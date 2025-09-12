@@ -2256,6 +2256,7 @@ server <- function(input, output, session) {
         nj_clade_type_val("roundrect")
 
         # Dimensions
+        nj_aspect_ratio_val(0.6)
         nj_ratio_val(c("16:10" = (16 / 10)))
         nj_v_val(0)
         nj_h_val(-0.05)
@@ -15941,8 +15942,15 @@ server <- function(input, output, session) {
   nj_h_val <- reactiveVal()
   nj_scale_val <- reactiveVal()
   nj_zoom_val <- reactiveVal()
+  nj_aspect_ratio_val <- reactiveVal()
 
   observe({
+    ifelse(
+      !is.null(input$nj_aspect_ratio),
+      nj_aspect_ratio_val(input$nj_aspect_ratio),
+      nj_aspect_ratio_val(0.6)
+    )
+
     ifelse(
       !is.null(input$nj_ratio),
       nj_ratio_val(input$nj_ratio),
@@ -16156,16 +16164,26 @@ server <- function(input, output, session) {
                   align = "center",
                   div(
                     class = "nj-control-ratio",
-                    selectInput(
-                      "nj_ratio",
+                    sliderInput(
+                      "nj_aspect_ratio",
                       "",
-                      choices = c(
-                        "16:10" = (16 / 10),
-                        "16:9" = (16 / 9),
-                        "4:3" = (4 / 3)
-                      ),
-                      selected = isolate(nj_ratio_val())
+                      min = 0.5,
+                      max = 2.0,
+                      value = isolate(nj_aspect_ratio_val()),
+                      step = 0.1,
+                      width = "100%",
+                      ticks = FALSE
                     )
+                    # selectInput(
+                    #   "nj_ratio",
+                    #   "",
+                    #   choices = c(
+                    #     "16:10" = (16 / 10),
+                    #     "16:9" = (16 / 9),
+                    #     "4:3" = (4 / 3)
+                    #   ),
+                    #   selected = isolate(nj_ratio_val())
+                    # )
                   )
                 ),
                 column(
@@ -16740,7 +16758,7 @@ server <- function(input, output, session) {
                                     value = isolate(nj_legend_x_val()),
                                     min = -0.9,
                                     max = 1.9,
-                                    step = 0.2,
+                                    step = 0.1,
                                     width = "150px",
                                     ticks = FALSE
                                   )
@@ -17282,6 +17300,7 @@ server <- function(input, output, session) {
     nj_clade_type_val("roundrect")
 
     # Dimensions
+    nj_aspect_ratio_val(0.6)
     nj_ratio_val(c("16:10" = (16 / 10)))
     nj_v_val(0)
     nj_h_val(-0.05)
@@ -19940,6 +19959,7 @@ server <- function(input, output, session) {
         ggtitle(label = nj_title_val(), subtitle = nj_subtitle_val()) +
         theme_tree(bgcolor = nj_bg_val()) +
         theme(
+          plot.margin = unit(nj_margin(), "cm"),
           plot.title = element_text(
             colour = nj_title_color_val(),
             size = nj_title_size_val()
@@ -20053,6 +20073,18 @@ server <- function(input, output, session) {
             color = nj_bg_val()
           )
         )
+    }
+  })
+
+  # Adjust margin dependening on tree layout
+  nj_margin <- reactive({
+    if (
+      nj_layout_val() == "circular" ||
+        nj_layout_val() == "inward"
+    ) {
+      c(0, 0, 0, 0)
+    } else {
+      c(-3, 3, -0.5, 0)
     }
   })
 
@@ -21072,6 +21104,20 @@ server <- function(input, output, session) {
 
   ### Reactive Events ----
 
+  # Switch view mode
+  observe({
+    req(input$toggle_style)
+    if (input$toggle_style == TRUE) {
+      runjs(
+        "$('#tree_plot img').css({ 'height': '70vh' });"
+      )
+    } else if (input$toggle_style == FALSE) {
+      runjs(
+        "$('#tree_plot img').css({ 'height': 'unset' });"
+      )
+    }
+  })
+
   # Show isolate selection table
   observeEvent(input$table_view, {
     showModal(
@@ -21753,14 +21799,15 @@ server <- function(input, output, session) {
             addSpinner(
               plotOutput(
                 "tree_plot",
-                width = paste0(
-                  as.character(
-                    as.numeric(nj_scale_val()) *
-                      as.numeric(nj_ratio_val())
-                  ),
-                  "px"
-                ),
-                height = paste0(as.character(nj_scale_val()), "px")
+                height = "auto"
+                # width = paste0(
+                #   as.character(
+                #     as.numeric(nj_scale_val()) *
+                #       as.numeric(nj_ratio_val())
+                #   ),
+                #   "px"
+                # ),
+                # height = paste0(as.character(nj_scale_val()), "px")
               ),
               spin = "dots",
               color = "#ffffff"
@@ -21923,9 +21970,105 @@ server <- function(input, output, session) {
             nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
             nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
 
-            output$tree_plot <- renderPlot({
-              make.tree()
-            })
+            # test1 <<- make.tree()
+            # # test2 <<- session$clientData$output_tree_plot_width
+            # test3 <- make.tree()
+
+            # output$tree_plot <- renderPlot(
+            #   {
+            #     # make.tree()
+            #     # test1
+            #     make.tree()
+            #   },
+            #   # width = 600,
+            #   # Render with dynamic aspect ratio
+            #   height = function() {
+            #     session$clientData$output_tree_plot_width *
+            #       nj_aspect_ratio_val()
+            #   },
+            #   res = 192
+            # )
+
+            # output$tree_plot <- renderPlot(
+            #   {
+            #     # Get dimensions
+            #     width <- as.integer(session$clientData$output_tree_plot_width)
+            #     height <- as.integer(width * nj_aspect_ratio_val())
+
+            #     # Create a temporary file for the PNG output
+            #     tmp_file <- tempfile(fileext = ".png")
+
+            #     # Use ragg to render the plot to a file
+            #     ragg::agg_png(
+            #       filename = tmp_file,
+            #       width = width,
+            #       height = height,
+            #       res = 144,
+            #       units = "px"
+            #     )
+
+            #     # Render the plot
+            #     print(make.tree())
+
+            #     # Close the device
+            #     dev.off()
+
+            #     # Return the plot (Shiny will handle displaying the PNG)
+            #     invisible(NULL)
+            #   },
+            #   height = function() {
+            #     as.integer(
+            #       session$clientData$output_tree_plot_width *
+            #         nj_aspect_ratio_val()
+            #     )
+            #   },
+            #   res = 144
+            # )
+
+            output$tree_plot <- renderPlot(
+              {
+                # Require reactive inputs
+                req(
+                  session$clientData$output_tree_plot_width,
+                  nj_aspect_ratio_val()
+                )
+                # Get and validate dimensions
+                width <- session$clientData$output_tree_plot_width
+                if (is.null(width) || !is.numeric(width) || width <= 0) {
+                  width <- 800 # Fallback
+                } else {
+                  width <- as.integer(width)
+                }
+
+                height <- as.integer(width * nj_aspect_ratio_val())
+                if (!is.numeric(height) || height <= 0) {
+                  height <- as.integer(800 * 0.6) # Fallback
+                }
+
+                # Debugging: Print dimensions and file path
+                cat("Rendering tree plot\n")
+                cat("Width:", width, "Height:", height, "\n")
+                # Use Shiny's built-in capture mechanism instead of manual PNG
+                make.tree()
+              },
+              height = function() {
+                req(
+                  session$clientData$output_tree_plot_width,
+                  nj_aspect_ratio_val()
+                )
+                width <- session$clientData$output_tree_plot_width
+                if (is.null(width) || !is.numeric(width) || width <= 0) {
+                  width <- 800
+                }
+                height <- as.integer(width * nj_aspect_ratio_val())
+                if (!is.numeric(height) || height <= 0) {
+                  height <- as.integer(800 * 0.6)
+                }
+                cat("Shiny height:", height, "\n")
+                height
+              },
+              res = 192
+            )
 
             Vis$nj_true <- TRUE
           }
