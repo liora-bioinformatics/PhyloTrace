@@ -2260,10 +2260,8 @@ server <- function(input, output, session) {
 
         # Dimensions
         nj_aspect_ratio_val(0.6)
-        nj_ratio_val(c("16:10" = (16 / 10)))
         nj_v_val(0)
         nj_h_val(-0.05)
-        nj_scale_val(670)
         nj_zoom_val(0.95)
 
         # Root tree
@@ -15932,10 +15930,8 @@ server <- function(input, output, session) {
   ###### Other Control Values ----
 
   # Dimensions
-  nj_ratio_val <- reactiveVal()
   nj_v_val <- reactiveVal()
   nj_h_val <- reactiveVal()
-  nj_scale_val <- reactiveVal()
   nj_zoom_val <- reactiveVal()
   nj_aspect_ratio_val <- reactiveVal()
 
@@ -15944,12 +15940,6 @@ server <- function(input, output, session) {
       !is.null(input$nj_aspect_ratio),
       nj_aspect_ratio_val(input$nj_aspect_ratio),
       nj_aspect_ratio_val(0.6)
-    )
-
-    ifelse(
-      !is.null(input$nj_ratio),
-      nj_ratio_val(input$nj_ratio),
-      nj_ratio_val(c("16:10" = (16 / 10)))
     )
 
     ifelse(!is.null(input$nj_v), nj_v_val(input$nj_v), nj_v_val(0))
@@ -15962,12 +15952,6 @@ server <- function(input, output, session) {
         nj_h_val(-0.05),
         nj_h_val(0)
       )
-    )
-
-    ifelse(
-      !is.null(input$nj_scale),
-      nj_scale_val(input$nj_scale),
-      nj_scale_val(670)
     )
 
     ifelse(
@@ -16169,16 +16153,6 @@ server <- function(input, output, session) {
                       width = "100%",
                       ticks = FALSE
                     )
-                    # selectInput(
-                    #   "nj_ratio",
-                    #   "",
-                    #   choices = c(
-                    #     "16:10" = (16 / 10),
-                    #     "16:9" = (16 / 9),
-                    #     "4:3" = (4 / 3)
-                    #   ),
-                    #   selected = isolate(nj_ratio_val())
-                    # )
                   )
                 ),
                 column(
@@ -16255,38 +16229,6 @@ server <- function(input, output, session) {
                                 max = 0.5,
                                 step = 0.01,
                                 value = isolate(nj_h_val()),
-                                width = "150px",
-                                ticks = FALSE
-                              )
-                            )
-                          )
-                        ),
-                        br(),
-                        fluidRow(
-                          column(
-                            width = 2,
-                            align = "left",
-                            HTML(
-                              paste(
-                                tags$span(
-                                  style = 'color: white; font-size: 14px; position: relative; right: 10px; top: 7px;',
-                                  'Horizontal'
-                                )
-                              )
-                            )
-                          ),
-                          column(
-                            width = 9,
-                            align = "right",
-                            div(
-                              class = "nj-label-slider",
-                              sliderInput(
-                                "nj_scale",
-                                "",
-                                min = 450,
-                                max = 670,
-                                step = 5,
-                                value = isolate(nj_scale_val()),
                                 width = "150px",
                                 ticks = FALSE
                               )
@@ -17302,10 +17244,8 @@ server <- function(input, output, session) {
 
     # Dimensions
     nj_aspect_ratio_val(0.6)
-    nj_ratio_val(c("16:10" = (16 / 10)))
     nj_v_val(0)
     nj_h_val(-0.05)
-    nj_scale_val(670)
     nj_zoom_val(0.95)
 
     # Root Tree
@@ -17479,38 +17419,6 @@ server <- function(input, output, session) {
         )
       )
     )
-  })
-
-  # Size scaling NJ
-  observe({
-    if (equals(nj_ratio_val(), "1.6")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 5,
-        value = 670,
-        min = 450,
-        max = 670
-      )
-    } else if (equals(nj_ratio_val(), "1.77777777777778")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 9,
-        value = 657,
-        min = 450,
-        max = 666
-      )
-    } else if (equals(nj_ratio_val(), "1.33333333333333")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 3,
-        value = 654,
-        min = 450,
-        max = 669
-      )
-    }
   })
 
   ### Custom Labels
@@ -21947,7 +21855,7 @@ server <- function(input, output, session) {
                 if (!is.numeric(height) || height <= 0) {
                   height <- as.integer(800 * 0.6)
                 }
-                cat("Shiny height:", height, "\n")
+
                 height
               },
               res = 192
@@ -22601,29 +22509,17 @@ server <- function(input, output, session) {
 
   # Save plot for Report
   plot.report <- reactive({
-    req(
-      session$clientData$output_tree_plot_width,
-      nj_aspect_ratio_val()
+    width <- get_plot_width(session = session)
+    height <- get_plot_height(
+      width = width,
+      aspect_ratio_val = nj_aspect_ratio_val()
     )
-
-    # Get and validate dimensions
-    width <- session$clientData$output_tree_plot_width
-    if (is.null(width) || !is.numeric(width) || width <= 0) {
-      width <- 800 # Fallback
-    } else {
-      width <- as.integer(width)
-    }
-
-    height <- as.integer(width * nj_aspect_ratio_val())
-    if (!is.numeric(height) || height <= 0) {
-      height <- as.integer(800 * 0.6) # Fallback
-    }
 
     if (tree_type_reactive() == "Tree") {
       jpeg(
         paste0(getwd(), "/Report/NJ.jpeg"),
-        width = (as.numeric(nj_scale_val()) * as.numeric(nj_ratio_val())),
-        height = as.numeric(nj_scale_val()),
+        width = width,
+        height = height,
         quality = 100
       )
       print(make.tree())
