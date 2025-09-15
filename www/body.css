@@ -2436,10 +2436,12 @@ button#create_tree:hover {
 
 #mst_field,
 #tree_field {
-  margin-left: 45px;
   margin-top: -15px;
   z-index: 0;
   width: 67vw;
+  background-image: linear-gradient(45deg, #d1d9df69 25%, transparent 25%, transparent 50%, #d1d9df69 50%, #d1d9df69 75%, transparent 75%);
+  background-size: 5px 5px;
+  border-radius: 5px;
 }
 
 button#mst_general_menu {
@@ -2795,7 +2797,6 @@ button#mst_col_map_menu {
   border-radius: 8px;
   width: 38px;
   height: 30px;
-  margin-left: -30px;
   margin-top: 13px;
   margin-bottom: 10px;
 }
@@ -3107,12 +3108,8 @@ button#nj_del_label {
   margin: auto;
   width: 100%;
   height: auto;
-  /* height: 80vh; */
-  /* overflow-x: clip;
-  overflow-y: auto; */
   border: none;
-  /* max-height: 70vh; */
-  border-radius: 10px;
+  border-radius: 5px;
   display: flex;
   justify-content: center;
 }
@@ -3144,8 +3141,7 @@ button#nj_del_label {
 }
 
 #tree_field img {
-  border-radius: 10px;
-  /* height: 68vh; */
+  height: unset;
 }
 
 #tree_field>div {
@@ -3153,6 +3149,26 @@ button#nj_del_label {
   width: 100%;
   height: 70vh !important;
   overflow-x: hidden;
+  border-radius: 5px;
+}
+
+#tree_aspect {
+  position: absolute;
+  right: -78px;
+  top: 6px;
+  z-index: 99;
+  padding: 3px;
+  border-top-right-radius: 5px;
+}
+
+.tree-field-container {
+  width: 67vw;
+  margin-top: -15px;
+  margin-left: 45px;
+}
+
+.custom-height {
+  height: 70vh !important;
 }
 
 .gs-plot-selected-isolate .dropdown-menu .open .open>.dropdown-menu,

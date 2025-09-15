@@ -1,3 +1,4 @@
+# Render rhandsontable
 generate_rhandsontable <- function(
   data,
   cust_var,

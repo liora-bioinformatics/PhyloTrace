@@ -4,7 +4,6 @@ options(ignore.negative.edge = TRUE)
 options(shiny.error = browser)
 Sys.setlocale("LC_TIME", "C")
 
-# _______________________ ####
 # CRAN Packages
 library(shiny)
 library(shinyjs)
@@ -56,6 +55,7 @@ library(ggtreeExtra)
 source("./assets/constants.R")
 source("./assets/functions.R")
 source("./assets/ui_modules.R")
+source("./assets/plot_save.R")
 
 # User Interface ----
 
@@ -786,7 +786,11 @@ ui <- dashboardPage(
             ),
             conditionalPanel(
               "input.tree_type=='Tree'",
-              uiOutput("tree_field")
+              div(
+                class = "tree-field-container",
+                uiOutput("tree_aspect"),
+                uiOutput("tree_field")
+              )
             )
           )
         )
@@ -851,7 +855,6 @@ ui <- dashboardPage(
   ) # End dashboardPage
 ) # end UI
 
-# _______________________ ####
 
 # Server ----
 
@@ -1231,8 +1234,6 @@ server <- function(input, output, session) {
     }
   })
 
-  # _______________________ ####
-
   ## Startup ----
 
   ### Miscellaneous ----
@@ -1250,7 +1251,6 @@ server <- function(input, output, session) {
     color = transparent(.5)
   )
 
-  #TODO Enable this, or leave disabled
   # Kill server on session end
   session$onSessionEnded(function() {
     system(
@@ -2060,6 +2060,9 @@ server <- function(input, output, session) {
       }
 
       if (isTRUE(Vis$nj_true)) {
+        # Reset view switch
+        updateSwitchInput(session, "toggle_style", value = FALSE)
+
         # Tip label
         Vis$nj_tiplab_val_reset <- TRUE
         nj_tiplab_val("Assembly Name")
@@ -5342,8 +5345,6 @@ server <- function(input, output, session) {
       waiter_hide()
     }
   })
-
-  # _______________________ ####
 
   ## Database ----
 
@@ -8802,8 +8803,6 @@ server <- function(input, output, session) {
     }
   )
 
-  # _______________________ ####
-
   ## Locus sequences ----
 
   observe({
@@ -9127,8 +9126,6 @@ server <- function(input, output, session) {
       writeLines(cont, file)
     }
   )
-
-  # _______________________ ####
 
   ## Download cgMLST ----
 
@@ -10447,8 +10444,6 @@ server <- function(input, output, session) {
     removeModal()
     updateTabItems(session, "tabs", selected = "init")
   })
-
-  # _______________________ ####
 
   ## Visualization ----
 
@@ -16977,6 +16972,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_download_menu")
 
+    # Switch to full display mode
+    updateSwitchInput(session, "toggle_style", value = TRUE)
+
     output$tree_controls <- renderUI(
       div(
         class = "control-box",
@@ -17103,6 +17101,9 @@ server <- function(input, output, session) {
     runjs(block_ui)
 
     removeModal()
+
+    # Reset view switch
+    updateSwitchInput(session, "toggle_style", value = FALSE)
 
     # Tip label
     Vis$nj_tiplab_val_reset <- TRUE
@@ -20084,7 +20085,7 @@ server <- function(input, output, session) {
     ) {
       c(0, 0, 0, 0)
     } else {
-      c(-3, 3, -0.5, 0)
+      c(-1, 2, 0, 0)
     }
   })
 
@@ -21045,77 +21046,26 @@ server <- function(input, output, session) {
 
   output$download_nj <- downloadHandler(
     filename = function() {
-      log_print(paste0(
-        "Save NJ;",
-        paste0("NJ_", Sys.Date(), ".", input$filetype_nj)
-      ))
-      paste0(
-        Sys.Date(),
-        "_",
-        gsub(" ", "_", DB$scheme),
-        "_Tree.",
-        input$filetype_nj
-      )
+      make_filename(filetype = input$filetype_nj, scheme = DB$scheme)
     },
     content = function(file) {
-      if (input$filetype_nj == "png") {
-        png(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val())
-        )
-        print(make.tree())
-        dev.off()
-      } else if (input$filetype_nj == "jpeg") {
-        jpeg(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val()),
-          quality = 100
-        )
-        print(make.tree())
-        dev.off()
-      } else if (input$filetype_nj == "svg") {
-        plot <- print(make.tree())
-        ggsave(
-          file = file,
-          plot = plot,
-          device = svg(
-            width = (as.numeric(nj_scale_val()) *
-              as.numeric(nj_ratio_val())) /
-              96,
-            height = as.numeric(nj_scale_val()) / 96
-          )
-        )
-      } else if (input$filetype_nj == "bmp") {
-        bmp(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val())
-        )
-        print(make.tree())
-        dev.off()
-      }
+      cat(input$filetype_nj)
+      save_plot_content(
+        file = file,
+        session = session,
+        filetype = input$filetype_nj,
+        aspect_ratio = nj_aspect_ratio_val(),
+        plot = make.tree(),
+        dpi = 192
+      )
     }
   )
 
   ### Reactive Events ----
 
   # Switch view mode
-  observe({
-    req(input$toggle_style)
-    if (input$toggle_style == TRUE) {
-      runjs(
-        "$('#tree_plot img').css({ 'height': '70vh' });"
-      )
-    } else if (input$toggle_style == FALSE) {
-      runjs(
-        "$('#tree_plot img').css({ 'height': 'unset' });"
-      )
-    }
+  observeEvent(input$toggle_style, {
+    runjs("toggleCustomHeight()")
   })
 
   # Show isolate selection table
@@ -21800,14 +21750,6 @@ server <- function(input, output, session) {
               plotOutput(
                 "tree_plot",
                 height = "auto"
-                # width = paste0(
-                #   as.character(
-                #     as.numeric(nj_scale_val()) *
-                #       as.numeric(nj_ratio_val())
-                #   ),
-                #   "px"
-                # ),
-                # height = paste0(as.character(nj_scale_val()), "px")
               ),
               spin = "dots",
               color = "#ffffff"
@@ -21970,68 +21912,13 @@ server <- function(input, output, session) {
             nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
             nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
 
-            # test1 <<- make.tree()
-            # # test2 <<- session$clientData$output_tree_plot_width
-            # test3 <- make.tree()
-
-            # output$tree_plot <- renderPlot(
-            #   {
-            #     # make.tree()
-            #     # test1
-            #     make.tree()
-            #   },
-            #   # width = 600,
-            #   # Render with dynamic aspect ratio
-            #   height = function() {
-            #     session$clientData$output_tree_plot_width *
-            #       nj_aspect_ratio_val()
-            #   },
-            #   res = 192
-            # )
-
-            # output$tree_plot <- renderPlot(
-            #   {
-            #     # Get dimensions
-            #     width <- as.integer(session$clientData$output_tree_plot_width)
-            #     height <- as.integer(width * nj_aspect_ratio_val())
-
-            #     # Create a temporary file for the PNG output
-            #     tmp_file <- tempfile(fileext = ".png")
-
-            #     # Use ragg to render the plot to a file
-            #     ragg::agg_png(
-            #       filename = tmp_file,
-            #       width = width,
-            #       height = height,
-            #       res = 144,
-            #       units = "px"
-            #     )
-
-            #     # Render the plot
-            #     print(make.tree())
-
-            #     # Close the device
-            #     dev.off()
-
-            #     # Return the plot (Shiny will handle displaying the PNG)
-            #     invisible(NULL)
-            #   },
-            #   height = function() {
-            #     as.integer(
-            #       session$clientData$output_tree_plot_width *
-            #         nj_aspect_ratio_val()
-            #     )
-            #   },
-            #   res = 144
-            # )
-
             output$tree_plot <- renderPlot(
               {
-                # Require reactive inputs
                 req(
                   session$clientData$output_tree_plot_width,
                   nj_aspect_ratio_val()
                 )
+
                 # Get and validate dimensions
                 width <- session$clientData$output_tree_plot_width
                 if (is.null(width) || !is.numeric(width) || width <= 0) {
@@ -22045,10 +21932,6 @@ server <- function(input, output, session) {
                   height <- as.integer(800 * 0.6) # Fallback
                 }
 
-                # Debugging: Print dimensions and file path
-                cat("Rendering tree plot\n")
-                cat("Width:", width, "Height:", height, "\n")
-                # Use Shiny's built-in capture mechanism instead of manual PNG
                 make.tree()
               },
               height = function() {
@@ -22069,6 +21952,17 @@ server <- function(input, output, session) {
               },
               res = 192
             )
+
+            # Aspect ratio info
+            output$tree_aspect <- renderUI({
+              width <- get_plot_width(session = session)
+              height <- get_plot_height(
+                width = width,
+                aspect_ratio_val = nj_aspect_ratio_val()
+              )
+
+              paste(width, "x", height, "px | 192 DPI")
+            })
 
             Vis$nj_true <- TRUE
           }
@@ -22132,8 +22026,6 @@ server <- function(input, output, session) {
 
     runjs(unblock_ui)
   })
-
-  # _______________________ ####
 
   ## Report ----
 
@@ -22709,6 +22601,24 @@ server <- function(input, output, session) {
 
   # Save plot for Report
   plot.report <- reactive({
+    req(
+      session$clientData$output_tree_plot_width,
+      nj_aspect_ratio_val()
+    )
+
+    # Get and validate dimensions
+    width <- session$clientData$output_tree_plot_width
+    if (is.null(width) || !is.numeric(width) || width <= 0) {
+      width <- 800 # Fallback
+    } else {
+      width <- as.integer(width)
+    }
+
+    height <- as.integer(width * nj_aspect_ratio_val())
+    if (!is.numeric(height) || height <= 0) {
+      height <- as.integer(800 * 0.6) # Fallback
+    }
+
     if (tree_type_reactive() == "Tree") {
       jpeg(
         paste0(getwd(), "/Report/NJ.jpeg"),
@@ -22795,8 +22705,6 @@ server <- function(input, output, session) {
       runjs(unblock_ui)
     }
   )
-
-  # _______________________ ####
 
   ## Gene Screening  ----
 
@@ -27674,8 +27582,6 @@ server <- function(input, output, session) {
     gs_plot()
   })
 
-  # _______________________ ####
-
   ## Typing  ----
 
   # Render Single/Multi Switch
@@ -29128,8 +29034,6 @@ server <- function(input, output, session) {
     }
   })
 } # end server
-
-# _______________________ ####
 
 # Shiny ----
 
