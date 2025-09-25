@@ -8,7 +8,7 @@ function toggleCustomHeight() {
   }
   if (styleTag.innerHTML.includes('height: unset')) {
     styleTag.innerHTML = `
-      #tree_plot img { height: 70vh !important; border-radius: 0; }
+      #tree_plot img { height: 75vh !important; border-radius: 0; }
       #tree_plot { border-radius: 0; }
       #tree_field > div { border-radius: 0; }
       #tree_field { border: 1px #ffbf00 solid; }

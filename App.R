@@ -734,7 +734,7 @@ ui <- dashboardPage(
             width = 5,
             br(),
             div(
-              class = "vis-control-box",
+              class = "vis-full-height-box",
               uiOutput("generate_plot_ui")
             )
           ),
@@ -744,52 +744,54 @@ ui <- dashboardPage(
             conditionalPanel(
               "input.tree_type=='MST'",
               div(
-                class = "vis-control-box-2",
+                class = "vis-full-height-box-2",
                 mst_control_box
               )
             ),
             conditionalPanel(
               "input.tree_type=='Tree'",
               div(
-                class = "vis-control-box-2",
+                class = "vis-full-height-box-2",
                 nj_control_box
               )
             )
           )
         ),
-        fluidRow(
-          tags$script(src = "javascript_functions.js"),
-          column(
-            width = 2,
-            conditionalPanel(
-              "input.tree_type=='MST'",
-              div(
-                class = "vis-control-box-3",
-                uiOutput("mst_controls")
+        div(
+          class = "flex-row",
+          fluidRow(
+            tags$script(src = "javascript_functions.js"),
+            column(
+              width = 10,
+              conditionalPanel(
+                "input.tree_type=='MST'",
+                div(
+                  class = "mst-field-container",
+                  uiOutput("mst_aspect"),
+                  uiOutput("mst_field")
+                ),
+              ),
+              conditionalPanel(
+                "input.tree_type=='Tree'",
+                div(
+                  class = "tree-field-container",
+                  uiOutput("tree_aspect"),
+                  uiOutput("tree_field")
+                )
               )
             ),
-            conditionalPanel(
-              "input.tree_type=='Tree'",
-              div(
-                class = "vis-control-box-3",
+            column(
+              width = 2,
+              conditionalPanel(
+                "input.tree_type=='MST'",
+                div(
+                  class = "vis-full-height-box-3",
+                  uiOutput("mst_controls")
+                )
+              ),
+              conditionalPanel(
+                "input.tree_type=='Tree'",
                 uiOutput("tree_controls")
-              )
-            )
-          ),
-          column(
-            width = 9,
-            align = "left",
-            br(),
-            conditionalPanel(
-              "input.tree_type=='MST'",
-              uiOutput("mst_field")
-            ),
-            conditionalPanel(
-              "input.tree_type=='Tree'",
-              div(
-                class = "tree-field-container",
-                uiOutput("tree_aspect"),
-                uiOutput("tree_field")
               )
             )
           )
@@ -10504,7 +10506,7 @@ server <- function(input, output, session) {
                 justified = TRUE
               )
             ),
-            uiOutput("tree_algo_lines"),
+            # uiOutput("tree_algo_lines"),
             column(
               width = 4,
               uiOutput("tree_algo_ui")
@@ -10571,7 +10573,7 @@ server <- function(input, output, session) {
 
   output$tree_controls <- renderUI(
     div(
-      class = "control-box",
+      class = "full-height-box",
       box(
         solidHeader = TRUE,
         status = "primary",
@@ -11384,7 +11386,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -12547,7 +12549,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -14135,262 +14137,265 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_color_menu")
 
     output$tree_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Color Menu",
-        column(
-          width = 12,
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Lines/Text'
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Color Menu",
+          column(
+            width = 12,
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Lines/Text'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_color",
+                    selected = isolate(nj_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_color",
-                  selected = isolate(nj_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Background'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Background'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_bg",
+                    selected = isolate(nj_bg_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_bg",
-                  selected = isolate(nj_bg_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Title'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Title'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_title_color",
+                    selected = isolate(nj_title_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_title_color",
-                  selected = isolate(nj_title_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Tip Label'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Tip Label'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tiplab_color",
+                    selected = isolate(nj_tiplab_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tiplab_color",
-                  selected = isolate(nj_tiplab_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Label Panel'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Label Panel'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tiplab_fill",
+                    selected = isolate(nj_tiplab_fill_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tiplab_fill",
-                  selected = isolate(nj_tiplab_fill_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 13px; position: relative; top: 10px;',
+                      'Branch Label'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 13px; position: relative; top: 10px;',
-                    'Branch Label'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_branch_label_color",
+                    selected = isolate(nj_branch_label_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_branch_label_color",
-                  selected = isolate(nj_branch_label_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Tip Point'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Tip Point'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tippoint_color",
+                    selected = isolate(nj_tippoint_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tippoint_color",
-                  selected = isolate(nj_tippoint_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Node Point'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Node Point'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_nodepoint_color",
+                    selected = isolate(nj_nodepoint_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_nodepoint_color",
-                  selected = isolate(nj_nodepoint_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
-                )
-              )
-            )
-          ),
-          br()
+            br()
+          )
         )
       )
     )
@@ -14730,7 +14735,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -16107,7 +16112,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI({
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -16919,7 +16924,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -17858,7 +17863,7 @@ server <- function(input, output, session) {
 
     output$mst_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -18249,7 +18254,7 @@ server <- function(input, output, session) {
 
     output$mst_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -18687,7 +18692,7 @@ server <- function(input, output, session) {
 
     output$mst_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -18758,15 +18763,28 @@ server <- function(input, output, session) {
                 column(
                   width = 8,
                   align = "center",
+                  # div(
+                  #   class = "mst-scale-slider",
+                  #   sliderInput(
+                  #     "mst_scale",
+                  #     "",
+                  #     min = 450,
+                  #     max = 670,
+                  #     step = 5,
+                  #     value = isolate(mst_scale_reactive()),
+                  #     ticks = FALSE
+                  #   )
+                  # )
                   div(
-                    class = "mst-scale-slider",
+                    class = "nj-control-ratio",
                     sliderInput(
-                      "mst_scale",
+                      "nj_aspect_ratio",
                       "",
-                      min = 450,
-                      max = 670,
-                      step = 5,
-                      value = isolate(mst_scale_reactive()),
+                      min = 0.5,
+                      max = 2.0,
+                      value = isolate(nj_aspect_ratio_val()),
+                      step = 0.1,
+                      width = "100%",
                       ticks = FALSE
                     )
                   )
@@ -19091,7 +19109,7 @@ server <- function(input, output, session) {
 
     output$mst_controls <- renderUI(
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -21822,24 +21840,6 @@ server <- function(input, output, session) {
 
             output$tree_plot <- renderPlot(
               {
-                req(
-                  session$clientData$output_tree_plot_width,
-                  nj_aspect_ratio_val()
-                )
-
-                # Get and validate dimensions
-                width <- session$clientData$output_tree_plot_width
-                if (is.null(width) || !is.numeric(width) || width <= 0) {
-                  width <- 800 # Fallback
-                } else {
-                  width <- as.integer(width)
-                }
-
-                height <- as.integer(width * nj_aspect_ratio_val())
-                if (!is.numeric(height) || height <= 0) {
-                  height <- as.integer(800 * 0.6) # Fallback
-                }
-
                 make.tree()
               },
               height = function() {
@@ -21888,14 +21888,27 @@ server <- function(input, output, session) {
                 height = paste0(mst_scale_reactive(), "px")
               )
             } else {
+              if (!is.null(session$clientData$output_tree_mst_height)) {
+                message(session$clientData$output_tree_mst_height)
+                width <- as.integer(
+                  session$clientData$output_tree_mst_height *
+                    (1 / nj_aspect_ratio_val())
+                )
+              } else {
+                message("Unavailable")
+                width <- as.integer(
+                  500 *
+                    nj_aspect_ratio_val()
+                )
+              }
+
+              width <- paste0(width, "px")
+
               addSpinner(
                 visNetworkOutput(
                   "tree_mst",
-                  width = paste0(
-                    mst_scale_reactive() * as.numeric(mst_ratio_reactive()),
-                    "px"
-                  ),
-                  height = paste0(mst_scale_reactive(), "px")
+                  height = "100%",
+                  width = width
                 ),
                 spin = "dots",
                 color = "#ffffff"
@@ -21927,6 +21940,13 @@ server <- function(input, output, session) {
             mst_tree()
           })
 
+          # Aspect ratio info
+          output$mst_aspect <- renderUI({
+            width <- as.integer(session$clientData$output_tree_mst_width)
+            height <- as.integer(session$clientData$output_tree_mst_height)
+            paste(width, "x", height, "px")
+          })
+
           Vis$mst_true <- TRUE
         }
       }
@@ -21953,6 +21973,9 @@ server <- function(input, output, session) {
   ### Report creation UI ----
 
   observeEvent(input$create_rep, {
+    #TODO
+    # test
+    # Adapt aspect ratio of plot
     runjs(block_ui)
 
     if (
