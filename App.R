@@ -10588,7 +10588,7 @@ server <- function(input, output, session) {
               br(),
               fluidRow(
                 column(
-                  width = 6,
+                  width = 7,
                   align = "left",
                   h4(
                     p("Isolate Label"),
@@ -10596,7 +10596,7 @@ server <- function(input, output, session) {
                   ),
                 ),
                 column(
-                  width = 6,
+                  width = 5,
                   align = "left",
                   div(
                     class = "mat-switch-lab",
@@ -10781,7 +10781,7 @@ server <- function(input, output, session) {
               align = "left",
               fluidRow(
                 column(
-                  width = 6,
+                  width = 7,
                   align = "left",
                   h4(
                     p("Branches"),
@@ -10789,7 +10789,7 @@ server <- function(input, output, session) {
                   ),
                 ),
                 column(
-                  width = 6,
+                  width = 5,
                   align = "left",
                   div(
                     class = "mat-switch-lab",
@@ -11401,7 +11401,7 @@ server <- function(input, output, session) {
                 br(),
                 fluidRow(
                   column(
-                    width = 6,
+                    width = 7,
                     align = "left",
                     h4(
                       p("Isolate Label"),
@@ -11409,7 +11409,7 @@ server <- function(input, output, session) {
                     )
                   ),
                   column(
-                    width = 6,
+                    width = 5,
                     align = "left",
                     div(
                       class = "mat-switch-lab",
@@ -11594,7 +11594,7 @@ server <- function(input, output, session) {
                 align = "left",
                 fluidRow(
                   column(
-                    width = 6,
+                    width = 7,
                     align = "left",
                     h4(
                       p("Branches"),
@@ -11602,7 +11602,7 @@ server <- function(input, output, session) {
                     )
                   ),
                   column(
-                    width = 6,
+                    width = 5,
                     align = "left",
                     div(
                       class = "mat-switch-lab",
@@ -17646,73 +17646,33 @@ server <- function(input, output, session) {
   session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
   output$mst_controls <- renderUI(
-    box(
-      solidHeader = TRUE,
-      status = "primary",
-      width = "100%",
-      title = "Labels",
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Isolate Label"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
+    div(
+      class = "full-height-box",
+      box(
+        solidHeader = TRUE,
+        status = "primary",
+        width = "100%",
+        title = "Labels",
+        fluidRow(
           column(
             width = 12,
-            align = "center",
-            div(
-              class = "mst-label-sel",
-              uiOutput("mst_node_label")
+            align = "left",
+            h4(
+              p("Isolate Label"),
+              style = "color:white; position: relative; right: -15px; top: 15px;"
+            ),
+            column(
+              width = 12,
+              align = "center",
+              div(
+                class = "mst-label-sel",
+                uiOutput("mst_node_label")
+              ),
+              br()
             )
           )
         )
-      ),
-      br(),
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Title"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
-          column(
-            width = 12,
-            align = "center",
-            textInput(
-              "mst_title",
-              label = "",
-              width = "100%",
-              placeholder = "Plot Title"
-            )
-          )
-        )
-      ),
-      br(),
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Subtitle"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
-          column(
-            width = 12,
-            align = "center",
-            textInput(
-              "mst_subtitle",
-              label = "",
-              width = "100%",
-              placeholder = "Plot Subtitle"
-            )
-          )
-        )
-      ),
-      br(),
-      br()
+      )
     )
   )
 
@@ -17753,75 +17713,33 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
     output$mst_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Labels",
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Isolate Label"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Labels",
+          fluidRow(
             column(
               width = 12,
-              align = "center",
-              div(
-                class = "mst-label-sel",
-                uiOutput("mst_node_label")
+              align = "left",
+              h4(
+                p("Isolate Label"),
+                style = "color:white; position: relative; right: -15px; top: 15px;"
+              ),
+              column(
+                width = 12,
+                align = "center",
+                div(
+                  class = "mst-label-sel",
+                  uiOutput("mst_node_label")
+                ),
+                br()
               )
             )
           )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Title"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
-            column(
-              width = 12,
-              align = "center",
-              textInput(
-                "mst_title",
-                value = isolate(mst_title_reactive()),
-                label = "",
-                width = "100%",
-                placeholder = "Plot Title"
-              )
-            )
-          )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Subtitle"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
-            column(
-              width = 12,
-              align = "center",
-              textInput(
-                "mst_subtitle",
-                value = isolate(mst_subtitle_reactive()),
-                label = "",
-                width = "100%",
-                placeholder = "Plot Subtitle"
-              )
-            )
-          )
-        ),
-        br(),
-        br()
+        )
       )
     )
 
@@ -18006,164 +17924,167 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_highlight', "mst_color_menu")
 
     output$mst_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Color Menu",
-        column(
-          width = 12,
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Text'
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Color Menu",
+          column(
+            width = 12,
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Text'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_text_color",
+                  selected = isolate(mst_text_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start",
+                  width = "100%"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Nodes'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                uiOutput("mst_color_mapping")
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Edges'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_color_edge",
+                  width = "100%",
+                  selected = isolate(mst_color_edge_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Edge Font'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_edge_font_color",
+                  width = "100%",
+                  selected = isolate(mst_edge_font_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Background'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_background_color",
+                  width = "100%",
+                  selected = isolate(mst_background_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            fluidRow(
+              column(1),
+              column(
+                width = 11,
+                div(
+                  class = "switch-mst-transparent",
+                  materialSwitch(
+                    "mst_background_transparent",
+                    h5(
+                      p("Transparent"),
+                      style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
+                    ),
+                    value = isolate(mst_background_transparent_reactive()),
+                    right = TRUE
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_text_color",
-                selected = isolate(mst_text_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start",
-                width = "100%"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Nodes'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              uiOutput("mst_color_mapping")
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Edges'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_color_edge",
-                width = "100%",
-                selected = isolate(mst_color_edge_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Edge Font'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_edge_font_color",
-                width = "100%",
-                selected = isolate(mst_edge_font_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Background'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_background_color",
-                width = "100%",
-                selected = isolate(mst_background_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          fluidRow(
-            column(1),
-            column(
-              width = 11,
-              div(
-                class = "switch-mst-transparent",
-                materialSwitch(
-                  "mst_background_transparent",
-                  h5(
-                    p("Transparent"),
-                    style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
-                  ),
-                  value = isolate(mst_background_transparent_reactive()),
-                  right = TRUE
-                )
-              )
-            )
-          ),
-          br()
+            br()
+          )
         )
       )
     )
