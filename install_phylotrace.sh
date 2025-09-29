@@ -9,10 +9,10 @@ conda clean --all -y
 
 if conda env list | grep -q "PhyloTrace"; then
   echo "Environment PhyloTrace already exists. Updating the environment..."
-  conda env update -f PhyloTrace.yml
+  conda env update -f PhyloTrace.yml --quiet
 else
   echo "Environment PhyloTrace does not exist. Creating the environment..."
-  conda env create -f PhyloTrace.yml
+  conda env create -f PhyloTrace.yml --quiet
 fi
 
 conda activate PhyloTrace

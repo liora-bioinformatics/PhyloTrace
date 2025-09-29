@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.24">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>readme</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="README_files/libs/clipboard/clipboard.min.js"></script>
+<script src="README_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="README_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="README_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="README_files/libs/quarto-html/popper.min.js"></script>
+<script src="README_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="README_files/libs/quarto-html/anchor.min.js"></script>
+<link href="README_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="README_files/libs/quarto-html/quarto-syntax-highlighting-dc55a5b9e770e841cd82e46aadbfb9b0.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="README_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="README_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="README_files/libs/bootstrap/bootstrap-066b5bcea5b2b2cb2120b04fed1cb263.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<p><img src="www/PhyloTrace_bw.png#gh-light-mode-only" width="90%"> <img src="www/PhyloTrace.png#gh-dark-mode-only" width="90%"> <br> PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. Its components evolve around Core-Genome Multilocus Sequence Typing (cgMLST) and Antimicrobial Resistance Screening. Complex analyses and computation are wrapped into an appealing and easy-to-handle graphical user interface. Users build a local database comprising analyzed isolates, manageable directly with the application. The visualization of isolate relationship and genetic profile is highly interactive aiding to reveal patterns explaining outbreak dynamics and events by connecting genomic information with epidemiologic variables. PhyloTrace achieves universal compatibility by assigning unique 256-bit hashes based on sequence and allele information. The ability to easily share analysis results enables efficient inter-lab comparison and collaboration. <br><br></p>
+<p><strong>Features</strong></p>
+<ul>
+<li>Interactive cgMLST analysis also for large datasets comprising numerous whole-genome assemblies</li>
+<li>Screening for species-specific genes involved in antibiotics resistance, virulence, stress and more</li>
+<li>Managing an individual and portable local database to continously monitor bacterial populations</li>
+<li>Producing publication-ready plots with minimum-spanning tree network graphs and phylogenetic trees (Neighbour-Joining &amp; UPGMA)</li>
+<li>Extensive export and report functionalities</li>
+<li><em>and more</em></li>
+</ul>
+<p>We want to make cgMLST analysis and genomic pathogen monitoring accessible to a broad spectrum of individuals and organizations. Therefore our goal is to build an interface with convenient user experience and easy handling that doesn’t require you to be a bioinformatician. The app is in active development. To get a stable version download the newest release.</p>
+<p><em>PhyloTrace is supposed to be used for research and academic purposes only.</em></p>
+<p><a href="https://www.phylotrace.com">www.PhyloTrace.com</a> | <a href="mailto:info@phylotrace.com?subject=%5BGitHub%5D%20Source%20Han%20Sans">info@phylotrace.com</a></p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="www/partners_logo_round.svg" class="img-fluid figure-img"></p>
+<figcaption>PartnerLogos</figcaption>
+</figure>
+</div>
+<p><sup><sup> Developed in collaboration with Hochschule Furtwangen University (HFU) and Medical University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024. </sup> </sup></p>
+<p><a href="https://doi.org/10.5281/zenodo.10996423"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.10996423-00e896?labelColor=gray&amp;color=609ea5&amp;logoColor=black" class="img-fluid" alt="DOI"></a> <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-659DA3.svg" class="img-fluid" alt="License: GPLv3"></a> <a href="https://github.com/infinity-a11y/PhyloTrace/releases/tag/v1.6.1"><img src="https://img.shields.io/badge/Version-1.6.1-659DA3" class="img-fluid" alt="Version"></a> <img src="https://img.shields.io/badge/Linux-FCC624?style=flat&amp;logo=linux&amp;logoColor=black.png" class="img-fluid" alt="Linux"> <img src="https://img.shields.io/badge/Windows-339033?style=flat&amp;logo=windows&amp;logoColor=white.png" class="img-fluid" alt="Windows"></p>
+<p><br><br><br></p>
+<section id="section" class="level1">
+<h1><img src="www/PhyloTrace_3d.png" align="right" width="20%"></h1>
+<ul>
+<li><a href="#1-getting-started">1 Getting Started</a>
+<ul>
+<li><a href="#11-workflow">1.1 Workflow</a></li>
+<li><a href="#12-compatibility">1.2 Compatibility</a></li>
+<li><a href="#13-citation">1.3 Citation</a></li>
+</ul></li>
+<li><a href="#2-installation">2 Installation</a>
+<ul>
+<li><a href="#21-download-source-code">2.1 Download Source Code</a></li>
+<li><a href="#22-install-miniconda">2.2 Install Miniconda</a></li>
+<li><a href="#23-install-phylotrace">2.3 Install PhyloTrace</a></li>
+<li><a href="#24-uninstall">2.4 Uninstall</a></li>
+<li><a href="#25-troubleshooting">2.5 Troubleshooting</a></li>
+</ul></li>
+<li><a href="#3-launch-phylotrace">3 Launch PhyloTrace</a></li>
+</ul>
+<section id="getting-started" class="level2">
+<h2 class="anchored" data-anchor-id="getting-started">1 Getting Started</h2>
+<p>PhyloTrace is an open-source platform for <em>in silico</em> bacterial typing with core-genome multilocus sequence typing (cgMLST). This method allows pathogen monitoring on a genomic level by typing allele variants in order to profile the present genetic constitution for individual isolates of a bacterial population. Comparing the allelic profile to other isolates of the same species might reveal coherences that are not visible by the bare eye. Visualizing the generated data enables humans to identify patterns of epidemiologic dynamics (transmission, outbreak variants, source identification), relatedness and population structure. To work with PhyloTrace all that is needed are whole-genome assemblies which demarcate the starting point of the workflow. Easily pipe the files into the cgMLST analysis and step-by-step build up a local database, which can be managed with full control through the app. Visualize and export results in a publication-ready format.</p>
+</section>
+<section id="workflow" class="level2">
+<h2 class="anchored" data-anchor-id="workflow">1.1 Workflow</h2>
+<p>The <strong>user manual</strong> containing detailed instruction and information is available at <a href="https://www.phylotrace.com/user-manual">www.phylotrace.com/user-manual</a>.</p>
+<details open="">
+<summary>
+<b>Manage cgMLST Scheme</b>
+</summary>
+<p><br></p>
+<p>Download a standardized scheme that defines the genetic targets, nomenclature and allele sequences for the bacterial species of interest from the <a href="https://www.cgmlst.org/ncs">cgMLST.org</a> and <a href="https://pubmlst.org/">PubMLST</a> public databases. The connection to the server including information on the scheme is integrated in the app. Once one of the 69 available species has been selected and downloaded, everything is ready to go. The scheme can be inspected in detail using the locus info interface.</p>
+<div style="display: flex; justify-content: space-between;">
+<p><img src="docs/resources/manage_schemes.png" width="47.5%"> <img src="docs/resources/loci_info.png" width="48.5%"></p>
+</div>
+<p><br></p>
+</details>
+<details>
+<summary>
+<b>Allelic Typing</b>
+</summary>
+<p><br></p>
+<p>Whole-genome assemblies can be entered into the pipeline and are automatically analyzed at high speed. Using the downloaded cgMLST scheme, the bacterial genome is aligned to the known variants at the respective genetic target. By iterating this process over all genes that are part of the core genome, an individual allele profile is generated. If a potential new genetic variant is discovered, it is checked whether the existing allele is still capable of producing a functional protein. Successfully typed assemblies are appended to the local database in real time.</p>
+<div style="display: flex; justify-content: space-between;">
+<p><img src="docs/resources/typing_start.png" width="48%"> <img src="docs/resources/typing_results.png" width="48%"></p>
+</div>
+<p><br></p>
+</details>
+<details>
+<summary>
+<b>Building and Managing Database</b>
+</summary>
+<p><br></p>
+<p>Step-by-step the database is filled with typed isolates and the connected metadata. The database browser provides full control allowing to edit, delete and inspect the entries that were added so far. It features several functions, e.g.&nbsp;to export the table, compare allelic profiles or to introduce custom variables with information about presence/absence of antimicrobial resistances, gene expression values or any other characteristic, to answer individual research questions.</p>
+<div style="display: flex; justify-content: space-between;">
+<p><img src="docs/resources/browse_entries.png" width="48%"> <img src="docs/resources/dist_matrix.png" width="48%"></p>
+</div>
+<p><br></p>
+</details>
+<details>
+<summary>
+<b>Visualizing Typing Results</b>
+</summary>
+<p><br></p>
+<p>Create and customize sophisticated hierarchic trees (Neighbour-Joining &amp; UPGMA) or networks (Minimum-spanning) to visualize the underlying relationship between the isolates in your local database. The plots can be heavily modified and enriched with useful information e.g.&nbsp;by mapping previously added custom variables. The resulting visuals can be saved in multiple formats and even included in a report document that can be generated from within the app.</p>
+<div style="display: flex; justify-content: space-between;">
+<p><img src="docs/resources/mst_visualization.png" width="54%"> <img src="docs/resources/2025-03-18_Bordetella_pertussis_CM_Tree.png" width="42%"></p>
+</div>
+<p><br></p>
+</details>
+<details>
+<summary>
+<b>Antimicrobial Resistance Screening</b>
+</summary>
+<p><br></p>
+<p>Screen isolates in seconds for known resistance, virulence and stress genes using an interface that wraps around the proven AMRFinder tool. Visualize the presence or absence of these markers along with user-defined variables among isolates in a fully interactive heatmap.</p>
+<div style="display: flex; justify-content: space-between;">
+<p><img src="docs/resources/amr_screening.png" width="48%"> <img src="docs/resources/amr_heatmap.png" width="49%"></p>
+</div>
+<p><br></p>
+</details>
+<section id="compatibility" class="level3">
+<h3 class="anchored" data-anchor-id="compatibility">1.2 Compatibility</h3>
+<section id="minimum-system-requirements" class="level4">
+<h4 class="anchored" data-anchor-id="minimum-system-requirements">Minimum System Requirements</h4>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 58%">
+<col style="width: 41%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Component</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Operating System</td>
+<td>Any Linux distribution capable of running R and Conda (e.g.&nbsp;Ubuntu, Fedora, Debian, ArchLinux, OpenSuse, etc.)</td>
+</tr>
+<tr class="even">
+<td>Web Browser</td>
+<td>Compatible with latest version of major browsers (Chrome, Brave, Chromium, Opera, Vivaldi)</td>
+</tr>
+<tr class="odd">
+<td>Storage</td>
+<td>≥ 250 GB SSD/HDD</td>
+</tr>
+<tr class="even">
+<td>RAM</td>
+<td>≥ 8 GB</td>
+</tr>
+<tr class="odd">
+<td>CPU</td>
+<td>Multi-core processor, ≥ 2.5 GHz</td>
+</tr>
+</tbody>
+</table>
+<blockquote class="blockquote">
+<p><em>These system requirements are provided as estimates. It is possible for the application to run on lower-spec systems, depending on application workload and usage patterns.</em></p>
+</blockquote>
+<blockquote class="blockquote">
+<p><em>The <strong>Firefox</strong> browser has display-issues that might impair the usage.</em></p>
+</blockquote>
+</section>
+</section>
+<section id="citation" class="level3">
+<h3 class="anchored" data-anchor-id="citation">1.3 Citation</h3>
+<p>If you use PhyloTrace for your paper or publication, cite us with</p>
+<ul>
+<li><em>Freisleben, M. &amp; Paskali, F. (2024). PhyloTrace. Zenodo. DOI: 10.5281/zenodo.10996423.</em></li>
+</ul>
+<pre><code>@software{Freisleben_Paskali_2024,
+  author       = {Freisleben, Marian and Paskali, Filip},
+  title        = {PhyloTrace},
+  year         = {2024},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.10996423},
+  url          = {https://doi.org/10.5281/zenodo.10996423}
+}</code></pre>
+</section>
+</section>
+<section id="installation" class="level2">
+<h2 class="anchored" data-anchor-id="installation">2 Installation</h2>
+<p>PhyloTrace can be installed in a linux environment and, using Windows Subsystem for Linux (WSL) also on Microsoft Windows.</p>
+<p>For the installation on a linux OS follow the steps starting from <a href="#22-install-miniconda">2.2 Install Miniconda</a>. If you want to install PhyloTrace on Microsoft Windows, you must first follow the steps found in the collapsible menu below before proceeding with the other steps.</p>
+<details>
+<p><br></p>
+<summary>
+<b>Installing PhyloTrace on Windows using WSL (Windows Subsystem for Linux)</b>
+</summary>
+<p>To install Ubuntu on WSL, start PowerShell as administrator and run the following command:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode powershell code-with-copy"><code class="sourceCode powershell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>wsl <span class="op">--</span>install</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>When the installation is complete, a prompt will appear for new UNIX username and password. Enter the preferred username and password.</p>
+<p>After successful installation, WSL can be started from Start Menu by launching WSL or Ubuntu shortcut.</p>
+<p>For the full functionality of PhyloTrace, WSL utilities should be installed. Start WSL and enter the following commands:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> add-apt-repository ppa:wslutilities/wslu</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt update</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt install wslu</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>After this, follow the instructions below.</p>
+</details>
+<section id="download-source-code" class="level3">
+<h3 class="anchored" data-anchor-id="download-source-code">2.1 Download Source Code</h3>
+<p>Donwload the source code of the latest stable version.</p>
+<p>Use the terminal to navigate to an accessible location on your system and clone the repository using Git.</p>
+<pre><code>git clone https://github.com/infinity-a11y/PhyloTrace.git</code></pre>
+<p>Alternatively download PhyloTrace manually from <a href="https://github.com/infinity-a11y/PhyloTrace/archive/refs/tags/v1.6.1.zip">Version 1.6.1</a> and extract/unzip it to a location on your system.</p>
+</section>
+<section id="install-miniconda" class="level3">
+<h3 class="anchored" data-anchor-id="install-miniconda">2.2 Install Miniconda</h3>
+<p>Is <strong><em>Miniconda</em></strong> or another <strong><em>Conda Distribution</em></strong> installed on the system?</p>
+<p><strong>No</strong> :arrow_right: Run the installation below and initialize conda <br></p>
+<p><strong>Yes</strong> :arrow_right: Proceed to <a href="#23-install-phylotrace">2.3 Install PhyloTrace</a></p>
+<p>These four commands quickly and quietly install the latest 64-bit version of Miniconda and then clean up after themselves.</p>
+<blockquote class="blockquote">
+<p><em>For installation of Miniconda on system with different architecture, please refer to the <a href="https://docs.anaconda.com/free/miniconda/index.html">Miniconda documentation</a>.</em></p>
+</blockquote>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> ~/miniconda3</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="fu">wget</span> https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh <span class="at">-O</span> ~/miniconda3/miniconda.sh</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="fu">bash</span> ~/miniconda3/miniconda.sh <span class="at">-b</span> <span class="at">-u</span> <span class="at">-p</span> ~/miniconda3</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> ~/miniconda3/miniconda.sh</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>After installation, the newly-installed Miniconda should be initialized with the following command:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">~/miniconda3/bin/conda</span> init</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>To start using conda, the terminal should be restarted.</p>
+<blockquote class="blockquote">
+<p><strong><em>Optional:</em></strong> <em>To disable automatic activation of conda whenever the terminal is started, the following command can be executed:</em></p>
+</blockquote>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">conda</span> config <span class="at">--set</span> auto_activate_base false</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="install-phylotrace" class="level3">
+<h3 class="anchored" data-anchor-id="install-phylotrace">2.3 Install PhyloTrace</h3>
+<p>Run install script to generate a run script and include PhyloTrace desktop icon in the Applications Menu.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> path/to/phylotrace/directory</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="fu">bash</span> install_phylotrace.sh</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<blockquote class="blockquote">
+<p><em>In the command above, replace <code>path/to/phylotrace/directory</code> with the actual path linking to the PhyloTrace directory on your system.</em></p>
+</blockquote>
+</section>
+<section id="uninstall" class="level3">
+<h3 class="anchored" data-anchor-id="uninstall">2.4 Uninstall</h3>
+<p>To uninstall PhyloTrace from your system, remove the application directory and run the following command to remove the desktop launcher and the PhyloTrace conda environment:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="at">-r</span> <span class="va">$HOME</span>/.local/share/phylotrace</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="va">$HOME</span>/.local/share/applications/PhyloTrace.desktop</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="at">-f</span> <span class="va">$HOME</span>/.local/share/icons/hicolor/<span class="pp">*</span>/apps/PhyloTrace_flat.png</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="ex">conda</span> remove <span class="at">-n</span> PhyloTrace <span class="at">--all</span> <span class="at">-y</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="troubleshooting" class="level3">
+<h3 class="anchored" data-anchor-id="troubleshooting">2.5 Troubleshooting</h3>
+<p>There are multiple possible sources for issues with the installation. Common mistakes during the installation are: - Change <code>path/to/phylotrace/directory</code> in the command chunks with the actual path of the repository containing all PhyloTrace files - Before installation make sure the whole repository is unzipped to a writable location in your system</p>
+<p>If the installation issues persist feel free to contact us via <a href="mailto:info@phylotrace.com?subject=%5BGitHub%5D%20Source%20Han%20Sans">info@phylotrace.com</a> or open an issue.</p>
+<section id="desktop-launcher-not-working" class="level4">
+<h4 class="anchored" data-anchor-id="desktop-launcher-not-working">Desktop Launcher not Working</h4>
+<p>If the desktop launcher is not working, the currently set default browser is likely not declared properly. To resolve this, change the R_BROWSER environment variable to the executable name of the desired browser (executable names for popular browsers are listed in the table below). For example to use Google Chrome, execute the following command:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> path/to/phylotrace/directory</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="va">R_BROWSER</span><span class="op">=</span>google-chrome</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="fu">bash</span> run_phylotrace.sh</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<blockquote class="blockquote">
+<p><em>In the command above, replace <code>path/to/phylotrace/directory</code> with the actual path linking to the PhyloTrace directory on your system.</em></p>
+</blockquote>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Browser</th>
+<th><em>browser-name</em></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Google Chrome</td>
+<td><em>google-chrome</em> <strong>or</strong> <em>google-chrome-stable</em></td>
+</tr>
+<tr class="even">
+<td>Chromium</td>
+<td><em>chromium</em></td>
+</tr>
+<tr class="odd">
+<td>Brave</td>
+<td><em>brave-browser</em></td>
+</tr>
+<tr class="even">
+<td>Opera</td>
+<td><em>opera</em></td>
+</tr>
+<tr class="odd">
+<td>Vivaldi</td>
+<td><em>vivaldi</em></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+</section>
+<section id="launch-phylotrace" class="level2">
+<h2 class="anchored" data-anchor-id="launch-phylotrace">3 Launch PhyloTrace</h2>
+<p><strong>Linux</strong> - Start PhyloTrace by using the launcher in Applications Menu. A browser tab with the app will automatically open in the default browser.</p>
+<p><img src="docs/resources/app_icon.png" width="60%"> <br></p>
+<p><strong>Launching from terminal (and for Microsoft Windows)</strong></p>
+<p>For Windows users, or if launching from the Linux desktop does not work, the alternative way to run the app is to execute these commands:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> path/to/phylotrace/directory</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="fu">bash</span> run_phylotrace.sh</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<blockquote class="blockquote">
+<p><em>In the command above, replace <code>path/to/phylotrace/directory</code> with the actual path linking to the PhyloTrace directory on your system.</em></p>
+</blockquote>
+<blockquote class="blockquote">
+<p><em>To install and use PhyloTrace on Windows, a user account with administration rights is required.</em></p>
+</blockquote>
+<p>The <strong>user manual</strong> containing documentation is available at <a href="https://www.phylotrace.com/user-manual">www.phylotrace.com/user-manual</a>.</p>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
