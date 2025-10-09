@@ -2022,8 +2022,6 @@ server <- function(input, output, session) {
       # Reactive variables related to plot controls
       if (isTRUE(Vis$mst_true)) {
         mst_node_label_reactive("Assembly Name")
-        mst_title_reactive("")
-        mst_subtitle_reactive("")
         mst_color_var_reactive(FALSE)
         mst_col_var_reactive("Isolation Date")
         mst_col_scale_reactive("Viridis")
@@ -2041,10 +2039,6 @@ server <- function(input, output, session) {
         mst_edge_length_reactive(35)
         mst_edge_font_size_reactive(18)
         mst_node_label_fontsize_reactive(14)
-        mst_title_size_reactive(35)
-        mst_subtitle_size_reactive(20)
-        mst_ratio_reactive(16 / 10)
-        mst_scale_reactive(600)
         mst_shadow_reactive(TRUE)
         mst_node_shape_reactive("dot")
         mst_show_clusters_reactive(FALSE)
@@ -17679,8 +17673,6 @@ server <- function(input, output, session) {
   ##### Label Menu ----
 
   mst_node_label_reactive <- reactiveVal()
-  mst_title_reactive <- reactiveVal()
-  mst_subtitle_reactive <- reactiveVal()
 
   observe({
     ifelse(
@@ -17691,18 +17683,6 @@ server <- function(input, output, session) {
         mst_node_label_reactive(input$mst_node_label),
         mst_node_label_reactive("Assembly Name")
       )
-    )
-
-    ifelse(
-      !is.null(input$mst_title),
-      mst_title_reactive(input$mst_title),
-      mst_title_reactive("")
-    )
-
-    ifelse(
-      !is.null(input$mst_subtitle),
-      mst_subtitle_reactive(input$mst_subtitle),
-      mst_subtitle_reactive("")
     )
   })
 
@@ -18101,8 +18081,6 @@ server <- function(input, output, session) {
   mst_edge_length_scale_reactive <- reactiveVal()
   mst_edge_length_reactive <- reactiveVal()
   mst_edge_font_size_reactive <- reactiveVal()
-  mst_title_size_reactive <- reactiveVal()
-  mst_subtitle_size_reactive <- reactiveVal()
   mst_node_label_fontsize_reactive <- reactiveVal()
 
   observe({
@@ -18152,18 +18130,6 @@ server <- function(input, output, session) {
       !is.null(input$mst_node_label_fontsize),
       mst_node_label_fontsize_reactive(input$mst_node_label_fontsize),
       mst_node_label_fontsize_reactive(14)
-    )
-
-    ifelse(
-      !is.null(input$mst_title_size),
-      mst_title_size_reactive(input$mst_title_size),
-      mst_title_size_reactive(35)
-    )
-
-    ifelse(
-      !is.null(input$mst_subtitle_size),
-      mst_subtitle_size_reactive(input$mst_subtitle_size),
-      mst_subtitle_size_reactive(20)
     )
   })
 
@@ -18440,64 +18406,6 @@ server <- function(input, output, session) {
                     )
                   )
                 )
-              ),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; font-size: 14px; position: relative; top: 15px; margin-left: 15px;',
-                        'Title'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  div(
-                    class = "mst-size-slider",
-                    sliderInput(
-                      "mst_title_size",
-                      "",
-                      value = isolate(mst_title_size_reactive()),
-                      min = 15,
-                      max = 50,
-                      step = 1,
-                      ticks = FALSE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; font-size: 14px; position: relative; top: 15px; margin-left: 15px;',
-                        'Subtitle'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  div(
-                    class = "mst-size-slider2",
-                    sliderInput(
-                      "mst_subtitle_size",
-                      "",
-                      value = isolate(mst_subtitle_size_reactive()),
-                      min = 15,
-                      max = 40,
-                      step = 1,
-                      ticks = FALSE
-                    )
-                  )
-                )
               )
             )
           )
@@ -18510,8 +18418,7 @@ server <- function(input, output, session) {
 
   ##### Other Menu ----
 
-  mst_ratio_reactive <- reactiveVal()
-  mst_scale_reactive <- reactiveVal()
+  mst_aspect_ratio_reactive <- reactiveVal()
   mst_shadow_reactive <- reactiveVal()
   mst_node_shape_reactive <- reactiveVal()
   mst_show_clusters_reactive <- reactiveVal()
@@ -18525,15 +18432,9 @@ server <- function(input, output, session) {
 
   observe({
     ifelse(
-      !is.null(input$mst_ratio),
-      mst_ratio_reactive(input$mst_ratio),
-      mst_ratio_reactive(16 / 10)
-    )
-
-    ifelse(
-      !is.null(input$mst_scale),
-      mst_scale_reactive(input$mst_scale),
-      mst_scale_reactive(600)
+      !is.null(input$mst_aspect_ratio),
+      mst_aspect_ratio_reactive(input$mst_aspect_ratio),
+      mst_aspect_ratio_reactive(0.6)
     )
 
     ifelse(
@@ -18637,14 +18538,14 @@ server <- function(input, output, session) {
                   )
                 )
               ),
+              br(),
               fluidRow(
                 column(
                   width = 5,
-                  align = "left",
                   HTML(
                     paste(
                       tags$span(
-                        style = 'color: white; font-size: 14px; margin-left: 15px; position: relative; top: 27px',
+                        style = 'color: white; top: 8px; margin-left: 15px; font-size: 14px; position: relative;',
                         'Ratio'
                       )
                     )
@@ -18655,55 +18556,12 @@ server <- function(input, output, session) {
                   align = "center",
                   div(
                     class = "mst-control-ratio",
-                    selectInput(
-                      "mst_ratio",
-                      "",
-                      choices = c(
-                        "16:10" = (16 / 10),
-                        "16:9" = (16 / 9),
-                        "4:3" = (4 / 3)
-                      ),
-                      selected = isolate(mst_ratio_reactive())
-                    )
-                  )
-                )
-              ),
-              br(),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; margin-left: 15px; font-size: 14px; position: relative;',
-                        'Scale'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  # div(
-                  #   class = "mst-scale-slider",
-                  #   sliderInput(
-                  #     "mst_scale",
-                  #     "",
-                  #     min = 450,
-                  #     max = 670,
-                  #     step = 5,
-                  #     value = isolate(mst_scale_reactive()),
-                  #     ticks = FALSE
-                  #   )
-                  # )
-                  div(
-                    class = "nj-control-ratio",
                     sliderInput(
-                      "nj_aspect_ratio",
+                      "mst_aspect_ratio",
                       "",
                       min = 0.5,
                       max = 2.0,
-                      value = isolate(nj_aspect_ratio_val()),
+                      value = isolate(mst_aspect_ratio_reactive()),
                       step = 0.1,
                       width = "100%",
                       ticks = FALSE
@@ -18713,6 +18571,7 @@ server <- function(input, output, session) {
               )
             )
           ),
+          br(),
           hr(),
           fluidRow(
             column(
@@ -19222,8 +19081,6 @@ server <- function(input, output, session) {
     removeModal()
 
     mst_node_label_reactive("Assembly Name")
-    mst_title_reactive("")
-    mst_subtitle_reactive("")
     mst_color_var_reactive(FALSE)
     mst_col_var_reactive("Isolation Date")
     mst_col_scale_reactive("Viridis")
@@ -19241,10 +19098,6 @@ server <- function(input, output, session) {
     mst_edge_length_reactive(35)
     mst_edge_font_size_reactive(18)
     mst_node_label_fontsize_reactive(14)
-    mst_title_size_reactive(35)
-    mst_subtitle_size_reactive(20)
-    mst_ratio_reactive(16 / 10)
-    mst_scale_reactive(600)
     mst_shadow_reactive(TRUE)
     mst_node_shape_reactive("dot")
     mst_show_clusters_reactive(FALSE)
@@ -19261,38 +19114,6 @@ server <- function(input, output, session) {
     mst_symbol_size_reactive(20)
 
     runjs(unblock_ui)
-  })
-
-  # Size scaling MST
-  observe({
-    if (mst_ratio_reactive() == "1.6") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 5,
-        value = 600,
-        min = 450,
-        max = 670
-      )
-    } else if (mst_ratio_reactive() == "1.77777777777778") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 9,
-        value = 657,
-        min = 450,
-        max = 666
-      )
-    } else if (mst_ratio_reactive() == "1.33333333333333") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 3,
-        value = 654,
-        min = 450,
-        max = 669
-      )
-    }
   })
 
   # Clustering UI
@@ -19494,9 +19315,7 @@ server <- function(input, output, session) {
     visNetwork_graph <- visNetwork(
       data$nodes,
       data$edges,
-      main = mst_title(),
-      background = mst_background_color(),
-      submain = mst_subtitle()
+      background = mst_background_color()
     ) %>%
       visNodes(
         size = mst_node_size_reactive(),
@@ -19590,9 +19409,7 @@ server <- function(input, output, session) {
         visNetwork_graph <- visNetwork(
           data$nodes,
           data$edges,
-          main = mst_title(),
-          background = mst_background_color(),
-          submain = mst_subtitle()
+          background = mst_background_color()
         ) %>%
           visNodes(
             size = mst_node_size_reactive(),
@@ -19696,55 +19513,7 @@ server <- function(input, output, session) {
     }
   })
 
-  # Set Title
-  mst_title <- reactive({
-    if (nchar(mst_title_reactive()) < 1) {
-      list(
-        text = "title",
-        style = paste0(
-          "font-family:Georgia, Times New Roman, Times, serif;",
-          "text-align:center;",
-          "font-size: ",
-          as.character(mst_title_size_reactive()),
-          "px",
-          "; color: ",
-          as.character(mst_background_color())
-        )
-      )
-    } else {
-      list(
-        text = mst_title_reactive(),
-        style = paste0(
-          "font-family:Georgia, Times New Roman, Times, serif;",
-          "text-align:center;",
-          "font-size: ",
-          as.character(mst_title_size_reactive()),
-          "px",
-          "; color: ",
-          as.character(mst_text_color_reactive())
-        )
-      )
-    }
-  })
-
-  # Set Subtitle
-  mst_subtitle <- reactive({
-    list(
-      text = mst_subtitle_reactive(),
-      style = paste0(
-        "font-family:Georgia, Times New Roman, Times, serif;",
-        "text-align:center;",
-        "font-size: ",
-        as.character(mst_subtitle_size_reactive()),
-        "px",
-        "; color: ",
-        as.character(mst_text_color_reactive())
-      )
-    )
-  })
-
   # Background color
-
   mst_background_color <- reactive({
     if (isTRUE(mst_background_transparent_reactive())) {
       'rgba(0, 0, 0, 0)'
@@ -21799,41 +21568,30 @@ server <- function(input, output, session) {
           log_print("Rendering MST graph")
 
           output$mst_field <- renderUI({
-            if (isTRUE(mst_background_transparent_reactive())) {
-              visNetworkOutput(
-                "tree_mst",
-                width = paste0(
-                  mst_scale_reactive() * as.numeric(mst_ratio_reactive()),
-                  "px"
-                ),
-                height = paste0(mst_scale_reactive(), "px")
+            if (!is.null(session$clientData$output_tree_mst_height)) {
+              width <- as.integer(
+                session$clientData$output_tree_mst_height *
+                  (1 / mst_aspect_ratio_reactive())
               )
             } else {
-              if (!is.null(session$clientData$output_tree_mst_height)) {
-                message(session$clientData$output_tree_mst_height)
-                width <- as.integer(
-                  session$clientData$output_tree_mst_height *
-                    (1 / nj_aspect_ratio_val())
-                )
-              } else {
-                message("Unavailable")
-                width <- as.integer(
-                  500 *
-                    nj_aspect_ratio_val()
-                )
-              }
-
-              width <- paste0(width, "px")
-
-              addSpinner(
-                visNetworkOutput(
-                  "tree_mst",
-                  height = "100%",
-                  width = width
-                ),
-                spin = "dots",
-                color = "#ffffff"
+              width <- as.integer(
+                500 *
+                  mst_aspect_ratio_reactive()
               )
+            }
+
+            width <- paste0(width, "px")
+
+            visnetworkoutput <- visNetworkOutput(
+              "tree_mst",
+              height = "100%",
+              width = width
+            )
+
+            if (isTRUE(mst_background_transparent_reactive())) {
+              visnetworkoutput
+            } else {
+              addSpinner(visnetworkoutput)
             }
           })
 

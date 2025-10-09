@@ -2283,7 +2283,7 @@ body>div.wrapper>header>nav>div>ul>li.dropdown.notifications-menu:hover {
 /* Visualization MST */
 
 #mst_node_col_info>svg {
-  top: -30px !important;
+  top: -37px !important;
 }
 
 #mst_legend_menu_dropmenu .tippy-popper,
@@ -2308,7 +2308,6 @@ body>div.wrapper>header>nav>div>ul>li.dropdown.notifications-menu:hover {
 
 .mst-edge-slider {
   width: 85%;
-  margin-left: -20px;
   margin-top: -20px;
 }
 
@@ -2518,7 +2517,6 @@ button#mst_edgecolor_menu {
   position: relative;
   top: -10px;
   width: 85%;
-  left: -5px;
 }
 
 #mst_subtitle {
@@ -2556,6 +2554,7 @@ button#mst_col_map_menu {
 .mst_scale_slider {
   margin-bottom: -12px;
   margin-top: -10px;
+  margin-right: 15px;
   width: 85%
 }
 
@@ -2978,6 +2977,11 @@ button#mst_col_map_menu {
   margin-left: -20px;
 }
 
+.nj-control-ratio .control-label,
+.mst-control-ratio .control-label {
+  display: none;
+}
+
 #tree_algo {
   margin-top: -9px;
   margin-bottom: -25px;
@@ -3215,6 +3219,7 @@ button#nj_del_label {
 .full-height-box .box-body {
   overflow-y: auto;
   overflow-x: clip;
+  height: 100%;
 }
 
 #tree_controls {
@@ -3297,7 +3302,7 @@ button#create_rep.btn.btn-default.action-button.shiny-bound-input {
   border: 1px solid white;
   width: 100%;
   margin-top: 10px;
-  margin-left: -30px;
+  margin-left: -15px;
 }
 
 #nj_v,
@@ -4467,7 +4472,7 @@ button#nj_nodepoint_menu {
 .filetype-mst {
   margin-top: -28px;
   width: 100%;
-  margin-left: -30px;
+  margin-left: -15px;
 }
 
 .datepicker {
@@ -4625,6 +4630,10 @@ button#download_nj_bttn {
   margin-top: 20px;
   margin-bottom: 10px;
   margin-left: -30px;
+}
+
+button#download_nj_bttn {
+  margin-left: -15px !important;
 }
 
 #save_plot_html_bttn>i,

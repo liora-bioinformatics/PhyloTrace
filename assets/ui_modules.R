@@ -123,7 +123,7 @@ mst_control_box <- box(
       )
     ),
     column(
-      width = 1,
+      width = 2,
       align = "center",
       div(
         class = "plot-control-reset",
@@ -139,15 +139,6 @@ mst_control_box <- box(
           title = "Reset",
           options = list("delay': 400, 'foo" = "foo")
         )
-      )
-    ),
-    column(
-      width = 1,
-      align = "center",
-      materialSwitch(
-        "toggle_style",
-        "Full",
-        value = FALSE
       )
     )
   )
