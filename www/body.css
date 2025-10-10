@@ -2973,7 +2973,7 @@ button#mst_col_map_menu {
 }
 
 .nj-control-ratio {
-  margin-bottom: -20px;
+  margin-top: 14px;
   margin-left: -20px;
 }
 
@@ -3035,7 +3035,6 @@ button#mst_col_map_menu {
 
 #nj_legend_menu_dropmenu .tippy-popper,
 #nj_clade_menu_dropmenu .tippy-popper,
-#nj_variable_tiles_menu_dropmenu .tippy-popper,
 #nj_variable_heatmap_menu_dropmenu .tippy-popper,
 #nj_custom_label_menu_dropmenu .tippy-popper {
   bottom: 1% !important;
@@ -3531,11 +3530,9 @@ button#nj_nodepoint_menu {
 }
 
 .nj-root-select {
-  margin-top: -19px;
-  right: 2px;
   position: relative;
-  margin-left: -20px;
-  margin-bottom: -20px;
+  margin-left: 15px;
+  width: 100%;
 }
 
 .nj-rootedge-line {

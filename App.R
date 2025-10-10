@@ -2021,6 +2021,7 @@ server <- function(input, output, session) {
 
       # Reactive variables related to plot controls
       if (isTRUE(Vis$mst_true)) {
+        mst_show_label_reactive(TRUE)
         mst_node_label_reactive("Assembly Name")
         mst_color_var_reactive(FALSE)
         mst_col_var_reactive("Isolation Date")
@@ -2350,7 +2351,9 @@ server <- function(input, output, session) {
 
       # Empty tree plot fields
       output$tree_field <- NULL
+      output$tree_aspect <- NULL
       output$mst_field <- NULL
+      output$mst_aspect <- NULL
       log_print("Input load")
 
       # set typing start control variable
@@ -16278,9 +16281,9 @@ server <- function(input, output, session) {
             div(
               class = "nj-label-control-col",
               column(
-                width = 4,
+                width = 9,
                 h4(
-                  p("Root"),
+                  p("Tree Rooting"),
                   style = paste0(
                     "color:white; position: relative; top: 0px;",
                     " margin-bottom: -10px; right: -15px"
@@ -16288,27 +16291,8 @@ server <- function(input, output, session) {
                 )
               )
             ),
-            div(
-              class = "nj-elements-control-col",
-              column(
-                width = 5,
-                div(
-                  class = "nj-root-select",
-                  selectInput(
-                    "nj_root_isolate",
-                    "",
-                    choices = c(
-                      "Automatic",
-                      DB$data$`Assembly Name`[which(DB$data$Include == TRUE)]
-                    ),
-                    selected = isolate(nj_root_isolate_val()),
-                    width = "90%"
-                  )
-                )
-              )
-            ),
             column(
-              width = 1,
+              width = 2,
               actionButton(
                 "table_view",
                 "",
@@ -16319,6 +16303,24 @@ server <- function(input, output, session) {
                 HTML("Select from table"),
                 placement = "bottom",
                 trigger = "hover"
+              )
+            )
+          ),
+          fluidRow(
+            column(
+              width = 12,
+              div(
+                class = "nj-root-select",
+                selectInput(
+                  "nj_root_isolate",
+                  "",
+                  choices = c(
+                    "Automatic",
+                    DB$data$`Assembly Name`[which(DB$data$Include == TRUE)]
+                  ),
+                  selected = isolate(nj_root_isolate_val()),
+                  width = "90%"
+                )
               )
             )
           ),
@@ -16914,7 +16916,7 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_download_menu")
 
     # Switch to full display mode
-    updateSwitchInput(session, "toggle_style", value = TRUE)
+    updateSwitchInput(session, "toggle_style", value = FALSE)
 
     output$tree_controls <- renderUI(
       div(
@@ -17651,18 +17653,38 @@ server <- function(input, output, session) {
           column(
             width = 12,
             align = "left",
-            h4(
-              p("Isolate Label"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
-            column(
-              width = 12,
-              align = "center",
-              div(
-                class = "mst-label-sel",
-                uiOutput("mst_node_label")
+            fluidRow(
+              column(
+                width = 8,
+                align = "left",
+                h4(
+                  p("Isolate Label"),
+                  style = "color:white; position: relative; right: -15px; "
+                )
               ),
-              br()
+              column(
+                width = 4,
+                align = "center",
+                div(
+                  class = "mat-switch-v",
+                  materialSwitch(
+                    "mst_show_label",
+                    "",
+                    value = isolate(mst_show_label_reactive())
+                  )
+                )
+              )
+            ),
+            fluidRow(
+              column(
+                width = 12,
+                align = "center",
+                div(
+                  class = "mst-label-sel",
+                  uiOutput("mst_node_label")
+                ),
+                br()
+              )
             )
           )
         )
@@ -17673,6 +17695,7 @@ server <- function(input, output, session) {
   ##### Label Menu ----
 
   mst_node_label_reactive <- reactiveVal()
+  mst_show_label_reactive <- reactiveVal()
 
   observe({
     ifelse(
@@ -17682,6 +17705,16 @@ server <- function(input, output, session) {
         !is.null(input$mst_node_label),
         mst_node_label_reactive(input$mst_node_label),
         mst_node_label_reactive("Assembly Name")
+      )
+    )
+
+    ifelse(
+      isTRUE(mst_color_var_reactive()),
+      mst_show_label_reactive(TRUE),
+      ifelse(
+        !is.null(input$mst_show_label),
+        mst_show_label_reactive(input$mst_show_label),
+        mst_show_label_reactive(TRUE)
       )
     )
   })
@@ -17704,18 +17737,38 @@ server <- function(input, output, session) {
             column(
               width = 12,
               align = "left",
-              h4(
-                p("Isolate Label"),
-                style = "color:white; position: relative; right: -15px; top: 15px;"
-              ),
-              column(
-                width = 12,
-                align = "center",
-                div(
-                  class = "mst-label-sel",
-                  uiOutput("mst_node_label")
+              fluidRow(
+                column(
+                  width = 8,
+                  align = "left",
+                  h4(
+                    p("Isolate Label"),
+                    style = "color:white; position: relative; right: -15px; "
+                  )
                 ),
-                br()
+                column(
+                  width = 4,
+                  align = "center",
+                  div(
+                    class = "mat-switch-v",
+                    materialSwitch(
+                      "mst_show_label",
+                      "",
+                      value = isolate(mst_show_label_reactive())
+                    )
+                  )
+                )
+              ),
+              fluidRow(
+                column(
+                  width = 12,
+                  align = "center",
+                  div(
+                    class = "mst-label-sel",
+                    uiOutput("mst_node_label")
+                  ),
+                  br()
+                )
               )
             )
           )
@@ -19080,6 +19133,7 @@ server <- function(input, output, session) {
 
     removeModal()
 
+    mst_show_label_reactive(TRUE)
     mst_node_label_reactive("Assembly Name")
     mst_color_var_reactive(FALSE)
     mst_col_var_reactive("Isolation Date")
@@ -19163,6 +19217,11 @@ server <- function(input, output, session) {
         inputId = "mst_node_label",
         choices = c("Assembly Name")
       )
+      updateSwitchInput(
+        session,
+        inputId = "mst_show_label",
+        value = TRUE
+      )
     } else {
       updateSelectizeInput(
         session,
@@ -19214,12 +19273,17 @@ server <- function(input, output, session) {
 
   mst_tree <- reactive({
     data <- toVisNetworkData(Vis$mst_pre)
+
     data$nodes <- mutate(
       data$nodes,
-      label = Vis$unique_meta[,
-        colnames(Vis$unique_meta) %in%
-          mst_node_label_reactive()
-      ],
+      label = ifelse(
+        isTRUE(mst_show_label_reactive()) | isTRUE(mst_color_var_reactive()),
+        Vis$unique_meta[,
+          colnames(Vis$unique_meta) %in%
+            mst_node_label_reactive()
+        ],
+        ""
+      ),
       value = mst_node_scaling()
     )
 
@@ -19537,6 +19601,8 @@ server <- function(input, output, session) {
       )
     }
 
+    test <<- Vis_nj
+
     if (isTRUE(nj_nodelabel_show_val())) {
       ggtree(
         Vis_nj,
@@ -19556,9 +19622,13 @@ server <- function(input, output, session) {
         Vis_nj,
         color = nj_color_val(),
         layout = layout_nj(),
-        ladderize = nj_ladder_val()
+        ladderize = nj_ladder_val(),
       ) %<+%
         Vis$meta_nj +
+        geom_label(
+          aes(x = branch, label = round(branch.length, 2)),
+          nudge_y = 0.25
+        ) +
         nj_clades() +
         nj_tiplab() +
         nj_tiplab_scale() +
@@ -20665,7 +20735,6 @@ server <- function(input, output, session) {
       make_filename(filetype = input$filetype_nj, scheme = DB$scheme)
     },
     content = function(file) {
-      cat(input$filetype_nj)
       save_plot_content(
         file = file,
         session = session,
@@ -21956,7 +22025,11 @@ server <- function(input, output, session) {
                           paste(
                             tags$span(
                               style = 'color:white; position: relative; top: 17px; font-style: italic',
-                              input$tree_type
+                              ifelse(
+                                input$tree_type == "MST",
+                                "MST",
+                                input$tree_algo
+                              )
                             )
                           )
                         )
@@ -22202,7 +22275,7 @@ server <- function(input, output, session) {
         na_handling = input$na_handling,
         distance = "Hamming Distances",
         version = c(phylotraceVersion, "2.5.1"),
-        plot = "NJ"
+        plot = c(input$tree_type, input$tree_algo)
       )
     }
 
@@ -22218,14 +22291,22 @@ server <- function(input, output, session) {
     )
 
     if (tree_type_reactive() == "Tree") {
-      jpeg(
-        paste0(getwd(), "/Report/NJ.jpeg"),
-        width = width,
-        height = height,
-        quality = 100
+      # jpeg(
+      #   paste0(getwd(), "/Report/NJ.jpeg"),
+      #   width = width,
+      #   height = height,
+      #   quality = 100
+      # )
+      # print(make.tree())
+      # dev.off()
+      save_plot_content(
+        file = paste0(getwd(), "/Report/Tree.svg"),
+        session = session,
+        filetype = "svg",
+        aspect_ratio = nj_aspect_ratio_val(),
+        plot = make.tree(),
+        dpi = 192
       )
-      print(make.tree())
-      dev.off()
     } else if (tree_type_reactive() == "MST") {
       runjs("mstReport();")
       decoded_data <- base64enc::base64decode(input$canvas_data)

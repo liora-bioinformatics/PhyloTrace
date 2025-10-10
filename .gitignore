@@ -13,3 +13,8 @@ renv.lock
 
 # Ignore R environment information csv
 r_packages.csv
+
+# Ignore report folder files
+Report/*
+!Report/Report.Rmd
+!Report/PhyloTrace_bw.png

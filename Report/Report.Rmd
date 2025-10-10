@@ -17,10 +17,13 @@ library(kableExtra)
 report_vars <- readRDS(paste0(getwd(), "/selected_elements.rds"))
 
 # Format scheme url link
-if(!is.null(report_vars[["scheme"]][[2]][2])){
-  report_vars[["scheme"]][[2]][2] <- sub('.*href="([^"]*)".*', '\\1',
-                                               report_vars[["scheme"]][[2]][2])
-} 
+if (!is.null(report_vars[["scheme"]][[2]][2])) {
+  report_vars[["scheme"]][[2]][2] <- sub(
+    '.*href="([^"]*)".*',
+    '\\1',
+    report_vars[["scheme"]][[2]][2]
+  )
+}
 
 ```
 
@@ -34,7 +37,7 @@ if(!is.null(report_vars[["scheme"]][[2]][2])){
 ```
 
 ```{r pressure, echo=FALSE, fig.align = "right", out.width = '30%', out.extra='style="float: right; margin-right: 10px; margin-top: 20px"'}
-knitr::include_graphics(paste0(getwd(),"/PhyloTrace_bw.png"))
+knitr::include_graphics(paste0(getwd(), "/PhyloTrace_bw.png"))
 ```
 
 # cgMLST Report
@@ -51,104 +54,165 @@ knitr::include_graphics(paste0(getwd(),"/PhyloTrace_bw.png"))
 
 \
 
-```{r echo=FALSE, fig.align = "center", out.width='960', out.height='650'}
-if(!report_vars[["plot"]] == "MST"){
-  if(report_vars[["report_df.Include"]][13]) {
-  knitr::include_graphics(paste0(report_vars[["plot"]], ".jpeg"))
-  }
-} else {
-  if(report_vars[["report_df.Include"]][13]) {
-  knitr::include_graphics(paste0(report_vars[["plot"]], ".jpg"))
-  }
+<!-- ```{r echo=FALSE, fig.align = "center", out.width='960', out.height='650'} -->
+```{r echo=FALSE, fig.align = "center"}
+file_ext <- ifelse(report_vars[["plot"]][1] == "MST", ".jpg", ".svg")
+knitr::include_graphics(paste0(report_vars[["plot"]][1], file_ext))
+```
+\
+
+```{r echo=FALSE, fig.align = "center"}
+file_ext <- ifelse(report_vars[["plot"]][1] == "MST", ".jpg", ".svg")
+knitr::include_graphics(paste0(report_vars[["plot"]][1], file_ext))
+```
+
+\
+
+```{r echo=FALSE}
+if (report_vars[["report_df.Include"]][1]) {
+  kable(
+    select(report_vars[["entry_table"]], report_vars[["table_columns"]]),
+    row.names = FALSE,
+    linesep = ""
+  ) %>%
+    kable_styling(
+      bootstrap_options = "striped",
+      full_width = TRUE,
+      font_size = 10
+    ) %>%
+    row_spec(1:nrow(report_vars[["entry_table"]]), extra_css = "padding: 3px")
 }
 ```
 
 \
 
 ```{r echo=FALSE}
-if(report_vars[["report_df.Include"]][1]) {
-  kable(select(report_vars[["entry_table"]], report_vars[["table_columns"]]), 
-      row.names = FALSE,
-      linesep = "") %>%
-  kable_styling(bootstrap_options = "striped", full_width = TRUE, font_size = 10) %>%
-  row_spec(1:nrow(report_vars[["entry_table"]]),
-           extra_css = "padding: 3px")
-}
-```
-
-\
-
-```{r echo=FALSE}
-if(!is.null(report_vars[["na_handling"]])){
-  if(report_vars[["na_handling"]] == "ignore_na") {
-    report_vars[["na_handling"]] <- "Ignore missing values for pairwise comparison"
+if (!is.null(report_vars[["na_handling"]])) {
+  if (report_vars[["na_handling"]] == "ignore_na") {
+    report_vars[[
+      "na_handling"
+    ]] <- "Ignore missing values for pairwise comparison"
   } else if (report_vars[["na_handling"]] == "omit") {
-    report_vars[["na_handling"]] <- "Omit loci with missing values for all assemblies"
-  } else  {
+    report_vars[[
+      "na_handling"
+    ]] <- "Omit loci with missing values for all assemblies"
+  } else {
     report_vars[["na_handling"]] <- "Treat missing values as allele variant"
   }
-} 
+}
 
-if(report_vars[["report_df.Include"]][7] == TRUE) {
+if (report_vars[["report_df.Include"]][7] == TRUE) {
   show_analysis <- TRUE
 } else {
   show_analysis <- FALSE
 }
- 
-if(!is.null(report_vars[["na_handling"]])){
+
+if (!is.null(report_vars[["na_handling"]])) {
   df <- data.frame(
     Item = c(
-      if(report_vars[["report_df.Include"]][9]){"Tree construction"},
-      if(report_vars[["report_df.Include"]][10]){"Distance algorithm"},
-      if(report_vars[["report_df.Include"]][11]){"Missing value handling"},
-      if(report_vars[["report_df.Include"]][12]){"PhyloTrace version"},
-      if(report_vars[["report_df.Include"]][12]){"pblat version"}),
+      if (report_vars[["report_df.Include"]][9]) {
+        "Tree construction"
+      },
+      if (report_vars[["report_df.Include"]][10]) {
+        "Distance algorithm"
+      },
+      if (report_vars[["report_df.Include"]][11]) {
+        "Missing value handling"
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        "PhyloTrace version"
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        "pblat version"
+      }
+    ),
     Content = c(
-      if(report_vars[["report_df.Include"]][9]){report_vars[["tree"]]},
-      if(report_vars[["report_df.Include"]][10]){report_vars[["distance"]]},
-      if(report_vars[["report_df.Include"]][11]){report_vars[["na_handling"]]},
-      if(report_vars[["report_df.Include"]][12]){report_vars[["version"]][1]},
-      if(report_vars[["report_df.Include"]][12]){report_vars[["version"]][2]}))
+      if (report_vars[["report_df.Include"]][9]) {
+        report_vars[["tree"]]
+      },
+      if (report_vars[["report_df.Include"]][10]) {
+        report_vars[["distance"]]
+      },
+      if (report_vars[["report_df.Include"]][11]) {
+        report_vars[["na_handling"]]
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        report_vars[["version"]][1]
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        report_vars[["version"]][2]
+      }
+    )
+  )
 } else {
   df <- data.frame(
     Item = c(
-      if(report_vars[["report_df.Include"]][9]){"Tree construction"},
-      if(report_vars[["report_df.Include"]][10]){"Distance algorithm"},
-      if(report_vars[["report_df.Include"]][12]){"PhyloTrace version"},
-      if(report_vars[["report_df.Include"]][12]){"pblat version"}),
+      if (report_vars[["report_df.Include"]][9]) {
+        "Tree construction"
+      },
+      if (report_vars[["report_df.Include"]][10]) {
+        "Distance algorithm"
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        "PhyloTrace version"
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        "pblat version"
+      }
+    ),
     Content = c(
-      if(report_vars[["report_df.Include"]][9]){report_vars[["tree"]]},
-      if(report_vars[["report_df.Include"]][10]){report_vars[["distance"]]},
-      if(report_vars[["report_df.Include"]][12]){report_vars[["version"]][1]},
-      if(report_vars[["report_df.Include"]][12]){report_vars[["version"]][2]}))
+      if (report_vars[["report_df.Include"]][9]) {
+        if (report_vars[["tree"]] == "MST") {
+          "Minimum-Spanning Tree"
+        } else {
+          report_vars[["tree"]][2]
+        }
+      },
+      if (report_vars[["report_df.Include"]][10]) {
+        report_vars[["distance"]]
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        report_vars[["version"]][1]
+      },
+      if (report_vars[["report_df.Include"]][12]) {
+        report_vars[["version"]][2]
+      }
+    )
+  )
 }
 colnames(df) <- NULL
 
-if(report_vars[["report_df.Include"]][7] & show_analysis){
+if (report_vars[["report_df.Include"]][7] & show_analysis) {
   kbl(df) %>%
-  kable_styling(position = "float_left",
-                font_size = 10) %>%
-  kable_paper(full_width = F) %>%
-  column_spec(1, bold = T, border_right = T) %>%
-  column_spec(2, width = "15em", background = "#F9F9F9")%>%
-  pack_rows("Analysis parameter", 1, nrow(df), 
-            bold = FALSE,
-            label_row_css = "font-size: 20px; padding: 19px",
-            hline_before = F,
-            hline_after = F)
+    kable_styling(position = "float_left", font_size = 10) %>%
+    kable_paper(full_width = F) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+    column_spec(2, width = "15em", background = "#F9F9F9") %>%
+    pack_rows(
+      "Analysis parameter",
+      1,
+      nrow(df),
+      bold = FALSE,
+      label_row_css = "font-size: 20px; padding: 19px",
+      hline_before = F,
+      hline_after = F
+    )
 }
-if(report_vars[["report_df.Include"]][8] & show_analysis) {
+if (report_vars[["report_df.Include"]][8] & show_analysis) {
   kbl(report_vars[["scheme"]]) %>%
-  kable_styling(position = "right",
-                font_size = 10) %>%
-  kable_paper(full_width = F) %>%
-  column_spec(1, bold = T, border_right = T) %>%
-  column_spec(2, width = "45em", background = "#F9F9F9") %>%
-  pack_rows("cgMLST Scheme", 1, nrow(report_vars[["scheme"]]), 
-            bold = FALSE,
-            label_row_css = "font-size: 20px; padding: 19px",
-            hline_before = FALSE,
-            hline_after = F)
+    kable_styling(position = "right", font_size = 10) %>%
+    kable_paper(full_width = F) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+    column_spec(2, width = "45em", background = "#F9F9F9") %>%
+    pack_rows(
+      "cgMLST Scheme",
+      1,
+      nrow(report_vars[["scheme"]]),
+      bold = FALSE,
+      label_row_css = "font-size: 20px; padding: 19px",
+      hline_before = FALSE,
+      hline_after = F
+    )
 }
 
 ```
