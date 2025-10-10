@@ -3005,7 +3005,7 @@ button#mst_col_map_menu {
   margin-bottom: 0px;
 }
 
-#nj_labeltext_menu_dropmenu .tippy-popper,
+/* #nj_labeltext_menu_dropmenu .tippy-popper,
 #nj_labelformat_menu_dropmenu .tippy-popper,
 #nj_branch_label_menu_dropmenu .tippy-popper,
 #nj_title_menu_dropmenu .tippy-popper,
@@ -3022,21 +3022,35 @@ button#mst_col_map_menu {
 #nj_custom_label_menu_dropmenu .tippy-popper,
 #nj_variable_tipcolor_menu_dropmenu .tippy-popper,
 #nj_variable_tiplab_menu_dropmenu .tippy-popper,
-#nj_variable_tiles_menu_dropmenu .tippy-popper {
-  top: 0px !important;
-  left: 15px !important
+#nj_variable_tiles_menu_dropmenu .tippy-popper */
+.tippy-popper {
+  position: fixed !important;
+  z-index: 99999 !important;
+  right: 14% !important;
+  top: unset !important;
+  left: unset !important;
+  bottom: unset !important;
+  transform: none !important;
 }
 
+#nj_legend_menu_dropmenu .tippy-popper,
 #nj_clade_menu_dropmenu .tippy-popper,
+#nj_variable_tiles_menu_dropmenu .tippy-popper,
+#nj_variable_heatmap_menu_dropmenu .tippy-popper,
+#nj_custom_label_menu_dropmenu .tippy-popper {
+  bottom: 1% !important;
+}
+
+/* #nj_clade_menu_dropmenu .tippy-popper,
 #nj_legend_menu_dropmenu .tippy-popper {
   top: -50px !important;
   left: 15px !important
-}
+} */
 
-#nj_variable_heatmap_menu_dropmenu .tippy-popper {
+/* #nj_variable_heatmap_menu_dropmenu .tippy-popper {
   top: -80px !important;
   left: 15px !important
-}
+} */
 
 #tree_type {
   margin-top: -9px;
