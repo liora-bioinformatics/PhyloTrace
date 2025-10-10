@@ -2094,7 +2094,9 @@ server <- function(input, output, session) {
           nj_branch_size_val(4)
         )
         Vis$nj_branch_label_val_reset <- TRUE
-        nj_branch_label_val("Host")
+        nj_branch_label_val("Allelic Distance")
+        nj_branch_panel_val(FALSE)
+        nj_branchlabel_cutoff_val(10)
         nj_branchlab_alpha_val(0.65)
         nj_branch_x_val(0)
         nj_branchlab_fontface_val("plain")
@@ -2186,6 +2188,7 @@ server <- function(input, output, session) {
         nj_title_color_val("#000000")
         nj_tiplab_color_val("#000000")
         nj_tiplab_fill_val("#84D9A0")
+        nj_branch_color_val("#000000")
         nj_branch_label_color_val("#FFB7B7")
         nj_tippoint_color_val("#3A4657")
         nj_nodepoint_color_val("#3A4657")
@@ -10896,9 +10899,44 @@ server <- function(input, output, session) {
                           value = 0.5,
                           width = "250px",
                           ticks = FALSE
-                        )
+                        ),
+                        br()
                       )
                     )
+                  )
+                )
+              ),
+              fluidRow(
+                column(
+                  width = 5,
+                  div(
+                    class = "mat-switch-geom",
+                    materialSwitch(
+                      inputId = "nj_branch_panel",
+                      h5(
+                        p("Panels"),
+                        style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                      ),
+                      value = isolate(nj_branch_panel_val()),
+                      right = FALSE
+                    )
+                  )
+                ),
+                column(
+                  width = 7,
+                  sliderInput(
+                    inputId = "nj_branchlabel_cutoff",
+                    label = h5(
+                      "Cutoff",
+                      style = "color:white; margin-bottom: 0px"
+                    ),
+                    value = isolate(nj_branchlabel_cutoff_val()),
+                    min = 1,
+                    max = 100,
+                    step = 1,
+                    width = "100%",
+                    ticks = FALSE,
+                    post = "%"
                   )
                 )
               )
@@ -11288,10 +11326,16 @@ server <- function(input, output, session) {
   nj_show_branch_label_val <- reactiveVal()
   nj_branch_size_val <- reactiveVal()
   nj_branch_label_reactive <- reactive({
-    ifelse(!is.null(input$nj_branch_label), input$nj_branch_label, "Host")
+    ifelse(
+      !is.null(input$nj_branch_label),
+      input$nj_branch_label,
+      "Allelic Distance"
+    )
   }) |>
     debounce(100)
   nj_branch_label_val <- reactiveVal()
+  nj_branch_panel_val <- reactiveVal()
+  nj_branchlabel_cutoff_val <- reactiveVal()
   nj_branchlab_alpha_val <- reactiveVal()
   nj_branch_x_val <- reactiveVal()
   nj_branchlab_fontface_val <- reactiveVal()
@@ -11326,6 +11370,18 @@ server <- function(input, output, session) {
       !is.null(input$nj_branch_x),
       nj_branch_x_val(input$nj_branch_x),
       nj_branch_x_val(0)
+    )
+
+    ifelse(
+      !is.null(input$nj_branch_panel),
+      nj_branch_panel_val(input$nj_branch_panel),
+      nj_branch_panel_val(FALSE)
+    )
+
+    ifelse(
+      !is.null(input$nj_branchlabel_cutoff),
+      nj_branchlabel_cutoff_val(input$nj_branchlabel_cutoff),
+      nj_branchlabel_cutoff_val(10)
     )
 
     ifelse(
@@ -11644,7 +11700,7 @@ server <- function(input, output, session) {
                               "Fontface",
                               style = "color:white; margin-bottom: 0px;"
                             ),
-                            width = "250px",
+                            width = "150px",
                             choices = c(
                               Plain = "plain",
                               Bold = "bold",
@@ -11663,7 +11719,7 @@ server <- function(input, output, session) {
                             min = -3,
                             max = 3,
                             value = isolate(nj_branch_x_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
                           ),
                           br(),
@@ -11677,7 +11733,7 @@ server <- function(input, output, session) {
                             max = 1,
                             step = 0.05,
                             value = isolate(nj_branchlab_alpha_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
                           )
                         ),
@@ -11708,11 +11764,46 @@ server <- function(input, output, session) {
                             max = 0.5,
                             step = 0.05,
                             value = isolate(nj_branch_labelradius_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
-                          )
+                          ),
+                          br()
                         )
                       )
+                    )
+                  )
+                ),
+                fluidRow(
+                  column(
+                    width = 5,
+                    div(
+                      class = "mat-switch-geom",
+                      materialSwitch(
+                        inputId = "nj_branch_panel",
+                        h5(
+                          p("Panels"),
+                          style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                        ),
+                        value = isolate(nj_branch_panel_val()),
+                        right = FALSE
+                      )
+                    )
+                  ),
+                  column(
+                    width = 7,
+                    sliderInput(
+                      inputId = "nj_branchlabel_cutoff",
+                      label = h5(
+                        "Cutoff",
+                        style = "color:white; margin-bottom: 0px"
+                      ),
+                      value = isolate(nj_branchlabel_cutoff_val()),
+                      min = 1,
+                      max = 100,
+                      step = 0.5,
+                      # width = "150px",
+                      ticks = FALSE,
+                      post = "%"
                     )
                   )
                 )
@@ -12062,9 +12153,9 @@ server <- function(input, output, session) {
     output <- render_plot_control(
       input_id = "nj_branch_label",
       input_type = "selectInput",
-      choices = choices,
+      choices = c(choices, "Allelic Distance"),
       reactive_value = nj_branch_label_val(),
-      default_value = "Host",
+      default_value = "Allelic Distance",
       reset = isolate(Vis$nj_branch_label_val_reset)
     )
 
@@ -14075,6 +14166,7 @@ server <- function(input, output, session) {
   nj_title_color_val <- reactiveVal()
   nj_tiplab_color_val <- reactiveVal()
   nj_tiplab_fill_val <- reactiveVal()
+  nj_branch_color_val <- reactiveVal()
   nj_branch_label_color_val <- reactiveVal()
   nj_tippoint_color_val <- reactiveVal()
   nj_nodepoint_color_val <- reactiveVal()
@@ -14110,6 +14202,12 @@ server <- function(input, output, session) {
       !is.null(input$nj_branch_label_color),
       nj_branch_label_color_val(input$nj_branch_label_color),
       nj_branch_label_color_val("#FFB7B7")
+    )
+
+    ifelse(
+      !is.null(input$nj_branch_color),
+      nj_branch_color_val(input$nj_branch_color),
+      nj_branch_color_val("#000000")
     )
 
     ifelse(
@@ -14308,6 +14406,37 @@ server <- function(input, output, session) {
                     tags$span(
                       style = 'color: white; font-size: 13px; position: relative; top: 10px;',
                       'Branch Label'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_branch_color",
+                    selected = isolate(nj_branch_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
+                  )
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 13px; position: relative; top: 10px;',
+                      'Branch Panel'
                     )
                   )
                 )
@@ -17082,7 +17211,9 @@ server <- function(input, output, session) {
       nj_branch_size_val(4)
     )
     Vis$nj_branch_label_val_reset <- TRUE
-    nj_branch_label_val("Host")
+    nj_branch_label_val("Allelic Distance")
+    nj_branch_panel_val(FALSE)
+    nj_branchlabel_cutoff_val(10)
     nj_branchlab_alpha_val(0.65)
     nj_branch_x_val(0)
     nj_branchlab_fontface_val("plain")
@@ -17174,6 +17305,7 @@ server <- function(input, output, session) {
     nj_title_color_val("#000000")
     nj_tiplab_color_val("#000000")
     nj_tiplab_fill_val("#84D9A0")
+    nj_branch_color_val("#000000")
     nj_branch_label_color_val("#FFB7B7")
     nj_tippoint_color_val("#3A4657")
     nj_nodepoint_color_val("#3A4657")
@@ -19601,8 +19733,6 @@ server <- function(input, output, session) {
       )
     }
 
-    test <<- Vis_nj
-
     if (isTRUE(nj_nodelabel_show_val())) {
       ggtree(
         Vis_nj,
@@ -19622,13 +19752,9 @@ server <- function(input, output, session) {
         Vis_nj,
         color = nj_color_val(),
         layout = layout_nj(),
-        ladderize = nj_ladder_val(),
+        ladderize = nj_ladder_val()
       ) %<+%
         Vis$meta_nj +
-        geom_label(
-          aes(x = branch, label = round(branch.length, 2)),
-          nudge_y = 0.25
-        ) +
         nj_clades() +
         nj_tiplab() +
         nj_tiplab_scale() +
@@ -20572,18 +20698,48 @@ server <- function(input, output, session) {
         nj_layout_val() != "inward"
     ) {
       if (isTRUE(nj_show_branch_label_val())) {
-        geom_label(
-          aes(
-            x = !!sym("branch"),
-            label = !!sym(nj_branch_label_val())
-          ),
-          fill = nj_branch_label_color_val(),
+        args <- list(
+          color = nj_branch_color_val(),
           size = nj_branch_size_val(),
-          label.r = unit(nj_branch_labelradius_val(), "lines"),
           nudge_x = nj_branch_x_val(),
           fontface = nj_branchlab_fontface_val(),
           alpha = nj_branchlab_alpha_val()
         )
+
+        if (isTRUE(nj_branch_panel_val())) {
+          geom <- geom_label2
+          args[["fill"]] <- nj_branch_label_color_val()
+          args[["label.r"]] <- unit(nj_branch_labelradius_val(), "lines")
+        } else {
+          geom <- geom_text2
+          args[["nudge_y"]] <- 0.25
+        }
+
+        if (nj_branch_label_val() == "Allelic Distance") {
+          args[["mapping"]] <- aes(
+            x = branch,
+            label = round(branch.length, 2),
+            subset = branch.length >
+              quantile(
+                branch.length[branch.length > Vis$nj_max_x * 0.005],
+                probs = nj_branchlabel_cutoff_val() / 100,
+                na.rm = TRUE
+              )
+          )
+        } else {
+          args[["mapping"]] <- aes(
+            x = !!sym("branch"),
+            label = !!sym(nj_branch_label_val()),
+            subset = branch.length >
+              quantile(
+                branch.length[branch.length > Vis$nj_max_x * 0.005],
+                probs = nj_branchlabel_cutoff_val() / 100,
+                na.rm = TRUE
+              )
+          )
+        }
+
+        do.call(geom, args)
       } else {
         NULL
       }
@@ -21721,9 +21877,6 @@ server <- function(input, output, session) {
   ### Report creation UI ----
 
   observeEvent(input$create_rep, {
-    #TODO
-    # test
-    # Adapt aspect ratio of plot
     runjs(block_ui)
 
     if (
@@ -22291,14 +22444,6 @@ server <- function(input, output, session) {
     )
 
     if (tree_type_reactive() == "Tree") {
-      # jpeg(
-      #   paste0(getwd(), "/Report/NJ.jpeg"),
-      #   width = width,
-      #   height = height,
-      #   quality = 100
-      # )
-      # print(make.tree())
-      # dev.off()
       save_plot_content(
         file = paste0(getwd(), "/Report/Tree.svg"),
         session = session,
