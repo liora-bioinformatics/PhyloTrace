@@ -1,4 +1,30 @@
 // toggle between plot view
+// function toggleCustomHeight() {
+//   let styleTag = document.getElementById('dynamic-tree-plot-style');
+//   if (!styleTag) {
+//     styleTag = document.createElement('style');
+//     styleTag.id = 'dynamic-tree-plot-style';
+//     document.head.appendChild(styleTag);
+//   }
+//   if (styleTag.innerHTML.includes('height: unset')) {
+//     styleTag.innerHTML = `
+//       #tree_plot img { height: 75vh !important; border-radius: 0; }
+//       #tree_plot { border-radius: 0; }
+//       #tree_field > div { border-radius: 0; }
+//       #tree_field { border: 1px #ffbf00 solid; }
+//       #tree_aspect { color: #ffbf00; background: #00000087; }
+//     `;
+//   } else {
+//     styleTag.innerHTML = `
+//       #tree_plot img { height: unset !important; border-radius: unset; }
+//       #tree_plot { border-radius: 5px; }
+//       #tree_field > div { border-radius: 5px; }
+//       #tree_field { border: none; }
+//       #tree_aspect { color: transparent; background: transparent; }
+//     `;
+//   }
+// }
+
 function toggleCustomHeight() {
   let styleTag = document.getElementById('dynamic-tree-plot-style');
   if (!styleTag) {
@@ -6,21 +32,19 @@ function toggleCustomHeight() {
     styleTag.id = 'dynamic-tree-plot-style';
     document.head.appendChild(styleTag);
   }
-  if (styleTag.innerHTML.includes('height: unset')) {
-    styleTag.innerHTML = `
-      #tree_plot img { height: 75vh !important; border-radius: 0; }
-      #tree_plot { border-radius: 0; }
-      #tree_field > div { border-radius: 0; }
-      #tree_field { border: 1px #ffbf00 solid; }
-      #tree_aspect { color: #ffbf00; background: #00000087; }
-    `;
-  } else {
+  if (styleTag.innerHTML.includes('height: 75vh')) {
     styleTag.innerHTML = `
       #tree_plot img { height: unset !important; border-radius: unset; }
       #tree_plot { border-radius: 5px; }
       #tree_field > div { border-radius: 5px; }
-      #tree_field { border: none; }
       #tree_aspect { color: transparent; background: transparent; }
+    `;
+  } else {
+    styleTag.innerHTML = `
+      #tree_plot img { height: 75vh !important; border-radius: 0; }
+      #tree_plot { border-radius: 0; }
+      #tree_field > div { border-radius: 0; }
+      #tree_aspect { color: #ffbf00; background: #00000087; }
     `;
   }
 }

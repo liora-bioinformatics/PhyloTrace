@@ -2286,12 +2286,6 @@ body>div.wrapper>header>nav>div>ul>li.dropdown.notifications-menu:hover {
   top: -37px !important;
 }
 
-#mst_legend_menu_dropmenu .tippy-popper,
-#mst_cluster_col_menu_dropmenu .tippy-popper {
-  top: 20px !important;
-  left: 0px !important
-}
-
 #mst_cluster_reset_div .tooltip {
   width: 145px !important
 }
@@ -3131,7 +3125,7 @@ button#nj_del_label {
   width: 100%;
   height: auto;
   border: none;
-  border-radius: 5px;
+  border-radius: 0;
   display: flex;
   justify-content: center;
 }
@@ -3151,26 +3145,11 @@ button#nj_del_label {
   border-bottom-right-radius: 10px;
 }
 
-.shiny-plot-output img {
-  width: unset;
-  height: unset;
-}
-
-#gs_field img,
-#gs_plot img {
-  border-radius: 10px;
-  box-shadow: 10px 10px 15px rgba(0, 0, 0, 0.5);
-}
-
-#tree_field img {
-  height: unset;
-}
-
 #tree_field>div,
 #mst_field>div {
   position: relative;
   width: 100% !important;
-  border-radius: 5px;
+  border-radius: 0;
 }
 
 #tree_field>div {
@@ -3181,6 +3160,36 @@ button#nj_del_label {
 #mst_field>div {
   height: 75vh !important;
   overflow: hidden;
+  position: relative;
+  width: 100% !important;
+  border-radius: 5px;
+}
+
+.aspect-display {
+  color: #ffbf00;
+  /* Added */
+  background: #00000087;
+  position: absolute;
+  z-index: 99;
+  padding: 3px;
+  border-top-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+.shiny-plot-output img {
+  width: unset;
+  height: unset;
+}
+
+.shiny-plot-output img {
+  width: unset;
+  height: unset;
+}
+
+#gs_field img,
+#gs_plot img {
+  border-radius: 10px;
+  box-shadow: 10px 10px 15px rgba(0, 0, 0, 0.5);
 }
 
 #tree_mst hr {
@@ -3238,29 +3247,6 @@ button#nj_del_label {
 #tree_controls {
   height: 100%;
 }
-
-#tree_aspect,
-#mst_aspect {
-  position: absolute;
-  z-index: 99;
-  padding: 3px;
-  border-top-left-radius: 5px;
-  margin-left: 1px;
-  margin-top: 1px;
-  border-bottom-right-radius: 5px;
-}
-
-#mst_aspect {
-  color: #ffbf00;
-  background: #00000087;
-}
-
-/* TODO
-.tree-field-container {
-  width: 67vw;
-  margin-top: -15px;
-  margin-left: 45px;
-} */
 
 .custom-height {
   height: 75vh !important;

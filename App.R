@@ -2269,7 +2269,7 @@ server <- function(input, output, session) {
 
         # Layout
         nj_layout_val("rectangular")
-        nj_rootedge_show_val(FALSE)
+        nj_rootedge_show_val(TRUE)
         Vis$nj_rootedge_length_val_reset <- TRUE
         ifelse(
           !is.null(Vis$nj_max_x),
@@ -2281,7 +2281,7 @@ server <- function(input, output, session) {
         nj_xlim_val(-10)
         Vis$nj_xlim_inw_val_reset <- TRUE
         nj_xlim_inw_val(50)
-        nj_treescale_show_val(FALSE)
+        nj_treescale_show_val(TRUE)
         Vis$nj_treescale_width_val_reset <- TRUE
         ifelse(
           !is.null(Vis$nj_max_x),
@@ -2291,11 +2291,12 @@ server <- function(input, output, session) {
         Vis$nj_treescale_x_val_reset <- TRUE
         ifelse(
           !is.null(Vis$nj_max_x),
-          nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
+          nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
+          # nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
           nj_treescale_x_val(2)
         )
         Vis$nj_treescale_y_val_reset <- TRUE
-        nj_treescale_y_val(0)
+        nj_treescale_y_val(1)
         nj_ladder_val(TRUE)
 
         # Legend
@@ -2357,6 +2358,8 @@ server <- function(input, output, session) {
       output$tree_aspect <- NULL
       output$mst_field <- NULL
       output$mst_aspect <- NULL
+      shinyjs::removeClass("mst_aspect", class = "aspect-display")
+      shinyjs::removeClass("tree_aspect", class = "aspect-display")
       log_print("Input load")
 
       # set typing start control variable
@@ -16140,13 +16143,14 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_treescale_x),
       input$nj_treescale_x,
-      ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.2, 0), 2)
+      # ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.2, 0), 2)
+      ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
     )
   }) |>
     debounce(100)
   nj_treescale_x_val <- reactiveVal()
   nj_treescale_y_reactive <- reactive({
-    ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, 0)
+    ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, -1)
   }) |>
     debounce(100)
   nj_ladder_val <- reactiveVal()
@@ -16162,7 +16166,7 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_rootedge_show),
       nj_rootedge_show_val(input$nj_rootedge_show),
-      nj_rootedge_show_val(FALSE)
+      nj_rootedge_show_val(TRUE)
     )
 
     nj_rootedge_length_val(nj_rootedge_length_reactive())
@@ -16180,7 +16184,7 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_treescale_show),
       nj_treescale_show_val(input$nj_treescale_show),
-      nj_treescale_show_val(FALSE)
+      nj_treescale_show_val(TRUE)
     )
 
     nj_treescale_width_val(nj_treescale_width_reactive())
@@ -16968,7 +16972,8 @@ server <- function(input, output, session) {
       reactive_value = nj_treescale_x_val(),
       default_value = ifelse(
         !is.null(Vis$nj_max_x),
-        round(ceiling(Vis$nj_max_x) * 0.2, 0),
+        # round(ceiling(Vis$nj_max_x) * 0.2, 0),
+        round(Vis$nj_max_x / 2, 0),
         2
       ),
       reset = isolate(Vis$nj_treescale_x_val_reset)
@@ -16994,7 +16999,7 @@ server <- function(input, output, session) {
       min = 0,
       max = max,
       reactive_value = nj_treescale_y_val(),
-      default_value = 0,
+      default_value = -1,
       reset = isolate(Vis$nj_treescale_y_val_reset)
     )
 
@@ -17386,7 +17391,7 @@ server <- function(input, output, session) {
 
     # Layout
     nj_layout_val("rectangular")
-    nj_rootedge_show_val(FALSE)
+    nj_rootedge_show_val(TRUE)
     Vis$nj_rootedge_length_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
@@ -17398,7 +17403,7 @@ server <- function(input, output, session) {
     nj_xlim_val(-10)
     Vis$nj_xlim_inw_val_reset <- TRUE
     nj_xlim_inw_val(50)
-    nj_treescale_show_val(FALSE)
+    nj_treescale_show_val(TRUE)
     Vis$nj_treescale_width_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
@@ -17408,11 +17413,12 @@ server <- function(input, output, session) {
     Vis$nj_treescale_x_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
-      nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
+      # nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
+      nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
       nj_treescale_x_val(2)
     )
     Vis$nj_treescale_y_val_reset <- TRUE
-    nj_treescale_y_val(0)
+    nj_treescale_y_val(-1)
     nj_ladder_val(TRUE)
 
     # Legend
@@ -21787,6 +21793,8 @@ server <- function(input, output, session) {
               paste(width, "x", height, "px | 192 DPI")
             })
 
+            shinyjs::addClass("tree_aspect", class = "aspect-display")
+
             Vis$nj_true <- TRUE
           }
         } else {
@@ -21850,6 +21858,8 @@ server <- function(input, output, session) {
             height <- as.integer(session$clientData$output_tree_mst_height)
             paste(width, "x", height, "px")
           })
+
+          shinyjs::addClass("mst_aspect", class = "aspect-display")
 
           Vis$mst_true <- TRUE
         }
