@@ -2096,7 +2096,19 @@ server <- function(input, output, session) {
         Vis$nj_branch_label_val_reset <- TRUE
         nj_branch_label_val("Allelic Distance")
         nj_branch_panel_val(FALSE)
-        nj_branchlabel_cutoff_val(10)
+        Vis$nj_branchlabel_cutoff_val_reset <- TRUE
+        nj_branchlabel_cutoff_val(ifelse(
+          !is.null(Vis$nj_branch_lengths),
+          2,
+          round(
+            quantile(
+              Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+              0.3,
+              na.rm = TRUE
+            ),
+            1
+          )
+        ))
         nj_branchlab_alpha_val(0.65)
         nj_branch_x_val(0)
         nj_branchlab_fontface_val("plain")
@@ -10885,7 +10897,7 @@ server <- function(input, output, session) {
                           min = 2,
                           max = 10,
                           step = 0.5,
-                          value = nj_branch_size_val(),
+                          value = 4,
                           width = "150px",
                           ticks = FALSE
                         ),
@@ -10920,27 +10932,14 @@ server <- function(input, output, session) {
                         p("Panels"),
                         style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
                       ),
-                      value = isolate(nj_branch_panel_val()),
+                      value = FALSE,
                       right = FALSE
                     )
                   )
                 ),
                 column(
                   width = 7,
-                  sliderInput(
-                    inputId = "nj_branchlabel_cutoff",
-                    label = h5(
-                      "Cutoff",
-                      style = "color:white; margin-bottom: 0px"
-                    ),
-                    value = isolate(nj_branchlabel_cutoff_val()),
-                    min = 1,
-                    max = 100,
-                    step = 1,
-                    width = "100%",
-                    ticks = FALSE,
-                    post = "%"
-                  )
+                  uiOutput("nj_branchlabel_cutoff_ui")
                 )
               )
             )
@@ -11384,7 +11383,20 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_branchlabel_cutoff),
       nj_branchlabel_cutoff_val(input$nj_branchlabel_cutoff),
-      nj_branchlabel_cutoff_val(10)
+      nj_branchlabel_cutoff_val(
+        nj_branchlabel_cutoff_val(ifelse(
+          !is.null(Vis$nj_branch_lengths),
+          2,
+          round(
+            quantile(
+              Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+              0.3,
+              na.rm = TRUE
+            ),
+            1
+          )
+        ))
+      )
     )
 
     ifelse(
@@ -11794,20 +11806,7 @@ server <- function(input, output, session) {
                   ),
                   column(
                     width = 7,
-                    sliderInput(
-                      inputId = "nj_branchlabel_cutoff",
-                      label = h5(
-                        "Cutoff",
-                        style = "color:white; margin-bottom: 0px"
-                      ),
-                      value = isolate(nj_branchlabel_cutoff_val()),
-                      min = 1,
-                      max = 100,
-                      step = 0.5,
-                      # width = "150px",
-                      ticks = FALSE,
-                      post = "%"
-                    )
+                    uiOutput("nj_branchlabel_cutoff_ui")
                   )
                 )
               )
@@ -12080,6 +12079,43 @@ server <- function(input, output, session) {
   })
 
   ###### Label Inputs ----
+
+  # Branch Label Cutoff
+  output$nj_branchlabel_cutoff_ui <- renderUI({
+    if (!is.null(Vis$nj_branch_lengths)) {
+      min <- round(min(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
+      max <- round(max(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
+      default <- round(
+        quantile(
+          Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+          0.3,
+          na.rm = TRUE
+        ),
+        1
+      )
+    } else {
+      min <- 1
+      max <- 10
+      default <- 2
+    }
+
+    output <- render_plot_control(
+      input_id = "nj_branchlabel_cutoff",
+      input_type = "sliderInput",
+      # div_class = "nj-label-slider",
+      # width = "150px",
+      min = min,
+      max = max,
+      step = 0.1,
+      reactive_value = nj_branchlabel_cutoff_val(),
+      default_value = default,
+      reset = isolate(Vis$nj_branchlabel_cutoff_val_reset)
+    )
+
+    isolate(Vis$nj_branchlabel_cutoff_val_reset <- FALSE)
+
+    output
+  })
 
   # Tip label
   output$nj_tiplab_ui <- renderUI({
@@ -17218,6 +17254,7 @@ server <- function(input, output, session) {
     Vis$nj_branch_label_val_reset <- TRUE
     nj_branch_label_val("Allelic Distance")
     nj_branch_panel_val(FALSE)
+    Vis$nj_branchlabel_cutoff_val_reset <- TRUE
     nj_branchlabel_cutoff_val(10)
     nj_branchlab_alpha_val(0.65)
     nj_branch_x_val(0)
@@ -20725,12 +20762,13 @@ server <- function(input, output, session) {
           args[["mapping"]] <- aes(
             x = branch,
             label = round(branch.length, 2),
-            subset = branch.length >
-              quantile(
-                branch.length[branch.length > Vis$nj_max_x * 0.005],
-                probs = nj_branchlabel_cutoff_val() / 100,
-                na.rm = TRUE
-              )
+            subset = branch.length > nj_branchlabel_cutoff_val()
+            # branch.length >
+            # quantile(
+            #   branch.length[branch.length > Vis$nj_max_x * 0.005],
+            #   probs = nj_branchlabel_cutoff_val() / 100,
+            #   na.rm = TRUE
+            # )
           )
         } else {
           args[["mapping"]] <- aes(
@@ -21745,6 +21783,7 @@ server <- function(input, output, session) {
 
             # Get upper and lower end of x range
             Vis$nj_max_x <- max(nj_tree$data$x)
+            Vis$nj_branch_lengths <- nj_tree$data$branch.length
             Vis$nj_min_x <- min(nj_tree$data$x)
 
             # Get parent node numbers
