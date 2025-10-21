@@ -8,9 +8,6 @@ run_phylotrace.sh
 /renv
 renv.lock
 
-# Ignore Rprofile
-.Rprofile
-
 # Ignore R environment information csv
 r_packages.csv
 
