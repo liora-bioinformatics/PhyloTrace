@@ -2065,7 +2065,7 @@ server <- function(input, output, session) {
         nj_tiplab_val("Assembly Name")
         nj_tiplab_show_val(TRUE)
         Vis$nj_align_reset <- TRUE
-        nj_align_val(FALSE)
+        nj_align_val(TRUE)
         ifelse(
           !is.null(Vis$labelsize_nj),
           nj_tiplab_size_val(Vis$labelsize_nj),
@@ -11218,7 +11218,7 @@ server <- function(input, output, session) {
   nj_tiplab_val <- reactiveVal()
   nj_tiplab_show_val <- reactiveVal()
   nj_align_reactive <- reactive({
-    ifelse(!is.null(input$nj_align), input$nj_align, FALSE)
+    ifelse(!is.null(input$nj_align), input$nj_align, TRUE)
   }) |>
     debounce(100)
   nj_align_val <- reactiveVal()
@@ -12148,7 +12148,7 @@ server <- function(input, output, session) {
         style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
       ),
       reactive_value = nj_align_val(),
-      default_value = FALSE,
+      default_value = TRUE,
       div_class = "mat-switch-align",
       reset = isolate(Vis$nj_align_reset),
       right = TRUE,
@@ -17223,7 +17223,7 @@ server <- function(input, output, session) {
     nj_tiplab_val("Assembly Name")
     nj_tiplab_show_val(TRUE)
     Vis$nj_align_reset <- TRUE
-    nj_align_val(FALSE)
+    nj_align_val(TRUE)
     ifelse(
       !is.null(Vis$labelsize_nj),
       nj_tiplab_size_val(Vis$labelsize_nj),
@@ -17750,7 +17750,7 @@ server <- function(input, output, session) {
       # nj_colnames_y_val(-1)
 
       if (!is.null(Vis$tree_algo) && Vis$tree_algo == "NJ") {
-        nj_align_val(FALSE)
+        nj_align_val(TRUE)
       }
 
       nj_h_val(-0.05)
