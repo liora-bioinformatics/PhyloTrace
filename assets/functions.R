@@ -1,3 +1,15 @@
+# Estimate element sizing for hierarchical tree
+get_vis_params <- function(n) {
+  # Assume n >= 3; adjust defaults if needed for n < 3
+  ratio_nj <- max(0.8, min(2, 0.016 * n + 0.55))
+  labelsize_nj <- 17 - 2.73 * log(n + 70) # Natural log; add max(1.3, ...) if you want a floor for large n
+
+  return(list(
+    labelsize_nj = round(labelsize_nj, 1),
+    ratio_nj = round(ratio_nj, 1)
+  ))
+}
+
 # Render rhandsontable
 generate_rhandsontable <- function(
   data,

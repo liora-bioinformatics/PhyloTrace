@@ -2271,7 +2271,11 @@ server <- function(input, output, session) {
         nj_clade_type_val("roundrect")
 
         # Dimensions
-        nj_aspect_ratio_val(0.6)
+        ifelse(
+          !is.null(Vis$ratio_nj),
+          nj_aspect_ratio_val(Vis$ratio_nj),
+          nj_aspect_ratio_val(0.6)
+        )
         nj_v_val(0)
         nj_h_val(-0.05)
         nj_zoom_val(0.95)
@@ -10660,8 +10664,8 @@ server <- function(input, output, session) {
                           ),
                           min = 1,
                           max = 10,
-                          step = 0.5,
-                          value = nj_tiplab_size_val(),
+                          step = 0.1,
+                          value = 4,
                           width = "150px",
                           ticks = FALSE
                         ),
@@ -10763,7 +10767,7 @@ server <- function(input, output, session) {
                     ),
                     min = 0.05,
                     max = 1,
-                    value = nj_tiplab_padding_val(),
+                    value = 0.2,
                     step = 0.05,
                     width = "150px",
                     ticks = FALSE
@@ -11447,6 +11451,21 @@ server <- function(input, output, session) {
   ###### Label Interface ----
 
   observeEvent(input$nj_label_menu, {
+    req(
+      isolate(nj_tiplab_size_val()),
+      isolate(nj_tiplab_alpha_val()),
+      isolate(nj_tiplab_fontface_val()),
+      isolate(nj_tiplab_position_val()),
+      isolate(nj_tiplab_padding_val()),
+      isolate(nj_tiplab_labelradius_val()),
+      isolate(nj_branch_x_val()),
+      isolate(nj_branchlab_alpha_val()),
+      isolate(nj_branch_size_val()),
+      isolate(nj_branch_labelradius_val()),
+      isolate(nj_title_size_val()),
+      isolate(nj_subtitle_size_val())
+    )
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
@@ -11526,7 +11545,7 @@ server <- function(input, output, session) {
                             ),
                             min = 1,
                             max = 10,
-                            step = 0.5,
+                            step = 0.1,
                             value = isolate(nj_tiplab_size_val()),
                             width = "150px",
                             ticks = FALSE
@@ -12082,6 +12101,8 @@ server <- function(input, output, session) {
 
   # Branch Label Cutoff
   output$nj_branchlabel_cutoff_ui <- renderUI({
+    test13 <<- nj_branchlabel_cutoff_val()
+
     if (!is.null(Vis$nj_branch_lengths)) {
       min <- round(min(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
       max <- round(max(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
@@ -12161,6 +12182,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiplab_angle_ui <- renderUI({
+    test5 <<- nj_tiplab_angle_val()
+
     output <- render_plot_control(
       input_id = "nj_tiplab_angle",
       input_type = "sliderInput",
@@ -12226,6 +12249,9 @@ server <- function(input, output, session) {
   })
 
   output$nj_custom_labelsize <- renderUI({
+    test16 <<- Vis$nj_label_size
+    test17 <<- input$nj_custom_label_sel
+
     if (length(Vis$custom_label_nj) > 0) {
       if (!is.null(Vis$nj_label_size[[input$nj_custom_label_sel]])) {
         sliderInput(
@@ -12265,8 +12291,13 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_y <- renderUI({
+    test19 <<- Vis$nj_label_pos_y
+    test20 <<- input$nj_custom_label_sel
+
     if (!is.null(Vis$custom_label_nj)) {
-      if (length(Vis$custom_label_nj) > 0) {
+      if (
+        !is.null(input$nj_custom_label_sel) && length(Vis$custom_label_nj) > 0
+      ) {
         inputId <- paste0("nj_slider_", input$nj_custom_label_sel, "_y")
         max <- sum(DB$data$Include)
 
@@ -12298,8 +12329,12 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_x <- renderUI({
+    test22 <<- Vis$custom_label_nj
+    test23 <<- input$nj_custom_label_sel
     if (!is.null(Vis$custom_label_nj)) {
-      if (length(Vis$custom_label_nj) > 0) {
+      if (
+        !is.null(input$nj_custom_label_sel) && length(Vis$custom_label_nj) > 0
+      ) {
         inputId <- paste0("nj_slider_", input$nj_custom_label_sel, "_x")
 
         if (!is.null(Vis$nj_label_pos_x[[input$nj_custom_label_sel]])) {
@@ -16109,7 +16144,11 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_aspect_ratio),
       nj_aspect_ratio_val(input$nj_aspect_ratio),
-      nj_aspect_ratio_val(0.6)
+      ifelse(
+        !is.null(Vis$ratio_nj),
+        nj_aspect_ratio_val(Vis$ratio_nj),
+        nj_aspect_ratio_val(0.6)
+      )
     )
 
     ifelse(!is.null(input$nj_v), nj_v_val(input$nj_v), nj_v_val(0))
@@ -17418,7 +17457,11 @@ server <- function(input, output, session) {
     nj_clade_type_val("roundrect")
 
     # Dimensions
-    nj_aspect_ratio_val(0.6)
+    ifelse(
+      !is.null(Vis$ratio_nj),
+      nj_aspect_ratio_val(Vis$ratio_nj),
+      nj_aspect_ratio_val(0.6)
+    )
     nj_v_val(0)
     nj_h_val(-0.05)
     nj_zoom_val(0.95)
@@ -21702,6 +21745,9 @@ server <- function(input, output, session) {
 
             # Get number of included entries calculate start values for tree
             if (nj_layout_val() == "circular" || nj_layout_val() == "inward") {
+              # Plot aspect ratio always 1 for circular layouts
+              Vis$ratio_nj <- 1
+
               if (sum(DB$data$Include) < 21) {
                 Vis$labelsize_nj <- 5.5
                 Vis$tippointsize_nj <- 5.5
@@ -21740,43 +21786,212 @@ server <- function(input, output, session) {
                 Vis$branch_size_nj <- 2
               }
             } else {
-              if (sum(DB$data$Include) < 21) {
-                Vis$labelsize_nj <- 5
-                Vis$tippointsize_nj <- 5
-                Vis$nodepointsize_nj <- 4
-                Vis$tiplab_padding_nj <- 0.25
-                Vis$branch_size_nj <- 4.5
-              } else if (between(sum(DB$data$Include), 21, 40)) {
-                Vis$labelsize_nj <- 4.5
-                Vis$tippointsize_nj <- 4.5
-                Vis$nodepointsize_nj <- 3.5
-                Vis$tiplab_padding_nj <- 0.2
-                Vis$branch_size_nj <- 4
-              } else if (between(sum(DB$data$Include), 41, 60)) {
-                Vis$labelsize_nj <- 4
-                Vis$tippointsize_nj <- 4
-                Vis$nodepointsize_nj <- 3
-                Vis$tiplab_padding_nj <- 0.15
-                Vis$branch_size_nj <- 3.5
-              } else if (between(sum(DB$data$Include), 61, 80)) {
-                Vis$labelsize_nj <- 3.5
-                Vis$tippointsize_nj <- 3.5
-                Vis$nodepointsize_nj <- 2.5
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 3
-              } else if (between(sum(DB$data$Include), 81, 100)) {
-                Vis$labelsize_nj <- 3
-                Vis$tippointsize_nj <- 3
-                Vis$nodepointsize_nj <- 2
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 2.5
-              } else {
-                Vis$labelsize_nj <- 2.5
-                Vis$tippointsize_nj <- 2.5
-                Vis$nodepointsize_nj <- 1.5
-                Vis$tiplab_padding_nj <- 0.05
-                Vis$branch_size_nj <- 2
-              }
+              # if (between(sum(DB$data$Include), 3, 5)) {
+              #   Vis$labelsize_nj <- 6
+              #   # Vis$tippointsize_nj <- 5
+              #   # Vis$nodepointsize_nj <- 4
+              #   # Vis$tiplab_padding_nj <- 0.25
+              #   # Vis$branch_size_nj <- 4.5
+              #   Vis$ratio_nj <- 0.8
+              # } else if (between(sum(DB$data$Include), 6, 10)) {
+              #   Vis$labelsize_nj <- 5.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 0.8
+              # } else if (between(sum(DB$data$Include), 11, 15)) {
+              #   Vis$labelsize_nj <- 5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 0.8
+              # } else if (between(sum(DB$data$Include), 16, 20)) {
+              #   Vis$labelsize_nj <- 4.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 0.8
+              # } else if (between(sum(DB$data$Include), 21, 25)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 0.9
+              # } else if (between(sum(DB$data$Include), 26, 30)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1
+              # } else if (between(sum(DB$data$Include), 31, 40)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.1
+              # } else if (between(sum(DB$data$Include), 41, 46)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.2
+              # } else if (between(sum(DB$data$Include), 51, 55)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.4
+              # } else if (between(sum(DB$data$Include), 56, 60)) {
+              #   Vis$labelsize_nj <- 4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.5
+              # } else if (between(sum(DB$data$Include), 61, 65)) {
+              #   Vis$labelsize_nj <- 3.7
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.6
+              # } else if (between(sum(DB$data$Include), 66, 70)) {
+              #   Vis$labelsize_nj <- 3.7
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.7
+              # } else if (between(sum(DB$data$Include), 71, 75)) {
+              #   Vis$labelsize_nj <- 3.7
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.8
+              # } else if (between(sum(DB$data$Include), 76, 80)) {
+              #   Vis$labelsize_nj <- 3.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.8
+              # } else if (between(sum(DB$data$Include), 81, 90)) {
+              #   Vis$labelsize_nj <- 3.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 1.9
+              # } else if (between(sum(DB$data$Include), 91, 100)) {
+              #   Vis$labelsize_nj <- 3.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 101, 110)) {
+              #   Vis$labelsize_nj <- 3.2
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 111, 120)) {
+              #   Vis$labelsize_nj <- 3
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 121, 130)) {
+              #   Vis$labelsize_nj <- 2.8
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 131, 140)) {
+              #   Vis$labelsize_nj <- 2.6
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 141, 150)) {
+              #   Vis$labelsize_nj <- 2.4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 151, 160)) {
+              #   Vis$labelsize_nj <- 2.2
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 161, 170)) {
+              #   Vis$labelsize_nj <- 2
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 171, 190)) {
+              #   Vis$labelsize_nj <- 1.8
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 191, 210)) {
+              #   Vis$labelsize_nj <- 1.6
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 211, 230)) {
+              #   Vis$labelsize_nj <- 1.5
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else if (between(sum(DB$data$Include), 231, 250)) {
+              #   Vis$labelsize_nj <- 1.4
+              #   # Vis$tippointsize_nj <- 4.5
+              #   # Vis$nodepointsize_nj <- 3.5
+              #   # Vis$tiplab_padding_nj <- 0.2
+              #   # Vis$branch_size_nj <- 4
+              #   Vis$ratio_nj <- 2
+              # } else {
+              #   Vis$labelsize_nj <- 1.3
+              #   # Vis$tippointsize_nj <- 2.5
+              #   # Vis$nodepointsize_nj <- 1.5
+              #   # Vis$tiplab_padding_nj <- 0.05
+              #   # Vis$branch_size_nj <- 2
+              #   Vis$ratio_nj <- 2
+              # }
+
+              vis_params <- get_vis_params(sum(DB$data$Include))
+              test <<- vis_params
+
+              Vis$tippointsize_nj <- Vis$labelsize_nj <- vis_params$labelsize_nj
+              Vis$nodepointsize_nj <- vis_params$labelsize_nj - 1
+              Vis$ratio_nj <- vis_params$ratio_nj
+              Vis$tiplab_padding_nj <- 0.05
+              Vis$branch_size_nj <- 2
             }
 
             nj_tree <- ggtree(Vis$nj)
@@ -21791,10 +22006,16 @@ server <- function(input, output, session) {
 
             # Update visualization control inputs
             nj_tiplab_size_val(Vis$labelsize_nj)
+            updateSliderInput(
+              session = session,
+              inputId = "nj_tiplab_size",
+              value = Vis$labelsize_nj
+            )
             nj_tippoint_size_val(Vis$tippointsize_nj)
             nj_nodepoint_size_val(Vis$nodepointsize_nj)
             nj_tiplab_padding_val(Vis$tiplab_padding_nj)
             nj_branch_size_val(Vis$branch_size_nj)
+            nj_aspect_ratio_val(Vis$ratio_nj)
             nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
             nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
 
