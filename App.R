@@ -11471,7 +11471,8 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      message("Rendering 'Labels' tree controls")
       div(
         class = "full-height-box",
         box(
@@ -12092,7 +12093,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -12704,12 +12705,45 @@ server <- function(input, output, session) {
   ###### Variable Interface ----
 
   observeEvent(input$nj_variable_menu, {
+    # List of reactive variables for menu
+    nj_variable_menu_reactives <- list(
+      nj_mapping_show_val = isolate(nj_mapping_show_val()),
+      nj_tipcolor_mapping_show_val = isolate(nj_tipcolor_mapping_show_val()),
+      nj_tipshape_mapping_show_val = isolate(nj_tipshape_mapping_show_val()),
+      nj_tiles_show_1_val = isolate(nj_tiles_show_1_val()),
+      nj_tiles_show_2_val = isolate(nj_tiles_show_2_val()),
+      nj_tiles_show_3_val = isolate(nj_tiles_show_3_val()),
+      nj_tiles_show_4_val = isolate(nj_tiles_show_4_val()),
+      nj_tiles_show_5_val = isolate(nj_tiles_show_5_val())
+      #nj_heatmap_show_val = isolate(nj_heatmap_show_val())
+    )
+
+    # Check if any reactives are null
+    nj_variable_menu_reactives_status <- sapply(
+      nj_variable_menu_reactives,
+      is.null
+    )
+    if (any(nj_variable_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_variable_menu_reactives)[which(
+          nj_variable_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_variable_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      message("Rendering 'Variable Mapping' tree controls")
       div(
         class = "full-height-box",
         box(
@@ -13143,7 +13177,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -14300,12 +14334,45 @@ server <- function(input, output, session) {
   ###### Color Interface ----
 
   observeEvent(input$nj_color_menu, {
+    # List of reactive variables for menu
+    nj_color_menu_reactives <- list(
+      nj_color_val = isolate(nj_color_val()),
+      nj_bg_val = isolate(nj_bg_val()),
+      nj_title_color_val = isolate(nj_title_color_val()),
+      nj_tiplab_color_val = isolate(nj_tiplab_color_val()),
+      nj_tiplab_fill_val = isolate(nj_tiplab_fill_val()),
+      nj_branch_color_val = isolate(nj_branch_color_val()),
+      nj_branch_label_color_val = isolate(nj_branch_label_color_val()),
+      nj_tippoint_color_val = isolate(nj_tippoint_color_val()),
+      nj_nodepoint_color_val = isolate(nj_nodepoint_color_val())
+    )
+
+    # Check if any reactives are null
+    nj_color_menu_reactives_status <- sapply(
+      nj_color_menu_reactives,
+      is.null
+    )
+    if (any(nj_color_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_color_menu_reactives)[which(
+          nj_color_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_color_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      message("Rendering 'Color Menu' tree controls")
       div(
         class = "full-height-box",
         box(
@@ -14598,7 +14665,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -14928,12 +14995,51 @@ server <- function(input, output, session) {
   ###### Elements Interface ----
 
   observeEvent(input$nj_elements_menu, {
+    # List of reactive variables for menu
+    nj_elements_menu_reactives <- list(
+      nj_tippoint_show_val = isolate(nj_tippoint_show_val()),
+      nj_tippoint_alpha_val = isolate(nj_tippoint_alpha_val()),
+      nj_tippoint_size_val = isolate(nj_tippoint_size_val()),
+      nj_nodepoint_show_val = isolate(nj_nodepoint_show_val()),
+      nj_nodepoint_shape_val = isolate(nj_nodepoint_shape_val()),
+      nj_nodepoint_alpha_val = isolate(nj_nodepoint_alpha_val()),
+      nj_nodepoint_size_val = isolate(nj_nodepoint_size_val()),
+      nj_tile_number_val = isolate(nj_tile_number_val()),
+      nj_fruit_alpha_val = isolate(nj_fruit_alpha_val()),
+      nj_fruit_alpha_2_val = isolate(nj_fruit_alpha_2_val()),
+      nj_fruit_alpha_3_val = isolate(nj_fruit_alpha_3_val()),
+      nj_fruit_alpha_4_val = isolate(nj_fruit_alpha_4_val()),
+      nj_fruit_alpha_5_val = isolate(nj_fruit_alpha_5_val()),
+      nj_nodelabel_show_val = isolate(nj_nodelabel_show_val()),
+      nj_clade_type_val = isolate(nj_clade_type_val())
+    )
+
+    # Check if any reactives are null
+    nj_elements_menu_reactives_status <- sapply(
+      nj_elements_menu_reactives,
+      is.null
+    )
+    if (any(nj_elements_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_elements_menu_reactives)[which(
+          nj_elements_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_elements_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      message("Rendering 'Elements Menu' tree controls")
       div(
         class = "full-height-box",
         box(
@@ -15674,7 +15780,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -16310,12 +16416,46 @@ server <- function(input, output, session) {
   ###### Other Interface ----
 
   observeEvent(input$nj_misc_menu, {
+    # List of reactive variables for menu
+    nj_misc_menu_reactives <- list(
+      nj_aspect_ratio_val = isolate(nj_aspect_ratio_val()),
+      nj_v_val = isolate(nj_v_val()),
+      nj_h_val = isolate(nj_h_val()),
+      nj_zoom_val = isolate(nj_zoom_val()),
+      nj_root_isolate_val = isolate(nj_root_isolate_val()),
+      nj_layout_val = isolate(nj_layout_val()),
+      nj_ladder_val = isolate(nj_ladder_val()),
+      nj_rootedge_show_val = isolate(nj_rootedge_show_val()),
+      nj_rootedge_line_val = isolate(nj_rootedge_line_val()),
+      nj_treescale_show_val = isolate(nj_treescale_show_val()),
+      nj_legend_orientation_val = isolate(nj_legend_orientation_val()),
+      nj_legend_size_val = isolate(nj_legend_size_val()),
+      nj_legend_x_val = isolate(nj_legend_x_val()),
+      nj_legend_y_val = isolate(nj_legend_y_val())
+    )
+
+    # Check if any reactives are null
+    nj_misc_menu_reactives_status <- sapply(nj_misc_menu_reactives, is.null)
+    if (any(nj_misc_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_misc_menu_reactives)[which(nj_misc_menu_reactives_status)],
+        "reactive variable(s) from tree 'Miscellaneous Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_misc_menu")
 
     output$tree_controls <- renderUI({
+      message("Rendering 'Miscellaneous Menu' tree controls")
+
       div(
         class = "full-height-box",
         box(
@@ -17127,7 +17267,8 @@ server <- function(input, output, session) {
     # Switch to full display mode
     updateSwitchInput(session, "toggle_style", value = FALSE)
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      message("Rendering 'Export Menu' tree controls")
       div(
         class = "full-height-box",
         box(
@@ -17211,7 +17352,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
   })
 
   ##### Tree Control Events ----
