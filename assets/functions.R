@@ -1,3 +1,14 @@
+# Render info message function
+render_info <- function(output) {
+  message(
+    format(Sys.time(), digits = 3L),
+    " | ",
+    "-------------------------- Rendering '",
+    output,
+    "' UI"
+  )
+}
+
 # Estimate element sizing for hierarchical tree
 get_vis_params <- function(n) {
   # Assume n >= 3; adjust defaults if needed for n < 3

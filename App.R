@@ -1455,7 +1455,9 @@ server <- function(input, output, session) {
     }
   })
 
-  output$start_message <- renderUI(
+  output$start_message <- renderUI({
+    render_info("start_message")
+
     column(
       width = 12,
       align = "center",
@@ -1528,10 +1530,11 @@ server <- function(input, output, session) {
         )
       )
     )
-  )
+  })
 
   # Load db & scheme selection UI
-  output$load_db <- renderUI(
+  output$load_db <- renderUI({
+    render_info("load_db")
     if (!is.null(Startup$select_new)) {
       if (length(DB$new_database) > 0 && Startup$select_new) {
         column(
@@ -1835,7 +1838,7 @@ server <- function(input, output, session) {
         )
       }
     }
-  )
+  })
 
   output$imageOutput <- renderImage(
     {
@@ -1852,13 +1855,14 @@ server <- function(input, output, session) {
     log_print("Input create_new_db")
     Startup$select_new <- TRUE
 
-    output$new_db_name_ui <- renderUI(
+    output$new_db_name_ui <- renderUI({
+      render_info("new_db_name_ui")
       textInput(
         "new_db_name",
         "",
         placeholder = "New database name"
       )
-    )
+    })
   })
 
   observeEvent(input$db_location, {
@@ -2387,6 +2391,7 @@ server <- function(input, output, session) {
 
         if (is.null(input$scheme_position)) {
           output$loaded_scheme <- renderUI({
+            render_info("loaded_scheme")
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2408,6 +2413,7 @@ server <- function(input, output, session) {
 
         if (!is.null(input$scheme_position)) {
           output$loaded_scheme <- renderUI({
+            render_info("loaded_scheme")
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2456,6 +2462,8 @@ server <- function(input, output, session) {
             database <- Startup$database
           }
           output$databasetext <- renderUI({
+            render_info("databasetext")
+
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2487,7 +2495,9 @@ server <- function(input, output, session) {
       observe({
         if (!is.null(Startup$database)) {
           if (Typing$status == "Finalized") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
+
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2503,9 +2513,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Typing$status == "Attaching") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2521,9 +2532,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Typing$status == "Processing") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2539,9 +2551,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Screening$status == "started") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2557,9 +2570,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Screening$status == "finished") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2575,9 +2589,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2593,7 +2608,7 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           }
         }
       })
@@ -2816,7 +2831,8 @@ server <- function(input, output, session) {
 
           Startup$sidebar <- FALSE
 
-          output$menu_header_typing <- renderUI(
+          output$menu_header_typing <- renderUI({
+            render_info("menu_header_typing")
             div(
               class = "menu-header-typing",
               HTML(
@@ -2832,9 +2848,10 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
-          output$menu_header_screening <- renderUI(
+          output$menu_header_screening <- renderUI({
+            render_info("menu_header_screening")
             div(
               class = "menu-header-screening",
               HTML(
@@ -2849,7 +2866,7 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
           # Hide start message
           output$start_message <- NULL
@@ -3425,6 +3442,7 @@ server <- function(input, output, session) {
                   Startup$first_look <- TRUE
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 3,
                       align = "center",
@@ -3625,6 +3643,7 @@ server <- function(input, output, session) {
 
                   # Render missing values sidebar elements
                   output$missing_values_sidebar <- renderUI({
+                    render_info("missing_values_sidebar")
                     column(
                       width = 12,
                       fluidRow(
@@ -3652,6 +3671,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_loci <- renderUI({
+                    render_info("download_loci")
                     if (!is.null(DB$loci_info)) {
                       column(
                         12,
@@ -3679,6 +3699,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_scheme_info <- renderUI({
+                    render_info("download_scheme_info")
                     column(
                       12,
                       downloadBttn(
@@ -3700,6 +3721,7 @@ server <- function(input, output, session) {
 
                   # Render select input to choose displayed loci
                   output$compare_select <- renderUI({
+                    render_info("compare_select")
                     if (nrow(DB$data) == 1) {
                       HTML(
                         paste(
@@ -3764,6 +3786,7 @@ server <- function(input, output, session) {
 
                   ##### Render Entry Data Table ----
                   output$db_entries_table <- renderUI({
+                    render_info("db_entries_table")
                     if (!is.null(DB$data)) {
                       if (between(nrow(DB$data), 1, 30)) {
                         fluidRow(
@@ -4045,6 +4068,7 @@ server <- function(input, output, session) {
 
                       # Dynamic save button when rhandsontable changes or new entries
                       output$edit_entry_table <- renderUI({
+                        render_info("edit_entry_table")
                         check_new_entry <- check_new_entry()
 
                         if (
@@ -4216,6 +4240,7 @@ server <- function(input, output, session) {
 
                   # Render Entry table controls
                   output$entry_table_controls <- renderUI({
+                    render_info("entry_table_controls")
                     fluidRow(
                       column(
                         width = 5,
@@ -4277,6 +4302,7 @@ server <- function(input, output, session) {
                       ) {
                         output$db_distancematrix <- NULL
                         output$distancematrix_duplicated <- renderUI({
+                          render_info("distancematrix_duplicated")
                           column(
                             width = 12,
                             tags$span(
@@ -4375,6 +4401,7 @@ server <- function(input, output, session) {
                       # Render Distance Matrix UI
 
                       output$distmatrix_show <- renderUI({
+                        render_info("distmatrix_show")
                         if (!is.null(DB$data)) {
                           if (nrow(DB$data) > 1) {
                             if (!is.null(input$distmatrix_label)) {
@@ -4572,6 +4599,7 @@ server <- function(input, output, session) {
 
                   # render custom variables box UI
                   output$custom_var_box <- renderUI({
+                    render_info("custom_var_box")
                     custom_var_button <- actionButton(
                       "custom_var_table",
                       "Browse ",
@@ -4641,6 +4669,7 @@ server <- function(input, output, session) {
 
                   # Render delete entry box UI
                   output$delete_box <- renderUI({
+                    render_info("delete_box")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4670,6 +4699,7 @@ server <- function(input, output, session) {
 
                   # Render loci comparison box UI
                   output$compare_allele_box <- renderUI({
+                    render_info("compare_allele_box")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4702,6 +4732,7 @@ server <- function(input, output, session) {
 
                   # Render entry deletion select input
                   output$delete_select <- renderUI({
+                    render_info("delete_select")
                     pickerInput(
                       "select_delete",
                       label = "",
@@ -4721,6 +4752,7 @@ server <- function(input, output, session) {
 
                   # Render delete entry button
                   output$del_bttn <- renderUI({
+                    render_info("del_bttn")
                     actionBttn(
                       "del_button",
                       label = "",
@@ -4826,6 +4858,7 @@ server <- function(input, output, session) {
 
                   # Render missing value informatiojn box UI
                   output$missing_values <- renderUI({
+                    render_info("missing_values")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4963,7 +4996,8 @@ server <- function(input, output, session) {
                   observe({
                     if (is.null(DB$data)) {
                       if (check_new_entry()) {
-                        output$db_no_entries <- renderUI(
+                        output$db_no_entries <- renderUI({
+                          render_info("db_no_entries")
                           column(
                             width = 12,
                             fluidRow(
@@ -4992,9 +5026,10 @@ server <- function(input, output, session) {
                               )
                             )
                           )
-                        )
+                        })
                       } else {
-                        output$db_no_entries <- renderUI(
+                        output$db_no_entries <- renderUI({
+                          render_info("db_no_entries")
                           column(
                             width = 12,
                             fluidRow(
@@ -5033,13 +5068,14 @@ server <- function(input, output, session) {
                               )
                             )
                           )
-                        )
+                        })
                       }
                     }
                   })
 
                   # Render scheme info download button
                   output$download_scheme_info <- renderUI({
+                    render_info("download_scheme_info")
                     column(
                       12,
                       downloadBttn(
@@ -5061,6 +5097,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_loci <- renderUI({
+                    render_info("download_loci")
                     if (!is.null(DB$loci_info)) {
                       column(
                         12,
@@ -5084,7 +5121,8 @@ server <- function(input, output, session) {
                     }
                   })
 
-                  output$distancematrix_no_entries <- renderUI(
+                  output$distancematrix_no_entries <- renderUI({
+                    render_info("distancematrix_no_entries")
                     fluidRow(
                       column(1),
                       column(
@@ -5098,7 +5136,7 @@ server <- function(input, output, session) {
                         ))
                       )
                     )
-                  )
+                  })
 
                   output$db_entries <- NULL
                   output$edit_index <- NULL
@@ -5123,6 +5161,7 @@ server <- function(input, output, session) {
                   output$start_typing_ui <- NULL
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 4,
                       align = "center",
@@ -5169,6 +5208,7 @@ server <- function(input, output, session) {
                   })
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 4,
                       align = "center",
@@ -5390,6 +5430,7 @@ server <- function(input, output, session) {
   output$distance_matrix_info <- renderUI({
     req(DB$scheme)
 
+    render_info("distance_matrix_info")
     if (!is.null(DB$allelic_profile)) {
       if (anyNA(DB$allelic_profile)) {
         any_na <- TRUE
@@ -5476,6 +5517,7 @@ server <- function(input, output, session) {
             unlist(lapply(species_data, function(x) x$Name$name))
           )
           output$species_info_select_saved <- renderUI({
+            render_info("species_info_select_saved")
             fluidRow(
               column(1),
               column(
@@ -5530,6 +5572,8 @@ server <- function(input, output, session) {
   output$species_info_saved <- renderUI({
     req(Startup$database, DB$scheme)
 
+    render_info("species_info_saved")
+
     species_data_path <- file.path(
       Startup$database,
       gsub(" ", "_", DB$scheme),
@@ -5560,19 +5604,21 @@ server <- function(input, output, session) {
               deleteFile = FALSE
             )
           } else {
-            output$species_no_img_saved <- renderUI(
+            output$species_no_img_saved <- renderUI({
+              render_info("species_no_img_saved")
               HTML(
                 '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
               )
-            )
+            })
             output$species_img_saved <- NULL
           }
         } else {
-          output$species_no_img_saved <- renderUI(
+          output$species_no_img_saved <- renderUI({
+            render_info("species_no_img_saved")
             HTML(
               '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
             )
-          )
+          })
           output$species_img_saved <- NULL
         }
       } else if (length(species_data) > 0) {
@@ -5591,11 +5637,12 @@ server <- function(input, output, session) {
             deleteFile = FALSE
           )
         } else {
-          output$species_no_img_saved <- renderUI(
+          output$species_no_img_saved <- renderUI({
+            render_info("species_no_img_saved")
             HTML(
               '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
             )
-          )
+          })
           output$species_img_saved <- NULL
         }
       }
@@ -5889,6 +5936,7 @@ server <- function(input, output, session) {
 
   # Scheme selector UI
   output$scheme_selector <- renderUI({
+    render_info("scheme_selector")
     if (!is.null(DB$scheme)) {
       scheme_names <- schemes$species
       names(scheme_names) <- ifelse(
@@ -5940,6 +5988,7 @@ server <- function(input, output, session) {
 
   # Control custom variables table
   output$cust_var_select <- renderUI({
+    render_info("cust_var_select")
     if (nrow(DB$cust_var) > 5) {
       selectInput(
         "cust_var_select",
@@ -5951,6 +6000,8 @@ server <- function(input, output, session) {
 
   output$cust_var_info <- renderUI({
     if ((!is.null(DB$cust_var)) && (!is.null(input$cust_var_select))) {
+      render_info("cust_var_info")
+
       if (nrow(DB$cust_var) > 5) {
         low <- -4
         high <- 0
@@ -5988,6 +6039,7 @@ server <- function(input, output, session) {
       if (DB$exist) {
         # Message for tab Browse Entries
         output$no_scheme_entries <- renderUI({
+          render_info("no_scheme_entries")
           fluidRow(
             column(1),
             column(
@@ -6019,6 +6071,7 @@ server <- function(input, output, session) {
 
         # Message for Tab Scheme Info
         output$no_scheme_info <- renderUI({
+          render_info("no_scheme_info")
           fluidRow(
             column(1),
             column(
@@ -6050,6 +6103,7 @@ server <- function(input, output, session) {
 
         # Message for Tab Distance Matrix
         output$no_scheme_distancematrix <- renderUI({
+          render_info("no_scheme_distancematrix")
           fluidRow(
             column(1),
             column(
@@ -6214,6 +6268,7 @@ server <- function(input, output, session) {
   observe({
     if (!is.null(DB$available)) {
       output$scheme_db <- renderUI({
+        render_info("scheme_db")
         if (length(DB$available) > 3) {
           selectInput(
             "scheme_db",
@@ -6285,7 +6340,8 @@ server <- function(input, output, session) {
         )
 
         output$db_loci_no <- NULL
-        output$loci_info_text <- renderUI(
+        output$loci_info_text <- renderUI({
+          render_info("loci_info_text")
           p(
             HTML(
               paste0(
@@ -6295,7 +6351,7 @@ server <- function(input, output, session) {
               )
             )
           )
-        )
+        })
       } else {
         if (
           !is.null(DB$scheme_db) &&
@@ -6307,7 +6363,8 @@ server <- function(input, output, session) {
               !is.null(DB$scheme) &&
               !is.null(DB$scheme_link)
           ) {
-            output$db_loci_no <- renderUI(
+            output$db_loci_no <- renderUI({
+              render_info("db_loci_no")
               p(
                 HTML(
                   paste0(
@@ -6329,7 +6386,7 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
             output$loci_info_text <- NULL
           }
         }
@@ -6341,6 +6398,7 @@ server <- function(input, output, session) {
   # If only one entry available disable varying loci checkbox
 
   output$compare_difference_box <- renderUI({
+    render_info("compare_difference_box")
     if (!is.null(DB$data)) {
       if (nrow(DB$data) > 1) {
         div(
@@ -6732,6 +6790,8 @@ server <- function(input, output, session) {
   # Render import new name preview
   output$import_new_name_feedback_ui <- renderUI({
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
+      render_info("import_new_name_feedback_ui")
+
       if (is.null(input$import_new_name) || nchar(input$import_new_name) < 1) {
         disable("pin_import")
         HTML(
@@ -6769,6 +6829,8 @@ server <- function(input, output, session) {
   # Render ID column selection preview
   output$id_preview <- renderUI({
     req(input$import_id_selector, DB$import)
+
+    render_info("id_preview")
 
     check_pos_ui <- fluidRow(
       column(
@@ -6831,6 +6893,8 @@ server <- function(input, output, session) {
   output$imp_id_dup_info <- renderUI({
     req(DB$import, DB$data)
 
+    render_info("imp_id_dup_info")
+
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
       # get selected ID column
       id_column <- DB$import[[input$import_id_selector]]
@@ -6870,6 +6934,8 @@ server <- function(input, output, session) {
   # Render metadata selection preview
   output$metadata_preview <- renderUI({
     req(input$import_metadata_sel, DB$import)
+
+    render_info("metadata_preview")
 
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
       HTML(paste0(
@@ -7034,7 +7100,10 @@ server <- function(input, output, session) {
             )
           )
           hash_button <- disabled(hash_button_ui)
-          output$hash_dir <- renderUI(disabled(hash_dir_ui))
+          output$hash_dir <- renderUI({
+            render_info("hash_dir")
+            disabled(hash_dir_ui)
+          })
           runjs(
             paste0(
               "document.getElementById('pin_import').style.animation =",
@@ -7056,7 +7125,10 @@ server <- function(input, output, session) {
               )
             )
             hash_button <- disabled(hash_button_ui)
-            output$hash_dir <- renderUI(hash_dir_ui)
+            output$hash_dir <- renderUI({
+              render_info("hash_dir")
+              hash_dir_ui
+            })
             disable("pin_import")
             enable("import_start_hash")
             delay(
@@ -7088,7 +7160,10 @@ server <- function(input, output, session) {
               )
             )
             hash_button <- disabled(hash_button_ui)
-            output$hash_dir <- renderUI(disabled(hash_dir_ui))
+            output$hash_dir <- renderUI({
+              render_info("hash_dir")
+              disabled(hash_dir_ui)
+            })
             disable("pin_import")
             runjs(
               paste0(
@@ -7184,18 +7259,42 @@ server <- function(input, output, session) {
 
     # Import section
     output$import_path <- renderText(import_filepath)
-    output$import_new_name_ui <- renderUI(import_new_name)
-    output$import_feedback <- renderUI(feedback)
-    output$delim <- renderUI(delim)
+    output$import_new_name_ui <- renderUI({
+      render_info("import_new_name_ui")
+      import_new_name
+    })
+    output$import_feedback <- renderUI({
+      render_info("import_feedback")
+      feedback
+    })
+    output$delim <- renderUI({
+      render_info("delim")
+      delim
+    })
 
     # Metadata section
-    output$import_id_sel <- renderUI(id_sel_ui)
-    output$import_metadata_sel <- renderUI(metadata_sel_ui)
-    output$delim2 <- renderUI(delim)
+    output$import_id_sel <- renderUI({
+      render_info("import_id_sel")
+      id_sel_ui
+    })
+    output$import_metadata_sel <- renderUI({
+      render_info("import_metadata_sel")
+      metadata_sel_ui
+    })
+    output$delim2 <- renderUI({
+      render_info("delim2")
+      delim
+    })
 
     # Hashing section
-    output$hash_feedback <- renderUI(hash_feedback)
-    output$hash_import_button <- renderUI(hash_button)
+    output$hash_feedback <- renderUI({
+      render_info("hash_feedback")
+      hash_feedback
+    })
+    output$hash_import_button <- renderUI({
+      render_info("hash_import_button")
+      hash_button
+    })
   })
 
   # Foreign allele library directory selection
@@ -7221,7 +7320,10 @@ server <- function(input, output, session) {
       )
     )
 
-    output$hash_folderpath <- renderUI(HTML(truncate_start(hash_dir)))
+    output$hash_folderpath <- renderUI({
+      render_info("hash_folderpath")
+      HTML(truncate_start(hash_dir))
+    })
 
     DB$hash_dir <- hash_dir
 
@@ -7246,6 +7348,8 @@ server <- function(input, output, session) {
   # Render metadata selection
   output$metadata_sel_ui <- renderUI({
     req(input$import_id_selector, DB$import_all_meta)
+
+    render_info("metadata_sel_ui")
 
     pickerInput(
       "import_metadata_sel",
@@ -7305,13 +7409,16 @@ server <- function(input, output, session) {
         position = "bottom-end",
         timer = 6000
       )
-      output$hashing_status <- renderUI(HTML(
-        paste0(
-          '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
-          '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
-          'b>Hashing failed</b><br>Allele library has missing loci'
+      output$hashing_status <- renderUI({
+        render_info("hashing_status")
+        HTML(
+          paste0(
+            '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
+            '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
+            'b>Hashing failed</b><br>Allele library has missing loci'
+          )
         )
-      ))
+      })
       runjs(paste0(
         "document.getElementById('import_start_hash').styl",
         "e.animation = 'none';"
@@ -7349,13 +7456,16 @@ server <- function(input, output, session) {
             timer = 6000
           )
 
-          output$hashing_status <- renderUI(HTML(
-            paste0(
-              '&nbsp;&nbsp; <i class="fa-solid fa-circle-check" style="font',
-              '-size:15px; color:#90EE90; position:relative;"></i> &nbsp; <',
-              'b>Hashing successful</b><br>Proceed to import the dataset'
+          output$hashing_status <- renderUI({
+            render_info("hashing_status")
+            HTML(
+              paste0(
+                '&nbsp;&nbsp; <i class="fa-solid fa-circle-check" style="font',
+                '-size:15px; color:#90EE90; position:relative;"></i> &nbsp; <',
+                'b>Hashing successful</b><br>Proceed to import the dataset'
+              )
             )
-          ))
+          })
           enable("pin_import")
           disable("import_start_hash")
           disable("hash_dir_button")
@@ -7381,13 +7491,16 @@ server <- function(input, output, session) {
             "document.getElementById('hash_dir_button').style.animation = 'pulsa",
             "te-shadow 2s infinite linear';"
           ))
-          output$hashing_status <- renderUI(HTML(
-            paste0(
-              '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
-              '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
-              'b>Hashing failed</b><br>Dataset can not be imported.'
+          output$hashing_status <- renderUI({
+            render_info("hashing_status")
+            HTML(
+              paste0(
+                '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
+                '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
+                'b>Hashing failed</b><br>Dataset can not be imported.'
+              )
             )
-          ))
+          })
         }
       )
     }
@@ -8858,7 +8971,8 @@ server <- function(input, output, session) {
       )
 
       output$db_loci_no <- NULL
-      output$loci_info_text <- renderUI(
+      output$loci_info_text <- renderUI({
+        render_info("loci_info_text")
         p(
           HTML(
             paste0(
@@ -8868,14 +8982,15 @@ server <- function(input, output, session) {
             )
           )
         )
-      )
+      })
     } else {
       if (
         !is.null(DB$scheme_db) &&
           !is.null(DB$scheme) &&
           !is.null(DB$scheme_link)
       ) {
-        output$db_loci_no <- renderUI(
+        output$db_loci_no <- renderUI({
+          render_info("db_loci_no")
           p(
             HTML(
               paste0(
@@ -8893,7 +9008,7 @@ server <- function(input, output, session) {
               )
             )
           )
-        )
+        })
 
         output$loci_info_text <- NULL
       }
@@ -8909,6 +9024,8 @@ server <- function(input, output, session) {
         DB$scheme,
         input$seq_sel
       )
+
+      render_info("loci_sequences")
 
       DB$loci <- list.files(
         path = paste0(
@@ -8961,14 +9078,14 @@ server <- function(input, output, session) {
       } else {
         NULL
       }
-    } else {
-      NULL
     }
   })
 
   output$sequence_selector <- renderUI({
     if (!is.null(input$db_loci_rows_selected) && !is.null(DB$loci_info)) {
       req(input$db_loci_rows_selected, Startup$database, DB$scheme)
+
+      render_info("sequence_selector")
 
       DB$loci <- list.files(
         path = paste0(
@@ -9547,7 +9664,8 @@ server <- function(input, output, session) {
     shinyjs::show("download_cgMLST")
     shinyjs::hide("hashing")
 
-    output$statustext <- renderUI(
+    output$statustext <- renderUI({
+      render_info("statustext")
       fluidRow(
         tags$li(
           class = "dropdown",
@@ -9562,7 +9680,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     log_print("Download successful")
 
@@ -9795,13 +9913,14 @@ server <- function(input, output, session) {
     if (!is.null(scheme_overview)) {
       enable("download_cgMLST")
 
-      output$cgmlst_scheme_table <- renderUI(
+      output$cgmlst_scheme_table <- renderUI({
+        render_info("cgmlst_scheme_table")
         addSpinner(
           tableOutput("cgmlst_scheme"),
           spin = "dots",
           color = "#ffffff"
         )
-      )
+      })
 
       # Render scheme info table
       output$cgmlst_scheme <- renderTable(
@@ -9822,6 +9941,8 @@ server <- function(input, output, session) {
             !is.na(last_file_change) &&
             !is.na(last_scheme_change)
         ) {
+          render_info("scheme_update_info")
+
           new_scheme <- last_file_change < last_scheme_change
           if (length(new_scheme) != 0) {
             if (new_scheme) {
@@ -9949,11 +10070,12 @@ server <- function(input, output, session) {
                   print("Image downloaded successfully!")
                 } else {
                   output$species_img <- NULL
-                  output$species_no_img <- renderUI(
+                  output$species_no_img <- renderUI({
+                    render_info("species_no_img")
                     HTML(
                       '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
                     )
-                  )
+                  })
                   print("Failed to download image.")
                 }
               }
@@ -9981,11 +10103,12 @@ server <- function(input, output, session) {
                     deleteFile = FALSE
                   )
                 } else {
-                  output$species_no_img <- renderUI(
+                  output$species_no_img <- renderUI({
+                    render_info("species_no_img")
                     HTML(
                       '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
                     )
-                  )
+                  })
                   output$species_img <- NULL
                   print("Failed to download image.")
                 }
@@ -10059,11 +10182,12 @@ server <- function(input, output, session) {
               print("Image downloaded successfully!")
             } else {
               output$species_img <- NULL
-              output$species_no_img <- renderUI(
+              output$species_no_img <- renderUI({
+                render_info("species_no_img")
                 HTML(
                   '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
                 )
-              )
+              })
               print("Failed to download image.")
             }
           }
@@ -10083,11 +10207,12 @@ server <- function(input, output, session) {
               )
             } else {
               output$species_img <- NULL
-              output$species_no_img <- renderUI(
+              output$species_no_img <- renderUI({
+                render_info("species_no_img")
                 HTML(
                   '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
                 )
-              )
+              })
               print("Failed to download image.")
             }
           } else {
@@ -10104,6 +10229,7 @@ server <- function(input, output, session) {
 
       # Render species info
       output$species_info <- renderUI({
+        render_info("species_info")
         addSpinner(
           box(
             solidHeader = TRUE,
@@ -10405,6 +10531,7 @@ server <- function(input, output, session) {
           unlist(lapply(Scheme$species_data, function(x) x$Name$name))
         )
         output$species_info_select <- renderUI({
+          render_info("species_info_select")
           fluidRow(
             column(1),
             column(
@@ -10492,6 +10619,7 @@ server <- function(input, output, session) {
   })
 
   output$generate_plot_ui <- renderUI({
+    render_info("generate_plot_ui")
     box(
       solidHeader = TRUE,
       status = "primary",
@@ -10525,7 +10653,6 @@ server <- function(input, output, session) {
                 justified = TRUE
               )
             ),
-            # uiOutput("tree_algo_lines"),
             column(
               width = 4,
               uiOutput("tree_algo_ui")
@@ -10556,6 +10683,7 @@ server <- function(input, output, session) {
   })
 
   output$tree_algo_ui <- renderUI({
+    render_info("tree_algo_ui")
     tree_algo <- prettyRadioButtons(
       inputId = "tree_algo",
       "",
@@ -10570,27 +10698,14 @@ server <- function(input, output, session) {
     }
   })
 
-  output$tree_algo_lines <- renderUI({
-    if (tree_type_reactive() == "MST") {
-      div(
-        div(class = "lower-line-inactive"),
-        div(class = "upper-line-inactive")
-      )
-    } else {
-      div(
-        div(class = "lower-line-active"),
-        div(class = "upper-line-active")
-      )
-    }
-  })
-
   #### Tree controls ----
 
   # Initially shown label menu
 
   session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
-  output$tree_controls <- renderUI(
+  output$tree_controls <- renderUI({
+    render_info("tree_controls Labels Menu")
     div(
       class = "full-height-box",
       box(
@@ -11208,7 +11323,7 @@ server <- function(input, output, session) {
         )
       )
     )
-  )
+  })
 
   ##### Label Menu ----
 
@@ -11472,7 +11587,7 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Labels' tree controls")
+      render_info("tree_controls Labels")
       div(
         class = "full-height-box",
         box(
@@ -12102,7 +12217,7 @@ server <- function(input, output, session) {
 
   # Branch Label Cutoff
   output$nj_branchlabel_cutoff_ui <- renderUI({
-    test13 <<- nj_branchlabel_cutoff_val()
+    render_info("nj_branchlabel_cutoff_ui")
 
     if (!is.null(Vis$nj_branch_lengths)) {
       min <- round(min(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
@@ -12141,6 +12256,7 @@ server <- function(input, output, session) {
 
   # Tip label
   output$nj_tiplab_ui <- renderUI({
+    render_info("nj_tiplab_ui")
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1, 2, 6, 12, 13, 14)]
     } else {
@@ -12162,6 +12278,7 @@ server <- function(input, output, session) {
   })
 
   output$nj_align_ui <- renderUI({
+    render_info("nj_align_ui")
     output <- render_plot_control(
       input_id = "nj_align",
       input_type = "materialSwitch",
@@ -12183,7 +12300,7 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiplab_angle_ui <- renderUI({
-    test5 <<- nj_tiplab_angle_val()
+    render_info("nj_tiplab_angle_ui")
 
     output <- render_plot_control(
       input_id = "nj_tiplab_angle",
@@ -12207,6 +12324,8 @@ server <- function(input, output, session) {
 
   # Branch label
   output$nj_branch_label <- renderUI({
+    render_info("nj_branch_label")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12229,6 +12348,8 @@ server <- function(input, output, session) {
 
   # Custom label
   output$nj_custom_label_select <- renderUI({
+    render_info("nj_custom_label_select")
+
     if (!is.null(Vis$custom_label_nj)) {
       if (nrow(Vis$custom_label_nj) > 0) {
         choices <- Vis$custom_label_nj[, 1]
@@ -12250,8 +12371,7 @@ server <- function(input, output, session) {
   })
 
   output$nj_custom_labelsize <- renderUI({
-    test16 <<- Vis$nj_label_size
-    test17 <<- input$nj_custom_label_sel
+    render_info("nj_custom_labelsize")
 
     if (length(Vis$custom_label_nj) > 0) {
       if (!is.null(Vis$nj_label_size[[input$nj_custom_label_sel]])) {
@@ -12292,8 +12412,7 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_y <- renderUI({
-    test19 <<- Vis$nj_label_pos_y
-    test20 <<- input$nj_custom_label_sel
+    render_info("nj_sliderInput_y")
 
     if (!is.null(Vis$custom_label_nj)) {
       if (
@@ -12330,8 +12449,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_x <- renderUI({
-    test22 <<- Vis$custom_label_nj
-    test23 <<- input$nj_custom_label_sel
+    render_info("nj_sliderInput_x")
+
     if (!is.null(Vis$custom_label_nj)) {
       if (
         !is.null(input$nj_custom_label_sel) && length(Vis$custom_label_nj) > 0
@@ -12743,7 +12862,8 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_variable_menu")
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Variable Mapping' tree controls")
+      render_info("tree_controls Variable Mapping")
+
       div(
         class = "full-height-box",
         box(
@@ -13187,6 +13307,8 @@ server <- function(input, output, session) {
   # Tip label variable mapping
 
   output$nj_color_mapping <- renderUI({
+    render_info("nj_color_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13209,6 +13331,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiplab_scale <- renderUI({
+    render_info("nj_tiplab_scale")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13242,6 +13366,8 @@ server <- function(input, output, session) {
   output$nj_tiplab_mid_scale <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tiplab_mid_scale")
+
     output <- render_plot_control(
       input_id = "nj_color_mapping_div_mid",
       input_type = "selectInput",
@@ -13263,6 +13389,8 @@ server <- function(input, output, session) {
 
   output$nj_tiplab_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiplab_mapping_info")
 
     if (is.numeric(unlist(Vis$meta_nj[nj_color_mapping_val()]))) {
       fluidRow(
@@ -13300,6 +13428,8 @@ server <- function(input, output, session) {
   # Tip point variable mapping
 
   output$nj_tipcolor_mapping <- renderUI({
+    render_info("nj_tipcolor_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13322,6 +13452,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tippoint_scale <- renderUI({
+    render_info("nj_tippoint_scale")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13355,6 +13487,8 @@ server <- function(input, output, session) {
   output$nj_tippoint_mid_scale <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tippoint_mid_scale")
+
     output <- render_plot_control(
       input_id = "nj_tipcolor_mapping_div_mid",
       input_type = "selectInput",
@@ -13376,6 +13510,8 @@ server <- function(input, output, session) {
 
   output$nj_tipcolor_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tipcolor_mapping_info")
 
     if (is.numeric(unlist(Vis$meta_nj[nj_tipcolor_mapping_val()]))) {
       fluidRow(
@@ -13413,6 +13549,8 @@ server <- function(input, output, session) {
   # Tip shape variable mapping
 
   output$nj_tipshape_mapping <- renderUI({
+    render_info("nj_tipshape_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- names(Vis$meta_nj)[-c(1:4, 6, 12:14)]
 
@@ -13449,6 +13587,8 @@ server <- function(input, output, session) {
   output$nj_tipshape_mapping_info <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tipshape_mapping_info")
+
     if (is.numeric(unlist(Vis$meta_nj[nj_tipshape_mapping_val()]))) {
       fluidRow(
         h5(
@@ -13481,6 +13621,8 @@ server <- function(input, output, session) {
   # Tiles variables mapping
 
   output$nj_fruit_variable <- renderUI({
+    render_info("nj_fruit_variable")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13504,6 +13646,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_variable_2 <- renderUI({
+    render_info("nj_fruit_variable_2")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13527,6 +13671,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_variable_3 <- renderUI({
+    render_info("nj_fruit_variable_3")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13550,6 +13696,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_variable_4 <- renderUI({
+    render_info("nj_fruit_variable_4")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13573,6 +13721,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_variable_5 <- renderUI({
+    render_info("nj_fruit_variable_5")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -13596,6 +13746,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiles_scale_1 <- renderUI({
+    render_info("nj_tiles_scale_1")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13628,6 +13780,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiles_scale_2 <- renderUI({
+    render_info("nj_tiles_scale_2")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13660,6 +13814,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiles_scale_3 <- renderUI({
+    render_info("nj_tiles_scale_3")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13692,6 +13848,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiles_scale_4 <- renderUI({
+    render_info("nj_tiles_scale_4")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13724,6 +13882,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_tiles_scale_5 <- renderUI({
+    render_info("nj_tiles_scale_5")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -13758,6 +13918,8 @@ server <- function(input, output, session) {
   output$nj_tiles_mid_scale_1 <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tiles_mid_scale_1")
+
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_1",
       input_type = "selectInput",
@@ -13780,6 +13942,8 @@ server <- function(input, output, session) {
 
   output$nj_tiles_mid_scale_2 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_2")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_2",
@@ -13804,6 +13968,8 @@ server <- function(input, output, session) {
   output$nj_tiles_mid_scale_3 <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tiles_mid_scale_3")
+
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_3",
       input_type = "selectInput",
@@ -13826,6 +13992,8 @@ server <- function(input, output, session) {
 
   output$nj_tiles_mid_scale_4 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_4")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_4",
@@ -13850,6 +14018,8 @@ server <- function(input, output, session) {
   output$nj_tiles_mid_scale_5 <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_tiles_mid_scale_5")
+
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_5",
       input_type = "selectInput",
@@ -13871,6 +14041,8 @@ server <- function(input, output, session) {
 
   output$nj_fruit_mapping_info <- renderUI({
     req(input$nj_tile_num, Vis$meta_nj)
+
+    render_info("nj_fruit_mapping_info")
 
     if (input$nj_tile_num == 1) {
       if (is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_val()]))) {
@@ -14048,6 +14220,8 @@ server <- function(input, output, session) {
   output$nj_heatmap_sel <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_heatmap_sel")
+
     no_screened <- FALSE
 
     if (!is.null(Vis$meta_nj)) {
@@ -14142,6 +14316,8 @@ server <- function(input, output, session) {
   output$nj_heatmap_scale <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_heatmap_scale")
+
     if (!is.null(Vis$meta_nj)) {
       if (class(unlist(Vis$meta_nj[nj_heatmap_select_val()])) == "numeric") {
         choices <- list(
@@ -14186,6 +14362,8 @@ server <- function(input, output, session) {
   output$nj_heatmap_mid_scale <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_heatmap_mid_scale")
+
     output <- render_plot_control(
       input_id = "nj_heatmap_div_mid",
       input_type = "selectInput",
@@ -14208,6 +14386,8 @@ server <- function(input, output, session) {
 
   output$nj_heatmap_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_heatmap_mapping_info")
 
     if (!is.null(nj_heatmap_select_val())) {
       if (
@@ -14250,6 +14430,8 @@ server <- function(input, output, session) {
 
   output$nj_heatmap_var_warning <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_heatmap_var_warning")
 
     if (
       !is.null(Vis$meta_nj) &&
@@ -14372,7 +14554,7 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_color_menu")
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Color Menu' tree controls")
+      render_info("tree_controls Color Menu")
       div(
         class = "full-height-box",
         box(
@@ -15039,7 +15221,7 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_elements_menu")
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Elements Menu' tree controls")
+      render_info("tree_controls Elements Menu")
       div(
         class = "full-height-box",
         box(
@@ -15789,6 +15971,8 @@ server <- function(input, output, session) {
 
   # Tip points
   output$nj_tippoint_shape_ui <- renderUI({
+    render_info("nj_tippoint_shape_ui")
+
     output <- render_plot_control(
       input_id = "nj_tippoint_shape",
       input_type = "selectInput",
@@ -15813,6 +15997,8 @@ server <- function(input, output, session) {
 
   # Heatmap settings
   output$nj_heatmap_offset <- renderUI({
+    render_info("nj_heatmap_offset")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 1.5, 0),
@@ -15838,6 +16024,8 @@ server <- function(input, output, session) {
 
   # Clade highlighting
   output$nj_parentnode <- renderUI({
+    render_info("nj_parentnode")
+
     ifelse(
       !is.null(Vis$nj_parentnodes),
       choices <- sort(unique(as.numeric(Vis$nj_parentnodes))),
@@ -15866,6 +16054,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_clade_scale <- renderUI({
+    render_info("nj_clade_scale")
+
     selected_nodes <- nj_parentnode_val()
     if (
       length(selected_nodes) == 1 &&
@@ -15926,6 +16116,8 @@ server <- function(input, output, session) {
   output$nj_colnames_y <- renderUI({
     req(DB$data)
 
+    render_info("nj_colnames_y")
+
     disable <- FALSE
     if (
       nj_layout_val() == "inward" ||
@@ -15962,6 +16154,8 @@ server <- function(input, output, session) {
   # Tiles settings
 
   output$nj_fruit_width <- renderUI({
+    render_info("nj_fruit_width")
+
     fruit_width <- fruit_width()
     min_val <- max(round(fruit_width / 5, 1), 0.1)
     step_val <- max(round(fruit_width / 10, 1), 0.1)
@@ -15990,6 +16184,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_width2 <- renderUI({
+    render_info("nj_fruit_width2")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -16013,6 +16209,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_width3 <- renderUI({
+    render_info("nj_fruit_width3")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -16036,6 +16234,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_width4 <- renderUI({
+    render_info("nj_fruit_width4")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -16059,6 +16259,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_width5 <- renderUI({
+    render_info("nj_fruit_width5")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -16082,6 +16284,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_offset_circ <- renderUI({
+    render_info("nj_fruit_offset_circ")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -16113,6 +16317,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_offset_circ_2 <- renderUI({
+    render_info("nj_fruit_offset_circ_2")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -16144,6 +16350,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_offset_circ_3 <- renderUI({
+    render_info("nj_fruit_offset_circ_3")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -16175,6 +16383,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_offset_circ_4 <- renderUI({
+    render_info("nj_fruit_offset_circ_4")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -16206,6 +16416,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_fruit_offset_circ_5 <- renderUI({
+    render_info("nj_fruit_offset_circ_5")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -16454,7 +16666,7 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_highlight', "nj_misc_menu")
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Miscellaneous Menu' tree controls")
+      render_info("tree_controls Miscellaneous Menu")
 
       div(
         class = "full-height-box",
@@ -17103,6 +17315,8 @@ server <- function(input, output, session) {
 
   # Layout settings
   output$nj_xlim_ui <- renderUI({
+    render_info("nj_xlim_ui")
+
     if (nj_layout_val() == "inward") {
       input_id <- "nj_xlim_inw"
       min <- 30
@@ -17140,6 +17354,8 @@ server <- function(input, output, session) {
 
   # Treescale
   output$nj_treescale_width <- renderUI({
+    render_info("nj_treescale_width")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(floor(Vis$nj_max_x) * 0.5, 0),
@@ -17168,6 +17384,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_treescale_x <- renderUI({
+    render_info("nj_treescale_x")
+
     if ((!is.null(Vis$nj_min_x)) && (!is.null(Vis$nj_max_x))) {
       ifelse(ceiling(Vis$nj_min_x) < 1, min <- 1, min <- ceiling(Vis$nj_min_x))
 
@@ -17200,6 +17418,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_treescale_y <- renderUI({
+    render_info("nj_treescale_y")
+
     ifelse(
       !is.null(sum(DB$data$Include)),
       max <- sum(DB$data$Include),
@@ -17225,6 +17445,8 @@ server <- function(input, output, session) {
 
   # Rootedge
   output$nj_rootedge_length <- renderUI({
+    render_info("nj_rootedge_length")
+
     if (!is.null(Vis$nj_max_x)) {
       if (round(ceiling(Vis$nj_max_x) * 0.02, 0) < 1) {
         min <- 1
@@ -17268,7 +17490,8 @@ server <- function(input, output, session) {
     updateSwitchInput(session, "toggle_style", value = FALSE)
 
     output$tree_controls <- renderUI({
-      message("Rendering 'Export Menu' tree controls")
+      render_info("tree_controls Export Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -18000,7 +18223,9 @@ server <- function(input, output, session) {
   session$sendCustomMessage('mst_reset_style', "")
   session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
-  output$mst_controls <- renderUI(
+  output$mst_controls <- renderUI({
+    render_info("mst_controls Labels Menu")
+
     div(
       class = "full-height-box",
       box(
@@ -18049,7 +18274,7 @@ server <- function(input, output, session) {
         )
       )
     )
-  )
+  })
 
   ##### Label Menu ----
 
@@ -18084,7 +18309,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Labels Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -18133,7 +18360,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18171,7 +18398,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_variable_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Variable Mapping Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -18255,7 +18484,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18315,7 +18544,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_color_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Color Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -18479,7 +18710,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18551,7 +18782,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_size_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Size Settings Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -18823,7 +19056,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18924,7 +19157,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_misc_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Miscellaneous Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -19286,7 +19521,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -19299,7 +19534,9 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_download_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Export Menu")
+
       div(
         class = "full-height-box",
         box(
@@ -19419,7 +19656,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -19427,6 +19664,8 @@ server <- function(input, output, session) {
   ##### Miscellaneous ----
 
   output$mst_node_shape <- renderUI({
+    render_info("mst_node_shape")
+
     if (isTRUE(mst_color_var_reactive())) {
       choices <- c("Pie Nodes" = "custom")
       selected <- "custom"
@@ -19533,6 +19772,8 @@ server <- function(input, output, session) {
   output$mst_cluster <- renderUI({
     req(DB$schemeinfo)
 
+    render_info("mst_cluster")
+
     div(
       class = "mst-threshold",
       numericInput(
@@ -19547,6 +19788,8 @@ server <- function(input, output, session) {
 
   # MST color mapping
   output$mst_color_mapping <- renderUI({
+    render_info("mst_color_mapping")
+
     mst_color_node <- colorPickr(
       inputId = "mst_color_node",
       width = "100%",
@@ -19611,6 +19854,8 @@ server <- function(input, output, session) {
 
   # MST node labels
   output$mst_node_label <- renderUI({
+    render_info("mst_node_label")
+
     if (isTRUE(mst_color_var_reactive())) {
       choices <- "Assembly Name"
     } else {
@@ -21815,6 +22060,8 @@ server <- function(input, output, session) {
           log_print("Rendering tree plot")
 
           output$tree_field <- renderUI({
+            render_info("tree_field")
+
             addSpinner(
               plotOutput(
                 "tree_plot",
@@ -22185,6 +22432,8 @@ server <- function(input, output, session) {
 
             # Aspect ratio info
             output$tree_aspect <- renderUI({
+              render_info("tree_aspect")
+
               width <- get_plot_width(session = session)
               height <- get_plot_height(
                 width = width,
@@ -22202,6 +22451,8 @@ server <- function(input, output, session) {
           log_print("Rendering MST graph")
 
           output$mst_field <- renderUI({
+            render_info("mst_field")
+
             if (!is.null(session$clientData$output_tree_mst_height)) {
               width <- as.integer(
                 session$clientData$output_tree_mst_height *
@@ -22255,6 +22506,8 @@ server <- function(input, output, session) {
 
           # Aspect ratio info
           output$mst_aspect <- renderUI({
+            render_info("mst_aspect")
+
             width <- as.integer(session$clientData$output_tree_mst_width)
             height <- as.integer(session$clientData$output_tree_mst_height)
             paste(width, "x", height, "px")
@@ -23022,6 +23275,9 @@ server <- function(input, output, session) {
 
   output$gs_visualization_ui <- renderUI({
     req(DB$data, DB$scheme, Screening$available, Screening$amr_results)
+
+    render_info("gs_visualization_ui")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -23200,6 +23456,9 @@ server <- function(input, output, session) {
       Screening$vir_class,
       Screening$amr_class
     )
+
+    render_info("gs_plot_control_ui Heatmap Data Menu")
+
     amr_profile_numeric <- as.data.frame(lapply(
       Screening$amr_results,
       as.numeric
@@ -23616,7 +23875,9 @@ server <- function(input, output, session) {
 
     gs_plot_selected_noclass_selected <- gs_plot_selected_noclass()
 
-    output$gs_plot_control_ui <- renderUI(
+    output$gs_plot_control_ui <- renderUI({
+      render_info("gs_plot_control_ui Heatmap Data Menu")
+
       div(
         class = "gs-plot-box2",
         box(
@@ -23861,7 +24122,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -23908,6 +24169,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Color Menu")
 
       div(
         class = "gs-plot-box3",
@@ -24110,6 +24373,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Variable Mapping Menu")
 
       if (!is.null(input_gs_amr_variables())) {
         gs_amr_variables_selected <- input_gs_amr_variables()
@@ -24366,6 +24631,8 @@ server <- function(input, output, session) {
     runjs(block_ui)
 
     output$gs_plot_control_ui <- renderUI({
+      render_info("gs_plot_control_ui Sizing Menu")
+
       if (!is.null(input_gsplot_grid_width())) {
         gsplot_grid_width_selected <- input_gsplot_grid_width()
       } else {
@@ -24562,6 +24829,8 @@ server <- function(input, output, session) {
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
 
+      render_info("gs_plot_control_ui Save Heatmap Menu")
+
       div(
         class = "gs-plot-box4",
         box(
@@ -24658,6 +24927,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Miscellaneous Menu")
 
       if (!is.null(input_gs_ratio())) {
         gs_ratio_selected <- input_gs_ratio()
@@ -25010,6 +25281,8 @@ server <- function(input, output, session) {
   output$gs_virclass_scale_ui <- renderUI({
     req(Screening$available)
 
+    render_info("gs_virclass_scale_ui")
+
     if (!is.null(Screening$hm_meta)) {
       if (length(unique(Screening$hm_meta$vir)) > 7) {
         if (!is.null(gs_virclass_scale())) {
@@ -25075,6 +25348,8 @@ server <- function(input, output, session) {
 
   output$gs_amrclass_scale_ui <- renderUI({
     req(Screening$available)
+
+    render_info("gs_amrclass_scale_ui")
 
     if (!is.null(Screening$hm_meta)) {
       if (length(unique(Screening$hm_meta$amr)) > 7) {
@@ -25142,6 +25417,8 @@ server <- function(input, output, session) {
   # gs variable mapping scale
   output$gs_mapping_scale_ui <- renderUI({
     req(input$gs_var_mapping, Screening$available)
+
+    render_info("gs_mapping_scale_ui")
 
     if (input$gs_var_mapping != "None") {
       if (class(unlist(DB$meta[, input$gs_var_mapping])) == "numeric") {
@@ -25235,6 +25512,8 @@ server <- function(input, output, session) {
   output$gs_var_mapping_ui <- renderUI({
     req(DB$meta, Screening$available)
 
+    render_info("gs_var_mapping_ui")
+
     if (!is.null(input_gs_var_mapping())) {
       gs_var_mapping_selected <- input_gs_var_mapping()
     } else {
@@ -25255,6 +25534,8 @@ server <- function(input, output, session) {
 
   output$gs_field <- renderUI({
     req(Screening$available)
+
+    render_info("gs_field")
 
     if (!is.null(input$gs_scale)) {
       gs_scale <- input$gs_scale
@@ -25284,6 +25565,8 @@ server <- function(input, output, session) {
   # Render isolate picker info text
   output$gs_plot_sel_isolate_info <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_plot_sel_isolate_info")
 
     if (is.null(input$gs_plot_selected_isolate)) {
       tagList(
@@ -25328,6 +25611,8 @@ server <- function(input, output, session) {
   output$gs_plot_sel_amr_info <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_plot_sel_amr_info")
+
     if (is.null(input$gs_plot_selected_amr)) {
       tagList(
         tags$span(
@@ -25369,6 +25654,8 @@ server <- function(input, output, session) {
 
   output$gs_plot_sel_vir_info <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_plot_sel_vir_info")
 
     if (is.null(input$gs_plot_selected_vir)) {
       tagList(
@@ -25412,6 +25699,8 @@ server <- function(input, output, session) {
   output$gs_plot_sel_noclass_info <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_plot_sel_noclass_info")
+
     if (is.null(input$gs_plot_selected_noclass)) {
       tagList(
         tags$span(
@@ -25454,6 +25743,9 @@ server <- function(input, output, session) {
   # Rendering results table
   output$gs_results_table <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_results_table")
+
     if (!is.null(input$gs_profile_select)) {
       if (
         length(input$gs_profile_select) > 0 &&
@@ -25507,6 +25799,8 @@ server <- function(input, output, session) {
   output$gs_download <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_download")
+
     if (!is.null(input$gs_profile_select)) {
       if (length(input$gs_profile_select) > 0) {
         fluidRow(
@@ -25539,6 +25833,8 @@ server <- function(input, output, session) {
   # Resistance profile table output display
   output$gs_profile_display <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_profile_display")
 
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
@@ -25908,6 +26204,9 @@ server <- function(input, output, session) {
   # Availablity feedback
   output$gene_screening_info <- renderUI({
     req(DB$scheme)
+
+    render_info("gene_screening_info")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -25944,6 +26243,9 @@ server <- function(input, output, session) {
 
   output$gene_resistance_info <- renderUI({
     req(DB$scheme)
+
+    render_info("gene_resistance_info")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -25982,6 +26284,9 @@ server <- function(input, output, session) {
 
   output$screening_interface <- renderUI({
     req(DB$data, DB$scheme, Screening$available)
+
+    render_info("screening_interface")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -26305,17 +26610,23 @@ server <- function(input, output, session) {
   observe({
     req(DB$data, Screening$status, Screening$available)
     if (length(input$screening_select) < 1) {
-      output$genome_path_gs <- renderUI(HTML(
-        paste(
-          "<span style='color: white; font-style:italic'>",
-          length(input$screening_select),
-          " isolate(s) queried for screening"
+      output$genome_path_gs <- renderUI({
+        render_info("genome_path_gs")
+
+        HTML(
+          paste(
+            "<span style='color: white; font-style:italic'>",
+            length(input$screening_select),
+            " isolate(s) queried for screening"
+          )
         )
-      ))
+      })
 
       output$screening_start <- NULL
     } else if (length(input$screening_select) > 0) {
       output$screening_start <- renderUI({
+        render_info("screening_start")
+
         div(
           class = "screening-box",
           box(
@@ -26586,7 +26897,9 @@ server <- function(input, output, session) {
             )] ==
               "success"
           ) {
-            output$screening_result <- renderUI(
+            output$screening_result <- renderUI({
+              render_info("screening_result")
+
               column(
                 width = 12,
                 p(
@@ -26605,15 +26918,17 @@ server <- function(input, output, session) {
                   dataTableOutput("screening_table")
                 )
               )
-            )
+            })
           } else {
-            output$screening_result <- renderUI(
+            output$screening_result <- renderUI({
+              render_info("screening_result")
+
               column(
                 width = 12,
                 br(),
                 verbatimTextOutput("screening_fail")
               )
-            )
+            })
           }
         }
       } else {
@@ -26670,7 +26985,9 @@ server <- function(input, output, session) {
         check_screening()
 
         if (isTRUE(Screening$first_result)) {
-          output$screening_result_sel <- renderUI(
+          output$screening_result_sel <- renderUI({
+            render_info("screening_result_sel")
+
             fluidRow(
               column(
                 width = 2,
@@ -26743,7 +27060,7 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
           Screening$first_result <- FALSE
         }
@@ -27829,6 +28146,8 @@ server <- function(input, output, session) {
   # No db typing message
   output$typing_no_db <- renderUI({
     if (!is.null(DB$exist)) {
+      render_info("typing_no_db")
+
       if (DB$exist) {
         column(
           width = 4,
@@ -27851,8 +28170,6 @@ server <- function(input, output, session) {
       } else {
         NULL
       }
-    } else {
-      NULL
     }
   })
 
@@ -27862,6 +28179,8 @@ server <- function(input, output, session) {
   # Render selection info
   output$multi_folder_sel_info <- renderUI({
     req(Typing$assembly_folder_path, Typing$file_selection)
+
+    render_info("multi_folder_sel_info")
 
     if (Typing$file_selection == "folder") {
       if (length(Typing$assembly_folder_path) < 1) {
@@ -27890,6 +28209,8 @@ server <- function(input, output, session) {
   output$multi_file_sel_info <- renderUI({
     req(Typing$assembly_files_path, Typing$file_selection)
 
+    render_info("multi_file_sel_info")
+
     if (Typing$file_selection == "files") {
       if (nrow(Typing$assembly_files_path) < 1) {
         HTML(paste(
@@ -27917,6 +28238,8 @@ server <- function(input, output, session) {
   # Render multi selection table issues
   output$multi_select_issues <- renderUI({
     req(Typing$multi_sel_table, input$multi_select_table)
+
+    render_info("multi_select_issues")
 
     if (
       any(
@@ -27965,6 +28288,8 @@ server <- function(input, output, session) {
 
   output$multi_select_issue_info <- renderUI({
     req(Typing$multi_sel_table, input$multi_select_table)
+
+    render_info("multi_select_issue_info")
 
     multi_select_table <- hot_to_r(input$multi_select_table)
 
@@ -28056,7 +28381,9 @@ server <- function(input, output, session) {
   observe({
     if (!is.null(Typing$multi_sel_table)) {
       if (nrow(Typing$multi_sel_table) > 0) {
-        output$multi_select_tab_ctrls <- renderUI(
+        output$multi_select_tab_ctrls <- renderUI({
+          render_info("multi_select_tab_ctrls")
+
           fluidRow(
             h3(
               p("Metadata Declaration"),
@@ -28088,9 +28415,11 @@ server <- function(input, output, session) {
               uiOutput("multi_select_issues")
             )
           )
-        )
+        })
 
         output$metadata_multi_box <- renderUI({
+          render_info("metadata_multi_box")
+
           column(
             width = 11,
             align = "left",
@@ -28194,7 +28523,9 @@ server <- function(input, output, session) {
     Typing$multi_sel_table <- multi_sel_table
 
     if (nrow(Typing$multi_sel_table) > 0) {
-      output$multi_select_tab_ctrls <- renderUI(
+      output$multi_select_tab_ctrls <- renderUI({
+        render_info("multi_select_tab_ctrls")
+
         fluidRow(
           h3(
             p("Metadata Declaration"),
@@ -28226,7 +28557,7 @@ server <- function(input, output, session) {
             uiOutput("multi_select_issues")
           )
         )
-      )
+      })
     } else {
       output$multi_select_tab_ctrls <- NULL
     }
@@ -29080,6 +29411,8 @@ server <- function(input, output, session) {
     if (!is.null(Typing$result_list)) {
       if (length(Typing$result_list) > 0) {
         output$multi_typing_results <- renderUI({
+          render_info("multi_typing_results")
+
           column(
             width = 11,
             fluidRow(
@@ -29134,6 +29467,8 @@ server <- function(input, output, session) {
       output$initiate_multi_typing_ui <- NULL
 
       output$pending_typing <- renderUI({
+        render_info("pending_typing")
+
         fluidRow(
           fluidRow(
             br(),
@@ -29182,6 +29517,8 @@ server <- function(input, output, session) {
       output$initiate_multi_typing_ui <- NULL
 
       output$pending_typing <- renderUI({
+        render_info("pending_typing")
+
         fluidRow(
           fluidRow(
             br(),
