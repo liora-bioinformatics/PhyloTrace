@@ -2066,10 +2066,8 @@ server <- function(input, output, session) {
         updateSwitchInput(session, "toggle_style", value = FALSE)
 
         # Tip label
-        Vis$nj_tiplab_val_reset <- TRUE
         nj_tiplab_val("Assembly Name")
         nj_tiplab_show_val(TRUE)
-        Vis$nj_align_reset <- TRUE
         nj_align_val(TRUE)
         ifelse(
           !is.null(Vis$labelsize_nj),
@@ -2079,7 +2077,6 @@ server <- function(input, output, session) {
         nj_tiplab_fontface_val("plain")
         nj_tiplab_alpha_val(1)
         nj_tiplab_position_val(0)
-        Vis$nj_tiplab_angle_reset <- TRUE
         nj_tiplab_angle_val(0)
 
         # Label panels
@@ -2098,10 +2095,8 @@ server <- function(input, output, session) {
           nj_branch_size_val(Vis$branch_size_nj),
           nj_branch_size_val(4)
         )
-        Vis$nj_branch_label_val_reset <- TRUE
         nj_branch_label_val("Allelic Distance")
         nj_branch_panel_val(FALSE)
-        Vis$nj_branchlabel_cutoff_val_reset <- TRUE
         nj_branchlabel_cutoff_val(ifelse(
           !is.null(Vis$nj_branch_lengths),
           2,
@@ -2133,25 +2128,18 @@ server <- function(input, output, session) {
 
         # Tip label mapping
         nj_mapping_show_val(FALSE)
-        Vis$nj_color_mapping_val_reset <- TRUE
         nj_color_mapping_val("Country")
-        Vis$nj_tiplab_scale_reset <- TRUE
         nj_tiplab_scale_val(nj_tiplab_scale_val_default())
-        Vis$nj_color_mapping_div_mid_reset <- TRUE
         nj_color_mapping_div_mid_val("Mean")
 
         # Tip points mapping
         nj_tipcolor_mapping_show_val(FALSE)
-        Vis$nj_tipcolor_mapping_val_reset <- TRUE
         nj_tipcolor_mapping_val("Country")
-        Vis$nj_tippoint_scale_val_reset <- TRUE
         nj_tippoint_scale_val(nj_tippoint_scale_val_default())
-        Vis$nj_tipcolor_mapping_div_mid_reset <- TRUE
         nj_tipcolor_mapping_div_mid_val("Mean")
 
         # Tip shape mapping
         nj_tipshape_mapping_show_val(FALSE)
-        Vis$nj_tipshape_mapping_val_reset <- TRUE
         nj_tipshape_mapping_val("Host")
 
         # Tiles mapping
@@ -2160,43 +2148,25 @@ server <- function(input, output, session) {
         nj_tiles_show_3_val(FALSE)
         nj_tiles_show_4_val(FALSE)
         nj_tiles_show_5_val(FALSE)
-        Vis$nj_fruit_variable_val_reset <- TRUE
         nj_fruit_variable_val("Isolation Date")
-        Vis$nj_fruit_variable_2_val_reset <- TRUE
         nj_fruit_variable_2_val("Isolation Date")
-        Vis$nj_fruit_variable_3_val_reset <- TRUE
         nj_fruit_variable_3_val("Isolation Date")
-        Vis$nj_fruit_variable_4_val_reset <- TRUE
         nj_fruit_variable_4_val("Isolation Date")
-        Vis$nj_fruit_variable_5_val_reset <- TRUE
         nj_fruit_variable_5_val("Isolation Date")
-        Vis$nj_tiles_scale_1_reset <- TRUE
         nj_tiles_scale_1_val(nj_tiles_scale_1_val_default())
-        Vis$nj_tiles_scale_2_reset <- TRUE
         nj_tiles_scale_2_val(nj_tiles_scale_2_val_default())
-        Vis$nj_tiles_scale_3_reset <- TRUE
         nj_tiles_scale_3_val(nj_tiles_scale_3_val_default())
-        Vis$nj_tiles_scale_4_reset <- TRUE
         nj_tiles_scale_4_val(nj_tiles_scale_4_val_default())
-        Vis$nj_tiles_scale_5_reset <- TRUE
         nj_tiles_scale_5_val(nj_tiles_scale_5_val_default())
-        Vis$nj_tiles_mapping_div_mid_1_reset <- TRUE
         nj_tiles_mapping_div_mid_1_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_2_reset <- TRUE
         nj_tiles_mapping_div_mid_2_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_3_reset <- TRUE
         nj_tiles_mapping_div_mid_3_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_4_reset <- TRUE
         nj_tiles_mapping_div_mid_4_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_5_reset <- TRUE
         nj_tiles_mapping_div_mid_5_val("Mean")
 
         nj_heatmap_show_val(FALSE)
-        Vis$nj_heatmap_select_val_reset <- TRUE
         nj_heatmap_select_val(NULL)
-        Vis$nj_heatmap_scale_reset <- TRUE
         nj_heatmap_scale_val(nj_heatmap_scale_val_default())
-        Vis$nj_heatmap_div_mid_val_reset <- TRUE
         nj_heatmap_div_mid_val("Mean")
 
         # Color values
@@ -2212,7 +2182,6 @@ server <- function(input, output, session) {
 
         # Tip points
         nj_tippoint_show_val(FALSE)
-        Vis$nj_tippoint_shape_reset <- TRUE
         nj_tippoint_shape_val("circle")
         nj_tippoint_alpha_val(0.5)
         ifelse(
@@ -2238,39 +2207,26 @@ server <- function(input, output, session) {
         nj_fruit_alpha_3_val(1)
         nj_fruit_alpha_4_val(1)
         nj_fruit_alpha_5_val(1)
-        Vis$nj_fruit_width_circ_val_reset <- TRUE
         nj_fruit_width_circ_val(fruit_width())
-        Vis$nj_fruit_width_circ_2_val_reset <- TRUE
         nj_fruit_width_circ_2_val(fruit_width())
-        Vis$nj_fruit_width_circ_3_val_reset <- TRUE
         nj_fruit_width_circ_3_val(fruit_width())
-        Vis$nj_fruit_width_circ_4_val_reset <- TRUE
         nj_fruit_width_circ_4_val(fruit_width())
-        Vis$nj_fruit_width_circ_5_val_reset <- TRUE
         nj_fruit_width_circ_5_val(fruit_width())
-        Vis$nj_fruit_offset_circ_reset <- TRUE
         nj_fruit_offset_circ_val(0.05)
-        Vis$nj_fruit_offset_circ_2_reset <- TRUE
         nj_fruit_offset_circ_2_val(0.05)
-        Vis$nj_fruit_offset_circ_3_reset <- TRUE
         nj_fruit_offset_circ_3_val(0.05)
-        Vis$nj_fruit_offset_circ_4_reset <- TRUE
         nj_fruit_offset_circ_4_val(0.05)
-        Vis$nj_fruit_offset_circ_5_reset <- TRUE
         nj_fruit_offset_circ_5_val(0.05)
 
         # Heatmap
         nj_heatmap_title_val("Heatmap")
         nj_colnames_angle_val(-90)
-        Vis$nj_colnames_y_val_reset <- TRUE
         nj_colnames_y_val(-1)
         nj_heatmap_width_val(heatmap_width())
-        Vis$nj_heatmap_offset_val_reset <- TRUE
         nj_heatmap_offset_val(0)
 
         # Clade highlights
         nj_nodelabel_show_val(FALSE)
-        Vis$nj_parentnode_val_reset <- TRUE
         nj_parentnode_val("")
         nj_clade_scale_val(clade_highlight_color())
         nj_clade_type_val("roundrect")
@@ -2291,31 +2247,20 @@ server <- function(input, output, session) {
         # Layout
         nj_layout_val("rectangular")
         nj_rootedge_show_val(TRUE)
-        Vis$nj_rootedge_length_val_reset <- TRUE
         ifelse(
           !is.null(Vis$nj_max_x),
           nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05)),
           nj_rootedge_length_val(2)
         )
         nj_rootedge_line_val("solid")
-        Vis$nj_xlim_val_reset <- TRUE
         nj_xlim_val(-10)
-        Vis$nj_xlim_inw_val_reset <- TRUE
         nj_xlim_inw_val(50)
         nj_treescale_show_val(TRUE)
-        Vis$nj_treescale_width_val_reset <- TRUE
         ifelse(
           !is.null(Vis$nj_max_x),
           nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0)),
           nj_treescale_width_val(2)
         )
-        # Vis$nj_treescale_x_val_reset <- TRUE
-        # ifelse(
-        #   !is.null(Vis$nj_max_x),
-        #   nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
-        #   nj_treescale_x_val(2)
-        # )
-        Vis$nj_treescale_y_val_reset <- TRUE
         nj_treescale_y_val(-1)
         nj_ladder_val(TRUE)
 
@@ -12246,11 +12191,8 @@ server <- function(input, output, session) {
       max = max,
       step = 0.1,
       reactive_value = nj_branchlabel_cutoff_val(),
-      default_value = default,
-      reset = isolate(Vis$nj_branchlabel_cutoff_val_reset)
+      default_value = default
     )
-
-    isolate(Vis$nj_branchlabel_cutoff_val_reset <- FALSE)
 
     output
   })
@@ -12269,11 +12211,8 @@ server <- function(input, output, session) {
       input_type = "selectInput",
       choices = choices,
       reactive_value = nj_tiplab_val(),
-      default_value = "Assembly Name",
-      reset = isolate(Vis$nj_tiplab_val_reset)
+      default_value = "Assembly Name"
     )
-
-    isolate(Vis$nj_tiplab_val_reset <- FALSE)
 
     output
   })
@@ -12290,12 +12229,9 @@ server <- function(input, output, session) {
       reactive_value = nj_align_val(),
       default_value = TRUE,
       div_class = "mat-switch-align",
-      reset = isolate(Vis$nj_align_reset),
       right = TRUE,
       show_condition = !is.null(Vis$tree_algo) && Vis$tree_algo == "NJ"
     )
-
-    isolate(Vis$nj_align_reset <- FALSE)
 
     output
   })
@@ -12312,13 +12248,10 @@ server <- function(input, output, session) {
       width = "150px",
       reactive_value = nj_tiplab_angle_val(),
       default_value = 0,
-      reset = isolate(Vis$nj_tiplab_angle_reset),
       right = TRUE,
       show_condition = nj_layout_val() != "inward" &&
         nj_layout_val() != "circular"
     )
-
-    isolate(Vis$nj_tiplab_angle_reset <- FALSE)
 
     output
   })
@@ -12338,11 +12271,8 @@ server <- function(input, output, session) {
       input_type = "selectInput",
       choices = c(choices, "Allelic Distance"),
       reactive_value = nj_branch_label_val(),
-      default_value = "Allelic Distance",
-      reset = isolate(Vis$nj_branch_label_val_reset)
+      default_value = "Allelic Distance"
     )
-
-    isolate(Vis$nj_branch_label_val_reset <- FALSE)
 
     output
   })
@@ -13322,11 +13252,8 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_color_mapping_val(),
       default_value = "Country",
-      reset = isolate(Vis$nj_color_mapping_val_reset),
       show_condition = isTRUE(nj_mapping_show_val())
     )
-
-    isolate(Vis$nj_color_mapping_val_reset <- FALSE)
 
     output
   })
@@ -13355,11 +13282,8 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tiplab_scale_val(),
       default_value = nj_tiplab_scale_val_default(),
-      reset = isolate(Vis$nj_tiplab_scale_reset),
       show_condition = nj_mapping_show_val()
     )
-
-    isolate(Vis$nj_tiplab_scale_val_reset <- FALSE)
 
     output
   })
@@ -13376,14 +13300,11 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_color_mapping_div_mid_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_color_mapping_div_mid_reset),
       show_condition = isTRUE(nj_mapping_show_val()) &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_color_mapping_val()])) &&
         nj_tiplab_scale_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_color_mapping_div_mid_reset <- FALSE)
 
     output
   })
@@ -13443,11 +13364,8 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_tipcolor_mapping_val(),
       default_value = "Country",
-      reset = isolate(Vis$nj_tipcolor_mapping_val_reset),
       show_condition = isTRUE(nj_tipcolor_mapping_show_val())
     )
-
-    isolate(Vis$nj_tipcolor_mapping_val_reset <- FALSE)
 
     output
   })
@@ -13476,11 +13394,8 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tippoint_scale_val(),
       default_value = nj_tippoint_scale_val_default(),
-      reset = isolate(Vis$nj_tippoint_scale_reset),
       show_condition = nj_tipcolor_mapping_show_val()
     )
-
-    isolate(Vis$nj_tippoint_scale_reset <- FALSE)
 
     output
   })
@@ -13497,14 +13412,11 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_tipcolor_mapping_div_mid_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_tipcolor_mapping_div_mid_reset),
       show_condition = isTRUE(nj_tipcolor_mapping_show_val()) &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_tipcolor_mapping_val()])) &&
         nj_tippoint_scale_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tipcolor_mapping_div_mid_reset <- FALSE)
 
     output
   })
@@ -13576,11 +13488,8 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_tipshape_mapping_val(),
       default_value = "Host",
-      reset = isolate(Vis$nj_tipshape_mapping_val_reset),
       show_condition = isTRUE(nj_tipshape_mapping_show_val())
     )
-
-    isolate(Vis$nj_tipshape_mapping_val_reset <- FALSE)
 
     output
   })
@@ -13637,11 +13546,8 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_val_reset),
       show_condition = isTRUE(nj_tiles_show_1_val())
     )
-
-    isolate(Vis$nj_fruit_variable_val_reset <- FALSE)
 
     output
   })
@@ -13662,11 +13568,8 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_2_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_2_val_reset),
       show_condition = isTRUE(nj_tiles_show_2_val())
     )
-
-    isolate(Vis$nj_fruit_variable_2_val_reset <- FALSE)
 
     output
   })
@@ -13687,11 +13590,8 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_3_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_3_val_reset),
       show_condition = isTRUE(nj_tiles_show_3_val())
     )
-
-    isolate(Vis$nj_fruit_variable_3_val_reset <- FALSE)
 
     output
   })
@@ -13712,11 +13612,8 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_4_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_4_val_reset),
       show_condition = isTRUE(nj_tiles_show_4_val())
     )
-
-    isolate(Vis$nj_fruit_variable_4_val_reset <- FALSE)
 
     output
   })
@@ -13737,11 +13634,8 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_5_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_5_val_reset),
       show_condition = isTRUE(nj_tiles_show_5_val())
     )
-
-    isolate(Vis$nj_fruit_variable_5_val_reset <- FALSE)
 
     output
   })
@@ -13771,11 +13665,8 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_1_val(),
       default_value = nj_tiles_scale_1_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_1_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_1_val()
     )
-
-    isolate(Vis$nj_tiles_scale_1_reset <- FALSE)
 
     output
   })
@@ -13805,11 +13696,8 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_2_val(),
       default_value = nj_tiles_scale_2_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_2_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_2_val()
     )
-
-    isolate(Vis$nj_tiles_scale_2_reset <- FALSE)
 
     output
   })
@@ -13839,11 +13727,8 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_3_val(),
       default_value = nj_tiles_scale_3_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_3_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_3_val()
     )
-
-    isolate(Vis$nj_tiles_scale_3_reset <- FALSE)
 
     output
   })
@@ -13873,11 +13758,8 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_4_val(),
       default_value = nj_tiles_scale_4_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_4_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_4_val()
     )
-
-    isolate(Vis$nj_tiles_scale_4_reset <- FALSE)
 
     output
   })
@@ -13907,11 +13789,8 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_5_val(),
       default_value = nj_tiles_scale_5_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_5_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_5_val()
     )
-
-    isolate(Vis$nj_tiles_scale_5_reset <- FALSE)
 
     output
   })
@@ -13929,14 +13808,11 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_1_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_1_reset),
       show_condition = nj_tiles_show_1_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_val()])) &&
         nj_tiles_scale_1_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tiles_mapping_div_mid_1_reset <- FALSE)
 
     output
   })
@@ -13954,14 +13830,11 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_2_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_2_reset),
       show_condition = nj_tiles_show_2_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_2_val()])) &&
         nj_tiles_scale_2_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tiles_mapping_div_mid_2_reset <- FALSE)
 
     output
   })
@@ -13979,14 +13852,11 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_3_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_3_reset),
       show_condition = nj_tiles_show_3_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_3_val()])) &&
         nj_tiles_scale_3_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tiles_mapping_div_mid_3_reset <- FALSE)
 
     output
   })
@@ -14004,14 +13874,11 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_4_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_4_reset),
       show_condition = nj_tiles_show_4_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_4_val()])) &&
         nj_tiles_scale_4_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tiles_mapping_div_mid_4_reset <- FALSE)
 
     output
   })
@@ -14028,14 +13895,11 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_tiles_mapping_div_mid_5_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_5_reset),
       show_condition = nj_tiles_show_5_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_5_val()])) &&
         nj_tiles_scale_5_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_tiles_mapping_div_mid_5_reset <- FALSE)
 
     output
   })
@@ -14305,11 +14169,8 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_heatmap_select_val(),
       default_value = NULL,
-      reset = isolate(Vis$nj_heatmap_select_val_reset),
       show_condition = isFALSE(no_screened)
     )
-
-    isolate(Vis$nj_heatmap_select_val_reset <- FALSE)
 
     output
   })
@@ -14351,11 +14212,8 @@ server <- function(input, output, session) {
       reactive_value = nj_heatmap_scale_val(),
       default_value = nj_heatmap_scale_val_default(),
       div_class = "nj-heatmap-scale",
-      reset = isolate(Vis$nj_heatmap_scale_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_heatmap_show_val()
     )
-
-    isolate(Vis$nj_heatmap_scale_reset <- FALSE)
 
     output
   })
@@ -14373,14 +14231,11 @@ server <- function(input, output, session) {
       reactive_value = nj_heatmap_div_mid_val(),
       default_value = "Mean",
       div_class = "nj-heatmap-div-mid",
-      reset = isolate(Vis$nj_heatmap_div_mid_val_reset),
       show_condition = isTRUE(nj_heatmap_show_val()) &&
         !is.null(Vis$meta_nj) &&
         any(sapply(Vis$meta_nj[nj_heatmap_select_val()], is.numeric)) &&
         nj_heatmap_scale_val() %in% unlist(diverging_scales)
     )
-
-    isolate(Vis$nj_heatmap_div_mid_val_reset <- FALSE)
 
     output
   })
@@ -15987,11 +15842,8 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tippoint_shape_val(),
       default_value = "circle",
-      reset = isolate(Vis$nj_tippoint_shape_reset),
       show_condition = isFALSE(nj_tipshape_mapping_show_val())
     )
-
-    isolate(Vis$nj_tippoint_shape_reset <- FALSE)
 
     output
   })
@@ -16014,11 +15866,8 @@ server <- function(input, output, session) {
       max = max,
       step = 1,
       reactive_value = nj_heatmap_offset_val(),
-      default_value = 0,
-      reset = isolate(Vis$nj_heatmap_offset_val_reset)
+      default_value = 0
     )
-
-    isolate(Vis$nj_heatmap_offset_val_reset <- FALSE)
 
     output
   })
@@ -16045,11 +15894,8 @@ server <- function(input, output, session) {
       ),
       choices = choices,
       reactive_value = nj_parentnode_val(),
-      default_value = "",
-      reset = isolate(Vis$nj_parentnode_val_reset)
+      default_value = ""
     )
-
-    isolate(Vis$nj_parentnode_val_reset <- FALSE)
 
     output
   })
@@ -16143,11 +15989,8 @@ server <- function(input, output, session) {
       max = sum(DB$data$Include),
       reactive_value = nj_colnames_y_val(),
       default_value = -1,
-      reset = isolate(Vis$nj_colnames_y_val_reset),
       show_condition = !disable
     )
-
-    isolate(Vis$nj_colnames_y_val_reset <- FALSE)
 
     output
   })
@@ -16175,11 +16018,8 @@ server <- function(input, output, session) {
       step = step_val,
       max = max,
       reactive_value = isolate(nj_fruit_width_circ_val()),
-      default_value = fruit_width,
-      reset = isolate(Vis$nj_fruit_width_circ_val_reset)
+      default_value = fruit_width
     )
-
-    isolate(Vis$nj_fruit_width_circ_val_reset <- FALSE)
 
     output
   })
@@ -16200,11 +16040,8 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_2_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_2_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_2_val_reset <- FALSE)
 
     output
   })
@@ -16225,11 +16062,8 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_3_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_3_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_3_val_reset <- FALSE)
 
     output
   })
@@ -16250,11 +16084,8 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_4_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_4_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_4_val_reset <- FALSE)
 
     output
   })
@@ -16275,11 +16106,8 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_5_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_5_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_5_val_reset <- FALSE)
 
     output
   })
@@ -16308,11 +16136,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = isolate(nj_fruit_offset_circ_val()),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_reset <- FALSE)
 
     output
   })
@@ -16341,11 +16166,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_2_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_2_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_2_reset <- FALSE)
 
     output
   })
@@ -16374,11 +16196,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_3_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_3_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_3_reset <- FALSE)
 
     output
   })
@@ -16407,11 +16226,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_4_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_4_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_4_reset <- FALSE)
 
     output
   })
@@ -16440,11 +16256,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_5_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_5_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_5_reset <- FALSE)
 
     output
   })
@@ -16594,9 +16407,6 @@ server <- function(input, output, session) {
       nj_treescale_show_val(TRUE)
     )
 
-    # if (!is.null(input$nj_treescale_x)) {
-    #   nj_treescale_x_val(input$nj_treescale_x)
-    # }
     nj_treescale_x_val(nj_treescale_x_reactive())
 
     nj_treescale_y_val(nj_treescale_y_reactive())
@@ -17340,14 +17150,12 @@ server <- function(input, output, session) {
       max <- 120
       isolate(value <- nj_xlim_inw_val())
       default <- 50
-      isolate(reset <- Vis$nj_xlim_inw_val_reset)
     } else {
       input_id <- "nj_xlim"
       min <- -50
       max <- 0
       isolate(value <- nj_xlim_val())
       default <- -10
-      isolate(reset <- Vis$nj_xlim_val_reset)
     }
 
     output <- render_plot_control(
@@ -17359,12 +17167,9 @@ server <- function(input, output, session) {
       max = max,
       reactive_value = value,
       default_value = default,
-      reset = reset,
       show_condition = nj_layout_val == "inward" ||
         nj_layout_val == "circular"
     )
-
-    isolate(Vis$nj_xlim_inw_val_reset <- Vis$nj_xlim_val_reset <- FALSE)
 
     output
   })
@@ -17391,11 +17196,8 @@ server <- function(input, output, session) {
         !is.null(Vis$nj_max_x),
         round(ceiling(Vis$nj_max_x) * 0.1, 0),
         2
-      ),
-      reset = isolate(Vis$nj_treescale_width_val_reset)
+      )
     )
-
-    isolate(Vis$nj_treescale_width_val_reset <- FALSE)
 
     output
   })
@@ -17431,11 +17233,8 @@ server <- function(input, output, session) {
         !is.null(nj_max_x),
         round(nj_max_x / 2, 0),
         2
-      ),
-      reset = isolate(Vis$nj_treescale_x_val_reset)
+      )
     )
-
-    isolate(Vis$nj_treescale_x_val_reset <- FALSE)
 
     output
   })
@@ -17457,11 +17256,8 @@ server <- function(input, output, session) {
       min = -1,
       max = max,
       reactive_value = nj_treescale_y_val(),
-      default_value = -1,
-      reset = isolate(Vis$nj_treescale_y_val_reset)
+      default_value = -1
     )
-
-    isolate(Vis$nj_treescale_y_val_reset <- FALSE)
 
     output
   })
@@ -17494,11 +17290,8 @@ server <- function(input, output, session) {
         !is.null(Vis$nj_max_x),
         round(ceiling(Vis$nj_max_x) * 0.05),
         2
-      ),
-      reset = isolate(Vis$nj_rootedge_length_val_reset)
+      )
     )
-
-    isolate(Vis$nj_rootedge_length_val_reset <- FALSE)
 
     output
   })
@@ -17645,10 +17438,8 @@ server <- function(input, output, session) {
     updateSwitchInput(session, "toggle_style", value = FALSE)
 
     # Tip label
-    Vis$nj_tiplab_val_reset <- TRUE
     nj_tiplab_val("Assembly Name")
     nj_tiplab_show_val(TRUE)
-    Vis$nj_align_reset <- TRUE
     nj_align_val(TRUE)
     ifelse(
       !is.null(Vis$labelsize_nj),
@@ -17658,7 +17449,6 @@ server <- function(input, output, session) {
     nj_tiplab_fontface_val("plain")
     nj_tiplab_alpha_val(1)
     nj_tiplab_position_val(0)
-    Vis$nj_tiplab_angle_reset <- TRUE
     nj_tiplab_angle_val(0)
 
     # Label panels
@@ -17677,10 +17467,8 @@ server <- function(input, output, session) {
       nj_branch_size_val(Vis$branch_size_nj),
       nj_branch_size_val(4)
     )
-    Vis$nj_branch_label_val_reset <- TRUE
     nj_branch_label_val("Allelic Distance")
     nj_branch_panel_val(FALSE)
-    Vis$nj_branchlabel_cutoff_val_reset <- TRUE
     nj_branchlabel_cutoff_val(10)
     nj_branchlab_alpha_val(0.65)
     nj_branch_x_val(0)
@@ -17701,25 +17489,18 @@ server <- function(input, output, session) {
 
     # Tip label mapping
     nj_mapping_show_val(FALSE)
-    Vis$nj_color_mapping_val_reset <- TRUE
     nj_color_mapping_val("Country")
-    Vis$nj_tiplab_scale_reset <- TRUE
     nj_tiplab_scale_val(nj_tiplab_scale_val_default())
-    Vis$nj_color_mapping_div_mid_reset <- TRUE
     nj_color_mapping_div_mid_val("Mean")
 
     # Tip points mapping
     nj_tipcolor_mapping_show_val(FALSE)
-    Vis$nj_tipcolor_mapping_val_reset <- TRUE
     nj_tipcolor_mapping_val("Country")
-    Vis$nj_tippoint_scale_val_reset <- TRUE
     nj_tippoint_scale_val(nj_tippoint_scale_val_default())
-    Vis$nj_tipcolor_mapping_div_mid_reset <- TRUE
     nj_tipcolor_mapping_div_mid_val("Mean")
 
     # Tip shape mapping
     nj_tipshape_mapping_show_val(FALSE)
-    Vis$nj_tipshape_mapping_val_reset <- TRUE
     nj_tipshape_mapping_val("Host")
 
     # Tiles mapping
@@ -17728,43 +17509,25 @@ server <- function(input, output, session) {
     nj_tiles_show_3_val(FALSE)
     nj_tiles_show_4_val(FALSE)
     nj_tiles_show_5_val(FALSE)
-    Vis$nj_fruit_variable_val_reset <- TRUE
     nj_fruit_variable_val("Isolation Date")
-    Vis$nj_fruit_variable_2_val_reset <- TRUE
     nj_fruit_variable_2_val("Isolation Date")
-    Vis$nj_fruit_variable_3_val_reset <- TRUE
     nj_fruit_variable_3_val("Isolation Date")
-    Vis$nj_fruit_variable_4_val_reset <- TRUE
     nj_fruit_variable_4_val("Isolation Date")
-    Vis$nj_fruit_variable_5_val_reset <- TRUE
     nj_fruit_variable_5_val("Isolation Date")
-    Vis$nj_tiles_scale_1_reset <- TRUE
     nj_tiles_scale_1_val(nj_tiles_scale_1_val_default())
-    Vis$nj_tiles_scale_2_reset <- TRUE
     nj_tiles_scale_2_val(nj_tiles_scale_2_val_default())
-    Vis$nj_tiles_scale_3_reset <- TRUE
     nj_tiles_scale_3_val(nj_tiles_scale_3_val_default())
-    Vis$nj_tiles_scale_4_reset <- TRUE
     nj_tiles_scale_4_val(nj_tiles_scale_4_val_default())
-    Vis$nj_tiles_scale_5_reset <- TRUE
     nj_tiles_scale_5_val(nj_tiles_scale_5_val_default())
-    Vis$nj_tiles_mapping_div_mid_1_reset <- TRUE
     nj_tiles_mapping_div_mid_1_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_2_reset <- TRUE
     nj_tiles_mapping_div_mid_2_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_3_reset <- TRUE
     nj_tiles_mapping_div_mid_3_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_4_reset <- TRUE
     nj_tiles_mapping_div_mid_4_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_5_reset <- TRUE
     nj_tiles_mapping_div_mid_5_val("Mean")
 
     nj_heatmap_show_val(FALSE)
-    Vis$nj_heatmap_select_val_reset <- TRUE
     nj_heatmap_select_val(NULL)
-    Vis$nj_heatmap_scale_reset <- TRUE
     nj_heatmap_scale_val(nj_heatmap_scale_val_default())
-    Vis$nj_heatmap_div_mid_val_reset <- TRUE
     nj_heatmap_div_mid_val("Mean")
 
     # Color values
@@ -17780,7 +17543,6 @@ server <- function(input, output, session) {
 
     # Tip points
     nj_tippoint_show_val(FALSE)
-    Vis$nj_tippoint_shape_reset <- TRUE
     nj_tippoint_shape_val("circle")
     nj_tippoint_alpha_val(0.5)
     ifelse(
@@ -17806,39 +17568,26 @@ server <- function(input, output, session) {
     nj_fruit_alpha_3_val(1)
     nj_fruit_alpha_4_val(1)
     nj_fruit_alpha_5_val(1)
-    Vis$nj_fruit_width_circ_val_reset <- TRUE
     nj_fruit_width_circ_val(fruit_width())
-    Vis$nj_fruit_width_circ_2_val_reset <- TRUE
     nj_fruit_width_circ_2_val(fruit_width())
-    Vis$nj_fruit_width_circ_3_val_reset <- TRUE
     nj_fruit_width_circ_3_val(fruit_width())
-    Vis$nj_fruit_width_circ_4_val_reset <- TRUE
     nj_fruit_width_circ_4_val(fruit_width())
-    Vis$nj_fruit_width_circ_5_val_reset <- TRUE
     nj_fruit_width_circ_5_val(fruit_width())
-    Vis$nj_fruit_offset_circ_reset <- TRUE
     nj_fruit_offset_circ_val(0.05)
-    Vis$nj_fruit_offset_circ_2_reset <- TRUE
     nj_fruit_offset_circ_2_val(0.05)
-    Vis$nj_fruit_offset_circ_3_reset <- TRUE
     nj_fruit_offset_circ_3_val(0.05)
-    Vis$nj_fruit_offset_circ_4_reset <- TRUE
     nj_fruit_offset_circ_4_val(0.05)
-    Vis$nj_fruit_offset_circ_5_reset <- TRUE
     nj_fruit_offset_circ_5_val(0.05)
 
     # Heatmap
     nj_heatmap_title_val("Heatmap")
     nj_colnames_angle_val(-90)
-    Vis$nj_colnames_y_val_reset <- TRUE
     nj_colnames_y_val(-1)
     nj_heatmap_width_val(heatmap_width())
-    Vis$nj_heatmap_offset_val_reset <- TRUE
     nj_heatmap_offset_val(0)
 
     # Clade highlights
     nj_nodelabel_show_val(FALSE)
-    Vis$nj_parentnode_val_reset <- TRUE
     nj_parentnode_val("")
     nj_clade_scale_val(clade_highlight_color())
     nj_clade_type_val("roundrect")
@@ -17859,31 +17608,25 @@ server <- function(input, output, session) {
     # Layout
     nj_layout_val("rectangular")
     nj_rootedge_show_val(TRUE)
-    Vis$nj_rootedge_length_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
       nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05)),
       nj_rootedge_length_val(2)
     )
     nj_rootedge_line_val("solid")
-    Vis$nj_xlim_val_reset <- TRUE
     nj_xlim_val(-10)
-    Vis$nj_xlim_inw_val_reset <- TRUE
     nj_xlim_inw_val(50)
     nj_treescale_show_val(TRUE)
-    Vis$nj_treescale_width_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
       nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0)),
       nj_treescale_width_val(2)
     )
-    Vis$nj_treescale_x_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
       nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
       nj_treescale_x_val(2)
     )
-    Vis$nj_treescale_y_val_reset <- TRUE
     nj_treescale_y_val(-1)
     nj_ladder_val(TRUE)
 
@@ -22241,46 +21984,6 @@ server <- function(input, output, session) {
               nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
               nj_treescale_x_val(round(Vis$nj_max_x / 2, 0))
               nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
-
-              # output$tree_plot <- renderPlot(
-              #   {
-              #     make.tree()
-              #   },
-              #   height = function() {
-              #     req(
-              #       session$clientData$output_tree_plot_width,
-              #       nj_aspect_ratio_val()
-              #     )
-              #     width <- session$clientData$output_tree_plot_width
-              #     if (is.null(width) || !is.numeric(width) || width <= 0) {
-              #       width <- 800
-              #     }
-              #     height <- as.integer(width * nj_aspect_ratio_val())
-              #     if (!is.numeric(height) || height <= 0) {
-              #       height <- as.integer(800 * 0.6)
-              #     }
-
-              #     height
-              #   },
-              #   res = 192
-              # )
-
-              # # Aspect ratio info
-              # output$tree_aspect <- renderUI({
-              #   render_info("tree_aspect")
-
-              #   width <- get_plot_width(session = session)
-              #   height <- get_plot_height(
-              #     width = width,
-              #     aspect_ratio_val = nj_aspect_ratio_val()
-              #   )
-
-              #   paste(width, "x", height, "px | 192 DPI")
-              # })
-
-              # shinyjs::addClass("tree_aspect", class = "aspect-display")
-
-              # Vis$nj_true <- TRUE
             }
           } else {
             log_print("Rendering MST graph")
