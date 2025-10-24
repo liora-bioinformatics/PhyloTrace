@@ -661,13 +661,13 @@ render_plot_control <- function(
 ) {
   # Determine the selected value based on reset condition
   if (is.null(reactive_value)) {
-    sel <- NULL
+    sel <- default_value
   } else {
-    if (isTRUE(reset)) {
-      sel <- default_value
-    } else {
-      sel <- reactive_value
-    }
+    # if (isTRUE(reset)) {
+    #   sel <- default_value
+    # } else {
+    sel <- reactive_value
+    # }
   }
 
   # Prepare the initial arguments list

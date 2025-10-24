@@ -1913,6 +1913,7 @@ server <- function(input, output, session) {
       )
     } else {
       runjs(block_ui)
+      log_print("Input load")
 
       output$start_message <- NULL
       output$load_db <- NULL
@@ -2308,15 +2309,14 @@ server <- function(input, output, session) {
           nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0)),
           nj_treescale_width_val(2)
         )
-        Vis$nj_treescale_x_val_reset <- TRUE
-        ifelse(
-          !is.null(Vis$nj_max_x),
-          nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
-          # nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
-          nj_treescale_x_val(2)
-        )
+        # Vis$nj_treescale_x_val_reset <- TRUE
+        # ifelse(
+        #   !is.null(Vis$nj_max_x),
+        #   nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
+        #   nj_treescale_x_val(2)
+        # )
         Vis$nj_treescale_y_val_reset <- TRUE
-        nj_treescale_y_val(1)
+        nj_treescale_y_val(-1)
         nj_ladder_val(TRUE)
 
         # Legend
@@ -2380,7 +2380,8 @@ server <- function(input, output, session) {
       output$mst_aspect <- NULL
       shinyjs::removeClass("mst_aspect", class = "aspect-display")
       shinyjs::removeClass("tree_aspect", class = "aspect-display")
-      log_print("Input load")
+
+      output$tree_controls <- NULL
 
       # set typing start control variable
       Typing$reload <- TRUE
@@ -10702,628 +10703,628 @@ server <- function(input, output, session) {
 
   # Initially shown label menu
 
-  session$sendCustomMessage('nj_highlight', "nj_label_menu")
+  # session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
-  output$tree_controls <- renderUI({
-    render_info("tree_controls Labels Menu")
-    div(
-      class = "full-height-box",
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Labels",
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              br(),
-              fluidRow(
-                column(
-                  width = 7,
-                  align = "left",
-                  h4(
-                    p("Isolate Label"),
-                    style = "color:white; position: relative; right: -15px; "
-                  ),
-                ),
-                column(
-                  width = 5,
-                  align = "left",
-                  div(
-                    class = "mat-switch-lab",
-                    materialSwitch(
-                      "nj_tiplab_show",
-                      "",
-                      value = TRUE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 9,
-                  align = "left",
-                  div(
-                    class = "nj-label-sel",
-                    uiOutput("nj_tiplab_ui")
-                  )
-                ),
-                column(
-                  width = 3,
-                  align = "center",
-                  dropMenu(
-                    actionBttn(
-                      "nj_labeltext_menu",
-                      label = "",
-                      color = "default",
-                      size = "sm",
-                      style = "material-flat",
-                      icon = icon("sliders")
-                    ),
-                    placement = "right",
-                    theme = "translucent",
-                    fluidRow(
-                      column(
-                        width = 6,
-                        align = "center",
-                        uiOutput("nj_align_ui"),
-                        br(),
-                        sliderInput(
-                          "nj_tiplab_size",
-                          label = h5(
-                            "Label size",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 1,
-                          max = 10,
-                          step = 0.1,
-                          value = 4,
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_tiplab_alpha",
-                          label = h5(
-                            "Opacity",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0.1,
-                          max = 1,
-                          step = 0.05,
-                          value = 1,
-                          width = "150px",
-                          ticks = FALSE
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "center",
-                        selectInput(
-                          "nj_tiplab_fontface",
-                          label = h5(
-                            "Fontface",
-                            style = "color:white; margin-bottom: 5px; margin-top: 16px"
-                          ),
-                          width = "250px",
-                          choices = c(
-                            Plain = "plain",
-                            Bold = "bold",
-                            Italic = "italic",
-                            `B & I` = "bold.italic"
-                          ),
-                          selected = "plain"
-                        ),
-                        br(),
-                        sliderInput(
-                          inputId = "nj_tiplab_position",
-                          label = h5(
-                            "Position",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = -3,
-                          max = 3,
-                          step = 0.05,
-                          value = 0,
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        uiOutput("nj_tiplab_angle_ui")
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        fluidRow(
-          column(
-            width = 8,
-            div(
-              class = "mat-switch-geom",
-              materialSwitch(
-                "nj_geom",
-                h5(
-                  p("Panels"),
-                  style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
-                ),
-                value = FALSE,
-                right = FALSE
-              )
-            )
-          ),
-          column(
-            width = 4,
-            dropMenu(
-              actionBttn(
-                "nj_labelformat_menu",
-                label = "",
-                color = "default",
-                size = "sm",
-                style = "material-flat",
-                icon = icon("sliders")
-              ),
-              placement = "right",
-              theme = "translucent",
-              fluidRow(
-                column(
-                  width = 12,
-                  align = "center",
-                  sliderInput(
-                    inputId = "nj_tiplab_padding",
-                    label = h5(
-                      "Size",
-                      style = "color:white; margin-bottom: 0px"
-                    ),
-                    min = 0.05,
-                    max = 1,
-                    value = 0.2,
-                    step = 0.05,
-                    width = "150px",
-                    ticks = FALSE
-                  ),
-                  br(),
-                  sliderInput(
-                    inputId = "nj_tiplab_labelradius",
-                    label = h5(
-                      "Smooth edge",
-                      style = "color:white; margin-bottom: 0px"
-                    ),
-                    min = 0,
-                    step = 0.05,
-                    max = 0.5,
-                    value = 0.2,
-                    width = "150px",
-                    ticks = FALSE
-                  )
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              fluidRow(
-                column(
-                  width = 7,
-                  align = "left",
-                  h4(
-                    p("Branches"),
-                    style = "color:white; position: relative; right: -15px;"
-                  ),
-                ),
-                column(
-                  width = 5,
-                  align = "left",
-                  div(
-                    class = "mat-switch-lab",
-                    materialSwitch(
-                      "nj_show_branch_label",
-                      "",
-                      value = FALSE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 9,
-                  align = "left",
-                  div(
-                    class = "nj-label-sel",
-                    uiOutput("nj_branch_label")
-                  )
-                ),
-                column(
-                  width = 3,
-                  align = "center",
-                  dropMenu(
-                    actionBttn(
-                      "nj_branch_label_menu",
-                      label = "",
-                      color = "default",
-                      size = "sm",
-                      style = "material-flat",
-                      icon = icon("sliders")
-                    ),
-                    placement = "right",
-                    theme = "translucent",
-                    fluidRow(
-                      column(
-                        width = 6,
-                        align = "center",
-                        selectInput(
-                          "nj_branchlab_fontface",
-                          label = h5(
-                            "Fontface",
-                            style = "color:white; margin-bottom: 0px;"
-                          ),
-                          width = "250px",
-                          choices = c(
-                            Plain = "plain",
-                            Bold = "bold",
-                            Italic = "italic",
-                            `B & I` = "bold.italic"
-                          )
-                        ),
-                        br(),
-                        sliderInput(
-                          inputId = "nj_branch_x",
-                          label = h5(
-                            "X Position",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = -3,
-                          max = 3,
-                          value = 0,
-                          width = "250px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_branchlab_alpha",
-                          label = h5(
-                            "Opacity",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0.1,
-                          max = 1,
-                          step = 0.05,
-                          value = 0.65,
-                          width = "250px",
-                          ticks = FALSE
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "center",
-                        sliderInput(
-                          "nj_branch_size",
-                          label = h5(
-                            "Size",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 2,
-                          max = 10,
-                          step = 0.5,
-                          value = 4,
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_branch_labelradius",
-                          label = h5(
-                            "Smooth edge",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0,
-                          max = 0.5,
-                          step = 0.05,
-                          value = 0.5,
-                          width = "250px",
-                          ticks = FALSE
-                        ),
-                        br()
-                      )
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 5,
-                  div(
-                    class = "mat-switch-geom",
-                    materialSwitch(
-                      inputId = "nj_branch_panel",
-                      h5(
-                        p("Panels"),
-                        style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
-                      ),
-                      value = FALSE,
-                      right = FALSE
-                    )
-                  )
-                ),
-                column(
-                  width = 7,
-                  uiOutput("nj_branchlabel_cutoff_ui")
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            fluidRow(
-              column(
-                width = 8,
-                textInput(
-                  "nj_title",
-                  label = "",
-                  width = "100%",
-                  placeholder = "Plot Title"
-                )
-              ),
-              column(
-                width = 4,
-                dropMenu(
-                  actionBttn(
-                    "nj_title_menu",
-                    label = "",
-                    color = "default",
-                    size = "sm",
-                    style = "material-flat",
-                    icon = icon("sliders")
-                  ),
-                  placement = "right",
-                  theme = "translucent",
-                  fluidRow(
-                    column(
-                      width = 12,
-                      align = "center",
-                      sliderInput(
-                        "nj_title_size",
-                        label = h5(
-                          "Title Size",
-                          style = "color:white; margin-bottom: 0px"
-                        ),
-                        value = 30,
-                        min = 15,
-                        max = 40,
-                        step = 1,
-                        width = "150px",
-                        ticks = FALSE
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            fluidRow(
-              column(
-                width = 8,
-                textInput(
-                  "nj_subtitle",
-                  label = "",
-                  width = "100%",
-                  placeholder = "Plot Subtitle"
-                )
-              ),
-              column(
-                width = 4,
-                dropMenu(
-                  actionBttn(
-                    "nj_subtitle_menu",
-                    label = "",
-                    color = "default",
-                    size = "sm",
-                    style = "material-flat",
-                    icon = icon("sliders")
-                  ),
-                  placement = "right",
-                  theme = "translucent",
-                  fluidRow(
-                    column(
-                      width = 12,
-                      align = "center",
-                      sliderInput(
-                        "nj_subtitle_size",
-                        label = h5(
-                          "Subtitle Size",
-                          style = "color:white; margin-bottom: 0px"
-                        ),
-                        value = 30,
-                        min = 15,
-                        max = 40,
-                        step = 1,
-                        width = "150px",
-                        ticks = FALSE
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              h4(
-                p("Custom Label"),
-                style = "color:white; position: relative; right: -15px;"
-              ),
-              column(
-                width = 12,
-                align = "center",
-                fluidRow(
-                  column(
-                    width = 7,
-                    textInput(
-                      "nj_new_label_name",
-                      "",
-                      placeholder = "New Label"
-                    )
-                  ),
-                  column(
-                    width = 3,
-                    actionButton(
-                      "nj_add_new_label",
-                      "",
-                      icon = icon("plus")
-                    )
-                  ),
-                  column(
-                    width = 2,
-                    align = "right",
-                    dropMenu(
-                      actionBttn(
-                        "nj_custom_label_menu",
-                        label = "",
-                        color = "default",
-                        size = "sm",
-                        style = "material-flat",
-                        icon = icon("sliders")
-                      ),
-                      placement = "right",
-                      theme = "translucent",
-                      fluidRow(
-                        div(
-                          class = "nj-custom-label-menu-col",
-                          column(
-                            width = 12,
-                            align = "center",
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Size'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_custom_labelsize")
-                                )
-                              )
-                            ),
-                            br(),
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Vertical'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_sliderInput_y")
-                                )
-                              )
-                            ),
-                            br(),
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Horizontal'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_sliderInput_x")
-                                )
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                ),
-                fluidRow(
-                  column(
-                    width = 7,
-                    uiOutput("nj_custom_label_select")
-                  ),
-                  column(
-                    width = 4,
-                    actionButton(
-                      "nj_del_label",
-                      "",
-                      icon = icon("minus")
-                    )
-                  )
-                ),
-                fluidRow(
-                  column(
-                    width = 12,
-                    align = "center",
-                    actionButton(
-                      "nj_cust_label_save",
-                      "Apply"
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  })
+  # output$tree_controls <- renderUI({
+  #   render_info("tree_controls Labels Menu")
+  #   div(
+  #     class = "full-height-box",
+  #     box(
+  #       solidHeader = TRUE,
+  #       status = "primary",
+  #       width = "100%",
+  #       title = "Labels",
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             br(),
+  #             fluidRow(
+  #               column(
+  #                 width = 7,
+  #                 align = "left",
+  #                 h4(
+  #                   p("Isolate Label"),
+  #                   style = "color:white; position: relative; right: -15px; "
+  #                 ),
+  #               ),
+  #               column(
+  #                 width = 5,
+  #                 align = "left",
+  #                 div(
+  #                   class = "mat-switch-lab",
+  #                   materialSwitch(
+  #                     "nj_tiplab_show",
+  #                     "",
+  #                     value = TRUE
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 9,
+  #                 align = "left",
+  #                 div(
+  #                   class = "nj-label-sel",
+  #                   uiOutput("nj_tiplab_ui")
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 3,
+  #                 align = "center",
+  #                 dropMenu(
+  #                   actionBttn(
+  #                     "nj_labeltext_menu",
+  #                     label = "",
+  #                     color = "default",
+  #                     size = "sm",
+  #                     style = "material-flat",
+  #                     icon = icon("sliders")
+  #                   ),
+  #                   placement = "right",
+  #                   theme = "translucent",
+  #                   fluidRow(
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       uiOutput("nj_align_ui"),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_tiplab_size",
+  #                         label = h5(
+  #                           "Label size",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 1,
+  #                         max = 10,
+  #                         step = 0.1,
+  #                         value = 4,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_tiplab_alpha",
+  #                         label = h5(
+  #                           "Opacity",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0.1,
+  #                         max = 1,
+  #                         step = 0.05,
+  #                         value = 1,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       )
+  #                     ),
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       selectInput(
+  #                         "nj_tiplab_fontface",
+  #                         label = h5(
+  #                           "Fontface",
+  #                           style = "color:white; margin-bottom: 5px; margin-top: 16px"
+  #                         ),
+  #                         width = "250px",
+  #                         choices = c(
+  #                           Plain = "plain",
+  #                           Bold = "bold",
+  #                           Italic = "italic",
+  #                           `B & I` = "bold.italic"
+  #                         ),
+  #                         selected = "plain"
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         inputId = "nj_tiplab_position",
+  #                         label = h5(
+  #                           "Position",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = -3,
+  #                         max = 3,
+  #                         step = 0.05,
+  #                         value = 0,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       uiOutput("nj_tiplab_angle_ui")
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       fluidRow(
+  #         column(
+  #           width = 8,
+  #           div(
+  #             class = "mat-switch-geom",
+  #             materialSwitch(
+  #               "nj_geom",
+  #               h5(
+  #                 p("Panels"),
+  #                 style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+  #               ),
+  #               value = FALSE,
+  #               right = FALSE
+  #             )
+  #           )
+  #         ),
+  #         column(
+  #           width = 4,
+  #           dropMenu(
+  #             actionBttn(
+  #               "nj_labelformat_menu",
+  #               label = "",
+  #               color = "default",
+  #               size = "sm",
+  #               style = "material-flat",
+  #               icon = icon("sliders")
+  #             ),
+  #             placement = "right",
+  #             theme = "translucent",
+  #             fluidRow(
+  #               column(
+  #                 width = 12,
+  #                 align = "center",
+  #                 sliderInput(
+  #                   inputId = "nj_tiplab_padding",
+  #                   label = h5(
+  #                     "Size",
+  #                     style = "color:white; margin-bottom: 0px"
+  #                   ),
+  #                   min = 0.05,
+  #                   max = 1,
+  #                   value = 0.2,
+  #                   step = 0.05,
+  #                   width = "150px",
+  #                   ticks = FALSE
+  #                 ),
+  #                 br(),
+  #                 sliderInput(
+  #                   inputId = "nj_tiplab_labelradius",
+  #                   label = h5(
+  #                     "Smooth edge",
+  #                     style = "color:white; margin-bottom: 0px"
+  #                   ),
+  #                   min = 0,
+  #                   step = 0.05,
+  #                   max = 0.5,
+  #                   value = 0.2,
+  #                   width = "150px",
+  #                   ticks = FALSE
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             fluidRow(
+  #               column(
+  #                 width = 7,
+  #                 align = "left",
+  #                 h4(
+  #                   p("Branches"),
+  #                   style = "color:white; position: relative; right: -15px;"
+  #                 ),
+  #               ),
+  #               column(
+  #                 width = 5,
+  #                 align = "left",
+  #                 div(
+  #                   class = "mat-switch-lab",
+  #                   materialSwitch(
+  #                     "nj_show_branch_label",
+  #                     "",
+  #                     value = FALSE
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 9,
+  #                 align = "left",
+  #                 div(
+  #                   class = "nj-label-sel",
+  #                   uiOutput("nj_branch_label")
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 3,
+  #                 align = "center",
+  #                 dropMenu(
+  #                   actionBttn(
+  #                     "nj_branch_label_menu",
+  #                     label = "",
+  #                     color = "default",
+  #                     size = "sm",
+  #                     style = "material-flat",
+  #                     icon = icon("sliders")
+  #                   ),
+  #                   placement = "right",
+  #                   theme = "translucent",
+  #                   fluidRow(
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       selectInput(
+  #                         "nj_branchlab_fontface",
+  #                         label = h5(
+  #                           "Fontface",
+  #                           style = "color:white; margin-bottom: 0px;"
+  #                         ),
+  #                         width = "250px",
+  #                         choices = c(
+  #                           Plain = "plain",
+  #                           Bold = "bold",
+  #                           Italic = "italic",
+  #                           `B & I` = "bold.italic"
+  #                         )
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         inputId = "nj_branch_x",
+  #                         label = h5(
+  #                           "X Position",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = -3,
+  #                         max = 3,
+  #                         value = 0,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_branchlab_alpha",
+  #                         label = h5(
+  #                           "Opacity",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0.1,
+  #                         max = 1,
+  #                         step = 0.05,
+  #                         value = 0.65,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       )
+  #                     ),
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       sliderInput(
+  #                         "nj_branch_size",
+  #                         label = h5(
+  #                           "Size",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 2,
+  #                         max = 10,
+  #                         step = 0.5,
+  #                         value = 4,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_branch_labelradius",
+  #                         label = h5(
+  #                           "Smooth edge",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0,
+  #                         max = 0.5,
+  #                         step = 0.05,
+  #                         value = 0.5,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br()
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 5,
+  #                 div(
+  #                   class = "mat-switch-geom",
+  #                   materialSwitch(
+  #                     inputId = "nj_branch_panel",
+  #                     h5(
+  #                       p("Panels"),
+  #                       style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+  #                     ),
+  #                     value = FALSE,
+  #                     right = FALSE
+  #                   )
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 7,
+  #                 uiOutput("nj_branchlabel_cutoff_ui")
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         column(
+  #           width = 12,
+  #           align = "left",
+  #           fluidRow(
+  #             column(
+  #               width = 8,
+  #               textInput(
+  #                 "nj_title",
+  #                 label = "",
+  #                 width = "100%",
+  #                 placeholder = "Plot Title"
+  #               )
+  #             ),
+  #             column(
+  #               width = 4,
+  #               dropMenu(
+  #                 actionBttn(
+  #                   "nj_title_menu",
+  #                   label = "",
+  #                   color = "default",
+  #                   size = "sm",
+  #                   style = "material-flat",
+  #                   icon = icon("sliders")
+  #                 ),
+  #                 placement = "right",
+  #                 theme = "translucent",
+  #                 fluidRow(
+  #                   column(
+  #                     width = 12,
+  #                     align = "center",
+  #                     sliderInput(
+  #                       "nj_title_size",
+  #                       label = h5(
+  #                         "Title Size",
+  #                         style = "color:white; margin-bottom: 0px"
+  #                       ),
+  #                       value = 30,
+  #                       min = 15,
+  #                       max = 40,
+  #                       step = 1,
+  #                       width = "150px",
+  #                       ticks = FALSE
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       br(),
+  #       fluidRow(
+  #         column(
+  #           width = 12,
+  #           align = "left",
+  #           fluidRow(
+  #             column(
+  #               width = 8,
+  #               textInput(
+  #                 "nj_subtitle",
+  #                 label = "",
+  #                 width = "100%",
+  #                 placeholder = "Plot Subtitle"
+  #               )
+  #             ),
+  #             column(
+  #               width = 4,
+  #               dropMenu(
+  #                 actionBttn(
+  #                   "nj_subtitle_menu",
+  #                   label = "",
+  #                   color = "default",
+  #                   size = "sm",
+  #                   style = "material-flat",
+  #                   icon = icon("sliders")
+  #                 ),
+  #                 placement = "right",
+  #                 theme = "translucent",
+  #                 fluidRow(
+  #                   column(
+  #                     width = 12,
+  #                     align = "center",
+  #                     sliderInput(
+  #                       "nj_subtitle_size",
+  #                       label = h5(
+  #                         "Subtitle Size",
+  #                         style = "color:white; margin-bottom: 0px"
+  #                       ),
+  #                       value = 30,
+  #                       min = 15,
+  #                       max = 40,
+  #                       step = 1,
+  #                       width = "150px",
+  #                       ticks = FALSE
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             h4(
+  #               p("Custom Label"),
+  #               style = "color:white; position: relative; right: -15px;"
+  #             ),
+  #             column(
+  #               width = 12,
+  #               align = "center",
+  #               fluidRow(
+  #                 column(
+  #                   width = 7,
+  #                   textInput(
+  #                     "nj_new_label_name",
+  #                     "",
+  #                     placeholder = "New Label"
+  #                   )
+  #                 ),
+  #                 column(
+  #                   width = 3,
+  #                   actionButton(
+  #                     "nj_add_new_label",
+  #                     "",
+  #                     icon = icon("plus")
+  #                   )
+  #                 ),
+  #                 column(
+  #                   width = 2,
+  #                   align = "right",
+  #                   dropMenu(
+  #                     actionBttn(
+  #                       "nj_custom_label_menu",
+  #                       label = "",
+  #                       color = "default",
+  #                       size = "sm",
+  #                       style = "material-flat",
+  #                       icon = icon("sliders")
+  #                     ),
+  #                     placement = "right",
+  #                     theme = "translucent",
+  #                     fluidRow(
+  #                       div(
+  #                         class = "nj-custom-label-menu-col",
+  #                         column(
+  #                           width = 12,
+  #                           align = "center",
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Size'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_custom_labelsize")
+  #                               )
+  #                             )
+  #                           ),
+  #                           br(),
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Vertical'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_sliderInput_y")
+  #                               )
+  #                             )
+  #                           ),
+  #                           br(),
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Horizontal'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_sliderInput_x")
+  #                               )
+  #                             )
+  #                           )
+  #                         )
+  #                       )
+  #                     )
+  #                   )
+  #                 )
+  #               ),
+  #               fluidRow(
+  #                 column(
+  #                   width = 7,
+  #                   uiOutput("nj_custom_label_select")
+  #                 ),
+  #                 column(
+  #                   width = 4,
+  #                   actionButton(
+  #                     "nj_del_label",
+  #                     "",
+  #                     icon = icon("minus")
+  #                   )
+  #                 )
+  #               ),
+  #               fluidRow(
+  #                 column(
+  #                   width = 12,
+  #                   align = "center",
+  #                   actionButton(
+  #                     "nj_cust_label_save",
+  #                     "Apply"
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       )
+  #     )
+  #   )
+  # })
 
   ##### Label Menu ----
 
@@ -11333,13 +11334,13 @@ server <- function(input, output, session) {
   nj_tiplab_reactive <- reactive({
     ifelse(!is.null(input$nj_tiplab), input$nj_tiplab, "Assembly Name")
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiplab_val <- reactiveVal()
   nj_tiplab_show_val <- reactiveVal()
   nj_align_reactive <- reactive({
     ifelse(!is.null(input$nj_align), input$nj_align, TRUE)
   }) |>
-    debounce(100)
+    throttle(250)
   nj_align_val <- reactiveVal()
   nj_tiplab_size_val <- reactiveVal()
   nj_tiplab_fontface_val <- reactiveVal()
@@ -11453,7 +11454,7 @@ server <- function(input, output, session) {
       "Allelic Distance"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_branch_label_val <- reactiveVal()
   nj_branch_panel_val <- reactiveVal()
   nj_branchlabel_cutoff_val <- reactiveVal()
@@ -12501,7 +12502,7 @@ server <- function(input, output, session) {
   nj_color_mapping_reactive <- reactive({
     ifelse(!is.null(input$nj_color_mapping), input$nj_color_mapping, "Country")
   }) |>
-    debounce(100)
+    throttle(250)
   nj_color_mapping_val <- reactiveVal()
   nj_tiplab_scale_reactive <- reactive({
     ifelse(
@@ -12510,7 +12511,7 @@ server <- function(input, output, session) {
       nj_tiplab_scale_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiplab_scale_val <- reactiveVal()
   nj_color_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -12519,7 +12520,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_color_mapping_div_mid_val <- reactiveVal()
 
   observe({
@@ -12545,7 +12546,7 @@ server <- function(input, output, session) {
       "Country"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tipcolor_mapping_val <- reactiveVal()
   nj_tippoint_scale_reactive <- reactive({
     ifelse(
@@ -12554,7 +12555,7 @@ server <- function(input, output, session) {
       nj_tippoint_scale_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tippoint_scale_val <- reactiveVal()
   nj_tipcolor_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -12588,7 +12589,7 @@ server <- function(input, output, session) {
       "Host"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tipshape_mapping_val <- reactiveVal()
 
   observe({
@@ -12614,7 +12615,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_variable_val <- reactiveVal()
   nj_fruit_variable_2_reactive <- reactive({
     ifelse(
@@ -12623,7 +12624,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_variable_2_val <- reactiveVal()
   nj_fruit_variable_3_reactive <- reactive({
     ifelse(
@@ -12632,7 +12633,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_variable_3_val <- reactiveVal()
   nj_fruit_variable_4_reactive <- reactive({
     ifelse(
@@ -12641,7 +12642,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_variable_4_val <- reactiveVal()
   nj_fruit_variable_5_reactive <- reactive({
     ifelse(
@@ -12650,7 +12651,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_variable_5_val <- reactiveVal()
   nj_tiles_scale_1_reactive <- reactive({
     ifelse(
@@ -12659,7 +12660,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_1_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_scale_1_val <- reactiveVal()
   nj_tiles_scale_2_reactive <- reactive({
     ifelse(
@@ -12668,7 +12669,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_2_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_scale_2_val <- reactiveVal()
   nj_tiles_scale_3_reactive <- reactive({
     ifelse(
@@ -12677,7 +12678,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_3_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_scale_3_val <- reactiveVal()
   nj_tiles_scale_4_reactive <- reactive({
     ifelse(
@@ -12686,7 +12687,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_4_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_scale_4_val <- reactiveVal()
   nj_tiles_scale_5_reactive <- reactive({
     ifelse(
@@ -12695,7 +12696,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_5_val_default()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_scale_5_val <- reactiveVal()
   nj_tiles_mapping_div_mid_1_reactive <- reactive({
     ifelse(
@@ -12704,7 +12705,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_mapping_div_mid_1_val <- reactiveVal()
   nj_tiles_mapping_div_mid_2_reactive <- reactive({
     ifelse(
@@ -12713,7 +12714,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_mapping_div_mid_2_val <- reactiveVal()
   nj_tiles_mapping_div_mid_3_reactive <- reactive({
     ifelse(
@@ -12722,7 +12723,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_mapping_div_mid_3_val <- reactiveVal()
   nj_tiles_mapping_div_mid_4_reactive <- reactive({
     ifelse(
@@ -12731,7 +12732,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_mapping_div_mid_4_val <- reactiveVal()
   nj_tiles_mapping_div_mid_5_reactive <- reactive({
     ifelse(
@@ -12740,7 +12741,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tiles_mapping_div_mid_5_val <- reactiveVal()
 
   observe({
@@ -14861,7 +14862,7 @@ server <- function(input, output, session) {
   nj_tippoint_shape_reactive <- reactive({
     ifelse(!is.null(input$nj_tippoint_shape), input$nj_tippoint_shape, "circle")
   }) |>
-    debounce(100)
+    throttle(250)
   nj_tippoint_shape_val <- reactiveVal()
   nj_tippoint_alpha_val <- reactiveVal()
   nj_tippoint_size_val <- reactiveVal()
@@ -14942,7 +14943,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_width_circ_val <- reactiveVal()
   nj_fruit_width_circ_2_reactive <- reactive({
     ifelse(
@@ -14951,7 +14952,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_width_circ_2_val <- reactiveVal()
   nj_fruit_width_circ_3_reactive <- reactive({
     ifelse(
@@ -14960,7 +14961,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_width_circ_3_val <- reactiveVal()
   nj_fruit_width_circ_4_reactive <- reactive({
     ifelse(
@@ -14969,7 +14970,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_width_circ_4_val <- reactiveVal()
   nj_fruit_width_circ_5_reactive <- reactive({
     ifelse(
@@ -14978,7 +14979,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_fruit_width_circ_5_val <- reactiveVal()
   nj_fruit_offset_circ_val <- reactiveVal()
   nj_fruit_offset_circ_2_val <- reactiveVal()
@@ -15093,7 +15094,7 @@ server <- function(input, output, session) {
   nj_heatmap_offset_reactive <- reactive({
     ifelse(!is.null(input$nj_heatmap_offset), input$nj_heatmap_offset, 0)
   }) |>
-    debounce(100)
+    throttle(250)
   nj_heatmap_offset_val <- reactiveVal()
 
   observe({
@@ -15147,7 +15148,7 @@ server <- function(input, output, session) {
       ""
     }
   }) |>
-    debounce(100)
+    throttle(250)
   nj_parentnode_val <- reactiveVal()
   nj_clade_scale_val <- reactiveVal()
   nj_clade_type_val <- reactiveVal()
@@ -16509,18 +16510,18 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.05), 2)
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_rootedge_length_val <- reactiveVal()
   nj_rootedge_line_val <- reactiveVal()
   nj_xlim_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim), input$nj_xlim, -10)
   }) |>
-    debounce(100)
+    throttle(250)
   nj_xlim_val <- reactiveVal()
   nj_xlim_inw_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim_inw), input$nj_xlim_inw, 50)
   }) |>
-    debounce(100)
+    throttle(250)
   nj_xlim_inw_val <- reactiveVal()
   nj_treescale_show_val <- reactiveVal()
   nj_treescale_width_reactive <- reactive({
@@ -16530,22 +16531,21 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.1, 0), 2)
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_treescale_width_val <- reactiveVal()
   nj_treescale_x_reactive <- reactive({
     ifelse(
       !is.null(input$nj_treescale_x),
       input$nj_treescale_x,
-      # ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.2, 0), 2)
       ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
     )
   }) |>
-    debounce(100)
+    throttle(250)
   nj_treescale_x_val <- reactiveVal()
   nj_treescale_y_reactive <- reactive({
     ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, -1)
   }) |>
-    debounce(100)
+    throttle(250)
   nj_ladder_val <- reactiveVal()
   nj_treescale_y_val <- reactiveVal()
 
@@ -16562,7 +16562,10 @@ server <- function(input, output, session) {
       nj_rootedge_show_val(TRUE)
     )
 
-    nj_rootedge_length_val(nj_rootedge_length_reactive())
+    if (!is.null(input$nj_rootedge_length)) {
+      nj_rootedge_length_val(input$nj_rootedge_length)
+    }
+    # nj_rootedge_length_val(nj_rootedge_length_reactive())
 
     ifelse(
       !is.null(input$nj_rootedge_line),
@@ -16580,8 +16583,20 @@ server <- function(input, output, session) {
       nj_treescale_show_val(TRUE)
     )
 
-    nj_treescale_width_val(nj_treescale_width_reactive())
+    if (!is.null(input$nj_treescale_width)) {
+      nj_treescale_width_val(input$nj_treescale_width)
+    }
+    # nj_treescale_width_val(nj_treescale_width_reactive())
 
+    ifelse(
+      !is.null(input$nj_treescale_show),
+      nj_treescale_show_val(input$nj_treescale_show),
+      nj_treescale_show_val(TRUE)
+    )
+
+    # if (!is.null(input$nj_treescale_x)) {
+    #   nj_treescale_x_val(input$nj_treescale_x)
+    # }
     nj_treescale_x_val(nj_treescale_x_reactive())
 
     nj_treescale_y_val(nj_treescale_y_reactive())
@@ -17317,20 +17332,22 @@ server <- function(input, output, session) {
   output$nj_xlim_ui <- renderUI({
     render_info("nj_xlim_ui")
 
-    if (nj_layout_val() == "inward") {
+    nj_layout_val <- nj_layout_val()
+
+    if (nj_layout_val == "inward") {
       input_id <- "nj_xlim_inw"
       min <- 30
       max <- 120
-      value <- nj_xlim_inw_val()
+      isolate(value <- nj_xlim_inw_val())
       default <- 50
-      reset <- Vis$nj_xlim_inw_val_reset
+      isolate(reset <- Vis$nj_xlim_inw_val_reset)
     } else {
       input_id <- "nj_xlim"
       min <- -50
       max <- 0
-      value <- nj_xlim_val()
+      isolate(value <- nj_xlim_val())
       default <- -10
-      reset <- Vis$nj_xlim_val_reset
+      isolate(reset <- Vis$nj_xlim_val_reset)
     }
 
     output <- render_plot_control(
@@ -17343,8 +17360,8 @@ server <- function(input, output, session) {
       reactive_value = value,
       default_value = default,
       reset = reset,
-      show_condition = nj_layout_val() == "inward" ||
-        nj_layout_val() == "circular"
+      show_condition = nj_layout_val == "inward" ||
+        nj_layout_val == "circular"
     )
 
     isolate(Vis$nj_xlim_inw_val_reset <- Vis$nj_xlim_val_reset <- FALSE)
@@ -17386,10 +17403,13 @@ server <- function(input, output, session) {
   output$nj_treescale_x <- renderUI({
     render_info("nj_treescale_x")
 
-    if ((!is.null(Vis$nj_min_x)) && (!is.null(Vis$nj_max_x))) {
-      ifelse(ceiling(Vis$nj_min_x) < 1, min <- 1, min <- ceiling(Vis$nj_min_x))
+    isolate(nj_max_x <- Vis$nj_max_x)
+    nj_min_x <- Vis$nj_min_x
 
-      max <- round(floor(Vis$nj_max_x))
+    if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
+      min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
+
+      max <- round(floor(nj_max_x))
     } else {
       min <- 1
       max <- 10
@@ -17402,11 +17422,14 @@ server <- function(input, output, session) {
       width = "150px",
       min = min,
       max = max,
-      reactive_value = nj_treescale_x_val(),
+      reactive_value = isolate(ifelse(
+        !is.null(nj_treescale_x_val()),
+        nj_treescale_x_val(),
+        2
+      )),
       default_value = ifelse(
-        !is.null(Vis$nj_max_x),
-        # round(ceiling(Vis$nj_max_x) * 0.2, 0),
-        round(Vis$nj_max_x / 2, 0),
+        !is.null(nj_max_x),
+        round(nj_max_x / 2, 0),
         2
       ),
       reset = isolate(Vis$nj_treescale_x_val_reset)
@@ -17431,7 +17454,7 @@ server <- function(input, output, session) {
       input_type = "sliderInput",
       div_class = "nj-label-slider",
       width = "150px",
-      min = 0,
+      min = -1,
       max = max,
       reactive_value = nj_treescale_y_val(),
       default_value = -1,
@@ -17857,7 +17880,6 @@ server <- function(input, output, session) {
     Vis$nj_treescale_x_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
-      # nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
       nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
       nj_treescale_x_val(2)
     )
@@ -20196,6 +20218,13 @@ server <- function(input, output, session) {
     Vis_nj <- Vis$nj
     Vis_nj$tip.label <- Vis$meta_nj$Index
 
+    #TODO
+    #test
+    # nj_tree <- ggtree(Vis$nj)
+    # nj_max_x <- max(nj_tree$data$x)
+    # nj_branch_lengths <- nj_tree$data$branch.length
+    # nj_min_x <- min(nj_tree$data$x)
+
     # Rooted tree
     if (nj_root_isolate_val() != "Automatic") {
       Vis_nj <- ape::root(
@@ -21987,541 +22016,1029 @@ server <- function(input, output, session) {
     }
   })
 
-  observeEvent(input$create_tree, {
-    runjs(block_ui)
-    log_print("Input create_tree")
+  observeEvent(
+    input$create_tree,
+    {
+      runjs(block_ui)
+      log_print("Input create_tree")
 
-    if (is.null(DB$data)) {
-      log_print("Missing data")
+      if (is.null(DB$data)) {
+        log_print("Missing data")
 
-      show_toast(
-        title = "Missing data",
-        type = "error",
-        position = "bottom-end",
-        timer = 6000
+        show_toast(
+          title = "Missing data",
+          type = "error",
+          position = "bottom-end",
+          timer = 6000
+        )
+      } else if (nrow(DB$allelic_profile_true) < 3) {
+        log_print("Min. of 3 entries required for visualization")
+
+        show_toast(
+          title = "Min. of 3 entries required for visualization",
+          type = "error",
+          position = "bottom-end",
+          timer = 6000
+        )
+      } else {
+        if (
+          any(duplicated(DB$meta$`Assembly Name`)) ||
+            any(duplicated(DB$meta$`Assembly ID`))
+        ) {
+          log_print("Duplicated assemblies present")
+
+          dup_name <- which(duplicated(DB$meta_true$`Assembly Name`))
+          dup_id <- which(duplicated(DB$meta_true$`Assembly ID`))
+
+          showModal(
+            div(
+              class = "start-modal",
+              modalDialog(
+                fluidRow(
+                  br(),
+                  column(
+                    width = 11,
+                    p(
+                      HTML(
+                        paste0(
+                          '<span style="color: white; display: block; font-size: 15px; margin-left: 15px;">',
+                          "Entries contain duplicated name(s). Please assign only unique assembly name(s).",
+                          '</span>'
+                        )
+                      )
+                    )
+                  ),
+                  br()
+                ),
+                title = "Duplicate entries",
+                fade = TRUE,
+                easyClose = TRUE,
+                footer = tagList(
+                  modalButton("Dismiss"),
+                  actionButton(
+                    "change_entries",
+                    "Go to Entry Table",
+                    class = "btn btn-default"
+                  )
+                )
+              )
+            )
+          )
+        } else {
+          set.seed(1)
+
+          if (input$tree_type == "Tree") {
+            log_print("Rendering tree plot")
+
+            output$tree_field <- renderUI({
+              render_info("tree_field")
+
+              addSpinner(
+                plotOutput(
+                  "tree_plot",
+                  height = "auto"
+                ),
+                spin = "dots",
+                color = "#ffffff"
+              )
+            })
+
+            meta_nj <- select(DB$meta_true, -2)
+            if (
+              file.exists(file.path(
+                Startup$database,
+                gsub(" ", "_", DB$scheme),
+                "AMR_Profile.rds"
+              ))
+            ) {
+              amr_profile <- readRDS(file.path(
+                Startup$database,
+                gsub(" ", "_", DB$scheme),
+                "AMR_Profile.rds"
+              ))
+
+              if (isFALSE(any(meta_nj$Screened != "Yes"))) {
+                Vis$amr_nj <- amr_profile$results[
+                  rownames(
+                    amr_profile$results
+                  ) %in%
+                    meta_nj$`Assembly ID`,
+                ]
+                meta_nj <- add_column(meta_nj, Vis$amr_nj)
+              }
+            }
+
+            if (
+              length(unique(gsub(" ", "_", colnames(meta_nj)))) <
+                length(
+                  gsub(" ", "_", colnames(meta_nj))
+                )
+            ) {
+              show_toast(
+                title = "Conflicting Custom Variable Names",
+                type = "warning",
+                position = "bottom-end",
+                timer = 6000
+              )
+            } else {
+              # Create phylogenetic tree data
+              if (input$tree_algo == "Neighbour-Joining") {
+                Vis_nj <- ape::nj(hamming_dist())
+                Vis$tree_algo <- "NJ"
+              } else {
+                Vis_nj <- phangorn::upgma(hamming_dist())
+                Vis$tree_algo <- "UPGMA"
+              }
+
+              # Convert negative edges
+              edge_lengths_abs <- abs(Vis_nj[["edge.length"]])
+              edge_lengths_log <- log(
+                edge_lengths_abs + sqrt(edge_lengths_abs^2 + 1)
+              )
+              Vis_nj[["edge.length"]] <- edge_lengths_log
+              Vis$nj <- Vis_nj
+
+              # Create phylogenetic tree meta data
+              Vis$meta_nj <- mutate(meta_nj, taxa = Index) %>%
+                relocate(taxa)
+
+              # Get number of included entries calculate start values for tree
+              if (
+                nj_layout_val() == "circular" || nj_layout_val() == "inward"
+              ) {
+                # Plot aspect ratio always 1 for circular layouts
+                Vis$ratio_nj <- 1
+
+                if (sum(DB$data$Include) < 21) {
+                  Vis$labelsize_nj <- 5.5
+                  Vis$tippointsize_nj <- 5.5
+                  Vis$nodepointsize_nj <- 4
+                  Vis$tiplab_padding_nj <- 0.25
+                  Vis$branch_size_nj <- 4.5
+                } else if (between(sum(DB$data$Include), 21, 40)) {
+                  Vis$labelsize_nj <- 5
+                  Vis$tippointsize_nj <- 5
+                  Vis$nodepointsize_nj <- 3.5
+                  Vis$tiplab_padding_nj <- 0.2
+                  Vis$branch_size_nj <- 4
+                } else if (between(sum(DB$data$Include), 41, 60)) {
+                  Vis$labelsize_nj <- 4.5
+                  Vis$tippointsize_nj <- 4.5
+                  Vis$nodepointsize_nj <- 3
+                  Vis$tiplab_padding_nj <- 0.15
+                  Vis$branch_size_nj <- 3.5
+                } else if (between(sum(DB$data$Include), 61, 80)) {
+                  Vis$labelsize_nj <- 4
+                  Vis$tippointsize_nj <- 4
+                  Vis$nodepointsize_nj <- 2.5
+                  Vis$tiplab_padding_nj <- 0.1
+                  Vis$branch_size_nj <- 3
+                } else if (between(sum(DB$data$Include), 81, 100)) {
+                  Vis$labelsize_nj <- 3.5
+                  Vis$tippointsize_nj <- 3.5
+                  Vis$nodepointsize_nj <- 2
+                  Vis$tiplab_padding_nj <- 0.1
+                  Vis$branch_size_nj <- 2.5
+                } else {
+                  Vis$labelsize_nj <- 3
+                  Vis$tippointsize_nj <- 3
+                  Vis$nodepointsize_nj <- 1.5
+                  Vis$tiplab_padding_nj <- 0.05
+                  Vis$branch_size_nj <- 2
+                }
+              } else {
+                vis_params <- get_vis_params(sum(DB$data$Include))
+
+                Vis$tippointsize_nj <- Vis$labelsize_nj <- vis_params$labelsize_nj
+                Vis$nodepointsize_nj <- vis_params$labelsize_nj - 1
+                Vis$ratio_nj <- vis_params$ratio_nj
+                Vis$tiplab_padding_nj <- 0.05
+                Vis$branch_size_nj <- 2
+              }
+
+              nj_tree <- ggtree(Vis$nj)
+
+              # Get upper and lower end of x range
+              Vis$nj_max_x <- max(nj_tree$data$x)
+              Vis$nj_branch_lengths <- nj_tree$data$branch.length
+              Vis$nj_min_x <- min(nj_tree$data$x)
+
+              # Get parent node numbers
+              Vis$nj_parentnodes <- nj_tree$data$parent
+
+              # Update visualization control inputs
+              nj_tiplab_size_val(Vis$labelsize_nj)
+              updateSliderInput(
+                session = session,
+                inputId = "nj_tiplab_size",
+                value = Vis$labelsize_nj
+              )
+              nj_tippoint_size_val(Vis$tippointsize_nj)
+              nj_nodepoint_size_val(Vis$nodepointsize_nj)
+              nj_tiplab_padding_val(Vis$tiplab_padding_nj)
+              nj_branch_size_val(Vis$branch_size_nj)
+              nj_aspect_ratio_val(Vis$ratio_nj)
+              nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
+              nj_treescale_x_val(round(Vis$nj_max_x / 2, 0))
+              nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
+
+              # output$tree_plot <- renderPlot(
+              #   {
+              #     make.tree()
+              #   },
+              #   height = function() {
+              #     req(
+              #       session$clientData$output_tree_plot_width,
+              #       nj_aspect_ratio_val()
+              #     )
+              #     width <- session$clientData$output_tree_plot_width
+              #     if (is.null(width) || !is.numeric(width) || width <= 0) {
+              #       width <- 800
+              #     }
+              #     height <- as.integer(width * nj_aspect_ratio_val())
+              #     if (!is.numeric(height) || height <= 0) {
+              #       height <- as.integer(800 * 0.6)
+              #     }
+
+              #     height
+              #   },
+              #   res = 192
+              # )
+
+              # # Aspect ratio info
+              # output$tree_aspect <- renderUI({
+              #   render_info("tree_aspect")
+
+              #   width <- get_plot_width(session = session)
+              #   height <- get_plot_height(
+              #     width = width,
+              #     aspect_ratio_val = nj_aspect_ratio_val()
+              #   )
+
+              #   paste(width, "x", height, "px | 192 DPI")
+              # })
+
+              # shinyjs::addClass("tree_aspect", class = "aspect-display")
+
+              # Vis$nj_true <- TRUE
+            }
+          } else {
+            log_print("Rendering MST graph")
+
+            output$mst_field <- renderUI({
+              render_info("mst_field")
+
+              if (!is.null(session$clientData$output_tree_mst_height)) {
+                width <- as.integer(
+                  session$clientData$output_tree_mst_height *
+                    (1 / mst_aspect_ratio_reactive())
+                )
+              } else {
+                width <- as.integer(
+                  500 *
+                    mst_aspect_ratio_reactive()
+                )
+              }
+
+              width <- paste0(width, "px")
+
+              visnetworkoutput <- visNetworkOutput(
+                "tree_mst",
+                height = "100%",
+                width = width
+              )
+
+              if (isTRUE(mst_background_transparent_reactive())) {
+                visnetworkoutput
+              } else {
+                addSpinner(visnetworkoutput)
+              }
+            })
+
+            if (nrow(DB$meta_true) > 150) {
+              log_print("Over 100 isolates in MST graph")
+
+              show_toast(
+                title = "Computation might take a while",
+                type = "info",
+                position = "bottom-end",
+                timer = 10000
+              )
+            }
+
+            meta_mst <- DB$meta_true
+            Vis$meta_mst <- meta_mst
+
+            # prepare igraph object
+            Vis$mst_pre <- hamming_mst() |>
+              as.matrix() |>
+              graph.adjacency(weighted = TRUE) |>
+              igraph::mst()
+
+            output$tree_mst <- renderVisNetwork({
+              mst_tree()
+            })
+
+            # Aspect ratio info
+            output$mst_aspect <- renderUI({
+              render_info("mst_aspect")
+
+              width <- as.integer(session$clientData$output_tree_mst_width)
+              height <- as.integer(session$clientData$output_tree_mst_height)
+              paste(width, "x", height, "px")
+            })
+
+            shinyjs::addClass("mst_aspect", class = "aspect-display")
+
+            Vis$mst_true <- TRUE
+          }
+        }
+      }
+
+      runjs(unblock_ui)
+    },
+    priority = 1
+  )
+
+  observeEvent(
+    input$create_tree,
+    {
+      runjs(block_ui)
+      message("MAKE TREE")
+
+      output$tree_plot <- renderPlot(
+        {
+          make.tree()
+        },
+        height = function() {
+          req(
+            session$clientData$output_tree_plot_width,
+            nj_aspect_ratio_val()
+          )
+          width <- session$clientData$output_tree_plot_width
+          if (is.null(width) || !is.numeric(width) || width <= 0) {
+            width <- 800
+          }
+          height <- as.integer(width * nj_aspect_ratio_val())
+          if (!is.numeric(height) || height <= 0) {
+            height <- as.integer(800 * 0.6)
+          }
+
+          height
+        },
+        res = 192
       )
-    } else if (nrow(DB$allelic_profile_true) < 3) {
-      log_print("Min. of 3 entries required for visualization")
 
-      show_toast(
-        title = "Min. of 3 entries required for visualization",
-        type = "error",
-        position = "bottom-end",
-        timer = 6000
-      )
-    } else {
-      if (
-        any(duplicated(DB$meta$`Assembly Name`)) ||
-          any(duplicated(DB$meta$`Assembly ID`))
-      ) {
-        log_print("Duplicated assemblies present")
+      # Aspect ratio info
+      output$tree_aspect <- renderUI({
+        render_info("tree_aspect")
 
-        dup_name <- which(duplicated(DB$meta_true$`Assembly Name`))
-        dup_id <- which(duplicated(DB$meta_true$`Assembly ID`))
+        width <- get_plot_width(session = session)
+        height <- get_plot_height(
+          width = width,
+          aspect_ratio_val = nj_aspect_ratio_val()
+        )
 
-        showModal(
-          div(
-            class = "start-modal",
-            modalDialog(
-              fluidRow(
-                br(),
+        paste(width, "x", height, "px | 192 DPI")
+      })
+
+      shinyjs::addClass("tree_aspect", class = "aspect-display")
+
+      # Render tree control menu
+      session$sendCustomMessage('nj_reset_style', "")
+      session$sendCustomMessage('nj_highlight', "nj_label_menu")
+
+      output$tree_controls <- renderUI({
+        render_info("tree_controls Labels")
+        div(
+          class = "full-height-box",
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Labels",
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
                 column(
-                  width = 11,
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; display: block; font-size: 15px; margin-left: 15px;">',
-                        "Entries contain duplicated name(s). Please assign only unique assembly name(s).",
-                        '</span>'
+                  width = 12,
+                  align = "left",
+                  br(),
+                  fluidRow(
+                    column(
+                      width = 7,
+                      align = "left",
+                      h4(
+                        p("Isolate Label"),
+                        style = "color:white; position: relative; right: -15px;"
+                      )
+                    ),
+                    column(
+                      width = 5,
+                      align = "left",
+                      div(
+                        class = "mat-switch-lab",
+                        materialSwitch(
+                          "nj_tiplab_show",
+                          "",
+                          value = isolate(nj_tiplab_show_val())
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 9,
+                      align = "left",
+                      div(
+                        class = "nj-label-sel",
+                        uiOutput("nj_tiplab_ui")
+                      )
+                    ),
+                    column(
+                      width = 3,
+                      align = "center",
+                      dropMenu(
+                        actionBttn(
+                          "nj_labeltext_menu",
+                          label = "",
+                          color = "default",
+                          size = "sm",
+                          style = "material-flat",
+                          icon = icon("sliders")
+                        ),
+                        placement = "right",
+                        theme = "translucent",
+                        fluidRow(
+                          column(
+                            width = 6,
+                            align = "center",
+                            uiOutput("nj_align_ui"),
+                            br(),
+                            sliderInput(
+                              "nj_tiplab_size",
+                              label = h5(
+                                "Label size",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 1,
+                              max = 10,
+                              step = 0.1,
+                              value = isolate(nj_tiplab_size_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_tiplab_alpha",
+                              label = h5(
+                                "Opacity",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0.1,
+                              max = 1,
+                              step = 0.05,
+                              value = isolate(nj_tiplab_alpha_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            )
+                          ),
+                          column(
+                            width = 6,
+                            align = "center",
+                            selectInput(
+                              "nj_tiplab_fontface",
+                              label = h5(
+                                "Fontface",
+                                style = "color:white; margin-bottom: 5px; margin-top: 16px"
+                              ),
+                              width = "250px",
+                              choices = c(
+                                Plain = "plain",
+                                Bold = "bold",
+                                Italic = "italic",
+                                `B & I` = "bold.italic"
+                              ),
+                              selected = isolate(nj_tiplab_fontface_val())
+                            ),
+                            br(),
+                            sliderInput(
+                              inputId = "nj_tiplab_position",
+                              label = h5(
+                                "Position",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = -3,
+                              max = 3,
+                              step = 0.05,
+                              value = isolate(nj_tiplab_position_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            uiOutput("nj_tiplab_angle_ui")
+                          )
+                        )
                       )
                     )
                   )
-                ),
-                br()
+                )
+              )
+            ),
+            fluidRow(
+              column(
+                width = 8,
+                div(
+                  class = "mat-switch-geom",
+                  materialSwitch(
+                    "nj_geom",
+                    h5(
+                      p("Panels"),
+                      style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                    ),
+                    value = isolate(nj_geom_val()),
+                    right = FALSE
+                  )
+                )
               ),
-              title = "Duplicate entries",
-              fade = TRUE,
-              easyClose = TRUE,
-              footer = tagList(
-                modalButton("Dismiss"),
-                actionButton(
-                  "change_entries",
-                  "Go to Entry Table",
-                  class = "btn btn-default"
+              column(
+                width = 4,
+                dropMenu(
+                  actionBttn(
+                    "nj_labelformat_menu",
+                    label = "",
+                    color = "default",
+                    size = "sm",
+                    style = "material-flat",
+                    icon = icon("sliders")
+                  ),
+                  placement = "right",
+                  theme = "translucent",
+                  fluidRow(
+                    column(
+                      width = 12,
+                      align = "center",
+                      sliderInput(
+                        inputId = "nj_tiplab_padding",
+                        label = h5(
+                          "Size",
+                          style = "color:white; margin-bottom: 0px"
+                        ),
+                        min = 0.05,
+                        max = 1,
+                        value = isolate(nj_tiplab_padding_val()),
+                        step = 0.05,
+                        width = "150px",
+                        ticks = FALSE
+                      ),
+                      br(),
+                      sliderInput(
+                        inputId = "nj_tiplab_labelradius",
+                        label = h5(
+                          "Smooth edge",
+                          style = "color:white; margin-bottom: 0px"
+                        ),
+                        min = 0,
+                        step = 0.05,
+                        max = 0.5,
+                        value = isolate(nj_tiplab_labelradius_val()),
+                        width = "150px",
+                        ticks = FALSE
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
+                column(
+                  width = 12,
+                  align = "left",
+                  fluidRow(
+                    column(
+                      width = 7,
+                      align = "left",
+                      h4(
+                        p("Branches"),
+                        style = "color:white; position: relative; right: -15px;"
+                      )
+                    ),
+                    column(
+                      width = 5,
+                      align = "left",
+                      div(
+                        class = "mat-switch-lab",
+                        materialSwitch(
+                          "nj_show_branch_label",
+                          "",
+                          value = isolate(nj_show_branch_label_val())
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 9,
+                      align = "left",
+                      div(
+                        class = "nj-label-sel",
+                        uiOutput("nj_branch_label")
+                      )
+                    ),
+                    column(
+                      width = 3,
+                      align = "center",
+                      dropMenu(
+                        actionBttn(
+                          "nj_branch_label_menu",
+                          label = "",
+                          color = "default",
+                          size = "sm",
+                          style = "material-flat",
+                          icon = icon("sliders")
+                        ),
+                        placement = "right",
+                        theme = "translucent",
+                        fluidRow(
+                          column(
+                            width = 6,
+                            align = "center",
+                            selectInput(
+                              "nj_branchlab_fontface",
+                              label = h5(
+                                "Fontface",
+                                style = "color:white; margin-bottom: 0px;"
+                              ),
+                              width = "150px",
+                              choices = c(
+                                Plain = "plain",
+                                Bold = "bold",
+                                Italic = "italic",
+                                `B & I` = "bold.italic"
+                              ),
+                              selected = isolate(nj_branchlab_fontface_val())
+                            ),
+                            br(),
+                            sliderInput(
+                              inputId = "nj_branch_x",
+                              label = h5(
+                                "X Position",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = -3,
+                              max = 3,
+                              value = isolate(nj_branch_x_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_branchlab_alpha",
+                              label = h5(
+                                "Opacity",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0.1,
+                              max = 1,
+                              step = 0.05,
+                              value = isolate(nj_branchlab_alpha_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            )
+                          ),
+                          column(
+                            width = 6,
+                            align = "center",
+                            sliderInput(
+                              "nj_branch_size",
+                              label = h5(
+                                "Size",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 2,
+                              max = 10,
+                              step = 0.5,
+                              value = isolate(nj_branch_size_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_branch_labelradius",
+                              label = h5(
+                                "Smooth edge",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0,
+                              max = 0.5,
+                              step = 0.05,
+                              value = isolate(nj_branch_labelradius_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br()
+                          )
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 5,
+                      div(
+                        class = "mat-switch-geom",
+                        materialSwitch(
+                          inputId = "nj_branch_panel",
+                          h5(
+                            p("Panels"),
+                            style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                          ),
+                          value = isolate(nj_branch_panel_val()),
+                          right = FALSE
+                        )
+                      )
+                    ),
+                    column(
+                      width = 7,
+                      uiOutput("nj_branchlabel_cutoff_ui")
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              column(
+                width = 12,
+                align = "left",
+                fluidRow(
+                  column(
+                    width = 8,
+                    textInput(
+                      "nj_title",
+                      label = "",
+                      width = "100%",
+                      placeholder = "Plot Title",
+                      value = isolate(nj_title_val())
+                    )
+                  ),
+                  column(
+                    width = 4,
+                    dropMenu(
+                      actionBttn(
+                        "nj_title_menu",
+                        label = "",
+                        color = "default",
+                        size = "sm",
+                        style = "material-flat",
+                        icon = icon("sliders")
+                      ),
+                      placement = "right",
+                      theme = "translucent",
+                      fluidRow(
+                        column(
+                          width = 12,
+                          align = "center",
+                          sliderInput(
+                            "nj_title_size",
+                            label = h5(
+                              "Title Size",
+                              style = "color:white; margin-bottom: 0px"
+                            ),
+                            value = isolate(nj_title_size_val()),
+                            min = 15,
+                            max = 40,
+                            step = 1,
+                            width = "150px",
+                            ticks = FALSE
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 12,
+                align = "left",
+                fluidRow(
+                  column(
+                    width = 8,
+                    textInput(
+                      "nj_subtitle",
+                      label = "",
+                      width = "100%",
+                      placeholder = "Plot Subtitle",
+                      value = isolate(nj_subtitle_val())
+                    )
+                  ),
+                  column(
+                    width = 4,
+                    dropMenu(
+                      actionBttn(
+                        "nj_subtitle_menu",
+                        label = "",
+                        color = "default",
+                        size = "sm",
+                        style = "material-flat",
+                        icon = icon("sliders")
+                      ),
+                      placement = "right",
+                      theme = "translucent",
+                      fluidRow(
+                        column(
+                          width = 12,
+                          align = "center",
+                          sliderInput(
+                            "nj_subtitle_size",
+                            label = h5(
+                              "Subtitle Size",
+                              style = "color:white; margin-bottom: 0px"
+                            ),
+                            value = isolate(nj_subtitle_size_val()),
+                            min = 15,
+                            max = 40,
+                            step = 1,
+                            width = "150px",
+                            ticks = FALSE
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
+                column(
+                  width = 12,
+                  align = "left",
+                  h4(
+                    p("Custom Label"),
+                    style = "color:white; position: relative; right: -15px;"
+                  ),
+                  column(
+                    width = 12,
+                    align = "center",
+                    fluidRow(
+                      column(
+                        width = 7,
+                        textInput(
+                          "nj_new_label_name",
+                          "",
+                          placeholder = "New Label"
+                        )
+                      ),
+                      column(
+                        width = 3,
+                        actionButton(
+                          "nj_add_new_label",
+                          "",
+                          icon = icon("plus")
+                        )
+                      ),
+                      column(
+                        width = 2,
+                        align = "right",
+                        dropMenu(
+                          actionBttn(
+                            "nj_custom_label_menu",
+                            label = "",
+                            color = "default",
+                            size = "sm",
+                            style = "material-flat",
+                            icon = icon("sliders")
+                          ),
+                          placement = "right",
+                          theme = "translucent",
+                          fluidRow(
+                            div(
+                              class = "nj-custom-label-menu-col",
+                              column(
+                                width = 12,
+                                align = "center",
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Size'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_custom_labelsize")
+                                    )
+                                  )
+                                ),
+                                br(),
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Vertical'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_sliderInput_y")
+                                    )
+                                  )
+                                ),
+                                br(),
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Horizontal'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_sliderInput_x")
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    ),
+                    fluidRow(
+                      column(
+                        width = 7,
+                        uiOutput("nj_custom_label_select")
+                      ),
+                      column(
+                        width = 4,
+                        actionButton(
+                          "nj_del_label",
+                          "",
+                          icon = icon("minus")
+                        )
+                      )
+                    ),
+                    fluidRow(
+                      column(
+                        width = 12,
+                        align = "center",
+                        actionButton(
+                          "nj_cust_label_save",
+                          "Apply"
+                        )
+                      )
+                    )
+                  )
                 )
               )
             )
           )
         )
-      } else {
-        set.seed(1)
+      })
 
-        if (input$tree_type == "Tree") {
-          log_print("Rendering tree plot")
+      # Set tree presence status variable top TRUE
+      Vis$nj_true <- TRUE
 
-          output$tree_field <- renderUI({
-            render_info("tree_field")
-
-            addSpinner(
-              plotOutput(
-                "tree_plot",
-                height = "auto"
-              ),
-              spin = "dots",
-              color = "#ffffff"
-            )
-          })
-
-          meta_nj <- select(DB$meta_true, -2)
-          if (
-            file.exists(file.path(
-              Startup$database,
-              gsub(" ", "_", DB$scheme),
-              "AMR_Profile.rds"
-            ))
-          ) {
-            amr_profile <- readRDS(file.path(
-              Startup$database,
-              gsub(" ", "_", DB$scheme),
-              "AMR_Profile.rds"
-            ))
-
-            if (isFALSE(any(meta_nj$Screened != "Yes"))) {
-              Vis$amr_nj <- amr_profile$results[
-                rownames(
-                  amr_profile$results
-                ) %in%
-                  meta_nj$`Assembly ID`,
-              ]
-              meta_nj <- add_column(meta_nj, Vis$amr_nj)
-            }
-          }
-
-          if (
-            length(unique(gsub(" ", "_", colnames(meta_nj)))) <
-              length(
-                gsub(" ", "_", colnames(meta_nj))
-              )
-          ) {
-            show_toast(
-              title = "Conflicting Custom Variable Names",
-              type = "warning",
-              position = "bottom-end",
-              timer = 6000
-            )
-          } else {
-            # Create phylogenetic tree data
-            if (input$tree_algo == "Neighbour-Joining") {
-              Vis_nj <- ape::nj(hamming_dist())
-              Vis$tree_algo <- "NJ"
-            } else {
-              Vis_nj <- phangorn::upgma(hamming_dist())
-              Vis$tree_algo <- "UPGMA"
-            }
-
-            # Convert negative edges
-            edge_lengths_abs <- abs(Vis_nj[["edge.length"]])
-            edge_lengths_log <- log(
-              edge_lengths_abs + sqrt(edge_lengths_abs^2 + 1)
-            )
-            Vis_nj[["edge.length"]] <- edge_lengths_log
-            Vis$nj <- Vis_nj
-
-            # Create phylogenetic tree meta data
-            Vis$meta_nj <- mutate(meta_nj, taxa = Index) %>%
-              relocate(taxa)
-
-            # Get number of included entries calculate start values for tree
-            if (nj_layout_val() == "circular" || nj_layout_val() == "inward") {
-              # Plot aspect ratio always 1 for circular layouts
-              Vis$ratio_nj <- 1
-
-              if (sum(DB$data$Include) < 21) {
-                Vis$labelsize_nj <- 5.5
-                Vis$tippointsize_nj <- 5.5
-                Vis$nodepointsize_nj <- 4
-                Vis$tiplab_padding_nj <- 0.25
-                Vis$branch_size_nj <- 4.5
-              } else if (between(sum(DB$data$Include), 21, 40)) {
-                Vis$labelsize_nj <- 5
-                Vis$tippointsize_nj <- 5
-                Vis$nodepointsize_nj <- 3.5
-                Vis$tiplab_padding_nj <- 0.2
-                Vis$branch_size_nj <- 4
-              } else if (between(sum(DB$data$Include), 41, 60)) {
-                Vis$labelsize_nj <- 4.5
-                Vis$tippointsize_nj <- 4.5
-                Vis$nodepointsize_nj <- 3
-                Vis$tiplab_padding_nj <- 0.15
-                Vis$branch_size_nj <- 3.5
-              } else if (between(sum(DB$data$Include), 61, 80)) {
-                Vis$labelsize_nj <- 4
-                Vis$tippointsize_nj <- 4
-                Vis$nodepointsize_nj <- 2.5
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 3
-              } else if (between(sum(DB$data$Include), 81, 100)) {
-                Vis$labelsize_nj <- 3.5
-                Vis$tippointsize_nj <- 3.5
-                Vis$nodepointsize_nj <- 2
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 2.5
-              } else {
-                Vis$labelsize_nj <- 3
-                Vis$tippointsize_nj <- 3
-                Vis$nodepointsize_nj <- 1.5
-                Vis$tiplab_padding_nj <- 0.05
-                Vis$branch_size_nj <- 2
-              }
-            } else {
-              # if (between(sum(DB$data$Include), 3, 5)) {
-              #   Vis$labelsize_nj <- 6
-              #   # Vis$tippointsize_nj <- 5
-              #   # Vis$nodepointsize_nj <- 4
-              #   # Vis$tiplab_padding_nj <- 0.25
-              #   # Vis$branch_size_nj <- 4.5
-              #   Vis$ratio_nj <- 0.8
-              # } else if (between(sum(DB$data$Include), 6, 10)) {
-              #   Vis$labelsize_nj <- 5.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 0.8
-              # } else if (between(sum(DB$data$Include), 11, 15)) {
-              #   Vis$labelsize_nj <- 5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 0.8
-              # } else if (between(sum(DB$data$Include), 16, 20)) {
-              #   Vis$labelsize_nj <- 4.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 0.8
-              # } else if (between(sum(DB$data$Include), 21, 25)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 0.9
-              # } else if (between(sum(DB$data$Include), 26, 30)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1
-              # } else if (between(sum(DB$data$Include), 31, 40)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.1
-              # } else if (between(sum(DB$data$Include), 41, 46)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.2
-              # } else if (between(sum(DB$data$Include), 51, 55)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.4
-              # } else if (between(sum(DB$data$Include), 56, 60)) {
-              #   Vis$labelsize_nj <- 4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.5
-              # } else if (between(sum(DB$data$Include), 61, 65)) {
-              #   Vis$labelsize_nj <- 3.7
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.6
-              # } else if (between(sum(DB$data$Include), 66, 70)) {
-              #   Vis$labelsize_nj <- 3.7
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.7
-              # } else if (between(sum(DB$data$Include), 71, 75)) {
-              #   Vis$labelsize_nj <- 3.7
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.8
-              # } else if (between(sum(DB$data$Include), 76, 80)) {
-              #   Vis$labelsize_nj <- 3.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.8
-              # } else if (between(sum(DB$data$Include), 81, 90)) {
-              #   Vis$labelsize_nj <- 3.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 1.9
-              # } else if (between(sum(DB$data$Include), 91, 100)) {
-              #   Vis$labelsize_nj <- 3.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 101, 110)) {
-              #   Vis$labelsize_nj <- 3.2
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 111, 120)) {
-              #   Vis$labelsize_nj <- 3
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 121, 130)) {
-              #   Vis$labelsize_nj <- 2.8
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 131, 140)) {
-              #   Vis$labelsize_nj <- 2.6
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 141, 150)) {
-              #   Vis$labelsize_nj <- 2.4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 151, 160)) {
-              #   Vis$labelsize_nj <- 2.2
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 161, 170)) {
-              #   Vis$labelsize_nj <- 2
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 171, 190)) {
-              #   Vis$labelsize_nj <- 1.8
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 191, 210)) {
-              #   Vis$labelsize_nj <- 1.6
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 211, 230)) {
-              #   Vis$labelsize_nj <- 1.5
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else if (between(sum(DB$data$Include), 231, 250)) {
-              #   Vis$labelsize_nj <- 1.4
-              #   # Vis$tippointsize_nj <- 4.5
-              #   # Vis$nodepointsize_nj <- 3.5
-              #   # Vis$tiplab_padding_nj <- 0.2
-              #   # Vis$branch_size_nj <- 4
-              #   Vis$ratio_nj <- 2
-              # } else {
-              #   Vis$labelsize_nj <- 1.3
-              #   # Vis$tippointsize_nj <- 2.5
-              #   # Vis$nodepointsize_nj <- 1.5
-              #   # Vis$tiplab_padding_nj <- 0.05
-              #   # Vis$branch_size_nj <- 2
-              #   Vis$ratio_nj <- 2
-              # }
-
-              vis_params <- get_vis_params(sum(DB$data$Include))
-              test <<- vis_params
-
-              Vis$tippointsize_nj <- Vis$labelsize_nj <- vis_params$labelsize_nj
-              Vis$nodepointsize_nj <- vis_params$labelsize_nj - 1
-              Vis$ratio_nj <- vis_params$ratio_nj
-              Vis$tiplab_padding_nj <- 0.05
-              Vis$branch_size_nj <- 2
-            }
-
-            nj_tree <- ggtree(Vis$nj)
-
-            # Get upper and lower end of x range
-            Vis$nj_max_x <- max(nj_tree$data$x)
-            Vis$nj_branch_lengths <- nj_tree$data$branch.length
-            Vis$nj_min_x <- min(nj_tree$data$x)
-
-            # Get parent node numbers
-            Vis$nj_parentnodes <- nj_tree$data$parent
-
-            # Update visualization control inputs
-            nj_tiplab_size_val(Vis$labelsize_nj)
-            updateSliderInput(
-              session = session,
-              inputId = "nj_tiplab_size",
-              value = Vis$labelsize_nj
-            )
-            nj_tippoint_size_val(Vis$tippointsize_nj)
-            nj_nodepoint_size_val(Vis$nodepointsize_nj)
-            nj_tiplab_padding_val(Vis$tiplab_padding_nj)
-            nj_branch_size_val(Vis$branch_size_nj)
-            nj_aspect_ratio_val(Vis$ratio_nj)
-            nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
-            nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
-
-            output$tree_plot <- renderPlot(
-              {
-                make.tree()
-              },
-              height = function() {
-                req(
-                  session$clientData$output_tree_plot_width,
-                  nj_aspect_ratio_val()
-                )
-                width <- session$clientData$output_tree_plot_width
-                if (is.null(width) || !is.numeric(width) || width <= 0) {
-                  width <- 800
-                }
-                height <- as.integer(width * nj_aspect_ratio_val())
-                if (!is.numeric(height) || height <= 0) {
-                  height <- as.integer(800 * 0.6)
-                }
-
-                height
-              },
-              res = 192
-            )
-
-            # Aspect ratio info
-            output$tree_aspect <- renderUI({
-              render_info("tree_aspect")
-
-              width <- get_plot_width(session = session)
-              height <- get_plot_height(
-                width = width,
-                aspect_ratio_val = nj_aspect_ratio_val()
-              )
-
-              paste(width, "x", height, "px | 192 DPI")
-            })
-
-            shinyjs::addClass("tree_aspect", class = "aspect-display")
-
-            Vis$nj_true <- TRUE
-          }
-        } else {
-          log_print("Rendering MST graph")
-
-          output$mst_field <- renderUI({
-            render_info("mst_field")
-
-            if (!is.null(session$clientData$output_tree_mst_height)) {
-              width <- as.integer(
-                session$clientData$output_tree_mst_height *
-                  (1 / mst_aspect_ratio_reactive())
-              )
-            } else {
-              width <- as.integer(
-                500 *
-                  mst_aspect_ratio_reactive()
-              )
-            }
-
-            width <- paste0(width, "px")
-
-            visnetworkoutput <- visNetworkOutput(
-              "tree_mst",
-              height = "100%",
-              width = width
-            )
-
-            if (isTRUE(mst_background_transparent_reactive())) {
-              visnetworkoutput
-            } else {
-              addSpinner(visnetworkoutput)
-            }
-          })
-
-          if (nrow(DB$meta_true) > 150) {
-            log_print("Over 100 isolates in MST graph")
-
-            show_toast(
-              title = "Computation might take a while",
-              type = "info",
-              position = "bottom-end",
-              timer = 10000
-            )
-          }
-
-          meta_mst <- DB$meta_true
-          Vis$meta_mst <- meta_mst
-
-          # prepare igraph object
-          Vis$mst_pre <- hamming_mst() |>
-            as.matrix() |>
-            graph.adjacency(weighted = TRUE) |>
-            igraph::mst()
-
-          output$tree_mst <- renderVisNetwork({
-            mst_tree()
-          })
-
-          # Aspect ratio info
-          output$mst_aspect <- renderUI({
-            render_info("mst_aspect")
-
-            width <- as.integer(session$clientData$output_tree_mst_width)
-            height <- as.integer(session$clientData$output_tree_mst_height)
-            paste(width, "x", height, "px")
-          })
-
-          shinyjs::addClass("mst_aspect", class = "aspect-display")
-
-          Vis$mst_true <- TRUE
-        }
-      }
-    }
-
-    runjs(unblock_ui)
-  })
+      runjs(unblock_ui)
+    },
+    priority = 0
+  )
 
   ## Report ----
 
@@ -23783,7 +24300,7 @@ server <- function(input, output, session) {
   input_gsplot_isolate_label <- reactive({
     input$gsplot_isolate_label
   }) %>%
-    debounce(1000)
+    throttle(1000)
 
   observeEvent(input$gs_data_menu, {
     runjs(block_ui)
@@ -24362,11 +24879,11 @@ server <- function(input, output, session) {
   input_gs_amr_variables <- reactive({
     input$gs_amr_variables
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_vir_variables <- reactive({
     input$gs_vir_variables
   }) %>%
-    debounce(1000)
+    throttle(1000)
 
   observeEvent(input$gs_variable_menu, {
     runjs(block_ui)
@@ -24608,23 +25125,23 @@ server <- function(input, output, session) {
   input_gsplot_grid_width <- reactive({
     input$gsplot_grid_width
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gsplot_legend_labelsize <- reactive({
     input$gsplot_legend_labelsize
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gsplot_fontsize_title <- reactive({
     input$gsplot_fontsize_title
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gsplot_treeheight_col <- reactive({
     input$gsplot_treeheight_col
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gsplot_treeheight_row <- reactive({
     input$gsplot_treeheight_row
   }) %>%
-    debounce(1000)
+    throttle(1000)
 
   observeEvent(input$gs_size_menu, {
     req(Screening$available)
@@ -24891,35 +25408,35 @@ server <- function(input, output, session) {
   input_gs_ratio <- reactive({
     input$gs_ratio
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_scale <- reactive({
     input$gs_scale
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_row <- reactive({
     input$gs_cluster_row
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_col <- reactive({
     input$gs_cluster_col
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_distance_col <- reactive({
     input$gs_cluster_distance_col
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_distance_row <- reactive({
     input$gs_cluster_distance_row
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_method_col <- reactive({
     input$gs_cluster_method_col
   }) %>%
-    debounce(1000)
+    throttle(1000)
   input_gs_cluster_method_row <- reactive({
     input$gs_cluster_method_row
   }) %>%
-    debounce(1000)
+    throttle(1000)
 
   # miscellaneous menu
   observeEvent(input$gs_misc_menu, {
@@ -25507,7 +26024,7 @@ server <- function(input, output, session) {
   input_gs_var_mapping <- reactive({
     input$gs_var_mapping
   }) %>%
-    debounce(1000)
+    throttle(1000)
 
   output$gs_var_mapping_ui <- renderUI({
     req(DB$meta, Screening$available)
