@@ -20029,9 +20029,9 @@ server <- function(input, output, session) {
           legend.direction = nj_legend_orientation_val(),
           legend.title = element_text(
             color = nj_color_val(),
-            size = nj_legend_size_val() * 1.2
+            size = nj_legend_size_val() * 1.2,
+            hjust = 0.5
           ),
-          legend.title.align = 0.5,
           legend.position = c(nj_legend_x_val(), nj_legend_y_val()),
           legend.text = element_text(
             color = nj_color_val(),
