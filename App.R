@@ -1914,6 +1914,7 @@ server <- function(input, output, session) {
     } else {
       runjs(block_ui)
       log_print("Input load")
+      gc()
 
       output$start_message <- NULL
       output$load_db <- NULL
@@ -2325,6 +2326,11 @@ server <- function(input, output, session) {
       output$mst_aspect <- NULL
       shinyjs::removeClass("mst_aspect", class = "aspect-display")
       shinyjs::removeClass("tree_aspect", class = "aspect-display")
+
+      updateSliderInput(session, "nj_treescale_x", value = NULL)
+      output$nj_treescale_x <- NULL
+      message("load INPUT: ", input$nj_treescale_x)
+      message("load VAL:", nj_treescale_x_val())
 
       output$tree_controls <- NULL
 
@@ -11279,13 +11285,13 @@ server <- function(input, output, session) {
   nj_tiplab_reactive <- reactive({
     ifelse(!is.null(input$nj_tiplab), input$nj_tiplab, "Assembly Name")
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiplab_val <- reactiveVal()
   nj_tiplab_show_val <- reactiveVal()
   nj_align_reactive <- reactive({
     ifelse(!is.null(input$nj_align), input$nj_align, TRUE)
   }) |>
-    throttle(250)
+    debounce(250)
   nj_align_val <- reactiveVal()
   nj_tiplab_size_val <- reactiveVal()
   nj_tiplab_fontface_val <- reactiveVal()
@@ -11399,7 +11405,7 @@ server <- function(input, output, session) {
       "Allelic Distance"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_branch_label_val <- reactiveVal()
   nj_branch_panel_val <- reactiveVal()
   nj_branchlabel_cutoff_val <- reactiveVal()
@@ -12432,7 +12438,7 @@ server <- function(input, output, session) {
   nj_color_mapping_reactive <- reactive({
     ifelse(!is.null(input$nj_color_mapping), input$nj_color_mapping, "Country")
   }) |>
-    throttle(250)
+    debounce(250)
   nj_color_mapping_val <- reactiveVal()
   nj_tiplab_scale_reactive <- reactive({
     ifelse(
@@ -12441,7 +12447,7 @@ server <- function(input, output, session) {
       nj_tiplab_scale_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiplab_scale_val <- reactiveVal()
   nj_color_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -12450,7 +12456,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_color_mapping_div_mid_val <- reactiveVal()
 
   observe({
@@ -12476,7 +12482,7 @@ server <- function(input, output, session) {
       "Country"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tipcolor_mapping_val <- reactiveVal()
   nj_tippoint_scale_reactive <- reactive({
     ifelse(
@@ -12485,7 +12491,7 @@ server <- function(input, output, session) {
       nj_tippoint_scale_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tippoint_scale_val <- reactiveVal()
   nj_tipcolor_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -12519,7 +12525,7 @@ server <- function(input, output, session) {
       "Host"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tipshape_mapping_val <- reactiveVal()
 
   observe({
@@ -12545,7 +12551,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_variable_val <- reactiveVal()
   nj_fruit_variable_2_reactive <- reactive({
     ifelse(
@@ -12554,7 +12560,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_variable_2_val <- reactiveVal()
   nj_fruit_variable_3_reactive <- reactive({
     ifelse(
@@ -12563,7 +12569,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_variable_3_val <- reactiveVal()
   nj_fruit_variable_4_reactive <- reactive({
     ifelse(
@@ -12572,7 +12578,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_variable_4_val <- reactiveVal()
   nj_fruit_variable_5_reactive <- reactive({
     ifelse(
@@ -12581,7 +12587,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_variable_5_val <- reactiveVal()
   nj_tiles_scale_1_reactive <- reactive({
     ifelse(
@@ -12590,7 +12596,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_1_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_scale_1_val <- reactiveVal()
   nj_tiles_scale_2_reactive <- reactive({
     ifelse(
@@ -12599,7 +12605,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_2_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_scale_2_val <- reactiveVal()
   nj_tiles_scale_3_reactive <- reactive({
     ifelse(
@@ -12608,7 +12614,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_3_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_scale_3_val <- reactiveVal()
   nj_tiles_scale_4_reactive <- reactive({
     ifelse(
@@ -12617,7 +12623,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_4_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_scale_4_val <- reactiveVal()
   nj_tiles_scale_5_reactive <- reactive({
     ifelse(
@@ -12626,7 +12632,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_5_val_default()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_scale_5_val <- reactiveVal()
   nj_tiles_mapping_div_mid_1_reactive <- reactive({
     ifelse(
@@ -12635,7 +12641,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_mapping_div_mid_1_val <- reactiveVal()
   nj_tiles_mapping_div_mid_2_reactive <- reactive({
     ifelse(
@@ -12644,7 +12650,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_mapping_div_mid_2_val <- reactiveVal()
   nj_tiles_mapping_div_mid_3_reactive <- reactive({
     ifelse(
@@ -12653,7 +12659,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_mapping_div_mid_3_val <- reactiveVal()
   nj_tiles_mapping_div_mid_4_reactive <- reactive({
     ifelse(
@@ -12662,7 +12668,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_mapping_div_mid_4_val <- reactiveVal()
   nj_tiles_mapping_div_mid_5_reactive <- reactive({
     ifelse(
@@ -12671,7 +12677,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tiles_mapping_div_mid_5_val <- reactiveVal()
 
   observe({
@@ -14717,7 +14723,7 @@ server <- function(input, output, session) {
   nj_tippoint_shape_reactive <- reactive({
     ifelse(!is.null(input$nj_tippoint_shape), input$nj_tippoint_shape, "circle")
   }) |>
-    throttle(250)
+    debounce(250)
   nj_tippoint_shape_val <- reactiveVal()
   nj_tippoint_alpha_val <- reactiveVal()
   nj_tippoint_size_val <- reactiveVal()
@@ -14798,7 +14804,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_width_circ_val <- reactiveVal()
   nj_fruit_width_circ_2_reactive <- reactive({
     ifelse(
@@ -14807,7 +14813,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_width_circ_2_val <- reactiveVal()
   nj_fruit_width_circ_3_reactive <- reactive({
     ifelse(
@@ -14816,7 +14822,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_width_circ_3_val <- reactiveVal()
   nj_fruit_width_circ_4_reactive <- reactive({
     ifelse(
@@ -14825,7 +14831,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_width_circ_4_val <- reactiveVal()
   nj_fruit_width_circ_5_reactive <- reactive({
     ifelse(
@@ -14834,7 +14840,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_fruit_width_circ_5_val <- reactiveVal()
   nj_fruit_offset_circ_val <- reactiveVal()
   nj_fruit_offset_circ_2_val <- reactiveVal()
@@ -14949,7 +14955,7 @@ server <- function(input, output, session) {
   nj_heatmap_offset_reactive <- reactive({
     ifelse(!is.null(input$nj_heatmap_offset), input$nj_heatmap_offset, 0)
   }) |>
-    throttle(250)
+    debounce(250)
   nj_heatmap_offset_val <- reactiveVal()
 
   observe({
@@ -15003,7 +15009,7 @@ server <- function(input, output, session) {
       ""
     }
   }) |>
-    throttle(250)
+    debounce(250)
   nj_parentnode_val <- reactiveVal()
   nj_clade_scale_val <- reactiveVal()
   nj_clade_type_val <- reactiveVal()
@@ -16323,18 +16329,18 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.05), 2)
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_rootedge_length_val <- reactiveVal()
   nj_rootedge_line_val <- reactiveVal()
   nj_xlim_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim), input$nj_xlim, -10)
   }) |>
-    throttle(250)
+    debounce(250)
   nj_xlim_val <- reactiveVal()
   nj_xlim_inw_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim_inw), input$nj_xlim_inw, 50)
   }) |>
-    throttle(250)
+    debounce(250)
   nj_xlim_inw_val <- reactiveVal()
   nj_treescale_show_val <- reactiveVal()
   nj_treescale_width_reactive <- reactive({
@@ -16344,21 +16350,26 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.1, 0), 2)
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_treescale_width_val <- reactiveVal()
   nj_treescale_x_reactive <- reactive({
+    message("reactive input ", input$nj_treescale_x)
+    message(
+      "reactive noinput: ",
+      ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
+    )
     ifelse(
       !is.null(input$nj_treescale_x),
       input$nj_treescale_x,
       ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
     )
   }) |>
-    throttle(250)
+    debounce(250)
   nj_treescale_x_val <- reactiveVal()
   nj_treescale_y_reactive <- reactive({
     ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, -1)
   }) |>
-    throttle(250)
+    debounce(250)
   nj_ladder_val <- reactiveVal()
   nj_treescale_y_val <- reactiveVal()
 
@@ -16407,6 +16418,7 @@ server <- function(input, output, session) {
       nj_treescale_show_val(TRUE)
     )
 
+    message("observe: ", nj_treescale_x_reactive())
     nj_treescale_x_val(nj_treescale_x_reactive())
 
     nj_treescale_y_val(nj_treescale_y_reactive())
@@ -16492,7 +16504,7 @@ server <- function(input, output, session) {
 
     output$tree_controls <- renderUI({
       render_info("tree_controls Miscellaneous Menu")
-
+      message("render controls VAL: ", isolate(nj_treescale_x_val()))
       div(
         class = "full-height-box",
         box(
@@ -17202,42 +17214,42 @@ server <- function(input, output, session) {
     output
   })
 
-  output$nj_treescale_x <- renderUI({
-    render_info("nj_treescale_x")
+  # output$nj_treescale_x <- renderUI({
+  #   render_info("nj_treescale_x")
 
-    isolate(nj_max_x <- Vis$nj_max_x)
-    nj_min_x <- Vis$nj_min_x
+  #   isolate(nj_max_x <- Vis$nj_max_x)
+  #   nj_min_x <- Vis$nj_min_x
 
-    if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
-      min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
+  #   if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
+  #     min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
 
-      max <- round(floor(nj_max_x))
-    } else {
-      min <- 1
-      max <- 10
-    }
+  #     max <- round(floor(nj_max_x))
+  #   } else {
+  #     min <- 1
+  #     max <- 10
+  #   }
 
-    output <- render_plot_control(
-      input_id = "nj_treescale_x",
-      input_type = "sliderInput",
-      div_class = "nj-label-slider",
-      width = "150px",
-      min = min,
-      max = max,
-      reactive_value = isolate(ifelse(
-        !is.null(nj_treescale_x_val()),
-        nj_treescale_x_val(),
-        2
-      )),
-      default_value = ifelse(
-        !is.null(nj_max_x),
-        round(nj_max_x / 2, 0),
-        2
-      )
-    )
+  #   output <- render_plot_control(
+  #     input_id = "nj_treescale_x",
+  #     input_type = "sliderInput",
+  #     div_class = "nj-label-slider",
+  #     width = "150px",
+  #     min = min,
+  #     max = max,
+  #     reactive_value = isolate(ifelse(
+  #       !is.null(nj_treescale_x_val()),
+  #       nj_treescale_x_val(),
+  #       2
+  #     )),
+  #     default_value = ifelse(
+  #       !is.null(nj_max_x),
+  #       round(nj_max_x / 2, 0),
+  #       2
+  #     )
+  #   )
 
-    output
-  })
+  #   output
+  # })
 
   output$nj_treescale_y <- renderUI({
     render_info("nj_treescale_y")
@@ -19961,6 +19973,16 @@ server <- function(input, output, session) {
     Vis_nj <- Vis$nj
     Vis_nj$tip.label <- Vis$meta_nj$Index
 
+    message(
+      "make.tree input: ",
+      ifelse(
+        !is.null(isolate(input$nj_treescale_x)),
+        isolate(input$nj_treescale_x),
+        "nope"
+      )
+    )
+    message("make.tree VAL(): ", isolate(nj_treescale_x_val()))
+
     #TODO
     #test
     # nj_tree <- ggtree(Vis$nj)
@@ -21764,6 +21786,7 @@ server <- function(input, output, session) {
     {
       runjs(block_ui)
       log_print("Input create_tree")
+      message("create_tree 1: ", isolate(nj_treescale_x_val()))
 
       if (is.null(DB$data)) {
         log_print("Missing data")
@@ -22067,7 +22090,41 @@ server <- function(input, output, session) {
     input$create_tree,
     {
       runjs(block_ui)
-      message("MAKE TREE")
+      message("create_tree 2: ", isolate(nj_treescale_x_val()))
+
+      output$nj_treescale_x <- renderUI({
+        render_info("nj_treescale_x")
+        message("Test: ", isolate(nj_treescale_x_val()))
+
+        isolate(nj_max_x <- Vis$nj_max_x)
+        isolate(nj_min_x <- Vis$nj_min_x)
+
+        if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
+          min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
+
+          max <- round(floor(nj_max_x))
+        } else {
+          min <- 1
+          max <- 10
+        }
+
+        output <- render_plot_control(
+          input_id = "nj_treescale_x",
+          input_type = "sliderInput",
+          div_class = "nj-label-slider",
+          width = "150px",
+          min = min,
+          max = max,
+          reactive_value = isolate(nj_treescale_x_val()),
+          default_value = ifelse(
+            !is.null(nj_max_x),
+            round(nj_max_x / 2, 0),
+            2
+          )
+        )
+
+        output
+      })
 
       output$tree_plot <- renderPlot(
         {
@@ -24003,7 +24060,7 @@ server <- function(input, output, session) {
   input_gsplot_isolate_label <- reactive({
     input$gsplot_isolate_label
   }) %>%
-    throttle(1000)
+    debounce(1000)
 
   observeEvent(input$gs_data_menu, {
     runjs(block_ui)
@@ -24582,11 +24639,11 @@ server <- function(input, output, session) {
   input_gs_amr_variables <- reactive({
     input$gs_amr_variables
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_vir_variables <- reactive({
     input$gs_vir_variables
   }) %>%
-    throttle(1000)
+    debounce(1000)
 
   observeEvent(input$gs_variable_menu, {
     runjs(block_ui)
@@ -24828,23 +24885,23 @@ server <- function(input, output, session) {
   input_gsplot_grid_width <- reactive({
     input$gsplot_grid_width
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gsplot_legend_labelsize <- reactive({
     input$gsplot_legend_labelsize
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gsplot_fontsize_title <- reactive({
     input$gsplot_fontsize_title
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gsplot_treeheight_col <- reactive({
     input$gsplot_treeheight_col
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gsplot_treeheight_row <- reactive({
     input$gsplot_treeheight_row
   }) %>%
-    throttle(1000)
+    debounce(1000)
 
   observeEvent(input$gs_size_menu, {
     req(Screening$available)
@@ -25111,35 +25168,35 @@ server <- function(input, output, session) {
   input_gs_ratio <- reactive({
     input$gs_ratio
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_scale <- reactive({
     input$gs_scale
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_row <- reactive({
     input$gs_cluster_row
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_col <- reactive({
     input$gs_cluster_col
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_distance_col <- reactive({
     input$gs_cluster_distance_col
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_distance_row <- reactive({
     input$gs_cluster_distance_row
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_method_col <- reactive({
     input$gs_cluster_method_col
   }) %>%
-    throttle(1000)
+    debounce(1000)
   input_gs_cluster_method_row <- reactive({
     input$gs_cluster_method_row
   }) %>%
-    throttle(1000)
+    debounce(1000)
 
   # miscellaneous menu
   observeEvent(input$gs_misc_menu, {
@@ -25727,7 +25784,7 @@ server <- function(input, output, session) {
   input_gs_var_mapping <- reactive({
     input$gs_var_mapping
   }) %>%
-    throttle(1000)
+    debounce(1000)
 
   output$gs_var_mapping_ui <- renderUI({
     req(DB$meta, Screening$available)

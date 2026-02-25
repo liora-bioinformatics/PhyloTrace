@@ -923,25 +923,25 @@
         // Handle positioning of the toggle
         window.addEventListener(
           "resize",
-          throttle(() => {
+          debounce(() => {
             elRect = undefined;
             if (selectedAnnoteEl) {
               selectCodeLines(selectedAnnoteEl);
             }
           }, 10)
         );
-        function throttle(fn, ms) {
-          let throttle = false;
+        function debounce(fn, ms) {
+          let debounce = false;
           let timer;
           return (...args) => {
-            if (!throttle) { // first call gets through
+            if (!debounce) { // first call gets through
               fn.apply(this, args);
-              throttle = true;
-            } else { // all the others get throttled
+              debounce = true;
+            } else { // all the others get debounced
               if (timer) clearTimeout(timer); // cancel #2
               timer = setTimeout(() => {
                 fn.apply(this, args);
-                timer = throttle = false;
+                timer = debounce = false;
               }, ms);
             }
           };
