@@ -18,8 +18,8 @@ jobs:
       - name: Run PubMLST Deep Scan
         id: scan
         run: |
-          chmod +x ./check_pubmlst.sh
-          ./check_pubmlst.sh > scan_report.txt
+          chmod +x ./assets/check_pubmlst.sh
+          ./assets/check_pubmlst.sh > scan_report.txt
           
           # 1. Count the number of schemes in your KNOWN_FILE
           # 'tail -n +2' skips the header, 'wc -l' counts the remaining lines
