@@ -32,6 +32,7 @@ University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024. </sup>
 [![Version](https://img.shields.io/badge/Version-1.6.1-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases/tag/v1.6.1)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)
 ![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white)  
+![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)
 
 <br><br><br>
 
