@@ -21,7 +21,7 @@ jobs:
           chmod +x ./assets/check_pubmlst.sh
           ./assets/check_pubmlst.sh > scan_report.txt
           
-          TRACKED_COUNT=$(tail -n +2 known_schemes.csv | wc -l)
+          TRACKED_COUNT=$(tail -n +2 assets/known_schemes.csv | wc -l)
           echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
           
           if grep -qE "\+ NEW|\- REMOVED" scan_report.txt; then
@@ -43,7 +43,8 @@ jobs:
           filename: pubmlst_schemes.json
           label: PubMLST Schemes
           message: ${{ env.TRACKED_COUNT }}
-          color: "002147"
+          color: "ffffff"
+          labelColor: "002147"
 
       - name: Send Email Report
         if: env.DISCREPANCY == 'true'
