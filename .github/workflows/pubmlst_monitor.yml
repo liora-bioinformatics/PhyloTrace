@@ -34,6 +34,16 @@ jobs:
             echo "DISCREPANCY=false" >> $GITHUB_ENV
           fi
 
+      - name: Update Live Count Badge
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: ${{ secrets.GIST_ID }}
+          filename: pubmlst_schemes.json
+          label: PubMLST Schemes
+          message: ${{ env.LIVE_COUNT }}
+          color: blue
+
       - name: Send Email Report
         if: env.DISCREPANCY == 'true'
         uses: dawidd6/action-send-mail@v3
