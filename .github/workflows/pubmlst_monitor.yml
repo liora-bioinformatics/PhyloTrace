@@ -18,8 +18,7 @@ jobs:
       - name: Run PubMLST Deep Scan
         id: scan
         run: |
-          # Use your modified Bash script logic here
-          # We save the report to a file
+          # Save the report to a file
           chmod +x ./assets/check_pubmlst.sh
           ./assets/check_pubmlst.sh > scan_report.txt
           
@@ -42,7 +41,7 @@ jobs:
           filename: pubmlst_schemes.json
           label: PubMLST Schemes
           message: ${{ env.LIVE_COUNT }}
-          color: blue
+          color: "002147"
 
       - name: Send Email Report
         if: env.DISCREPANCY == 'true'
