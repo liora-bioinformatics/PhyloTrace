@@ -9707,13 +9707,22 @@ server <- function(input, output, session) {
       if (!is.null(scheme_overview)) {
         DB$failCon <- FALSE
 
+        scheme_overview <- parse.schemeinfo(
+          scheme_info = scheme_overview,
+          repo = "PM",
+          database = Startup$database,
+          folder_name = Scheme$folder_name,
+          url_link = schemes$url[schemes$species == input$select_cgmlst]
+        )
+
+        # Retrieve last changes
         if (!is.null(scheme_overview[["last_updated"]])) {
           last_scheme_change <- scheme_overview[["last_updated"]]
           last_file_change <- format(
             file.info(file.path(
-              Startup$database,
+              database,
               ".downloaded_schemes",
-              paste0(Scheme$folder_name, ".zip")
+              paste0(folder_name, ".zip")
             ))$mtime,
             "%Y-%m-%d %H:%M %p"
           )
@@ -9721,57 +9730,6 @@ server <- function(input, output, session) {
           last_scheme_change <- "Not Available"
           last_file_change <- NULL
         }
-
-        if (!is.null(scheme_overview[["description"]])) {
-          description <- scheme_overview[["description"]]
-        } else {
-          description <- "Not Available"
-        }
-
-        scheme_overview <- data.frame(
-          x1 = c(
-            "Scheme",
-            "Database",
-            "URL",
-            "Version",
-            "Locus Count",
-            "Last Change"
-          ),
-          x2 = c(
-            gsub("_", " ", Scheme$folder_name),
-            "pubMLST",
-            paste0(
-              '<a href="',
-              paste0(
-                "https://www.pubmlst.org/bigsdb?db=",
-                basename(
-                  dirname(
-                    dirname(
-                      schemes$url[schemes$species == input$select_cgmlst]
-                    )
-                  )
-                )
-              ),
-              '" target="_blank">',
-              paste0(
-                "https://www.pubmlst.org/bigsdb?db=",
-                basename(
-                  dirname(
-                    dirname(
-                      schemes$url[schemes$species == input$select_cgmlst]
-                    )
-                  )
-                )
-              ),
-              '</a>'
-            ),
-            description,
-            scheme_overview[["locus_count"]],
-            last_scheme_change
-          )
-        )
-
-        names(scheme_overview) <- NULL
       }
     }
 

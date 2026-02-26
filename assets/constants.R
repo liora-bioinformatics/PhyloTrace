@@ -58,19 +58,48 @@ diverging_scales <- list(
 )
 
 pubmlst_schemes <- data.frame(
-  species = paste0(c(
-    "Acinetobacter_baumannii", "Bacillus_anthracis", "Bacillus_cereus", "Borrelia_spp",
-    "Brucella_spp", "Burkholderia_mallei", "Burkholderia_pseudomallei",
-    "Campylobacter_jejuni_coli_v1", "Campylobacter_jejuni_coli_v2", 
-    "Chlamydia_abortus", "Chlamydia_trachomatis", "Clostridium_chauvoei", 
-    "Clostridium_perfringens", "Dichelobacter_nodosus", "Escherichia_spp", 
-    "Haemophilus_influenzae", "Leptospira_spp", "Mycobacteroides_abscessus_complex", 
-    "Neisseria_gonorrhoeae_v1", "Neisseria_gonorrhoeae_v2", "Neisseria_meningitidis_v1", 
-    "Neisseria_meningitidis_v2", "Neisseria_meningitidis_v3", 
-    "Human-restricted_Neisseria_v1", "Neisseria_L3", "Neisseria_L44", 
-    "Pasteurella_multocida", "Salmonella_v1", "Salmonella_v2_enterobase", "Serratia_spp", 
-    "Staphylococcus_aureus", "Streptococcus_agalactiae", "Streptococcus_pneumoniae", 
-    "Streptococcus_uberis", "Vibrio_cholerae", "Vibrio_parahaemolyticus", "Xanthomonas_citri"), "_PM"),
+  species = paste0(
+    c(
+      "Acinetobacter_baumannii",
+      "Bacillus_anthracis",
+      "Bacillus_cereus",
+      "Borrelia_spp",
+      "Brucella_spp",
+      "Burkholderia_mallei",
+      "Burkholderia_pseudomallei",
+      "Campylobacter_jejuni_coli_v1",
+      "Campylobacter_jejuni_coli_v2",
+      "Chlamydia_abortus",
+      "Chlamydia_trachomatis",
+      "Clostridium_chauvoei",
+      "Clostridium_perfringens",
+      "Dichelobacter_nodosus",
+      "Escherichia_spp",
+      "Haemophilus_influenzae",
+      "Leptospira_spp",
+      "Mycobacteroides_abscessus_complex",
+      "Neisseria_gonorrhoeae_v1",
+      "Neisseria_gonorrhoeae_v2",
+      "Neisseria_meningitidis_v1",
+      "Neisseria_meningitidis_v2",
+      "Neisseria_meningitidis_v3",
+      "Human-restricted_Neisseria_v1",
+      "Neisseria_L3",
+      "Neisseria_L44",
+      "Pasteurella_multocida",
+      "Salmonella_v1",
+      "Salmonella_v2_enterobase",
+      "Serratia_spp",
+      "Staphylococcus_aureus",
+      "Streptococcus_agalactiae",
+      "Streptococcus_pneumoniae",
+      "Streptococcus_uberis",
+      "Vibrio_cholerae",
+      "Vibrio_parahaemolyticus",
+      "Xanthomonas_citri"
+    ),
+    "_PM"
+  ),
   url = c(
     'https://rest.pubmlst.org/db/pubmlst_abaumannii_seqdef/schemes/3',
     'https://rest.pubmlst.org/db/pubmlst_bcereus_seqdef/schemes/2',
@@ -109,51 +138,118 @@ pubmlst_schemes <- data.frame(
     'https://rest.pubmlst.org/db/pubmlst_vcholerae_seqdef/schemes/3',
     'https://rest.pubmlst.org/db/pubmlst_vparahaemolyticus_seqdef/schemes/3',
     'https://rest.pubmlst.org/db/pubmlst_xcitri_seqdef/schemes/1'
-    ),
+  ),
   database = "pubMLST"
-  )
+)
 
 cgmlstorg_schemes <- data.frame(
-  species = paste0(c(
-    "Acinetobacter_baumannii", "Bacillus_anthracis", "Bordetella_pertussis", 
-    "Brucella_melitensis", "Brucella_spp", "Burkholderia_mallei_FLI", 
-    "Burkholderia_mallei_RKI", "Burkholderia_pseudomallei", "Campylobacter_jejuni_coli", 
-    "Clostridioides_difficile", "Clostridium_perfringens", "Corynebacterium_diphtheriae",
-    "Corynebacterium_pseudotuberculosis",
-    "Cronobacter_sakazakii_malonaticus", "Enterococcus_faecalis", "Enterococcus_faecium", 
-    "Escherichia_coli", "Francisella_tularensis", "Klebsiella_oxytoca_sensu_lato", 
-    "Klebsiella_pneumoniae_sensu_lato", "Legionella_pneumophila", "Listeria_monocytogenes", 
-    "Mycobacterium_tuberculosis_complex", "Mycobacteroides_abscessus", "Mycoplasma_gallisepticum", 
-    "Paenibacillus_larvae", "Pseudomonas_aeruginosa", "Salmonella_enterica", "Serratia_marcescens", 
-    "Staphylococcus_aureus", "Staphylococcus_capitis", "Streptococcus_pyogenes",
-    "Yersinia_enterocolitica"), "_CM"),
+  species = paste0(
+    c(
+      "Acinetobacter_baumannii",
+      "Bacillus_anthracis",
+      "Bordetella_pertussis",
+      "Brucella_melitensis",
+      "Brucella_spp",
+      "Burkholderia_mallei_FLI",
+      "Burkholderia_mallei_RKI",
+      "Burkholderia_pseudomallei",
+      "Campylobacter_jejuni_coli",
+      "Clostridioides_difficile",
+      "Clostridium_perfringens",
+      "Corynebacterium_diphtheriae",
+      "Corynebacterium_pseudotuberculosis",
+      "Cronobacter_sakazakii_malonaticus",
+      "Enterococcus_faecalis",
+      "Enterococcus_faecium",
+      "Escherichia_coli",
+      "Francisella_tularensis",
+      "Klebsiella_oxytoca_sensu_lato",
+      "Klebsiella_pneumoniae_sensu_lato",
+      "Legionella_pneumophila",
+      "Listeria_monocytogenes",
+      "Mycobacterium_tuberculosis_complex",
+      "Mycobacteroides_abscessus",
+      "Mycoplasma_gallisepticum",
+      "Paenibacillus_larvae",
+      "Pseudomonas_aeruginosa",
+      "Salmonella_enterica",
+      "Serratia_marcescens",
+      "Staphylococcus_aureus",
+      "Staphylococcus_capitis",
+      "Streptococcus_pyogenes",
+      "Yersinia_enterocolitica"
+    ),
+    "_CM"
+  ),
   url = "",
   database = "cgMLST.org"
 )
 
-abb <- c('Abaumannii', 'Banthracis', 'Bpertussis', 'Bmelitensis', 'Brucella',
-         'Bmallei_fli', 'Bmallei_rki', 'Bpseudomallei', 'Cjejuni', 'Cdifficile',
-         'Cperfringens', 'Cdiphtheriae', 'Cpseudotuberculosis', 'Csakazakii',
-         'Efaecalis', 'Efaecium', 'Ecoli', 'Ftularensis', 'Koxytoca', 
-         'Kpneumoniae', 'Lpneumophila', 'Lmonocytogenes', 'Mtuberculosis',
-         'Mabscessus', 'Mgallisepticum', 'Plarvae', 'Paeruginosa', 'Senterica',
-         'Smarcescens', 'Saureus', 'Scapitis', 'Spyogenes', 'Yenterocolitica')
-  
+abb <- c(
+  'Abaumannii',
+  'Banthracis',
+  'Bpertussis',
+  'Bmelitensis',
+  'Brucella',
+  'Bmallei_fli',
+  'Bmallei_rki',
+  'Bpseudomallei',
+  'Cjejuni',
+  'Cdifficile',
+  'Cperfringens',
+  'Cdiphtheriae',
+  'Cpseudotuberculosis',
+  'Csakazakii',
+  'Efaecalis',
+  'Efaecium',
+  'Ecoli',
+  'Ftularensis',
+  'Koxytoca',
+  'Kpneumoniae',
+  'Lpneumophila',
+  'Lmonocytogenes',
+  'Mtuberculosis',
+  'Mabscessus',
+  'Mgallisepticum',
+  'Plarvae',
+  'Paeruginosa',
+  'Senterica',
+  'Smarcescens',
+  'Saureus',
+  'Scapitis',
+  'Spyogenes',
+  'Yenterocolitica'
+)
+
 amrfinder_species <- c(
-  "Acinetobacter_baumannii", "Burkholderia_cepacia", 
-  "Burkholderia_mallei", "Burkholderia_pseudomallei", 
-  "Campylobacter", "Citrobacter_freundii", 
-  "Clostridioides_difficile", "Corynebacterium_diphtheriae", 
-  "Enterobacter_asburiae", "Enterobacter_cloacae", 
-  "Enterococcus_faecalis", "Enterococcus_faecium", 
-  "Escherichia", "Klebsiella_oxytoca", 
-  "Klebsiella_pneumoniae", "Neisseria_gonorrhoeae", 
-  "Neisseria_meningitidis", "Pseudomonas_aeruginosa", 
-  "Salmonella", "Serratia_marcescens", 
-  "Staphylococcus_aureus", "Staphylococcus_pseudintermedius", 
-  "Streptococcus_agalactiae", "Streptococcus_pneumoniae", 
-  "Streptococcus_pyogenes", "Vibrio_cholerae", 
-  "Vibrio_parahaemolyticus", "Vibrio_vulnificus"
+  "Acinetobacter_baumannii",
+  "Burkholderia_cepacia",
+  "Burkholderia_mallei",
+  "Burkholderia_pseudomallei",
+  "Campylobacter",
+  "Citrobacter_freundii",
+  "Clostridioides_difficile",
+  "Corynebacterium_diphtheriae",
+  "Enterobacter_asburiae",
+  "Enterobacter_cloacae",
+  "Enterococcus_faecalis",
+  "Enterococcus_faecium",
+  "Escherichia",
+  "Klebsiella_oxytoca",
+  "Klebsiella_pneumoniae",
+  "Neisseria_gonorrhoeae",
+  "Neisseria_meningitidis",
+  "Pseudomonas_aeruginosa",
+  "Salmonella",
+  "Serratia_marcescens",
+  "Staphylococcus_aureus",
+  "Staphylococcus_pseudintermedius",
+  "Streptococcus_agalactiae",
+  "Streptococcus_pneumoniae",
+  "Streptococcus_pyogenes",
+  "Vibrio_cholerae",
+  "Vibrio_parahaemolyticus",
+  "Vibrio_vulnificus"
 )
 
 country_names <- c(
@@ -356,15 +452,15 @@ country_names <- c(
 
 sel_countries <- c(
   "Austria",
-  "Germany", 
-  "Switzerland", 
-  "United Kingdom", 
+  "Germany",
+  "Switzerland",
+  "United Kingdom",
   "United States of America"
 )
 
-block_ui <- 
+block_ui <-
   'document.getElementById("blocking-overlay").style.display = "block";'
-unblock_ui <- 
+unblock_ui <-
   'document.getElementById("blocking-overlay").style.display = "none";'
 
 ctxRendererJS <- htmlwidgets::JS(
@@ -431,4 +527,5 @@ ctxRendererJS <- htmlwidgets::JS(
     drawExternalLabel: drawLabel,
     nodeDimensions: { width: 2 * radius, height: 2 * radius },
     };
-    }")
+    }"
+)
