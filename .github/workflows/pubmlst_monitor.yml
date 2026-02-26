@@ -52,7 +52,7 @@ jobs:
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: "⚠️ PubMLST Discrepancy Detected"
-          to: your-email@example.com
+          to: marian.freisleben@liora-bioinformatics.com
           from: GitHub Actions Monitor
           body: |
             The weekly PubMLST scan has detected changes.
