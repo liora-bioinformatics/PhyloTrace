@@ -18,29 +18,34 @@ jobs:
       - name: Run PubMLST Deep Scan
         id: scan
         run: |
-          # Save the report to a file
-          chmod +x ./assets/check_pubmlst.sh
-          ./assets/check_pubmlst.sh > scan_report.txt
+          chmod +x ./check_pubmlst.sh
+          ./check_pubmlst.sh > scan_report.txt
           
-          # Extract live count for the badge
-          LIVE_COUNT=$(grep "Found:" scan_report.txt | wc -l)
-          echo "LIVE_COUNT=$LIVE_COUNT" >> $GITHUB_ENV
+          # 1. Count the number of schemes in your KNOWN_FILE
+          # 'tail -n +2' skips the header, 'wc -l' counts the remaining lines
+          TRACKED_COUNT=$(tail -n +2 known_schemes.csv | wc -l)
+          echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
           
-          # Check for discrepancies (New, Removed, or Changed)
-          if grep -qE "\+ NEW|\- REMOVED|\* CHANGED" scan_report.txt; then
+          # 2. Check for discrepancies for the email trigger
+          if grep -qE "\+ NEW|\- REMOVED" scan_report.txt; then
             echo "DISCREPANCY=true" >> $GITHUB_ENV
+            
+            # Multi-line report for the email body
+            echo "REPORT_BODY<<EOF" >> $GITHUB_ENV
+            sed -n '/DISCREPANCY REPORT/,$p' scan_report.txt >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           else
             echo "DISCREPANCY=false" >> $GITHUB_ENV
           fi
 
-      - name: Update Live Count Badge
+      - name: Update Tracked Count Badge
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.GIST_TOKEN }}
           gistID: ${{ secrets.GIST_ID }}
           filename: pubmlst_schemes.json
           label: PubMLST Schemes
-          message: ${{ env.LIVE_COUNT }}
+          message: ${{ env.TRACKED_COUNT }}
           color: "002147"
 
       - name: Send Email Report
