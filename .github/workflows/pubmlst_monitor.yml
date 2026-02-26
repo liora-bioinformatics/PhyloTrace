@@ -1,4 +1,4 @@
-name: PubMLST cgMLST Monitor
+name: PubMLST Scan
 
 on:
   schedule:
@@ -20,8 +20,8 @@ jobs:
         run: |
           # Use your modified Bash script logic here
           # We save the report to a file
-          chmod +x ./check_pubmlst.sh
-          ./check_pubmlst.sh > scan_report.txt
+          chmod +x ./assets/check_pubmlst.sh
+          ./assets/check_pubmlst.sh > scan_report.txt
           
           # Extract live count for the badge
           LIVE_COUNT=$(grep "Found:" scan_report.txt | wc -l)
