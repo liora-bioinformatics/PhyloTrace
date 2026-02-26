@@ -1425,7 +1425,7 @@ fetch.species.data <- function(species) {
       if (!is.null(content$reports)) {
         species_data <- content$reports$taxonomy
 
-        message("Fetched taxonomy")
+        message("Fetched taxonomy for ", species)
 
         multiple[[gsub(" ", "_", parsed_species[i])]] <- list(
           Name = species_data$current_scientific_name,
@@ -1456,6 +1456,8 @@ fetch.species.data <- function(species) {
 # Function to retrieve cgmlst scheme information
 get.schemeinfo <- function(url_link) {
   endpoint <- paste0(url_link, "?return_all=1")
+
+  endpoint1 <<- endpoint
   scheme_info <- safe.api.call(endpoint)
 
   if (is.null(scheme_info)) {
@@ -1531,7 +1533,7 @@ parse.schemeinfo <- function(
       x1 = c(
         "Scheme",
         "Database",
-        "URL",
+        "Repository",
         "Version",
         "Locus Count",
         "Curators",

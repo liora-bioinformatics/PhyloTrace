@@ -1,0 +1,63 @@
+name: PubMLST cgMLST Monitor
+
+on:
+  schedule:
+    - cron: '0 0 * * 3'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: sudo apt-get install jq
+
+      - name: Run PubMLST Deep Scan
+        id: scan
+        run: |
+          # Use your modified Bash script logic here
+          # We save the report to a file
+          chmod +x ./check_pubmlst.sh
+          ./check_pubmlst.sh > scan_report.txt
+          
+          # Extract live count for the badge
+          LIVE_COUNT=$(grep "Found:" scan_report.txt | wc -l)
+          echo "LIVE_COUNT=$LIVE_COUNT" >> $GITHUB_ENV
+          
+          # Check for discrepancies (New, Removed, or Changed)
+          if grep -qE "\+ NEW|\- REMOVED|\* CHANGED" scan_report.txt; then
+            echo "DISCREPANCY=true" >> $GITHUB_ENV
+          else
+            echo "DISCREPANCY=false" >> $GITHUB_ENV
+          fi
+
+      - name: Update Live Count Badge
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: ${{ secrets.GIST_ID }}
+          filename: pubmlst_schemes.json
+          label: PubMLST Schemes
+          message: ${{ env.LIVE_COUNT }}
+          color: blue
+
+      - name: Send Email Report
+        if: env.DISCREPANCY == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "⚠️ PubMLST Discrepancy Detected"
+          to: your-email@example.com
+          from: GitHub Actions Monitor
+          body: |
+            The weekly PubMLST scan has detected changes.
+            Current Live Schemes: ${{ env.LIVE_COUNT }}
+            
+            Report Details:
+            $(cat scan_report.txt | sed -n '/DISCREPANCY REPORT/,$p')

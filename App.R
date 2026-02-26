@@ -9827,7 +9827,7 @@ server <- function(input, output, session) {
 
   ### Render species info & image ----
   observe({
-    req(Scheme$species_data)
+    req(Scheme$species_data, input$select_cgmlst)
 
     runjs(block_ui)
 
@@ -9843,103 +9843,101 @@ server <- function(input, output, session) {
 
     if (!is.null(species_data)) {
       # Download and render species image
-      if (length(Scheme$species_data) > 1 && length(Scheme$species_data) > 0) {
-        if (!is.null(input$selected_species)) {
-          # Download image
-          destination_file <- file.path(
-            Startup$database,
-            schemes$species[schemes$species == input$select_cgmlst],
-            paste0(input$selected_species, ".jpg")
-          )
-          if (!dir.exists(dirname(destination_file))) {
-            if (
-              file.exists(
-                file.path(tempdir(), paste0(input$selected_species, ".jpg"))
+      if (!is.null(input$selected_species) && length(Scheme$species_data) > 0) {
+        # Download image
+        destination_file <- file.path(
+          Startup$database,
+          schemes$species[schemes$species == input$select_cgmlst],
+          paste0(input$selected_species, ".jpg")
+        )
+        if (!dir.exists(dirname(destination_file))) {
+          if (
+            file.exists(
+              file.path(tempdir(), paste0(input$selected_species, ".jpg"))
+            )
+          ) {
+            destination_file <- file.path(
+              tempdir(),
+              paste0(input$selected_species, ".jpg")
+            )
+            output$species_no_img <- NULL
+            output$species_img <- renderImage(
+              {
+                list(src = destination_file, height = 180)
+              },
+              deleteFile = FALSE
+            )
+          } else {
+            if (!is.null(Scheme$species_data[[input$selected_species]])) {
+              response <- httr::GET(
+                Scheme$species_data[[input$selected_species]]$Image
               )
-            ) {
               destination_file <- file.path(
                 tempdir(),
                 paste0(input$selected_species, ".jpg")
               )
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
+              if (response$status_code == 200) {
+                writeBin(httr::content(response, "raw"), destination_file)
+                response <- NULL
+                output$species_no_img <- NULL
+                output$species_img <- renderImage(
+                  {
+                    list(src = destination_file, height = 180)
+                  },
+                  deleteFile = FALSE
+                )
+                print("Image downloaded successfully!")
+              } else {
+                output$species_img <- NULL
+                output$species_no_img <- renderUI(
+                  HTML(
+                    '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
+                  )
+                )
+                print("Failed to download image.")
+              }
+            }
+          }
+        } else {
+          if (!file.exists(destination_file)) {
+            if (!is.null(Scheme$species_data[[input$selected_species]])) {
+              response <- httr::GET(
+                Scheme$species_data[[input$selected_species]]$Image
               )
-            } else {
-              if (!is.null(Scheme$species_data[[input$selected_species]])) {
-                response <- httr::GET(
-                  Scheme$species_data[[input$selected_species]]$Image
+              destination_file <- file.path(
+                tempdir(),
+                paste0(input$selected_species, ".jpg")
+              )
+
+              if (response$status_code == 200) {
+                writeBin(httr::content(response, "raw"), destination_file)
+                response <- NULL
+                print("Image downloaded successfully!")
+                output$species_no_img <- NULL
+                output$species_img <- renderImage(
+                  {
+                    list(src = destination_file, height = 180)
+                  },
+                  deleteFile = FALSE
                 )
-                destination_file <- file.path(
-                  tempdir(),
-                  paste0(input$selected_species, ".jpg")
+              } else {
+                output$species_no_img <- renderUI(
+                  HTML(
+                    '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
+                  )
                 )
-                if (response$status_code == 200) {
-                  writeBin(httr::content(response, "raw"), destination_file)
-                  response <- NULL
-                  output$species_no_img <- NULL
-                  output$species_img <- renderImage(
-                    {
-                      list(src = destination_file, height = 180)
-                    },
-                    deleteFile = FALSE
-                  )
-                  print("Image downloaded successfully!")
-                } else {
-                  output$species_img <- NULL
-                  output$species_no_img <- renderUI(
-                    HTML(
-                      '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                    )
-                  )
-                  print("Failed to download image.")
-                }
+                output$species_img <- NULL
+                print("Failed to download image.")
               }
             }
           } else {
-            if (!file.exists(destination_file)) {
-              if (!is.null(Scheme$species_data[[input$selected_species]])) {
-                response <- httr::GET(
-                  Scheme$species_data[[input$selected_species]]$Image
-                )
-                destination_file <- file.path(
-                  tempdir(),
-                  paste0(input$selected_species, ".jpg")
-                )
-
-                if (response$status_code == 200) {
-                  writeBin(httr::content(response, "raw"), destination_file)
-                  response <- NULL
-                  print("Image downloaded successfully!")
-                  output$species_no_img <- NULL
-                  output$species_img <- renderImage(
-                    {
-                      list(src = destination_file, height = 180)
-                    },
-                    deleteFile = FALSE
-                  )
-                } else {
-                  output$species_no_img <- renderUI(
-                    HTML(
-                      '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                    )
-                  )
-                  output$species_img <- NULL
-                  print("Failed to download image.")
-                }
-              }
-            } else {
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-            }
+            output$species_no_img <- NULL
+            output$species_img <- renderImage(
+              {
+                list(src = destination_file, height = 180)
+              },
+              deleteFile = FALSE
+            )
           }
         }
       } else if (length(Scheme$species_data) > 0) {
@@ -9953,7 +9951,39 @@ server <- function(input, output, session) {
           )
         )
 
-        if (!dir.exists(dirname(destination_file))) {
+        if (dir.exists(dirname(destination_file))) {
+          if (!file.exists(destination_file)) {
+            response <- httr::GET(Scheme$species_data[[1]]$Image)
+
+            if (response$status_code == 200) {
+              writeBin(httr::content(response, "raw"), destination_file)
+              print("Image downloaded successfully!")
+              output$species_no_img <- NULL
+              output$species_img <- renderImage(
+                {
+                  list(src = destination_file, height = 180)
+                },
+                deleteFile = FALSE
+              )
+            } else {
+              output$species_img <- NULL
+              output$species_no_img <- renderUI(
+                HTML(
+                  '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
+                )
+              )
+              print("Failed to download image.")
+            }
+          } else {
+            output$species_no_img <- NULL
+            output$species_img <- renderImage(
+              {
+                list(src = destination_file, height = 180)
+              },
+              deleteFile = FALSE
+            )
+          }
+        } else {
           if (
             file.exists(
               file.path(
@@ -10007,38 +10037,6 @@ server <- function(input, output, session) {
               )
               print("Failed to download image.")
             }
-          }
-        } else {
-          if (!file.exists(destination_file)) {
-            response <- httr::GET(Scheme$species_data[[1]]$Image)
-
-            if (response$status_code == 200) {
-              writeBin(httr::content(response, "raw"), destination_file)
-              print("Image downloaded successfully!")
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-            } else {
-              output$species_img <- NULL
-              output$species_no_img <- renderUI(
-                HTML(
-                  '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                )
-              )
-              print("Failed to download image.")
-            }
-          } else {
-            output$species_no_img <- NULL
-            output$species_img <- renderImage(
-              {
-                list(src = destination_file, height = 180)
-              },
-              deleteFile = FALSE
-            )
           }
         }
       }
