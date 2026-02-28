@@ -56,6 +56,7 @@ library(ggtreeExtra)
 source("./assets/constants.R")
 source("./assets/functions.R")
 source("./assets/ui_modules.R")
+source("./assets/shinyDirChoose.R")
 
 # User Interface ----
 
@@ -4559,6 +4560,20 @@ server <- function(input, output, session) {
                       custom_var_button <- disabled(custom_var_button)
                     }
 
+                    del_which_var_input <- selectInput(
+                      inputId = "del_which_var",
+                      label = "",
+                      choices = DB$cust_var$Variable
+                    )
+
+                    if (
+                      is.null(DB$cust_var$Variable) || nrow(DB$cust_var) == 0
+                    ) {
+                      del_which_var_input <- shinyjs::disabled(
+                        del_which_var_input
+                      )
+                    }
+
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4591,11 +4606,7 @@ server <- function(input, output, session) {
                             column(
                               width = 9,
                               align = "center",
-                              selectInput(
-                                "del_which_var",
-                                "",
-                                DB$cust_var$Variable
-                              )
+                              del_which_var_input
                             ),
                             column(
                               width = 2,
@@ -4614,7 +4625,10 @@ server <- function(input, output, session) {
                         )
                       )
                     )
-                  })
+                  }) |>
+                    shiny::bindEvent(
+                      DB$cust_var
+                    )
 
                   # Render delete entry box UI
                   output$delete_box <- renderUI({
@@ -9199,8 +9213,6 @@ server <- function(input, output, session) {
     }
 
     # Check if remains of old temporary folder exists and remove them
-    Startup_database <<- Startup$database
-    Scheme_folder_name <<- Scheme$folder_name
     if (
       dir.exists(file.path(
         Startup$database,
@@ -9231,10 +9243,6 @@ server <- function(input, output, session) {
     tryCatch(
       {
         if (grepl("_PM", input$select_cgmlst)) {
-          url_link <<- schemes$url[schemes$species == input$select_cgmlst]
-          database <<- Startup$database
-          folder_name <<- Scheme$folder_name
-
           download.alleles.PM(
             url_link = schemes$url[schemes$species == input$select_cgmlst],
             database = Startup$database,

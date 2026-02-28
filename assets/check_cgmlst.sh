@@ -40,7 +40,7 @@ if cmp -s "$KNOWN_FILE" "$TEMP_FILE"; then
   exit 0
 fi
 
-echo "⚠️  CHANGES DETECTED!"
+echo "⚠️ Changes detected."
 
 comm -23 "$TEMP_FILE" "$KNOWN_FILE" > "$NEW_FILE"
 comm -13 "$TEMP_FILE" "$KNOWN_FILE" > "$REMOVED_FILE"
@@ -56,7 +56,7 @@ if [[ -s "$REMOVED_FILE" ]]; then
 fi
 
 echo ""
-echo "You can manually update the baseline with:"
+echo "Update tracked schemes with"
 echo "mv '$TEMP_FILE' '$KNOWN_FILE'"
 
 rm -f "$TEMP_FILE" "$NEW_FILE" "$REMOVED_FILE"
