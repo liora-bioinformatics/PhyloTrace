@@ -1,3 +1,134 @@
+### make_typing_select_handsontable() ----
+make_typing_select_handsontable <- function(
+  table,
+  dupl_mult_id
+) {
+  # Validate table
+  if (is.null(table) || nrow(table) < 1) {
+    return(NULL)
+  }
+
+  rhandsontable(
+    table,
+    rowHeaders = NULL,
+    stretchH = "all",
+    contextMenu = FALSE,
+    height = if (nrow(table) > 15) 500 else NULL
+  ) %>%
+    hot_cols(columnSorting = FALSE) %>%
+    hot_rows(rowHeights = 25) %>%
+    hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
+    hot_cols(2:3, readOnly = TRUE) %>%
+    hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
+    hot_col(
+      7,
+      dateFormat = "YYYY-MM-DD",
+      type = "date",
+      strict = TRUE,
+      allowInvalid = TRUE,
+      validator = "
+                                function (value, callback) {
+                                  var today_date = new Date();
+                                  today_date.setHours(0, 0, 0, 0);
+                                  
+                                  var new_date = new Date(value);
+                                  new_date.setHours(0, 0, 0, 0);
+                                  
+                                  try {
+                                    if (new_date <= today_date) {
+                                      callback(true);
+                                      Shiny.setInputValue('invalid_date', false);
+                                    } else {
+                                      callback(false); 
+                                      Shiny.setInputValue('invalid_date', true);
+                                    }
+                                  } catch (err) {
+                                    console.log(err);
+                                    callback(false); 
+                                    Shiny.setInputValue('invalid_date', true);
+                                  }
+                                }"
+    ) |>
+    htmlwidgets::onRender(
+      sprintf(
+        "function(el, x) {
+        var hot = this.hot;
+        
+        var columnData = hot.getDataAtCol(1); // Change column index if needed
+        var duplicates = {};
+          
+        var highlightInvalidAndDuplicates = function(invalidValues) {
+          
+          var columnData = hot.getDataAtCol(1); // Change column index if needed
+          var duplicates = {};
+
+          // Find all duplicate values
+          for (var i = 0; i < columnData.length; i++) {
+            var value = columnData[i];
+            if (value !== null && value !== undefined) {
+              if (duplicates[value]) {
+                duplicates[value].push(i);
+              } else {
+                duplicates[value] = [i];
+              }
+            }
+          }
+
+          // Reset all cell backgrounds in the column
+          for (var i = 0; i < columnData.length; i++) {
+            var cell = hot.getCell(i, 1); // Change column index if needed
+            if (cell) {
+              cell.style.background = 'white';
+            }
+          }
+
+          // Highlight duplicates and invalid values
+          for (var i = 0; i < columnData.length; i++) {
+            var cell = hot.getCell(i, 1); // Change column index if needed
+            var value = columnData[i];
+            if (cell) {
+              if (invalidValues.includes(value)) {
+                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
+              } else if (duplicates[value] && duplicates[value].length > 1) {
+                cell.style.background = '#FF7334'; // Highlight color for duplicates
+              }
+            }
+          }
+        };
+
+        var changefn = function(changes, source) {
+          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
+            highlightInvalidAndDuplicates(%s);
+          }
+        };
+
+        hot.addHook('afterChange', changefn);
+        hot.addHook('afterLoadData', function() {
+          highlightInvalidAndDuplicates(%s);
+        });
+        hot.addHook('afterRender', function() {
+          highlightInvalidAndDuplicates(%s);
+        });
+
+        highlightInvalidAndDuplicates(%s); // Initial highlight on load
+        
+        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
+          var colData = hot.getDataAtCol(0);
+          for (var i = 0; i < colData.length; i++) {
+            hot.setDataAtCell(i, 0, message.value);
+          }
+          hot.render(); // Re-render the table
+        });
+      }",
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id)
+      )
+    )
+}
+
+### generate_rhandsontable() ----
 generate_rhandsontable <- function(
   data,
   cust_var,

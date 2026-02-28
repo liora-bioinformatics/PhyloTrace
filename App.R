@@ -9199,6 +9199,8 @@ server <- function(input, output, session) {
     }
 
     # Check if remains of old temporary folder exists and remove them
+    Startup_database <<- Startup$database
+    Scheme_folder_name <<- Scheme$folder_name
     if (
       dir.exists(file.path(
         Startup$database,
@@ -9229,6 +9231,10 @@ server <- function(input, output, session) {
     tryCatch(
       {
         if (grepl("_PM", input$select_cgmlst)) {
+          url_link <<- schemes$url[schemes$species == input$select_cgmlst]
+          database <<- Startup$database
+          folder_name <<- Scheme$folder_name
+
           download.alleles.PM(
             url_link = schemes$url[schemes$species == input$select_cgmlst],
             database = Startup$database,
@@ -27784,9 +27790,13 @@ server <- function(input, output, session) {
     }
   })
 
+  trigger_multi_select_table <- shiny::reactiveVal(1)
+
   # Check if ongoing Multi Typing - Render accordingly
   observe({
     req(Typing$file_selection)
+
+    file_selection <- Typing$file_selection
 
     # Folder selection
     shinyDirChoose(
@@ -27798,7 +27808,7 @@ server <- function(input, output, session) {
       filetypes = c('', 'fasta', 'fna', 'fa')
     )
 
-    Typing$assembly_folder_path <- parseDirPath(
+    Typing$assembly_folder_path <- assembly_folder_path <- parseDirPath(
       roots = c(Home = path_home(), Root = "/"),
       input$assembly_folder
     )
@@ -27813,28 +27823,28 @@ server <- function(input, output, session) {
       filetypes = c('', 'fasta', 'fna', 'fa')
     )
 
-    Typing$assembly_files_path <- parseFilePaths(
+    Typing$assembly_files_path <- assembly_files_path <- parseFilePaths(
       roots = c(Home = path_home(), Root = "/"),
       input$assembly_files
     )
 
     # Format selection
-    if (Typing$file_selection != "") {
+    if (file_selection != "") {
       if (
-        (!is.null(Typing$assembly_files_path) ||
-          !is.null(Typing$assembly_folder_path)) &&
-          !is.null(Typing$file_selection)
+        (!is.null(assembly_files_path) ||
+          !is.null(assembly_folder_path)) &&
+          !is.null(file_selection)
       ) {
-        if (Typing$file_selection == "files") {
-          Typing$files_filtered <- Typing$assembly_files_path$name[which(
-            !endsWith(Typing$assembly_files_path$name, ".gz") &
-              grepl("\\.fasta|\\.fna|\\.fa", Typing$assembly_files_path$name)
+        if (file_selection == "files") {
+          Typing$files_filtered <- files_filtered <- assembly_files_path$name[which(
+            !endsWith(assembly_files_path$name, ".gz") &
+              grepl("\\.fasta|\\.fna|\\.fa", assembly_files_path$name)
           )]
-        } else if (Typing$file_selection == "folder") {
+        } else if (file_selection == "folder") {
           files_selected <- list.files(as.character(
-            Typing$assembly_folder_path
+            assembly_folder_path
           ))
-          Typing$files_filtered <- files_selected[which(
+          Typing$files_filtered <- files_filtered <- files_selected[which(
             !endsWith(files_selected, ".gz") &
               grepl("\\.fasta|\\.fna|\\.fa", files_selected)
           )]
@@ -27843,314 +27853,93 @@ server <- function(input, output, session) {
     }
 
     multi_sel_table <- data.frame(
-      Include = rep(TRUE, length(Typing$files_filtered)),
+      Include = rep(TRUE, length(files_filtered)),
       Files = gsub(
         ".fasta|.fna|.fa|.fasta.gz|.fna.gz|.fa.gz",
         "",
-        Typing$files_filtered
+        files_filtered
       ),
       Type = sub(
         ".*(\\.fasta|\\.fasta\\.gz|\\.fna|\\.fna\\.gz|\\.fa|\\.fa\\.gz)$",
         "\\1",
-        Typing$files_filtered,
-        perl = F
+        files_filtered,
+        perl = FALSE
       ),
-      Host = rep("", length(Typing$files_filtered)),
-      Country = rep("", length(Typing$files_filtered)),
-      City = rep("", length(Typing$files_filtered)),
-      Isolation.Date = rep(format(Sys.Date()), length(Typing$files_filtered))
+      Host = rep("", length(files_filtered)),
+      Country = rep("", length(files_filtered)),
+      City = rep("", length(files_filtered)),
+      Isolation.Date = rep(format(Sys.Date()), length(files_filtered))
     )
-
     colnames(multi_sel_table)[7] <- "Isolation Date"
 
     Typing$multi_sel_table <- multi_sel_table
 
-    if (nrow(Typing$multi_sel_table) > 0) {
-      output$multi_select_tab_ctrls <- renderUI(
-        fluidRow(
-          h3(
-            p("Metadata Declaration"),
-            style = "color:white; margin-left: 15px"
-          ),
-          br(),
-          column(
-            width = 2,
-            align = "left",
-            actionButton(
-              "sel_all_mt",
-              "All",
-              icon = icon("check")
-            )
-          ),
-          column(
-            width = 2,
-            align = "left",
-            actionButton(
-              "desel_all_mt",
-              "None",
-              icon = icon("xmark")
-            )
-          ),
-          column(
-            width = 10,
-            align = "center",
-            br(),
-            uiOutput("multi_select_issues")
+    # output$multi_select_table <- renderRHandsontable({
+    #   message(TRUE, Sys.time())
+
+    #   make_typing_select_handsontable(
+    #     Typing$multi_sel_table,
+    #     dupl_mult_id = dupl_mult_id()
+    #   )
+    # })
+
+    isolate({
+      message(Sys.time())
+      trigger_multi_select_table(trigger_multi_select_table() + 1)
+    })
+
+    output$multi_select_table <- renderRHandsontable({
+      message(TRUE, Sys.time())
+      make_typing_select_handsontable(
+        Typing$multi_sel_table,
+        dupl_mult_id = dupl_mult_id()
+      )
+    }) |>
+      shiny::bindEvent(
+        trigger_multi_select_table(),
+        Typing$multi_sel_table,
+        dupl_mult_id(),
+        ignoreNULL = FALSE
+      )
+
+    output$multi_select_tab_ctrls <- renderUI({
+      req(nrow(Typing$multi_sel_table) > 0)
+
+      fluidRow(
+        h3(
+          p("Metadata Declaration"),
+          style = "color:white; margin-left: 15px"
+        ),
+        br(),
+        column(
+          width = 2,
+          align = "left",
+          actionButton(
+            "sel_all_mt",
+            "All",
+            icon = icon("check")
           )
+        ),
+        column(
+          width = 2,
+          align = "left",
+          actionButton(
+            "desel_all_mt",
+            "None",
+            icon = icon("xmark")
+          )
+        ),
+        column(
+          width = 10,
+          align = "center",
+          br(),
+          uiOutput("multi_select_issues")
         )
       )
-    } else {
-      output$multi_select_tab_ctrls <- NULL
-    }
-
-    if (between(nrow(Typing$multi_sel_table), 1, 15)) {
-      output$multi_select_table <- renderRHandsontable({
-        rht <- rhandsontable(
-          Typing$multi_sel_table,
-          rowHeaders = NULL,
-          stretchH = "all",
-          contextMenu = FALSE
-        ) %>%
-          hot_cols(columnSorting = FALSE) %>%
-          hot_rows(rowHeights = 25) %>%
-          hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
-          hot_col(3, readOnly = TRUE) %>%
-          hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
-          hot_col(
-            7,
-            dateFormat = "YYYY-MM-DD",
-            type = "date",
-            strict = TRUE,
-            allowInvalid = TRUE,
-            validator = "
-                                function (value, callback) {
-                                  var today_date = new Date();
-                                  today_date.setHours(0, 0, 0, 0);
-                                  
-                                  var new_date = new Date(value);
-                                  new_date.setHours(0, 0, 0, 0);
-                                  
-                                  try {
-                                    if (new_date <= today_date) {
-                                      callback(true);
-                                      Shiny.setInputValue('invalid_date', false);
-                                    } else {
-                                      callback(false); 
-                                      Shiny.setInputValue('invalid_date', true);
-                                    }
-                                  } catch (err) {
-                                    console.log(err);
-                                    callback(false); 
-                                    Shiny.setInputValue('invalid_date', true);
-                                  }
-                                }"
-          )
-
-        htmlwidgets::onRender(
-          rht,
-          sprintf(
-            "function(el, x) {
-        var hot = this.hot;
-        
-        var columnData = hot.getDataAtCol(1); // Change column index if needed
-        var duplicates = {};
-          
-        var highlightInvalidAndDuplicates = function(invalidValues) {
-          
-          var columnData = hot.getDataAtCol(1); // Change column index if needed
-          var duplicates = {};
-
-          // Find all duplicate values
-          for (var i = 0; i < columnData.length; i++) {
-            var value = columnData[i];
-            if (value !== null && value !== undefined) {
-              if (duplicates[value]) {
-                duplicates[value].push(i);
-              } else {
-                duplicates[value] = [i];
-              }
-            }
-          }
-
-          // Reset all cell backgrounds in the column
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            if (cell) {
-              cell.style.background = 'white';
-            }
-          }
-
-          // Highlight duplicates and invalid values
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            var value = columnData[i];
-            if (cell) {
-              if (invalidValues.includes(value)) {
-                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
-              } else if (duplicates[value] && duplicates[value].length > 1) {
-                cell.style.background = '#FF7334'; // Highlight color for duplicates
-              }
-            }
-          }
-        };
-
-        var changefn = function(changes, source) {
-          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
-            highlightInvalidAndDuplicates(%s);
-          }
-        };
-
-        hot.addHook('afterChange', changefn);
-        hot.addHook('afterLoadData', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-        hot.addHook('afterRender', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-
-        highlightInvalidAndDuplicates(%s); // Initial highlight on load
-        
-        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
-          var colData = hot.getDataAtCol(0);
-          for (var i = 0; i < colData.length; i++) {
-            hot.setDataAtCell(i, 0, message.value);
-          }
-          hot.render(); // Re-render the table
-        });
-      }",
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id())
-          )
-        )
-      })
-    } else if (nrow(Typing$multi_sel_table) > 15) {
-      output$multi_select_table <- renderRHandsontable({
-        rht <- rhandsontable(
-          Typing$multi_sel_table,
-          rowHeaders = NULL,
-          stretchH = "all",
-          height = 500,
-          contextMenu = FALSE
-        ) %>%
-          hot_cols(columnSorting = FALSE) %>%
-          hot_rows(rowHeights = 25) %>%
-          hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
-          hot_col(3, readOnly = TRUE) %>%
-          hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
-          hot_col(
-            7,
-            dateFormat = "YYYY-MM-DD",
-            type = "date",
-            strict = TRUE,
-            allowInvalid = TRUE,
-            validator = "
-                                function (value, callback) {
-                                  var today_date = new Date();
-                                  today_date.setHours(0, 0, 0, 0);
-                                  
-                                  var new_date = new Date(value);
-                                  new_date.setHours(0, 0, 0, 0);
-                                  
-                                  try {
-                                    if (new_date <= today_date) {
-                                      callback(true);
-                                      Shiny.setInputValue('invalid_date', false);
-                                    } else {
-                                      callback(false); 
-                                      Shiny.setInputValue('invalid_date', true);
-                                    }
-                                  } catch (err) {
-                                    console.log(err);
-                                    callback(false); 
-                                    Shiny.setInputValue('invalid_date', true);
-                                  }
-                                }"
-          )
-
-        htmlwidgets::onRender(
-          rht,
-          sprintf(
-            "function(el, x) {
-        var hot = this.hot;
-        
-        var columnData = hot.getDataAtCol(1); // Change column index if needed
-        var duplicates = {};
-          
-        var highlightInvalidAndDuplicates = function(invalidValues) {
-          
-          var columnData = hot.getDataAtCol(1); // Change column index if needed
-          var duplicates = {};
-
-          // Find all duplicate values
-          for (var i = 0; i < columnData.length; i++) {
-            var value = columnData[i];
-            if (value !== null && value !== undefined) {
-              if (duplicates[value]) {
-                duplicates[value].push(i);
-              } else {
-                duplicates[value] = [i];
-              }
-            }
-          }
-
-          // Reset all cell backgrounds in the column
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            if (cell) {
-              cell.style.background = 'white';
-            }
-          }
-
-          // Highlight duplicates and invalid values
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            var value = columnData[i];
-            if (cell) {
-              if (invalidValues.includes(value)) {
-                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
-              } else if (duplicates[value] && duplicates[value].length > 1) {
-                cell.style.background = '#FF7334'; // Highlight color for duplicates
-              }
-            }
-          }
-        };
-
-        var changefn = function(changes, source) {
-          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
-            highlightInvalidAndDuplicates(%s);
-          }
-        };
-
-        hot.addHook('afterChange', changefn);
-        hot.addHook('afterLoadData', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-        hot.addHook('afterRender', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-
-        highlightInvalidAndDuplicates(%s); // Initial highlight on load
-        
-        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
-          var colData = hot.getDataAtCol(0);
-          for (var i = 0; i < colData.length; i++) {
-            hot.setDataAtCell(i, 0, message.value);
-          }
-          hot.render(); // Re-render the table
-        });
-      }",
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id())
-          )
-        )
-      })
-    } else {
-      output$multi_select_table <- NULL
-    }
+    }) |>
+      shiny::bindEvent(
+        Typing$multi_sel_table
+      )
   })
 
   ### Typing Events ----
@@ -28324,17 +28113,21 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$sel_all_mt, {
-    session$sendCustomMessage(
-      type = "setColumnValue",
-      message = list(value = TRUE)
-    )
+    Typing$multi_sel_table$Include <- TRUE
+
+    # session$sendCustomMessage(
+    #   type = "setColumnValue",
+    #   message = list(value = TRUE)
+    # )
   })
 
   observeEvent(input$desel_all_mt, {
-    session$sendCustomMessage(
-      type = "setColumnValue",
-      message = list(value = FALSE)
-    )
+    Typing$multi_sel_table$Include <- FALSE
+
+    # session$sendCustomMessage(
+    #   type = "setColumnValue",
+    #   message = list(value = FALSE)
+    # )
   })
 
   # Print Log
@@ -28771,6 +28564,7 @@ server <- function(input, output, session) {
                     selected = names(Typing$result_list)[length(
                       names(Typing$result_list)
                     )],
+                    width = "100%"
                   )
                 ),
                 br()

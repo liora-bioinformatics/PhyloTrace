@@ -1642,13 +1642,13 @@ i.fa-solid.fa-gears.fa-spin-pulse {
   margin-left: -70px;
 }
 
-#db_distancematrix>div>div>div>div>table>tbody>tr>td,
+/* #db_distancematrix>div>div>div>div>table>tbody>tr>td,
 #table_missing_values>div>div>div>div>table>tbody>tr>td,
 #multi_select_table>div>div>div>div>table>tbody>tr>td,
 #multi_typing_result_table>div>div>div>div>table>tbody>tr>td,
 #typing_result_table>div>div>div>div>table>tbody>tr>td {
   color: black !important;
-}
+} */
 
 #db_entries>div>div>div>div>table>tbody>tr>td {
   color: black;
