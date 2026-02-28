@@ -25,20 +25,16 @@ jobs:
       - name: Run PubMLST Deep Scan
         id: pubmlst_scan
         run: |
-          ./assets/check_pubmlst.sh > pubmlst_scan_report.txt 2>&1
+          ./assets/check_pubmlst.sh > scan_report.txt
 
           TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l)
-          echo "PUBMLST_TRACKED=$TRACKED_COUNT" >> $GITHUB_ENV
-
-          if grep -qE "\+ NEW|\- REMOVED" pubmlst_scan_report.txt; then
-            echo "PUBMLST_DISCREPANCY=true" >> $GITHUB_ENV
-            echo "PUBMLST_REPORT<<EOF" >> $GITHUB_ENV
-            sed -n '/DISCREPANCY REPORT/,$p' pubmlst_scan_report.txt >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-          else
-            echo "PUBMLST_DISCREPANCY=false" >> $GITHUB_ENV
-            echo "PUBMLST_REPORT=No changes detected in PubMLST schemes." >> $GITHUB_ENV
-          fi
+          echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
+          
+          if grep -qE "\+ NEW|\- REMOVED" scan_report.txt; then
+            echo "DISCREPANCY=true" >> $GITHUB_ENV
+            
+            echo "REPORT_BODY<<EOF" >> $GITHUB_ENV
+            sed -n '/DISCREPANCY REPORT/,$p' scan_report.txt >> $GITHUB_ENV
 
       # ── cgMLST Check ─────────────────────────────────────────────────────────
       - name: Run cgMLST Monitor
@@ -59,7 +55,7 @@ jobs:
             echo "CGMLST_REPORT=No changes detected in cgMLST schemes." >> $GITHUB_ENV
           fi
 
-      # ── Update PubMLST Badge (unchanged) ─────────────────────────────────────
+      # ── Update PubMLST Badge ─────────────────────────────────────
       - name: Update Tracked Count Badge (PubMLST)
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
@@ -67,11 +63,11 @@ jobs:
           gistID: ${{ secrets.GIST_ID }}
           filename: pubmlst_schemes.json
           label: PubMLST Schemes
-          message: ${{ env.PUBMLST_TRACKED }}
+          message: ${{ env.TRACKED_COUNT  }}
           color: "ffffff"
           labelColor: "002147"
 
-         # ── Compute cgMLST count for badge ───────────────────────────────────────
+         # ── Compute cgMLST count for badge ─────────────────────────
       - name: Compute cgMLST scheme count
         id: cgmlst_count
         run: |
@@ -112,10 +108,8 @@ jobs:
             ┌──────────────────────────────┐
             │ PubMLST Results              │
             └──────────────────────────────┘
-            Tracked schemes: ${{ env.PUBMLST_TRACKED }}
-            Status: ${{ env.PUBMLST_DISCREPANCY == 'true' && '⚠️ Discrepancy' || '✅ No changes' }}
-
-            ${{ env.PUBMLST_REPORT || 'No detailed report available.' }}
+            Tracked schemes: ${{ env.TRACKED_COUNT  }}
+            ${{ env.REPORT_BODY }}
 
             ┌──────────────────────────────┐
             │ cgMLST Results               │
@@ -132,6 +126,6 @@ jobs:
       - name: Cleanup temporary files
         if: always()
         run: |
-          rm -f pubmlst_scan_report.txt cgmlst_scan_report.txt
+          rm -f cgmlst_scan_report.txt
           rm -f .cgmlst_new.txt .new_schemes.txt .removed_schemes.txt 2>/dev/null || true
           echo "Temporary files removed"
