@@ -9135,8 +9135,10 @@ server <- function(input, output, session) {
 
   ### Manage Schemes UI Elements ----
 
+  ### Update scheme links based on selection ----
   observe({
     req(input$select_cgmlst)
+
     if (grepl("_PM", input$select_cgmlst)) {
       Scheme$link_scheme <- schemes$url[schemes$species == input$select_cgmlst]
       Scheme$link_cgmlst <- schemes$url[schemes$species == input$select_cgmlst]
@@ -9161,6 +9163,7 @@ server <- function(input, output, session) {
     }
   })
 
+  ### Download Scheme ----
   observeEvent(input$download_cgMLST, {
     runjs(block_ui)
     log_print(paste0("Started download of scheme for ", Scheme$folder_name))
@@ -9606,7 +9609,7 @@ server <- function(input, output, session) {
     runjs(unblock_ui)
   })
 
-  # Download Target Info (CSV Table)
+  ### Fetch Scheme Info (CSV Table) ----
   observe({
     req(input$select_cgmlst, Scheme$link_scheme)
 
@@ -9796,7 +9799,7 @@ server <- function(input, output, session) {
       output$scheme_update_info <- NULL
     }
 
-    ### Render species info
+    ### Fetch species info ----
     selected_species <- gsub(
       "_",
       " ",

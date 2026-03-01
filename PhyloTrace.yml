@@ -184,5 +184,7 @@ dependencies:
   - r-yulab.utils=0.1.0
   - r-zoo=1.8_12
   - pip
+  - gcc_linux-64
+  - gxx_linux-64
   - pip:
       - pubmlstdownload
