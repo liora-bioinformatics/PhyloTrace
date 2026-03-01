@@ -5,9 +5,9 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-659DA3.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Version](https://img.shields.io/badge/Version-1.6.1-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases/tag/v1.6.1)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)
-![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white)  
-[![cgMLST.org Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/b5505eda2fc83036aa7966c8f8ecb564/raw/cgmlst_schemes.json)](https://cgmlst.org/)
-[![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)](https://pubmlst.org/)
+![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white)
+
+<br>
 
 PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. Its components evolve around Core-Genome Multilocus Sequence Typing (cgMLST) and Antimicrobial Resistance Screening. Complex analyses and computation are wrapped into an appealing and easy-to-handle graphical user interface. Users build a local database comprising analyzed isolates, manageable directly with the application. The visualization of isolate relationship and genetic profile is highly interactive aiding to reveal patterns explaining outbreak dynamics and events by connecting genomic information with epidemiologic variables. PhyloTrace achieves universal compatibility by assigning unique 256-bit hashes based on sequence and allele information. The ability to easily share analysis results enables efficient inter-lab comparison and collaboration.
 <br><br>
@@ -23,8 +23,9 @@ PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. I
 
 We want to make cgMLST analysis and genomic pathogen monitoring accessible to a broad spectrum of
 individuals and organizations. Therefore our goal is to build an interface with convenient user
-experience and easy handling that doesn't require you to be a bioinformatician. The app is in active
-development. To get a stable version download the newest release. 
+experience and easy handling that doesn't require you to be a bioinformatician. 
+
+The app is in active development. To get a stable version download the newest release. 
 
 *_PhyloTrace is supposed to be used for research and academic purposes only._*
 
@@ -79,6 +80,11 @@ The **user manual** containing detailed instruction and information is available
 
 Download a standardized scheme that defines the genetic targets, nomenclature and allele sequences
 for the bacterial species of interest from the [cgMLST.org](https://www.cgmlst.org/ncs) and [PubMLST](https://pubmlst.org/) public databases. The connection to the server including information on the scheme is integrated in the app. Once one of the 69 available species has been selected and downloaded, everything is ready to go. The scheme can be inspected in detail using the locus info interface.
+
+Number of currently supported bacterial typing schemes: 
+<br><br>
+[![cgMLST.org Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/b5505eda2fc83036aa7966c8f8ecb564/raw/cgmlst_schemes.json)](https://cgmlst.org/) &nbsp;&nbsp;
+[![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)](https://pubmlst.org/)
 
 <div style="display: flex; justify-content: space-between;">
 <img src="docs/resources/manage_schemes.png" width="47.5%"/>
