@@ -1,62 +1,35 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-KNOWN_FILE="$SCRIPT_DIR/cgmlst_schemes.txt"
-TEMP_FILE="$SCRIPT_DIR/.cgmlst_new.txt"
-NEW_FILE="$SCRIPT_DIR/.new_schemes.txt"
-REMOVED_FILE="$SCRIPT_DIR/.removed_schemes.txt"
+#!/bin/bash
+set -e
 
 echo "Fetching current cgMLST schemes from https://www.cgmlst.org/ncs/ ..."
 
-curl -s -L -A "Mozilla/5.0 (compatible; cgMLST-Monitor; +https://github.com/liora-bioinformatics)" \
+sudo  curl -s -L -A "Mozilla/5.0 (compatible; cgMLST-Monitor; +https://github.com/liora-bioinformatics)" \
   https://www.cgmlst.org/ncs/ |
   grep -o "<a href='https://www.cgmlst.org/ncs/schema/[^']*'" |
   sed "s/<a href='//; s/'$//" |
-  sort -u > "$TEMP_FILE"
+  sort -u > ./assets/fetch_cgmlst.txt
 
-if [[ ! -s "$TEMP_FILE" ]]; then
+if [[ ! -s "./assets/fetch_cgmlst.txt" ]]; then
   echo "Error: No schemes fetched. Check curl / network / grep."
-  exit 1
 fi
 
-NEW_COUNT=$(wc -l < "$TEMP_FILE")
-KNOWN_COUNT=$(wc -l < "$KNOWN_FILE" 2>/dev/null || echo 0)
+echo "Comparing with local schemes"
 
-echo "Found $NEW_COUNT current schemes (previously known: $KNOWN_COUNT)"
-
-if [[ ! -s "$KNOWN_FILE" ]]; then
-  echo "First run — saving current list as baseline."
-  mv "$TEMP_FILE" "$KNOWN_FILE"
-  exit 0
-fi
+# Extract fetched and local lists
+FETCHED=$(grep -oP '.*/\K[a-zA-Z_]+(?=[0-9]*/?)'  ./assets/fetch_cgmlst.txt | sort)
+LOCAL=$(sed 1d ./assets/cgmlst_schemes.csv | cut -d',' -f3 | sort)
 
 # Compare
-if cmp -s "$KNOWN_FILE" "$TEMP_FILE"; then
-  echo "No changes detected."
-  rm -f "$TEMP_FILE"
-  exit 0
-fi
+updated=$(comm -23 <(echo "$FETCHED" | sort) <(echo "$LOCAL" | tr -d '"' | sort))
+removed=$(comm -13 <(echo "$FETCHED" | sort) <(echo "$LOCAL" | tr -d '"' | sort))
 
-echo "Changes detected."
+echo "$updated" > ./assets/updated_cgmlst.txt
+echo "$removed" > ./assets/removed_cgmlst.txt
 
-comm -23 "$TEMP_FILE" "$KNOWN_FILE" > "$NEW_FILE"
-comm -13 "$TEMP_FILE" "$KNOWN_FILE" > "$REMOVED_FILE"
+echo "Following schemes were added:"
+[[ -z "$updated" ]] && echo "none" || echo "$updated"
 
-if [[ -s "$NEW_FILE" ]]; then
-  echo "Updated schemes:"
-  cat "$NEW_FILE"
-fi
-
-if [[ -s "$REMOVED_FILE" ]]; then
-  echo "Removed schemes:"
-  cat "$REMOVED_FILE"
-fi
-
-echo ""
-echo "Update tracked schemes with"
-echo "mv '$TEMP_FILE' '$KNOWN_FILE'"
-
-rm -f "$TEMP_FILE" "$NEW_FILE" "$REMOVED_FILE"
+echo "Following schemes were removed:"
+[[ -z "$removed" ]] && echo "none" || echo "$removed"
 
 exit 0

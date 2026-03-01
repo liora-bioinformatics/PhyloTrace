@@ -24,11 +24,11 @@ jobs:
           chmod +x ./bin/check_pubmlst.sh
           ./bin/check_pubmlst.sh
 
-          TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l)
-          echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
+          PUBMLST_TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l)
+          echo "TRACKED_COUNT=$PUBMLST_TRACKED_COUNT" >> $GITHUB_ENV
 
-          # Initialize an empty report body
-          echo "REPORT_BODY<<EOF" >> $GITHUB_ENV
+          # Initialize report body
+          echo "PUBMLST_REPORT_BODY<<EOF" >> $GITHUB_ENV
           
           if grep -q '[^[:space:]]' ./assets/updated_pubmlst.txt; then
             echo "New/Updated schemes found:" >> $GITHUB_ENV
@@ -51,50 +51,47 @@ jobs:
           gistID: ${{ secrets.GIST_ID }}
           filename: pubmlst_schemes.json
           label: PubMLST Schemes
-          message: ${{ env.TRACKED_COUNT  }}
+          message: ${{ env.PUBMLST_TRACKED_COUNT  }}
           color: "ffffff"
           labelColor: "002147"
 
       # ── cgMLST Check ─────────────────────────────────────────────────────────
-      # - name: Run cgMLST Monitor
-      #   id: cgmlst_scan
-      #   run: |
-      #     ./assets/check_cgmlst.sh > cgmlst_scan_report.txt 2>&1
+      - name: Run cgMLST Scan
+        id: cgmlst_scan
+        run: |
+          chmod +x ./bin/check_cgmlst.sh
+          ./bin/check_pubmlst.sh
 
-      #     NEW_COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "unknown")
-      #     echo "CGMLST_FOUND=$NEW_COUNT" >> $GITHUB_ENV
+          CGMLST_TRACKED_COUNT=$(tail -n +2 ./assets/cgmlst_schemes.csv | wc -l)
+          echo "TRACKED_COUNT=$CGMLST_TRACKED_COUNT" >> $GITHUB_ENV
 
-      #     if grep -q "CHANGES DETECTED" cgmlst_scan_report.txt; then
-      #       echo "CGMLST_DISCREPANCY=true" >> $GITHUB_ENV
-      #       echo "CGMLST_REPORT<<EOF" >> $GITHUB_ENV
-      #       cat cgmlst_scan_report.txt >> $GITHUB_ENV
-      #       echo "EOF" >> $GITHUB_ENV
-      #     else
-      #       echo "CGMLST_DISCREPANCY=false" >> $GITHUB_ENV
-      #       echo "CGMLST_REPORT=No changes detected in cgMLST schemes." >> $GITHUB_ENV
-      #     fi
+          # Initialize report body
+          echo "CGMLST_REPORT_BODY<<EOF" >> $GITHUB_ENV
+          
+          if grep -q '[^[:space:]]' ./assets/updated_cgmlst.txt; then
+            echo "New/Updated schemes found:" >> $GITHUB_ENV
+            cat ./assets/updated_cgmlst.txt >> $GITHUB_ENV
+            echo "" >> $GITHUB_ENV
+          fi
 
-         # ── Compute cgMLST count for badge ─────────────────────────
-      # - name: Compute cgMLST scheme count
-      #   id: cgmlst_count
-      #   run: |
-      #     # Use the baseline file count (most accurate for "tracked")
-      #     COUNT=$(wc -l < ./assets/cgmlst_schemes.txt | xargs)
-      #     # Or use the just-fetched count if you prefer live value:
-      #     # COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "error")
-      #     echo "CGMLST_COUNT=$COUNT" >> $GITHUB_ENV
+          if grep -q '[^[:space:]]' ./assets/removed_cgmlst.txt; then
+            echo "Schemes removed from cgmlst.org:" >> $GITHUB_ENV
+            cat ./assets/removed_cgmlst.txt >> $GITHUB_ENV
+          fi
+          
+          echo "EOF" >> $GITHUB_ENV
 
-      # ── Update cgMLST Badge ──────────────────────────────────────────────────
-      # - name: Update cgMLST Schemes Badge
-      #   uses: schneegans/dynamic-badges-action@v1.7.0
-      #   with:
-      #     auth: ${{ secrets.GIST_TOKEN }}
-      #     gistID: ${{ secrets.GIST_ID_CGMLST }}
-      #     filename: cgmlst_schemes.json
-      #     label: cgMLST Schemes
-      #     message: ${{ env.CGMLST_COUNT }}
-      #     color: "ffffff"
-      #     labelColor: "000000"
+      # ── Update cgMLST.org Badge ─────────────────────────────────────
+      - name: Update Tracked Count Badge (cgMLST.org)
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_TOKEN }}
+          gistID: ${{ secrets.GIST_ID_CGMLST }}
+          filename: pubmlst_schemes.json
+          label: PubMLST Schemes
+          message: ${{ env.CGMLST_TRACKED_COUNT  }}
+          color: "ffffff"
+          labelColor: "000000"
 
       # ── Send Consolidated Email ─────────────────────────────────────
       - name: Send Email Report
@@ -112,19 +109,24 @@ jobs:
             Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Trigger: ${{ github.event_name == 'schedule' && 'Scheduled (weekly)' || 'Manual' }}
 
-            ┌──────────────────────────────┐
-            │ PubMLST Results              │
-            └──────────────────────────────┘
-            Tracked schemes: ${{ env.TRACKED_COUNT  }}
-            ${{ env.REPORT_BODY }}
+            ───────────────
+            PubMLST Results              
+            ───────────────
+            Tracked schemes: ${{ env.PUBMLST_TRACKED_COUNT  }}
+            ${{ env.PUBMLST_REPORT_BODY }}
 
-            
+            ───────────────
+            cgMLST Results
+            ───────────────
+            Tracked schemes: ${{ env.CGMLST_TRACKED_COUNT  }}
+            ${{ env.CGMLST_REPORT_BODY }}
+
 
             Full logs: See the workflow run link above.
-          content_type: text/plain
 
       # ── Cleanup temporary files ──────────────────────────────────────────────
       - name: Cleanup temporary files
         if: always()
         run: |
           rm -f ./assets/removed_pubmlst.txt ./assets/updated_pubmlst.txt ./assets/fetch_pubmlst.txt
+          rm -f ./assets/removed_cgmlst.txt ./assets/updated_cgmlst.txt ./assets/fetch_cgmlst.txt

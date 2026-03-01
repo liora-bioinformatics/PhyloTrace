@@ -183,3 +183,6 @@ dependencies:
   - r-yaml=2.3.10
   - r-yulab.utils=0.1.0
   - r-zoo=1.8_12
+  - pip
+  - pip:
+      - pubmlstdownload
