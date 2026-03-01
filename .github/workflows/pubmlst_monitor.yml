@@ -24,8 +24,8 @@ jobs:
           chmod +x ./bin/check_pubmlst.sh
           ./bin/check_pubmlst.sh
 
-          PUBMLST_TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l) >> $GITHUB_ENV
-          echo "TRACKED_COUNT=$PUBMLST_TRACKED_COUNT" >> $GITHUB_ENV
+          COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l | xargs)
+          echo "PUBMLST_TRACKED_COUNT=$COUNT" >> $GITHUB_ENV
 
           # Initialize report body
           echo "PUBMLST_REPORT_BODY<<EOF" >> $GITHUB_ENV
@@ -62,8 +62,8 @@ jobs:
           chmod +x ./bin/check_cgmlst.sh
           ./bin/check_cgmlst.sh
 
-          CGMLST_TRACKED_COUNT=$(tail -n +2 ./assets/cgmlst_schemes.csv | wc -l) >> $GITHUB_ENV
-          echo "TRACKED_COUNT=$CGMLST_TRACKED_COUNT" >> $GITHUB_ENV
+          COUNT=$(tail -n +2 ./assets/cgmlst_schemes.csv | wc -l | xargs)
+          echo "CGMLST_TRACKED_COUNT=$COUNT" >> $GITHUB_ENV
 
           # Initialize report body
           echo "CGMLST_REPORT_BODY<<EOF" >> $GITHUB_ENV
