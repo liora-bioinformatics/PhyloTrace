@@ -87,11 +87,11 @@ jobs:
         with:
           auth: ${{ secrets.GIST_TOKEN }}
           gistID: ${{ secrets.GIST_ID_CGMLST }}
-          filename: pubmlst_schemes.json
-          label: PubMLST Schemes
+          filename: cgmlst_schemes.json
+          label: cgMLST.org Schemes
           message: ${{ env.CGMLST_TRACKED_COUNT  }}
           color: "ffffff"
-          labelColor: "000000"
+          labelColor: "E32486"
 
       # ── Send Consolidated Email ─────────────────────────────────────
       - name: Send Email Report
