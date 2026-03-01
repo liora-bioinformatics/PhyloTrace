@@ -77,7 +77,7 @@ The **user manual** containing detailed instruction and information is available
 <br>
 
 Download a standardized scheme that defines the genetic targets, nomenclature and allele sequences
-for the bacterial species of interest from the [cgMLST.org](https://www.cgmlst.org/ncs) and [PubMLST](https://pubmlst.org/) public databases. The connection to the server including information on the scheme is integrated in the app. Once one of the 69 available species has been selected and downloaded, everything is ready to go. The scheme can be inspected in detail using the locus info interface.
+for the bacterial species of interest. Using the app interface, schemes from the [cgMLST.org](https://www.cgmlst.org/ncs) and [PubMLST](https://pubmlst.org/) public databases can be accessed. Genes and loci included in the scheme can be inspected in detail using the Loci Info interface.
 
 Number of currently supported bacterial typing schemes: 
 <br><br>
