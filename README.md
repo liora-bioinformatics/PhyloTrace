@@ -6,7 +6,8 @@
 [![Version](https://img.shields.io/badge/Version-1.6.1-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases/tag/v1.6.1)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)
 ![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white)  
-![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)
+[![cgMLST.org Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/b5505eda2fc83036aa7966c8f8ecb564/raw/pubmlst_schemes.json)](https://cgmlst.org/)
+[![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)](https://pubmlst.org/)
 
 PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. Its components evolve around Core-Genome Multilocus Sequence Typing (cgMLST) and Antimicrobial Resistance Screening. Complex analyses and computation are wrapped into an appealing and easy-to-handle graphical user interface. Users build a local database comprising analyzed isolates, manageable directly with the application. The visualization of isolate relationship and genetic profile is highly interactive aiding to reveal patterns explaining outbreak dynamics and events by connecting genomic information with epidemiologic variables. PhyloTrace achieves universal compatibility by assigning unique 256-bit hashes based on sequence and allele information. The ability to easily share analysis results enables efficient inter-lab comparison and collaboration.
 <br><br>
