@@ -57,6 +57,7 @@ source("./assets/constants.R")
 source("./assets/functions.R")
 source("./assets/ui_modules.R")
 source("./assets/shinyDirChoose.R")
+source("./assets/schemes.R")
 
 # User Interface ----
 
@@ -1312,10 +1313,10 @@ server <- function(input, output, session) {
 
   ### Set up environment ----
 
-  # Get available schemes
-  cgmlst_urls <- tryCatch(
+  # Get available scheme urls
+  tryCatch(
     {
-      get_latest_url(abb)
+      cgmlstorg_schemes$url <- get_latest_url(cgmlstorg_schemes$abb)
     },
     error = function(e) {
       DB$failCon <- TRUE
@@ -1329,19 +1330,6 @@ server <- function(input, output, session) {
       return(NULL)
     }
   )
-
-  if (length(cgmlst_urls) > 0) {
-    cgmlstorg_schemes$url <- cgmlst_urls
-  } else {
-    DB$failCon <- TRUE
-    show_toast(
-      title = "Could not retrieve data. Check internet connection.",
-      type = "error",
-      position = "bottom-end",
-      timer = 6000
-    )
-    warning("Could not retrieve data. Check internet connection.")
-  }
 
   schemes <- dplyr::arrange(
     dplyr::add_row(pubmlst_schemes, cgmlstorg_schemes),

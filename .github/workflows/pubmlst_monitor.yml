@@ -13,47 +13,31 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (for PubMLST jq)
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install Dependencies
+        run: sudo apt-get update && sudo pip install pubmlstdownload
 
       - name: Make scripts executable
         run: |
-          chmod +x ./assets/check_pubmlst.sh
-          chmod +x ./assets/check_cgmlst.sh
+          chmod +x ./bin/check_pubmlst.sh
 
       # ── PubMLST Check ────────────────────────────────────────────────────────
       - name: Run PubMLST Deep Scan
         id: pubmlst_scan
         run: |
-          ./assets/check_pubmlst.sh > scan_report.txt
+          ./bin/check_pubmlst.sh
 
           TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l)
           echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
-          
-          if grep -qE "\+ NEW|\- REMOVED" scan_report.txt; then
-            echo "DISCREPANCY=true" >> $GITHUB_ENV
-            
-            echo "REPORT_BODY<<EOF" >> $GITHUB_ENV
-            sed -n '/DISCREPANCY REPORT/,$p' scan_report.txt >> $GITHUB_ENV
 
-      # ── cgMLST Check ─────────────────────────────────────────────────────────
-      - name: Run cgMLST Monitor
-        id: cgmlst_scan
-        run: |
-          ./assets/check_cgmlst.sh > cgmlst_scan_report.txt 2>&1
-
-          NEW_COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "unknown")
-          echo "CGMLST_FOUND=$NEW_COUNT" >> $GITHUB_ENV
-
-          if grep -q "CHANGES DETECTED" cgmlst_scan_report.txt; then
-            echo "CGMLST_DISCREPANCY=true" >> $GITHUB_ENV
-            echo "CGMLST_REPORT<<EOF" >> $GITHUB_ENV
-            cat cgmlst_scan_report.txt >> $GITHUB_ENV
+          if grep -q '[^[:space:]]' ./assets/updated_pubmlst.txt; then
+            echo "Updated schemes:<<EOF" >> $GITHUB_ENV
+            cat ./assets/updated_pubmlst.txt >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
-          else
-            echo "CGMLST_DISCREPANCY=false" >> $GITHUB_ENV
-            echo "CGMLST_REPORT=No changes detected in cgMLST schemes." >> $GITHUB_ENV
-          fi
+
+          if grep -q '[^[:space:]]' ./assets/removed_pubmlst.txt; then
+            echo "Removed schemes:<<EOF" >> $GITHUB_ENV
+            cat ./assets/removed_pubmlst.txt >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
 
       # ── Update PubMLST Badge ─────────────────────────────────────
       - name: Update Tracked Count Badge (PubMLST)
@@ -67,27 +51,46 @@ jobs:
           color: "ffffff"
           labelColor: "002147"
 
+      # ── cgMLST Check ─────────────────────────────────────────────────────────
+      # - name: Run cgMLST Monitor
+      #   id: cgmlst_scan
+      #   run: |
+      #     ./assets/check_cgmlst.sh > cgmlst_scan_report.txt 2>&1
+
+      #     NEW_COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "unknown")
+      #     echo "CGMLST_FOUND=$NEW_COUNT" >> $GITHUB_ENV
+
+      #     if grep -q "CHANGES DETECTED" cgmlst_scan_report.txt; then
+      #       echo "CGMLST_DISCREPANCY=true" >> $GITHUB_ENV
+      #       echo "CGMLST_REPORT<<EOF" >> $GITHUB_ENV
+      #       cat cgmlst_scan_report.txt >> $GITHUB_ENV
+      #       echo "EOF" >> $GITHUB_ENV
+      #     else
+      #       echo "CGMLST_DISCREPANCY=false" >> $GITHUB_ENV
+      #       echo "CGMLST_REPORT=No changes detected in cgMLST schemes." >> $GITHUB_ENV
+      #     fi
+
          # ── Compute cgMLST count for badge ─────────────────────────
-      - name: Compute cgMLST scheme count
-        id: cgmlst_count
-        run: |
-          # Use the baseline file count (most accurate for "tracked")
-          COUNT=$(wc -l < ./assets/cgmlst_schemes.txt | xargs)
-          # Or use the just-fetched count if you prefer live value:
-          # COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "error")
-          echo "CGMLST_COUNT=$COUNT" >> $GITHUB_ENV
+      # - name: Compute cgMLST scheme count
+      #   id: cgmlst_count
+      #   run: |
+      #     # Use the baseline file count (most accurate for "tracked")
+      #     COUNT=$(wc -l < ./assets/cgmlst_schemes.txt | xargs)
+      #     # Or use the just-fetched count if you prefer live value:
+      #     # COUNT=$(grep -c '^https://www.cgmlst.org/ncs/schema/' cgmlst_scan_report.txt || echo "error")
+      #     echo "CGMLST_COUNT=$COUNT" >> $GITHUB_ENV
 
       # ── Update cgMLST Badge ──────────────────────────────────────────────────
-      - name: Update cgMLST Schemes Badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
-        with:
-          auth: ${{ secrets.GIST_TOKEN }}
-          gistID: ${{ secrets.GIST_ID_CGMLST }}
-          filename: cgmlst_schemes.json
-          label: cgMLST Schemes
-          message: ${{ env.CGMLST_COUNT }}
-          color: "ffffff"
-          labelColor: "000000"
+      # - name: Update cgMLST Schemes Badge
+      #   uses: schneegans/dynamic-badges-action@v1.7.0
+      #   with:
+      #     auth: ${{ secrets.GIST_TOKEN }}
+      #     gistID: ${{ secrets.GIST_ID_CGMLST }}
+      #     filename: cgmlst_schemes.json
+      #     label: cgMLST Schemes
+      #     message: ${{ env.CGMLST_COUNT }}
+      #     color: "ffffff"
+      #     labelColor: "000000"
 
       # ── Send Consolidated Email ─────────────────────────────────────
       - name: Send Email Report
@@ -111,13 +114,7 @@ jobs:
             Tracked schemes: ${{ env.TRACKED_COUNT  }}
             ${{ env.REPORT_BODY }}
 
-            ┌──────────────────────────────┐
-            │ cgMLST Results               │
-            └──────────────────────────────┘
-            Found schemes: ${{ env.CGMLST_FOUND }}
-            Status: ${{ env.CGMLST_DISCREPANCY == 'true' && '⚠️ Changes detected' || '✅ No changes' }}
-
-            ${{ env.CGMLST_REPORT || 'No detailed report available.' }}
+            
 
             Full logs: See the workflow run link above.
           content_type: text/plain
@@ -126,6 +123,4 @@ jobs:
       - name: Cleanup temporary files
         if: always()
         run: |
-          rm -f cgmlst_scan_report.txt
-          rm -f .cgmlst_new.txt .new_schemes.txt .removed_schemes.txt 2>/dev/null || true
-          echo "Temporary files removed"
+          rm -f ./assets/removed_pubmlst.txt ./assets/updated_pubmlst.txt ./assets/fetch_pubmlst.txt

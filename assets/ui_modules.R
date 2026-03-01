@@ -1,4 +1,9 @@
 # UI Modules
+block_ui <-
+  'document.getElementById("blocking-overlay").style.display = "block";'
+unblock_ui <-
+  'document.getElementById("blocking-overlay").style.display = "none";'
+
 mst_control_box <- box(
   solidHeader = TRUE,
   status = "primary",
@@ -326,10 +331,14 @@ initiate_multi_typing_ui <- renderUI({
           column(
             width = 11,
             align = "left",
-            h3(p("Assembly Selection"), style = "color:white; margin-left: 40px"),
+            h3(
+              p("Assembly Selection"),
+              style = "color:white; margin-left: 40px"
+            ),
           )
         ),
-        br(), br(),
+        br(),
+        br(),
         fluidRow(
           column(1),
           column(
@@ -341,7 +350,7 @@ initiate_multi_typing_ui <- renderUI({
                 align = "center",
                 shinyFilesButton(
                   "assembly_files",
-                  "Select File(s)" ,
+                  "Select File(s)",
                   icon = icon("file"),
                   title = "Select one or multiple assembly file(s)",
                   multiple = TRUE,
@@ -357,7 +366,7 @@ initiate_multi_typing_ui <- renderUI({
                 uiOutput("multi_file_sel_info")
               )
             ),
-            br(), 
+            br(),
             fluidRow(
               column(
                 width = 6,
@@ -377,7 +386,8 @@ initiate_multi_typing_ui <- renderUI({
                 uiOutput("multi_folder_sel_info")
               )
             ),
-            br(), br(), 
+            br(),
+            br(),
             fluidRow(
               column(1),
               uiOutput("metadata_multi_box")
