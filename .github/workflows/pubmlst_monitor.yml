@@ -15,29 +15,33 @@ jobs:
 
       - name: Install Dependencies
         run: sudo apt-get update && sudo pip install pubmlstdownload
-
-      - name: Make scripts executable
-        run: |
-          chmod +x ./bin/check_pubmlst.sh
+          
 
       # ── PubMLST Check ────────────────────────────────────────────────────────
-      - name: Run PubMLST Deep Scan
+      - name: Run PubMLST Scan
         id: pubmlst_scan
         run: |
+          chmod +x ./bin/check_pubmlst.sh
           ./bin/check_pubmlst.sh
 
           TRACKED_COUNT=$(tail -n +2 ./assets/pubmlst_schemes.csv | wc -l)
           echo "TRACKED_COUNT=$TRACKED_COUNT" >> $GITHUB_ENV
 
+          # Initialize an empty report body
+          echo "REPORT_BODY<<EOF" >> $GITHUB_ENV
+          
           if grep -q '[^[:space:]]' ./assets/updated_pubmlst.txt; then
-            echo "Updated schemes:<<EOF" >> $GITHUB_ENV
+            echo "New/Updated schemes found:" >> $GITHUB_ENV
             cat ./assets/updated_pubmlst.txt >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
+            echo "" >> $GITHUB_ENV
+          fi
 
           if grep -q '[^[:space:]]' ./assets/removed_pubmlst.txt; then
-            echo "Removed schemes:<<EOF" >> $GITHUB_ENV
+            echo "Schemes removed from PubMLST:" >> $GITHUB_ENV
             cat ./assets/removed_pubmlst.txt >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
+          fi
+          
+          echo "EOF" >> $GITHUB_ENV
 
       # ── Update PubMLST Badge ─────────────────────────────────────
       - name: Update Tracked Count Badge (PubMLST)
