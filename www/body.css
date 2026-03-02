@@ -1252,6 +1252,8 @@ button#load.pulsating-button.btn.btn-default.action-button.shiny-bound-input {
 
 .species-image {
   margin-left: -100px;
+  width: 100%;
+  height: auto;
 }
 
 .shiny-notification {

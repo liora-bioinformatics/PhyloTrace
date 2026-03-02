@@ -680,7 +680,6 @@ ui <- dashboardPage(
             )
           )
         ),
-        br(),
         fluidRow(
           column(1),
           column(
@@ -1391,8 +1390,6 @@ server <- function(input, output, session) {
             available %in%
               gsub("_", " ", schemes$species)
           ]
-
-          DB_available1 <<- DB$available
         }
       } else if (isTRUE(Startup$select_new)) {
         if (length(DB$new_database)) {
@@ -1413,15 +1410,12 @@ server <- function(input, output, session) {
           # Logical any local database present
           DB$exist <- (length(dir_ls(Startup$database)) == 0)
 
-          Startup_database <<- Startup$database
-
           # List of local schemes available
           available <- gsub("_", " ", basename(dir_ls(Startup$database)))
           DB$available <- available[
             available %in%
               gsub("_", " ", schemes$species)
           ]
-          DB_available2 <<- DB$available
         }
       }
     }
@@ -2721,8 +2715,6 @@ server <- function(input, output, session) {
       }
 
       if (isTRUE(DB$load_selected)) {
-        testii <<- schemes$species
-        input_scheme_db <<- input$scheme_db
         #Check if selected scheme valid
         if (
           gsub(" ", "_", gsub(" (PM|CM)", "", input$scheme_db)) %in%
@@ -5611,262 +5603,10 @@ server <- function(input, output, session) {
               '</span>'
             )
           ),
-          column(
-            width = 12,
-            fluidRow(
-              br(),
-              column(
-                width = 7,
-                p(
-                  HTML(
-                    paste0(
-                      '<i class="fa-solid fa-bacterium" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                      '<span style="color: white; font-size: 22px; ">',
-                      species_data$Name$name,
-                      '</span>'
-                    )
-                  )
-                ),
-                p(
-                  HTML(
-                    paste0(
-                      '<span style="color: white; font-size: 12px;">',
-                      species_data$Name$authority,
-                      '</span>'
-                    )
-                  )
-                ),
-                br(),
-                p(
-                  HTML(
-                    paste0(
-                      '<span style="color: white; font-size: 15px;">',
-                      'URL: ',
-                      '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                      species_data$ID,
-                      '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                      species_data$Name$name,
-                      ' NCBI',
-                      '</a>',
-                      '</span>'
-                    )
-                  )
-                ),
-                br(),
-                fluidRow(
-                  column(
-                    width = 12,
-                    p(
-                      HTML(
-                        paste0(
-                          '<span style="color: white; font-size: 20px;">',
-                          'Lineage',
-                          '</span>'
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$superkingdom$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$superkingdom$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Superkingdom',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$phylum$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$phylum$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Phylum',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$class$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$class$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Class',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$order$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$order$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Order',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$family$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$family$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Family',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$genus$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$genus$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Genus',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                )
-              ),
-              column(
-                width = 5,
-                align = "right",
-                uiOutput("species_no_img_saved"),
-                div(
-                  class = "species-image",
-                  imageOutput(
-                    "species_img_saved",
-                    width = "300px",
-                    height = "200px"
-                  )
-                ),
-              )
-            )
+          addSpinner(
+            species_data_ui(species_data, fetch = FALSE),
+            spin = "dots",
+            color = "#ffffff"
           )
         )
       } else {
@@ -6201,9 +5941,6 @@ server <- function(input, output, session) {
 
   observe({
     if (!is.null(DB$available)) {
-      Typing_last_scheme <<- Typing$last_scheme
-      DB_available <<- DB$available
-
       output$scheme_db <- renderUI({
         if (length(DB$available) > 3) {
           selectInput(
@@ -9540,7 +9277,6 @@ server <- function(input, output, session) {
 
     available <- gsub("_", " ", basename(dir_ls(Startup$database)))
     DB$available <- available[available %in% gsub("_", " ", schemes$species)]
-    DB_available3 <<- DB$available
     DB$exist <- length(dir_ls(Startup$database)) == 0
 
     shinyjs::show("download_cgMLST")
@@ -10074,264 +9810,7 @@ server <- function(input, output, session) {
                 '</span>'
               )
             ),
-            column(
-              width = 12,
-              fluidRow(
-                br(),
-                column(
-                  width = 7,
-                  p(
-                    HTML(
-                      paste0(
-                        '<i class="fa-solid fa-bacterium" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                        '<span style="color: white; font-size: 22px; ">',
-                        species_data$Name$name,
-                        '</span>'
-                      )
-                    )
-                  ),
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; font-size: 12px;">',
-                        species_data$Name$authority,
-                        '</span>'
-                      )
-                    )
-                  ),
-                  br(),
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; font-size: 15px;">',
-                        'URL: ',
-                        '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                        species_data$ID,
-                        '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                        species_data$Name$name,
-                        ' NCBI',
-                        '</a>',
-                        '</span>'
-                      )
-                    )
-                  ),
-                  br(),
-                  fluidRow(
-                    column(
-                      width = 12,
-                      p(
-                        HTML(
-                          paste0(
-                            '<i class="fa-solid fa-sitemap" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                            '<span style="color: white; font-size: 20px;">',
-                            'Lineage',
-                            '</span>'
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$superkingdom$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$superkingdom$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Superkingdom',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$phylum$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$phylum$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Phylum',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$class$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$class$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Class',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$order$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$order$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Order',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$family$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$family$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Family',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$genus$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$genus$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Genus',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 5,
-                  align = "right",
-                  uiOutput("species_no_img"),
-                  div(
-                    class = "species-image",
-                    imageOutput(
-                      "species_img",
-                      width = "300px",
-                      height = "200px"
-                    )
-                  )
-                )
-              )
-            )
+            species_data_ui(species_data, fetch = TRUE)
           ),
           spin = "dots",
           color = "#ffffff"

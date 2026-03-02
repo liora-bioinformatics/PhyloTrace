@@ -1357,6 +1357,11 @@ parse.names <- function(species) {
     return("Leptospira")
   } else if (species == "Mycobacteroides abscessus complex") {
     return("Mycobacteroides abscessus")
+  } else if (species == "Citrobacter sensu lato") {
+    return(paste(
+      "Citrobacter",
+      c("freundii", "portucalensis", "braakii", "europaeus")
+    ))
   } else {
     return(species)
   }

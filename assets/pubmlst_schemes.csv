@@ -38,6 +38,6 @@
 37, Xanthomonas_citri,,https://rest.pubmlst.org/db/pubmlst_xcitri_seqdef/schemes/1
 38,Burkholderia_cepacia_complex,,https://rest.pubmlst.org/db/pubmlst_bcc_seqdef/schemes/2
 39,Haemophilus_parainfluenzae,,https://rest.pubmlst.org/db/pubmlst_hinfluenzae_seqdef/schemes/59
-40,Mycobacteria_spp.,,https://rest.pubmlst.org/db/pubmlst_mycobacteria_seqdef/schemes/3
+40,Mycobacteria_spp,,https://rest.pubmlst.org/db/pubmlst_mycobacteria_seqdef/schemes/3
 41,Neisseria_lactamica,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/90
 42,Streptococcus_pyogenes,,https://rest.pubmlst.org/db/pubmlst_spyogenes_seqdef/schemes/11
