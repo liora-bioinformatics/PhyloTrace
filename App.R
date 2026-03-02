@@ -1391,6 +1391,8 @@ server <- function(input, output, session) {
             available %in%
               gsub("_", " ", schemes$species)
           ]
+
+          DB_available1 <<- DB$available
         }
       } else if (isTRUE(Startup$select_new)) {
         if (length(DB$new_database)) {
@@ -1411,12 +1413,15 @@ server <- function(input, output, session) {
           # Logical any local database present
           DB$exist <- (length(dir_ls(Startup$database)) == 0)
 
+          Startup_database <<- Startup$database
+
           # List of local schemes available
           available <- gsub("_", " ", basename(dir_ls(Startup$database)))
           DB$available <- available[
             available %in%
               gsub("_", " ", schemes$species)
           ]
+          DB_available2 <<- DB$available
         }
       }
     }
@@ -2716,6 +2721,8 @@ server <- function(input, output, session) {
       }
 
       if (isTRUE(DB$load_selected)) {
+        testii <<- schemes$species
+        input_scheme_db <<- input$scheme_db
         #Check if selected scheme valid
         if (
           gsub(" ", "_", gsub(" (PM|CM)", "", input$scheme_db)) %in%
@@ -6194,6 +6201,9 @@ server <- function(input, output, session) {
 
   observe({
     if (!is.null(DB$available)) {
+      Typing_last_scheme <<- Typing$last_scheme
+      DB_available <<- DB$available
+
       output$scheme_db <- renderUI({
         if (length(DB$available) > 3) {
           selectInput(
@@ -9530,6 +9540,7 @@ server <- function(input, output, session) {
 
     available <- gsub("_", " ", basename(dir_ls(Startup$database)))
     DB$available <- available[available %in% gsub("_", " ", schemes$species)]
+    DB_available3 <<- DB$available
     DB$exist <- length(dir_ls(Startup$database)) == 0
 
     shinyjs::show("download_cgMLST")

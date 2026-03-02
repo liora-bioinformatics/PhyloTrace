@@ -1,9 +1,15 @@
 pubmlst_schemes <- read.csv("./assets/pubmlst_schemes.csv")[, -1] |>
-  dplyr::mutate(species = paste0(species, "_PM"), database = "PubMLST") |>
+  dplyr::mutate(
+    species = paste0(trimws(species), "_PM"),
+    database = "PubMLST"
+  ) |>
   dplyr::arrange(species)
 
 cgmlstorg_schemes <- read.csv("./assets/cgmlst_schemes.csv")[, -1] |>
-  dplyr::mutate(species = paste0(species, "_CM"), database = "cgMLST.org") |>
+  dplyr::mutate(
+    species = paste0(trimws(species), "_CM"),
+    database = "cgMLST.org"
+  ) |>
   dplyr::arrange(species)
 
 

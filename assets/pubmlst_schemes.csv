@@ -1,41 +1,41 @@
 ,species,abb,url
-1,Acinetobacter_baumannii ,,https://rest.pubmlst.org/db/pubmlst_abaumannii_seqdef/schemes/3
-2, Bacillus_anthracis ,,https://rest.pubmlst.org/db/pubmlst_bcereus_seqdef/schemes/2
-3, Bacillus_cereus ,,https://rest.pubmlst.org/db/pubmlst_bcereus_seqdef/schemes/5
-4, Borrelia_spp ,,https://rest.pubmlst.org/db/pubmlst_borrelia_seqdef/schemes/3
-5, Brucella_spp ,,https://rest.pubmlst.org/db/pubmlst_brucella_seqdef/schemes/3
-6, Burkholderia_mallei ,,https://rest.pubmlst.org/db/pubmlst_bmallei_seqdef/schemes/1
-7, Burkholderia_pseudomallei ,,https://rest.pubmlst.org/db/pubmlst_bpseudomallei_seqdef/schemes/2
-8, Campylobacter_jejuni_coli_v1 ,,https://rest.pubmlst.org/db/pubmlst_campylobacter_seqdef/schemes/4
-9, Campylobacter_jejuni_coli_v2 ,,https://rest.pubmlst.org/db/pubmlst_campylobacter_seqdef/schemes/8
-10, Chlamydia_abortus ,,https://rest.pubmlst.org/db/pubmlst_chlamydiales_seqdef/schemes/44
-11, Chlamydia_trachomatis ,,https://rest.pubmlst.org/db/pubmlst_chlamydiales_seqdef/schemes/42
-12, Clostridium_chauvoei ,,https://rest.pubmlst.org/db/pubmlst_cchauvoei_seqdef/schemes/1
-13, Clostridium_perfringens ,,https://rest.pubmlst.org/db/pubmlst_cperfringens_seqdef/schemes/2
-14, Dichelobacter_nodosus ,,https://rest.pubmlst.org/db/pubmlst_dnodosus_seqdef/schemes/3
-15, Escherichia_spp ,,https://rest.pubmlst.org/db/pubmlst_escherichia_seqdef/schemes/6
-16, Haemophilus_influenzae ,,https://rest.pubmlst.org/db/pubmlst_hinfluenzae_seqdef/schemes/56
-17, Leptospira_spp ,,https://rest.pubmlst.org/db/pubmlst_leptospira_seqdef/schemes/4
+1,Acinetobacter_baumannii,,https://rest.pubmlst.org/db/pubmlst_abaumannii_seqdef/schemes/3
+2, Bacillus_anthracis,,https://rest.pubmlst.org/db/pubmlst_bcereus_seqdef/schemes/2
+3, Bacillus_cereus,,https://rest.pubmlst.org/db/pubmlst_bcereus_seqdef/schemes/5
+4, Borrelia_spp,,https://rest.pubmlst.org/db/pubmlst_borrelia_seqdef/schemes/3
+5, Brucella_spp,,https://rest.pubmlst.org/db/pubmlst_brucella_seqdef/schemes/3
+6, Burkholderia_mallei,,https://rest.pubmlst.org/db/pubmlst_bmallei_seqdef/schemes/1
+7, Burkholderia_pseudomallei,,https://rest.pubmlst.org/db/pubmlst_bpseudomallei_seqdef/schemes/2
+8, Campylobacter_jejuni_coli_v1,,https://rest.pubmlst.org/db/pubmlst_campylobacter_seqdef/schemes/4
+9, Campylobacter_jejuni_coli_v2,,https://rest.pubmlst.org/db/pubmlst_campylobacter_seqdef/schemes/8
+10, Chlamydia_abortus,,https://rest.pubmlst.org/db/pubmlst_chlamydiales_seqdef/schemes/44
+11, Chlamydia_trachomatis,,https://rest.pubmlst.org/db/pubmlst_chlamydiales_seqdef/schemes/42
+12, Clostridium_chauvoei,,https://rest.pubmlst.org/db/pubmlst_cchauvoei_seqdef/schemes/1
+13, Clostridium_perfringens,,https://rest.pubmlst.org/db/pubmlst_cperfringens_seqdef/schemes/2
+14, Dichelobacter_nodosus,,https://rest.pubmlst.org/db/pubmlst_dnodosus_seqdef/schemes/3
+15, Escherichia_spp,,https://rest.pubmlst.org/db/pubmlst_escherichia_seqdef/schemes/6
+16, Haemophilus_influenzae,,https://rest.pubmlst.org/db/pubmlst_hinfluenzae_seqdef/schemes/56
+17, Leptospira_spp,,https://rest.pubmlst.org/db/pubmlst_leptospira_seqdef/schemes/4
 18, Mycobacteroides_abscessus_complex ,,https://rest.pubmlst.org/db/pubmlst_mabscessus_seqdef/schemes/2
-19, Neisseria_gonorrhoeae_v1 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/62
-20, Neisseria_gonorrhoeae_v2 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/89
-21, Neisseria_meningitidis_v1 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/47
-22, Neisseria_meningitidis_v2 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/85
-23, Neisseria_meningitidis_v3 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/88
-24, Human-restricted_Neisseria_v1 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/72
-25, Neisseria_L3 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/45
-26, Neisseria_L44 ,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/68
-27, Pasteurella_multocida ,,https://rest.pubmlst.org/db/pubmlst_pmultocida_seqdef/schemes/3
-28, Salmonella_v1 ,,https://rest.pubmlst.org/db/pubmlst_salmonella_seqdef/schemes/4
-29, Salmonella_v2_enterobase ,,https://rest.pubmlst.org/db/pubmlst_salmonella_seqdef/schemes/3
-30, Serratia_spp ,,https://rest.pubmlst.org/db/pubmlst_serratia_seqdef/schemes/2
-31, Staphylococcus_aureus ,,https://rest.pubmlst.org/db/pubmlst_saureus_seqdef/schemes/20
-32, Streptococcus_agalactiae ,,https://rest.pubmlst.org/db/pubmlst_sagalactiae_seqdef/schemes/38
-33, Streptococcus_pneumoniae ,,https://rest.pubmlst.org/db/pubmlst_spneumoniae_seqdef/schemes/2
-34, Streptococcus_uberis ,,https://rest.pubmlst.org/db/pubmlst_suberis_seqdef/schemes/8
-35, Vibrio_cholerae ,,https://rest.pubmlst.org/db/pubmlst_vcholerae_seqdef/schemes/3
-36, Vibrio_parahaemolyticus ,,https://rest.pubmlst.org/db/pubmlst_vparahaemolyticus_seqdef/schemes/3
-37, Xanthomonas_citri ,,https://rest.pubmlst.org/db/pubmlst_xcitri_seqdef/schemes/1
+19, Neisseria_gonorrhoeae_v1,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/62
+20, Neisseria_gonorrhoeae_v2,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/89
+21, Neisseria_meningitidis_v1,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/47
+22, Neisseria_meningitidis_v2,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/85
+23, Neisseria_meningitidis_v3,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/88
+24, Human-restricted_Neisseria_v1,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/72
+25, Neisseria_L3,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/45
+26, Neisseria_L44,,https://rest.pubmlst.org/db/pubmlst_neisseria_seqdef/schemes/68
+27, Pasteurella_multocida,,https://rest.pubmlst.org/db/pubmlst_pmultocida_seqdef/schemes/3
+28, Salmonella_v1,,https://rest.pubmlst.org/db/pubmlst_salmonella_seqdef/schemes/4
+29, Salmonella_v2_enterobase,,https://rest.pubmlst.org/db/pubmlst_salmonella_seqdef/schemes/3
+30, Serratia_spp,,https://rest.pubmlst.org/db/pubmlst_serratia_seqdef/schemes/2
+31, Staphylococcus_aureus,,https://rest.pubmlst.org/db/pubmlst_saureus_seqdef/schemes/20
+32, Streptococcus_agalactiae,,https://rest.pubmlst.org/db/pubmlst_sagalactiae_seqdef/schemes/38
+33, Streptococcus_pneumoniae,,https://rest.pubmlst.org/db/pubmlst_spneumoniae_seqdef/schemes/2
+34, Streptococcus_uberis,,https://rest.pubmlst.org/db/pubmlst_suberis_seqdef/schemes/8
+35, Vibrio_cholerae,,https://rest.pubmlst.org/db/pubmlst_vcholerae_seqdef/schemes/3
+36, Vibrio_parahaemolyticus,,https://rest.pubmlst.org/db/pubmlst_vparahaemolyticus_seqdef/schemes/3
+37, Xanthomonas_citri,,https://rest.pubmlst.org/db/pubmlst_xcitri_seqdef/schemes/1
 38,Burkholderia_cepacia_complex,,https://rest.pubmlst.org/db/pubmlst_bcc_seqdef/schemes/2
 39,Haemophilus_parainfluenzae,,https://rest.pubmlst.org/db/pubmlst_hinfluenzae_seqdef/schemes/59
 40,Mycobacteria_spp.,,https://rest.pubmlst.org/db/pubmlst_mycobacteria_seqdef/schemes/3
