@@ -9289,7 +9289,7 @@ server <- function(input, output, session) {
       )
     )
 
-    # Disable pickerInput
+          # Enable pickerInput
     runjs("$('#select_cgmlst').prop('disabled', false);")
     runjs("$('#select_cgmlst').selectpicker('refresh');")
     runjs(unblock_ui)
