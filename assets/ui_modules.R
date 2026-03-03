@@ -10,7 +10,7 @@ species_data_ui <- function(species_data, fetch) {
       '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
     )
   } else {
-    response <- httr::GET(species_data1$Image)
+    response <- httr::GET(species_data$Image)
     if (response$status_code == 200) {
       species_image <- tags$img(
         class = "species-image",

@@ -2,6 +2,7 @@
 
 options(ignore.negative.edge = TRUE)
 options(shiny.error = browser)
+options(timeout = 600)
 Sys.setlocale("LC_TIME", "C")
 
 # _______________________ ####
@@ -1315,24 +1316,21 @@ server <- function(input, output, session) {
   # Get available scheme urls
   tryCatch(
     {
-      cgmlstorg_schemes$url <- get_latest_url(cgmlstorg_schemes$abb)
+      schemes$url[
+        schemes$database == "cgMLST.org"
+      ] <- get_latest_url(schemes$abb[schemes$database == "cgMLST.org"])
     },
     error = function(e) {
       DB$failCon <- TRUE
       show_toast(
-        title = "Could not retrieve data. Check internet connection.",
+        title = "Could not retrieve latest cgmlst.org scheme links.",
         type = "error",
         position = "bottom-end",
         timer = 6000
       )
-      warning("Could not retrieve data. Check internet connection.")
+      warning("Could not retrieve latest cgmlst.org scheme links.")
       return(NULL)
     }
-  )
-
-  schemes <- dplyr::arrange(
-    dplyr::add_row(pubmlst_schemes, cgmlstorg_schemes),
-    species
   )
 
   #### Screening environment ----
@@ -5222,14 +5220,19 @@ server <- function(input, output, session) {
               read_html(DB$url_link)
             },
             error = function(e) {
+              msg <- paste(
+                "Could not retrieve data for",
+                gsub(" ", "_", DB$scheme),
+                "scheme"
+              )
               DB$failCon <- TRUE
               show_toast(
-                title = "Could not retrieve data. Check internet connection.",
+                title = msg,
                 type = "error",
                 position = "bottom-end",
                 timer = 6000
               )
-              warning("Could not retrieve data. Check internet connection.")
+              warning(msg)
               return(NULL)
             }
           )
@@ -8909,8 +8912,6 @@ server <- function(input, output, session) {
 
     ### Download Loci Fasta Files
 
-    options(timeout = 600)
-
     # Create a Progress object
     progress <- shiny::Progress$new()
     on.exit(progress$close())
@@ -9289,7 +9290,7 @@ server <- function(input, output, session) {
       )
     )
 
-          # Enable pickerInput
+    # Enable pickerInput
     runjs("$('#select_cgmlst').prop('disabled', false);")
     runjs("$('#select_cgmlst').selectpicker('refresh');")
     runjs(unblock_ui)
@@ -9321,14 +9322,19 @@ server <- function(input, output, session) {
           read_html(Scheme$link_scheme)
         },
         error = function(e) {
+          msg <- paste(
+            "No connection to",
+            gsub(" ", "_", DB$scheme),
+            "scheme"
+          )
           DB$failCon <- TRUE
           show_toast(
-            title = "Could not retrieve data. Check internet connection.",
+            title = msg,
             type = "error",
             position = "bottom-end",
             timer = 6000
           )
-          warning("Could not retrieve data. Check internet connection.")
+          warning(msg)
           return(NULL)
         }
       )
@@ -9375,31 +9381,34 @@ server <- function(input, output, session) {
         )
       }
     } else if (grepl("_PM", input$select_cgmlst)) {
-      scheme_overview <- tryCatch(
+      scheme_fetch <- tryCatch(
         {
           get.schemeinfo(
             url_link = schemes$url[schemes$species == input$select_cgmlst]
           )
         },
         error = function(e) {
+          msg <- paste(
+            "Could not retrieve scheme info for",
+            input$select_cgmlst
+          )
           DB$failCon <- TRUE
-
           show_toast(
-            title = "Could not retrieve data. Check internet connection.",
+            title = msg,
             type = "error",
             position = "bottom-end",
             timer = 6000
           )
-          warning("Could not retrieve data. Check internet connection.")
+          warning(msg)
           return(NULL)
         }
       )
 
-      if (!is.null(scheme_overview)) {
+      if (!is.null(scheme_fetch)) {
         DB$failCon <- FALSE
 
         scheme_overview <- parse.schemeinfo(
-          scheme_info = scheme_overview,
+          scheme_info = scheme_fetch,
           repo = "PM",
           database = Startup$database,
           folder_name = Scheme$folder_name,
@@ -9407,13 +9416,13 @@ server <- function(input, output, session) {
         )
 
         # Retrieve last changes
-        if (!is.null(scheme_overview[["last_updated"]])) {
-          last_scheme_change <- scheme_overview[["last_updated"]]
+        if (!is.null(scheme_fetch[["last_updated"]])) {
+          last_scheme_change <- scheme_fetch[["last_updated"]]
           last_file_change <- format(
             file.info(file.path(
               database,
               ".downloaded_schemes",
-              paste0(folder_name, ".zip")
+              paste0(Scheme$folder_name, ".zip")
             ))$mtime,
             "%Y-%m-%d %H:%M %p"
           )
@@ -9501,14 +9510,15 @@ server <- function(input, output, session) {
         Scheme$species_data <- fetch.species.data(species = selected_species)
       },
       error = function(e) {
+        msg <- paste("Fetching species data for", selected_species, "failed")
         DB$failCon <- TRUE
         show_toast(
-          title = "Could not retrieve data. Check internet connection.",
+          title = msg,
           type = "error",
           position = "bottom-end",
           timer = 6000
         )
-        warning("Could not retrieve data. Check internet connection.")
+        warning(msg)
         Scheme$species_data <- NULL
       }
     )

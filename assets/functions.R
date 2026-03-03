@@ -1614,7 +1614,18 @@ parse.schemeinfo <- function(
 }
 
 # Function to download all alleles of each loci of selected scheme
-download.alleles.PM <- function(url_link, database, folder_name, progress) {
+# TODO delete
+download.alleles.PM1 <- function(
+  abb,
+  url_link,
+  database,
+  folder_name
+) {
+  abb1 <<- abb
+  url_link1 <<- url_link
+  database1 <<- database
+  folder_name1 <<- folder_name
+
   # Make scheme directory
   directory <- file.path(database, folder_name)
   if (!dir.exists(directory)) {
@@ -1629,7 +1640,328 @@ download.alleles.PM <- function(url_link, database, folder_name, progress) {
     )
   }
 
-  # retrieve and save scheme info
+  # Make output folder
+  output_folder <- file.path(
+    database,
+    ".downloaded_schemes",
+    paste0(folder_name)
+  )
+
+  if (!dir.exists(output_folder)) {
+    tryCatch(
+      {
+        dir.create(output_folder, recursive = TRUE)
+        message("Directory created: ", output_folder)
+      },
+      error = function(e) {
+        stop(
+          "Failed to create directory: ",
+          output_folder,
+          "\nError: ",
+          e$message
+        )
+      }
+    )
+  } else {
+    unlink(output_folder, recursive = TRUE, force = TRUE)
+    tryCatch(
+      {
+        dir.create(output_folder, recursive = TRUE)
+        message("Directory created: ", output_folder)
+      },
+      error = function(e) {
+        stop(
+          "Failed to create directory: ",
+          output_folder,
+          "\nError: ",
+          e$message
+        )
+      }
+    )
+  }
+
+  ### Invoke allele download with pubmlstdownload
+
+  # Construct the arguments vector
+  args <- c(
+    "-scheme",
+    abb,
+    "-subscheme",
+    "cgMLST",
+    "-scheme_url",
+    url_link,
+    "-output",
+    output_folder
+  )
+
+  p <<- process$new(
+    command = "pubmlstdownload",
+    args = args,
+    stdout = "",
+    stderr = ""
+  )
+}
+
+# Download scheme info  ----
+# TODO delete
+download.schemeinfo <- function(url_link, database, folder_name) {
+  # Retrieve and save scheme info
+  scheme_info <- get.schemeinfo(url_link)
+  if (is.null(scheme_info$loci) || length(scheme_info$loci) == 0) {
+    stop("No loci found in scheme_info.")
+  } else {
+    scheme_overview <- parse.schemeinfo(
+      scheme_info = scheme_info,
+      repo = "PM",
+      database = database,
+      folder_name = folder_name,
+      url_link = url_link
+    )
+
+    saveRDS(
+      scheme_overview,
+      file.path(database, folder_name, "scheme_info.rds")
+    )
+
+    message("Scheme info downloaded")
+  }
+}
+
+# TODO delete
+process.alleles.PM <- function(
+  abb,
+  database,
+  folder_name,
+  progress
+) {
+  output_folder <- file.path(
+    database,
+    ".downloaded_schemes",
+    paste0(folder_name)
+  )
+
+  # Move loci files up to scheme directory
+  base::file.copy(
+    from = list.files(
+      file.path(output_folder, abb, "cgMLST"),
+      full.names = TRUE,
+      pattern = ".fasta"
+    ),
+    to = output_folder,
+    overwrite = TRUE,
+    recursive = FALSE
+  )
+  unlink(file.path(output_folder, abb), recursive = TRUE)
+
+  # Final check to ensure all files are non-empty and expected count matches
+  downloaded_files <- list.files(
+    output_folder,
+    full.names = TRUE,
+    pattern = ".fasta"
+  )
+
+  empty_files <- downloaded_files[file.info(downloaded_files)$size == 0]
+  if (length(empty_files) > 0) {
+    stop(
+      "Some files are empty: ",
+      paste(basename(empty_files), collapse = ", ")
+    )
+  }
+
+  if (length(downloaded_files) != length(scheme_info$loci)) {
+    stop(
+      "Mismatch in the number of downloaded files. Expected: ",
+      length(scheme_info$loci),
+      " but got: ",
+      length(downloaded_files)
+    )
+  }
+
+  # Zip folder
+  zip_name <- paste0(output_folder, ".zip")
+  source_path <- paste0(output_folder, "/")
+
+  # Invoke compression
+  system2("zip", args = c("-r", "-j", zip_name, source_path))
+  unlink(output_folder, recursive = TRUE)
+
+  logr::log_print("All files downloaded successfully and are non-empty.")
+
+  # Unzip the scheme in temporary folder
+  unzip(
+    zipfile = file.path(
+      Startup$database,
+      ".downloaded_schemes",
+      paste0(Scheme$folder_name, ".zip")
+    ),
+    exdir = file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    )
+  )
+
+  # Hash temporary folder
+  hash_database(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    ),
+    progress = Scheme$progress
+  )
+
+  # Get list from local database
+  local_db_filelist <- list.files(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    )
+  )
+
+  if (!is_empty(local_db_filelist)) {
+    # Get list from temporary database
+    tmp_db_filelist <- list.files(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp")
+      )
+    )
+
+    # Find the difference (extra files in local database)
+    local_db_extra <- setdiff(local_db_filelist, tmp_db_filelist)
+
+    # Copy extra files to temporary folder
+    file.copy(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, "_alleles"),
+        local_db_extra
+      ),
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp")
+      )
+    )
+
+    # Check differences in file pairs
+    local_db_hashes <- tools::md5sum(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, "_alleles"),
+        local_db_filelist
+      )
+    )
+    tmp_db_hashes <- tools::md5sum(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp"),
+        local_db_filelist
+      )
+    )
+
+    diff_files <- local_db_hashes %in% tmp_db_hashes
+    diff_loci <- names(local_db_hashes)[diff_files == FALSE]
+    diff_loci <- sapply(strsplit(diff_loci, "/"), function(x) {
+      x[length(x)]
+    })
+
+    # Check locus hashes
+    for (locus in diff_loci) {
+      local_db_hashes <- get_locus_hashes(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, "_alleles"),
+          locus
+        )
+      )
+      tmp_db_hashes <- get_locus_hashes(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, ".tmp"),
+          locus
+        )
+      )
+      diff_hashes <- setdiff(local_db_hashes, tmp_db_hashes)
+
+      sequences <- extract_seq(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, "_alleles"),
+          locus
+        ),
+        diff_hashes
+      )
+      if (
+        !is_empty(sequences$idx) &&
+          !is_empty(sequences$seq) &&
+          length(sequences$idx) == length(sequences$seq)
+      ) {
+        add_new_sequences(
+          file.path(
+            Startup$database,
+            Scheme$folder_name,
+            paste0(Scheme$folder_name, ".tmp"),
+            locus
+          ),
+          sequences
+        )
+      }
+    }
+  }
+
+  unlink(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    ),
+    recursive = TRUE
+  )
+
+  file.rename(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    ),
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    )
+  )
+}
+
+download.alleles.PM <- function(url_link, database, folder_name, progress) {
+  url_link1 <<- url_link
+  database1 <<- database
+  folder_name1 <<- folder_name
+
+  # Make scheme directory
+  directory <- file.path(database, folder_name)
+  if (!dir.exists(directory)) {
+    tryCatch(
+      {
+        dir.create(directory, recursive = TRUE)
+        message("Directory created: ", directory)
+      },
+      error = function(e) {
+        stop("Failed to create directory: ", directory, "\nError: ", e$message)
+      }
+    )
+  }
+
+  # Retrieve and save scheme info
   scheme_info <- get.schemeinfo(url_link)
   if (is.null(scheme_info$loci) || length(scheme_info$loci) == 0) {
     stop("No loci found in scheme_info.")
@@ -1722,10 +2054,10 @@ download.alleles.PM <- function(url_link, database, folder_name, progress) {
     downloaded_files[i] <- output_file
 
     # Increment the progress bar
-    progress$inc(
-      1 / (2 * length(seq_along(scheme_info$loci))),
-      detail = paste("Saved", basename(locus_url))
-    )
+    # progress$inc(
+    #   1 / (2 * length(seq_along(scheme_info$loci))),
+    #   detail = paste("Saved", basename(locus_url))
+    # )
 
     message("Saved fasta file for locus: ", basename(locus_url))
   }
