@@ -1,4 +1,5 @@
 library(logr)
+library(RSQLite)
 
 iteration <- commandArgs(trailingOnly = TRUE)[1]
 app_local_share_dir <- file.path(fs::path_home(), ".local", "share", 
@@ -233,8 +234,10 @@ if(sum(unname(base::sapply(psl_files, file.size)) <= 427) / length(
     
   } else {
     
-    Database <- readRDS(file.path(meta_info$db_path, meta_info$scheme, 
-                                  "Typing.rds"))
+    conn <- dbConnect(RSQLite::SQLite(), file.path(meta_info$db_path, meta_info$scheme, "Typing.db"))
+    Database <- list()
+    Database$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
+    dbDisconnect(conn)
     
     if (!meta_info$save) {screen <- "NA"} else {screen <- "No"}
     
@@ -293,12 +296,11 @@ if(sum(unname(base::sapply(psl_files, file.size)) <= 427) / length(
     merged <- dplyr::mutate(merged, "Include" = as.logical(Include))
     
     Database$Typing <- rbind(Database$Typing, merged)
-    
   }
   
-  # Save new Entry in Typing Database
-  saveRDS(Database, file.path(meta_info$db_path, meta_info$scheme, 
-                              "Typing.rds"))
+  conn <- dbConnect(RSQLite::SQLite(), file.path(meta_info$db_path, meta_info$scheme, "Typing.db"))
+  dbWriteTable(conn, "typing", Database$Typing, overwrite = TRUE)
+  dbDisconnect(conn)
   
   isolate_dir <- file.path(meta_info$db_path, meta_info$scheme, "Isolates")
   

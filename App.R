@@ -49,6 +49,7 @@ library(DT)
 library(shinyBS)
 library(openssl)
 library(logr)
+library(RSQLite)
 # Bioconductor Packages
 library(treeio)
 library(ggtree)
@@ -1131,21 +1132,27 @@ server <- function(input, output, session) {
       typing_file <- file.path(
         Startup$database,
         gsub(" ", "_", DB$scheme),
-        "Typing.rds"
+        "Typing.db"
       )
 
       if (file_exists(typing_file)) {
         # Initialize Database to NULL in case of failure
-        Database <- tryCatch(
+	Database <- list()
+        Database$Typing <- tryCatch(
           {
-            readRDS(typing_file)
+            conn <- dbConnect(RSQLite::SQLite(), typing_file)
+            dbReadTable(conn, "typing", check.names = FALSE)
           },
           error = function(e) {
+            print(e)
             log_print(paste(
               "Error in check_new_entry():",
-              "Typing.rds could not be read."
+              "Typing.db could not be read."
             ))
             return(NULL)
+          },
+          finally = {
+            dbDisconnect(conn)
           }
         )
 
@@ -3290,20 +3297,18 @@ server <- function(input, output, session) {
                 # If typed entries present
                 if (
                   any(grepl(
-                    "Typing.rds",
-                    dir_ls(paste0(
+                    "Typing.db",
+                    dir_ls(file.path(
                       Startup$database,
-                      "/",
                       gsub(" ", "_", DB$scheme)
                     ))
                   ))
                 ) {
                   # Load database from files
-                  Database <- readRDS(file.path(
-                    Startup$database,
-                    gsub(" ", "_", DB$scheme),
-                    "Typing.rds"
-                  ))
+                  conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+                  Database <- list()
+                  Database$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
+                  dbDisconnect(conn)
 
                   # Databases produced with version < 1.6.1 receive extra column
                   if (
@@ -3329,14 +3334,9 @@ server <- function(input, output, session) {
                   }
 
                   # Save changes
-                  saveRDS(
-                    Database,
-                    file.path(
-                      Startup$database,
-                      gsub(" ", "_", DB$scheme),
-                      "Typing.rds"
-                    )
-                  )
+                  conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+                  dbWriteTable(conn, "typing", Database$Typing, overwrite = TRUE)
+                  dbDisconnect(conn)
 
                   DB$data <- Database[["Typing"]]
 
@@ -6364,10 +6364,10 @@ server <- function(input, output, session) {
       data <- list()
       data[["Typing"]] <- cbind(merged_meta, external_allelic_profile)
 
-      saveRDS(
-        data,
-        file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.rds")
-      )
+      conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+      dbWriteTable(conn, "typing", data$Typing, overwrite = TRUE)
+      dbDisconnect(conn)
+
       # UI changes & feedback
       show_toast(
         title = "Import of external dataset successful",
@@ -7547,12 +7547,10 @@ server <- function(input, output, session) {
 
     DB$inhibit_change <- FALSE
 
-    Data <- readRDS(paste0(
-      Startup$database,
-      "/",
-      gsub(" ", "_", DB$scheme),
-      "/Typing.rds"
-    ))
+    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    Data <- list()
+    Data$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
+    dbDisconnect(conn)
 
     DB$data <- Data[["Typing"]]
 
@@ -8090,11 +8088,10 @@ server <- function(input, output, session) {
     DB$remove_iso <- NULL
 
     # Load currently saved entry table
-    Data <- readRDS(file.path(
-      Startup$database,
-      gsub(" ", "_", DB$scheme),
-      "Typing.rds"
-    ))
+    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    Data <- list()
+    Data$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
+    dbDisconnect(conn)
 
     meta_hot <- hot_to_r(input$db_entries) %>%
       select(1:(14 + nrow(DB$cust_var))) %>%
@@ -8110,10 +8107,9 @@ server <- function(input, output, session) {
     Data[["Typing"]][["Include"]] <- as.logical(Data[["Typing"]][["Include"]])
     rownames(Data[["Typing"]]) <- Data[["Typing"]]$Index
 
-    saveRDS(
-      Data,
-      file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.rds")
-    )
+    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    dbWriteTable(conn, "typing", Data$Typing, overwrite = TRUE)
+    dbDisconnect(conn)
 
     DB$data <- Data[["Typing"]]
 
@@ -8246,7 +8242,7 @@ server <- function(input, output, session) {
     file.remove(file.path(
       Startup$database,
       gsub(" ", "_", DB$scheme),
-      "Typing.rds"
+      "Typing.db"
     ))
     unlink(
       file.path(Startup$database, gsub(" ", "_", DB$scheme), "Isolates"),
@@ -25708,36 +25704,21 @@ server <- function(input, output, session) {
 
         if (tail(status_df$status, 1) == "success") {
           # Changing "Screened" metadata variable in database
-          Database <- readRDS(file.path(
-            Startup$database,
-            gsub(
-              " ",
-              "_",
-              DB$scheme
-            ),
-            "Typing.rds"
-          ))
+          conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+          Database <- dbReadTable(conn, "typing", check.names = FALSE)
+          dbDisconnect(conn)
 
-          Database[["Typing"]]$Screened[which(
-            Database[["Typing"]]["Assembly ID"] ==
+          Database$Screened[which(
+            Database["Assembly ID"] ==
               tail(
                 Screening$choices,
                 1
               )
           )] <- "Yes"
-
-          saveRDS(
-            Database,
-            file.path(
-              Startup$database,
-              gsub(
-                " ",
-                "_",
-                DB$scheme
-              ),
-              "Typing.rds"
-            )
-          )
+          
+          conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+          dbWriteTable(conn, "typing", Database, overwrite = TRUE)
+          dbDisconnect(conn)
 
           DB$data$Screened[which(
             DB$data["Assembly ID"] ==
