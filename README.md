@@ -288,7 +288,7 @@ To start using conda, the terminal should be restarted.
 > following command can be executed:*
 
 ``` bash
-conda config --set auto_activate_base false
+conda config --set auto_activate false
 ```
 
 ### 2.3 Install PhyloTrace
