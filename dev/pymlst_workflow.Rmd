@@ -1,0 +1,83 @@
+---
+title: "PhyloTrace pyMLST Workflow"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = FALSE)
+# Derive project root from the Rmd file location, works both when knitting and interactively
+rmd_dir <- if (interactive()) {
+  dirname(rstudioapi::getSourceEditorContext()$path)
+} else {
+  dirname(knitr::current_input(dir = TRUE))
+}
+root <- normalizePath(file.path(rmd_dir, ".."))
+knitr::opts_knit$set(root.dir = root)
+source(file.path(root, "bin/pymslt.R"))
+
+db_path <- file.path(root, "pseudomonas_aeruginosa.db")
+genome_path <- "/home/marianfreisleben/Desktop/ncbi_dataset/subset2"
+```
+
+## 1. Download cgMLST Scheme
+
+Download the *Pseudomonas aeruginosa* cgMLST scheme from PubMLST via `wgMLST import`. The scheme is seeded into the SQLite database at `db_path`.
+
+```{r download-scheme, eval=FALSE}
+download_cgmlst_scheme(
+  scheme = "Pseudomonas aeruginosa",
+  db_path = db_path
+)
+```
+
+## 2. Inspect the Database Structure
+
+Read all tables from the SQLite database into a named list and inspect the structure. The two key tables are `sequences` (allele sequences) and `mlst` (per-isolate allele assignments).
+
+```{r read-database}
+database <- read_database(db_path)
+str(database)
+```
+
+## 3. Type Isolates
+
+Run BLAT-based cgMLST typing against the database for one or more genome FASTA files. `type_genomes` calls the `loop-pymlst.sh` wrapper and parses its output for QC flags (duplicate, species mismatch, success).
+
+```{r type-genomes, eval=FALSE}
+database <- type_genomes(
+  database = database,
+  db_path = db_path,
+  genome_input = genome_path
+)
+```
+
+## 4. Add SHA-256 Sequence Hashes
+
+Hash every allele sequence in `database$sequences` using SHA-256 via `openssl`. The resulting `sha256` column provides scheme-independent allele identifiers that are stable across database versions.
+
+```{r add-hashes}
+database <- add_sequence_hashes(database)
+str(database$sequences)
+```
+
+## 5. Retrieve Allelic Profiles
+
+Pivot the MLST table into a wide format where each row is one isolate (`souche`) and each column is a locus, with SHA-256 hashes as values.
+
+```{r allele-profiles}
+profiles <- get_isolate_allele_profiles(database)
+head(profiles[, 1:10])
+```
+
+## 6. Synchronize with the Remote Database
+
+Write all in-memory changes (including the new `sha256` column) back to the SQLite file on disk.
+
+```{r synchronize, eval=FALSE}
+synchronize_database(database, db_path)
+
+# Check if hashes were saved
+database <- read_database(db_path)
+names(database$sequences)
+```
+
