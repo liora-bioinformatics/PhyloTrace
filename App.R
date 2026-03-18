@@ -1357,10 +1357,10 @@ server <- function(input, output, session) {
 
   # Load last used database if possible
   if (
-    file.path(app_local_share_path, "last_db.rds") %in%
+    file.path(app_local_share_path, "state.json") %in%
       dir_ls(file.path(app_local_share_path))
   ) {
-    DB$last_db <- TRUE
+    DB$state <- TRUE
   }
 
   observe({
@@ -1405,10 +1405,10 @@ server <- function(input, output, session) {
       }
     } else {
       if (
-        !is.null(DB$last_db) &&
-          file.exists(file.path(app_local_share_path, "last_db.rds"))
+        !is.null(DB$state) &&
+          file.exists(file.path(app_local_share_path, "state.json"))
       ) {
-        last_db <- readRDS(file.path(app_local_share_path, "last_db.rds"))
+        last_db <- jsonlite::fromJSON(file.path(app_local_share_path, "state.json"))$last_db
 
         if (!is.null(last_db) && dir_exists(last_db)) {
           Startup$database <- last_db
@@ -1696,8 +1696,8 @@ server <- function(input, output, session) {
           br()
         )
       }
-    } else if ((!is.null(DB$last_db)) && (!is.null(DB$available))) {
-      if (isTRUE(DB$last_db) && (length(DB$available) > 0)) {
+    } else if ((!is.null(DB$state)) && (!is.null(DB$available))) {
+      if (isTRUE(DB$state) && (length(DB$available) > 0)) {
         if (
           sum(
             gsub(" ", "_", gsub(" (PM|CM)", "", DB$available)) %in%
@@ -1806,7 +1806,7 @@ server <- function(input, output, session) {
             )
           )
         }
-      } else if (isTRUE(DB$last_db) && (length(DB$available) == 0)) {
+      } else if (isTRUE(DB$state) && (length(DB$available) == 0)) {
         column(
           width = 12,
           p(
@@ -2726,10 +2726,17 @@ server <- function(input, output, session) {
             gsub("_(PM|CM)", "", schemes$species)
         ) {
           # Save database path for next start
-          saveRDS(
-            Startup$database,
-            file.path(app_local_share_path, "last_db.rds")
-          )
+          state_path <- file.path(app_local_share_path, "state.json")
+          if (file.exists(state_path)) {
+            state <- jsonlite::fromJSON(state_path)
+            state$last_db <- Startup$database
+          } else {
+            state <- list(
+              last_db = Statup$database,
+              new_db = NULL
+            )
+          }
+          jsonlite::write_json(state, state_path, pretty = TRUE, auto_unbox = TRUE)
 
           DB$check_new_entries <- TRUE
           DB$data <- NULL
@@ -8868,11 +8875,22 @@ server <- function(input, output, session) {
     runjs("$('#select_cgmlst').selectpicker('refresh');")
 
     if (length(DB$available) == 0) {
-      saveRDS(DB$new_database, file.path(app_local_share_path, "new_db.rds"))
+      state_path <- file.path(app_local_share_path, "state.json")
+      if (file.exists(state_path)) {
+        state <- jsonlite::fromJSON(state_path)
+        state$new_db <- DB$new_database
+      } else {
+        state <- list(
+          last_db = NULL,
+          new_db = DB$new_database
+        )
+      }
+      jsonlite::write_json(state, state_path, pretty = TRUE, auto_unbox = TRUE)
+      
       dir.create(
         file.path(
-          readRDS(file.path(app_local_share_path, "new_db.rds")),
-          "Database"
+          DB$new_database,
+          input$new_db_name
         ),
         recursive = TRUE
       )
