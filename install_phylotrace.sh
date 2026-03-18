@@ -4,6 +4,14 @@ CONDA_PATH=$( conda info --base )/bin/conda
 
 eval "$($CONDA_PATH shell.bash hook)"
 
+# Check if conda is installed
+if ! command -v conda >/dev/null 2>&1; then
+    echo -e "\e[31mError: Conda was not found. Please install or properly initialize Anaconda before running this script.\e[0m"
+    exit 1
+fi
+
+echo "Conda detected. Continuing script..."
+
 if conda env list | grep -q "PhyloTrace"; then
   echo "Environment PhyloTrace already exists. Updating the environment..."
   conda env update -f PhyloTrace.yml
