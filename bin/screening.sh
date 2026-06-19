@@ -3,22 +3,22 @@
 APP_LOCAL_SHARE_DIR="$HOME/.local/share/phylotrace"
 
 # Set base path
-base_path=$(Rscript -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR', 
+base_path=$("$R_HOME/bin/Rscript" -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR',
   'screening_meta.rds'))[,'wd'])")
 base_path=${base_path//\'/}
 
-filepaths=$(Rscript -e "cat(shQuote(stringr::str_split_1(readRDS(file.path(
+filepaths=$("$R_HOME/bin/Rscript" -e "cat(shQuote(stringr::str_split_1(readRDS(file.path(
   '$APP_LOCAL_SHARE_DIR', 'screening_meta.rds'))[,'selected'], ' ~ ')))")
 
 eval "selected=($filepaths)"
 
-species=$(Rscript -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR', 
+species=$("$R_HOME/bin/Rscript" -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR',
   'screening_meta.rds'))[,'species'])")
 
-database=$(Rscript -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR', 
+database=$("$R_HOME/bin/Rscript" -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR',
   'screening_meta.rds'))[,'database'])")
 
-scheme=$(Rscript -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR', 
+scheme=$("$R_HOME/bin/Rscript" -e "cat(readRDS(file.path('$APP_LOCAL_SHARE_DIR',
   'screening_meta.rds'))[,'scheme'])")
 
 # Remove the existing directory (if it exists)
@@ -58,6 +58,6 @@ for file in "${selected[@]}"; do
   rm -rf "$zip_dir/$zip_base.fasta"
 done
 
-Rscript "$base_path/bin/make_amr_profile.R" "$database" "$scheme" "$base_path"
+"$R_HOME/bin/Rscript" "$base_path/bin/make_amr_profile.R" "$database" "$scheme" "$base_path"
 
 echo "AMRFinder finalized"

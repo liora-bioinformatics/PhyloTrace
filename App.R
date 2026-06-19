@@ -28231,14 +28231,15 @@ server <- function(input, output, session) {
         noclass_heatmap <- NULL
         noclass_profile_matrix <- NULL
         if (!is.null(gs_plot_selected_noclass)) {
-          if (any(is.na(hm_meta$vir) && is.na(hm_meta$amr))) {
+          if (any(is.na(hm_meta$vir) & is.na(hm_meta$amr))) {
             unclass_genes <- rownames(hm_meta)[
-              is.na(hm_meta$vir) &&
+              is.na(hm_meta$vir) &
                 is.na(hm_meta$amr)
             ]
             noclass_profile_matrix <- heatmap_mat[,
               colnames(heatmap_mat) %in%
-                unclass_genes
+                unclass_genes,
+              drop = FALSE
             ]
 
             if (
