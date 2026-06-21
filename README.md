@@ -63,11 +63,18 @@ The **user manual** containing detailed instruction and information is available
 
 <br>
 
-Download a standardized scheme that defines the genetic targets, nomenclature and allele sequences for the bacterial species of interest from the [cgMLST.org](https://www.cgmlst.org/ncs) and [PubMLST](https://pubmlst.org/) public databases. The connection to the server including information on the scheme is integrated in the app. Once one of the 69 available species has been selected and downloaded, everything is ready to go. The scheme can be inspected in detail using the locus info interface.
+Download a standardized scheme that defines the genetic targets, nomenclature and allele sequences
+for the bacterial species of interest. Using the app interface, schemes from the [cgMLST.org](https://www.cgmlst.org/ncs) and [PubMLST](https://pubmlst.org/) public databases can be accessed. Genes and loci included in the scheme can be inspected in detail using the Loci Info interface.
 
-::: {style="display: flex; justify-content: space-between;"}
-<img src="docs/resources/manage_schemes.png" width="47.5%"/> <img src="docs/resources/loci_info.png" width="48.5%"/>
-:::
+Number of currently supported bacterial typing schemes: 
+<br><br>
+[![cgMLST.org Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/b5505eda2fc83036aa7966c8f8ecb564/raw/cgmlst_schemes.json)](https://cgmlst.org/) &nbsp;&nbsp;
+[![PubMLST Schemes](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/infinity-a11y/15ef48327c3dcda275169fb50a7a2b1e/raw/pubmlst_schemes.json)](https://pubmlst.org/)
+
+<div style="display: flex; justify-content: space-between;">
+<img src="docs/resources/manage_schemes.png" width="47.5%"/>
+<img src="docs/resources/loci_info.png" width="48.5%"/>
+</div>
 
 <br>
 
@@ -177,9 +184,6 @@ PhyloTrace can be installed in a linux environment and, using Windows Subsystem 
 For the installation on a linux OS follow the steps starting from [2.2 Install Miniconda](#22-install-miniconda). If you want to install PhyloTrace on Microsoft Windows, you must first follow the steps found in the collapsible menu below before proceeding with the other steps.
 
 <details>
-
-<br>
-
 <summary><b>Installing PhyloTrace on Windows using WSL (Windows Subsystem for Linux)</b></summary>
 
 To install Ubuntu on WSL, start PowerShell as administrator and run the following command:
@@ -206,10 +210,8 @@ After this, follow the instructions below.
 
 ### 2.1 Download Source Code
 
-Use the terminal to navigate to an accessible location on your system and clone the repository using Git.
-`git clone` downloads the source code of version 1.6.1 (latest stable version).
-
-```         
+1. Use the terminal to navigate to an accessible location on your system and clone the repository using Git.
+2. `git clone` downloads the source code of version 1.6.1 (latest stable version). ```         
 git clone --branch v1.6.1 --depth 1 https://github.com/liora-bioinformatics/PhyloTrace.git
 ```
 
