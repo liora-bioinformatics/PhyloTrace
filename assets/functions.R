@@ -665,7 +665,6 @@ render_plot_control <- function(
   min = 0,
   max = 100,
   default_value,
-  reset = FALSE,
   width = "100%",
   show_condition = TRUE,
   div_class = "",
@@ -675,16 +674,8 @@ render_plot_control <- function(
   options = NA,
   multiple = FALSE
 ) {
-  # Determine the selected value based on reset condition
-  if (is.null(reactive_value)) {
-    sel <- NULL
-  } else {
-    if (isTRUE(reset)) {
-      sel <- default_value
-    } else {
-      sel <- reactive_value
-    }
-  }
+  # Determine the selected value
+  sel <- ifelse(is.null(reactive_value), default_value, reactive_value)
 
   # Prepare the initial arguments list
   args <- list(

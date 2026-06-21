@@ -574,7 +574,7 @@ nj_control_box <- box(
       )
     ),
     column(
-      width = 2,
+      width = 1,
       align = "center",
       div(
         class = "plot-control-reset",
@@ -590,6 +590,15 @@ nj_control_box <- box(
           title = "Reset",
           options = list("delay': 400, 'foo" = "foo")
         )
+      )
+    ),
+    column(
+      width = 1,
+      align = "center",
+      materialSwitch(
+        "toggle_style",
+        "Full",
+        value = FALSE
       )
     )
   )

@@ -45,22 +45,25 @@
 }
 
 /* Style sequence display*/
-.base-a { 
+.base-a {
   color: #ff8080
 }
-.base-t { 
-  color: #00d169; 
-}
-.base-g { 
-  color: #007bff; 
-}
-.base-c { 
-  color: #ffb565; 
+
+.base-t {
+  color: #00d169;
 }
 
-.sequence { 
-  font-family: monospace; 
-  white-space: pre-wrap; 
+.base-g {
+  color: #007bff;
+}
+
+.base-c {
+  color: #ffb565;
+}
+
+.sequence {
+  font-family: monospace;
+  white-space: pre-wrap;
   word-wrap: break-word;
   background: #282F38;
   max-height: 368px;
@@ -70,10 +73,10 @@
   border-radius: 7px;
 }
 
-.clipboard-button { 
-  margin-left: 10px; 
-  cursor: pointer; 
-  border: none; 
+.clipboard-button {
+  margin-left: 10px;
+  cursor: pointer;
+  border: none;
   background: none;
 }
 
@@ -97,11 +100,11 @@
 }
 
 *::-webkit-scrollbar-thumb {
-    background-color: #1f4e5dc4;
-    border: 3px solid #F0F0F0;
-    border-radius: 10px;
-    min-width: 100px;
-    overflow-y: scroll;
+  background-color: #1f4e5dc4;
+  border: 3px solid #F0F0F0;
+  border-radius: 10px;
+  min-width: 100px;
+  overflow-y: scroll;
 }
 
 *::-webkit-scrollbar-corner {
@@ -110,13 +113,19 @@
 }
 
 .wtHolder::-webkit-scrollbar-track,
-#logText::-webkit-scrollbar-track, 
+#logText::-webkit-scrollbar-track,
 #logTextFull::-webkit-scrollbar-track,
 #screening_fail::-webkit-scrollbar-track,
 .selectize-dropdown-content::-webkit-scrollbar-track,
 .sF-dirInfo>div::-webkit-scrollbar-track {
   background: #F0F0F0;
 }
+
+#tree_field>div::-webkit-scrollbar-track {
+  border-top-right-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
 
 .wtHolder::-webkit-scrollbar-track {
   border-bottom-right-radius: 0px !important;
@@ -152,7 +161,7 @@
   border-bottom-right-radius: 5px;
 }
 
-.selectize-dropdown-content::-webkit-scrollbar-track{
+.selectize-dropdown-content::-webkit-scrollbar-track {
   border-top-right-radius: 5px !important;
 }
 
@@ -182,8 +191,7 @@ div#bs-select-23::-webkit-scrollbar-track,
 div#bs-select-24::-webkit-scrollbar-track,
 div#bs-select-25::-webkit-scrollbar-track,
 div#bs-select-26::-webkit-scrollbar-track,
-div#bs-select-27::-webkit-scrollbar-track
-div.bs-select::-webkit-scrollbar-track{
+div#bs-select-27::-webkit-scrollbar-track div.bs-select::-webkit-scrollbar-track {
   background: white;
   border-radius: 5px;
 }
@@ -209,7 +217,7 @@ div.bs-select::-webkit-scrollbar-track{
   border-top-right-radius: 5px;
   border-bottom-right-radius: 5px;
 }
-  
+
 .wtHolder::-webkit-scrollbar-thumb,
 div#bs-select-1::-webkit-scrollbar-thumb,
 div#bs-select-2::-webkit-scrollbar-thumb,
@@ -238,13 +246,13 @@ div#bs-select-24::-webkit-scrollbar-thumb,
 div#bs-select-25::-webkit-scrollbar-thumb,
 div#bs-select-26::-webkit-scrollbar-thumb,
 div#bs-select-27::-webkit-scrollbar-thumb,
-#logText::-webkit-scrollbar-thumb, 
+#logText::-webkit-scrollbar-thumb,
 #logTextFull::-webkit-scrollbar-thumb,
 #screening_fail::-webkit-scrollbar-thumb,
 .selectize-dropdown-content::-webkit-scrollbar-thumb,
 #mst_comm_general_select::-webkit-scrollbar-thumb,
 .sF-dirInfo>div::-webkit-scrollbar-thumb,
-#DataTables_Table_8_wrapper > div.dataTables_scroll > div.dataTables_scrollBody::-webkit-scrollbar-thumb,
+#DataTables_Table_8_wrapper>div.dataTables_scroll>div.dataTables_scrollBody::-webkit-scrollbar-thumb,
 .display .dataTable .no-footer::-webkit-scrollbar-thumb,
 #DataTables_Table_8::-webkit-scrollbar-thumb,
 .dataTables_scrollBody::-webkit-scrollbar-thumb,
@@ -254,7 +262,7 @@ div#gs_profile_table::-webkit-scrollbar-thumb,
 .sF-fileWindow::-webkit-scrollbar-thumb,
 #scheme_info::-webkit-scrollbar-thumb,
 #cgmlst_scheme::-webkit-scrollbar-thumb,
-.sequence::-webkit-scrollbar-thumb{
+.sequence::-webkit-scrollbar-thumb {
   background-color: #1f4e5dc4;
   border: 3px solid #F0F0F0;
   min-width: 100px;
@@ -291,22 +299,22 @@ div#gs_profile_table::-webkit-scrollbar-thumb,
 }
 
 .main-header {
-	position: relative;
-	max-height: 100px;
-	z-index: 1030;
-	box-shadow: 0px 7px 15px #000;
+  position: relative;
+  max-height: 100px;
+  z-index: 1030;
+  box-shadow: 0px 7px 15px #000;
 }
 
 .skin-blue .main-header .logo {
-	background: #d1d9df !important;
+  background: #d1d9df !important;
 }
 
 .skin-blue .main-header .navbar {
-	background: #d1d9df !important;
-	color: #000;
+  background: #d1d9df !important;
+  color: #000;
 }
 
 .skin-blue .main-header .navbar .sidebar-toggle {
-	background: #d1d9df !important;
-	color: #18ece1;
+  background: #d1d9df !important;
+  color: #18ece1;
 }
