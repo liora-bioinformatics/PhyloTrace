@@ -25,6 +25,11 @@ h5 {
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
 }
 
+body {
+  overflow-y: hidden;
+  overflow-x: hidden;
+}
+
 label {
   color: white;
 }
@@ -857,7 +862,7 @@ body>div.swal2-container.swal2-bottom-start.swal2-backdrop-show {
   border-radius: 0px 7px 0px 0px;
   background-color: transparent;
   position: relative;
-  left: 209px;
+  left: 230px;
   border: 2px solid;
   border-top-color: grey;
   border-right-color: grey;
@@ -872,7 +877,7 @@ body>div.swal2-container.swal2-bottom-start.swal2-backdrop-show {
   border-radius: 0 0 7px 0px;
   background-color: transparent;
   position: relative;
-  left: 209px;
+  left: 230px;
   border: 2px solid;
   border-bottom-color: white;
   border-right-color: white;
@@ -2280,13 +2285,7 @@ body>div.wrapper>header>nav>div>ul>li.dropdown.notifications-menu:hover {
 /* Visualization MST */
 
 #mst_node_col_info>svg {
-  top: -30px !important;
-}
-
-#mst_legend_menu_dropmenu .tippy-popper,
-#mst_cluster_col_menu_dropmenu .tippy-popper {
-  top: 20px !important;
-  left: 0px !important
+  top: -37px !important;
 }
 
 #mst_cluster_reset_div .tooltip {
@@ -2305,7 +2304,6 @@ body>div.wrapper>header>nav>div>ul>li.dropdown.notifications-menu:hover {
 
 .mst-edge-slider {
   width: 85%;
-  margin-left: -20px;
   margin-top: -20px;
 }
 
@@ -2369,14 +2367,15 @@ button#mst_cluster_reset.btn.btn-default.action-button.shiny-bound-input {
 }
 
 #maindivtree_mst {
-  border-radius: 10px;
+  /* border-radius: 10px; */
+  height: 100% !important;
 }
 
-#graphtree_mst {
+/* #graphtree_mst {
   border-radius: 10px;
   height: 100% !important;
   box-shadow: 20px 20px 20px -10px rgba(0, 0, 0, 0.5);
-}
+} */
 
 #mst_cluster_threshold {
   margin-top: -7px;
@@ -2433,9 +2432,10 @@ button#create_tree:hover {
 
 #mst_field,
 #tree_field {
-  margin-left: 45px;
-  margin-top: -15px;
   z-index: 0;
+  background-image: linear-gradient(45deg, #d1d9df69 25%, transparent 25%, transparent 50%, #d1d9df69 50%, #d1d9df69 75%, transparent 75%);
+  background-size: 5px 5px;
+  border-radius: 5px;
 }
 
 button#mst_general_menu {
@@ -2513,7 +2513,6 @@ button#mst_edgecolor_menu {
   position: relative;
   top: -10px;
   width: 85%;
-  left: -5px;
 }
 
 #mst_subtitle {
@@ -2551,6 +2550,7 @@ button#mst_col_map_menu {
 .mst_scale_slider {
   margin-bottom: -12px;
   margin-top: -10px;
+  margin-right: 15px;
   width: 85%
 }
 
@@ -2583,10 +2583,15 @@ button#mst_col_map_menu {
 }
 
 #tree_mst {
-  border-radius: 10px;
+  /* border-radius: 10px; */
+  /* width: 100% !important;
+  height: 100% !important; */
+  justify-self: center;
+  max-width: 100%;
 }
 
 #titletree_mst {
+  display: none !important;
   border-radius: 10px;
   margin-bottom: 10px;
   margin-left: 100px;
@@ -2594,6 +2599,7 @@ button#mst_col_map_menu {
 }
 
 #subtitletree_mst {
+  display: none !important;
   margin-bottom: 10px;
   margin-left: 100px;
   text-align: left !important;
@@ -2791,7 +2797,6 @@ button#mst_col_map_menu {
   border-radius: 8px;
   width: 38px;
   height: 30px;
-  margin-left: -30px;
   margin-top: 13px;
   margin-bottom: 10px;
 }
@@ -2964,12 +2969,17 @@ button#mst_col_map_menu {
 }
 
 .nj-control-ratio {
-  margin-bottom: -20px;
+  margin-top: 14px;
   margin-left: -20px;
 }
 
+.nj-control-ratio .control-label,
+.mst-control-ratio .control-label {
+  display: none;
+}
+
 #tree_algo {
-  margin-top: -31px;
+  margin-top: -9px;
   margin-bottom: -25px;
   font-size: 14px;
   margin-left: 15px;
@@ -2988,10 +2998,10 @@ button#mst_col_map_menu {
 }
 
 #tree_algo>div>div:nth-child(2) {
-  margin-bottom: 10px;
+  margin-bottom: 0px;
 }
 
-#nj_labeltext_menu_dropmenu .tippy-popper,
+/* #nj_labeltext_menu_dropmenu .tippy-popper,
 #nj_labelformat_menu_dropmenu .tippy-popper,
 #nj_branch_label_menu_dropmenu .tippy-popper,
 #nj_title_menu_dropmenu .tippy-popper,
@@ -3008,21 +3018,34 @@ button#mst_col_map_menu {
 #nj_custom_label_menu_dropmenu .tippy-popper,
 #nj_variable_tipcolor_menu_dropmenu .tippy-popper,
 #nj_variable_tiplab_menu_dropmenu .tippy-popper,
-#nj_variable_tiles_menu_dropmenu .tippy-popper {
-  top: 0px !important;
-  left: 15px !important
+#nj_variable_tiles_menu_dropmenu .tippy-popper */
+.tippy-popper {
+  position: fixed !important;
+  z-index: 99999 !important;
+  right: 14% !important;
+  top: unset !important;
+  left: unset !important;
+  bottom: unset !important;
+  transform: none !important;
 }
 
+#nj_legend_menu_dropmenu .tippy-popper,
 #nj_clade_menu_dropmenu .tippy-popper,
+#nj_variable_heatmap_menu_dropmenu .tippy-popper,
+#nj_custom_label_menu_dropmenu .tippy-popper {
+  bottom: 1% !important;
+}
+
+/* #nj_clade_menu_dropmenu .tippy-popper,
 #nj_legend_menu_dropmenu .tippy-popper {
   top: -50px !important;
   left: 15px !important
-}
+} */
 
-#nj_variable_heatmap_menu_dropmenu .tippy-popper {
+/* #nj_variable_heatmap_menu_dropmenu .tippy-popper {
   top: -80px !important;
   left: 15px !important
-}
+} */
 
 #tree_type {
   margin-top: -9px;
@@ -3063,7 +3086,7 @@ button#nj_del_label {
   height: 35px;
   width: 38px;
   margin-top: 10px;
-  margin-left: -43px;
+  margin-left: -24px;
 }
 
 #nj_heatmap_sel>div>div>button {
@@ -3098,11 +3121,137 @@ button#nj_del_label {
   margin-top: 20px !important;
 }
 
-#tree_field img,
+#tree_plot {
+  max-width: 100%;
+  margin: auto;
+  width: 100%;
+  height: auto;
+  border: none;
+  border-radius: 0;
+  display: flex;
+  justify-content: center;
+}
+
+#tree_plot::-webkit-scrollbar-thumb {
+  background-color: #20e6e5;
+  border: 3px solid #ffffff;
+  border-radius: 10px;
+  min-width: 100px;
+  overflow-y: scroll;
+  border-right-width: 5px;
+}
+
+#tree_plot::-webkit-scrollbar-track {
+  background-color: #ffffff;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+
+#tree_field>div,
+#mst_field>div {
+  position: relative;
+  width: 100% !important;
+  border-radius: 0;
+}
+
+#tree_field>div {
+  height: 75vh !important;
+  overflow-x: hidden;
+}
+
+#mst_field>div {
+  height: 75vh !important;
+  overflow: hidden;
+  position: relative;
+  width: 100% !important;
+  border-radius: 5px;
+}
+
+.aspect-display {
+  color: #ffbf00;
+  /* Added */
+  background: #00000087;
+  position: absolute;
+  z-index: 99;
+  padding: 3px;
+  border-top-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+
+.shiny-plot-output img {
+  width: unset;
+  height: unset;
+}
+
+.shiny-plot-output img {
+  width: unset;
+  height: unset;
+}
+
 #gs_field img,
 #gs_plot img {
   border-radius: 10px;
   box-shadow: 10px 10px 15px rgba(0, 0, 0, 0.5);
+}
+
+#tree_mst hr {
+  display: none;
+}
+
+.flex-row {
+  display: contents;
+}
+
+.flex-row>.row:first-child {
+  display: flex;
+}
+
+.flex-row>.row:first-child .col-sm-1,
+.flex-row>.row:first-child .col-sm-2,
+.flex-row>.row:first-child .col-sm-3,
+.flex-row>.row:first-child .col-sm-4,
+.flex-row>.row:first-child .col-sm-5,
+.flex-row>.row:first-child .col-sm-6,
+.flex-row>.row:first-child .col-sm-7,
+.flex-row>.row:first-child .col-sm-8,
+.flex-row>.row:first-child .col-sm-9,
+.flex-row>.row:first-child .col-sm-10,
+.flex-row>.row:first-child .col-sm-11,
+.flex-row>.row:first-child .col-sm-12 {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-row>.row:first-child .shiny-panel-conditional {
+  flex: 1;
+}
+
+.full-height-box {
+  display: contents;
+}
+
+.full-height-box>div {
+  height: 100%;
+}
+
+.full-height-box .box {
+  height: 75vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.full-height-box .box-body {
+  overflow-y: auto;
+  overflow-x: clip;
+  height: 100%;
+}
+
+#tree_controls {
+  height: 100%;
+}
+
+.custom-height {
+  height: 75vh !important;
 }
 
 .gs-plot-selected-isolate .dropdown-menu .open .open>.dropdown-menu,
@@ -3154,7 +3303,7 @@ button#create_rep.btn.btn-default.action-button.shiny-bound-input {
   border: 1px solid white;
   width: 100%;
   margin-top: 10px;
-  margin-left: -30px;
+  margin-left: -15px;
 }
 
 #nj_v,
@@ -3369,11 +3518,9 @@ button#nj_nodepoint_menu {
 }
 
 .nj-root-select {
-  margin-top: -19px;
-  right: 2px;
   position: relative;
-  margin-left: -20px;
-  margin-bottom: -20px;
+  margin-left: 15px;
+  width: 100%;
 }
 
 .nj-rootedge-line {
@@ -4324,7 +4471,7 @@ button#nj_nodepoint_menu {
 .filetype-mst {
   margin-top: -28px;
   width: 100%;
-  margin-left: -30px;
+  margin-left: -15px;
 }
 
 .datepicker {
@@ -4484,6 +4631,10 @@ button#download_nj_bttn {
   margin-left: -30px;
 }
 
+button#download_nj_bttn {
+  margin-left: -15px !important;
+}
+
 #save_plot_html_bttn>i,
 #download_nj_bttn>i {
   font-size: 16px;
@@ -4516,23 +4667,18 @@ button#gs_download_plot_bttn {
   margin-right: -30px;
 }
 
-
-.vis-control-box,
+/* TODO */
+/* .vis-control-box,
 .mst_control_box {
   margin-left: 35px;
   width: 90%;
-}
-
-.vis-control-box-2 {
-  margin-left: -25px;
-  margin-right: 60px;
 }
 
 .vis-control-box-3 {
   margin-left: 35px;
   margin-right: -30px;
   margin-top: 5px;
-}
+} */
 
 #gs_size_menu>i,
 #gs_variable_menu>i,

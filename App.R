@@ -5,7 +5,6 @@ options(shiny.error = browser)
 options(timeout = 600)
 Sys.setlocale("LC_TIME", "C")
 
-# _______________________ ####
 # CRAN Packages
 library(shiny)
 library(shinyjs)
@@ -58,6 +57,7 @@ library(ggtreeExtra)
 source("./assets/constants.R")
 source("./assets/functions.R")
 source("./assets/ui_modules.R")
+source("./assets/plot_save.R")
 source("./assets/shinyDirChoose.R")
 source("./assets/schemes.R")
 
@@ -737,7 +737,7 @@ ui <- dashboardPage(
             width = 5,
             br(),
             div(
-              class = "vis-control-box",
+              class = "vis-full-height-box",
               uiOutput("generate_plot_ui")
             )
           ),
@@ -747,49 +747,55 @@ ui <- dashboardPage(
             conditionalPanel(
               "input.tree_type=='MST'",
               div(
-                class = "vis-control-box-2",
+                class = "vis-full-height-box-2",
                 mst_control_box
               )
             ),
             conditionalPanel(
               "input.tree_type=='Tree'",
               div(
-                class = "vis-control-box-2",
+                class = "vis-full-height-box-2",
                 nj_control_box
               )
             )
           )
         ),
-        fluidRow(
-          tags$script(src = "javascript_functions.js"),
-          column(
-            width = 2,
-            conditionalPanel(
-              "input.tree_type=='MST'",
-              div(
-                class = "vis-control-box-3",
-                uiOutput("mst_controls")
+        div(
+          class = "flex-row",
+          fluidRow(
+            tags$script(src = "javascript_functions.js"),
+            column(
+              width = 10,
+              conditionalPanel(
+                "input.tree_type=='MST'",
+                div(
+                  class = "mst-field-container",
+                  uiOutput("mst_aspect"),
+                  uiOutput("mst_field")
+                ),
+              ),
+              conditionalPanel(
+                "input.tree_type=='Tree'",
+                div(
+                  class = "tree-field-container",
+                  uiOutput("tree_aspect"),
+                  uiOutput("tree_field")
+                )
               )
             ),
-            conditionalPanel(
-              "input.tree_type=='Tree'",
-              div(
-                class = "vis-control-box-3",
+            column(
+              width = 2,
+              conditionalPanel(
+                "input.tree_type=='MST'",
+                div(
+                  class = "vis-full-height-box-3",
+                  uiOutput("mst_controls")
+                )
+              ),
+              conditionalPanel(
+                "input.tree_type=='Tree'",
                 uiOutput("tree_controls")
               )
-            )
-          ),
-          column(
-            width = 9,
-            align = "left",
-            br(),
-            conditionalPanel(
-              "input.tree_type=='MST'",
-              uiOutput("mst_field")
-            ),
-            conditionalPanel(
-              "input.tree_type=='Tree'",
-              uiOutput("tree_field")
             )
           )
         )
@@ -854,7 +860,6 @@ ui <- dashboardPage(
   ) # End dashboardPage
 ) # end UI
 
-# _______________________ ####
 
 # Server ----
 
@@ -1240,8 +1245,6 @@ server <- function(input, output, session) {
     }
   })
 
-  # _______________________ ####
-
   ## Startup ----
 
   ### Miscellaneous ----
@@ -1259,7 +1262,6 @@ server <- function(input, output, session) {
     color = transparent(.5)
   )
 
-  #TODO Enable this, or leave disabled
   # Kill server on session end
   session$onSessionEnded(function() {
     system(
@@ -1446,7 +1448,9 @@ server <- function(input, output, session) {
     }
   })
 
-  output$start_message <- renderUI(
+  output$start_message <- renderUI({
+    render_info("start_message")
+
     column(
       width = 12,
       align = "center",
@@ -1519,10 +1523,11 @@ server <- function(input, output, session) {
         )
       )
     )
-  )
+  })
 
   # Load db & scheme selection UI
-  output$load_db <- renderUI(
+  output$load_db <- renderUI({
+    render_info("load_db")
     if (!is.null(Startup$select_new)) {
       if (length(DB$new_database) > 0 && Startup$select_new) {
         column(
@@ -1826,7 +1831,7 @@ server <- function(input, output, session) {
         )
       }
     }
-  )
+  })
 
   output$imageOutput <- renderImage(
     {
@@ -1843,13 +1848,14 @@ server <- function(input, output, session) {
     log_print("Input create_new_db")
     Startup$select_new <- TRUE
 
-    output$new_db_name_ui <- renderUI(
+    output$new_db_name_ui <- renderUI({
+      render_info("new_db_name_ui")
       textInput(
         "new_db_name",
         "",
         placeholder = "New database name"
       )
-    )
+    })
   })
 
   observeEvent(input$db_location, {
@@ -1900,6 +1906,8 @@ server <- function(input, output, session) {
       )
     } else {
       runjs(block_ui)
+      log_print("Input load")
+      gc()
 
       output$start_message <- NULL
       output$load_db <- NULL
@@ -2012,9 +2020,8 @@ server <- function(input, output, session) {
 
       # Reactive variables related to plot controls
       if (isTRUE(Vis$mst_true)) {
+        mst_show_label_reactive(TRUE)
         mst_node_label_reactive("Assembly Name")
-        mst_title_reactive("")
-        mst_subtitle_reactive("")
         mst_color_var_reactive(FALSE)
         mst_col_var_reactive("Isolation Date")
         mst_col_scale_reactive("Viridis")
@@ -2032,10 +2039,6 @@ server <- function(input, output, session) {
         mst_edge_length_reactive(35)
         mst_edge_font_size_reactive(18)
         mst_node_label_fontsize_reactive(14)
-        mst_title_size_reactive(35)
-        mst_subtitle_size_reactive(20)
-        mst_ratio_reactive(16 / 10)
-        mst_scale_reactive(600)
         mst_shadow_reactive(TRUE)
         mst_node_shape_reactive("dot")
         mst_show_clusters_reactive(FALSE)
@@ -2053,12 +2056,13 @@ server <- function(input, output, session) {
       }
 
       if (isTRUE(Vis$nj_true)) {
+        # Reset view switch
+        updateSwitchInput(session, "toggle_style", value = FALSE)
+
         # Tip label
-        Vis$nj_tiplab_val_reset <- TRUE
         nj_tiplab_val("Assembly Name")
         nj_tiplab_show_val(TRUE)
-        Vis$nj_align_reset <- TRUE
-        nj_align_val(FALSE)
+        nj_align_val(TRUE)
         ifelse(
           !is.null(Vis$labelsize_nj),
           nj_tiplab_size_val(Vis$labelsize_nj),
@@ -2067,7 +2071,6 @@ server <- function(input, output, session) {
         nj_tiplab_fontface_val("plain")
         nj_tiplab_alpha_val(1)
         nj_tiplab_position_val(0)
-        Vis$nj_tiplab_angle_reset <- TRUE
         nj_tiplab_angle_val(0)
 
         # Label panels
@@ -2086,8 +2089,20 @@ server <- function(input, output, session) {
           nj_branch_size_val(Vis$branch_size_nj),
           nj_branch_size_val(4)
         )
-        Vis$nj_branch_label_val_reset <- TRUE
-        nj_branch_label_val("Host")
+        nj_branch_label_val("Allelic Distance")
+        nj_branch_panel_val(FALSE)
+        nj_branchlabel_cutoff_val(ifelse(
+          !is.null(Vis$nj_branch_lengths),
+          2,
+          round(
+            quantile(
+              Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+              0.3,
+              na.rm = TRUE
+            ),
+            1
+          )
+        ))
         nj_branchlab_alpha_val(0.65)
         nj_branch_x_val(0)
         nj_branchlab_fontface_val("plain")
@@ -2107,25 +2122,18 @@ server <- function(input, output, session) {
 
         # Tip label mapping
         nj_mapping_show_val(FALSE)
-        Vis$nj_color_mapping_val_reset <- TRUE
         nj_color_mapping_val("Country")
-        Vis$nj_tiplab_scale_reset <- TRUE
         nj_tiplab_scale_val(nj_tiplab_scale_val_default())
-        Vis$nj_color_mapping_div_mid_reset <- TRUE
         nj_color_mapping_div_mid_val("Mean")
 
         # Tip points mapping
         nj_tipcolor_mapping_show_val(FALSE)
-        Vis$nj_tipcolor_mapping_val_reset <- TRUE
         nj_tipcolor_mapping_val("Country")
-        Vis$nj_tippoint_scale_val_reset <- TRUE
         nj_tippoint_scale_val(nj_tippoint_scale_val_default())
-        Vis$nj_tipcolor_mapping_div_mid_reset <- TRUE
         nj_tipcolor_mapping_div_mid_val("Mean")
 
         # Tip shape mapping
         nj_tipshape_mapping_show_val(FALSE)
-        Vis$nj_tipshape_mapping_val_reset <- TRUE
         nj_tipshape_mapping_val("Host")
 
         # Tiles mapping
@@ -2134,43 +2142,25 @@ server <- function(input, output, session) {
         nj_tiles_show_3_val(FALSE)
         nj_tiles_show_4_val(FALSE)
         nj_tiles_show_5_val(FALSE)
-        Vis$nj_fruit_variable_val_reset <- TRUE
         nj_fruit_variable_val("Isolation Date")
-        Vis$nj_fruit_variable_2_val_reset <- TRUE
         nj_fruit_variable_2_val("Isolation Date")
-        Vis$nj_fruit_variable_3_val_reset <- TRUE
         nj_fruit_variable_3_val("Isolation Date")
-        Vis$nj_fruit_variable_4_val_reset <- TRUE
         nj_fruit_variable_4_val("Isolation Date")
-        Vis$nj_fruit_variable_5_val_reset <- TRUE
         nj_fruit_variable_5_val("Isolation Date")
-        Vis$nj_tiles_scale_1_reset <- TRUE
         nj_tiles_scale_1_val(nj_tiles_scale_1_val_default())
-        Vis$nj_tiles_scale_2_reset <- TRUE
         nj_tiles_scale_2_val(nj_tiles_scale_2_val_default())
-        Vis$nj_tiles_scale_3_reset <- TRUE
         nj_tiles_scale_3_val(nj_tiles_scale_3_val_default())
-        Vis$nj_tiles_scale_4_reset <- TRUE
         nj_tiles_scale_4_val(nj_tiles_scale_4_val_default())
-        Vis$nj_tiles_scale_5_reset <- TRUE
         nj_tiles_scale_5_val(nj_tiles_scale_5_val_default())
-        Vis$nj_tiles_mapping_div_mid_1_reset <- TRUE
         nj_tiles_mapping_div_mid_1_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_2_reset <- TRUE
         nj_tiles_mapping_div_mid_2_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_3_reset <- TRUE
         nj_tiles_mapping_div_mid_3_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_4_reset <- TRUE
         nj_tiles_mapping_div_mid_4_val("Mean")
-        Vis$nj_tiles_mapping_div_mid_5_reset <- TRUE
         nj_tiles_mapping_div_mid_5_val("Mean")
 
         nj_heatmap_show_val(FALSE)
-        Vis$nj_heatmap_select_val_reset <- TRUE
         nj_heatmap_select_val(NULL)
-        Vis$nj_heatmap_scale_reset <- TRUE
         nj_heatmap_scale_val(nj_heatmap_scale_val_default())
-        Vis$nj_heatmap_div_mid_val_reset <- TRUE
         nj_heatmap_div_mid_val("Mean")
 
         # Color values
@@ -2179,13 +2169,13 @@ server <- function(input, output, session) {
         nj_title_color_val("#000000")
         nj_tiplab_color_val("#000000")
         nj_tiplab_fill_val("#84D9A0")
+        nj_branch_color_val("#000000")
         nj_branch_label_color_val("#FFB7B7")
         nj_tippoint_color_val("#3A4657")
         nj_nodepoint_color_val("#3A4657")
 
         # Tip points
         nj_tippoint_show_val(FALSE)
-        Vis$nj_tippoint_shape_reset <- TRUE
         nj_tippoint_shape_val("circle")
         nj_tippoint_alpha_val(0.5)
         ifelse(
@@ -2211,48 +2201,38 @@ server <- function(input, output, session) {
         nj_fruit_alpha_3_val(1)
         nj_fruit_alpha_4_val(1)
         nj_fruit_alpha_5_val(1)
-        Vis$nj_fruit_width_circ_val_reset <- TRUE
         nj_fruit_width_circ_val(fruit_width())
-        Vis$nj_fruit_width_circ_2_val_reset <- TRUE
         nj_fruit_width_circ_2_val(fruit_width())
-        Vis$nj_fruit_width_circ_3_val_reset <- TRUE
         nj_fruit_width_circ_3_val(fruit_width())
-        Vis$nj_fruit_width_circ_4_val_reset <- TRUE
         nj_fruit_width_circ_4_val(fruit_width())
-        Vis$nj_fruit_width_circ_5_val_reset <- TRUE
         nj_fruit_width_circ_5_val(fruit_width())
-        Vis$nj_fruit_offset_circ_reset <- TRUE
         nj_fruit_offset_circ_val(0.05)
-        Vis$nj_fruit_offset_circ_2_reset <- TRUE
         nj_fruit_offset_circ_2_val(0.05)
-        Vis$nj_fruit_offset_circ_3_reset <- TRUE
         nj_fruit_offset_circ_3_val(0.05)
-        Vis$nj_fruit_offset_circ_4_reset <- TRUE
         nj_fruit_offset_circ_4_val(0.05)
-        Vis$nj_fruit_offset_circ_5_reset <- TRUE
         nj_fruit_offset_circ_5_val(0.05)
 
         # Heatmap
         nj_heatmap_title_val("Heatmap")
         nj_colnames_angle_val(-90)
-        Vis$nj_colnames_y_val_reset <- TRUE
         nj_colnames_y_val(-1)
         nj_heatmap_width_val(heatmap_width())
-        Vis$nj_heatmap_offset_val_reset <- TRUE
         nj_heatmap_offset_val(0)
 
         # Clade highlights
         nj_nodelabel_show_val(FALSE)
-        Vis$nj_parentnode_val_reset <- TRUE
         nj_parentnode_val("")
         nj_clade_scale_val(clade_highlight_color())
         nj_clade_type_val("roundrect")
 
         # Dimensions
-        nj_ratio_val(c("16:10" = (16 / 10)))
+        ifelse(
+          !is.null(Vis$ratio_nj),
+          nj_aspect_ratio_val(Vis$ratio_nj),
+          nj_aspect_ratio_val(0.6)
+        )
         nj_v_val(0)
         nj_h_val(-0.05)
-        nj_scale_val(670)
         nj_zoom_val(0.95)
 
         # Root tree
@@ -2260,33 +2240,22 @@ server <- function(input, output, session) {
 
         # Layout
         nj_layout_val("rectangular")
-        nj_rootedge_show_val(FALSE)
-        Vis$nj_rootedge_length_val_reset <- TRUE
+        nj_rootedge_show_val(TRUE)
         ifelse(
           !is.null(Vis$nj_max_x),
           nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05)),
           nj_rootedge_length_val(2)
         )
         nj_rootedge_line_val("solid")
-        Vis$nj_xlim_val_reset <- TRUE
         nj_xlim_val(-10)
-        Vis$nj_xlim_inw_val_reset <- TRUE
         nj_xlim_inw_val(50)
-        nj_treescale_show_val(FALSE)
-        Vis$nj_treescale_width_val_reset <- TRUE
+        nj_treescale_show_val(TRUE)
         ifelse(
           !is.null(Vis$nj_max_x),
           nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0)),
           nj_treescale_width_val(2)
         )
-        Vis$nj_treescale_x_val_reset <- TRUE
-        ifelse(
-          !is.null(Vis$nj_max_x),
-          nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
-          nj_treescale_x_val(2)
-        )
-        Vis$nj_treescale_y_val_reset <- TRUE
-        nj_treescale_y_val(0)
+        nj_treescale_y_val(-1)
         nj_ladder_val(TRUE)
 
         # Legend
@@ -2345,8 +2314,18 @@ server <- function(input, output, session) {
 
       # Empty tree plot fields
       output$tree_field <- NULL
+      output$tree_aspect <- NULL
       output$mst_field <- NULL
-      log_print("Input load")
+      output$mst_aspect <- NULL
+      shinyjs::removeClass("mst_aspect", class = "aspect-display")
+      shinyjs::removeClass("tree_aspect", class = "aspect-display")
+
+      updateSliderInput(session, "nj_treescale_x", value = NULL)
+      output$nj_treescale_x <- NULL
+      message("load INPUT: ", input$nj_treescale_x)
+      message("load VAL:", nj_treescale_x_val())
+
+      output$tree_controls <- NULL
 
       # set typing start control variable
       Typing$reload <- TRUE
@@ -2357,6 +2336,7 @@ server <- function(input, output, session) {
 
         if (is.null(input$scheme_position)) {
           output$loaded_scheme <- renderUI({
+            render_info("loaded_scheme")
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2378,6 +2358,7 @@ server <- function(input, output, session) {
 
         if (!is.null(input$scheme_position)) {
           output$loaded_scheme <- renderUI({
+            render_info("loaded_scheme")
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2426,6 +2407,8 @@ server <- function(input, output, session) {
             database <- Startup$database
           }
           output$databasetext <- renderUI({
+            render_info("databasetext")
+
             fluidRow(
               tags$li(
                 class = "dropdown",
@@ -2457,7 +2440,9 @@ server <- function(input, output, session) {
       observe({
         if (!is.null(Startup$database)) {
           if (Typing$status == "Finalized") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
+
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2473,9 +2458,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Typing$status == "Attaching") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2491,9 +2477,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Typing$status == "Processing") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2509,9 +2496,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Screening$status == "started") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2527,9 +2515,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else if (Screening$status == "finished") {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2545,9 +2534,10 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           } else {
-            output$statustext <- renderUI(
+            output$statustext <- renderUI({
+              render_info("statustext")
               fluidRow(
                 tags$li(
                   class = "dropdown",
@@ -2563,7 +2553,7 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
           }
         }
       })
@@ -2793,7 +2783,8 @@ server <- function(input, output, session) {
 
           Startup$sidebar <- FALSE
 
-          output$menu_header_typing <- renderUI(
+          output$menu_header_typing <- renderUI({
+            render_info("menu_header_typing")
             div(
               class = "menu-header-typing",
               HTML(
@@ -2809,9 +2800,10 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
-          output$menu_header_screening <- renderUI(
+          output$menu_header_screening <- renderUI({
+            render_info("menu_header_screening")
             div(
               class = "menu-header-screening",
               HTML(
@@ -2826,7 +2818,7 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
           # Hide start message
           output$start_message <- NULL
@@ -3080,7 +3072,7 @@ server <- function(input, output, session) {
                     "integer",
                     "integer",
                     "character",
-                    "integer",
+                    "character",
                     "NULL"
                   )
                 )
@@ -3395,6 +3387,7 @@ server <- function(input, output, session) {
                   Startup$first_look <- TRUE
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 3,
                       align = "center",
@@ -3595,6 +3588,7 @@ server <- function(input, output, session) {
 
                   # Render missing values sidebar elements
                   output$missing_values_sidebar <- renderUI({
+                    render_info("missing_values_sidebar")
                     column(
                       width = 12,
                       fluidRow(
@@ -3622,6 +3616,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_loci <- renderUI({
+                    render_info("download_loci")
                     if (!is.null(DB$loci_info)) {
                       column(
                         12,
@@ -3649,6 +3644,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_scheme_info <- renderUI({
+                    render_info("download_scheme_info")
                     column(
                       12,
                       downloadBttn(
@@ -3670,6 +3666,7 @@ server <- function(input, output, session) {
 
                   # Render select input to choose displayed loci
                   output$compare_select <- renderUI({
+                    render_info("compare_select")
                     if (nrow(DB$data) == 1) {
                       HTML(
                         paste(
@@ -3734,6 +3731,7 @@ server <- function(input, output, session) {
 
                   ##### Render Entry Data Table ----
                   output$db_entries_table <- renderUI({
+                    render_info("db_entries_table")
                     if (!is.null(DB$data)) {
                       if (between(nrow(DB$data), 1, 30)) {
                         fluidRow(
@@ -4015,6 +4013,7 @@ server <- function(input, output, session) {
 
                       # Dynamic save button when rhandsontable changes or new entries
                       output$edit_entry_table <- renderUI({
+                        render_info("edit_entry_table")
                         check_new_entry <- check_new_entry()
 
                         if (
@@ -4186,6 +4185,7 @@ server <- function(input, output, session) {
 
                   # Render Entry table controls
                   output$entry_table_controls <- renderUI({
+                    render_info("entry_table_controls")
                     fluidRow(
                       column(
                         width = 5,
@@ -4247,6 +4247,7 @@ server <- function(input, output, session) {
                       ) {
                         output$db_distancematrix <- NULL
                         output$distancematrix_duplicated <- renderUI({
+                          render_info("distancematrix_duplicated")
                           column(
                             width = 12,
                             tags$span(
@@ -4345,6 +4346,7 @@ server <- function(input, output, session) {
                       # Render Distance Matrix UI
 
                       output$distmatrix_show <- renderUI({
+                        render_info("distmatrix_show")
                         if (!is.null(DB$data)) {
                           if (nrow(DB$data) > 1) {
                             if (!is.null(input$distmatrix_label)) {
@@ -4542,6 +4544,7 @@ server <- function(input, output, session) {
 
                   # render custom variables box UI
                   output$custom_var_box <- renderUI({
+                    render_info("custom_var_box")
                     custom_var_button <- actionButton(
                       "custom_var_table",
                       "Browse ",
@@ -4624,6 +4627,7 @@ server <- function(input, output, session) {
 
                   # Render delete entry box UI
                   output$delete_box <- renderUI({
+                    render_info("delete_box")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4653,6 +4657,7 @@ server <- function(input, output, session) {
 
                   # Render loci comparison box UI
                   output$compare_allele_box <- renderUI({
+                    render_info("compare_allele_box")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4685,6 +4690,7 @@ server <- function(input, output, session) {
 
                   # Render entry deletion select input
                   output$delete_select <- renderUI({
+                    render_info("delete_select")
                     pickerInput(
                       "select_delete",
                       label = "",
@@ -4704,6 +4710,7 @@ server <- function(input, output, session) {
 
                   # Render delete entry button
                   output$del_bttn <- renderUI({
+                    render_info("del_bttn")
                     actionBttn(
                       "del_button",
                       label = "",
@@ -4809,6 +4816,7 @@ server <- function(input, output, session) {
 
                   # Render missing value informatiojn box UI
                   output$missing_values <- renderUI({
+                    render_info("missing_values")
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4946,7 +4954,8 @@ server <- function(input, output, session) {
                   observe({
                     if (is.null(DB$data)) {
                       if (check_new_entry()) {
-                        output$db_no_entries <- renderUI(
+                        output$db_no_entries <- renderUI({
+                          render_info("db_no_entries")
                           column(
                             width = 12,
                             fluidRow(
@@ -4975,9 +4984,10 @@ server <- function(input, output, session) {
                               )
                             )
                           )
-                        )
+                        })
                       } else {
-                        output$db_no_entries <- renderUI(
+                        output$db_no_entries <- renderUI({
+                          render_info("db_no_entries")
                           column(
                             width = 12,
                             fluidRow(
@@ -5016,13 +5026,14 @@ server <- function(input, output, session) {
                               )
                             )
                           )
-                        )
+                        })
                       }
                     }
                   })
 
                   # Render scheme info download button
                   output$download_scheme_info <- renderUI({
+                    render_info("download_scheme_info")
                     column(
                       12,
                       downloadBttn(
@@ -5044,6 +5055,7 @@ server <- function(input, output, session) {
 
                   # Render scheme info download button
                   output$download_loci <- renderUI({
+                    render_info("download_loci")
                     if (!is.null(DB$loci_info)) {
                       column(
                         12,
@@ -5067,7 +5079,8 @@ server <- function(input, output, session) {
                     }
                   })
 
-                  output$distancematrix_no_entries <- renderUI(
+                  output$distancematrix_no_entries <- renderUI({
+                    render_info("distancematrix_no_entries")
                     fluidRow(
                       column(1),
                       column(
@@ -5081,7 +5094,7 @@ server <- function(input, output, session) {
                         ))
                       )
                     )
-                  )
+                  })
 
                   output$db_entries <- NULL
                   output$edit_index <- NULL
@@ -5106,6 +5119,7 @@ server <- function(input, output, session) {
                   output$start_typing_ui <- NULL
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 4,
                       align = "center",
@@ -5152,6 +5166,7 @@ server <- function(input, output, session) {
                   })
 
                   output$initiate_typing_ui <- renderUI({
+                    render_info("initiate_typing_ui")
                     column(
                       width = 4,
                       align = "center",
@@ -5353,8 +5368,6 @@ server <- function(input, output, session) {
     }
   })
 
-  # _______________________ ####
-
   ## Database ----
 
   ### Conditional UI Elements rendering ----
@@ -5380,6 +5393,7 @@ server <- function(input, output, session) {
   output$distance_matrix_info <- renderUI({
     req(DB$scheme)
 
+    render_info("distance_matrix_info")
     if (!is.null(DB$allelic_profile)) {
       if (anyNA(DB$allelic_profile)) {
         any_na <- TRUE
@@ -5466,6 +5480,7 @@ server <- function(input, output, session) {
             unlist(lapply(species_data, function(x) x$Name$name))
           )
           output$species_info_select_saved <- renderUI({
+            render_info("species_info_select_saved")
             fluidRow(
               column(1),
               column(
@@ -5520,6 +5535,8 @@ server <- function(input, output, session) {
   output$species_info_saved <- renderUI({
     req(Startup$database, DB$scheme)
 
+    render_info("species_info_saved")
+
     species_data_path <- file.path(
       Startup$database,
       gsub(" ", "_", DB$scheme),
@@ -5566,6 +5583,7 @@ server <- function(input, output, session) {
 
   # Scheme selector UI
   output$scheme_selector <- renderUI({
+    render_info("scheme_selector")
     if (!is.null(DB$scheme)) {
       scheme_names <- schemes$species
       names(scheme_names) <- ifelse(
@@ -5617,6 +5635,7 @@ server <- function(input, output, session) {
 
   # Control custom variables table
   output$cust_var_select <- renderUI({
+    render_info("cust_var_select")
     if (nrow(DB$cust_var) > 5) {
       selectInput(
         "cust_var_select",
@@ -5628,6 +5647,8 @@ server <- function(input, output, session) {
 
   output$cust_var_info <- renderUI({
     if ((!is.null(DB$cust_var)) && (!is.null(input$cust_var_select))) {
+      render_info("cust_var_info")
+
       if (nrow(DB$cust_var) > 5) {
         low <- -4
         high <- 0
@@ -5665,6 +5686,7 @@ server <- function(input, output, session) {
       if (DB$exist) {
         # Message for tab Browse Entries
         output$no_scheme_entries <- renderUI({
+          render_info("no_scheme_entries")
           fluidRow(
             column(1),
             column(
@@ -5696,6 +5718,7 @@ server <- function(input, output, session) {
 
         # Message for Tab Scheme Info
         output$no_scheme_info <- renderUI({
+          render_info("no_scheme_info")
           fluidRow(
             column(1),
             column(
@@ -5727,6 +5750,7 @@ server <- function(input, output, session) {
 
         # Message for Tab Distance Matrix
         output$no_scheme_distancematrix <- renderUI({
+          render_info("no_scheme_distancematrix")
           fluidRow(
             column(1),
             column(
@@ -5891,6 +5915,7 @@ server <- function(input, output, session) {
   observe({
     if (!is.null(DB$available)) {
       output$scheme_db <- renderUI({
+        render_info("scheme_db")
         if (length(DB$available) > 3) {
           selectInput(
             "scheme_db",
@@ -5962,7 +5987,8 @@ server <- function(input, output, session) {
         )
 
         output$db_loci_no <- NULL
-        output$loci_info_text <- renderUI(
+        output$loci_info_text <- renderUI({
+          render_info("loci_info_text")
           p(
             HTML(
               paste0(
@@ -5972,7 +5998,7 @@ server <- function(input, output, session) {
               )
             )
           )
-        )
+        })
       } else {
         if (
           !is.null(DB$scheme_db) &&
@@ -5984,7 +6010,8 @@ server <- function(input, output, session) {
               !is.null(DB$scheme) &&
               !is.null(DB$scheme_link)
           ) {
-            output$db_loci_no <- renderUI(
+            output$db_loci_no <- renderUI({
+              render_info("db_loci_no")
               p(
                 HTML(
                   paste0(
@@ -6006,7 +6033,7 @@ server <- function(input, output, session) {
                   )
                 )
               )
-            )
+            })
             output$loci_info_text <- NULL
           }
         }
@@ -6018,6 +6045,7 @@ server <- function(input, output, session) {
   # If only one entry available disable varying loci checkbox
 
   output$compare_difference_box <- renderUI({
+    render_info("compare_difference_box")
     if (!is.null(DB$data)) {
       if (nrow(DB$data) > 1) {
         div(
@@ -6409,6 +6437,8 @@ server <- function(input, output, session) {
   # Render import new name preview
   output$import_new_name_feedback_ui <- renderUI({
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
+      render_info("import_new_name_feedback_ui")
+
       if (is.null(input$import_new_name) || nchar(input$import_new_name) < 1) {
         disable("pin_import")
         HTML(
@@ -6446,6 +6476,8 @@ server <- function(input, output, session) {
   # Render ID column selection preview
   output$id_preview <- renderUI({
     req(input$import_id_selector, DB$import)
+
+    render_info("id_preview")
 
     check_pos_ui <- fluidRow(
       column(
@@ -6508,6 +6540,8 @@ server <- function(input, output, session) {
   output$imp_id_dup_info <- renderUI({
     req(DB$import, DB$data)
 
+    render_info("imp_id_dup_info")
+
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
       # get selected ID column
       id_column <- DB$import[[input$import_id_selector]]
@@ -6547,6 +6581,8 @@ server <- function(input, output, session) {
   # Render metadata selection preview
   output$metadata_preview <- renderUI({
     req(input$import_metadata_sel, DB$import)
+
+    render_info("metadata_preview")
 
     if (!is.null(input$import_files) && length(input$import_files) > 1) {
       HTML(paste0(
@@ -6711,7 +6747,10 @@ server <- function(input, output, session) {
             )
           )
           hash_button <- disabled(hash_button_ui)
-          output$hash_dir <- renderUI(disabled(hash_dir_ui))
+          output$hash_dir <- renderUI({
+            render_info("hash_dir")
+            disabled(hash_dir_ui)
+          })
           runjs(
             paste0(
               "document.getElementById('pin_import').style.animation =",
@@ -6733,7 +6772,10 @@ server <- function(input, output, session) {
               )
             )
             hash_button <- disabled(hash_button_ui)
-            output$hash_dir <- renderUI(hash_dir_ui)
+            output$hash_dir <- renderUI({
+              render_info("hash_dir")
+              hash_dir_ui
+            })
             disable("pin_import")
             enable("import_start_hash")
             delay(
@@ -6765,7 +6807,10 @@ server <- function(input, output, session) {
               )
             )
             hash_button <- disabled(hash_button_ui)
-            output$hash_dir <- renderUI(disabled(hash_dir_ui))
+            output$hash_dir <- renderUI({
+              render_info("hash_dir")
+              disabled(hash_dir_ui)
+            })
             disable("pin_import")
             runjs(
               paste0(
@@ -6861,18 +6906,42 @@ server <- function(input, output, session) {
 
     # Import section
     output$import_path <- renderText(import_filepath)
-    output$import_new_name_ui <- renderUI(import_new_name)
-    output$import_feedback <- renderUI(feedback)
-    output$delim <- renderUI(delim)
+    output$import_new_name_ui <- renderUI({
+      render_info("import_new_name_ui")
+      import_new_name
+    })
+    output$import_feedback <- renderUI({
+      render_info("import_feedback")
+      feedback
+    })
+    output$delim <- renderUI({
+      render_info("delim")
+      delim
+    })
 
     # Metadata section
-    output$import_id_sel <- renderUI(id_sel_ui)
-    output$import_metadata_sel <- renderUI(metadata_sel_ui)
-    output$delim2 <- renderUI(delim)
+    output$import_id_sel <- renderUI({
+      render_info("import_id_sel")
+      id_sel_ui
+    })
+    output$import_metadata_sel <- renderUI({
+      render_info("import_metadata_sel")
+      metadata_sel_ui
+    })
+    output$delim2 <- renderUI({
+      render_info("delim2")
+      delim
+    })
 
     # Hashing section
-    output$hash_feedback <- renderUI(hash_feedback)
-    output$hash_import_button <- renderUI(hash_button)
+    output$hash_feedback <- renderUI({
+      render_info("hash_feedback")
+      hash_feedback
+    })
+    output$hash_import_button <- renderUI({
+      render_info("hash_import_button")
+      hash_button
+    })
   })
 
   # Foreign allele library directory selection
@@ -6898,7 +6967,10 @@ server <- function(input, output, session) {
       )
     )
 
-    output$hash_folderpath <- renderUI(HTML(truncate_start(hash_dir)))
+    output$hash_folderpath <- renderUI({
+      render_info("hash_folderpath")
+      HTML(truncate_start(hash_dir))
+    })
 
     DB$hash_dir <- hash_dir
 
@@ -6923,6 +6995,8 @@ server <- function(input, output, session) {
   # Render metadata selection
   output$metadata_sel_ui <- renderUI({
     req(input$import_id_selector, DB$import_all_meta)
+
+    render_info("metadata_sel_ui")
 
     pickerInput(
       "import_metadata_sel",
@@ -6982,13 +7056,16 @@ server <- function(input, output, session) {
         position = "bottom-end",
         timer = 6000
       )
-      output$hashing_status <- renderUI(HTML(
-        paste0(
-          '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
-          '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
-          'b>Hashing failed</b><br>Allele library has missing loci'
+      output$hashing_status <- renderUI({
+        render_info("hashing_status")
+        HTML(
+          paste0(
+            '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
+            '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
+            'b>Hashing failed</b><br>Allele library has missing loci'
+          )
         )
-      ))
+      })
       runjs(paste0(
         "document.getElementById('import_start_hash').styl",
         "e.animation = 'none';"
@@ -7026,13 +7103,16 @@ server <- function(input, output, session) {
             timer = 6000
           )
 
-          output$hashing_status <- renderUI(HTML(
-            paste0(
-              '&nbsp;&nbsp; <i class="fa-solid fa-circle-check" style="font',
-              '-size:15px; color:#90EE90; position:relative;"></i> &nbsp; <',
-              'b>Hashing successful</b><br>Proceed to import the dataset'
+          output$hashing_status <- renderUI({
+            render_info("hashing_status")
+            HTML(
+              paste0(
+                '&nbsp;&nbsp; <i class="fa-solid fa-circle-check" style="font',
+                '-size:15px; color:#90EE90; position:relative;"></i> &nbsp; <',
+                'b>Hashing successful</b><br>Proceed to import the dataset'
+              )
             )
-          ))
+          })
           enable("pin_import")
           disable("import_start_hash")
           disable("hash_dir_button")
@@ -7058,13 +7138,16 @@ server <- function(input, output, session) {
             "document.getElementById('hash_dir_button').style.animation = 'pulsa",
             "te-shadow 2s infinite linear';"
           ))
-          output$hashing_status <- renderUI(HTML(
-            paste0(
-              '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
-              '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
-              'b>Hashing failed</b><br>Dataset can not be imported.'
+          output$hashing_status <- renderUI({
+            render_info("hashing_status")
+            HTML(
+              paste0(
+                '&nbsp;&nbsp; <i class="fa-solid fa-circle-xmark" style="font',
+                '-size:15px; color:#ff0000; position:relative;"></i> &nbsp; <',
+                'b>Hashing failed</b><br>Dataset can not be imported.'
+              )
             )
-          ))
+          })
         }
       )
     }
@@ -8495,8 +8578,6 @@ server <- function(input, output, session) {
     }
   )
 
-  # _______________________ ####
-
   ## Locus sequences ----
 
   observe({
@@ -8533,7 +8614,8 @@ server <- function(input, output, session) {
       )
 
       output$db_loci_no <- NULL
-      output$loci_info_text <- renderUI(
+      output$loci_info_text <- renderUI({
+        render_info("loci_info_text")
         p(
           HTML(
             paste0(
@@ -8543,14 +8625,15 @@ server <- function(input, output, session) {
             )
           )
         )
-      )
+      })
     } else {
       if (
         !is.null(DB$scheme_db) &&
           !is.null(DB$scheme) &&
           !is.null(DB$scheme_link)
       ) {
-        output$db_loci_no <- renderUI(
+        output$db_loci_no <- renderUI({
+          render_info("db_loci_no")
           p(
             HTML(
               paste0(
@@ -8568,7 +8651,7 @@ server <- function(input, output, session) {
               )
             )
           )
-        )
+        })
 
         output$loci_info_text <- NULL
       }
@@ -8584,6 +8667,8 @@ server <- function(input, output, session) {
         DB$scheme,
         input$seq_sel
       )
+
+      render_info("loci_sequences")
 
       DB$loci <- list.files(
         path = paste0(
@@ -8636,14 +8721,14 @@ server <- function(input, output, session) {
       } else {
         NULL
       }
-    } else {
-      NULL
     }
   })
 
   output$sequence_selector <- renderUI({
     if (!is.null(input$db_loci_rows_selected) && !is.null(DB$loci_info)) {
       req(input$db_loci_rows_selected, Startup$database, DB$scheme)
+
+      render_info("sequence_selector")
 
       DB$loci <- list.files(
         path = paste0(
@@ -8820,8 +8905,6 @@ server <- function(input, output, session) {
       writeLines(cont, file)
     }
   )
-
-  # _______________________ ####
 
   ## Download cgMLST ----
 
@@ -9236,7 +9319,8 @@ server <- function(input, output, session) {
     shinyjs::show("download_cgMLST")
     shinyjs::hide("hashing")
 
-    output$statustext <- renderUI(
+    output$statustext <- renderUI({
+      render_info("statustext")
       fluidRow(
         tags$li(
           class = "dropdown",
@@ -9251,7 +9335,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     log_print("Download successful")
 
@@ -9602,6 +9686,7 @@ server <- function(input, output, session) {
           unlist(lapply(Scheme$species_data, function(x) x$Name$name))
         )
         output$species_info_select <- renderUI({
+          render_info("species_info_select")
           fluidRow(
             column(1),
             column(
@@ -9661,8 +9746,6 @@ server <- function(input, output, session) {
     updateTabItems(session, "tabs", selected = "init")
   })
 
-  # _______________________ ####
-
   ## Visualization ----
 
   # Render placeholder image
@@ -9691,6 +9774,7 @@ server <- function(input, output, session) {
   })
 
   output$generate_plot_ui <- renderUI({
+    render_info("generate_plot_ui")
     box(
       solidHeader = TRUE,
       status = "primary",
@@ -9724,7 +9808,6 @@ server <- function(input, output, session) {
                 justified = TRUE
               )
             ),
-            uiOutput("tree_algo_lines"),
             column(
               width = 4,
               uiOutput("tree_algo_ui")
@@ -9755,6 +9838,7 @@ server <- function(input, output, session) {
   })
 
   output$tree_algo_ui <- renderUI({
+    render_info("tree_algo_ui")
     tree_algo <- prettyRadioButtons(
       inputId = "tree_algo",
       "",
@@ -9769,623 +9853,632 @@ server <- function(input, output, session) {
     }
   })
 
-  output$tree_algo_lines <- renderUI({
-    if (tree_type_reactive() == "MST") {
-      div(
-        div(class = "lower-line-inactive"),
-        div(class = "upper-line-inactive")
-      )
-    } else {
-      div(
-        div(class = "lower-line-active"),
-        div(class = "upper-line-active")
-      )
-    }
-  })
-
   #### Tree controls ----
 
   # Initially shown label menu
 
-  session$sendCustomMessage('nj_highlight', "nj_label_menu")
+  # session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
-  output$tree_controls <- renderUI(
-    div(
-      class = "control-box",
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Labels",
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              br(),
-              fluidRow(
-                column(
-                  width = 6,
-                  align = "left",
-                  h4(
-                    p("Isolate Label"),
-                    style = "color:white; position: relative; right: -15px; "
-                  ),
-                ),
-                column(
-                  width = 6,
-                  align = "left",
-                  div(
-                    class = "mat-switch-lab",
-                    materialSwitch(
-                      "nj_tiplab_show",
-                      "",
-                      value = TRUE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 9,
-                  align = "left",
-                  div(
-                    class = "nj-label-sel",
-                    uiOutput("nj_tiplab_ui")
-                  )
-                ),
-                column(
-                  width = 3,
-                  align = "center",
-                  dropMenu(
-                    actionBttn(
-                      "nj_labeltext_menu",
-                      label = "",
-                      color = "default",
-                      size = "sm",
-                      style = "material-flat",
-                      icon = icon("sliders")
-                    ),
-                    placement = "right",
-                    theme = "translucent",
-                    fluidRow(
-                      column(
-                        width = 6,
-                        align = "center",
-                        uiOutput("nj_align_ui"),
-                        br(),
-                        sliderInput(
-                          "nj_tiplab_size",
-                          label = h5(
-                            "Label size",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 1,
-                          max = 10,
-                          step = 0.5,
-                          value = nj_tiplab_size_val(),
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_tiplab_alpha",
-                          label = h5(
-                            "Opacity",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0.1,
-                          max = 1,
-                          step = 0.05,
-                          value = 1,
-                          width = "150px",
-                          ticks = FALSE
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "center",
-                        selectInput(
-                          "nj_tiplab_fontface",
-                          label = h5(
-                            "Fontface",
-                            style = "color:white; margin-bottom: 5px; margin-top: 16px"
-                          ),
-                          width = "250px",
-                          choices = c(
-                            Plain = "plain",
-                            Bold = "bold",
-                            Italic = "italic",
-                            `B & I` = "bold.italic"
-                          ),
-                          selected = "plain"
-                        ),
-                        br(),
-                        sliderInput(
-                          inputId = "nj_tiplab_position",
-                          label = h5(
-                            "Position",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = -3,
-                          max = 3,
-                          step = 0.05,
-                          value = 0,
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        uiOutput("nj_tiplab_angle_ui")
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        fluidRow(
-          column(
-            width = 8,
-            div(
-              class = "mat-switch-geom",
-              materialSwitch(
-                "nj_geom",
-                h5(
-                  p("Panels"),
-                  style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
-                ),
-                value = FALSE,
-                right = FALSE
-              )
-            )
-          ),
-          column(
-            width = 4,
-            dropMenu(
-              actionBttn(
-                "nj_labelformat_menu",
-                label = "",
-                color = "default",
-                size = "sm",
-                style = "material-flat",
-                icon = icon("sliders")
-              ),
-              placement = "right",
-              theme = "translucent",
-              fluidRow(
-                column(
-                  width = 12,
-                  align = "center",
-                  sliderInput(
-                    inputId = "nj_tiplab_padding",
-                    label = h5(
-                      "Size",
-                      style = "color:white; margin-bottom: 0px"
-                    ),
-                    min = 0.05,
-                    max = 1,
-                    value = nj_tiplab_padding_val(),
-                    step = 0.05,
-                    width = "150px",
-                    ticks = FALSE
-                  ),
-                  br(),
-                  sliderInput(
-                    inputId = "nj_tiplab_labelradius",
-                    label = h5(
-                      "Smooth edge",
-                      style = "color:white; margin-bottom: 0px"
-                    ),
-                    min = 0,
-                    step = 0.05,
-                    max = 0.5,
-                    value = 0.2,
-                    width = "150px",
-                    ticks = FALSE
-                  )
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              fluidRow(
-                column(
-                  width = 6,
-                  align = "left",
-                  h4(
-                    p("Branches"),
-                    style = "color:white; position: relative; right: -15px;"
-                  ),
-                ),
-                column(
-                  width = 6,
-                  align = "left",
-                  div(
-                    class = "mat-switch-lab",
-                    materialSwitch(
-                      "nj_show_branch_label",
-                      "",
-                      value = FALSE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 9,
-                  align = "left",
-                  div(
-                    class = "nj-label-sel",
-                    uiOutput("nj_branch_label")
-                  )
-                ),
-                column(
-                  width = 3,
-                  align = "center",
-                  dropMenu(
-                    actionBttn(
-                      "nj_branch_label_menu",
-                      label = "",
-                      color = "default",
-                      size = "sm",
-                      style = "material-flat",
-                      icon = icon("sliders")
-                    ),
-                    placement = "right",
-                    theme = "translucent",
-                    fluidRow(
-                      column(
-                        width = 6,
-                        align = "center",
-                        selectInput(
-                          "nj_branchlab_fontface",
-                          label = h5(
-                            "Fontface",
-                            style = "color:white; margin-bottom: 0px;"
-                          ),
-                          width = "250px",
-                          choices = c(
-                            Plain = "plain",
-                            Bold = "bold",
-                            Italic = "italic",
-                            `B & I` = "bold.italic"
-                          )
-                        ),
-                        br(),
-                        sliderInput(
-                          inputId = "nj_branch_x",
-                          label = h5(
-                            "X Position",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = -3,
-                          max = 3,
-                          value = 0,
-                          width = "250px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_branchlab_alpha",
-                          label = h5(
-                            "Opacity",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0.1,
-                          max = 1,
-                          step = 0.05,
-                          value = 0.65,
-                          width = "250px",
-                          ticks = FALSE
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "center",
-                        sliderInput(
-                          "nj_branch_size",
-                          label = h5(
-                            "Size",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 2,
-                          max = 10,
-                          step = 0.5,
-                          value = nj_branch_size_val(),
-                          width = "150px",
-                          ticks = FALSE
-                        ),
-                        br(),
-                        sliderInput(
-                          "nj_branch_labelradius",
-                          label = h5(
-                            "Smooth edge",
-                            style = "color:white; margin-bottom: 0px"
-                          ),
-                          min = 0,
-                          max = 0.5,
-                          step = 0.05,
-                          value = 0.5,
-                          width = "250px",
-                          ticks = FALSE
-                        )
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            fluidRow(
-              column(
-                width = 8,
-                textInput(
-                  "nj_title",
-                  label = "",
-                  width = "100%",
-                  placeholder = "Plot Title"
-                )
-              ),
-              column(
-                width = 4,
-                dropMenu(
-                  actionBttn(
-                    "nj_title_menu",
-                    label = "",
-                    color = "default",
-                    size = "sm",
-                    style = "material-flat",
-                    icon = icon("sliders")
-                  ),
-                  placement = "right",
-                  theme = "translucent",
-                  fluidRow(
-                    column(
-                      width = 12,
-                      align = "center",
-                      sliderInput(
-                        "nj_title_size",
-                        label = h5(
-                          "Title Size",
-                          style = "color:white; margin-bottom: 0px"
-                        ),
-                        value = 30,
-                        min = 15,
-                        max = 40,
-                        step = 1,
-                        width = "150px",
-                        ticks = FALSE
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            fluidRow(
-              column(
-                width = 8,
-                textInput(
-                  "nj_subtitle",
-                  label = "",
-                  width = "100%",
-                  placeholder = "Plot Subtitle"
-                )
-              ),
-              column(
-                width = 4,
-                dropMenu(
-                  actionBttn(
-                    "nj_subtitle_menu",
-                    label = "",
-                    color = "default",
-                    size = "sm",
-                    style = "material-flat",
-                    icon = icon("sliders")
-                  ),
-                  placement = "right",
-                  theme = "translucent",
-                  fluidRow(
-                    column(
-                      width = 12,
-                      align = "center",
-                      sliderInput(
-                        "nj_subtitle_size",
-                        label = h5(
-                          "Subtitle Size",
-                          style = "color:white; margin-bottom: 0px"
-                        ),
-                        value = 30,
-                        min = 15,
-                        max = 40,
-                        step = 1,
-                        width = "150px",
-                        ticks = FALSE
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        ),
-        hr(),
-        fluidRow(
-          div(
-            class = "nj-label-control-col",
-            column(
-              width = 12,
-              align = "left",
-              h4(
-                p("Custom Label"),
-                style = "color:white; position: relative; right: -15px;"
-              ),
-              column(
-                width = 12,
-                align = "center",
-                fluidRow(
-                  column(
-                    width = 7,
-                    textInput(
-                      "nj_new_label_name",
-                      "",
-                      placeholder = "New Label"
-                    )
-                  ),
-                  column(
-                    width = 3,
-                    actionButton(
-                      "nj_add_new_label",
-                      "",
-                      icon = icon("plus")
-                    )
-                  ),
-                  column(
-                    width = 2,
-                    align = "right",
-                    dropMenu(
-                      actionBttn(
-                        "nj_custom_label_menu",
-                        label = "",
-                        color = "default",
-                        size = "sm",
-                        style = "material-flat",
-                        icon = icon("sliders")
-                      ),
-                      placement = "right",
-                      theme = "translucent",
-                      fluidRow(
-                        div(
-                          class = "nj-custom-label-menu-col",
-                          column(
-                            width = 12,
-                            align = "center",
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Size'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_custom_labelsize")
-                                )
-                              )
-                            ),
-                            br(),
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Vertical'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_sliderInput_y")
-                                )
-                              )
-                            ),
-                            br(),
-                            fluidRow(
-                              column(
-                                width = 3,
-                                align = "left",
-                                HTML(
-                                  paste(
-                                    tags$span(
-                                      style = 'color: white; font-size: 14px; position: relative; top: 7px;',
-                                      'Horizontal'
-                                    )
-                                  )
-                                )
-                              ),
-                              column(
-                                width = 9,
-                                align = "right",
-                                div(
-                                  class = "nj-label-slider",
-                                  uiOutput("nj_sliderInput_x")
-                                )
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                ),
-                fluidRow(
-                  column(
-                    width = 7,
-                    uiOutput("nj_custom_label_select")
-                  ),
-                  column(
-                    width = 4,
-                    actionButton(
-                      "nj_del_label",
-                      "",
-                      icon = icon("minus")
-                    )
-                  )
-                ),
-                fluidRow(
-                  column(
-                    width = 12,
-                    align = "center",
-                    actionButton(
-                      "nj_cust_label_save",
-                      "Apply"
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  )
+  # output$tree_controls <- renderUI({
+  #   render_info("tree_controls Labels Menu")
+  #   div(
+  #     class = "full-height-box",
+  #     box(
+  #       solidHeader = TRUE,
+  #       status = "primary",
+  #       width = "100%",
+  #       title = "Labels",
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             br(),
+  #             fluidRow(
+  #               column(
+  #                 width = 7,
+  #                 align = "left",
+  #                 h4(
+  #                   p("Isolate Label"),
+  #                   style = "color:white; position: relative; right: -15px; "
+  #                 ),
+  #               ),
+  #               column(
+  #                 width = 5,
+  #                 align = "left",
+  #                 div(
+  #                   class = "mat-switch-lab",
+  #                   materialSwitch(
+  #                     "nj_tiplab_show",
+  #                     "",
+  #                     value = TRUE
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 9,
+  #                 align = "left",
+  #                 div(
+  #                   class = "nj-label-sel",
+  #                   uiOutput("nj_tiplab_ui")
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 3,
+  #                 align = "center",
+  #                 dropMenu(
+  #                   actionBttn(
+  #                     "nj_labeltext_menu",
+  #                     label = "",
+  #                     color = "default",
+  #                     size = "sm",
+  #                     style = "material-flat",
+  #                     icon = icon("sliders")
+  #                   ),
+  #                   placement = "right",
+  #                   theme = "translucent",
+  #                   fluidRow(
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       uiOutput("nj_align_ui"),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_tiplab_size",
+  #                         label = h5(
+  #                           "Label size",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 1,
+  #                         max = 10,
+  #                         step = 0.1,
+  #                         value = 4,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_tiplab_alpha",
+  #                         label = h5(
+  #                           "Opacity",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0.1,
+  #                         max = 1,
+  #                         step = 0.05,
+  #                         value = 1,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       )
+  #                     ),
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       selectInput(
+  #                         "nj_tiplab_fontface",
+  #                         label = h5(
+  #                           "Fontface",
+  #                           style = "color:white; margin-bottom: 5px; margin-top: 16px"
+  #                         ),
+  #                         width = "250px",
+  #                         choices = c(
+  #                           Plain = "plain",
+  #                           Bold = "bold",
+  #                           Italic = "italic",
+  #                           `B & I` = "bold.italic"
+  #                         ),
+  #                         selected = "plain"
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         inputId = "nj_tiplab_position",
+  #                         label = h5(
+  #                           "Position",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = -3,
+  #                         max = 3,
+  #                         step = 0.05,
+  #                         value = 0,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       uiOutput("nj_tiplab_angle_ui")
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       fluidRow(
+  #         column(
+  #           width = 8,
+  #           div(
+  #             class = "mat-switch-geom",
+  #             materialSwitch(
+  #               "nj_geom",
+  #               h5(
+  #                 p("Panels"),
+  #                 style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+  #               ),
+  #               value = FALSE,
+  #               right = FALSE
+  #             )
+  #           )
+  #         ),
+  #         column(
+  #           width = 4,
+  #           dropMenu(
+  #             actionBttn(
+  #               "nj_labelformat_menu",
+  #               label = "",
+  #               color = "default",
+  #               size = "sm",
+  #               style = "material-flat",
+  #               icon = icon("sliders")
+  #             ),
+  #             placement = "right",
+  #             theme = "translucent",
+  #             fluidRow(
+  #               column(
+  #                 width = 12,
+  #                 align = "center",
+  #                 sliderInput(
+  #                   inputId = "nj_tiplab_padding",
+  #                   label = h5(
+  #                     "Size",
+  #                     style = "color:white; margin-bottom: 0px"
+  #                   ),
+  #                   min = 0.05,
+  #                   max = 1,
+  #                   value = 0.2,
+  #                   step = 0.05,
+  #                   width = "150px",
+  #                   ticks = FALSE
+  #                 ),
+  #                 br(),
+  #                 sliderInput(
+  #                   inputId = "nj_tiplab_labelradius",
+  #                   label = h5(
+  #                     "Smooth edge",
+  #                     style = "color:white; margin-bottom: 0px"
+  #                   ),
+  #                   min = 0,
+  #                   step = 0.05,
+  #                   max = 0.5,
+  #                   value = 0.2,
+  #                   width = "150px",
+  #                   ticks = FALSE
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             fluidRow(
+  #               column(
+  #                 width = 7,
+  #                 align = "left",
+  #                 h4(
+  #                   p("Branches"),
+  #                   style = "color:white; position: relative; right: -15px;"
+  #                 ),
+  #               ),
+  #               column(
+  #                 width = 5,
+  #                 align = "left",
+  #                 div(
+  #                   class = "mat-switch-lab",
+  #                   materialSwitch(
+  #                     "nj_show_branch_label",
+  #                     "",
+  #                     value = FALSE
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 9,
+  #                 align = "left",
+  #                 div(
+  #                   class = "nj-label-sel",
+  #                   uiOutput("nj_branch_label")
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 3,
+  #                 align = "center",
+  #                 dropMenu(
+  #                   actionBttn(
+  #                     "nj_branch_label_menu",
+  #                     label = "",
+  #                     color = "default",
+  #                     size = "sm",
+  #                     style = "material-flat",
+  #                     icon = icon("sliders")
+  #                   ),
+  #                   placement = "right",
+  #                   theme = "translucent",
+  #                   fluidRow(
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       selectInput(
+  #                         "nj_branchlab_fontface",
+  #                         label = h5(
+  #                           "Fontface",
+  #                           style = "color:white; margin-bottom: 0px;"
+  #                         ),
+  #                         width = "250px",
+  #                         choices = c(
+  #                           Plain = "plain",
+  #                           Bold = "bold",
+  #                           Italic = "italic",
+  #                           `B & I` = "bold.italic"
+  #                         )
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         inputId = "nj_branch_x",
+  #                         label = h5(
+  #                           "X Position",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = -3,
+  #                         max = 3,
+  #                         value = 0,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_branchlab_alpha",
+  #                         label = h5(
+  #                           "Opacity",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0.1,
+  #                         max = 1,
+  #                         step = 0.05,
+  #                         value = 0.65,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       )
+  #                     ),
+  #                     column(
+  #                       width = 6,
+  #                       align = "center",
+  #                       sliderInput(
+  #                         "nj_branch_size",
+  #                         label = h5(
+  #                           "Size",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 2,
+  #                         max = 10,
+  #                         step = 0.5,
+  #                         value = 4,
+  #                         width = "150px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br(),
+  #                       sliderInput(
+  #                         "nj_branch_labelradius",
+  #                         label = h5(
+  #                           "Smooth edge",
+  #                           style = "color:white; margin-bottom: 0px"
+  #                         ),
+  #                         min = 0,
+  #                         max = 0.5,
+  #                         step = 0.05,
+  #                         value = 0.5,
+  #                         width = "250px",
+  #                         ticks = FALSE
+  #                       ),
+  #                       br()
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             ),
+  #             fluidRow(
+  #               column(
+  #                 width = 5,
+  #                 div(
+  #                   class = "mat-switch-geom",
+  #                   materialSwitch(
+  #                     inputId = "nj_branch_panel",
+  #                     h5(
+  #                       p("Panels"),
+  #                       style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+  #                     ),
+  #                     value = FALSE,
+  #                     right = FALSE
+  #                   )
+  #                 )
+  #               ),
+  #               column(
+  #                 width = 7,
+  #                 uiOutput("nj_branchlabel_cutoff_ui")
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         column(
+  #           width = 12,
+  #           align = "left",
+  #           fluidRow(
+  #             column(
+  #               width = 8,
+  #               textInput(
+  #                 "nj_title",
+  #                 label = "",
+  #                 width = "100%",
+  #                 placeholder = "Plot Title"
+  #               )
+  #             ),
+  #             column(
+  #               width = 4,
+  #               dropMenu(
+  #                 actionBttn(
+  #                   "nj_title_menu",
+  #                   label = "",
+  #                   color = "default",
+  #                   size = "sm",
+  #                   style = "material-flat",
+  #                   icon = icon("sliders")
+  #                 ),
+  #                 placement = "right",
+  #                 theme = "translucent",
+  #                 fluidRow(
+  #                   column(
+  #                     width = 12,
+  #                     align = "center",
+  #                     sliderInput(
+  #                       "nj_title_size",
+  #                       label = h5(
+  #                         "Title Size",
+  #                         style = "color:white; margin-bottom: 0px"
+  #                       ),
+  #                       value = 30,
+  #                       min = 15,
+  #                       max = 40,
+  #                       step = 1,
+  #                       width = "150px",
+  #                       ticks = FALSE
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       br(),
+  #       fluidRow(
+  #         column(
+  #           width = 12,
+  #           align = "left",
+  #           fluidRow(
+  #             column(
+  #               width = 8,
+  #               textInput(
+  #                 "nj_subtitle",
+  #                 label = "",
+  #                 width = "100%",
+  #                 placeholder = "Plot Subtitle"
+  #               )
+  #             ),
+  #             column(
+  #               width = 4,
+  #               dropMenu(
+  #                 actionBttn(
+  #                   "nj_subtitle_menu",
+  #                   label = "",
+  #                   color = "default",
+  #                   size = "sm",
+  #                   style = "material-flat",
+  #                   icon = icon("sliders")
+  #                 ),
+  #                 placement = "right",
+  #                 theme = "translucent",
+  #                 fluidRow(
+  #                   column(
+  #                     width = 12,
+  #                     align = "center",
+  #                     sliderInput(
+  #                       "nj_subtitle_size",
+  #                       label = h5(
+  #                         "Subtitle Size",
+  #                         style = "color:white; margin-bottom: 0px"
+  #                       ),
+  #                       value = 30,
+  #                       min = 15,
+  #                       max = 40,
+  #                       step = 1,
+  #                       width = "150px",
+  #                       ticks = FALSE
+  #                     )
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       ),
+  #       hr(),
+  #       fluidRow(
+  #         div(
+  #           class = "nj-label-control-col",
+  #           column(
+  #             width = 12,
+  #             align = "left",
+  #             h4(
+  #               p("Custom Label"),
+  #               style = "color:white; position: relative; right: -15px;"
+  #             ),
+  #             column(
+  #               width = 12,
+  #               align = "center",
+  #               fluidRow(
+  #                 column(
+  #                   width = 7,
+  #                   textInput(
+  #                     "nj_new_label_name",
+  #                     "",
+  #                     placeholder = "New Label"
+  #                   )
+  #                 ),
+  #                 column(
+  #                   width = 3,
+  #                   actionButton(
+  #                     "nj_add_new_label",
+  #                     "",
+  #                     icon = icon("plus")
+  #                   )
+  #                 ),
+  #                 column(
+  #                   width = 2,
+  #                   align = "right",
+  #                   dropMenu(
+  #                     actionBttn(
+  #                       "nj_custom_label_menu",
+  #                       label = "",
+  #                       color = "default",
+  #                       size = "sm",
+  #                       style = "material-flat",
+  #                       icon = icon("sliders")
+  #                     ),
+  #                     placement = "right",
+  #                     theme = "translucent",
+  #                     fluidRow(
+  #                       div(
+  #                         class = "nj-custom-label-menu-col",
+  #                         column(
+  #                           width = 12,
+  #                           align = "center",
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Size'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_custom_labelsize")
+  #                               )
+  #                             )
+  #                           ),
+  #                           br(),
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Vertical'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_sliderInput_y")
+  #                               )
+  #                             )
+  #                           ),
+  #                           br(),
+  #                           fluidRow(
+  #                             column(
+  #                               width = 3,
+  #                               align = "left",
+  #                               HTML(
+  #                                 paste(
+  #                                   tags$span(
+  #                                     style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+  #                                     'Horizontal'
+  #                                   )
+  #                                 )
+  #                               )
+  #                             ),
+  #                             column(
+  #                               width = 9,
+  #                               align = "right",
+  #                               div(
+  #                                 class = "nj-label-slider",
+  #                                 uiOutput("nj_sliderInput_x")
+  #                               )
+  #                             )
+  #                           )
+  #                         )
+  #                       )
+  #                     )
+  #                   )
+  #                 )
+  #               ),
+  #               fluidRow(
+  #                 column(
+  #                   width = 7,
+  #                   uiOutput("nj_custom_label_select")
+  #                 ),
+  #                 column(
+  #                   width = 4,
+  #                   actionButton(
+  #                     "nj_del_label",
+  #                     "",
+  #                     icon = icon("minus")
+  #                   )
+  #                 )
+  #               ),
+  #               fluidRow(
+  #                 column(
+  #                   width = 12,
+  #                   align = "center",
+  #                   actionButton(
+  #                     "nj_cust_label_save",
+  #                     "Apply"
+  #                   )
+  #                 )
+  #               )
+  #             )
+  #           )
+  #         )
+  #       )
+  #     )
+  #   )
+  # })
 
   ##### Label Menu ----
 
@@ -10395,13 +10488,13 @@ server <- function(input, output, session) {
   nj_tiplab_reactive <- reactive({
     ifelse(!is.null(input$nj_tiplab), input$nj_tiplab, "Assembly Name")
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiplab_val <- reactiveVal()
   nj_tiplab_show_val <- reactiveVal()
   nj_align_reactive <- reactive({
-    ifelse(!is.null(input$nj_align), input$nj_align, FALSE)
+    ifelse(!is.null(input$nj_align), input$nj_align, TRUE)
   }) |>
-    debounce(100)
+    debounce(250)
   nj_align_val <- reactiveVal()
   nj_tiplab_size_val <- reactiveVal()
   nj_tiplab_fontface_val <- reactiveVal()
@@ -10509,10 +10602,16 @@ server <- function(input, output, session) {
   nj_show_branch_label_val <- reactiveVal()
   nj_branch_size_val <- reactiveVal()
   nj_branch_label_reactive <- reactive({
-    ifelse(!is.null(input$nj_branch_label), input$nj_branch_label, "Host")
+    ifelse(
+      !is.null(input$nj_branch_label),
+      input$nj_branch_label,
+      "Allelic Distance"
+    )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_branch_label_val <- reactiveVal()
+  nj_branch_panel_val <- reactiveVal()
+  nj_branchlabel_cutoff_val <- reactiveVal()
   nj_branchlab_alpha_val <- reactiveVal()
   nj_branch_x_val <- reactiveVal()
   nj_branchlab_fontface_val <- reactiveVal()
@@ -10547,6 +10646,31 @@ server <- function(input, output, session) {
       !is.null(input$nj_branch_x),
       nj_branch_x_val(input$nj_branch_x),
       nj_branch_x_val(0)
+    )
+
+    ifelse(
+      !is.null(input$nj_branch_panel),
+      nj_branch_panel_val(input$nj_branch_panel),
+      nj_branch_panel_val(FALSE)
+    )
+
+    ifelse(
+      !is.null(input$nj_branchlabel_cutoff),
+      nj_branchlabel_cutoff_val(input$nj_branchlabel_cutoff),
+      nj_branchlabel_cutoff_val(
+        nj_branchlabel_cutoff_val(ifelse(
+          !is.null(Vis$nj_branch_lengths),
+          2,
+          round(
+            quantile(
+              Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+              0.3,
+              na.rm = TRUE
+            ),
+            1
+          )
+        ))
+      )
     )
 
     ifelse(
@@ -10597,14 +10721,30 @@ server <- function(input, output, session) {
   ###### Label Interface ----
 
   observeEvent(input$nj_label_menu, {
+    req(
+      isolate(nj_tiplab_size_val()),
+      isolate(nj_tiplab_alpha_val()),
+      isolate(nj_tiplab_fontface_val()),
+      isolate(nj_tiplab_position_val()),
+      isolate(nj_tiplab_padding_val()),
+      isolate(nj_tiplab_labelradius_val()),
+      isolate(nj_branch_x_val()),
+      isolate(nj_branchlab_alpha_val()),
+      isolate(nj_branch_size_val()),
+      isolate(nj_branch_labelradius_val()),
+      isolate(nj_title_size_val()),
+      isolate(nj_subtitle_size_val())
+    )
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_label_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      render_info("tree_controls Labels")
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -10619,7 +10759,7 @@ server <- function(input, output, session) {
                 br(),
                 fluidRow(
                   column(
-                    width = 6,
+                    width = 7,
                     align = "left",
                     h4(
                       p("Isolate Label"),
@@ -10627,7 +10767,7 @@ server <- function(input, output, session) {
                     )
                   ),
                   column(
-                    width = 6,
+                    width = 5,
                     align = "left",
                     div(
                       class = "mat-switch-lab",
@@ -10676,7 +10816,7 @@ server <- function(input, output, session) {
                             ),
                             min = 1,
                             max = 10,
-                            step = 0.5,
+                            step = 0.1,
                             value = isolate(nj_tiplab_size_val()),
                             width = "150px",
                             ticks = FALSE
@@ -10812,7 +10952,7 @@ server <- function(input, output, session) {
                 align = "left",
                 fluidRow(
                   column(
-                    width = 6,
+                    width = 7,
                     align = "left",
                     h4(
                       p("Branches"),
@@ -10820,7 +10960,7 @@ server <- function(input, output, session) {
                     )
                   ),
                   column(
-                    width = 6,
+                    width = 5,
                     align = "left",
                     div(
                       class = "mat-switch-lab",
@@ -10865,7 +11005,7 @@ server <- function(input, output, session) {
                               "Fontface",
                               style = "color:white; margin-bottom: 0px;"
                             ),
-                            width = "250px",
+                            width = "150px",
                             choices = c(
                               Plain = "plain",
                               Bold = "bold",
@@ -10884,7 +11024,7 @@ server <- function(input, output, session) {
                             min = -3,
                             max = 3,
                             value = isolate(nj_branch_x_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
                           ),
                           br(),
@@ -10898,7 +11038,7 @@ server <- function(input, output, session) {
                             max = 1,
                             step = 0.05,
                             value = isolate(nj_branchlab_alpha_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
                           )
                         ),
@@ -10929,12 +11069,34 @@ server <- function(input, output, session) {
                             max = 0.5,
                             step = 0.05,
                             value = isolate(nj_branch_labelradius_val()),
-                            width = "250px",
+                            width = "150px",
                             ticks = FALSE
-                          )
+                          ),
+                          br()
                         )
                       )
                     )
+                  )
+                ),
+                fluidRow(
+                  column(
+                    width = 5,
+                    div(
+                      class = "mat-switch-geom",
+                      materialSwitch(
+                        inputId = "nj_branch_panel",
+                        h5(
+                          p("Panels"),
+                          style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                        ),
+                        value = isolate(nj_branch_panel_val()),
+                        right = FALSE
+                      )
+                    )
+                  ),
+                  column(
+                    width = 7,
+                    uiOutput("nj_branchlabel_cutoff_ui")
                   )
                 )
               )
@@ -11201,15 +11363,52 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
 
   ###### Label Inputs ----
 
+  # Branch Label Cutoff
+  output$nj_branchlabel_cutoff_ui <- renderUI({
+    render_info("nj_branchlabel_cutoff_ui")
+
+    if (!is.null(Vis$nj_branch_lengths)) {
+      min <- round(min(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
+      max <- round(max(Vis$nj_branch_lengths, na.rm = TRUE), digits = 1)
+      default <- round(
+        quantile(
+          Vis$nj_branch_lengths[Vis$nj_branch_lengths != 0],
+          0.3,
+          na.rm = TRUE
+        ),
+        1
+      )
+    } else {
+      min <- 1
+      max <- 10
+      default <- 2
+    }
+
+    output <- render_plot_control(
+      input_id = "nj_branchlabel_cutoff",
+      input_type = "sliderInput",
+      # div_class = "nj-label-slider",
+      # width = "150px",
+      min = min,
+      max = max,
+      step = 0.1,
+      reactive_value = nj_branchlabel_cutoff_val(),
+      default_value = default
+    )
+
+    output
+  })
+
   # Tip label
   output$nj_tiplab_ui <- renderUI({
+    render_info("nj_tiplab_ui")
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1, 2, 6, 12, 13, 14)]
     } else {
@@ -11221,16 +11420,14 @@ server <- function(input, output, session) {
       input_type = "selectInput",
       choices = choices,
       reactive_value = nj_tiplab_val(),
-      default_value = "Assembly Name",
-      reset = isolate(Vis$nj_tiplab_val_reset)
+      default_value = "Assembly Name"
     )
-
-    isolate(Vis$nj_tiplab_val_reset <- FALSE)
 
     output
   })
 
   output$nj_align_ui <- renderUI({
+    render_info("nj_align_ui")
     output <- render_plot_control(
       input_id = "nj_align",
       input_type = "materialSwitch",
@@ -11239,19 +11436,18 @@ server <- function(input, output, session) {
         style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
       ),
       reactive_value = nj_align_val(),
-      default_value = FALSE,
+      default_value = TRUE,
       div_class = "mat-switch-align",
-      reset = isolate(Vis$nj_align_reset),
       right = TRUE,
       show_condition = !is.null(Vis$tree_algo) && Vis$tree_algo == "NJ"
     )
-
-    isolate(Vis$nj_align_reset <- FALSE)
 
     output
   })
 
   output$nj_tiplab_angle_ui <- renderUI({
+    render_info("nj_tiplab_angle_ui")
+
     output <- render_plot_control(
       input_id = "nj_tiplab_angle",
       input_type = "sliderInput",
@@ -11261,19 +11457,18 @@ server <- function(input, output, session) {
       width = "150px",
       reactive_value = nj_tiplab_angle_val(),
       default_value = 0,
-      reset = isolate(Vis$nj_tiplab_angle_reset),
       right = TRUE,
       show_condition = nj_layout_val() != "inward" &&
         nj_layout_val() != "circular"
     )
-
-    isolate(Vis$nj_tiplab_angle_reset <- FALSE)
 
     output
   })
 
   # Branch label
   output$nj_branch_label <- renderUI({
+    render_info("nj_branch_label")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -11283,19 +11478,18 @@ server <- function(input, output, session) {
     output <- render_plot_control(
       input_id = "nj_branch_label",
       input_type = "selectInput",
-      choices = choices,
+      choices = c(choices, "Allelic Distance"),
       reactive_value = nj_branch_label_val(),
-      default_value = "Host",
-      reset = isolate(Vis$nj_branch_label_val_reset)
+      default_value = "Allelic Distance"
     )
-
-    isolate(Vis$nj_branch_label_val_reset <- FALSE)
 
     output
   })
 
   # Custom label
   output$nj_custom_label_select <- renderUI({
+    render_info("nj_custom_label_select")
+
     if (!is.null(Vis$custom_label_nj)) {
       if (nrow(Vis$custom_label_nj) > 0) {
         choices <- Vis$custom_label_nj[, 1]
@@ -11317,6 +11511,8 @@ server <- function(input, output, session) {
   })
 
   output$nj_custom_labelsize <- renderUI({
+    render_info("nj_custom_labelsize")
+
     if (length(Vis$custom_label_nj) > 0) {
       if (!is.null(Vis$nj_label_size[[input$nj_custom_label_sel]])) {
         sliderInput(
@@ -11356,8 +11552,12 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_y <- renderUI({
+    render_info("nj_sliderInput_y")
+
     if (!is.null(Vis$custom_label_nj)) {
-      if (length(Vis$custom_label_nj) > 0) {
+      if (
+        !is.null(input$nj_custom_label_sel) && length(Vis$custom_label_nj) > 0
+      ) {
         inputId <- paste0("nj_slider_", input$nj_custom_label_sel, "_y")
         max <- sum(DB$data$Include)
 
@@ -11389,8 +11589,12 @@ server <- function(input, output, session) {
   })
 
   output$nj_sliderInput_x <- renderUI({
+    render_info("nj_sliderInput_x")
+
     if (!is.null(Vis$custom_label_nj)) {
-      if (length(Vis$custom_label_nj) > 0) {
+      if (
+        !is.null(input$nj_custom_label_sel) && length(Vis$custom_label_nj) > 0
+      ) {
         inputId <- paste0("nj_slider_", input$nj_custom_label_sel, "_x")
 
         if (!is.null(Vis$nj_label_pos_x[[input$nj_custom_label_sel]])) {
@@ -11437,7 +11641,7 @@ server <- function(input, output, session) {
   nj_color_mapping_reactive <- reactive({
     ifelse(!is.null(input$nj_color_mapping), input$nj_color_mapping, "Country")
   }) |>
-    debounce(100)
+    debounce(250)
   nj_color_mapping_val <- reactiveVal()
   nj_tiplab_scale_reactive <- reactive({
     ifelse(
@@ -11446,7 +11650,7 @@ server <- function(input, output, session) {
       nj_tiplab_scale_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiplab_scale_val <- reactiveVal()
   nj_color_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -11455,7 +11659,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_color_mapping_div_mid_val <- reactiveVal()
 
   observe({
@@ -11481,7 +11685,7 @@ server <- function(input, output, session) {
       "Country"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tipcolor_mapping_val <- reactiveVal()
   nj_tippoint_scale_reactive <- reactive({
     ifelse(
@@ -11490,7 +11694,7 @@ server <- function(input, output, session) {
       nj_tippoint_scale_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tippoint_scale_val <- reactiveVal()
   nj_tipcolor_mapping_div_mid_reactive <- reactive({
     ifelse(
@@ -11524,7 +11728,7 @@ server <- function(input, output, session) {
       "Host"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tipshape_mapping_val <- reactiveVal()
 
   observe({
@@ -11550,7 +11754,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_variable_val <- reactiveVal()
   nj_fruit_variable_2_reactive <- reactive({
     ifelse(
@@ -11559,7 +11763,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_variable_2_val <- reactiveVal()
   nj_fruit_variable_3_reactive <- reactive({
     ifelse(
@@ -11568,7 +11772,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_variable_3_val <- reactiveVal()
   nj_fruit_variable_4_reactive <- reactive({
     ifelse(
@@ -11577,7 +11781,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_variable_4_val <- reactiveVal()
   nj_fruit_variable_5_reactive <- reactive({
     ifelse(
@@ -11586,7 +11790,7 @@ server <- function(input, output, session) {
       "Isolation Date"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_variable_5_val <- reactiveVal()
   nj_tiles_scale_1_reactive <- reactive({
     ifelse(
@@ -11595,7 +11799,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_1_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_scale_1_val <- reactiveVal()
   nj_tiles_scale_2_reactive <- reactive({
     ifelse(
@@ -11604,7 +11808,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_2_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_scale_2_val <- reactiveVal()
   nj_tiles_scale_3_reactive <- reactive({
     ifelse(
@@ -11613,7 +11817,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_3_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_scale_3_val <- reactiveVal()
   nj_tiles_scale_4_reactive <- reactive({
     ifelse(
@@ -11622,7 +11826,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_4_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_scale_4_val <- reactiveVal()
   nj_tiles_scale_5_reactive <- reactive({
     ifelse(
@@ -11631,7 +11835,7 @@ server <- function(input, output, session) {
       nj_tiles_scale_5_val_default()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_scale_5_val <- reactiveVal()
   nj_tiles_mapping_div_mid_1_reactive <- reactive({
     ifelse(
@@ -11640,7 +11844,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_mapping_div_mid_1_val <- reactiveVal()
   nj_tiles_mapping_div_mid_2_reactive <- reactive({
     ifelse(
@@ -11649,7 +11853,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_mapping_div_mid_2_val <- reactiveVal()
   nj_tiles_mapping_div_mid_3_reactive <- reactive({
     ifelse(
@@ -11658,7 +11862,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_mapping_div_mid_3_val <- reactiveVal()
   nj_tiles_mapping_div_mid_4_reactive <- reactive({
     ifelse(
@@ -11667,7 +11871,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_mapping_div_mid_4_val <- reactiveVal()
   nj_tiles_mapping_div_mid_5_reactive <- reactive({
     ifelse(
@@ -11676,7 +11880,7 @@ server <- function(input, output, session) {
       "Mean"
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tiles_mapping_div_mid_5_val <- reactiveVal()
 
   observe({
@@ -11760,14 +11964,48 @@ server <- function(input, output, session) {
   ###### Variable Interface ----
 
   observeEvent(input$nj_variable_menu, {
+    # List of reactive variables for menu
+    nj_variable_menu_reactives <- list(
+      nj_mapping_show_val = isolate(nj_mapping_show_val()),
+      nj_tipcolor_mapping_show_val = isolate(nj_tipcolor_mapping_show_val()),
+      nj_tipshape_mapping_show_val = isolate(nj_tipshape_mapping_show_val()),
+      nj_tiles_show_1_val = isolate(nj_tiles_show_1_val()),
+      nj_tiles_show_2_val = isolate(nj_tiles_show_2_val()),
+      nj_tiles_show_3_val = isolate(nj_tiles_show_3_val()),
+      nj_tiles_show_4_val = isolate(nj_tiles_show_4_val()),
+      nj_tiles_show_5_val = isolate(nj_tiles_show_5_val())
+      #nj_heatmap_show_val = isolate(nj_heatmap_show_val())
+    )
+
+    # Check if any reactives are null
+    nj_variable_menu_reactives_status <- sapply(
+      nj_variable_menu_reactives,
+      is.null
+    )
+    if (any(nj_variable_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_variable_menu_reactives)[which(
+          nj_variable_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_variable_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      render_info("tree_controls Variable Mapping")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -12199,7 +12437,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -12209,6 +12447,8 @@ server <- function(input, output, session) {
   # Tip label variable mapping
 
   output$nj_color_mapping <- renderUI({
+    render_info("nj_color_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12221,16 +12461,15 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_color_mapping_val(),
       default_value = "Country",
-      reset = isolate(Vis$nj_color_mapping_val_reset),
       show_condition = isTRUE(nj_mapping_show_val())
     )
-
-    isolate(Vis$nj_color_mapping_val_reset <- FALSE)
 
     output
   })
 
   output$nj_tiplab_scale <- renderUI({
+    render_info("nj_tiplab_scale")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12252,17 +12491,16 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tiplab_scale_val(),
       default_value = nj_tiplab_scale_val_default(),
-      reset = isolate(Vis$nj_tiplab_scale_reset),
       show_condition = nj_mapping_show_val()
     )
-
-    isolate(Vis$nj_tiplab_scale_val_reset <- FALSE)
 
     output
   })
 
   output$nj_tiplab_mid_scale <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiplab_mid_scale")
 
     output <- render_plot_control(
       input_id = "nj_color_mapping_div_mid",
@@ -12271,20 +12509,19 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_color_mapping_div_mid_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_color_mapping_div_mid_reset),
       show_condition = isTRUE(nj_mapping_show_val()) &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_color_mapping_val()])) &&
         nj_tiplab_scale_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_color_mapping_div_mid_reset <- FALSE)
-
     output
   })
 
   output$nj_tiplab_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiplab_mapping_info")
 
     if (is.numeric(unlist(Vis$meta_nj[nj_color_mapping_val()]))) {
       fluidRow(
@@ -12322,6 +12559,8 @@ server <- function(input, output, session) {
   # Tip point variable mapping
 
   output$nj_tipcolor_mapping <- renderUI({
+    render_info("nj_tipcolor_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12334,16 +12573,15 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_tipcolor_mapping_val(),
       default_value = "Country",
-      reset = isolate(Vis$nj_tipcolor_mapping_val_reset),
       show_condition = isTRUE(nj_tipcolor_mapping_show_val())
     )
-
-    isolate(Vis$nj_tipcolor_mapping_val_reset <- FALSE)
 
     output
   })
 
   output$nj_tippoint_scale <- renderUI({
+    render_info("nj_tippoint_scale")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12365,17 +12603,16 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tippoint_scale_val(),
       default_value = nj_tippoint_scale_val_default(),
-      reset = isolate(Vis$nj_tippoint_scale_reset),
       show_condition = nj_tipcolor_mapping_show_val()
     )
-
-    isolate(Vis$nj_tippoint_scale_reset <- FALSE)
 
     output
   })
 
   output$nj_tippoint_mid_scale <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tippoint_mid_scale")
 
     output <- render_plot_control(
       input_id = "nj_tipcolor_mapping_div_mid",
@@ -12384,20 +12621,19 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_tipcolor_mapping_div_mid_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_tipcolor_mapping_div_mid_reset),
       show_condition = isTRUE(nj_tipcolor_mapping_show_val()) &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_tipcolor_mapping_val()])) &&
         nj_tippoint_scale_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tipcolor_mapping_div_mid_reset <- FALSE)
-
     output
   })
 
   output$nj_tipcolor_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tipcolor_mapping_info")
 
     if (is.numeric(unlist(Vis$meta_nj[nj_tipcolor_mapping_val()]))) {
       fluidRow(
@@ -12435,6 +12671,8 @@ server <- function(input, output, session) {
   # Tip shape variable mapping
 
   output$nj_tipshape_mapping <- renderUI({
+    render_info("nj_tipshape_mapping")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- names(Vis$meta_nj)[-c(1:4, 6, 12:14)]
 
@@ -12459,17 +12697,16 @@ server <- function(input, output, session) {
       choices = choices,
       reactive_value = nj_tipshape_mapping_val(),
       default_value = "Host",
-      reset = isolate(Vis$nj_tipshape_mapping_val_reset),
       show_condition = isTRUE(nj_tipshape_mapping_show_val())
     )
-
-    isolate(Vis$nj_tipshape_mapping_val_reset <- FALSE)
 
     output
   })
 
   output$nj_tipshape_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tipshape_mapping_info")
 
     if (is.numeric(unlist(Vis$meta_nj[nj_tipshape_mapping_val()]))) {
       fluidRow(
@@ -12503,6 +12740,8 @@ server <- function(input, output, session) {
   # Tiles variables mapping
 
   output$nj_fruit_variable <- renderUI({
+    render_info("nj_fruit_variable")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12516,16 +12755,15 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_val_reset),
       show_condition = isTRUE(nj_tiles_show_1_val())
     )
-
-    isolate(Vis$nj_fruit_variable_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_variable_2 <- renderUI({
+    render_info("nj_fruit_variable_2")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12539,16 +12777,15 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_2_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_2_val_reset),
       show_condition = isTRUE(nj_tiles_show_2_val())
     )
-
-    isolate(Vis$nj_fruit_variable_2_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_variable_3 <- renderUI({
+    render_info("nj_fruit_variable_3")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12562,16 +12799,15 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_3_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_3_val_reset),
       show_condition = isTRUE(nj_tiles_show_3_val())
     )
-
-    isolate(Vis$nj_fruit_variable_3_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_variable_4 <- renderUI({
+    render_info("nj_fruit_variable_4")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12585,16 +12821,15 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_4_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_4_val_reset),
       show_condition = isTRUE(nj_tiles_show_4_val())
     )
-
-    isolate(Vis$nj_fruit_variable_4_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_variable_5 <- renderUI({
+    render_info("nj_fruit_variable_5")
+
     if (!is.null(Vis$meta_nj)) {
       choices <- colnames(Vis$meta_nj)[-c(1:4, 6, 12:14)]
     } else {
@@ -12608,16 +12843,15 @@ server <- function(input, output, session) {
       div_class = "nj-fruit-variable",
       reactive_value = nj_fruit_variable_5_val(),
       default_value = "Isolation Date",
-      reset = isolate(Vis$nj_fruit_variable_5_val_reset),
       show_condition = isTRUE(nj_tiles_show_5_val())
     )
-
-    isolate(Vis$nj_fruit_variable_5_val_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_scale_1 <- renderUI({
+    render_info("nj_tiles_scale_1")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12640,16 +12874,15 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_1_val(),
       default_value = nj_tiles_scale_1_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_1_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_1_val()
     )
-
-    isolate(Vis$nj_tiles_scale_1_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_scale_2 <- renderUI({
+    render_info("nj_tiles_scale_2")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12672,16 +12905,15 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_2_val(),
       default_value = nj_tiles_scale_2_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_2_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_2_val()
     )
-
-    isolate(Vis$nj_tiles_scale_2_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_scale_3 <- renderUI({
+    render_info("nj_tiles_scale_3")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12704,16 +12936,15 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_3_val(),
       default_value = nj_tiles_scale_3_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_3_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_3_val()
     )
-
-    isolate(Vis$nj_tiles_scale_3_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_scale_4 <- renderUI({
+    render_info("nj_tiles_scale_4")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12736,16 +12967,15 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_4_val(),
       default_value = nj_tiles_scale_4_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_4_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_4_val()
     )
-
-    isolate(Vis$nj_tiles_scale_4_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_scale_5 <- renderUI({
+    render_info("nj_tiles_scale_5")
+
     if (!is.null(Vis$meta_nj)) {
       meta_nj <- Vis$meta_nj
     } else {
@@ -12768,17 +12998,16 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_scale_5_val(),
       default_value = nj_tiles_scale_5_val_default(),
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_scale_5_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_tiles_show_5_val()
     )
-
-    isolate(Vis$nj_tiles_scale_5_reset <- FALSE)
 
     output
   })
 
   output$nj_tiles_mid_scale_1 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_1")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_1",
@@ -12788,20 +13017,19 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_1_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_1_reset),
       show_condition = nj_tiles_show_1_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_val()])) &&
         nj_tiles_scale_1_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tiles_mapping_div_mid_1_reset <- FALSE)
-
     output
   })
 
   output$nj_tiles_mid_scale_2 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_2")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_2",
@@ -12811,20 +13039,19 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_2_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_2_reset),
       show_condition = nj_tiles_show_2_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_2_val()])) &&
         nj_tiles_scale_2_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tiles_mapping_div_mid_2_reset <- FALSE)
-
     output
   })
 
   output$nj_tiles_mid_scale_3 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_3")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_3",
@@ -12834,20 +13061,19 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_3_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_3_reset),
       show_condition = nj_tiles_show_3_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_3_val()])) &&
         nj_tiles_scale_3_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tiles_mapping_div_mid_3_reset <- FALSE)
-
     output
   })
 
   output$nj_tiles_mid_scale_4 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_4")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_4",
@@ -12857,20 +13083,19 @@ server <- function(input, output, session) {
       reactive_value = nj_tiles_mapping_div_mid_4_val(),
       default_value = "Mean",
       div_class = "nj-tiles-scale",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_4_reset),
       show_condition = nj_tiles_show_4_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_4_val()])) &&
         nj_tiles_scale_4_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tiles_mapping_div_mid_4_reset <- FALSE)
-
     output
   })
 
   output$nj_tiles_mid_scale_5 <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_tiles_mid_scale_5")
 
     output <- render_plot_control(
       input_id = "nj_tiles_mapping_div_mid_5",
@@ -12879,20 +13104,19 @@ server <- function(input, output, session) {
       choices = c("Zero", "Mean", "Median"),
       reactive_value = nj_tiles_mapping_div_mid_5_val(),
       default_value = "Mean",
-      reset = isolate(Vis$nj_tiles_mapping_div_mid_5_reset),
       show_condition = nj_tiles_show_5_val() &&
         !is.null(Vis$meta_nj) &&
         is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_5_val()])) &&
         nj_tiles_scale_5_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_tiles_mapping_div_mid_5_reset <- FALSE)
-
     output
   })
 
   output$nj_fruit_mapping_info <- renderUI({
     req(input$nj_tile_num, Vis$meta_nj)
+
+    render_info("nj_fruit_mapping_info")
 
     if (input$nj_tile_num == 1) {
       if (is.numeric(unlist(Vis$meta_nj[nj_fruit_variable_val()]))) {
@@ -13070,6 +13294,8 @@ server <- function(input, output, session) {
   output$nj_heatmap_sel <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_heatmap_sel")
+
     no_screened <- FALSE
 
     if (!is.null(Vis$meta_nj)) {
@@ -13152,17 +13378,16 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_heatmap_select_val(),
       default_value = NULL,
-      reset = isolate(Vis$nj_heatmap_select_val_reset),
       show_condition = isFALSE(no_screened)
     )
-
-    isolate(Vis$nj_heatmap_select_val_reset <- FALSE)
 
     output
   })
 
   output$nj_heatmap_scale <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_heatmap_scale")
 
     if (!is.null(Vis$meta_nj)) {
       if (class(unlist(Vis$meta_nj[nj_heatmap_select_val()])) == "numeric") {
@@ -13196,17 +13421,16 @@ server <- function(input, output, session) {
       reactive_value = nj_heatmap_scale_val(),
       default_value = nj_heatmap_scale_val_default(),
       div_class = "nj-heatmap-scale",
-      reset = isolate(Vis$nj_heatmap_scale_reset),
       show_condition = !is.null(Vis$meta_nj) && nj_heatmap_show_val()
     )
-
-    isolate(Vis$nj_heatmap_scale_reset <- FALSE)
 
     output
   })
 
   output$nj_heatmap_mid_scale <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_heatmap_mid_scale")
 
     output <- render_plot_control(
       input_id = "nj_heatmap_div_mid",
@@ -13216,20 +13440,19 @@ server <- function(input, output, session) {
       reactive_value = nj_heatmap_div_mid_val(),
       default_value = "Mean",
       div_class = "nj-heatmap-div-mid",
-      reset = isolate(Vis$nj_heatmap_div_mid_val_reset),
       show_condition = isTRUE(nj_heatmap_show_val()) &&
         !is.null(Vis$meta_nj) &&
         any(sapply(Vis$meta_nj[nj_heatmap_select_val()], is.numeric)) &&
         nj_heatmap_scale_val() %in% unlist(diverging_scales)
     )
 
-    isolate(Vis$nj_heatmap_div_mid_val_reset <- FALSE)
-
     output
   })
 
   output$nj_heatmap_mapping_info <- renderUI({
     req(Vis$meta_nj)
+
+    render_info("nj_heatmap_mapping_info")
 
     if (!is.null(nj_heatmap_select_val())) {
       if (
@@ -13273,6 +13496,8 @@ server <- function(input, output, session) {
   output$nj_heatmap_var_warning <- renderUI({
     req(Vis$meta_nj)
 
+    render_info("nj_heatmap_var_warning")
+
     if (
       !is.null(Vis$meta_nj) &&
         any(sapply(Vis$meta_nj[nj_heatmap_select_val()], is.numeric)) &&
@@ -13296,6 +13521,7 @@ server <- function(input, output, session) {
   nj_title_color_val <- reactiveVal()
   nj_tiplab_color_val <- reactiveVal()
   nj_tiplab_fill_val <- reactiveVal()
+  nj_branch_color_val <- reactiveVal()
   nj_branch_label_color_val <- reactiveVal()
   nj_tippoint_color_val <- reactiveVal()
   nj_nodepoint_color_val <- reactiveVal()
@@ -13334,6 +13560,12 @@ server <- function(input, output, session) {
     )
 
     ifelse(
+      !is.null(input$nj_branch_color),
+      nj_branch_color_val(input$nj_branch_color),
+      nj_branch_color_val("#000000")
+    )
+
+    ifelse(
       !is.null(input$nj_tippoint_color),
       nj_tippoint_color_val(input$nj_tippoint_color),
       nj_tippoint_color_val("#3A4657")
@@ -13349,271 +13581,338 @@ server <- function(input, output, session) {
   ###### Color Interface ----
 
   observeEvent(input$nj_color_menu, {
+    # List of reactive variables for menu
+    nj_color_menu_reactives <- list(
+      nj_color_val = isolate(nj_color_val()),
+      nj_bg_val = isolate(nj_bg_val()),
+      nj_title_color_val = isolate(nj_title_color_val()),
+      nj_tiplab_color_val = isolate(nj_tiplab_color_val()),
+      nj_tiplab_fill_val = isolate(nj_tiplab_fill_val()),
+      nj_branch_color_val = isolate(nj_branch_color_val()),
+      nj_branch_label_color_val = isolate(nj_branch_label_color_val()),
+      nj_tippoint_color_val = isolate(nj_tippoint_color_val()),
+      nj_nodepoint_color_val = isolate(nj_nodepoint_color_val())
+    )
+
+    # Check if any reactives are null
+    nj_color_menu_reactives_status <- sapply(
+      nj_color_menu_reactives,
+      is.null
+    )
+    if (any(nj_color_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_color_menu_reactives)[which(
+          nj_color_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_color_menu")
 
-    output$tree_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Color Menu",
-        column(
-          width = 12,
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Lines/Text'
+    output$tree_controls <- renderUI({
+      render_info("tree_controls Color Menu")
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Color Menu",
+          column(
+            width = 12,
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Lines/Text'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_color",
+                    selected = isolate(nj_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_color",
-                  selected = isolate(nj_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Background'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Background'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_bg",
+                    selected = isolate(nj_bg_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_bg",
-                  selected = isolate(nj_bg_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Title'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Title'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_title_color",
+                    selected = isolate(nj_title_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_title_color",
-                  selected = isolate(nj_title_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Tip Label'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Tip Label'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tiplab_color",
+                    selected = isolate(nj_tiplab_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tiplab_color",
-                  selected = isolate(nj_tiplab_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Label Panel'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Label Panel'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tiplab_fill",
+                    selected = isolate(nj_tiplab_fill_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tiplab_fill",
-                  selected = isolate(nj_tiplab_fill_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 13px; position: relative; top: 10px;',
+                      'Branch Label'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 13px; position: relative; top: 10px;',
-                    'Branch Label'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_branch_color",
+                    selected = isolate(nj_branch_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_branch_label_color",
-                  selected = isolate(nj_branch_label_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 13px; position: relative; top: 10px;',
+                      'Branch Panel'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Tip Point'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_branch_label_color",
+                    selected = isolate(nj_branch_label_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_tippoint_color",
-                  selected = isolate(nj_tippoint_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Tip Point'
+                    )
+                  )
                 )
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Node Point'
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_tippoint_color",
+                    selected = isolate(nj_tippoint_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              div(
-                class = "control-color",
-                colorPickr(
-                  inputId = "nj_nodepoint_color",
-                  selected = isolate(nj_nodepoint_color_val()),
-                  label = "",
-                  update = "changestop",
-                  interaction = list(clear = FALSE, save = FALSE),
-                  position = "right-start",
-                  width = "100%"
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Node Point'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                div(
+                  class = "control-color",
+                  colorPickr(
+                    inputId = "nj_nodepoint_color",
+                    selected = isolate(nj_nodepoint_color_val()),
+                    label = "",
+                    update = "changestop",
+                    interaction = list(clear = FALSE, save = FALSE),
+                    position = "right-start",
+                    width = "100%"
+                  )
                 )
               )
-            )
-          ),
-          br()
+            ),
+            br()
+          )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -13627,7 +13926,7 @@ server <- function(input, output, session) {
   nj_tippoint_shape_reactive <- reactive({
     ifelse(!is.null(input$nj_tippoint_shape), input$nj_tippoint_shape, "circle")
   }) |>
-    debounce(100)
+    debounce(250)
   nj_tippoint_shape_val <- reactiveVal()
   nj_tippoint_alpha_val <- reactiveVal()
   nj_tippoint_size_val <- reactiveVal()
@@ -13708,7 +14007,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_width_circ_val <- reactiveVal()
   nj_fruit_width_circ_2_reactive <- reactive({
     ifelse(
@@ -13717,7 +14016,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_width_circ_2_val <- reactiveVal()
   nj_fruit_width_circ_3_reactive <- reactive({
     ifelse(
@@ -13726,7 +14025,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_width_circ_3_val <- reactiveVal()
   nj_fruit_width_circ_4_reactive <- reactive({
     ifelse(
@@ -13735,7 +14034,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_width_circ_4_val <- reactiveVal()
   nj_fruit_width_circ_5_reactive <- reactive({
     ifelse(
@@ -13744,7 +14043,7 @@ server <- function(input, output, session) {
       fruit_width()
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_fruit_width_circ_5_val <- reactiveVal()
   nj_fruit_offset_circ_val <- reactiveVal()
   nj_fruit_offset_circ_2_val <- reactiveVal()
@@ -13859,7 +14158,7 @@ server <- function(input, output, session) {
   nj_heatmap_offset_reactive <- reactive({
     ifelse(!is.null(input$nj_heatmap_offset), input$nj_heatmap_offset, 0)
   }) |>
-    debounce(100)
+    debounce(250)
   nj_heatmap_offset_val <- reactiveVal()
 
   observe({
@@ -13913,7 +14212,7 @@ server <- function(input, output, session) {
       ""
     }
   }) |>
-    debounce(100)
+    debounce(250)
   nj_parentnode_val <- reactiveVal()
   nj_clade_scale_val <- reactiveVal()
   nj_clade_type_val <- reactiveVal()
@@ -13943,14 +14242,53 @@ server <- function(input, output, session) {
   ###### Elements Interface ----
 
   observeEvent(input$nj_elements_menu, {
+    # List of reactive variables for menu
+    nj_elements_menu_reactives <- list(
+      nj_tippoint_show_val = isolate(nj_tippoint_show_val()),
+      nj_tippoint_alpha_val = isolate(nj_tippoint_alpha_val()),
+      nj_tippoint_size_val = isolate(nj_tippoint_size_val()),
+      nj_nodepoint_show_val = isolate(nj_nodepoint_show_val()),
+      nj_nodepoint_shape_val = isolate(nj_nodepoint_shape_val()),
+      nj_nodepoint_alpha_val = isolate(nj_nodepoint_alpha_val()),
+      nj_nodepoint_size_val = isolate(nj_nodepoint_size_val()),
+      nj_tile_number_val = isolate(nj_tile_number_val()),
+      nj_fruit_alpha_val = isolate(nj_fruit_alpha_val()),
+      nj_fruit_alpha_2_val = isolate(nj_fruit_alpha_2_val()),
+      nj_fruit_alpha_3_val = isolate(nj_fruit_alpha_3_val()),
+      nj_fruit_alpha_4_val = isolate(nj_fruit_alpha_4_val()),
+      nj_fruit_alpha_5_val = isolate(nj_fruit_alpha_5_val()),
+      nj_nodelabel_show_val = isolate(nj_nodelabel_show_val()),
+      nj_clade_type_val = isolate(nj_clade_type_val())
+    )
+
+    # Check if any reactives are null
+    nj_elements_menu_reactives_status <- sapply(
+      nj_elements_menu_reactives,
+      is.null
+    )
+    if (any(nj_elements_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_elements_menu_reactives)[which(
+          nj_elements_menu_reactives_status
+        )],
+        "reactive variable(s) from tree 'Elements Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_elements_menu")
 
-    output$tree_controls <- renderUI(
+    output$tree_controls <- renderUI({
+      render_info("tree_controls Elements Menu")
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -14689,7 +15027,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -14698,6 +15036,8 @@ server <- function(input, output, session) {
 
   # Tip points
   output$nj_tippoint_shape_ui <- renderUI({
+    render_info("nj_tippoint_shape_ui")
+
     output <- render_plot_control(
       input_id = "nj_tippoint_shape",
       input_type = "selectInput",
@@ -14711,17 +15051,16 @@ server <- function(input, output, session) {
       ),
       reactive_value = nj_tippoint_shape_val(),
       default_value = "circle",
-      reset = isolate(Vis$nj_tippoint_shape_reset),
       show_condition = isFALSE(nj_tipshape_mapping_show_val())
     )
-
-    isolate(Vis$nj_tippoint_shape_reset <- FALSE)
 
     output
   })
 
   # Heatmap settings
   output$nj_heatmap_offset <- renderUI({
+    render_info("nj_heatmap_offset")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 1.5, 0),
@@ -14736,17 +15075,16 @@ server <- function(input, output, session) {
       max = max,
       step = 1,
       reactive_value = nj_heatmap_offset_val(),
-      default_value = 0,
-      reset = isolate(Vis$nj_heatmap_offset_val_reset)
+      default_value = 0
     )
-
-    isolate(Vis$nj_heatmap_offset_val_reset <- FALSE)
 
     output
   })
 
   # Clade highlighting
   output$nj_parentnode <- renderUI({
+    render_info("nj_parentnode")
+
     ifelse(
       !is.null(Vis$nj_parentnodes),
       choices <- sort(unique(as.numeric(Vis$nj_parentnodes))),
@@ -14765,16 +15103,15 @@ server <- function(input, output, session) {
       ),
       choices = choices,
       reactive_value = nj_parentnode_val(),
-      default_value = "",
-      reset = isolate(Vis$nj_parentnode_val_reset)
+      default_value = ""
     )
-
-    isolate(Vis$nj_parentnode_val_reset <- FALSE)
 
     output
   })
 
   output$nj_clade_scale <- renderUI({
+    render_info("nj_clade_scale")
+
     selected_nodes <- nj_parentnode_val()
     if (
       length(selected_nodes) == 1 &&
@@ -14835,6 +15172,8 @@ server <- function(input, output, session) {
   output$nj_colnames_y <- renderUI({
     req(DB$data)
 
+    render_info("nj_colnames_y")
+
     disable <- FALSE
     if (
       nj_layout_val() == "inward" ||
@@ -14859,11 +15198,8 @@ server <- function(input, output, session) {
       max = sum(DB$data$Include),
       reactive_value = nj_colnames_y_val(),
       default_value = -1,
-      reset = isolate(Vis$nj_colnames_y_val_reset),
       show_condition = !disable
     )
-
-    isolate(Vis$nj_colnames_y_val_reset <- FALSE)
 
     output
   })
@@ -14871,6 +15207,8 @@ server <- function(input, output, session) {
   # Tiles settings
 
   output$nj_fruit_width <- renderUI({
+    render_info("nj_fruit_width")
+
     fruit_width <- fruit_width()
     min_val <- max(round(fruit_width / 5, 1), 0.1)
     step_val <- max(round(fruit_width / 10, 1), 0.1)
@@ -14889,16 +15227,15 @@ server <- function(input, output, session) {
       step = step_val,
       max = max,
       reactive_value = isolate(nj_fruit_width_circ_val()),
-      default_value = fruit_width,
-      reset = isolate(Vis$nj_fruit_width_circ_val_reset)
+      default_value = fruit_width
     )
-
-    isolate(Vis$nj_fruit_width_circ_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_width2 <- renderUI({
+    render_info("nj_fruit_width2")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -14912,16 +15249,15 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_2_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_2_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_2_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_width3 <- renderUI({
+    render_info("nj_fruit_width3")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -14935,16 +15271,15 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_3_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_3_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_3_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_width4 <- renderUI({
+    render_info("nj_fruit_width4")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -14958,16 +15293,15 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_4_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_4_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_4_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_width5 <- renderUI({
+    render_info("nj_fruit_width5")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(ceiling(Vis$nj_max_x) * 0.5, 0),
@@ -14981,16 +15315,15 @@ server <- function(input, output, session) {
       min = 1,
       max = max,
       reactive_value = nj_fruit_width_circ_5_val(),
-      default_value = fruit_width(),
-      reset = isolate(Vis$nj_fruit_width_circ_5_val_reset)
+      default_value = fruit_width()
     )
-
-    isolate(Vis$nj_fruit_width_circ_5_val_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_offset_circ <- renderUI({
+    render_info("nj_fruit_offset_circ")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -15012,16 +15345,15 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = isolate(nj_fruit_offset_circ_val()),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_offset_circ_2 <- renderUI({
+    render_info("nj_fruit_offset_circ_2")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -15043,16 +15375,15 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_2_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_2_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_2_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_offset_circ_3 <- renderUI({
+    render_info("nj_fruit_offset_circ_3")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -15074,16 +15405,15 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_3_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_3_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_3_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_offset_circ_4 <- renderUI({
+    render_info("nj_fruit_offset_circ_4")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -15105,16 +15435,15 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_4_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_4_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_4_reset <- FALSE)
 
     output
   })
 
   output$nj_fruit_offset_circ_5 <- renderUI({
+    render_info("nj_fruit_offset_circ_5")
+
     if (
       !is.null(nj_layout_val()) &&
         (nj_layout_val() == "circular" || nj_layout_val() == "inward")
@@ -15136,11 +15465,8 @@ server <- function(input, output, session) {
       min = min,
       max = max,
       reactive_value = nj_fruit_offset_circ_5_val(),
-      default_value = 0.05,
-      reset = isolate(Vis$nj_fruit_offset_circ_5_reset)
+      default_value = 0.05
     )
-
-    isolate(Vis$nj_fruit_offset_circ_5_reset <- FALSE)
 
     output
   })
@@ -15150,17 +15476,20 @@ server <- function(input, output, session) {
   ###### Other Control Values ----
 
   # Dimensions
-  nj_ratio_val <- reactiveVal()
   nj_v_val <- reactiveVal()
   nj_h_val <- reactiveVal()
-  nj_scale_val <- reactiveVal()
   nj_zoom_val <- reactiveVal()
+  nj_aspect_ratio_val <- reactiveVal()
 
   observe({
     ifelse(
-      !is.null(input$nj_ratio),
-      nj_ratio_val(input$nj_ratio),
-      nj_ratio_val(c("16:10" = (16 / 10)))
+      !is.null(input$nj_aspect_ratio),
+      nj_aspect_ratio_val(input$nj_aspect_ratio),
+      ifelse(
+        !is.null(Vis$ratio_nj),
+        nj_aspect_ratio_val(Vis$ratio_nj),
+        nj_aspect_ratio_val(0.6)
+      )
     )
 
     ifelse(!is.null(input$nj_v), nj_v_val(input$nj_v), nj_v_val(0))
@@ -15173,12 +15502,6 @@ server <- function(input, output, session) {
         nj_h_val(-0.05),
         nj_h_val(0)
       )
-    )
-
-    ifelse(
-      !is.null(input$nj_scale),
-      nj_scale_val(input$nj_scale),
-      nj_scale_val(670)
     )
 
     ifelse(
@@ -15209,18 +15532,18 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.05), 2)
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_rootedge_length_val <- reactiveVal()
   nj_rootedge_line_val <- reactiveVal()
   nj_xlim_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim), input$nj_xlim, -10)
   }) |>
-    debounce(100)
+    debounce(250)
   nj_xlim_val <- reactiveVal()
   nj_xlim_inw_reactive <- reactive({
     ifelse(!is.null(input$nj_xlim_inw), input$nj_xlim_inw, 50)
   }) |>
-    debounce(100)
+    debounce(250)
   nj_xlim_inw_val <- reactiveVal()
   nj_treescale_show_val <- reactiveVal()
   nj_treescale_width_reactive <- reactive({
@@ -15230,21 +15553,26 @@ server <- function(input, output, session) {
       ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.1, 0), 2)
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_treescale_width_val <- reactiveVal()
   nj_treescale_x_reactive <- reactive({
+    message("reactive input ", input$nj_treescale_x)
+    message(
+      "reactive noinput: ",
+      ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
+    )
     ifelse(
       !is.null(input$nj_treescale_x),
       input$nj_treescale_x,
-      ifelse(!is.null(Vis$nj_max_x), round(ceiling(Vis$nj_max_x) * 0.2, 0), 2)
+      ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
     )
   }) |>
-    debounce(100)
+    debounce(250)
   nj_treescale_x_val <- reactiveVal()
   nj_treescale_y_reactive <- reactive({
-    ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, 0)
+    ifelse(!is.null(input$nj_treescale_y), input$nj_treescale_y, -1)
   }) |>
-    debounce(100)
+    debounce(250)
   nj_ladder_val <- reactiveVal()
   nj_treescale_y_val <- reactiveVal()
 
@@ -15258,10 +15586,13 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_rootedge_show),
       nj_rootedge_show_val(input$nj_rootedge_show),
-      nj_rootedge_show_val(FALSE)
+      nj_rootedge_show_val(TRUE)
     )
 
-    nj_rootedge_length_val(nj_rootedge_length_reactive())
+    if (!is.null(input$nj_rootedge_length)) {
+      nj_rootedge_length_val(input$nj_rootedge_length)
+    }
+    # nj_rootedge_length_val(nj_rootedge_length_reactive())
 
     ifelse(
       !is.null(input$nj_rootedge_line),
@@ -15276,11 +15607,21 @@ server <- function(input, output, session) {
     ifelse(
       !is.null(input$nj_treescale_show),
       nj_treescale_show_val(input$nj_treescale_show),
-      nj_treescale_show_val(FALSE)
+      nj_treescale_show_val(TRUE)
     )
 
-    nj_treescale_width_val(nj_treescale_width_reactive())
+    if (!is.null(input$nj_treescale_width)) {
+      nj_treescale_width_val(input$nj_treescale_width)
+    }
+    # nj_treescale_width_val(nj_treescale_width_reactive())
 
+    ifelse(
+      !is.null(input$nj_treescale_show),
+      nj_treescale_show_val(input$nj_treescale_show),
+      nj_treescale_show_val(TRUE)
+    )
+
+    message("observe: ", nj_treescale_x_reactive())
     nj_treescale_x_val(nj_treescale_x_reactive())
 
     nj_treescale_y_val(nj_treescale_y_reactive())
@@ -15327,14 +15668,48 @@ server <- function(input, output, session) {
   ###### Other Interface ----
 
   observeEvent(input$nj_misc_menu, {
+    # List of reactive variables for menu
+    nj_misc_menu_reactives <- list(
+      nj_aspect_ratio_val = isolate(nj_aspect_ratio_val()),
+      nj_v_val = isolate(nj_v_val()),
+      nj_h_val = isolate(nj_h_val()),
+      nj_zoom_val = isolate(nj_zoom_val()),
+      nj_root_isolate_val = isolate(nj_root_isolate_val()),
+      nj_layout_val = isolate(nj_layout_val()),
+      nj_ladder_val = isolate(nj_ladder_val()),
+      nj_rootedge_show_val = isolate(nj_rootedge_show_val()),
+      nj_rootedge_line_val = isolate(nj_rootedge_line_val()),
+      nj_treescale_show_val = isolate(nj_treescale_show_val()),
+      nj_legend_orientation_val = isolate(nj_legend_orientation_val()),
+      nj_legend_size_val = isolate(nj_legend_size_val()),
+      nj_legend_x_val = isolate(nj_legend_x_val()),
+      nj_legend_y_val = isolate(nj_legend_y_val())
+    )
+
+    # Check if any reactives are null
+    nj_misc_menu_reactives_status <- sapply(nj_misc_menu_reactives, is.null)
+    if (any(nj_misc_menu_reactives_status)) {
+      message_text <- paste(
+        "WARNING:",
+        names(nj_misc_menu_reactives)[which(nj_misc_menu_reactives_status)],
+        "reactive variable(s) from tree 'Miscellaneous Menu' is NULL.",
+        collapse = "\n"
+      )
+      message(message_text)
+      log_print(message_text)
+      return()
+    }
+
     runjs(block_ui)
 
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_misc_menu")
 
     output$tree_controls <- renderUI({
+      render_info("tree_controls Miscellaneous Menu")
+      message("render controls VAL: ", isolate(nj_treescale_x_val()))
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -15370,15 +15745,15 @@ server <- function(input, output, session) {
                   align = "center",
                   div(
                     class = "nj-control-ratio",
-                    selectInput(
-                      "nj_ratio",
+                    sliderInput(
+                      "nj_aspect_ratio",
                       "",
-                      choices = c(
-                        "16:10" = (16 / 10),
-                        "16:9" = (16 / 9),
-                        "4:3" = (4 / 3)
-                      ),
-                      selected = isolate(nj_ratio_val())
+                      min = 0.5,
+                      max = 2.0,
+                      value = isolate(nj_aspect_ratio_val()),
+                      step = 0.1,
+                      width = "100%",
+                      ticks = FALSE
                     )
                   )
                 ),
@@ -15471,38 +15846,6 @@ server <- function(input, output, session) {
                               paste(
                                 tags$span(
                                   style = 'color: white; font-size: 14px; position: relative; right: 10px; top: 7px;',
-                                  'Horizontal'
-                                )
-                              )
-                            )
-                          ),
-                          column(
-                            width = 9,
-                            align = "right",
-                            div(
-                              class = "nj-label-slider",
-                              sliderInput(
-                                "nj_scale",
-                                "",
-                                min = 450,
-                                max = 670,
-                                step = 5,
-                                value = isolate(nj_scale_val()),
-                                width = "150px",
-                                ticks = FALSE
-                              )
-                            )
-                          )
-                        ),
-                        br(),
-                        fluidRow(
-                          column(
-                            width = 2,
-                            align = "left",
-                            HTML(
-                              paste(
-                                tags$span(
-                                  style = 'color: white; font-size: 14px; position: relative; right: 10px; top: 7px;',
                                   'Zoom'
                                 )
                               )
@@ -15538,9 +15881,9 @@ server <- function(input, output, session) {
             div(
               class = "nj-label-control-col",
               column(
-                width = 4,
+                width = 9,
                 h4(
-                  p("Root"),
+                  p("Tree Rooting"),
                   style = paste0(
                     "color:white; position: relative; top: 0px;",
                     " margin-bottom: -10px; right: -15px"
@@ -15548,27 +15891,8 @@ server <- function(input, output, session) {
                 )
               )
             ),
-            div(
-              class = "nj-elements-control-col",
-              column(
-                width = 5,
-                div(
-                  class = "nj-root-select",
-                  selectInput(
-                    "nj_root_isolate",
-                    "",
-                    choices = c(
-                      "Automatic",
-                      DB$data$`Assembly Name`[which(DB$data$Include == TRUE)]
-                    ),
-                    selected = isolate(nj_root_isolate_val()),
-                    width = "90%"
-                  )
-                )
-              )
-            ),
             column(
-              width = 1,
+              width = 2,
               actionButton(
                 "table_view",
                 "",
@@ -15579,6 +15903,24 @@ server <- function(input, output, session) {
                 HTML("Select from table"),
                 placement = "bottom",
                 trigger = "hover"
+              )
+            )
+          ),
+          fluidRow(
+            column(
+              width = 12,
+              div(
+                class = "nj-root-select",
+                selectInput(
+                  "nj_root_isolate",
+                  "",
+                  choices = c(
+                    "Automatic",
+                    DB$data$`Assembly Name`[which(DB$data$Include == TRUE)]
+                  ),
+                  selected = isolate(nj_root_isolate_val()),
+                  width = "90%"
+                )
               )
             )
           ),
@@ -15954,7 +16296,7 @@ server <- function(input, output, session) {
                                     value = isolate(nj_legend_x_val()),
                                     min = -0.9,
                                     max = 1.9,
-                                    step = 0.2,
+                                    step = 0.1,
                                     width = "150px",
                                     ticks = FALSE
                                   )
@@ -16013,20 +16355,22 @@ server <- function(input, output, session) {
 
   # Layout settings
   output$nj_xlim_ui <- renderUI({
-    if (nj_layout_val() == "inward") {
+    render_info("nj_xlim_ui")
+
+    nj_layout_val <- nj_layout_val()
+
+    if (nj_layout_val == "inward") {
       input_id <- "nj_xlim_inw"
       min <- 30
       max <- 120
-      value <- nj_xlim_inw_val()
+      isolate(value <- nj_xlim_inw_val())
       default <- 50
-      reset <- Vis$nj_xlim_inw_val_reset
     } else {
       input_id <- "nj_xlim"
       min <- -50
       max <- 0
-      value <- nj_xlim_val()
+      isolate(value <- nj_xlim_val())
       default <- -10
-      reset <- Vis$nj_xlim_val_reset
     }
 
     output <- render_plot_control(
@@ -16038,18 +16382,17 @@ server <- function(input, output, session) {
       max = max,
       reactive_value = value,
       default_value = default,
-      reset = reset,
-      show_condition = nj_layout_val() == "inward" ||
-        nj_layout_val() == "circular"
+      show_condition = nj_layout_val == "inward" ||
+        nj_layout_val == "circular"
     )
-
-    isolate(Vis$nj_xlim_inw_val_reset <- Vis$nj_xlim_val_reset <- FALSE)
 
     output
   })
 
   # Treescale
   output$nj_treescale_width <- renderUI({
+    render_info("nj_treescale_width")
+
     ifelse(
       !is.null(Vis$nj_max_x),
       max <- round(floor(Vis$nj_max_x) * 0.5, 0),
@@ -16068,47 +16411,52 @@ server <- function(input, output, session) {
         !is.null(Vis$nj_max_x),
         round(ceiling(Vis$nj_max_x) * 0.1, 0),
         2
-      ),
-      reset = isolate(Vis$nj_treescale_width_val_reset)
+      )
     )
-
-    isolate(Vis$nj_treescale_width_val_reset <- FALSE)
 
     output
   })
 
-  output$nj_treescale_x <- renderUI({
-    if ((!is.null(Vis$nj_min_x)) && (!is.null(Vis$nj_max_x))) {
-      ifelse(ceiling(Vis$nj_min_x) < 1, min <- 1, min <- ceiling(Vis$nj_min_x))
+  # output$nj_treescale_x <- renderUI({
+  #   render_info("nj_treescale_x")
 
-      max <- round(floor(Vis$nj_max_x))
-    } else {
-      min <- 1
-      max <- 10
-    }
+  #   isolate(nj_max_x <- Vis$nj_max_x)
+  #   nj_min_x <- Vis$nj_min_x
 
-    output <- render_plot_control(
-      input_id = "nj_treescale_x",
-      input_type = "sliderInput",
-      div_class = "nj-label-slider",
-      width = "150px",
-      min = min,
-      max = max,
-      reactive_value = nj_treescale_x_val(),
-      default_value = ifelse(
-        !is.null(Vis$nj_max_x),
-        round(ceiling(Vis$nj_max_x) * 0.2, 0),
-        2
-      ),
-      reset = isolate(Vis$nj_treescale_x_val_reset)
-    )
+  #   if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
+  #     min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
 
-    isolate(Vis$nj_treescale_x_val_reset <- FALSE)
+  #     max <- round(floor(nj_max_x))
+  #   } else {
+  #     min <- 1
+  #     max <- 10
+  #   }
 
-    output
-  })
+  #   output <- render_plot_control(
+  #     input_id = "nj_treescale_x",
+  #     input_type = "sliderInput",
+  #     div_class = "nj-label-slider",
+  #     width = "150px",
+  #     min = min,
+  #     max = max,
+  #     reactive_value = isolate(ifelse(
+  #       !is.null(nj_treescale_x_val()),
+  #       nj_treescale_x_val(),
+  #       2
+  #     )),
+  #     default_value = ifelse(
+  #       !is.null(nj_max_x),
+  #       round(nj_max_x / 2, 0),
+  #       2
+  #     )
+  #   )
+
+  #   output
+  # })
 
   output$nj_treescale_y <- renderUI({
+    render_info("nj_treescale_y")
+
     ifelse(
       !is.null(sum(DB$data$Include)),
       max <- sum(DB$data$Include),
@@ -16120,20 +16468,19 @@ server <- function(input, output, session) {
       input_type = "sliderInput",
       div_class = "nj-label-slider",
       width = "150px",
-      min = 0,
+      min = -1,
       max = max,
       reactive_value = nj_treescale_y_val(),
-      default_value = 0,
-      reset = isolate(Vis$nj_treescale_y_val_reset)
+      default_value = -1
     )
-
-    isolate(Vis$nj_treescale_y_val_reset <- FALSE)
 
     output
   })
 
   # Rootedge
   output$nj_rootedge_length <- renderUI({
+    render_info("nj_rootedge_length")
+
     if (!is.null(Vis$nj_max_x)) {
       if (round(ceiling(Vis$nj_max_x) * 0.02, 0) < 1) {
         min <- 1
@@ -16158,11 +16505,8 @@ server <- function(input, output, session) {
         !is.null(Vis$nj_max_x),
         round(ceiling(Vis$nj_max_x) * 0.05),
         2
-      ),
-      reset = isolate(Vis$nj_rootedge_length_val_reset)
+      )
     )
-
-    isolate(Vis$nj_rootedge_length_val_reset <- FALSE)
 
     output
   })
@@ -16173,9 +16517,14 @@ server <- function(input, output, session) {
     session$sendCustomMessage('nj_reset_style', "")
     session$sendCustomMessage('nj_highlight', "nj_download_menu")
 
-    output$tree_controls <- renderUI(
+    # Switch to full display mode
+    updateSwitchInput(session, "toggle_style", value = FALSE)
+
+    output$tree_controls <- renderUI({
+      render_info("tree_controls Export Menu")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -16257,7 +16606,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
   })
 
   ##### Tree Control Events ----
@@ -16300,12 +16649,13 @@ server <- function(input, output, session) {
 
     removeModal()
 
+    # Reset view switch
+    updateSwitchInput(session, "toggle_style", value = FALSE)
+
     # Tip label
-    Vis$nj_tiplab_val_reset <- TRUE
     nj_tiplab_val("Assembly Name")
     nj_tiplab_show_val(TRUE)
-    Vis$nj_align_reset <- TRUE
-    nj_align_val(FALSE)
+    nj_align_val(TRUE)
     ifelse(
       !is.null(Vis$labelsize_nj),
       nj_tiplab_size_val(Vis$labelsize_nj),
@@ -16314,7 +16664,6 @@ server <- function(input, output, session) {
     nj_tiplab_fontface_val("plain")
     nj_tiplab_alpha_val(1)
     nj_tiplab_position_val(0)
-    Vis$nj_tiplab_angle_reset <- TRUE
     nj_tiplab_angle_val(0)
 
     # Label panels
@@ -16333,8 +16682,9 @@ server <- function(input, output, session) {
       nj_branch_size_val(Vis$branch_size_nj),
       nj_branch_size_val(4)
     )
-    Vis$nj_branch_label_val_reset <- TRUE
-    nj_branch_label_val("Host")
+    nj_branch_label_val("Allelic Distance")
+    nj_branch_panel_val(FALSE)
+    nj_branchlabel_cutoff_val(10)
     nj_branchlab_alpha_val(0.65)
     nj_branch_x_val(0)
     nj_branchlab_fontface_val("plain")
@@ -16354,25 +16704,18 @@ server <- function(input, output, session) {
 
     # Tip label mapping
     nj_mapping_show_val(FALSE)
-    Vis$nj_color_mapping_val_reset <- TRUE
     nj_color_mapping_val("Country")
-    Vis$nj_tiplab_scale_reset <- TRUE
     nj_tiplab_scale_val(nj_tiplab_scale_val_default())
-    Vis$nj_color_mapping_div_mid_reset <- TRUE
     nj_color_mapping_div_mid_val("Mean")
 
     # Tip points mapping
     nj_tipcolor_mapping_show_val(FALSE)
-    Vis$nj_tipcolor_mapping_val_reset <- TRUE
     nj_tipcolor_mapping_val("Country")
-    Vis$nj_tippoint_scale_val_reset <- TRUE
     nj_tippoint_scale_val(nj_tippoint_scale_val_default())
-    Vis$nj_tipcolor_mapping_div_mid_reset <- TRUE
     nj_tipcolor_mapping_div_mid_val("Mean")
 
     # Tip shape mapping
     nj_tipshape_mapping_show_val(FALSE)
-    Vis$nj_tipshape_mapping_val_reset <- TRUE
     nj_tipshape_mapping_val("Host")
 
     # Tiles mapping
@@ -16381,43 +16724,25 @@ server <- function(input, output, session) {
     nj_tiles_show_3_val(FALSE)
     nj_tiles_show_4_val(FALSE)
     nj_tiles_show_5_val(FALSE)
-    Vis$nj_fruit_variable_val_reset <- TRUE
     nj_fruit_variable_val("Isolation Date")
-    Vis$nj_fruit_variable_2_val_reset <- TRUE
     nj_fruit_variable_2_val("Isolation Date")
-    Vis$nj_fruit_variable_3_val_reset <- TRUE
     nj_fruit_variable_3_val("Isolation Date")
-    Vis$nj_fruit_variable_4_val_reset <- TRUE
     nj_fruit_variable_4_val("Isolation Date")
-    Vis$nj_fruit_variable_5_val_reset <- TRUE
     nj_fruit_variable_5_val("Isolation Date")
-    Vis$nj_tiles_scale_1_reset <- TRUE
     nj_tiles_scale_1_val(nj_tiles_scale_1_val_default())
-    Vis$nj_tiles_scale_2_reset <- TRUE
     nj_tiles_scale_2_val(nj_tiles_scale_2_val_default())
-    Vis$nj_tiles_scale_3_reset <- TRUE
     nj_tiles_scale_3_val(nj_tiles_scale_3_val_default())
-    Vis$nj_tiles_scale_4_reset <- TRUE
     nj_tiles_scale_4_val(nj_tiles_scale_4_val_default())
-    Vis$nj_tiles_scale_5_reset <- TRUE
     nj_tiles_scale_5_val(nj_tiles_scale_5_val_default())
-    Vis$nj_tiles_mapping_div_mid_1_reset <- TRUE
     nj_tiles_mapping_div_mid_1_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_2_reset <- TRUE
     nj_tiles_mapping_div_mid_2_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_3_reset <- TRUE
     nj_tiles_mapping_div_mid_3_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_4_reset <- TRUE
     nj_tiles_mapping_div_mid_4_val("Mean")
-    Vis$nj_tiles_mapping_div_mid_5_reset <- TRUE
     nj_tiles_mapping_div_mid_5_val("Mean")
 
     nj_heatmap_show_val(FALSE)
-    Vis$nj_heatmap_select_val_reset <- TRUE
     nj_heatmap_select_val(NULL)
-    Vis$nj_heatmap_scale_reset <- TRUE
     nj_heatmap_scale_val(nj_heatmap_scale_val_default())
-    Vis$nj_heatmap_div_mid_val_reset <- TRUE
     nj_heatmap_div_mid_val("Mean")
 
     # Color values
@@ -16426,13 +16751,13 @@ server <- function(input, output, session) {
     nj_title_color_val("#000000")
     nj_tiplab_color_val("#000000")
     nj_tiplab_fill_val("#84D9A0")
+    nj_branch_color_val("#000000")
     nj_branch_label_color_val("#FFB7B7")
     nj_tippoint_color_val("#3A4657")
     nj_nodepoint_color_val("#3A4657")
 
     # Tip points
     nj_tippoint_show_val(FALSE)
-    Vis$nj_tippoint_shape_reset <- TRUE
     nj_tippoint_shape_val("circle")
     nj_tippoint_alpha_val(0.5)
     ifelse(
@@ -16458,48 +16783,38 @@ server <- function(input, output, session) {
     nj_fruit_alpha_3_val(1)
     nj_fruit_alpha_4_val(1)
     nj_fruit_alpha_5_val(1)
-    Vis$nj_fruit_width_circ_val_reset <- TRUE
     nj_fruit_width_circ_val(fruit_width())
-    Vis$nj_fruit_width_circ_2_val_reset <- TRUE
     nj_fruit_width_circ_2_val(fruit_width())
-    Vis$nj_fruit_width_circ_3_val_reset <- TRUE
     nj_fruit_width_circ_3_val(fruit_width())
-    Vis$nj_fruit_width_circ_4_val_reset <- TRUE
     nj_fruit_width_circ_4_val(fruit_width())
-    Vis$nj_fruit_width_circ_5_val_reset <- TRUE
     nj_fruit_width_circ_5_val(fruit_width())
-    Vis$nj_fruit_offset_circ_reset <- TRUE
     nj_fruit_offset_circ_val(0.05)
-    Vis$nj_fruit_offset_circ_2_reset <- TRUE
     nj_fruit_offset_circ_2_val(0.05)
-    Vis$nj_fruit_offset_circ_3_reset <- TRUE
     nj_fruit_offset_circ_3_val(0.05)
-    Vis$nj_fruit_offset_circ_4_reset <- TRUE
     nj_fruit_offset_circ_4_val(0.05)
-    Vis$nj_fruit_offset_circ_5_reset <- TRUE
     nj_fruit_offset_circ_5_val(0.05)
 
     # Heatmap
     nj_heatmap_title_val("Heatmap")
     nj_colnames_angle_val(-90)
-    Vis$nj_colnames_y_val_reset <- TRUE
     nj_colnames_y_val(-1)
     nj_heatmap_width_val(heatmap_width())
-    Vis$nj_heatmap_offset_val_reset <- TRUE
     nj_heatmap_offset_val(0)
 
     # Clade highlights
     nj_nodelabel_show_val(FALSE)
-    Vis$nj_parentnode_val_reset <- TRUE
     nj_parentnode_val("")
     nj_clade_scale_val(clade_highlight_color())
     nj_clade_type_val("roundrect")
 
     # Dimensions
-    nj_ratio_val(c("16:10" = (16 / 10)))
+    ifelse(
+      !is.null(Vis$ratio_nj),
+      nj_aspect_ratio_val(Vis$ratio_nj),
+      nj_aspect_ratio_val(0.6)
+    )
     nj_v_val(0)
     nj_h_val(-0.05)
-    nj_scale_val(670)
     nj_zoom_val(0.95)
 
     # Root Tree
@@ -16507,33 +16822,27 @@ server <- function(input, output, session) {
 
     # Layout
     nj_layout_val("rectangular")
-    nj_rootedge_show_val(FALSE)
-    Vis$nj_rootedge_length_val_reset <- TRUE
+    nj_rootedge_show_val(TRUE)
     ifelse(
       !is.null(Vis$nj_max_x),
       nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05)),
       nj_rootedge_length_val(2)
     )
     nj_rootedge_line_val("solid")
-    Vis$nj_xlim_val_reset <- TRUE
     nj_xlim_val(-10)
-    Vis$nj_xlim_inw_val_reset <- TRUE
     nj_xlim_inw_val(50)
-    nj_treescale_show_val(FALSE)
-    Vis$nj_treescale_width_val_reset <- TRUE
+    nj_treescale_show_val(TRUE)
     ifelse(
       !is.null(Vis$nj_max_x),
       nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0)),
       nj_treescale_width_val(2)
     )
-    Vis$nj_treescale_x_val_reset <- TRUE
     ifelse(
       !is.null(Vis$nj_max_x),
-      nj_treescale_x_val(round(ceiling(Vis$nj_max_x) * 0.2, 0)),
+      nj_treescale_x_val(round(Vis$nj_max_x / 2, 0)),
       nj_treescale_x_val(2)
     )
-    Vis$nj_treescale_y_val_reset <- TRUE
-    nj_treescale_y_val(0)
+    nj_treescale_y_val(-1)
     nj_ladder_val(TRUE)
 
     # Legend
@@ -16673,38 +16982,6 @@ server <- function(input, output, session) {
         )
       )
     )
-  })
-
-  # Size scaling NJ
-  observe({
-    if (equals(nj_ratio_val(), "1.6")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 5,
-        value = 670,
-        min = 450,
-        max = 670
-      )
-    } else if (equals(nj_ratio_val(), "1.77777777777778")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 9,
-        value = 657,
-        min = 450,
-        max = 666
-      )
-    } else if (equals(nj_ratio_val(), "1.33333333333333")) {
-      updateSliderInput(
-        session,
-        "nj_scale",
-        step = 3,
-        value = 654,
-        min = 450,
-        max = 669
-      )
-    }
   })
 
   ### Custom Labels
@@ -16860,7 +17137,7 @@ server <- function(input, output, session) {
       # nj_colnames_y_val(-1)
 
       if (!is.null(Vis$tree_algo) && Vis$tree_algo == "NJ") {
-        nj_align_val(FALSE)
+        nj_align_val(TRUE)
       }
 
       nj_h_val(-0.05)
@@ -16926,82 +17203,63 @@ server <- function(input, output, session) {
   session$sendCustomMessage('mst_reset_style', "")
   session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
-  output$mst_controls <- renderUI(
-    box(
-      solidHeader = TRUE,
-      status = "primary",
-      width = "100%",
-      title = "Labels",
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Isolate Label"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
+  output$mst_controls <- renderUI({
+    render_info("mst_controls Labels Menu")
+
+    div(
+      class = "full-height-box",
+      box(
+        solidHeader = TRUE,
+        status = "primary",
+        width = "100%",
+        title = "Labels",
+        fluidRow(
           column(
             width = 12,
-            align = "center",
-            div(
-              class = "mst-label-sel",
-              uiOutput("mst_node_label")
+            align = "left",
+            fluidRow(
+              column(
+                width = 8,
+                align = "left",
+                h4(
+                  p("Isolate Label"),
+                  style = "color:white; position: relative; right: -15px; "
+                )
+              ),
+              column(
+                width = 4,
+                align = "center",
+                div(
+                  class = "mat-switch-v",
+                  materialSwitch(
+                    "mst_show_label",
+                    "",
+                    value = isolate(mst_show_label_reactive())
+                  )
+                )
+              )
+            ),
+            fluidRow(
+              column(
+                width = 12,
+                align = "center",
+                div(
+                  class = "mst-label-sel",
+                  uiOutput("mst_node_label")
+                ),
+                br()
+              )
             )
           )
         )
-      ),
-      br(),
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Title"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
-          column(
-            width = 12,
-            align = "center",
-            textInput(
-              "mst_title",
-              label = "",
-              width = "100%",
-              placeholder = "Plot Title"
-            )
-          )
-        )
-      ),
-      br(),
-      fluidRow(
-        column(
-          width = 12,
-          align = "left",
-          h4(
-            p("Subtitle"),
-            style = "color:white; position: relative; right: -15px; top: 15px;"
-          ),
-          column(
-            width = 12,
-            align = "center",
-            textInput(
-              "mst_subtitle",
-              label = "",
-              width = "100%",
-              placeholder = "Plot Subtitle"
-            )
-          )
-        )
-      ),
-      br(),
-      br()
+      )
     )
-  )
+  })
 
   ##### Label Menu ----
 
   mst_node_label_reactive <- reactiveVal()
-  mst_title_reactive <- reactiveVal()
-  mst_subtitle_reactive <- reactiveVal()
+  mst_show_label_reactive <- reactiveVal()
 
   observe({
     ifelse(
@@ -17015,15 +17273,13 @@ server <- function(input, output, session) {
     )
 
     ifelse(
-      !is.null(input$mst_title),
-      mst_title_reactive(input$mst_title),
-      mst_title_reactive("")
-    )
-
-    ifelse(
-      !is.null(input$mst_subtitle),
-      mst_subtitle_reactive(input$mst_subtitle),
-      mst_subtitle_reactive("")
+      isTRUE(mst_color_var_reactive()),
+      mst_show_label_reactive(TRUE),
+      ifelse(
+        !is.null(input$mst_show_label),
+        mst_show_label_reactive(input$mst_show_label),
+        mst_show_label_reactive(TRUE)
+      )
     )
   })
 
@@ -17033,78 +17289,58 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_label_menu")
 
-    output$mst_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Labels",
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Isolate Label"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Labels Menu")
+
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Labels",
+          fluidRow(
             column(
               width = 12,
-              align = "center",
-              div(
-                class = "mst-label-sel",
-                uiOutput("mst_node_label")
+              align = "left",
+              fluidRow(
+                column(
+                  width = 8,
+                  align = "left",
+                  h4(
+                    p("Isolate Label"),
+                    style = "color:white; position: relative; right: -15px; "
+                  )
+                ),
+                column(
+                  width = 4,
+                  align = "center",
+                  div(
+                    class = "mat-switch-v",
+                    materialSwitch(
+                      "mst_show_label",
+                      "",
+                      value = isolate(mst_show_label_reactive())
+                    )
+                  )
+                )
+              ),
+              fluidRow(
+                column(
+                  width = 12,
+                  align = "center",
+                  div(
+                    class = "mst-label-sel",
+                    uiOutput("mst_node_label")
+                  ),
+                  br()
+                )
               )
             )
           )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Title"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
-            column(
-              width = 12,
-              align = "center",
-              textInput(
-                "mst_title",
-                value = isolate(mst_title_reactive()),
-                label = "",
-                width = "100%",
-                placeholder = "Plot Title"
-              )
-            )
-          )
-        ),
-        br(),
-        fluidRow(
-          column(
-            width = 12,
-            align = "left",
-            h4(
-              p("Subtitle"),
-              style = "color:white; position: relative; right: -15px; top: 15px;"
-            ),
-            column(
-              width = 12,
-              align = "center",
-              textInput(
-                "mst_subtitle",
-                value = isolate(mst_subtitle_reactive()),
-                label = "",
-                width = "100%",
-                placeholder = "Plot Subtitle"
-              )
-            )
-          )
-        ),
-        br(),
-        br()
+        )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -17142,9 +17378,11 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_variable_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Variable Mapping Menu")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -17226,7 +17464,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -17286,168 +17524,173 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_color_menu")
 
-    output$mst_controls <- renderUI(
-      box(
-        solidHeader = TRUE,
-        status = "primary",
-        width = "100%",
-        title = "Color Menu",
-        column(
-          width = 12,
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Text'
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Color Menu")
+
+      div(
+        class = "full-height-box",
+        box(
+          solidHeader = TRUE,
+          status = "primary",
+          width = "100%",
+          title = "Color Menu",
+          column(
+            width = 12,
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Text'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_text_color",
+                  selected = isolate(mst_text_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start",
+                  width = "100%"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Nodes'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                uiOutput("mst_color_mapping")
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Edges'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_color_edge",
+                  width = "100%",
+                  selected = isolate(mst_color_edge_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Edge Font'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_edge_font_color",
+                  width = "100%",
+                  selected = isolate(mst_edge_font_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 6,
+                align = "left",
+                HTML(
+                  paste(
+                    tags$span(
+                      style = 'color: white; font-size: 14px; position: relative; top: 10px;',
+                      'Background'
+                    )
+                  )
+                )
+              ),
+              column(
+                width = 6,
+                align = "center",
+                colorPickr(
+                  inputId = "mst_background_color",
+                  width = "100%",
+                  selected = isolate(mst_background_color_reactive()),
+                  label = "",
+                  update = "changestop",
+                  interaction = list(clear = FALSE, save = FALSE),
+                  position = "right-start"
+                )
+              )
+            ),
+            fluidRow(
+              column(1),
+              column(
+                width = 11,
+                div(
+                  class = "switch-mst-transparent",
+                  materialSwitch(
+                    "mst_background_transparent",
+                    h5(
+                      p("Transparent"),
+                      style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
+                    ),
+                    value = isolate(mst_background_transparent_reactive()),
+                    right = TRUE
                   )
                 )
               )
             ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_text_color",
-                selected = isolate(mst_text_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start",
-                width = "100%"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Nodes'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              uiOutput("mst_color_mapping")
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Edges'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_color_edge",
-                width = "100%",
-                selected = isolate(mst_color_edge_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Edge Font'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_edge_font_color",
-                width = "100%",
-                selected = isolate(mst_edge_font_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          br(),
-          fluidRow(
-            column(
-              width = 6,
-              align = "left",
-              HTML(
-                paste(
-                  tags$span(
-                    style = 'color: white; font-size: 14px; position: relative; top: 10px;',
-                    'Background'
-                  )
-                )
-              )
-            ),
-            column(
-              width = 6,
-              align = "center",
-              colorPickr(
-                inputId = "mst_background_color",
-                width = "100%",
-                selected = isolate(mst_background_color_reactive()),
-                label = "",
-                update = "changestop",
-                interaction = list(clear = FALSE, save = FALSE),
-                position = "right-start"
-              )
-            )
-          ),
-          fluidRow(
-            column(1),
-            column(
-              width = 11,
-              div(
-                class = "switch-mst-transparent",
-                materialSwitch(
-                  "mst_background_transparent",
-                  h5(
-                    p("Transparent"),
-                    style = "color:white; padding-left: 0px; position: relative; top: -4px; right: -5px;"
-                  ),
-                  value = isolate(mst_background_transparent_reactive()),
-                  right = TRUE
-                )
-              )
-            )
-          ),
-          br()
+            br()
+          )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -17461,8 +17704,6 @@ server <- function(input, output, session) {
   mst_edge_length_scale_reactive <- reactiveVal()
   mst_edge_length_reactive <- reactiveVal()
   mst_edge_font_size_reactive <- reactiveVal()
-  mst_title_size_reactive <- reactiveVal()
-  mst_subtitle_size_reactive <- reactiveVal()
   mst_node_label_fontsize_reactive <- reactiveVal()
 
   observe({
@@ -17513,18 +17754,6 @@ server <- function(input, output, session) {
       mst_node_label_fontsize_reactive(input$mst_node_label_fontsize),
       mst_node_label_fontsize_reactive(14)
     )
-
-    ifelse(
-      !is.null(input$mst_title_size),
-      mst_title_size_reactive(input$mst_title_size),
-      mst_title_size_reactive(35)
-    )
-
-    ifelse(
-      !is.null(input$mst_subtitle_size),
-      mst_subtitle_size_reactive(input$mst_subtitle_size),
-      mst_subtitle_size_reactive(20)
-    )
   })
 
   observeEvent(input$mst_size_menu, {
@@ -17533,9 +17762,11 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_size_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Size Settings Menu")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -17800,78 +18031,19 @@ server <- function(input, output, session) {
                     )
                   )
                 )
-              ),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; font-size: 14px; position: relative; top: 15px; margin-left: 15px;',
-                        'Title'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  div(
-                    class = "mst-size-slider",
-                    sliderInput(
-                      "mst_title_size",
-                      "",
-                      value = isolate(mst_title_size_reactive()),
-                      min = 15,
-                      max = 50,
-                      step = 1,
-                      ticks = FALSE
-                    )
-                  )
-                )
-              ),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; font-size: 14px; position: relative; top: 15px; margin-left: 15px;',
-                        'Subtitle'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  div(
-                    class = "mst-size-slider2",
-                    sliderInput(
-                      "mst_subtitle_size",
-                      "",
-                      value = isolate(mst_subtitle_size_reactive()),
-                      min = 15,
-                      max = 40,
-                      step = 1,
-                      ticks = FALSE
-                    )
-                  )
-                )
               )
             )
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
 
   ##### Other Menu ----
 
-  mst_ratio_reactive <- reactiveVal()
-  mst_scale_reactive <- reactiveVal()
+  mst_aspect_ratio_reactive <- reactiveVal()
   mst_shadow_reactive <- reactiveVal()
   mst_node_shape_reactive <- reactiveVal()
   mst_show_clusters_reactive <- reactiveVal()
@@ -17885,15 +18057,9 @@ server <- function(input, output, session) {
 
   observe({
     ifelse(
-      !is.null(input$mst_ratio),
-      mst_ratio_reactive(input$mst_ratio),
-      mst_ratio_reactive(16 / 10)
-    )
-
-    ifelse(
-      !is.null(input$mst_scale),
-      mst_scale_reactive(input$mst_scale),
-      mst_scale_reactive(600)
+      !is.null(input$mst_aspect_ratio),
+      mst_aspect_ratio_reactive(input$mst_aspect_ratio),
+      mst_aspect_ratio_reactive(0.6)
     )
 
     ifelse(
@@ -17971,9 +18137,11 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_misc_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Miscellaneous Menu")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -17997,14 +18165,14 @@ server <- function(input, output, session) {
                   )
                 )
               ),
+              br(),
               fluidRow(
                 column(
                   width = 5,
-                  align = "left",
                   HTML(
                     paste(
                       tags$span(
-                        style = 'color: white; font-size: 14px; margin-left: 15px; position: relative; top: 27px',
+                        style = 'color: white; top: 8px; margin-left: 15px; font-size: 14px; position: relative;',
                         'Ratio'
                       )
                     )
@@ -18015,44 +18183,14 @@ server <- function(input, output, session) {
                   align = "center",
                   div(
                     class = "mst-control-ratio",
-                    selectInput(
-                      "mst_ratio",
-                      "",
-                      choices = c(
-                        "16:10" = (16 / 10),
-                        "16:9" = (16 / 9),
-                        "4:3" = (4 / 3)
-                      ),
-                      selected = isolate(mst_ratio_reactive())
-                    )
-                  )
-                )
-              ),
-              br(),
-              fluidRow(
-                column(
-                  width = 4,
-                  HTML(
-                    paste(
-                      tags$span(
-                        style = 'color: white; margin-left: 15px; font-size: 14px; position: relative;',
-                        'Scale'
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 8,
-                  align = "center",
-                  div(
-                    class = "mst-scale-slider",
                     sliderInput(
-                      "mst_scale",
+                      "mst_aspect_ratio",
                       "",
-                      min = 450,
-                      max = 670,
-                      step = 5,
-                      value = isolate(mst_scale_reactive()),
+                      min = 0.5,
+                      max = 2.0,
+                      value = isolate(mst_aspect_ratio_reactive()),
+                      step = 0.1,
+                      width = "100%",
                       ticks = FALSE
                     )
                   )
@@ -18060,6 +18198,7 @@ server <- function(input, output, session) {
               )
             )
           ),
+          br(),
           hr(),
           fluidRow(
             column(
@@ -18362,7 +18501,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18375,9 +18514,11 @@ server <- function(input, output, session) {
     session$sendCustomMessage('mst_reset_style', "")
     session$sendCustomMessage('mst_highlight', "mst_download_menu")
 
-    output$mst_controls <- renderUI(
+    output$mst_controls <- renderUI({
+      render_info("mst_controls Export Menu")
+
       div(
-        class = "control-box",
+        class = "full-height-box",
         box(
           solidHeader = TRUE,
           status = "primary",
@@ -18495,7 +18636,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -18503,6 +18644,8 @@ server <- function(input, output, session) {
   ##### Miscellaneous ----
 
   output$mst_node_shape <- renderUI({
+    render_info("mst_node_shape")
+
     if (isTRUE(mst_color_var_reactive())) {
       choices <- c("Pie Nodes" = "custom")
       selected <- "custom"
@@ -18568,9 +18711,8 @@ server <- function(input, output, session) {
 
     removeModal()
 
+    mst_show_label_reactive(TRUE)
     mst_node_label_reactive("Assembly Name")
-    mst_title_reactive("")
-    mst_subtitle_reactive("")
     mst_color_var_reactive(FALSE)
     mst_col_var_reactive("Isolation Date")
     mst_col_scale_reactive("Viridis")
@@ -18588,10 +18730,6 @@ server <- function(input, output, session) {
     mst_edge_length_reactive(35)
     mst_edge_font_size_reactive(18)
     mst_node_label_fontsize_reactive(14)
-    mst_title_size_reactive(35)
-    mst_subtitle_size_reactive(20)
-    mst_ratio_reactive(16 / 10)
-    mst_scale_reactive(600)
     mst_shadow_reactive(TRUE)
     mst_node_shape_reactive("dot")
     mst_show_clusters_reactive(FALSE)
@@ -18610,41 +18748,11 @@ server <- function(input, output, session) {
     runjs(unblock_ui)
   })
 
-  # Size scaling MST
-  observe({
-    if (mst_ratio_reactive() == "1.6") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 5,
-        value = 600,
-        min = 450,
-        max = 670
-      )
-    } else if (mst_ratio_reactive() == "1.77777777777778") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 9,
-        value = 657,
-        min = 450,
-        max = 666
-      )
-    } else if (mst_ratio_reactive() == "1.33333333333333") {
-      updateSliderInput(
-        session,
-        "mst_scale",
-        step = 3,
-        value = 654,
-        min = 450,
-        max = 669
-      )
-    }
-  })
-
   # Clustering UI
   output$mst_cluster <- renderUI({
     req(DB$schemeinfo)
+
+    render_info("mst_cluster")
 
     div(
       class = "mst-threshold",
@@ -18660,6 +18768,8 @@ server <- function(input, output, session) {
 
   # MST color mapping
   output$mst_color_mapping <- renderUI({
+    render_info("mst_color_mapping")
+
     mst_color_node <- colorPickr(
       inputId = "mst_color_node",
       width = "100%",
@@ -18688,6 +18798,11 @@ server <- function(input, output, session) {
         session,
         inputId = "mst_node_label",
         choices = c("Assembly Name")
+      )
+      updateSwitchInput(
+        session,
+        inputId = "mst_show_label",
+        value = TRUE
       )
     } else {
       updateSelectizeInput(
@@ -18719,6 +18834,8 @@ server <- function(input, output, session) {
 
   # MST node labels
   output$mst_node_label <- renderUI({
+    render_info("mst_node_label")
+
     if (isTRUE(mst_color_var_reactive())) {
       choices <- "Assembly Name"
     } else {
@@ -18740,12 +18857,17 @@ server <- function(input, output, session) {
 
   mst_tree <- reactive({
     data <- toVisNetworkData(Vis$mst_pre)
+
     data$nodes <- mutate(
       data$nodes,
-      label = Vis$unique_meta[,
-        colnames(Vis$unique_meta) %in%
-          mst_node_label_reactive()
-      ],
+      label = ifelse(
+        isTRUE(mst_show_label_reactive()) | isTRUE(mst_color_var_reactive()),
+        Vis$unique_meta[,
+          colnames(Vis$unique_meta) %in%
+            mst_node_label_reactive()
+        ],
+        ""
+      ),
       value = mst_node_scaling()
     )
 
@@ -18841,9 +18963,7 @@ server <- function(input, output, session) {
     visNetwork_graph <- visNetwork(
       data$nodes,
       data$edges,
-      main = mst_title(),
-      background = mst_background_color(),
-      submain = mst_subtitle()
+      background = mst_background_color()
     ) %>%
       visNodes(
         size = mst_node_size_reactive(),
@@ -18937,9 +19057,7 @@ server <- function(input, output, session) {
         visNetwork_graph <- visNetwork(
           data$nodes,
           data$edges,
-          main = mst_title(),
-          background = mst_background_color(),
-          submain = mst_subtitle()
+          background = mst_background_color()
         ) %>%
           visNodes(
             size = mst_node_size_reactive(),
@@ -19043,55 +19161,7 @@ server <- function(input, output, session) {
     }
   })
 
-  # Set Title
-  mst_title <- reactive({
-    if (nchar(mst_title_reactive()) < 1) {
-      list(
-        text = "title",
-        style = paste0(
-          "font-family:Georgia, Times New Roman, Times, serif;",
-          "text-align:center;",
-          "font-size: ",
-          as.character(mst_title_size_reactive()),
-          "px",
-          "; color: ",
-          as.character(mst_background_color())
-        )
-      )
-    } else {
-      list(
-        text = mst_title_reactive(),
-        style = paste0(
-          "font-family:Georgia, Times New Roman, Times, serif;",
-          "text-align:center;",
-          "font-size: ",
-          as.character(mst_title_size_reactive()),
-          "px",
-          "; color: ",
-          as.character(mst_text_color_reactive())
-        )
-      )
-    }
-  })
-
-  # Set Subtitle
-  mst_subtitle <- reactive({
-    list(
-      text = mst_subtitle_reactive(),
-      style = paste0(
-        "font-family:Georgia, Times New Roman, Times, serif;",
-        "text-align:center;",
-        "font-size: ",
-        as.character(mst_subtitle_size_reactive()),
-        "px",
-        "; color: ",
-        as.character(mst_text_color_reactive())
-      )
-    )
-  })
-
   # Background color
-
   mst_background_color <- reactive({
     if (isTRUE(mst_background_transparent_reactive())) {
       'rgba(0, 0, 0, 0)'
@@ -19105,6 +19175,23 @@ server <- function(input, output, session) {
   make.tree <- reactive({
     Vis_nj <- Vis$nj
     Vis_nj$tip.label <- Vis$meta_nj$Index
+
+    message(
+      "make.tree input: ",
+      ifelse(
+        !is.null(isolate(input$nj_treescale_x)),
+        isolate(input$nj_treescale_x),
+        "nope"
+      )
+    )
+    message("make.tree VAL(): ", isolate(nj_treescale_x_val()))
+
+    #TODO
+    #test
+    # nj_tree <- ggtree(Vis$nj)
+    # nj_max_x <- max(nj_tree$data$x)
+    # nj_branch_lengths <- nj_tree$data$branch.length
+    # nj_min_x <- min(nj_tree$data$x)
 
     # Rooted tree
     if (nj_root_isolate_val() != "Automatic") {
@@ -19154,6 +19241,7 @@ server <- function(input, output, session) {
         ggtitle(label = nj_title_val(), subtitle = nj_subtitle_val()) +
         theme_tree(bgcolor = nj_bg_val()) +
         theme(
+          plot.margin = unit(nj_margin(), "cm"),
           plot.title = element_text(
             colour = nj_title_color_val(),
             size = nj_title_size_val()
@@ -19166,9 +19254,9 @@ server <- function(input, output, session) {
           legend.direction = nj_legend_orientation_val(),
           legend.title = element_text(
             color = nj_color_val(),
-            size = nj_legend_size_val() * 1.2
+            size = nj_legend_size_val() * 1.2,
+            hjust = 0.5
           ),
-          legend.title.align = 0.5,
           legend.position = c(nj_legend_x_val(), nj_legend_y_val()),
           legend.text = element_text(
             color = nj_color_val(),
@@ -19267,6 +19355,18 @@ server <- function(input, output, session) {
             color = nj_bg_val()
           )
         )
+    }
+  })
+
+  # Adjust margin dependening on tree layout
+  nj_margin <- reactive({
+    if (
+      nj_layout_val() == "circular" ||
+        nj_layout_val() == "inward"
+    ) {
+      c(0, 0, 0, 0)
+    } else {
+      c(-1, 2, 0, 0)
     }
   })
 
@@ -20067,18 +20167,49 @@ server <- function(input, output, session) {
         nj_layout_val() != "inward"
     ) {
       if (isTRUE(nj_show_branch_label_val())) {
-        geom_label(
-          aes(
-            x = !!sym("branch"),
-            label = !!sym(nj_branch_label_val())
-          ),
-          fill = nj_branch_label_color_val(),
+        args <- list(
+          color = nj_branch_color_val(),
           size = nj_branch_size_val(),
-          label.r = unit(nj_branch_labelradius_val(), "lines"),
           nudge_x = nj_branch_x_val(),
           fontface = nj_branchlab_fontface_val(),
           alpha = nj_branchlab_alpha_val()
         )
+
+        if (isTRUE(nj_branch_panel_val())) {
+          geom <- geom_label2
+          args[["fill"]] <- nj_branch_label_color_val()
+          args[["label.r"]] <- unit(nj_branch_labelradius_val(), "lines")
+        } else {
+          geom <- geom_text2
+          args[["nudge_y"]] <- 0.25
+        }
+
+        if (nj_branch_label_val() == "Allelic Distance") {
+          args[["mapping"]] <- aes(
+            x = branch,
+            label = round(branch.length, 2),
+            subset = branch.length > nj_branchlabel_cutoff_val()
+            # branch.length >
+            # quantile(
+            #   branch.length[branch.length > Vis$nj_max_x * 0.005],
+            #   probs = nj_branchlabel_cutoff_val() / 100,
+            #   na.rm = TRUE
+            # )
+          )
+        } else {
+          args[["mapping"]] <- aes(
+            x = !!sym("branch"),
+            label = !!sym(nj_branch_label_val()),
+            subset = branch.length >
+              quantile(
+                branch.length[branch.length > Vis$nj_max_x * 0.005],
+                probs = nj_branchlabel_cutoff_val() / 100,
+                na.rm = TRUE
+              )
+          )
+        }
+
+        do.call(geom, args)
       } else {
         NULL
       }
@@ -20227,64 +20358,26 @@ server <- function(input, output, session) {
 
   output$download_nj <- downloadHandler(
     filename = function() {
-      log_print(paste0(
-        "Save NJ;",
-        paste0("NJ_", Sys.Date(), ".", input$filetype_nj)
-      ))
-      paste0(
-        Sys.Date(),
-        "_",
-        gsub(" ", "_", DB$scheme),
-        "_Tree.",
-        input$filetype_nj
-      )
+      make_filename(filetype = input$filetype_nj, scheme = DB$scheme)
     },
     content = function(file) {
-      if (input$filetype_nj == "png") {
-        png(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val())
-        )
-        print(make.tree())
-        dev.off()
-      } else if (input$filetype_nj == "jpeg") {
-        jpeg(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val()),
-          quality = 100
-        )
-        print(make.tree())
-        dev.off()
-      } else if (input$filetype_nj == "svg") {
-        plot <- print(make.tree())
-        ggsave(
-          file = file,
-          plot = plot,
-          device = svg(
-            width = (as.numeric(nj_scale_val()) *
-              as.numeric(nj_ratio_val())) /
-              96,
-            height = as.numeric(nj_scale_val()) / 96
-          )
-        )
-      } else if (input$filetype_nj == "bmp") {
-        bmp(
-          file,
-          width = (as.numeric(nj_scale_val()) *
-            as.numeric(nj_ratio_val())),
-          height = as.numeric(nj_scale_val())
-        )
-        print(make.tree())
-        dev.off()
-      }
+      save_plot_content(
+        file = file,
+        session = session,
+        filetype = input$filetype_nj,
+        aspect_ratio = nj_aspect_ratio_val(),
+        plot = make.tree(),
+        dpi = 192
+      )
     }
   )
 
   ### Reactive Events ----
+
+  # Switch view mode
+  observeEvent(input$toggle_style, {
+    runjs("toggleCustomHeight()")
+  })
 
   # Show isolate selection table
   observeEvent(input$table_view, {
@@ -20891,320 +20984,1024 @@ server <- function(input, output, session) {
     }
   })
 
-  observeEvent(input$create_tree, {
-    runjs(block_ui)
-    log_print("Input create_tree")
+  observeEvent(
+    input$create_tree,
+    {
+      runjs(block_ui)
+      log_print("Input create_tree")
+      message("create_tree 1: ", isolate(nj_treescale_x_val()))
 
-    if (is.null(DB$data)) {
-      log_print("Missing data")
+      if (is.null(DB$data)) {
+        log_print("Missing data")
 
-      show_toast(
-        title = "Missing data",
-        type = "error",
-        position = "bottom-end",
-        timer = 6000
+        show_toast(
+          title = "Missing data",
+          type = "error",
+          position = "bottom-end",
+          timer = 6000
+        )
+      } else if (nrow(DB$allelic_profile_true) < 3) {
+        log_print("Min. of 3 entries required for visualization")
+
+        show_toast(
+          title = "Min. of 3 entries required for visualization",
+          type = "error",
+          position = "bottom-end",
+          timer = 6000
+        )
+      } else {
+        if (
+          any(duplicated(DB$meta$`Assembly Name`)) ||
+            any(duplicated(DB$meta$`Assembly ID`))
+        ) {
+          log_print("Duplicated assemblies present")
+
+          dup_name <- which(duplicated(DB$meta_true$`Assembly Name`))
+          dup_id <- which(duplicated(DB$meta_true$`Assembly ID`))
+
+          showModal(
+            div(
+              class = "start-modal",
+              modalDialog(
+                fluidRow(
+                  br(),
+                  column(
+                    width = 11,
+                    p(
+                      HTML(
+                        paste0(
+                          '<span style="color: white; display: block; font-size: 15px; margin-left: 15px;">',
+                          "Entries contain duplicated name(s). Please assign only unique assembly name(s).",
+                          '</span>'
+                        )
+                      )
+                    )
+                  ),
+                  br()
+                ),
+                title = "Duplicate entries",
+                fade = TRUE,
+                easyClose = TRUE,
+                footer = tagList(
+                  modalButton("Dismiss"),
+                  actionButton(
+                    "change_entries",
+                    "Go to Entry Table",
+                    class = "btn btn-default"
+                  )
+                )
+              )
+            )
+          )
+        } else {
+          set.seed(1)
+
+          if (input$tree_type == "Tree") {
+            log_print("Rendering tree plot")
+
+            output$tree_field <- renderUI({
+              render_info("tree_field")
+
+              addSpinner(
+                plotOutput(
+                  "tree_plot",
+                  height = "auto"
+                ),
+                spin = "dots",
+                color = "#ffffff"
+              )
+            })
+
+            meta_nj <- select(DB$meta_true, -2)
+            if (
+              file.exists(file.path(
+                Startup$database,
+                gsub(" ", "_", DB$scheme),
+                "AMR_Profile.rds"
+              ))
+            ) {
+              amr_profile <- readRDS(file.path(
+                Startup$database,
+                gsub(" ", "_", DB$scheme),
+                "AMR_Profile.rds"
+              ))
+
+              if (isFALSE(any(meta_nj$Screened != "Yes"))) {
+                Vis$amr_nj <- amr_profile$results[
+                  rownames(
+                    amr_profile$results
+                  ) %in%
+                    meta_nj$`Assembly ID`,
+                ]
+                meta_nj <- add_column(meta_nj, Vis$amr_nj)
+              }
+            }
+
+            if (
+              length(unique(gsub(" ", "_", colnames(meta_nj)))) <
+                length(
+                  gsub(" ", "_", colnames(meta_nj))
+                )
+            ) {
+              show_toast(
+                title = "Conflicting Custom Variable Names",
+                type = "warning",
+                position = "bottom-end",
+                timer = 6000
+              )
+            } else {
+              # Create phylogenetic tree data
+              if (input$tree_algo == "Neighbour-Joining") {
+                Vis_nj <- ape::nj(hamming_dist())
+                Vis$tree_algo <- "NJ"
+              } else {
+                Vis_nj <- phangorn::upgma(hamming_dist())
+                Vis$tree_algo <- "UPGMA"
+              }
+
+              # Convert negative edges
+              edge_lengths_abs <- abs(Vis_nj[["edge.length"]])
+              edge_lengths_log <- log(
+                edge_lengths_abs + sqrt(edge_lengths_abs^2 + 1)
+              )
+              Vis_nj[["edge.length"]] <- edge_lengths_log
+              Vis$nj <- Vis_nj
+
+              # Create phylogenetic tree meta data
+              Vis$meta_nj <- mutate(meta_nj, taxa = Index) %>%
+                relocate(taxa)
+
+              # Get number of included entries calculate start values for tree
+              if (
+                nj_layout_val() == "circular" || nj_layout_val() == "inward"
+              ) {
+                # Plot aspect ratio always 1 for circular layouts
+                Vis$ratio_nj <- 1
+
+                if (sum(DB$data$Include) < 21) {
+                  Vis$labelsize_nj <- 5.5
+                  Vis$tippointsize_nj <- 5.5
+                  Vis$nodepointsize_nj <- 4
+                  Vis$tiplab_padding_nj <- 0.25
+                  Vis$branch_size_nj <- 4.5
+                } else if (between(sum(DB$data$Include), 21, 40)) {
+                  Vis$labelsize_nj <- 5
+                  Vis$tippointsize_nj <- 5
+                  Vis$nodepointsize_nj <- 3.5
+                  Vis$tiplab_padding_nj <- 0.2
+                  Vis$branch_size_nj <- 4
+                } else if (between(sum(DB$data$Include), 41, 60)) {
+                  Vis$labelsize_nj <- 4.5
+                  Vis$tippointsize_nj <- 4.5
+                  Vis$nodepointsize_nj <- 3
+                  Vis$tiplab_padding_nj <- 0.15
+                  Vis$branch_size_nj <- 3.5
+                } else if (between(sum(DB$data$Include), 61, 80)) {
+                  Vis$labelsize_nj <- 4
+                  Vis$tippointsize_nj <- 4
+                  Vis$nodepointsize_nj <- 2.5
+                  Vis$tiplab_padding_nj <- 0.1
+                  Vis$branch_size_nj <- 3
+                } else if (between(sum(DB$data$Include), 81, 100)) {
+                  Vis$labelsize_nj <- 3.5
+                  Vis$tippointsize_nj <- 3.5
+                  Vis$nodepointsize_nj <- 2
+                  Vis$tiplab_padding_nj <- 0.1
+                  Vis$branch_size_nj <- 2.5
+                } else {
+                  Vis$labelsize_nj <- 3
+                  Vis$tippointsize_nj <- 3
+                  Vis$nodepointsize_nj <- 1.5
+                  Vis$tiplab_padding_nj <- 0.05
+                  Vis$branch_size_nj <- 2
+                }
+              } else {
+                vis_params <- get_vis_params(sum(DB$data$Include))
+
+                Vis$tippointsize_nj <- Vis$labelsize_nj <- vis_params$labelsize_nj
+                Vis$nodepointsize_nj <- vis_params$labelsize_nj - 1
+                Vis$ratio_nj <- vis_params$ratio_nj
+                Vis$tiplab_padding_nj <- 0.05
+                Vis$branch_size_nj <- 2
+              }
+
+              nj_tree <- ggtree(Vis$nj)
+
+              # Get upper and lower end of x range
+              Vis$nj_max_x <- max(nj_tree$data$x)
+              Vis$nj_branch_lengths <- nj_tree$data$branch.length
+              Vis$nj_min_x <- min(nj_tree$data$x)
+
+              # Get parent node numbers
+              Vis$nj_parentnodes <- nj_tree$data$parent
+
+              # Update visualization control inputs
+              nj_tiplab_size_val(Vis$labelsize_nj)
+              updateSliderInput(
+                session = session,
+                inputId = "nj_tiplab_size",
+                value = Vis$labelsize_nj
+              )
+              nj_tippoint_size_val(Vis$tippointsize_nj)
+              nj_nodepoint_size_val(Vis$nodepointsize_nj)
+              nj_tiplab_padding_val(Vis$tiplab_padding_nj)
+              nj_branch_size_val(Vis$branch_size_nj)
+              nj_aspect_ratio_val(Vis$ratio_nj)
+              nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
+              nj_treescale_x_val(round(Vis$nj_max_x / 2, 0))
+              nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
+            }
+          } else {
+            log_print("Rendering MST graph")
+
+            output$mst_field <- renderUI({
+              render_info("mst_field")
+
+              if (!is.null(session$clientData$output_tree_mst_height)) {
+                width <- as.integer(
+                  session$clientData$output_tree_mst_height *
+                    (1 / mst_aspect_ratio_reactive())
+                )
+              } else {
+                width <- as.integer(
+                  500 *
+                    mst_aspect_ratio_reactive()
+                )
+              }
+
+              width <- paste0(width, "px")
+
+              visnetworkoutput <- visNetworkOutput(
+                "tree_mst",
+                height = "100%",
+                width = width
+              )
+
+              if (isTRUE(mst_background_transparent_reactive())) {
+                visnetworkoutput
+              } else {
+                addSpinner(visnetworkoutput)
+              }
+            })
+
+            if (nrow(DB$meta_true) > 150) {
+              log_print("Over 100 isolates in MST graph")
+
+              show_toast(
+                title = "Computation might take a while",
+                type = "info",
+                position = "bottom-end",
+                timer = 10000
+              )
+            }
+
+            meta_mst <- DB$meta_true
+            Vis$meta_mst <- meta_mst
+
+            # prepare igraph object
+            Vis$mst_pre <- hamming_mst() |>
+              as.matrix() |>
+              graph.adjacency(weighted = TRUE) |>
+              igraph::mst()
+
+            output$tree_mst <- renderVisNetwork({
+              mst_tree()
+            })
+
+            # Aspect ratio info
+            output$mst_aspect <- renderUI({
+              render_info("mst_aspect")
+
+              width <- as.integer(session$clientData$output_tree_mst_width)
+              height <- as.integer(session$clientData$output_tree_mst_height)
+              paste(width, "x", height, "px")
+            })
+
+            shinyjs::addClass("mst_aspect", class = "aspect-display")
+
+            Vis$mst_true <- TRUE
+          }
+        }
+      }
+
+      runjs(unblock_ui)
+    },
+    priority = 1
+  )
+
+  observeEvent(
+    input$create_tree,
+    {
+      runjs(block_ui)
+      message("create_tree 2: ", isolate(nj_treescale_x_val()))
+
+      output$nj_treescale_x <- renderUI({
+        render_info("nj_treescale_x")
+        message("Test: ", isolate(nj_treescale_x_val()))
+
+        isolate(nj_max_x <- Vis$nj_max_x)
+        isolate(nj_min_x <- Vis$nj_min_x)
+
+        if (!is.null(nj_min_x) && !is.null(nj_max_x)) {
+          min <- ifelse(ceiling(nj_min_x) < 1, 1, ceiling(nj_min_x))
+
+          max <- round(floor(nj_max_x))
+        } else {
+          min <- 1
+          max <- 10
+        }
+
+        output <- render_plot_control(
+          input_id = "nj_treescale_x",
+          input_type = "sliderInput",
+          div_class = "nj-label-slider",
+          width = "150px",
+          min = min,
+          max = max,
+          reactive_value = isolate(nj_treescale_x_val()),
+          default_value = ifelse(
+            !is.null(nj_max_x),
+            round(nj_max_x / 2, 0),
+            2
+          )
+        )
+
+        output
+      })
+
+      output$tree_plot <- renderPlot(
+        {
+          make.tree()
+        },
+        height = function() {
+          req(
+            session$clientData$output_tree_plot_width,
+            nj_aspect_ratio_val()
+          )
+          width <- session$clientData$output_tree_plot_width
+          if (is.null(width) || !is.numeric(width) || width <= 0) {
+            width <- 800
+          }
+          height <- as.integer(width * nj_aspect_ratio_val())
+          if (!is.numeric(height) || height <= 0) {
+            height <- as.integer(800 * 0.6)
+          }
+
+          height
+        },
+        res = 192
       )
-    } else if (nrow(DB$allelic_profile_true) < 3) {
-      log_print("Min. of 3 entries required for visualization")
 
-      show_toast(
-        title = "Min. of 3 entries required for visualization",
-        type = "error",
-        position = "bottom-end",
-        timer = 6000
-      )
-    } else {
-      if (
-        any(duplicated(DB$meta$`Assembly Name`)) ||
-          any(duplicated(DB$meta$`Assembly ID`))
-      ) {
-        log_print("Duplicated assemblies present")
+      # Aspect ratio info
+      output$tree_aspect <- renderUI({
+        render_info("tree_aspect")
 
-        dup_name <- which(duplicated(DB$meta_true$`Assembly Name`))
-        dup_id <- which(duplicated(DB$meta_true$`Assembly ID`))
+        width <- get_plot_width(session = session)
+        height <- get_plot_height(
+          width = width,
+          aspect_ratio_val = nj_aspect_ratio_val()
+        )
 
-        showModal(
-          div(
-            class = "start-modal",
-            modalDialog(
-              fluidRow(
-                br(),
+        paste(width, "x", height, "px | 192 DPI")
+      })
+
+      shinyjs::addClass("tree_aspect", class = "aspect-display")
+
+      # Render tree control menu
+      session$sendCustomMessage('nj_reset_style', "")
+      session$sendCustomMessage('nj_highlight', "nj_label_menu")
+
+      output$tree_controls <- renderUI({
+        render_info("tree_controls Labels")
+        div(
+          class = "full-height-box",
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Labels",
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
                 column(
-                  width = 11,
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; display: block; font-size: 15px; margin-left: 15px;">',
-                        "Entries contain duplicated name(s). Please assign only unique assembly name(s).",
-                        '</span>'
+                  width = 12,
+                  align = "left",
+                  br(),
+                  fluidRow(
+                    column(
+                      width = 7,
+                      align = "left",
+                      h4(
+                        p("Isolate Label"),
+                        style = "color:white; position: relative; right: -15px;"
+                      )
+                    ),
+                    column(
+                      width = 5,
+                      align = "left",
+                      div(
+                        class = "mat-switch-lab",
+                        materialSwitch(
+                          "nj_tiplab_show",
+                          "",
+                          value = isolate(nj_tiplab_show_val())
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 9,
+                      align = "left",
+                      div(
+                        class = "nj-label-sel",
+                        uiOutput("nj_tiplab_ui")
+                      )
+                    ),
+                    column(
+                      width = 3,
+                      align = "center",
+                      dropMenu(
+                        actionBttn(
+                          "nj_labeltext_menu",
+                          label = "",
+                          color = "default",
+                          size = "sm",
+                          style = "material-flat",
+                          icon = icon("sliders")
+                        ),
+                        placement = "right",
+                        theme = "translucent",
+                        fluidRow(
+                          column(
+                            width = 6,
+                            align = "center",
+                            uiOutput("nj_align_ui"),
+                            br(),
+                            sliderInput(
+                              "nj_tiplab_size",
+                              label = h5(
+                                "Label size",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 1,
+                              max = 10,
+                              step = 0.1,
+                              value = isolate(nj_tiplab_size_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_tiplab_alpha",
+                              label = h5(
+                                "Opacity",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0.1,
+                              max = 1,
+                              step = 0.05,
+                              value = isolate(nj_tiplab_alpha_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            )
+                          ),
+                          column(
+                            width = 6,
+                            align = "center",
+                            selectInput(
+                              "nj_tiplab_fontface",
+                              label = h5(
+                                "Fontface",
+                                style = "color:white; margin-bottom: 5px; margin-top: 16px"
+                              ),
+                              width = "250px",
+                              choices = c(
+                                Plain = "plain",
+                                Bold = "bold",
+                                Italic = "italic",
+                                `B & I` = "bold.italic"
+                              ),
+                              selected = isolate(nj_tiplab_fontface_val())
+                            ),
+                            br(),
+                            sliderInput(
+                              inputId = "nj_tiplab_position",
+                              label = h5(
+                                "Position",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = -3,
+                              max = 3,
+                              step = 0.05,
+                              value = isolate(nj_tiplab_position_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            uiOutput("nj_tiplab_angle_ui")
+                          )
+                        )
                       )
                     )
                   )
-                ),
-                br()
+                )
+              )
+            ),
+            fluidRow(
+              column(
+                width = 8,
+                div(
+                  class = "mat-switch-geom",
+                  materialSwitch(
+                    "nj_geom",
+                    h5(
+                      p("Panels"),
+                      style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                    ),
+                    value = isolate(nj_geom_val()),
+                    right = FALSE
+                  )
+                )
               ),
-              title = "Duplicate entries",
-              fade = TRUE,
-              easyClose = TRUE,
-              footer = tagList(
-                modalButton("Dismiss"),
-                actionButton(
-                  "change_entries",
-                  "Go to Entry Table",
-                  class = "btn btn-default"
+              column(
+                width = 4,
+                dropMenu(
+                  actionBttn(
+                    "nj_labelformat_menu",
+                    label = "",
+                    color = "default",
+                    size = "sm",
+                    style = "material-flat",
+                    icon = icon("sliders")
+                  ),
+                  placement = "right",
+                  theme = "translucent",
+                  fluidRow(
+                    column(
+                      width = 12,
+                      align = "center",
+                      sliderInput(
+                        inputId = "nj_tiplab_padding",
+                        label = h5(
+                          "Size",
+                          style = "color:white; margin-bottom: 0px"
+                        ),
+                        min = 0.05,
+                        max = 1,
+                        value = isolate(nj_tiplab_padding_val()),
+                        step = 0.05,
+                        width = "150px",
+                        ticks = FALSE
+                      ),
+                      br(),
+                      sliderInput(
+                        inputId = "nj_tiplab_labelradius",
+                        label = h5(
+                          "Smooth edge",
+                          style = "color:white; margin-bottom: 0px"
+                        ),
+                        min = 0,
+                        step = 0.05,
+                        max = 0.5,
+                        value = isolate(nj_tiplab_labelradius_val()),
+                        width = "150px",
+                        ticks = FALSE
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
+                column(
+                  width = 12,
+                  align = "left",
+                  fluidRow(
+                    column(
+                      width = 7,
+                      align = "left",
+                      h4(
+                        p("Branches"),
+                        style = "color:white; position: relative; right: -15px;"
+                      )
+                    ),
+                    column(
+                      width = 5,
+                      align = "left",
+                      div(
+                        class = "mat-switch-lab",
+                        materialSwitch(
+                          "nj_show_branch_label",
+                          "",
+                          value = isolate(nj_show_branch_label_val())
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 9,
+                      align = "left",
+                      div(
+                        class = "nj-label-sel",
+                        uiOutput("nj_branch_label")
+                      )
+                    ),
+                    column(
+                      width = 3,
+                      align = "center",
+                      dropMenu(
+                        actionBttn(
+                          "nj_branch_label_menu",
+                          label = "",
+                          color = "default",
+                          size = "sm",
+                          style = "material-flat",
+                          icon = icon("sliders")
+                        ),
+                        placement = "right",
+                        theme = "translucent",
+                        fluidRow(
+                          column(
+                            width = 6,
+                            align = "center",
+                            selectInput(
+                              "nj_branchlab_fontface",
+                              label = h5(
+                                "Fontface",
+                                style = "color:white; margin-bottom: 0px;"
+                              ),
+                              width = "150px",
+                              choices = c(
+                                Plain = "plain",
+                                Bold = "bold",
+                                Italic = "italic",
+                                `B & I` = "bold.italic"
+                              ),
+                              selected = isolate(nj_branchlab_fontface_val())
+                            ),
+                            br(),
+                            sliderInput(
+                              inputId = "nj_branch_x",
+                              label = h5(
+                                "X Position",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = -3,
+                              max = 3,
+                              value = isolate(nj_branch_x_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_branchlab_alpha",
+                              label = h5(
+                                "Opacity",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0.1,
+                              max = 1,
+                              step = 0.05,
+                              value = isolate(nj_branchlab_alpha_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            )
+                          ),
+                          column(
+                            width = 6,
+                            align = "center",
+                            sliderInput(
+                              "nj_branch_size",
+                              label = h5(
+                                "Size",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 2,
+                              max = 10,
+                              step = 0.5,
+                              value = isolate(nj_branch_size_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br(),
+                            sliderInput(
+                              "nj_branch_labelradius",
+                              label = h5(
+                                "Smooth edge",
+                                style = "color:white; margin-bottom: 0px"
+                              ),
+                              min = 0,
+                              max = 0.5,
+                              step = 0.05,
+                              value = isolate(nj_branch_labelradius_val()),
+                              width = "150px",
+                              ticks = FALSE
+                            ),
+                            br()
+                          )
+                        )
+                      )
+                    )
+                  ),
+                  fluidRow(
+                    column(
+                      width = 5,
+                      div(
+                        class = "mat-switch-geom",
+                        materialSwitch(
+                          inputId = "nj_branch_panel",
+                          h5(
+                            p("Panels"),
+                            style = "color:white; padding-left: 5px; position: relative; top: -4px; right: 5px;"
+                          ),
+                          value = isolate(nj_branch_panel_val()),
+                          right = FALSE
+                        )
+                      )
+                    ),
+                    column(
+                      width = 7,
+                      uiOutput("nj_branchlabel_cutoff_ui")
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              column(
+                width = 12,
+                align = "left",
+                fluidRow(
+                  column(
+                    width = 8,
+                    textInput(
+                      "nj_title",
+                      label = "",
+                      width = "100%",
+                      placeholder = "Plot Title",
+                      value = isolate(nj_title_val())
+                    )
+                  ),
+                  column(
+                    width = 4,
+                    dropMenu(
+                      actionBttn(
+                        "nj_title_menu",
+                        label = "",
+                        color = "default",
+                        size = "sm",
+                        style = "material-flat",
+                        icon = icon("sliders")
+                      ),
+                      placement = "right",
+                      theme = "translucent",
+                      fluidRow(
+                        column(
+                          width = 12,
+                          align = "center",
+                          sliderInput(
+                            "nj_title_size",
+                            label = h5(
+                              "Title Size",
+                              style = "color:white; margin-bottom: 0px"
+                            ),
+                            value = isolate(nj_title_size_val()),
+                            min = 15,
+                            max = 40,
+                            step = 1,
+                            width = "150px",
+                            ticks = FALSE
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            br(),
+            fluidRow(
+              column(
+                width = 12,
+                align = "left",
+                fluidRow(
+                  column(
+                    width = 8,
+                    textInput(
+                      "nj_subtitle",
+                      label = "",
+                      width = "100%",
+                      placeholder = "Plot Subtitle",
+                      value = isolate(nj_subtitle_val())
+                    )
+                  ),
+                  column(
+                    width = 4,
+                    dropMenu(
+                      actionBttn(
+                        "nj_subtitle_menu",
+                        label = "",
+                        color = "default",
+                        size = "sm",
+                        style = "material-flat",
+                        icon = icon("sliders")
+                      ),
+                      placement = "right",
+                      theme = "translucent",
+                      fluidRow(
+                        column(
+                          width = 12,
+                          align = "center",
+                          sliderInput(
+                            "nj_subtitle_size",
+                            label = h5(
+                              "Subtitle Size",
+                              style = "color:white; margin-bottom: 0px"
+                            ),
+                            value = isolate(nj_subtitle_size_val()),
+                            min = 15,
+                            max = 40,
+                            step = 1,
+                            width = "150px",
+                            ticks = FALSE
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            ),
+            hr(),
+            fluidRow(
+              div(
+                class = "nj-label-control-col",
+                column(
+                  width = 12,
+                  align = "left",
+                  h4(
+                    p("Custom Label"),
+                    style = "color:white; position: relative; right: -15px;"
+                  ),
+                  column(
+                    width = 12,
+                    align = "center",
+                    fluidRow(
+                      column(
+                        width = 7,
+                        textInput(
+                          "nj_new_label_name",
+                          "",
+                          placeholder = "New Label"
+                        )
+                      ),
+                      column(
+                        width = 3,
+                        actionButton(
+                          "nj_add_new_label",
+                          "",
+                          icon = icon("plus")
+                        )
+                      ),
+                      column(
+                        width = 2,
+                        align = "right",
+                        dropMenu(
+                          actionBttn(
+                            "nj_custom_label_menu",
+                            label = "",
+                            color = "default",
+                            size = "sm",
+                            style = "material-flat",
+                            icon = icon("sliders")
+                          ),
+                          placement = "right",
+                          theme = "translucent",
+                          fluidRow(
+                            div(
+                              class = "nj-custom-label-menu-col",
+                              column(
+                                width = 12,
+                                align = "center",
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Size'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_custom_labelsize")
+                                    )
+                                  )
+                                ),
+                                br(),
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Vertical'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_sliderInput_y")
+                                    )
+                                  )
+                                ),
+                                br(),
+                                fluidRow(
+                                  column(
+                                    width = 3,
+                                    align = "left",
+                                    HTML(
+                                      paste(
+                                        tags$span(
+                                          style = 'color: white; font-size: 14px; position: relative; top: 7px;',
+                                          'Horizontal'
+                                        )
+                                      )
+                                    )
+                                  ),
+                                  column(
+                                    width = 9,
+                                    align = "right",
+                                    div(
+                                      class = "nj-label-slider",
+                                      uiOutput("nj_sliderInput_x")
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    ),
+                    fluidRow(
+                      column(
+                        width = 7,
+                        uiOutput("nj_custom_label_select")
+                      ),
+                      column(
+                        width = 4,
+                        actionButton(
+                          "nj_del_label",
+                          "",
+                          icon = icon("minus")
+                        )
+                      )
+                    ),
+                    fluidRow(
+                      column(
+                        width = 12,
+                        align = "center",
+                        actionButton(
+                          "nj_cust_label_save",
+                          "Apply"
+                        )
+                      )
+                    )
+                  )
                 )
               )
             )
           )
         )
-      } else {
-        set.seed(1)
+      })
 
-        if (input$tree_type == "Tree") {
-          log_print("Rendering tree plot")
+      # Set tree presence status variable top TRUE
+      Vis$nj_true <- TRUE
 
-          output$tree_field <- renderUI({
-            addSpinner(
-              plotOutput(
-                "tree_plot",
-                width = paste0(
-                  as.character(
-                    as.numeric(nj_scale_val()) *
-                      as.numeric(nj_ratio_val())
-                  ),
-                  "px"
-                ),
-                height = paste0(as.character(nj_scale_val()), "px")
-              ),
-              spin = "dots",
-              color = "#ffffff"
-            )
-          })
-
-          meta_nj <- select(DB$meta_true, -2)
-          if (
-            file.exists(file.path(
-              Startup$database,
-              gsub(" ", "_", DB$scheme),
-              "AMR_Profile.rds"
-            ))
-          ) {
-            amr_profile <- readRDS(file.path(
-              Startup$database,
-              gsub(" ", "_", DB$scheme),
-              "AMR_Profile.rds"
-            ))
-
-            if (isFALSE(any(meta_nj$Screened != "Yes"))) {
-              Vis$amr_nj <- amr_profile$results[
-                rownames(
-                  amr_profile$results
-                ) %in%
-                  meta_nj$`Assembly ID`,
-              ]
-              meta_nj <- add_column(meta_nj, Vis$amr_nj)
-            }
-          }
-
-          if (
-            length(unique(gsub(" ", "_", colnames(meta_nj)))) <
-              length(
-                gsub(" ", "_", colnames(meta_nj))
-              )
-          ) {
-            show_toast(
-              title = "Conflicting Custom Variable Names",
-              type = "warning",
-              position = "bottom-end",
-              timer = 6000
-            )
-          } else {
-            # Create phylogenetic tree data
-            if (input$tree_algo == "Neighbour-Joining") {
-              Vis_nj <- ape::nj(hamming_dist())
-              Vis$tree_algo <- "NJ"
-            } else {
-              Vis_nj <- phangorn::upgma(hamming_dist())
-              Vis$tree_algo <- "UPGMA"
-            }
-
-            # Convert negative edges
-            edge_lengths_abs <- abs(Vis_nj[["edge.length"]])
-            edge_lengths_log <- log(
-              edge_lengths_abs + sqrt(edge_lengths_abs^2 + 1)
-            )
-            Vis_nj[["edge.length"]] <- edge_lengths_log
-            Vis$nj <- Vis_nj
-
-            # Create phylogenetic tree meta data
-            Vis$meta_nj <- mutate(meta_nj, taxa = Index) %>%
-              relocate(taxa)
-
-            # Get number of included entries calculate start values for tree
-            if (nj_layout_val() == "circular" || nj_layout_val() == "inward") {
-              if (sum(DB$data$Include) < 21) {
-                Vis$labelsize_nj <- 5.5
-                Vis$tippointsize_nj <- 5.5
-                Vis$nodepointsize_nj <- 4
-                Vis$tiplab_padding_nj <- 0.25
-                Vis$branch_size_nj <- 4.5
-              } else if (between(sum(DB$data$Include), 21, 40)) {
-                Vis$labelsize_nj <- 5
-                Vis$tippointsize_nj <- 5
-                Vis$nodepointsize_nj <- 3.5
-                Vis$tiplab_padding_nj <- 0.2
-                Vis$branch_size_nj <- 4
-              } else if (between(sum(DB$data$Include), 41, 60)) {
-                Vis$labelsize_nj <- 4.5
-                Vis$tippointsize_nj <- 4.5
-                Vis$nodepointsize_nj <- 3
-                Vis$tiplab_padding_nj <- 0.15
-                Vis$branch_size_nj <- 3.5
-              } else if (between(sum(DB$data$Include), 61, 80)) {
-                Vis$labelsize_nj <- 4
-                Vis$tippointsize_nj <- 4
-                Vis$nodepointsize_nj <- 2.5
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 3
-              } else if (between(sum(DB$data$Include), 81, 100)) {
-                Vis$labelsize_nj <- 3.5
-                Vis$tippointsize_nj <- 3.5
-                Vis$nodepointsize_nj <- 2
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 2.5
-              } else {
-                Vis$labelsize_nj <- 3
-                Vis$tippointsize_nj <- 3
-                Vis$nodepointsize_nj <- 1.5
-                Vis$tiplab_padding_nj <- 0.05
-                Vis$branch_size_nj <- 2
-              }
-            } else {
-              if (sum(DB$data$Include) < 21) {
-                Vis$labelsize_nj <- 5
-                Vis$tippointsize_nj <- 5
-                Vis$nodepointsize_nj <- 4
-                Vis$tiplab_padding_nj <- 0.25
-                Vis$branch_size_nj <- 4.5
-              } else if (between(sum(DB$data$Include), 21, 40)) {
-                Vis$labelsize_nj <- 4.5
-                Vis$tippointsize_nj <- 4.5
-                Vis$nodepointsize_nj <- 3.5
-                Vis$tiplab_padding_nj <- 0.2
-                Vis$branch_size_nj <- 4
-              } else if (between(sum(DB$data$Include), 41, 60)) {
-                Vis$labelsize_nj <- 4
-                Vis$tippointsize_nj <- 4
-                Vis$nodepointsize_nj <- 3
-                Vis$tiplab_padding_nj <- 0.15
-                Vis$branch_size_nj <- 3.5
-              } else if (between(sum(DB$data$Include), 61, 80)) {
-                Vis$labelsize_nj <- 3.5
-                Vis$tippointsize_nj <- 3.5
-                Vis$nodepointsize_nj <- 2.5
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 3
-              } else if (between(sum(DB$data$Include), 81, 100)) {
-                Vis$labelsize_nj <- 3
-                Vis$tippointsize_nj <- 3
-                Vis$nodepointsize_nj <- 2
-                Vis$tiplab_padding_nj <- 0.1
-                Vis$branch_size_nj <- 2.5
-              } else {
-                Vis$labelsize_nj <- 2.5
-                Vis$tippointsize_nj <- 2.5
-                Vis$nodepointsize_nj <- 1.5
-                Vis$tiplab_padding_nj <- 0.05
-                Vis$branch_size_nj <- 2
-              }
-            }
-
-            nj_tree <- ggtree(Vis$nj)
-
-            # Get upper and lower end of x range
-            Vis$nj_max_x <- max(nj_tree$data$x)
-            Vis$nj_min_x <- min(nj_tree$data$x)
-
-            # Get parent node numbers
-            Vis$nj_parentnodes <- nj_tree$data$parent
-
-            # Update visualization control inputs
-            nj_tiplab_size_val(Vis$labelsize_nj)
-            nj_tippoint_size_val(Vis$tippointsize_nj)
-            nj_nodepoint_size_val(Vis$nodepointsize_nj)
-            nj_tiplab_padding_val(Vis$tiplab_padding_nj)
-            nj_branch_size_val(Vis$branch_size_nj)
-            nj_treescale_width_val(round(ceiling(Vis$nj_max_x) * 0.1, 0))
-            nj_rootedge_length_val(round(ceiling(Vis$nj_max_x) * 0.05, 0))
-
-            output$tree_plot <- renderPlot({
-              make.tree()
-            })
-
-            Vis$nj_true <- TRUE
-          }
-        } else {
-          log_print("Rendering MST graph")
-
-          output$mst_field <- renderUI({
-            if (isTRUE(mst_background_transparent_reactive())) {
-              visNetworkOutput(
-                "tree_mst",
-                width = paste0(
-                  mst_scale_reactive() * as.numeric(mst_ratio_reactive()),
-                  "px"
-                ),
-                height = paste0(mst_scale_reactive(), "px")
-              )
-            } else {
-              addSpinner(
-                visNetworkOutput(
-                  "tree_mst",
-                  width = paste0(
-                    mst_scale_reactive() * as.numeric(mst_ratio_reactive()),
-                    "px"
-                  ),
-                  height = paste0(mst_scale_reactive(), "px")
-                ),
-                spin = "dots",
-                color = "#ffffff"
-              )
-            }
-          })
-
-          if (nrow(DB$meta_true) > 150) {
-            log_print("Over 100 isolates in MST graph")
-
-            show_toast(
-              title = "Computation might take a while",
-              type = "info",
-              position = "bottom-end",
-              timer = 10000
-            )
-          }
-
-          meta_mst <- DB$meta_true
-          Vis$meta_mst <- meta_mst
-
-          # prepare igraph object
-          Vis$mst_pre <- hamming_mst() |>
-            as.matrix() |>
-            graph.adjacency(weighted = TRUE) |>
-            igraph::mst()
-
-          output$tree_mst <- renderVisNetwork({
-            mst_tree()
-          })
-
-          Vis$mst_true <- TRUE
-        }
-      }
-    }
-
-    runjs(unblock_ui)
-  })
-
-  # _______________________ ####
+      runjs(unblock_ui)
+    },
+    priority = 0
+  )
 
   ## Report ----
 
@@ -21525,7 +22322,11 @@ server <- function(input, output, session) {
                           paste(
                             tags$span(
                               style = 'color:white; position: relative; top: 17px; font-style: italic',
-                              input$tree_type
+                              ifelse(
+                                input$tree_type == "MST",
+                                "MST",
+                                input$tree_algo
+                              )
                             )
                           )
                         )
@@ -21771,7 +22572,7 @@ server <- function(input, output, session) {
         na_handling = input$na_handling,
         distance = "Hamming Distances",
         version = c(phylotraceVersion, "2.5.1"),
-        plot = "NJ"
+        plot = c(input$tree_type, input$tree_algo)
       )
     }
 
@@ -21780,15 +22581,21 @@ server <- function(input, output, session) {
 
   # Save plot for Report
   plot.report <- reactive({
+    width <- get_plot_width(session = session)
+    height <- get_plot_height(
+      width = width,
+      aspect_ratio_val = nj_aspect_ratio_val()
+    )
+
     if (tree_type_reactive() == "Tree") {
-      jpeg(
-        paste0(getwd(), "/Report/NJ.jpeg"),
-        width = (as.numeric(nj_scale_val()) * as.numeric(nj_ratio_val())),
-        height = as.numeric(nj_scale_val()),
-        quality = 100
+      save_plot_content(
+        file = paste0(getwd(), "/Report/Tree.svg"),
+        session = session,
+        filetype = "svg",
+        aspect_ratio = nj_aspect_ratio_val(),
+        plot = make.tree(),
+        dpi = 192
       )
-      print(make.tree())
-      dev.off()
     } else if (tree_type_reactive() == "MST") {
       runjs("mstReport();")
       decoded_data <- base64enc::base64decode(input$canvas_data)
@@ -21866,8 +22673,6 @@ server <- function(input, output, session) {
       runjs(unblock_ui)
     }
   )
-
-  # _______________________ ####
 
   ## Gene Screening  ----
 
@@ -21950,6 +22755,9 @@ server <- function(input, output, session) {
 
   output$gs_visualization_ui <- renderUI({
     req(DB$data, DB$scheme, Screening$available, Screening$amr_results)
+
+    render_info("gs_visualization_ui")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -22128,6 +22936,9 @@ server <- function(input, output, session) {
       Screening$vir_class,
       Screening$amr_class
     )
+
+    render_info("gs_plot_control_ui Heatmap Data Menu")
+
     amr_profile_numeric <- as.data.frame(lapply(
       Screening$amr_results,
       as.numeric
@@ -22544,7 +23355,9 @@ server <- function(input, output, session) {
 
     gs_plot_selected_noclass_selected <- gs_plot_selected_noclass()
 
-    output$gs_plot_control_ui <- renderUI(
+    output$gs_plot_control_ui <- renderUI({
+      render_info("gs_plot_control_ui Heatmap Data Menu")
+
       div(
         class = "gs-plot-box2",
         box(
@@ -22789,7 +23602,7 @@ server <- function(input, output, session) {
           )
         )
       )
-    )
+    })
 
     runjs(unblock_ui)
   })
@@ -22836,6 +23649,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Color Menu")
 
       div(
         class = "gs-plot-box3",
@@ -23038,6 +23853,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Variable Mapping Menu")
 
       if (!is.null(input_gs_amr_variables())) {
         gs_amr_variables_selected <- input_gs_amr_variables()
@@ -23294,6 +24111,8 @@ server <- function(input, output, session) {
     runjs(block_ui)
 
     output$gs_plot_control_ui <- renderUI({
+      render_info("gs_plot_control_ui Sizing Menu")
+
       if (!is.null(input_gsplot_grid_width())) {
         gsplot_grid_width_selected <- input_gsplot_grid_width()
       } else {
@@ -23490,6 +24309,8 @@ server <- function(input, output, session) {
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
 
+      render_info("gs_plot_control_ui Save Heatmap Menu")
+
       div(
         class = "gs-plot-box4",
         box(
@@ -23586,6 +24407,8 @@ server <- function(input, output, session) {
 
     output$gs_plot_control_ui <- renderUI({
       req(Screening$available)
+
+      render_info("gs_plot_control_ui Miscellaneous Menu")
 
       if (!is.null(input_gs_ratio())) {
         gs_ratio_selected <- input_gs_ratio()
@@ -23938,6 +24761,8 @@ server <- function(input, output, session) {
   output$gs_virclass_scale_ui <- renderUI({
     req(Screening$available)
 
+    render_info("gs_virclass_scale_ui")
+
     if (!is.null(Screening$hm_meta)) {
       if (length(unique(Screening$hm_meta$vir)) > 7) {
         if (!is.null(gs_virclass_scale())) {
@@ -24003,6 +24828,8 @@ server <- function(input, output, session) {
 
   output$gs_amrclass_scale_ui <- renderUI({
     req(Screening$available)
+
+    render_info("gs_amrclass_scale_ui")
 
     if (!is.null(Screening$hm_meta)) {
       if (length(unique(Screening$hm_meta$amr)) > 7) {
@@ -24070,6 +24897,8 @@ server <- function(input, output, session) {
   # gs variable mapping scale
   output$gs_mapping_scale_ui <- renderUI({
     req(input$gs_var_mapping, Screening$available)
+
+    render_info("gs_mapping_scale_ui")
 
     if (input$gs_var_mapping != "None") {
       if (class(unlist(DB$meta[, input$gs_var_mapping])) == "numeric") {
@@ -24163,6 +24992,8 @@ server <- function(input, output, session) {
   output$gs_var_mapping_ui <- renderUI({
     req(DB$meta, Screening$available)
 
+    render_info("gs_var_mapping_ui")
+
     if (!is.null(input_gs_var_mapping())) {
       gs_var_mapping_selected <- input_gs_var_mapping()
     } else {
@@ -24183,6 +25014,8 @@ server <- function(input, output, session) {
 
   output$gs_field <- renderUI({
     req(Screening$available)
+
+    render_info("gs_field")
 
     if (!is.null(input$gs_scale)) {
       gs_scale <- input$gs_scale
@@ -24212,6 +25045,8 @@ server <- function(input, output, session) {
   # Render isolate picker info text
   output$gs_plot_sel_isolate_info <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_plot_sel_isolate_info")
 
     if (is.null(input$gs_plot_selected_isolate)) {
       tagList(
@@ -24256,6 +25091,8 @@ server <- function(input, output, session) {
   output$gs_plot_sel_amr_info <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_plot_sel_amr_info")
+
     if (is.null(input$gs_plot_selected_amr)) {
       tagList(
         tags$span(
@@ -24297,6 +25134,8 @@ server <- function(input, output, session) {
 
   output$gs_plot_sel_vir_info <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_plot_sel_vir_info")
 
     if (is.null(input$gs_plot_selected_vir)) {
       tagList(
@@ -24340,6 +25179,8 @@ server <- function(input, output, session) {
   output$gs_plot_sel_noclass_info <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_plot_sel_noclass_info")
+
     if (is.null(input$gs_plot_selected_noclass)) {
       tagList(
         tags$span(
@@ -24382,6 +25223,9 @@ server <- function(input, output, session) {
   # Rendering results table
   output$gs_results_table <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_results_table")
+
     if (!is.null(input$gs_profile_select)) {
       if (
         length(input$gs_profile_select) > 0 &&
@@ -24435,6 +25279,8 @@ server <- function(input, output, session) {
   output$gs_download <- renderUI({
     req(DB$data, Screening$available)
 
+    render_info("gs_download")
+
     if (!is.null(input$gs_profile_select)) {
       if (length(input$gs_profile_select) > 0) {
         fluidRow(
@@ -24467,6 +25313,8 @@ server <- function(input, output, session) {
   # Resistance profile table output display
   output$gs_profile_display <- renderUI({
     req(DB$data, Screening$available)
+
+    render_info("gs_profile_display")
 
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
@@ -24836,6 +25684,9 @@ server <- function(input, output, session) {
   # Availablity feedback
   output$gene_screening_info <- renderUI({
     req(DB$scheme)
+
+    render_info("gene_screening_info")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -24872,6 +25723,9 @@ server <- function(input, output, session) {
 
   output$gene_resistance_info <- renderUI({
     req(DB$scheme)
+
+    render_info("gene_resistance_info")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -24910,6 +25764,9 @@ server <- function(input, output, session) {
 
   output$screening_interface <- renderUI({
     req(DB$data, DB$scheme, Screening$available)
+
+    render_info("screening_interface")
+
     amrfinder_available <- check.amrfinder.available(
       selected_scheme = DB$scheme,
       amrfinder_species = amrfinder_species
@@ -25233,17 +26090,23 @@ server <- function(input, output, session) {
   observe({
     req(DB$data, Screening$status, Screening$available)
     if (length(input$screening_select) < 1) {
-      output$genome_path_gs <- renderUI(HTML(
-        paste(
-          "<span style='color: white; font-style:italic'>",
-          length(input$screening_select),
-          " isolate(s) queried for screening"
+      output$genome_path_gs <- renderUI({
+        render_info("genome_path_gs")
+
+        HTML(
+          paste(
+            "<span style='color: white; font-style:italic'>",
+            length(input$screening_select),
+            " isolate(s) queried for screening"
+          )
         )
-      ))
+      })
 
       output$screening_start <- NULL
     } else if (length(input$screening_select) > 0) {
       output$screening_start <- renderUI({
+        render_info("screening_start")
+
         div(
           class = "screening-box",
           box(
@@ -25514,7 +26377,9 @@ server <- function(input, output, session) {
             )] ==
               "success"
           ) {
-            output$screening_result <- renderUI(
+            output$screening_result <- renderUI({
+              render_info("screening_result")
+
               column(
                 width = 12,
                 p(
@@ -25533,15 +26398,17 @@ server <- function(input, output, session) {
                   dataTableOutput("screening_table")
                 )
               )
-            )
+            })
           } else {
-            output$screening_result <- renderUI(
+            output$screening_result <- renderUI({
+              render_info("screening_result")
+
               column(
                 width = 12,
                 br(),
                 verbatimTextOutput("screening_fail")
               )
-            )
+            })
           }
         }
       } else {
@@ -25598,7 +26465,9 @@ server <- function(input, output, session) {
         check_screening()
 
         if (isTRUE(Screening$first_result)) {
-          output$screening_result_sel <- renderUI(
+          output$screening_result_sel <- renderUI({
+            render_info("screening_result_sel")
+
             fluidRow(
               column(
                 width = 2,
@@ -25671,7 +26540,7 @@ server <- function(input, output, session) {
                 )
               )
             )
-          )
+          })
 
           Screening$first_result <- FALSE
         }
@@ -26550,14 +27419,15 @@ server <- function(input, output, session) {
         noclass_heatmap <- NULL
         noclass_profile_matrix <- NULL
         if (!is.null(gs_plot_selected_noclass)) {
-          if (any(is.na(hm_meta$vir) && is.na(hm_meta$amr))) {
+          if (any(is.na(hm_meta$vir) & is.na(hm_meta$amr))) {
             unclass_genes <- rownames(hm_meta)[
-              is.na(hm_meta$vir) &&
+              is.na(hm_meta$vir) &
                 is.na(hm_meta$amr)
             ]
             noclass_profile_matrix <- heatmap_mat[,
               colnames(heatmap_mat) %in%
-                unclass_genes
+                unclass_genes,
+              drop = FALSE
             ]
 
             if (
@@ -26730,8 +27600,6 @@ server <- function(input, output, session) {
     gs_plot()
   })
 
-  # _______________________ ####
-
   ## Typing  ----
 
   # Render Single/Multi Switch
@@ -26744,6 +27612,8 @@ server <- function(input, output, session) {
   # No db typing message
   output$typing_no_db <- renderUI({
     if (!is.null(DB$exist)) {
+      render_info("typing_no_db")
+
       if (DB$exist) {
         column(
           width = 4,
@@ -26766,8 +27636,6 @@ server <- function(input, output, session) {
       } else {
         NULL
       }
-    } else {
-      NULL
     }
   })
 
@@ -26777,6 +27645,8 @@ server <- function(input, output, session) {
   # Render selection info
   output$multi_folder_sel_info <- renderUI({
     req(Typing$assembly_folder_path, Typing$file_selection)
+
+    render_info("multi_folder_sel_info")
 
     if (Typing$file_selection == "folder") {
       if (length(Typing$assembly_folder_path) < 1) {
@@ -26805,6 +27675,8 @@ server <- function(input, output, session) {
   output$multi_file_sel_info <- renderUI({
     req(Typing$assembly_files_path, Typing$file_selection)
 
+    render_info("multi_file_sel_info")
+
     if (Typing$file_selection == "files") {
       if (nrow(Typing$assembly_files_path) < 1) {
         HTML(paste(
@@ -26832,6 +27704,8 @@ server <- function(input, output, session) {
   # Render multi selection table issues
   output$multi_select_issues <- renderUI({
     req(Typing$multi_sel_table, input$multi_select_table)
+
+    render_info("multi_select_issues")
 
     if (
       any(
@@ -26880,6 +27754,8 @@ server <- function(input, output, session) {
 
   output$multi_select_issue_info <- renderUI({
     req(Typing$multi_sel_table, input$multi_select_table)
+
+    render_info("multi_select_issue_info")
 
     multi_select_table <- hot_to_r(input$multi_select_table)
 
@@ -26971,7 +27847,9 @@ server <- function(input, output, session) {
   observe({
     if (!is.null(Typing$multi_sel_table)) {
       if (nrow(Typing$multi_sel_table) > 0) {
-        output$multi_select_tab_ctrls <- renderUI(
+        output$multi_select_tab_ctrls <- renderUI({
+          render_info("multi_select_tab_ctrls")
+
           fluidRow(
             h3(
               p("Metadata Declaration"),
@@ -27003,9 +27881,11 @@ server <- function(input, output, session) {
               uiOutput("multi_select_issues")
             )
           )
-        )
+        })
 
         output$metadata_multi_box <- renderUI({
+          render_info("metadata_multi_box")
+
           column(
             width = 11,
             align = "left",
@@ -27782,6 +28662,8 @@ server <- function(input, output, session) {
     if (!is.null(Typing$result_list)) {
       if (length(Typing$result_list) > 0) {
         output$multi_typing_results <- renderUI({
+          render_info("multi_typing_results")
+
           column(
             width = 11,
             fluidRow(
@@ -27837,6 +28719,8 @@ server <- function(input, output, session) {
       output$initiate_multi_typing_ui <- NULL
 
       output$pending_typing <- renderUI({
+        render_info("pending_typing")
+
         fluidRow(
           fluidRow(
             br(),
@@ -27885,6 +28769,8 @@ server <- function(input, output, session) {
       output$initiate_multi_typing_ui <- NULL
 
       output$pending_typing <- renderUI({
+        render_info("pending_typing")
+
         fluidRow(
           fluidRow(
             br(),
@@ -27972,8 +28858,6 @@ server <- function(input, output, session) {
     }
   })
 } # end server
-
-# _______________________ ####
 
 # Shiny ----
 
