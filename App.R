@@ -3066,7 +3066,7 @@ server <- function(input, output, session) {
                     "integer",
                     "integer",
                     "character",
-                    "integer",
+                    "character",
                     "NULL"
                   )
                 )
