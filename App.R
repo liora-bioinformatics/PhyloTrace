@@ -2,6 +2,7 @@
 
 options(ignore.negative.edge = TRUE)
 options(shiny.error = browser)
+options(timeout = 600)
 Sys.setlocale("LC_TIME", "C")
 
 # CRAN Packages
@@ -56,6 +57,8 @@ source("./assets/constants.R")
 source("./assets/functions.R")
 source("./assets/ui_modules.R")
 source("./assets/plot_save.R")
+source("./assets/shinyDirChoose.R")
+source("./assets/schemes.R")
 
 # User Interface ----
 
@@ -678,7 +681,6 @@ ui <- dashboardPage(
             )
           )
         ),
-        br(),
         fluidRow(
           column(1),
           column(
@@ -1313,40 +1315,24 @@ server <- function(input, output, session) {
 
   ### Set up environment ----
 
-  # Get available schemes
-  cgmlst_urls <- tryCatch(
+  # Get available scheme urls
+  tryCatch(
     {
-      get_latest_url(abb)
+      schemes$url[
+        schemes$database == "cgMLST.org"
+      ] <- get_latest_url(schemes$abb[schemes$database == "cgMLST.org"])
     },
     error = function(e) {
       DB$failCon <- TRUE
       show_toast(
-        title = "Could not retrieve data. Check internet connection.",
+        title = "Could not retrieve latest cgmlst.org scheme links.",
         type = "error",
         position = "bottom-end",
         timer = 6000
       )
-      warning("Could not retrieve data. Check internet connection.")
+      warning("Could not retrieve latest cgmlst.org scheme links.")
       return(NULL)
     }
-  )
-
-  if (length(cgmlst_urls) > 0) {
-    cgmlstorg_schemes$url <- cgmlst_urls
-  } else {
-    DB$failCon <- TRUE
-    show_toast(
-      title = "Could not retrieve data. Check internet connection.",
-      type = "error",
-      position = "bottom-end",
-      timer = 6000
-    )
-    warning("Could not retrieve data. Check internet connection.")
-  }
-
-  schemes <- dplyr::arrange(
-    dplyr::add_row(pubmlst_schemes, cgmlstorg_schemes),
-    species
   )
 
   #### Screening environment ----
@@ -3072,7 +3058,7 @@ server <- function(input, output, session) {
                     "integer",
                     "integer",
                     "character",
-                    "integer",
+                    "character",
                     "NULL"
                   )
                 )
@@ -4562,6 +4548,20 @@ server <- function(input, output, session) {
                       custom_var_button <- disabled(custom_var_button)
                     }
 
+                    del_which_var_input <- selectInput(
+                      inputId = "del_which_var",
+                      label = "",
+                      choices = DB$cust_var$Variable
+                    )
+
+                    if (
+                      is.null(DB$cust_var$Variable) || nrow(DB$cust_var) == 0
+                    ) {
+                      del_which_var_input <- shinyjs::disabled(
+                        del_which_var_input
+                      )
+                    }
+
                     box(
                       solidHeader = TRUE,
                       status = "primary",
@@ -4594,11 +4594,7 @@ server <- function(input, output, session) {
                             column(
                               width = 9,
                               align = "center",
-                              selectInput(
-                                "del_which_var",
-                                "",
-                                DB$cust_var$Variable
-                              )
+                              del_which_var_input
                             ),
                             column(
                               width = 2,
@@ -4617,7 +4613,10 @@ server <- function(input, output, session) {
                         )
                       )
                     )
-                  })
+                  }) |>
+                    shiny::bindEvent(
+                      DB$cust_var
+                    )
 
                   # Render delete entry box UI
                   output$delete_box <- renderUI({
@@ -5236,14 +5235,19 @@ server <- function(input, output, session) {
               read_html(DB$url_link)
             },
             error = function(e) {
+              msg <- paste(
+                "Could not retrieve data for",
+                gsub(" ", "_", DB$scheme),
+                "scheme"
+              )
               DB$failCon <- TRUE
               show_toast(
-                title = "Could not retrieve data. Check internet connection.",
+                title = msg,
                 type = "error",
                 position = "bottom-end",
                 timer = 6000
               )
-              warning("Could not retrieve data. Check internet connection.")
+              warning(msg)
               return(NULL)
             }
           )
@@ -5534,70 +5538,6 @@ server <- function(input, output, session) {
 
     if (file.exists(species_data_path)) {
       species_data <- readRDS(species_data_path)
-      if (length(species_data) > 1) {
-        if (!is.null(input$selected_species_saved)) {
-          image_path <- file.path(
-            Startup$database,
-            gsub(" ", "_", DB$scheme),
-            paste0(
-              names(species_data)[
-                names(species_data) == input$selected_species_saved
-              ],
-              ".jpg"
-            )
-          )
-
-          if (file.exists(image_path)) {
-            output$species_no_img_saved <- NULL
-            output$species_img_saved <- renderImage(
-              {
-                list(src = image_path, height = 180)
-              },
-              deleteFile = FALSE
-            )
-          } else {
-            output$species_no_img_saved <- renderUI({
-              render_info("species_no_img_saved")
-              HTML(
-                '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-              )
-            })
-            output$species_img_saved <- NULL
-          }
-        } else {
-          output$species_no_img_saved <- renderUI({
-            render_info("species_no_img_saved")
-            HTML(
-              '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-            )
-          })
-          output$species_img_saved <- NULL
-        }
-      } else if (length(species_data) > 0) {
-        image_path <- file.path(
-          Startup$database,
-          gsub(" ", "_", DB$scheme),
-          paste0(gsub("_(PM|CM)", "", gsub(" ", "_", DB$scheme)), ".jpg")
-        )
-
-        if (file.exists(image_path)) {
-          output$species_no_img_saved <- NULL
-          output$species_img_saved <- renderImage(
-            {
-              list(src = image_path, height = 180)
-            },
-            deleteFile = FALSE
-          )
-        } else {
-          output$species_no_img_saved <- renderUI({
-            render_info("species_no_img_saved")
-            HTML(
-              '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-            )
-          })
-          output$species_img_saved <- NULL
-        }
-      }
 
       multiple <- length(species_data) > 1 &&
         !is.null(input$selected_species_saved)
@@ -5622,262 +5562,10 @@ server <- function(input, output, session) {
               '</span>'
             )
           ),
-          column(
-            width = 12,
-            fluidRow(
-              br(),
-              column(
-                width = 7,
-                p(
-                  HTML(
-                    paste0(
-                      '<i class="fa-solid fa-bacterium" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                      '<span style="color: white; font-size: 22px; ">',
-                      species_data$Name$name,
-                      '</span>'
-                    )
-                  )
-                ),
-                p(
-                  HTML(
-                    paste0(
-                      '<span style="color: white; font-size: 12px;">',
-                      species_data$Name$authority,
-                      '</span>'
-                    )
-                  )
-                ),
-                br(),
-                p(
-                  HTML(
-                    paste0(
-                      '<span style="color: white; font-size: 15px;">',
-                      'URL: ',
-                      '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                      species_data$ID,
-                      '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                      species_data$Name$name,
-                      ' NCBI',
-                      '</a>',
-                      '</span>'
-                    )
-                  )
-                ),
-                br(),
-                fluidRow(
-                  column(
-                    width = 12,
-                    p(
-                      HTML(
-                        paste0(
-                          '<span style="color: white; font-size: 20px;">',
-                          'Lineage',
-                          '</span>'
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$superkingdom$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$superkingdom$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Superkingdom',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$phylum$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$phylum$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Phylum',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$class$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$class$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Class',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$order$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$order$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Order',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$family$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$family$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Family',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    ),
-                    fluidRow(
-                      column(
-                        width = 6,
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 15px;">',
-                              '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                              species_data$Classification$genus$id,
-                              '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                              species_data$Classification$genus$name,
-                              '</a>',
-                              '</span>'
-                            )
-                          )
-                        )
-                      ),
-                      column(
-                        width = 6,
-                        align = "left",
-                        p(
-                          HTML(
-                            paste0(
-                              '<span style="color: white; font-size: 12px;">',
-                              'Genus',
-                              '</span>'
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                )
-              ),
-              column(
-                width = 5,
-                align = "right",
-                uiOutput("species_no_img_saved"),
-                div(
-                  class = "species-image",
-                  imageOutput(
-                    "species_img_saved",
-                    width = "300px",
-                    height = "200px"
-                  )
-                ),
-              )
-            )
+          addSpinner(
+            species_data_ui(species_data, fetch = FALSE),
+            spin = "dots",
+            color = "#ffffff"
           )
         )
       } else {
@@ -9219,8 +8907,10 @@ server <- function(input, output, session) {
 
   ### Manage Schemes UI Elements ----
 
+  ### Update scheme links based on selection ----
   observe({
     req(input$select_cgmlst)
+
     if (grepl("_PM", input$select_cgmlst)) {
       Scheme$link_scheme <- schemes$url[schemes$species == input$select_cgmlst]
       Scheme$link_cgmlst <- schemes$url[schemes$species == input$select_cgmlst]
@@ -9245,6 +8935,7 @@ server <- function(input, output, session) {
     }
   })
 
+  ### Download Scheme ----
   observeEvent(input$download_cgMLST, {
     runjs(block_ui)
     log_print(paste0("Started download of scheme for ", Scheme$folder_name))
@@ -9303,8 +8994,6 @@ server <- function(input, output, session) {
     }
 
     ### Download Loci Fasta Files
-
-    options(timeout = 600)
 
     # Create a Progress object
     progress <- shiny::Progress$new()
@@ -9685,13 +9374,13 @@ server <- function(input, output, session) {
       )
     )
 
-    # Disable pickerInput
+    # Enable pickerInput
     runjs("$('#select_cgmlst').prop('disabled', false);")
     runjs("$('#select_cgmlst').selectpicker('refresh');")
     runjs(unblock_ui)
   })
 
-  # Download Target Info (CSV Table)
+  ### Fetch Scheme Info (CSV Table) ----
   observe({
     req(input$select_cgmlst, Scheme$link_scheme)
 
@@ -9717,14 +9406,19 @@ server <- function(input, output, session) {
           read_html(Scheme$link_scheme)
         },
         error = function(e) {
+          msg <- paste(
+            "No connection to",
+            gsub(" ", "_", DB$scheme),
+            "scheme"
+          )
           DB$failCon <- TRUE
           show_toast(
-            title = "Could not retrieve data. Check internet connection.",
+            title = msg,
             type = "error",
             position = "bottom-end",
             timer = 6000
           )
-          warning("Could not retrieve data. Check internet connection.")
+          warning(msg)
           return(NULL)
         }
       )
@@ -9771,34 +9465,46 @@ server <- function(input, output, session) {
         )
       }
     } else if (grepl("_PM", input$select_cgmlst)) {
-      scheme_overview <- tryCatch(
+      scheme_fetch <- tryCatch(
         {
           get.schemeinfo(
             url_link = schemes$url[schemes$species == input$select_cgmlst]
           )
         },
         error = function(e) {
+          msg <- paste(
+            "Could not retrieve scheme info for",
+            input$select_cgmlst
+          )
           DB$failCon <- TRUE
-
           show_toast(
-            title = "Could not retrieve data. Check internet connection.",
+            title = msg,
             type = "error",
             position = "bottom-end",
             timer = 6000
           )
-          warning("Could not retrieve data. Check internet connection.")
+          warning(msg)
           return(NULL)
         }
       )
 
-      if (!is.null(scheme_overview)) {
+      if (!is.null(scheme_fetch)) {
         DB$failCon <- FALSE
 
-        if (!is.null(scheme_overview[["last_updated"]])) {
-          last_scheme_change <- scheme_overview[["last_updated"]]
+        scheme_overview <- parse.schemeinfo(
+          scheme_info = scheme_fetch,
+          repo = "PM",
+          database = Startup$database,
+          folder_name = Scheme$folder_name,
+          url_link = schemes$url[schemes$species == input$select_cgmlst]
+        )
+
+        # Retrieve last changes
+        if (!is.null(scheme_fetch[["last_updated"]])) {
+          last_scheme_change <- scheme_fetch[["last_updated"]]
           last_file_change <- format(
             file.info(file.path(
-              Startup$database,
+              database,
               ".downloaded_schemes",
               paste0(Scheme$folder_name, ".zip")
             ))$mtime,
@@ -9808,71 +9514,19 @@ server <- function(input, output, session) {
           last_scheme_change <- "Not Available"
           last_file_change <- NULL
         }
-
-        if (!is.null(scheme_overview[["description"]])) {
-          description <- scheme_overview[["description"]]
-        } else {
-          description <- "Not Available"
-        }
-
-        scheme_overview <- data.frame(
-          x1 = c(
-            "Scheme",
-            "Database",
-            "URL",
-            "Version",
-            "Locus Count",
-            "Last Change"
-          ),
-          x2 = c(
-            gsub("_", " ", Scheme$folder_name),
-            "pubMLST",
-            paste0(
-              '<a href="',
-              paste0(
-                "https://www.pubmlst.org/bigsdb?db=",
-                basename(
-                  dirname(
-                    dirname(
-                      schemes$url[schemes$species == input$select_cgmlst]
-                    )
-                  )
-                )
-              ),
-              '" target="_blank">',
-              paste0(
-                "https://www.pubmlst.org/bigsdb?db=",
-                basename(
-                  dirname(
-                    dirname(
-                      schemes$url[schemes$species == input$select_cgmlst]
-                    )
-                  )
-                )
-              ),
-              '</a>'
-            ),
-            description,
-            scheme_overview[["locus_count"]],
-            last_scheme_change
-          )
-        )
-
-        names(scheme_overview) <- NULL
       }
     }
 
     if (!is.null(scheme_overview)) {
       enable("download_cgMLST")
 
-      output$cgmlst_scheme_table <- renderUI({
-        render_info("cgmlst_scheme_table")
+      output$cgmlst_scheme_table <- renderUI(
         addSpinner(
           tableOutput("cgmlst_scheme"),
           spin = "dots",
           color = "#ffffff"
         )
-      })
+      )
 
       # Render scheme info table
       output$cgmlst_scheme <- renderTable(
@@ -9893,8 +9547,6 @@ server <- function(input, output, session) {
             !is.na(last_file_change) &&
             !is.na(last_scheme_change)
         ) {
-          render_info("scheme_update_info")
-
           new_scheme <- last_file_change < last_scheme_change
           if (length(new_scheme) != 0) {
             if (new_scheme) {
@@ -9926,7 +9578,7 @@ server <- function(input, output, session) {
       output$scheme_update_info <- NULL
     }
 
-    ### Render species info
+    ### Fetch species info ----
     selected_species <- gsub(
       "_",
       " ",
@@ -9942,14 +9594,15 @@ server <- function(input, output, session) {
         Scheme$species_data <- fetch.species.data(species = selected_species)
       },
       error = function(e) {
+        msg <- paste("Fetching species data for", selected_species, "failed")
         DB$failCon <- TRUE
         show_toast(
-          title = "Could not retrieve data. Check internet connection.",
+          title = msg,
           type = "error",
           position = "bottom-end",
           timer = 6000
         )
-        warning("Could not retrieve data. Check internet connection.")
+        warning(msg)
         Scheme$species_data <- NULL
       }
     )
@@ -9959,7 +9612,7 @@ server <- function(input, output, session) {
 
   ### Render species info & image ----
   observe({
-    req(Scheme$species_data)
+    req(Scheme$species_data, input$select_cgmlst)
 
     runjs(block_ui)
 
@@ -9974,214 +9627,8 @@ server <- function(input, output, session) {
     }
 
     if (!is.null(species_data)) {
-      # Download and render species image
-      if (length(Scheme$species_data) > 1 && length(Scheme$species_data) > 0) {
-        if (!is.null(input$selected_species)) {
-          # Download image
-          destination_file <- file.path(
-            Startup$database,
-            schemes$species[schemes$species == input$select_cgmlst],
-            paste0(input$selected_species, ".jpg")
-          )
-          if (!dir.exists(dirname(destination_file))) {
-            if (
-              file.exists(
-                file.path(tempdir(), paste0(input$selected_species, ".jpg"))
-              )
-            ) {
-              destination_file <- file.path(
-                tempdir(),
-                paste0(input$selected_species, ".jpg")
-              )
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-            } else {
-              if (!is.null(Scheme$species_data[[input$selected_species]])) {
-                response <- httr::GET(
-                  Scheme$species_data[[input$selected_species]]$Image
-                )
-                destination_file <- file.path(
-                  tempdir(),
-                  paste0(input$selected_species, ".jpg")
-                )
-                if (response$status_code == 200) {
-                  writeBin(httr::content(response, "raw"), destination_file)
-                  response <- NULL
-                  output$species_no_img <- NULL
-                  output$species_img <- renderImage(
-                    {
-                      list(src = destination_file, height = 180)
-                    },
-                    deleteFile = FALSE
-                  )
-                  print("Image downloaded successfully!")
-                } else {
-                  output$species_img <- NULL
-                  output$species_no_img <- renderUI({
-                    render_info("species_no_img")
-                    HTML(
-                      '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                    )
-                  })
-                  print("Failed to download image.")
-                }
-              }
-            }
-          } else {
-            if (!file.exists(destination_file)) {
-              if (!is.null(Scheme$species_data[[input$selected_species]])) {
-                response <- httr::GET(
-                  Scheme$species_data[[input$selected_species]]$Image
-                )
-                destination_file <- file.path(
-                  tempdir(),
-                  paste0(input$selected_species, ".jpg")
-                )
-
-                if (response$status_code == 200) {
-                  writeBin(httr::content(response, "raw"), destination_file)
-                  response <- NULL
-                  print("Image downloaded successfully!")
-                  output$species_no_img <- NULL
-                  output$species_img <- renderImage(
-                    {
-                      list(src = destination_file, height = 180)
-                    },
-                    deleteFile = FALSE
-                  )
-                } else {
-                  output$species_no_img <- renderUI({
-                    render_info("species_no_img")
-                    HTML(
-                      '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                    )
-                  })
-                  output$species_img <- NULL
-                  print("Failed to download image.")
-                }
-              }
-            } else {
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-            }
-          }
-        }
-      } else if (length(Scheme$species_data) > 0) {
-        # Download image
-        destination_file <- file.path(
-          Startup$database,
-          schemes$species[schemes$species == input$select_cgmlst],
-          paste0(
-            schemes$species[schemes$species == input$select_cgmlst],
-            ".jpg"
-          )
-        )
-
-        if (!dir.exists(dirname(destination_file))) {
-          if (
-            file.exists(
-              file.path(
-                tempdir(),
-                paste0(
-                  schemes$species[schemes$species == input$select_cgmlst],
-                  ".jpg"
-                )
-              )
-            )
-          ) {
-            destination_file <- file.path(
-              tempdir(),
-              paste0(
-                schemes$species[schemes$species == input$select_cgmlst],
-                ".jpg"
-              )
-            )
-            output$species_no_img <- NULL
-            output$species_img <- renderImage(
-              {
-                list(src = destination_file, height = 180)
-              },
-              deleteFile = FALSE
-            )
-          } else {
-            destination_file <- file.path(
-              tempdir(),
-              paste0(
-                schemes$species[schemes$species == input$select_cgmlst],
-                ".jpg"
-              )
-            )
-            response <- httr::GET(Scheme$species_data[[1]]$Image)
-            if (response$status_code == 200) {
-              writeBin(httr::content(response, "raw"), destination_file)
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-              print("Image downloaded successfully!")
-            } else {
-              output$species_img <- NULL
-              output$species_no_img <- renderUI({
-                render_info("species_no_img")
-                HTML(
-                  '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                )
-              })
-              print("Failed to download image.")
-            }
-          }
-        } else {
-          if (!file.exists(destination_file)) {
-            response <- httr::GET(Scheme$species_data[[1]]$Image)
-
-            if (response$status_code == 200) {
-              writeBin(httr::content(response, "raw"), destination_file)
-              print("Image downloaded successfully!")
-              output$species_no_img <- NULL
-              output$species_img <- renderImage(
-                {
-                  list(src = destination_file, height = 180)
-                },
-                deleteFile = FALSE
-              )
-            } else {
-              output$species_img <- NULL
-              output$species_no_img <- renderUI({
-                render_info("species_no_img")
-                HTML(
-                  '<i class="fa-solid fa-bacteria" style="font-size:150px;color:white;margin-right:25px;" ></i>'
-                )
-              })
-              print("Failed to download image.")
-            }
-          } else {
-            output$species_no_img <- NULL
-            output$species_img <- renderImage(
-              {
-                list(src = destination_file, height = 180)
-              },
-              deleteFile = FALSE
-            )
-          }
-        }
-      }
-
       # Render species info
       output$species_info <- renderUI({
-        render_info("species_info")
         addSpinner(
           box(
             solidHeader = TRUE,
@@ -10197,264 +9644,7 @@ server <- function(input, output, session) {
                 '</span>'
               )
             ),
-            column(
-              width = 12,
-              fluidRow(
-                br(),
-                column(
-                  width = 7,
-                  p(
-                    HTML(
-                      paste0(
-                        '<i class="fa-solid fa-bacterium" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                        '<span style="color: white; font-size: 22px; ">',
-                        species_data$Name$name,
-                        '</span>'
-                      )
-                    )
-                  ),
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; font-size: 12px;">',
-                        species_data$Name$authority,
-                        '</span>'
-                      )
-                    )
-                  ),
-                  br(),
-                  p(
-                    HTML(
-                      paste0(
-                        '<span style="color: white; font-size: 15px;">',
-                        'URL: ',
-                        '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                        species_data$ID,
-                        '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                        species_data$Name$name,
-                        ' NCBI',
-                        '</a>',
-                        '</span>'
-                      )
-                    )
-                  ),
-                  br(),
-                  fluidRow(
-                    column(
-                      width = 12,
-                      p(
-                        HTML(
-                          paste0(
-                            '<i class="fa-solid fa-sitemap" style="font-size:20px;color:white; margin-right: 10px;"></i>',
-                            '<span style="color: white; font-size: 20px;">',
-                            'Lineage',
-                            '</span>'
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$superkingdom$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$superkingdom$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Superkingdom',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$phylum$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$phylum$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Phylum',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$class$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$class$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Class',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$order$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$order$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Order',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$family$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$family$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Family',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      ),
-                      fluidRow(
-                        column(
-                          width = 6,
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 15px;">',
-                                '<a href="https://www.ncbi.nlm.nih.gov/datasets/taxonomy/',
-                                species_data$Classification$genus$id,
-                                '/" target="_blank" style="color:#008edb; text-decoration:none;">',
-                                species_data$Classification$genus$name,
-                                '</a>',
-                                '</span>'
-                              )
-                            )
-                          )
-                        ),
-                        column(
-                          width = 6,
-                          align = "left",
-                          p(
-                            HTML(
-                              paste0(
-                                '<span style="color: white; font-size: 12px;">',
-                                'Genus',
-                                '</span>'
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                ),
-                column(
-                  width = 5,
-                  align = "right",
-                  uiOutput("species_no_img"),
-                  div(
-                    class = "species-image",
-                    imageOutput(
-                      "species_img",
-                      width = "300px",
-                      height = "200px"
-                    )
-                  )
-                )
-              )
-            )
+            species_data_ui(species_data, fetch = TRUE)
           ),
           spin = "dots",
           color = "#ffffff"
@@ -10462,7 +9652,6 @@ server <- function(input, output, session) {
       })
     } else {
       output$species_info <- NULL
-      output$species_img <- NULL
     }
 
     runjs(unblock_ui)
@@ -28719,9 +27908,13 @@ server <- function(input, output, session) {
     }
   })
 
+  trigger_multi_select_table <- shiny::reactiveVal(1)
+
   # Check if ongoing Multi Typing - Render accordingly
   observe({
     req(Typing$file_selection)
+
+    file_selection <- Typing$file_selection
 
     # Folder selection
     shinyDirChoose(
@@ -28733,7 +27926,7 @@ server <- function(input, output, session) {
       filetypes = c('', 'fasta', 'fna', 'fa')
     )
 
-    Typing$assembly_folder_path <- parseDirPath(
+    Typing$assembly_folder_path <- assembly_folder_path <- parseDirPath(
       roots = c(Home = path_home(), Root = "/"),
       input$assembly_folder
     )
@@ -28748,28 +27941,28 @@ server <- function(input, output, session) {
       filetypes = c('', 'fasta', 'fna', 'fa')
     )
 
-    Typing$assembly_files_path <- parseFilePaths(
+    Typing$assembly_files_path <- assembly_files_path <- parseFilePaths(
       roots = c(Home = path_home(), Root = "/"),
       input$assembly_files
     )
 
     # Format selection
-    if (Typing$file_selection != "") {
+    if (file_selection != "") {
       if (
-        (!is.null(Typing$assembly_files_path) ||
-          !is.null(Typing$assembly_folder_path)) &&
-          !is.null(Typing$file_selection)
+        (!is.null(assembly_files_path) ||
+          !is.null(assembly_folder_path)) &&
+          !is.null(file_selection)
       ) {
-        if (Typing$file_selection == "files") {
-          Typing$files_filtered <- Typing$assembly_files_path$name[which(
-            !endsWith(Typing$assembly_files_path$name, ".gz") &
-              grepl("\\.fasta|\\.fna|\\.fa", Typing$assembly_files_path$name)
+        if (file_selection == "files") {
+          Typing$files_filtered <- files_filtered <- assembly_files_path$name[which(
+            !endsWith(assembly_files_path$name, ".gz") &
+              grepl("\\.fasta|\\.fna|\\.fa", assembly_files_path$name)
           )]
-        } else if (Typing$file_selection == "folder") {
+        } else if (file_selection == "folder") {
           files_selected <- list.files(as.character(
-            Typing$assembly_folder_path
+            assembly_folder_path
           ))
-          Typing$files_filtered <- files_selected[which(
+          Typing$files_filtered <- files_filtered <- files_selected[which(
             !endsWith(files_selected, ".gz") &
               grepl("\\.fasta|\\.fna|\\.fa", files_selected)
           )]
@@ -28778,316 +27971,93 @@ server <- function(input, output, session) {
     }
 
     multi_sel_table <- data.frame(
-      Include = rep(TRUE, length(Typing$files_filtered)),
+      Include = rep(TRUE, length(files_filtered)),
       Files = gsub(
         ".fasta|.fna|.fa|.fasta.gz|.fna.gz|.fa.gz",
         "",
-        Typing$files_filtered
+        files_filtered
       ),
       Type = sub(
         ".*(\\.fasta|\\.fasta\\.gz|\\.fna|\\.fna\\.gz|\\.fa|\\.fa\\.gz)$",
         "\\1",
-        Typing$files_filtered,
-        perl = F
+        files_filtered,
+        perl = FALSE
       ),
-      Host = rep("", length(Typing$files_filtered)),
-      Country = rep("", length(Typing$files_filtered)),
-      City = rep("", length(Typing$files_filtered)),
-      Isolation.Date = rep(format(Sys.Date()), length(Typing$files_filtered))
+      Host = rep("", length(files_filtered)),
+      Country = rep("", length(files_filtered)),
+      City = rep("", length(files_filtered)),
+      Isolation.Date = rep(format(Sys.Date()), length(files_filtered))
     )
-
     colnames(multi_sel_table)[7] <- "Isolation Date"
 
     Typing$multi_sel_table <- multi_sel_table
 
-    if (nrow(Typing$multi_sel_table) > 0) {
-      output$multi_select_tab_ctrls <- renderUI({
-        render_info("multi_select_tab_ctrls")
+    # output$multi_select_table <- renderRHandsontable({
+    #   message(TRUE, Sys.time())
 
-        fluidRow(
-          h3(
-            p("Metadata Declaration"),
-            style = "color:white; margin-left: 15px"
-          ),
+    #   make_typing_select_handsontable(
+    #     Typing$multi_sel_table,
+    #     dupl_mult_id = dupl_mult_id()
+    #   )
+    # })
+
+    isolate({
+      message(Sys.time())
+      trigger_multi_select_table(trigger_multi_select_table() + 1)
+    })
+
+    output$multi_select_table <- renderRHandsontable({
+      message(TRUE, Sys.time())
+      make_typing_select_handsontable(
+        Typing$multi_sel_table,
+        dupl_mult_id = dupl_mult_id()
+      )
+    }) |>
+      shiny::bindEvent(
+        trigger_multi_select_table(),
+        Typing$multi_sel_table,
+        dupl_mult_id(),
+        ignoreNULL = FALSE
+      )
+
+    output$multi_select_tab_ctrls <- renderUI({
+      req(nrow(Typing$multi_sel_table) > 0)
+
+      fluidRow(
+        h3(
+          p("Metadata Declaration"),
+          style = "color:white; margin-left: 15px"
+        ),
+        br(),
+        column(
+          width = 2,
+          align = "left",
+          actionButton(
+            "sel_all_mt",
+            "All",
+            icon = icon("check")
+          )
+        ),
+        column(
+          width = 2,
+          align = "left",
+          actionButton(
+            "desel_all_mt",
+            "None",
+            icon = icon("xmark")
+          )
+        ),
+        column(
+          width = 10,
+          align = "center",
           br(),
-          column(
-            width = 2,
-            align = "left",
-            actionButton(
-              "sel_all_mt",
-              "All",
-              icon = icon("check")
-            )
-          ),
-          column(
-            width = 2,
-            align = "left",
-            actionButton(
-              "desel_all_mt",
-              "None",
-              icon = icon("xmark")
-            )
-          ),
-          column(
-            width = 10,
-            align = "center",
-            br(),
-            uiOutput("multi_select_issues")
-          )
+          uiOutput("multi_select_issues")
         )
-      })
-    } else {
-      output$multi_select_tab_ctrls <- NULL
-    }
-
-    if (between(nrow(Typing$multi_sel_table), 1, 15)) {
-      output$multi_select_table <- renderRHandsontable({
-        rht <- rhandsontable(
-          Typing$multi_sel_table,
-          rowHeaders = NULL,
-          stretchH = "all",
-          contextMenu = FALSE
-        ) %>%
-          hot_cols(columnSorting = FALSE) %>%
-          hot_rows(rowHeights = 25) %>%
-          hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
-          hot_col(3, readOnly = TRUE) %>%
-          hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
-          hot_col(
-            7,
-            dateFormat = "YYYY-MM-DD",
-            type = "date",
-            strict = TRUE,
-            allowInvalid = TRUE,
-            validator = "
-                                function (value, callback) {
-                                  var today_date = new Date();
-                                  today_date.setHours(0, 0, 0, 0);
-                                  
-                                  var new_date = new Date(value);
-                                  new_date.setHours(0, 0, 0, 0);
-                                  
-                                  try {
-                                    if (new_date <= today_date) {
-                                      callback(true);
-                                      Shiny.setInputValue('invalid_date', false);
-                                    } else {
-                                      callback(false); 
-                                      Shiny.setInputValue('invalid_date', true);
-                                    }
-                                  } catch (err) {
-                                    console.log(err);
-                                    callback(false); 
-                                    Shiny.setInputValue('invalid_date', true);
-                                  }
-                                }"
-          )
-
-        htmlwidgets::onRender(
-          rht,
-          sprintf(
-            "function(el, x) {
-        var hot = this.hot;
-        
-        var columnData = hot.getDataAtCol(1); // Change column index if needed
-        var duplicates = {};
-          
-        var highlightInvalidAndDuplicates = function(invalidValues) {
-          
-          var columnData = hot.getDataAtCol(1); // Change column index if needed
-          var duplicates = {};
-
-          // Find all duplicate values
-          for (var i = 0; i < columnData.length; i++) {
-            var value = columnData[i];
-            if (value !== null && value !== undefined) {
-              if (duplicates[value]) {
-                duplicates[value].push(i);
-              } else {
-                duplicates[value] = [i];
-              }
-            }
-          }
-
-          // Reset all cell backgrounds in the column
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            if (cell) {
-              cell.style.background = 'white';
-            }
-          }
-
-          // Highlight duplicates and invalid values
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            var value = columnData[i];
-            if (cell) {
-              if (invalidValues.includes(value)) {
-                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
-              } else if (duplicates[value] && duplicates[value].length > 1) {
-                cell.style.background = '#FF7334'; // Highlight color for duplicates
-              }
-            }
-          }
-        };
-
-        var changefn = function(changes, source) {
-          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
-            highlightInvalidAndDuplicates(%s);
-          }
-        };
-
-        hot.addHook('afterChange', changefn);
-        hot.addHook('afterLoadData', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-        hot.addHook('afterRender', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-
-        highlightInvalidAndDuplicates(%s); // Initial highlight on load
-        
-        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
-          var colData = hot.getDataAtCol(0);
-          for (var i = 0; i < colData.length; i++) {
-            hot.setDataAtCell(i, 0, message.value);
-          }
-          hot.render(); // Re-render the table
-        });
-      }",
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id())
-          )
-        )
-      })
-    } else if (nrow(Typing$multi_sel_table) > 15) {
-      output$multi_select_table <- renderRHandsontable({
-        rht <- rhandsontable(
-          Typing$multi_sel_table,
-          rowHeaders = NULL,
-          stretchH = "all",
-          height = 500,
-          contextMenu = FALSE
-        ) %>%
-          hot_cols(columnSorting = FALSE) %>%
-          hot_rows(rowHeights = 25) %>%
-          hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
-          hot_col(3, readOnly = TRUE) %>%
-          hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
-          hot_col(
-            7,
-            dateFormat = "YYYY-MM-DD",
-            type = "date",
-            strict = TRUE,
-            allowInvalid = TRUE,
-            validator = "
-                                function (value, callback) {
-                                  var today_date = new Date();
-                                  today_date.setHours(0, 0, 0, 0);
-                                  
-                                  var new_date = new Date(value);
-                                  new_date.setHours(0, 0, 0, 0);
-                                  
-                                  try {
-                                    if (new_date <= today_date) {
-                                      callback(true);
-                                      Shiny.setInputValue('invalid_date', false);
-                                    } else {
-                                      callback(false); 
-                                      Shiny.setInputValue('invalid_date', true);
-                                    }
-                                  } catch (err) {
-                                    console.log(err);
-                                    callback(false); 
-                                    Shiny.setInputValue('invalid_date', true);
-                                  }
-                                }"
-          )
-
-        htmlwidgets::onRender(
-          rht,
-          sprintf(
-            "function(el, x) {
-        var hot = this.hot;
-        
-        var columnData = hot.getDataAtCol(1); // Change column index if needed
-        var duplicates = {};
-          
-        var highlightInvalidAndDuplicates = function(invalidValues) {
-          
-          var columnData = hot.getDataAtCol(1); // Change column index if needed
-          var duplicates = {};
-
-          // Find all duplicate values
-          for (var i = 0; i < columnData.length; i++) {
-            var value = columnData[i];
-            if (value !== null && value !== undefined) {
-              if (duplicates[value]) {
-                duplicates[value].push(i);
-              } else {
-                duplicates[value] = [i];
-              }
-            }
-          }
-
-          // Reset all cell backgrounds in the column
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            if (cell) {
-              cell.style.background = 'white';
-            }
-          }
-
-          // Highlight duplicates and invalid values
-          for (var i = 0; i < columnData.length; i++) {
-            var cell = hot.getCell(i, 1); // Change column index if needed
-            var value = columnData[i];
-            if (cell) {
-              if (invalidValues.includes(value)) {
-                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
-              } else if (duplicates[value] && duplicates[value].length > 1) {
-                cell.style.background = '#FF7334'; // Highlight color for duplicates
-              }
-            }
-          }
-        };
-
-        var changefn = function(changes, source) {
-          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
-            highlightInvalidAndDuplicates(%s);
-          }
-        };
-
-        hot.addHook('afterChange', changefn);
-        hot.addHook('afterLoadData', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-        hot.addHook('afterRender', function() {
-          highlightInvalidAndDuplicates(%s);
-        });
-
-        highlightInvalidAndDuplicates(%s); // Initial highlight on load
-        
-        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
-          var colData = hot.getDataAtCol(0);
-          for (var i = 0; i < colData.length; i++) {
-            hot.setDataAtCell(i, 0, message.value);
-          }
-          hot.render(); // Re-render the table
-        });
-      }",
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id()),
-            jsonlite::toJSON(dupl_mult_id())
-          )
-        )
-      })
-    } else {
-      output$multi_select_table <- NULL
-    }
+      )
+    }) |>
+      shiny::bindEvent(
+        Typing$multi_sel_table
+      )
   })
 
   ### Typing Events ----
@@ -29261,17 +28231,21 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$sel_all_mt, {
-    session$sendCustomMessage(
-      type = "setColumnValue",
-      message = list(value = TRUE)
-    )
+    Typing$multi_sel_table$Include <- TRUE
+
+    # session$sendCustomMessage(
+    #   type = "setColumnValue",
+    #   message = list(value = TRUE)
+    # )
   })
 
   observeEvent(input$desel_all_mt, {
-    session$sendCustomMessage(
-      type = "setColumnValue",
-      message = list(value = FALSE)
-    )
+    Typing$multi_sel_table$Include <- FALSE
+
+    # session$sendCustomMessage(
+    #   type = "setColumnValue",
+    #   message = list(value = FALSE)
+    # )
   })
 
   # Print Log
@@ -29710,6 +28684,7 @@ server <- function(input, output, session) {
                     selected = names(Typing$result_list)[length(
                       names(Typing$result_list)
                     )],
+                    width = "100%"
                   )
                 ),
                 br()

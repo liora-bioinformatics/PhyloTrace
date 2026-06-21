@@ -1,27 +1,134 @@
-# Render info message function
-render_info <- function(output) {
-  message(
-    format(Sys.time(), digits = 3L),
-    " | ",
-    "-------------------------- Rendering '",
-    output,
-    "' UI"
-  )
+### make_typing_select_handsontable() ----
+make_typing_select_handsontable <- function(
+  table,
+  dupl_mult_id
+) {
+  # Validate table
+  if (is.null(table) || nrow(table) < 1) {
+    return(NULL)
+  }
+
+  rhandsontable(
+    table,
+    rowHeaders = NULL,
+    stretchH = "all",
+    contextMenu = FALSE,
+    height = if (nrow(table) > 15) 500 else NULL
+  ) %>%
+    hot_cols(columnSorting = FALSE) %>%
+    hot_rows(rowHeights = 25) %>%
+    hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
+    hot_cols(2:3, readOnly = TRUE) %>%
+    hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
+    hot_col(
+      7,
+      dateFormat = "YYYY-MM-DD",
+      type = "date",
+      strict = TRUE,
+      allowInvalid = TRUE,
+      validator = "
+                                function (value, callback) {
+                                  var today_date = new Date();
+                                  today_date.setHours(0, 0, 0, 0);
+                                  
+                                  var new_date = new Date(value);
+                                  new_date.setHours(0, 0, 0, 0);
+                                  
+                                  try {
+                                    if (new_date <= today_date) {
+                                      callback(true);
+                                      Shiny.setInputValue('invalid_date', false);
+                                    } else {
+                                      callback(false); 
+                                      Shiny.setInputValue('invalid_date', true);
+                                    }
+                                  } catch (err) {
+                                    console.log(err);
+                                    callback(false); 
+                                    Shiny.setInputValue('invalid_date', true);
+                                  }
+                                }"
+    ) |>
+    htmlwidgets::onRender(
+      sprintf(
+        "function(el, x) {
+        var hot = this.hot;
+        
+        var columnData = hot.getDataAtCol(1); // Change column index if needed
+        var duplicates = {};
+          
+        var highlightInvalidAndDuplicates = function(invalidValues) {
+          
+          var columnData = hot.getDataAtCol(1); // Change column index if needed
+          var duplicates = {};
+
+          // Find all duplicate values
+          for (var i = 0; i < columnData.length; i++) {
+            var value = columnData[i];
+            if (value !== null && value !== undefined) {
+              if (duplicates[value]) {
+                duplicates[value].push(i);
+              } else {
+                duplicates[value] = [i];
+              }
+            }
+          }
+
+          // Reset all cell backgrounds in the column
+          for (var i = 0; i < columnData.length; i++) {
+            var cell = hot.getCell(i, 1); // Change column index if needed
+            if (cell) {
+              cell.style.background = 'white';
+            }
+          }
+
+          // Highlight duplicates and invalid values
+          for (var i = 0; i < columnData.length; i++) {
+            var cell = hot.getCell(i, 1); // Change column index if needed
+            var value = columnData[i];
+            if (cell) {
+              if (invalidValues.includes(value)) {
+                cell.style.background = 'rgb(224, 179, 0)'; // Highlight color for invalid values
+              } else if (duplicates[value] && duplicates[value].length > 1) {
+                cell.style.background = '#FF7334'; // Highlight color for duplicates
+              }
+            }
+          }
+        };
+
+        var changefn = function(changes, source) {
+          if (source === 'edit' || source === 'undo' || source === 'autofill' || source === 'paste') {
+            highlightInvalidAndDuplicates(%s);
+          }
+        };
+
+        hot.addHook('afterChange', changefn);
+        hot.addHook('afterLoadData', function() {
+          highlightInvalidAndDuplicates(%s);
+        });
+        hot.addHook('afterRender', function() {
+          highlightInvalidAndDuplicates(%s);
+        });
+
+        highlightInvalidAndDuplicates(%s); // Initial highlight on load
+        
+        Shiny.addCustomMessageHandler('setColumnValue', function(message) {
+          var colData = hot.getDataAtCol(0);
+          for (var i = 0; i < colData.length; i++) {
+            hot.setDataAtCell(i, 0, message.value);
+          }
+          hot.render(); // Re-render the table
+        });
+      }",
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id),
+        jsonlite::toJSON(dupl_mult_id)
+      )
+    )
 }
 
-# Estimate element sizing for hierarchical tree
-get_vis_params <- function(n) {
-  # Assume n >= 3; adjust defaults if needed for n < 3
-  ratio_nj <- max(0.8, min(2, 0.016 * n + 0.55))
-  labelsize_nj <- 17 - 2.73 * log(n + 70) # Natural log; add max(1.3, ...) if you want a floor for large n
-
-  return(list(
-    labelsize_nj = round(labelsize_nj, 1),
-    ratio_nj = round(ratio_nj, 1)
-  ))
-}
-
-# Render rhandsontable
+### generate_rhandsontable() ----
 generate_rhandsontable <- function(
   data,
   cust_var,
@@ -393,97 +500,6 @@ help_func <- function(x) {
 # helper function to replace .is_not
 is_not <- function(x) {
   is.null(x) || identical(x, FALSE)
-}
-
-shinyDirChoose_mod <- function(
-  input,
-  id,
-  updateFreq = 0,
-  session = getSession(),
-  defaultPath = "",
-  defaultRoot = NULL,
-  allowDirCreate = TRUE,
-  ...
-) {
-  # Access internal functions from shinyFiles
-  dirGet <- shinyFiles:::dirGetter(...)
-  fileGet <- shinyFiles:::fileGetter(...)
-  dirCreate <- shinyFiles:::dirCreator(...)
-
-  currentDir <- list()
-  currentFiles <- NULL
-  lastDirCreate <- NULL
-  clientId <- session$ns(id)
-
-  sendDirectoryData <- function(message) {
-    req(input[[id]])
-    tree <- input[[paste0(id, "-modal")]]
-    createDir <- input[[paste0(id, "-newDir")]]
-
-    if (!identical(createDir, lastDirCreate)) {
-      if (allowDirCreate) {
-        dirCreate(createDir$name, createDir$path, createDir$root)
-        lastDirCreate <<- createDir
-      } else {
-        shiny::showNotification(
-          shiny::p("Creating directories has been disabled."),
-          type = "error"
-        )
-        lastDirCreate <<- createDir
-      }
-    }
-
-    exist <- TRUE
-    if (is_not(tree)) {
-      # REPLACED .is_not(tree) with is_not(tree)
-      dir <- list(
-        tree = list(name = defaultPath, expanded = TRUE),
-        root = defaultRoot
-      )
-      files <- list(dir = NA, root = tree$selectedRoot)
-    } else {
-      dir <- list(tree = tree$tree, root = tree$selectedRoot)
-      files <- list(dir = unlist(tree$contentPath), root = tree$selectedRoot)
-      passedPath <- list(list(...)$roots[tree$selectedRoot])
-      exist <- dir.exists(do.call(path, c(passedPath, files$dir[-1])))
-    }
-
-    newDir <- do.call(dirGet, dir)
-
-    if (is_not(files$dir)) {
-      newDir$content <- NA
-      newDir$contentPath <- NA
-      newDir$writable <- FALSE
-    } else {
-      newDir$contentPath <- as.list(files$dir)
-      files$dir <- paste0(files$dir, collapse = "/")
-
-      # content <- do.call(fileGet, files)
-      # newDir$content <- content$files
-      newDir$content <- NULL # Skip loading files
-
-      # newDir$writable <- content$writable
-    }
-
-    newDir$exist <- exist
-    newDir$root <- files$root
-    currentDir <<- newDir
-    session$sendCustomMessage(message, list(id = clientId, dir = newDir))
-
-    if (updateFreq > 0) {
-      invalidateLater(updateFreq, session)
-    }
-  }
-
-  observe({
-    sendDirectoryData("shinyDirectories")
-  })
-
-  observeEvent(input[[paste0(id, "-refresh")]], {
-    if (!is.null(input[[paste0(id, "-refresh")]])) {
-      sendDirectoryData("shinyDirectories-refresh")
-    }
-  })
 }
 
 # map hashes to allele profile
@@ -1332,6 +1348,11 @@ parse.names <- function(species) {
     return("Leptospira")
   } else if (species == "Mycobacteroides abscessus complex") {
     return("Mycobacteroides abscessus")
+  } else if (species == "Citrobacter sensu lato") {
+    return(paste(
+      "Citrobacter",
+      c("freundii", "portucalensis", "braakii", "europaeus")
+    ))
   } else {
     return(species)
   }
@@ -1425,7 +1446,6 @@ fetch.species.data <- function(species) {
       }
     )
 
-    #if (length(result) < 1) {
     if (is.null(result)) {
       message(paste("Error: ", parsed_species, " not available on NCBI."))
       return(NULL)
@@ -1441,7 +1461,7 @@ fetch.species.data <- function(species) {
       if (!is.null(content$reports)) {
         species_data <- content$reports$taxonomy
 
-        message("Fetched taxonomy")
+        message("Fetched taxonomy for ", species)
 
         multiple[[gsub(" ", "_", parsed_species[i])]] <- list(
           Name = species_data$current_scientific_name,
@@ -1482,56 +1502,77 @@ get.schemeinfo <- function(url_link) {
   return(scheme_info)
 }
 
-# Function to download all alleles of each loci of selected scheme
-download.alleles2.PM <- function(url_link, database, folder_name, progress) {
-  # Make scheme directory
-  directory <- file.path(database, folder_name)
-  if (!dir.exists(directory)) {
-    tryCatch(
-      {
-        dir.create(directory, recursive = TRUE)
-        message("Directory created: ", directory)
-      },
-      error = function(e) {
-        stop("Failed to create directory: ", directory, "\nError: ", e$message)
-      }
-    )
-  }
+parse.schemeinfo <- function(
+  scheme_info,
+  repo = "PM",
+  database,
+  folder_name,
+  url_link
+) {
+  if (repo == "PM") {
+    # Get curators
+    if (!is.null(scheme_info[["curators"]])) {
+      curators <- character()
+      for (i in 1:length(scheme_info[["curators"]])) {
+        curators_list <- get.schemeinfo(scheme_info[["curators"]][i])
+        curator <- paste(
+          curators_list$first_name,
+          curators_list$surname,
+          "<br>\n",
+          curators_list$affiliation
+        )
 
-  # retrieve and save scheme info
-  scheme_info <- get.schemeinfo(url_link)
-  if (is.null(scheme_info$loci) || length(scheme_info$loci) == 0) {
-    stop("No loci found in scheme_info.")
-  } else {
-    if (!is.null(scheme_info[["last_updated"]])) {
-      last_scheme_change <- scheme_info[["last_updated"]]
-      last_file_change <- format(
-        file.info(file.path(
-          database,
-          ".downloaded_schemes",
-          paste0(folder_name, ".zip")
-        ))$mtime,
-        "%Y-%m-%d %H:%M %p"
-      )
+        curators <- c(curators, curator)
+
+        # Small delay before next request
+        if (length(scheme_info[["curators"]]) > 1) {
+          Sys.sleep(0.5)
+        }
+      }
+
+      curators <- paste(curators, collapse = "<br>\n<br>\n")
     } else {
-      last_scheme_change <- "Not Available"
-      last_file_change <- NULL
+      curators <- "Not Available"
     }
 
+    # Get flags
+    if (!is.null(scheme_info[["flags"]])) {
+      flags <- paste(scheme_info[["flags"]], collapse = "<br>\n")
+    } else {
+      flags <- "Not Available"
+    }
+
+    # Get schemem description
     if (!is.null(scheme_info[["description"]])) {
       description <- scheme_info[["description"]]
     } else {
       description <- "Not Available"
     }
 
+    # Get last update info
+    if (!is.null(scheme_info[["last_updated"]])) {
+      last_updated <- scheme_info[["last_updated"]]
+    } else {
+      last_updated <- "Not Available"
+    }
+
+    # Get locus count
+    if (!is.null(scheme_info[["last_updated"]])) {
+      last_updated <- scheme_info[["last_updated"]]
+    } else {
+      last_updated <- "Not Available"
+    }
+
     scheme_overview <- data.frame(
       x1 = c(
         "Scheme",
         "Database",
-        "URL",
+        "Repository",
         "Version",
         "Locus Count",
-        "Last Change"
+        "Curators",
+        "Last Change",
+        "Flags"
       ),
       x2 = c(
         gsub("_", " ", folder_name),
@@ -1551,21 +1592,44 @@ download.alleles2.PM <- function(url_link, database, folder_name, progress) {
         ),
         description,
         scheme_info[["locus_count"]],
-        last_scheme_change
+        curators,
+        last_updated,
+        flags
       )
     )
 
     names(scheme_overview) <- NULL
 
-    saveRDS(scheme_overview, file.path(directory, "scheme_info.rds"))
-
-    message("Scheme info downloaded")
+    return(scheme_overview)
   }
+}
 
-  ### Download alleles
+# Function to download all alleles of each loci of selected scheme
+# TODO delete
+download.alleles.PM1 <- function(
+  abb,
+  url_link,
+  database,
+  folder_name
+) {
+  abb1 <<- abb
+  url_link1 <<- url_link
+  database1 <<- database
+  folder_name1 <<- folder_name
 
-  # Initialize vector to store the paths of downloaded files
-  downloaded_files <- vector("character", length(scheme_info$loci))
+  # Make scheme directory
+  directory <- file.path(database, folder_name)
+  if (!dir.exists(directory)) {
+    tryCatch(
+      {
+        dir.create(directory, recursive = TRUE)
+        message("Directory created: ", directory)
+      },
+      error = function(e) {
+        stop("Failed to create directory: ", directory, "\nError: ", e$message)
+      }
+    )
+  }
 
   # Make output folder
   output_folder <- file.path(
@@ -1589,59 +1653,104 @@ download.alleles2.PM <- function(url_link, database, folder_name, progress) {
         )
       }
     )
+  } else {
+    unlink(output_folder, recursive = TRUE, force = TRUE)
+    tryCatch(
+      {
+        dir.create(output_folder, recursive = TRUE)
+        message("Directory created: ", output_folder)
+      },
+      error = function(e) {
+        stop(
+          "Failed to create directory: ",
+          output_folder,
+          "\nError: ",
+          e$message
+        )
+      }
+    )
   }
 
-  for (i in seq_along(scheme_info$loci)) {
-    locus_url <- scheme_info$loci[i]
-    endpoint <- paste0(locus_url, "/alleles_fasta?return_all=1")
+  ### Invoke allele download with pubmlstdownload
 
-    response <- httr::GET(endpoint)
+  # Construct the arguments vector
+  args <- c(
+    "-scheme",
+    abb,
+    "-subscheme",
+    "cgMLST",
+    "-scheme_url",
+    url_link,
+    "-output",
+    output_folder
+  )
 
-    if (httr::http_error(response)) {
-      stop("Failed to retrieve data for locus: ", basename(locus_url))
-    }
+  p <<- process$new(
+    command = "pubmlstdownload",
+    args = args,
+    stdout = "",
+    stderr = ""
+  )
+}
 
-    content <- httr::content(response, as = "text", encoding = "UTF-8")
-
-    if (is.null(content)) {
-      stop("Failed to parse content for locus: ", basename(locus_url))
-    }
-
-    # Insert an empty line between sequences
-    formatted_content <- gsub("\n>", "\n\n>", content)
-
-    # Write to file
-    output_file <- file.path(
-      output_folder,
-      paste0(basename(locus_url), ".fasta")
+# Download scheme info  ----
+# TODO delete
+download.schemeinfo <- function(url_link, database, folder_name) {
+  # Retrieve and save scheme info
+  scheme_info <- get.schemeinfo(url_link)
+  if (is.null(scheme_info$loci) || length(scheme_info$loci) == 0) {
+    stop("No loci found in scheme_info.")
+  } else {
+    scheme_overview <- parse.schemeinfo(
+      scheme_info = scheme_info,
+      repo = "PM",
+      database = database,
+      folder_name = folder_name,
+      url_link = url_link
     )
 
-    writeLines(formatted_content, con = output_file)
-
-    downloaded_files[i] <- output_file
-
-    # Increment the progress bar
-    progress$inc(
-      1 / (2 * length(seq_along(scheme_info$loci))),
-      detail = paste("Saved", basename(locus_url))
+    saveRDS(
+      scheme_overview,
+      file.path(database, folder_name, "scheme_info.rds")
     )
 
-    logr::log_print("Saved fasta file for locus: ", basename(locus_url))
+    message("Scheme info downloaded")
   }
+}
 
-  progress$set(message = "Compressing files", value = 50)
+# TODO delete
+process.alleles.PM <- function(
+  abb,
+  database,
+  folder_name,
+  progress
+) {
+  output_folder <- file.path(
+    database,
+    ".downloaded_schemes",
+    paste0(folder_name)
+  )
 
-  # Zip folder
-  system(paste0(
-    "zip -r -j ",
-    shQuote(output_folder),
-    ".zip ",
-    shQuote(output_folder),
-    "/"
-  ))
-  unlink(output_folder, recursive = TRUE)
+  # Move loci files up to scheme directory
+  base::file.copy(
+    from = list.files(
+      file.path(output_folder, abb, "cgMLST"),
+      full.names = TRUE,
+      pattern = ".fasta"
+    ),
+    to = output_folder,
+    overwrite = TRUE,
+    recursive = FALSE
+  )
+  unlink(file.path(output_folder, abb), recursive = TRUE)
 
   # Final check to ensure all files are non-empty and expected count matches
+  downloaded_files <- list.files(
+    output_folder,
+    full.names = TRUE,
+    pattern = ".fasta"
+  )
+
   empty_files <- downloaded_files[file.info(downloaded_files)$size == 0]
   if (length(empty_files) > 0) {
     stop(
@@ -1659,11 +1768,176 @@ download.alleles2.PM <- function(url_link, database, folder_name, progress) {
     )
   }
 
+  # Zip folder
+  zip_name <- paste0(output_folder, ".zip")
+  source_path <- paste0(output_folder, "/")
+
+  # Invoke compression
+  system2("zip", args = c("-r", "-j", zip_name, source_path))
+  unlink(output_folder, recursive = TRUE)
+
   logr::log_print("All files downloaded successfully and are non-empty.")
+
+  # Unzip the scheme in temporary folder
+  unzip(
+    zipfile = file.path(
+      Startup$database,
+      ".downloaded_schemes",
+      paste0(Scheme$folder_name, ".zip")
+    ),
+    exdir = file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    )
+  )
+
+  # Hash temporary folder
+  hash_database(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    ),
+    progress = Scheme$progress
+  )
+
+  # Get list from local database
+  local_db_filelist <- list.files(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    )
+  )
+
+  if (!is_empty(local_db_filelist)) {
+    # Get list from temporary database
+    tmp_db_filelist <- list.files(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp")
+      )
+    )
+
+    # Find the difference (extra files in local database)
+    local_db_extra <- setdiff(local_db_filelist, tmp_db_filelist)
+
+    # Copy extra files to temporary folder
+    file.copy(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, "_alleles"),
+        local_db_extra
+      ),
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp")
+      )
+    )
+
+    # Check differences in file pairs
+    local_db_hashes <- tools::md5sum(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, "_alleles"),
+        local_db_filelist
+      )
+    )
+    tmp_db_hashes <- tools::md5sum(
+      file.path(
+        Startup$database,
+        Scheme$folder_name,
+        paste0(Scheme$folder_name, ".tmp"),
+        local_db_filelist
+      )
+    )
+
+    diff_files <- local_db_hashes %in% tmp_db_hashes
+    diff_loci <- names(local_db_hashes)[diff_files == FALSE]
+    diff_loci <- sapply(strsplit(diff_loci, "/"), function(x) {
+      x[length(x)]
+    })
+
+    # Check locus hashes
+    for (locus in diff_loci) {
+      local_db_hashes <- get_locus_hashes(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, "_alleles"),
+          locus
+        )
+      )
+      tmp_db_hashes <- get_locus_hashes(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, ".tmp"),
+          locus
+        )
+      )
+      diff_hashes <- setdiff(local_db_hashes, tmp_db_hashes)
+
+      sequences <- extract_seq(
+        file.path(
+          Startup$database,
+          Scheme$folder_name,
+          paste0(Scheme$folder_name, "_alleles"),
+          locus
+        ),
+        diff_hashes
+      )
+      if (
+        !is_empty(sequences$idx) &&
+          !is_empty(sequences$seq) &&
+          length(sequences$idx) == length(sequences$seq)
+      ) {
+        add_new_sequences(
+          file.path(
+            Startup$database,
+            Scheme$folder_name,
+            paste0(Scheme$folder_name, ".tmp"),
+            locus
+          ),
+          sequences
+        )
+      }
+    }
+  }
+
+  unlink(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    ),
+    recursive = TRUE
+  )
+
+  file.rename(
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, ".tmp")
+    ),
+    file.path(
+      Startup$database,
+      Scheme$folder_name,
+      paste0(Scheme$folder_name, "_alleles")
+    )
+  )
 }
 
-# Function to download all alleles of each loci of selected scheme
 download.alleles.PM <- function(url_link, database, folder_name, progress) {
+  url_link1 <<- url_link
+  database1 <<- database
+  folder_name1 <<- folder_name
+
   # Make scheme directory
   directory <- file.path(database, folder_name)
   if (!dir.exists(directory)) {
@@ -1678,64 +1952,18 @@ download.alleles.PM <- function(url_link, database, folder_name, progress) {
     )
   }
 
-  # retrieve and save scheme info
+  # Retrieve and save scheme info
   scheme_info <- get.schemeinfo(url_link)
   if (is.null(scheme_info$loci) || length(scheme_info$loci) == 0) {
     stop("No loci found in scheme_info.")
   } else {
-    if (!is.null(scheme_info[["last_updated"]])) {
-      last_scheme_change <- scheme_info[["last_updated"]]
-      last_file_change <- format(
-        file.info(file.path(
-          database,
-          ".downloaded_schemes",
-          paste0(folder_name, ".zip")
-        ))$mtime,
-        "%Y-%m-%d %H:%M %p"
-      )
-    } else {
-      last_scheme_change <- "Not Available"
-      last_file_change <- NULL
-    }
-
-    if (!is.null(scheme_info[["description"]])) {
-      description <- scheme_info[["description"]]
-    } else {
-      description <- "Not Available"
-    }
-
-    scheme_overview <- data.frame(
-      x1 = c(
-        "Scheme",
-        "Database",
-        "URL",
-        "Version",
-        "Locus Count",
-        "Last Change"
-      ),
-      x2 = c(
-        gsub("_", " ", folder_name),
-        "pubMLST",
-        paste0(
-          '<a href="',
-          paste0(
-            "https://www.pubmlst.org/bigsdb?db=",
-            basename(dirname(dirname(url_link)))
-          ),
-          '" target="_blank">',
-          paste0(
-            "https://www.pubmlst.org/bigsdb?db=",
-            basename(dirname(dirname(url_link)))
-          ),
-          '</a>'
-        ),
-        description,
-        scheme_info[["locus_count"]],
-        last_scheme_change
-      )
+    scheme_overview <- parse.schemeinfo(
+      scheme_info = scheme_info,
+      repo = "PM",
+      database = database,
+      folder_name = folder_name,
+      url_link = url_link
     )
-
-    names(scheme_overview) <- NULL
 
     saveRDS(scheme_overview, file.path(directory, "scheme_info.rds"))
 
@@ -1817,10 +2045,10 @@ download.alleles.PM <- function(url_link, database, folder_name, progress) {
     downloaded_files[i] <- output_file
 
     # Increment the progress bar
-    progress$inc(
-      1 / (2 * length(seq_along(scheme_info$loci))),
-      detail = paste("Saved", basename(locus_url))
-    )
+    # progress$inc(
+    #   1 / (2 * length(seq_along(scheme_info$loci))),
+    #   detail = paste("Saved", basename(locus_url))
+    # )
 
     message("Saved fasta file for locus: ", basename(locus_url))
   }

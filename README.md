@@ -1,4 +1,14 @@
-<img src="www/PhyloTrace_bw.png#gh-light-mode-only" width="90%"/> <img src="www/PhyloTrace.png#gh-dark-mode-only" width="90%"/> <br> PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. Its components evolve around Core-Genome Multilocus Sequence Typing (cgMLST) and Antimicrobial Resistance Screening. Complex analyses and computation are wrapped into an appealing and easy-to-handle graphical user interface. Users build a local database comprising analyzed isolates, manageable directly with the application. The visualization of isolate relationship and genetic profile is highly interactive aiding to reveal patterns explaining outbreak dynamics and events by connecting genomic information with epidemiologic variables. PhyloTrace achieves universal compatibility by assigning unique 256-bit hashes based on sequence and allele information. The ability to easily share analysis results enables efficient inter-lab comparison and collaboration. <br><br>
+<img src="www/PhyloTrace_bw.png#gh-light-mode-only" width="90%"/>
+<img src="www/PhyloTrace.png#gh-dark-mode-only" width="90%"/> 
+
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.10996423-00e896?labelColor=gray&color=609ea5&logoColor=black)](https://doi.org/10.5281/zenodo.10996423)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-659DA3.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Version](https://img.shields.io/badge/Version-1.6.1-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases/tag/v1.6.1)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black)
+![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white) 
+
+PhyloTrace is a platform for bacterial pathogen monitoring on a genomic level. Its components evolve around Core-Genome Multilocus Sequence Typing (cgMLST) and Antimicrobial Resistance Screening. Complex analyses and computation are wrapped into an appealing and easy-to-handle graphical user interface. Users build a local database comprising analyzed isolates, manageable directly with the application. The visualization of isolate relationship and genetic profile is highly interactive aiding to reveal patterns explaining outbreak dynamics and events by connecting genomic information with epidemiologic variables. PhyloTrace achieves universal compatibility by assigning unique 256-bit hashes based on sequence and allele information. The ability to easily share analysis results enables efficient inter-lab comparison and collaboration.
+<br><br>
 
 **Features**
 
@@ -9,7 +19,11 @@
 -   Extensive export and report functionalities
 -   *and more*
 
-We want to make cgMLST analysis and genomic pathogen monitoring accessible to a broad spectrum of individuals and organizations. Therefore our goal is to build an interface with convenient user experience and easy handling that doesn't require you to be a bioinformatician. The app is in active development. To get a stable version download the newest release.
+We want to make cgMLST analysis and genomic pathogen monitoring accessible to a broad spectrum of
+individuals and organizations. Therefore our goal is to build an interface with convenient user
+experience and easy handling that doesn't require you to be a bioinformatician. 
+
+The app is in active development. To get a stable version download the newest release. 
 
 *PhyloTrace is supposed to be used for research and academic purposes only.*
 
@@ -18,8 +32,6 @@ We want to make cgMLST analysis and genomic pathogen monitoring accessible to a 
 ![PartnerLogos](www/partners_logo_round.svg)
 
 <sup><sup> Developed in collaboration with Hochschule Furtwangen University (HFU) and Medical University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024. </sup> </sup>
-
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.10996423-00e896?labelColor=gray&color=609ea5&logoColor=black)](https://doi.org/10.5281/zenodo.10996423) [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-659DA3.svg)](https://www.gnu.org/licenses/gpl-3.0) [![Version](https://img.shields.io/badge/Version-1.6.1-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases/tag/v1.6.1) ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) ![Windows](https://img.shields.io/badge/Windows-339033?style=flat&logo=windows&logoColor=white)
 
 <br><br><br>
 
@@ -194,12 +206,11 @@ After this, follow the instructions below.
 
 ### 2.1 Download Source Code
 
-Donwload the source code of the latest stable version.
-
 Use the terminal to navigate to an accessible location on your system and clone the repository using Git.
+`git clone` downloads the source code of version 1.6.1 (latest stable version).
 
 ```         
-git clone https://github.com/liora-bioinformatics/PhyloTrace.git
+git clone --branch v1.6.1 --depth 1 https://github.com/liora-bioinformatics/PhyloTrace.git
 ```
 
 Alternatively download PhyloTrace manually from [Version 1.6.1](https://github.com/liora-bioinformatics/PhyloTrace/archive/refs/tags/v1.6.1.zip) and extract/unzip it to a location on your system.

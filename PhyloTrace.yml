@@ -11,7 +11,7 @@ dependencies:
   - kma=1.4.14
   - abritamr=1.0.19
   - parallel=20240522
-  - ncbi-datasets-cli=16.27.1
+  - ncbi-datasets-cli=18.18.0
   - pblat=2.5.1
   - zip=3.0
   - unzip=6.0
@@ -183,3 +183,8 @@ dependencies:
   - r-yaml=2.3.10
   - r-yulab.utils=0.1.0
   - r-zoo=1.8_12
+  - pip
+  - gcc_linux-64
+  - gxx_linux-64
+  - pip:
+      - pubmlstdownload
