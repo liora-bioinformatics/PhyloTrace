@@ -7,5 +7,5 @@ startShiny <- function() {
     browser = paths[which(file.exists(paths))]
   )
 
-  shiny::runApp("App.R", launch.browser = T)
+  shiny::runApp("App.R", launch.browser = TRUE)
 }

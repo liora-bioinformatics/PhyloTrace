@@ -1,3 +1,13 @@
+render_info <- function(output) {
+  message(
+    format(Sys.time(), digits = 3L),
+    " | ",
+    "-------------------------- Rendering '",
+    output,
+    "' UI"
+  )
+}
+
 ### make_typing_select_handsontable() ----
 make_typing_select_handsontable <- function(
   table,
@@ -11,15 +21,18 @@ make_typing_select_handsontable <- function(
   rhandsontable(
     table,
     rowHeaders = NULL,
-    stretchH = "all",
+    stretchH = "last",
     contextMenu = FALSE,
     height = if (nrow(table) > 15) 500 else NULL
   ) %>%
     hot_cols(columnSorting = FALSE) %>%
     hot_rows(rowHeights = 25) %>%
-    hot_col(2, readOnly = FALSE, valign = "htBottom") %>%
-    hot_cols(2:3, readOnly = TRUE) %>%
     hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
+    hot_col(2, readOnly = FALSE, colWidths = 220) %>%
+    hot_col(3, readOnly = TRUE, colWidths = 100) %>%
+    hot_col(4, readOnly = FALSE, colWidths = 100) %>%
+    hot_col(5, readOnly = FALSE, colWidths = 100) %>%
+    hot_col(6, readOnly = FALSE, colWidths = 100) %>%
     hot_col(
       7,
       dateFormat = "YYYY-MM-DD",

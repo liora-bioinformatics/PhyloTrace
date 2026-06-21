@@ -2003,9 +2003,8 @@ button#edit_button.btn.btn-default.action-button.shiny-bound-input {
 
 #assembly_files,
 #assembly_folder {
-  width: 140px;
+  width: 40%;
   border: 1px solid white;
-  margin-left: 30px;
 }
 
 #single_select_issues {
@@ -2013,24 +2012,9 @@ button#edit_button.btn.btn-default.action-button.shiny-bound-input {
   margin-bottom: 10px;
 }
 
-#sel_all_mt {
-  margin-left: 10px;
-}
-
-#desel_all_mt {
-  margin-left: -5vh;
-}
-
 #sel_all_mt,
 #desel_all_mt {
-  margin-top: 20px;
-  margin-bottom: 25px;
   border: 1px solid white;
-  width: 7vh;
-}
-
-#multi_select_issues {
-  margin-top: 5px;
 }
 
 .mult_res_sel {
@@ -4936,4 +4920,92 @@ button#download_resistance_profile_bttn {
 
 #screening_result {
   margin-top: 1em;
+}
+
+table.dataTable tbody tr {
+  cursor: pointer;
+}
+
+.rhandsontable input[type="checkbox"] {
+  margin: 0;
+}
+
+#initiate_multi_typing_ui>div {
+  height: 80vh;
+  display: flex;
+  gap: 3rem;
+  padding-left: 3rem;
+  padding-right: 3rem;
+}
+
+#initiate_multi_typing_ui>div>div:nth-child(1) {
+  width: 50%;
+}
+
+#initiate_multi_typing_ui>div>div:nth-child(2) {
+  width: 100%;
+}
+
+#initiate_multi_typing_ui .box {
+  height: 100%;
+  margin: 0;
+}
+
+#initiate_multi_typing_ui .box-body {
+  padding: 2rem;
+}
+
+#initiate_multi_typing_ui .box {
+  border-radius: 5px;
+}
+
+#initiate_multi_typing_ui .box .box-header {
+  border-top-right-radius: 5px;
+  border-top-left-radius: 5px;
+}
+
+.file-selection-info {
+  gap: 1rem;
+  display: flex;
+}
+
+.file-selection,
+.typing-launch,
+.metadata-declaration {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  width: 100%;
+}
+
+.box-body:has(> .metadata-declaration) {
+  padding: 0;
+}
+
+.metadata-declaration > div:last-child {
+  width: 100%;
+}
+
+#multi_select_table {
+  width: 100% !important;
+  border-radius: 0 0 8px 8px;
+}
+
+.selection-launch-boxes {
+  display: flex;
+  flex-direction: column;
+  gap: 3rem
+}
+
+.selection-launch-boxes>div {
+  height: 100%;
+}
+
+#multi_select_tab_ctrls>div {
+  display: flex;
+  gap: 2rem;
+}
+
+#multi_select_issues {
+  align-content: center;
 }

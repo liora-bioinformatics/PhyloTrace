@@ -1142,7 +1142,7 @@ server <- function(input, output, session) {
 
       if (file_exists(typing_file)) {
         # Initialize Database to NULL in case of failure
-	Database <- list()
+        Database <- list()
         Database$Typing <- tryCatch(
           {
             conn <- dbConnect(RSQLite::SQLite(), typing_file)
@@ -1410,7 +1410,10 @@ server <- function(input, output, session) {
         !is.null(DB$state) &&
           file.exists(file.path(app_local_share_path, "state.json"))
       ) {
-        last_db <- jsonlite::fromJSON(file.path(app_local_share_path, "state.json"))$last_db
+        last_db <- jsonlite::fromJSON(file.path(
+          app_local_share_path,
+          "state.json"
+        ))$last_db
 
         if (!is.null(last_db) && dir_exists(last_db)) {
           Startup$database <- last_db
@@ -2722,11 +2725,16 @@ server <- function(input, output, session) {
             state$last_db <- Startup$database
           } else {
             state <- list(
-              last_db = Statup$database,
+              last_db = Startup$database,
               new_db = NULL
             )
           }
-          jsonlite::write_json(state, state_path, pretty = TRUE, auto_unbox = TRUE)
+          jsonlite::write_json(
+            state,
+            state_path,
+            pretty = TRUE,
+            auto_unbox = TRUE
+          )
 
           DB$check_new_entries <- TRUE
           DB$data <- NULL
@@ -3304,9 +3312,20 @@ server <- function(input, output, session) {
                   ))
                 ) {
                   # Load database from files
-                  conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+                  conn <- dbConnect(
+                    RSQLite::SQLite(),
+                    file.path(
+                      Startup$database,
+                      gsub(" ", "_", DB$scheme),
+                      "Typing.db"
+                    )
+                  )
                   Database <- list()
-                  Database$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
+                  Database$Typing <- dbReadTable(
+                    conn,
+                    "typing",
+                    check.names = FALSE
+                  )
                   dbDisconnect(conn)
 
                   # Databases produced with version < 1.6.1 receive extra column
@@ -3333,10 +3352,25 @@ server <- function(input, output, session) {
                   }
 
                   # Save changes
-                  conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
-                  dbWriteTable(conn, "typing", Database$Typing, overwrite = TRUE)
+                  conn <- dbConnect(
+                    RSQLite::SQLite(),
+                    file.path(
+                      Startup$database,
+                      gsub(" ", "_", DB$scheme),
+                      "Typing.db"
+                    )
+                  )
+                  dbWriteTable(
+                    conn,
+                    "typing",
+                    Database$Typing,
+                    overwrite = TRUE
+                  )
                   dbDisconnect(conn)
 
+                  Database[["Typing"]][["Include"]] <- as.logical(Database[[
+                    "Typing"
+                  ]][["Include"]])
                   DB$data <- Database[["Typing"]]
 
                   if ((ncol(DB$data) - 14) != DB$number_loci) {
@@ -5569,11 +5603,7 @@ server <- function(input, output, session) {
               '</span>'
             )
           ),
-          addSpinner(
-            species_data_ui(species_data, fetch = FALSE),
-            spin = "dots",
-            color = "#ffffff"
-          )
+          species_data_ui(species_data, fetch = FALSE)
         )
       } else {
         NULL
@@ -5974,7 +6004,7 @@ server <- function(input, output, session) {
 
         output$db_loci <- renderDataTable(
           loci_info,
-          selection = "single",
+          selection = list(mode = "single", selected = 1),
           options = list(
             pageLength = 15,
             scrollY = TRUE,
@@ -6399,7 +6429,10 @@ server <- function(input, output, session) {
       data <- list()
       data[["Typing"]] <- cbind(merged_meta, external_allelic_profile)
 
-      conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+      conn <- dbConnect(
+        RSQLite::SQLite(),
+        file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+      )
       dbWriteTable(conn, "typing", data$Typing, overwrite = TRUE)
       dbDisconnect(conn)
 
@@ -7637,11 +7670,15 @@ server <- function(input, output, session) {
 
     DB$inhibit_change <- FALSE
 
-    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    conn <- dbConnect(
+      RSQLite::SQLite(),
+      file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+    )
     Data <- list()
     Data$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
     dbDisconnect(conn)
 
+    Data[["Typing"]][["Include"]] <- as.logical(Data[["Typing"]][["Include"]])
     DB$data <- Data[["Typing"]]
 
     if ((ncol(DB$data) - 14) != DB$number_loci) {
@@ -8178,7 +8215,10 @@ server <- function(input, output, session) {
     DB$remove_iso <- NULL
 
     # Load currently saved entry table
-    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    conn <- dbConnect(
+      RSQLite::SQLite(),
+      file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+    )
     Data <- list()
     Data$Typing <- dbReadTable(conn, "typing", check.names = FALSE)
     dbDisconnect(conn)
@@ -8197,7 +8237,10 @@ server <- function(input, output, session) {
     Data[["Typing"]][["Include"]] <- as.logical(Data[["Typing"]][["Include"]])
     rownames(Data[["Typing"]]) <- Data[["Typing"]]$Index
 
-    conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+    conn <- dbConnect(
+      RSQLite::SQLite(),
+      file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+    )
     dbWriteTable(conn, "typing", Data$Typing, overwrite = TRUE)
     dbDisconnect(conn)
 
@@ -8605,7 +8648,7 @@ server <- function(input, output, session) {
 
       output$db_loci <- renderDataTable(
         loci_info,
-        selection = "single",
+        selection = list(mode = "single", selected = 1),
         options = list(
           pageLength = 15,
           scrollY = TRUE,
@@ -8969,7 +9012,7 @@ server <- function(input, output, session) {
         )
       }
       jsonlite::write_json(state, state_path, pretty = TRUE, auto_unbox = TRUE)
-      
+
       dir.create(
         file.path(
           DB$new_database,
@@ -12682,7 +12725,7 @@ server <- function(input, output, session) {
         choices <- c(choices, categ_vars)
       }
     } else {
-      choices = c(
+      choices <- c(
         Database = "Database",
         `Isolation Date` = "Isolation Date",
         Host = "Host",
@@ -15556,11 +15599,6 @@ server <- function(input, output, session) {
     debounce(250)
   nj_treescale_width_val <- reactiveVal()
   nj_treescale_x_reactive <- reactive({
-    message("reactive input ", input$nj_treescale_x)
-    message(
-      "reactive noinput: ",
-      ifelse(!is.null(Vis$nj_max_x), round(Vis$nj_max_x / 2, 0), 2)
-    )
     ifelse(
       !is.null(input$nj_treescale_x),
       input$nj_treescale_x,
@@ -26591,7 +26629,10 @@ server <- function(input, output, session) {
 
         if (tail(status_df$status, 1) == "success") {
           # Changing "Screened" metadata variable in database
-          conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+          conn <- dbConnect(
+            RSQLite::SQLite(),
+            file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+          )
           Database <- dbReadTable(conn, "typing", check.names = FALSE)
           dbDisconnect(conn)
 
@@ -26602,8 +26643,11 @@ server <- function(input, output, session) {
                 1
               )
           )] <- "Yes"
-          
-          conn <- dbConnect(RSQLite::SQLite(), file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db"))
+
+          conn <- dbConnect(
+            RSQLite::SQLite(),
+            file.path(Startup$database, gsub(" ", "_", DB$scheme), "Typing.db")
+          )
           dbWriteTable(conn, "typing", Database, overwrite = TRUE)
           dbDisconnect(conn)
 
@@ -26874,8 +26918,8 @@ server <- function(input, output, session) {
         hm_meta <- Screening$hm_meta
 
         # styling parameters
-        ht_opt$ANNOTATION_LEGEND_PADDING = unit(10, "mm")
-        ht_opt$HEATMAP_LEGEND_PADDING = unit(5, "mm")
+        ht_opt$ANNOTATION_LEGEND_PADDING <- unit(10, "mm")
+        ht_opt$HEATMAP_LEGEND_PADDING <- unit(5, "mm")
 
         if (!is.null(input$gsplot_isolate_label)) {
           gsplot_isolate_label <- input$gsplot_isolate_label
@@ -27849,51 +27893,26 @@ server <- function(input, output, session) {
       if (nrow(Typing$multi_sel_table) > 0) {
         output$multi_select_tab_ctrls <- renderUI({
           render_info("multi_select_tab_ctrls")
-
-          fluidRow(
-            h3(
-              p("Metadata Declaration"),
-              style = "color:white; margin-left: 15px"
+          div(
+            actionButton(
+              "sel_all_mt",
+              "All",
+              icon = icon("check")
             ),
-            br(),
-            column(
-              width = 2,
-              align = "left",
-              actionButton(
-                "sel_all_mt",
-                "All",
-                icon = icon("check")
-              )
+            actionButton(
+              "desel_all_mt",
+              "None",
+              icon = icon("xmark")
             ),
-            column(
-              width = 2,
-              align = "left",
-              actionButton(
-                "desel_all_mt",
-                "None",
-                icon = icon("xmark")
-              )
-            ),
-            column(
-              width = 8,
-              align = "center",
-              br(),
-              uiOutput("multi_select_issues")
-            )
+            uiOutput("multi_select_issues")
           )
         })
 
         output$metadata_multi_box <- renderUI({
           render_info("metadata_multi_box")
-
-          column(
-            width = 11,
-            align = "left",
-            hr(),
-            br(),
+          div(
+            class = "typing-launch",
             uiOutput("multi_select_issue_info"),
-            br(),
-            br(),
             actionButton(
               inputId = "conf_meta_multi",
               label = "Confirm",

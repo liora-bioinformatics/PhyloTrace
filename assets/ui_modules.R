@@ -628,100 +628,62 @@ screening_menu_available <- sidebarMenu(
 
 
 initiate_multi_typing_ui <- renderUI({
-  column(
-    width = 12,
-    fluidRow(
-      column(
-        width = 3,
-        align = "center",
-        br(),
-        br(),
-        fluidRow(
-          column(1),
-          column(
-            width = 11,
-            align = "left",
-            h3(
-              p("Assembly Selection"),
-              style = "color:white; margin-left: 40px"
+  div(
+    div(
+      class = "selection-launch-boxes",
+      box(
+        solidHeader = TRUE,
+        status = "primary",
+        width = "100%",
+        title = "Assembly Selection",
+        div(
+          class = "file-selection",
+          div(
+            class = "file-selection-info",
+            shinyFilesButton(
+              "assembly_files",
+              "Select File(s)",
+              icon = icon("file"),
+              title = "Select one or multiple assembly file(s)",
+              multiple = TRUE,
+              buttonType = "default",
+              class = NULL,
+              width = "120px",
+              root = path_home()
             ),
-          )
-        ),
-        br(),
-        br(),
-        fluidRow(
-          column(1),
-          column(
-            width = 11,
-            align = "center",
-            fluidRow(
-              column(
-                width = 6,
-                align = "center",
-                shinyFilesButton(
-                  "assembly_files",
-                  "Select File(s)",
-                  icon = icon("file"),
-                  title = "Select one or multiple assembly file(s)",
-                  multiple = TRUE,
-                  buttonType = "default",
-                  class = NULL,
-                  width = "120px",
-                  root = path_home()
-                )
-              ),
-              column(
-                width = 6,
-                align = "left",
-                uiOutput("multi_file_sel_info")
-              )
+            uiOutput("multi_file_sel_info")
+          ),
+          div(
+            class = "file-selection-info",
+            shinyDirButton(
+              "assembly_folder",
+              "Select Folder",
+              icon = icon("folder-open"),
+              title = "Select folder containing assembly file(s)",
+              buttonType = "default",
+              root = path_home()
             ),
-            br(),
-            fluidRow(
-              column(
-                width = 6,
-                align = "center",
-                shinyDirButton(
-                  "assembly_folder",
-                  "Select Folder",
-                  icon = icon("folder-open"),
-                  title = "Select folder containing assembly file(s)",
-                  buttonType = "default",
-                  root = path_home()
-                )
-              ),
-              column(
-                width = 6,
-                align = "left",
-                uiOutput("multi_folder_sel_info")
-              )
-            ),
-            br(),
-            br(),
-            fluidRow(
-              column(1),
-              uiOutput("metadata_multi_box")
-            )
+            uiOutput("multi_folder_sel_info")
           )
         )
       ),
-      column(1),
-      column(
-        width = 7,
-        br(),
-        br(),
-        fluidRow(
-          column(
-            width = 10,
-            uiOutput("multi_select_tab_ctrls"),
-          )
-        ),
-        fluidRow(
-          column(
-            width = 12,
-            rHandsontableOutput("multi_select_table")
-          )
-        )
+      box(
+        solidHeader = TRUE,
+        status = "primary",
+        width = "100%",
+        title = "Launch Typing",
+        uiOutput("metadata_multi_box")
+      )
+    ),
+    box(
+      solidHeader = TRUE,
+      status = "primary",
+      width = "100%",
+      title = "Metadata Declaration",
+      div(
+        class = "metadata-declaration",
+        uiOutput("multi_select_tab_ctrls"),
+        div(rHandsontableOutput("multi_select_table"))
       )
     )
   )
