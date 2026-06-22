@@ -701,29 +701,21 @@ ui <- dashboardPage(
 
       tabItem(
         tabName = "typing",
-        fluidRow(
-          column(
-            width = 3,
-            align = "center",
-            h2(p("Generate Allelic Profile"), style = "color:white")
-          )
-        ),
-        hr(),
-        uiOutput("typing_no_db"),
-        fluidRow(
-          uiOutput("initiate_multi_typing_ui"),
-          uiOutput("multi_stop"),
-          column(1),
-          uiOutput("start_multi_typing_ui")
-        ),
-        fluidRow(
-          column(
-            width = 6,
-            uiOutput("pending_typing")
-          ),
-          column(
-            width = 6,
-            uiOutput("multi_typing_results")
+        div(
+          class = "tab-ui",
+          div(class = "tab-header", "Generate Allelic Profile"),
+          div(
+            class = "tab-body",
+            div(
+              uiOutput("typing_no_db"),
+              uiOutput("initiate_multi_typing_ui"),
+              uiOutput("multi_stop"),
+              div(
+                class = "pending-typing",
+                uiOutput("pending_typing"),
+                uiOutput("multi_typing_results")
+              )
+            )
           )
         )
       ),
@@ -1531,6 +1523,13 @@ server <- function(input, output, session) {
   # Load db & scheme selection UI
   output$load_db <- renderUI({
     render_info("load_db")
+
+    load_bttn <- actionButton(
+      "load",
+      "Load",
+      class = "load-start special-button"
+    )
+
     if (!is.null(Startup$select_new)) {
       if (length(DB$new_database) > 0 && Startup$select_new) {
         column(
@@ -1549,7 +1548,7 @@ server <- function(input, output, session) {
           uiOutput("new_db_name_ui"),
           br(),
           br(),
-          actionButton("load", "Create", class = "load-start")
+          load_bttn
         )
       } else if (length(DB$available) > 0 && !(Startup$select_new)) {
         if (
@@ -1633,11 +1632,7 @@ server <- function(input, output, session) {
               )
             ),
             br(),
-            actionButton(
-              "load",
-              "Load",
-              class = "load-start"
-            )
+            load_bttn
           )
         } else {
           column(
@@ -1653,11 +1648,7 @@ server <- function(input, output, session) {
             uiOutput("scheme_db"),
             br(),
             br(),
-            actionButton(
-              "load",
-              "Load",
-              class = "load-start"
-            )
+            load_bttn
           )
         }
       } else {
@@ -1787,11 +1778,7 @@ server <- function(input, output, session) {
               )
             ),
             br(),
-            actionButton(
-              "load",
-              "Load",
-              class = "load-start"
-            )
+            load_bttn
           )
         } else {
           column(
@@ -1807,11 +1794,7 @@ server <- function(input, output, session) {
             uiOutput("scheme_db"),
             br(),
             br(),
-            actionButton(
-              "load",
-              "Load",
-              class = "load-start"
-            )
+            load_bttn
           )
         }
       } else if (isTRUE(DB$state) && (length(DB$available) == 0)) {
@@ -1826,11 +1809,7 @@ server <- function(input, output, session) {
             )
           ),
           br(),
-          actionButton(
-            "load",
-            "Load",
-            class = "load-start"
-          )
+          load_bttn
         )
       }
     }
@@ -2325,9 +2304,6 @@ server <- function(input, output, session) {
 
       updateSliderInput(session, "nj_treescale_x", value = NULL)
       output$nj_treescale_x <- NULL
-      message("load INPUT: ", input$nj_treescale_x)
-      message("load VAL:", nj_treescale_x_val())
-
       output$tree_controls <- NULL
 
       # set typing start control variable
@@ -2696,7 +2672,6 @@ server <- function(input, output, session) {
           output$entry_table_controls <- NULL
           output$multi_stop <- NULL
           output$metadata_multi_box <- NULL
-          output$start_multi_typing_ui <- NULL
           output$pending_typing <- NULL
           output$multi_typing_results <- NULL
           output$single_typing_progress <- NULL
@@ -2772,7 +2747,6 @@ server <- function(input, output, session) {
           # null typing initiation UI
           output$multi_stop <- NULL
           output$metadata_multi_box <- NULL
-          output$start_multi_typing_ui <- NULL
           output$pending_typing <- NULL
           output$multi_typing_results <- NULL
           output$single_typing_progress <- NULL
@@ -5145,7 +5119,6 @@ server <- function(input, output, session) {
                   output$entry_table_controls <- NULL
                   output$multi_stop <- NULL
                   output$metadata_multi_box <- NULL
-                  output$start_multi_typing_ui <- NULL
                   output$pending_typing <- NULL
                   output$multi_typing_results <- NULL
                   output$single_typing_progress <- NULL
@@ -27896,12 +27869,12 @@ server <- function(input, output, session) {
           div(
             actionButton(
               "sel_all_mt",
-              "All",
+              "Select All",
               icon = icon("check")
             ),
             actionButton(
               "desel_all_mt",
-              "None",
+              "Deselect All",
               icon = icon("xmark")
             ),
             uiOutput("multi_select_issues")
@@ -27915,8 +27888,9 @@ server <- function(input, output, session) {
             uiOutput("multi_select_issue_info"),
             actionButton(
               inputId = "conf_meta_multi",
-              label = "Confirm",
-              icon = icon("arrow-right")
+              label = "Start Typing",
+              icon = icon("play"),
+              class = "special-button"
             )
           )
         })
@@ -28052,7 +28026,7 @@ server <- function(input, output, session) {
           align = "left",
           actionButton(
             "sel_all_mt",
-            "All",
+            "Select All",
             icon = icon("check")
           )
         ),
@@ -28061,7 +28035,7 @@ server <- function(input, output, session) {
           align = "left",
           actionButton(
             "desel_all_mt",
-            "None",
+            "Deselect All",
             icon = icon("xmark")
           )
         ),
@@ -28409,7 +28383,6 @@ server <- function(input, output, session) {
       # Remove Allelic Typing Controls
       output$initiate_multi_typing_ui <- NULL
       output$metadata_multi_box <- NULL
-      output$start_multi_typing_ui <- NULL
 
       # Activate entry detection
       DB$check_new_entries <- TRUE
@@ -28683,34 +28656,29 @@ server <- function(input, output, session) {
         output$multi_typing_results <- renderUI({
           render_info("multi_typing_results")
 
-          column(
-            width = 11,
-            fluidRow(
-              column(
-                width = 9,
-                br(),
-                br(),
-                br(),
-                br(),
-                br(),
-                div(
-                  class = "mult_res_sel",
-                  selectInput(
-                    "multi_results_picker",
-                    label = h5("Select Typing Results", style = "color:white"),
-                    choices = names(Typing$result_list),
-                    selected = names(Typing$result_list)[length(
-                      names(Typing$result_list)
-                    )],
-                    width = "100%"
-                  )
-                ),
-                br()
-              )
-            ),
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Typing Results",
             div(
-              class = "typing-result-table",
-              dataTableOutput("multi_typing_result_table")
+              class = "typing-results",
+              div(
+                class = "mult_res_sel",
+                selectInput(
+                  "multi_results_picker",
+                  label = h5("Select Typing Results", style = "color:white"),
+                  choices = names(Typing$result_list),
+                  selected = names(Typing$result_list)[length(
+                    names(Typing$result_list)
+                  )],
+                  width = "100%"
+                )
+              ),
+              div(
+                class = "typing-result-table",
+                dataTableOutput("multi_typing_result_table")
+              )
             )
           )
         })
@@ -28739,44 +28707,38 @@ server <- function(input, output, session) {
 
       output$pending_typing <- renderUI({
         render_info("pending_typing")
-
-        fluidRow(
-          fluidRow(
-            br(),
-            br(),
-            column(width = 2),
-            column(
-              width = 4,
-              h3(p("Pending Typing ..."), style = "color:white"),
-              br(),
-              br(),
-              fluidRow(
-                column(
-                  width = 5,
-                  HTML(paste(
-                    '<i class="fa fa-spinner fa-spin" style="font-size:24px;color:white;margin-top:5px"></i>'
-                  ))
-                ),
-                column(
-                  width = 6,
-                  align = "left",
-                  actionButton(
-                    "reset_multi",
-                    "Terminate",
-                    icon = icon("ban")
-                  )
+        div(
+          class = "pending-typing-ui",
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Typing Status",
+            div(
+              class = "typing-status",
+              div(
+                class = "typing-status-spinner",
+                "Pending Typing ...",
+                HTML(
+                  '<i class="fa fa-spinner fa-spin" style="height: 100%; margin-top:5px"></i>'
                 )
               ),
+              div(
+                class = "typing-status-buttons",
+                actionButton(
+                  "reset_multi",
+                  "Terminate",
+                  icon = icon("ban")
+                )
+              )
             )
           ),
-          br(),
-          br(),
-          fluidRow(
-            column(width = 2),
-            column(
-              width = 10,
-              verbatimTextOutput("logText")
-            )
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Typing Log",
+            verbatimTextOutput("logText")
           )
         )
       })
@@ -28790,19 +28752,17 @@ server <- function(input, output, session) {
       output$pending_typing <- renderUI({
         render_info("pending_typing")
 
-        fluidRow(
-          fluidRow(
-            br(),
-            br(),
-            column(width = 2),
-            column(
-              width = 4,
-              h3(p("Pending Multi Typing ..."), style = "color:white"),
-              br(),
-              br(),
+        div(
+          class = "pending-typing-ui",
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Typing Status",
+            div(
+              class = "typing-status",
               HTML(
                 paste(
-                  "<span style='color: white;'>",
                   paste(
                     "Typing of",
                     sum(str_detect(
@@ -28838,36 +28798,27 @@ server <- function(input, output, session) {
                   sep = '<br/>'
                 )
               ),
-              br(),
-              br(),
-              fluidRow(
-                column(
-                  width = 5,
-                  actionButton(
-                    "reset_multi",
-                    "Reset",
-                    icon = icon("arrows-rotate")
-                  )
+              div(
+                class = "typing-status-buttons",
+                actionButton(
+                  "reset_multi",
+                  "Reset",
+                  icon = icon("arrows-rotate")
                 ),
-                column(
-                  width = 5,
-                  downloadButton(
-                    "print_log",
-                    "Logfile",
-                    icon = icon("floppy-disk")
-                  )
+                downloadButton(
+                  "print_log",
+                  "Logfile",
+                  icon = icon("floppy-disk")
                 )
               )
             )
           ),
-          br(),
-          br(),
-          fluidRow(
-            column(width = 2),
-            column(
-              width = 10,
-              verbatimTextOutput("logTextFull")
-            )
+          box(
+            solidHeader = TRUE,
+            status = "primary",
+            width = "100%",
+            title = "Typing Log",
+            verbatimTextOutput("logTextFull")
           )
         )
       })

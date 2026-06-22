@@ -739,12 +739,6 @@ body>div.swal2-container.swal2-bottom-start.swal2-backdrop-show {
   max-width: 800px;
 }
 
-.btn-default:active:hover,
-.btn-primary:active:hover {
-  color: white !important;
-  background-color: #282F38 !important;
-}
-
 .btn .radiobtn .btn-default .active:hover {
   color: #333;
   background-color: #e6e6e6;
@@ -752,22 +746,8 @@ body>div.swal2-container.swal2-bottom-start.swal2-backdrop-show {
   border-color: #adadad;
 }
 
-.btn-primary.focus,
-.btn-primary:focus {
-  color: #000000;
-  background-color: #20E6E5;
-  border-color: #20E6E5;
-}
-
 .heatmap-picker.inner.open {
   max-height: 130px;
-}
-
-.btn-primary.focus,
-.btn-primary:active:focus {
-  color: #ffffff;
-  background-color: #282F38;
-  border-color: white;
 }
 
 .datepicker table tr td.active:active,
@@ -1226,14 +1206,6 @@ button#load.pulsating-button.btn.btn-default.action-button.shiny-bound-input {
   z-index: 0;
 }
 
-.load-start:hover {
-  background: #3c8c56 !important;
-  border: none;
-  color: white !important;
-  box-shadow: 0px 0px 20px 15px rgba(40, 47, 56, 1);
-}
-
-
 .shiny-input-container input[type="text"] {
   border-radius: 5px;
 }
@@ -1649,14 +1621,6 @@ i.fa-solid.fa-gears.fa-spin-pulse {
   margin-left: -70px;
 }
 
-/* #db_distancematrix>div>div>div>div>table>tbody>tr>td,
-#table_missing_values>div>div>div>div>table>tbody>tr>td,
-#multi_select_table>div>div>div>div>table>tbody>tr>td,
-#multi_typing_result_table>div>div>div>div>table>tbody>tr>td,
-#typing_result_table>div>div>div>div>table>tbody>tr>td {
-  color: black !important;
-} */
-
 #db_entries>div>div>div>div>table>tbody>tr>td {
   color: black;
 }
@@ -1741,10 +1705,6 @@ i.fa-solid.fa-gears.fa-spin-pulse {
   margin-left: -30px;
 }
 
-.btn-default:hover {
-  border-color: transparent !important;
-}
-
 #cgmlst_scheme {
   margin-top: 20px;
   max-width: 90%;
@@ -1805,13 +1765,6 @@ i.fa-solid.fa-gears.fa-spin-pulse {
   width: 4.333333%;
 }
 
-.bttn-simple:hover {
-  border-color: #20E6E5 !important;
-  background: #20E6E5 !important;
-  color: black !important;
-  opacity: 1;
-}
-
 .mat-switch-db {
   margin-left: 20px;
 }
@@ -1844,10 +1797,6 @@ i.fa-solid.fa-gears.fa-spin-pulse {
   width: fit-content !important;
   max-width: 1200px;
   margin-left: 30px;
-}
-
-#multi_typing_result_table {
-  margin-top: -15px;
 }
 
 #add_new_variable {
@@ -1914,28 +1863,21 @@ button#download_cgMLST {
   border-color: white;
 }
 
-.btn-primary:hover {
-  background-color: #20e6e5;
-  border-color: #20e6e5;
-  color: black;
-  border-radius: 5px;
-  height: 35px;
+.btn-default:hover,
+.btn-primary:hover,
+.bttn-simple:hover {
+  background: unset;
+  color: white;
+  border-color: unset;
+  box-shadow: inset 0px 0px 20px 3px #ffffff3d;
 }
 
-.btn-primary {
-  background: #282F38;
-  color: #ffffff;
-  border-color: #282F38;
-  border-radius: 5px;
-  height: 35px;
-  padding: 6px 12px;
-}
-
-.btn-default:hover {
-  border-color: #20e6e5 !important;
-  background: #20e6e5 !important;
+.special-button:hover {
+  background: linear-gradient(to right, rgba(44, 222, 235, 1) 0%, rgba(44, 222, 235, 1) 30%, rgba(0, 255, 213, 1) 100%) !important;
   color: black !important;
+  box-shadow: inset 0px 0px 20px 3px #00000077;
 }
+
 
 button#download_cgMLST i.fas.fa-download {
   margin-right: 5px !important
@@ -2015,27 +1957,7 @@ button#edit_button.btn.btn-default.action-button.shiny-bound-input {
 #sel_all_mt,
 #desel_all_mt {
   border: 1px solid white;
-}
-
-.mult_res_sel {
-  margin-bottom: 15px;
-}
-
-.multi_meta_box {
-  margin-left: -40px;
-}
-
-.multi_start_col {
-  position: relative;
-  left: -40px;
-}
-
-#multi_typing_results .mult_res_sel .selectize-input.items.full.has-options.has-items {
-  width: -webkit-fill-available;
-}
-
-#multi_typing_results {
-  margin-left: 30px;
+  width: 15%;
 }
 
 body>div.htDatepickerHolder>div>div>table>tbody>tr>td.is-today.is-selected>button {
@@ -2094,11 +2016,12 @@ body>div.datepicker.datepicker-dropdown.dropdown-menu.datepicker-orient-left.dat
 
 #logText,
 #logTextFull {
-  margin-top: 5px;
-  max-height: 40vh;
   white-space: pre-line;
   word-wrap: break-word;
-  box-shadow: 10px 10px 15px rgba(0, 0, 0, 0.5);
+  background: transparent;
+  color: white;
+  border: none;
+  padding: 0;
 }
 
 .append_table {
@@ -2141,8 +2064,7 @@ div#progress_bar.progress-bar {
 #conf_meta_single,
 #conf_meta_multi {
   border-color: white;
-  height: 40px;
-  width: 200px;
+  height: 60px;
   font-size: large;
 }
 
@@ -4930,33 +4852,69 @@ table.dataTable tbody tr {
   margin: 0;
 }
 
-#initiate_multi_typing_ui>div {
-  height: 80vh;
+.tab-ui {
+  height: 100%;
   display: flex;
-  gap: 3rem;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1%;
+  color: white;
+}
+
+.tab-body {
+  padding-bottom: 2rem;
+}
+
+.tab-body,
+.tab-header {
   padding-left: 3rem;
   padding-right: 3rem;
 }
 
+.tab-header {
+  color: white;
+  font-size: 2em;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid white;
+  margin-bottom: 2rem;
+  padding-top: 1rem;
+}
+
+.main-header {
+  position: relative;
+  max-height: 100px;
+  z-index: 1030;
+  box-shadow: 0px 7px 15px #000;
+}
+
+.tab-content,
+.tab-content>div {
+  height: 100%;
+}
+
+#initiate_multi_typing_ui>div {
+  height: 80vh;
+  display: flex;
+  gap: 3rem;
+}
+
 #initiate_multi_typing_ui>div>div:nth-child(1) {
-  width: 50%;
+  width: 35%;
 }
 
 #initiate_multi_typing_ui>div>div:nth-child(2) {
-  width: 100%;
+  width: 65%;
 }
 
-#initiate_multi_typing_ui .box {
+.tab-body .box,
+.tab-body .box.box-solid.box-primary {
   height: 100%;
+  border-radius: 5px;
   margin: 0;
 }
 
 #initiate_multi_typing_ui .box-body {
   padding: 2rem;
-}
-
-#initiate_multi_typing_ui .box {
-  border-radius: 5px;
 }
 
 #initiate_multi_typing_ui .box .box-header {
@@ -4971,24 +4929,12 @@ table.dataTable tbody tr {
 
 .file-selection,
 .typing-launch,
-.metadata-declaration {
+.metadata-declaration,
+.typing-status {
   display: flex;
   flex-direction: column;
   gap: 2rem;
   width: 100%;
-}
-
-.box-body:has(> .metadata-declaration) {
-  padding: 0;
-}
-
-.metadata-declaration > div:last-child {
-  width: 100%;
-}
-
-#multi_select_table {
-  width: 100% !important;
-  border-radius: 0 0 8px 8px;
 }
 
 .selection-launch-boxes {
@@ -5008,4 +4954,116 @@ table.dataTable tbody tr {
 
 #multi_select_issues {
   align-content: center;
+}
+
+.btn,
+.btn-primary {
+  box-shadow: inset 0px 0px 14px 1px #ffffff1a;
+  border-color: #aaaaaa !important;
+  transition: box-shadow 0.3s ease;
+}
+
+.bttn-simple:focus,
+.bttn-simple:hover {
+  opacity: unset !important;
+}
+
+.box:has(.metadata-declaration) {
+  display: flex;
+  flex-direction: column;
+}
+
+.box-body:has(> .metadata-declaration) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.metadata-declaration {
+  flex: 1;
+  min-height: 0;
+}
+
+.multi-select-table {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.multi-select-table>#multi_select_table {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+
+.btn-primary {
+  background: #282F38;
+  color: #ffffff;
+  border-color: #282F38;
+}
+
+.skin-blue .main-header .logo,
+.navbar {
+  height: 100%;
+}
+
+.pending-typing {
+  display: flex;
+  gap: 3rem;
+  justify-content: space-between;
+  height: 80vh;
+}
+
+.pending-typing-ui {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 3rem;
+}
+
+.pending-typing-ui>div:nth-child(1) {
+  height: 30%;
+  min-height: fit-content;
+}
+
+.pending-typing-ui>div:nth-child(2) {
+  height: 70%;
+}
+
+#pending_typing,
+#multi_typing_results {
+  width: 50%;
+}
+
+.typing-status-spinner {
+  display: flex;
+  gap: 2rem;
+  font-size: 1.5em;
+}
+
+.typing-status {
+  margin-bottom: 1rem;
+}
+
+.multi_typing_results>div {
+  height: 100%;
+}
+
+.typing-results {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.typing-status-buttons {
+  width: 50%;
+  display: flex;
+  gap: 1rem;
+}
+
+.typing-status-buttons>a,
+.typing-status-buttons>button {
+  width: 100%;
 }

@@ -21,18 +21,19 @@ make_typing_select_handsontable <- function(
   rhandsontable(
     table,
     rowHeaders = NULL,
-    stretchH = "last",
+    stretchH = "all",
     contextMenu = FALSE,
-    height = if (nrow(table) > 15) 500 else NULL
+    renderAllRows = TRUE,
+    wordWrap = FALSE
   ) %>%
     hot_cols(columnSorting = FALSE) %>%
     hot_rows(rowHeights = 25) %>%
-    hot_col(1, halign = "htCenter", valign = "htTop", colWidths = 60) %>%
-    hot_col(2, readOnly = FALSE, colWidths = 220) %>%
-    hot_col(3, readOnly = TRUE, colWidths = 100) %>%
-    hot_col(4, readOnly = FALSE, colWidths = 100) %>%
-    hot_col(5, readOnly = FALSE, colWidths = 100) %>%
-    hot_col(6, readOnly = FALSE, colWidths = 100) %>%
+    hot_col(1, halign = "htCenter", valign = "htTop") %>%
+    hot_col(2, readOnly = FALSE) %>%
+    hot_col(3, readOnly = TRUE) %>%
+    hot_col(4, readOnly = FALSE) %>%
+    hot_col(5, readOnly = FALSE) %>%
+    hot_col(6, readOnly = FALSE) %>%
     hot_col(
       7,
       dateFormat = "YYYY-MM-DD",
@@ -66,7 +67,7 @@ make_typing_select_handsontable <- function(
       sprintf(
         "function(el, x) {
         var hot = this.hot;
-        
+
         var columnData = hot.getDataAtCol(1); // Change column index if needed
         var duplicates = {};
           
@@ -1625,11 +1626,6 @@ download.alleles.PM1 <- function(
   database,
   folder_name
 ) {
-  abb1 <<- abb
-  url_link1 <<- url_link
-  database1 <<- database
-  folder_name1 <<- folder_name
-
   # Make scheme directory
   directory <- file.path(database, folder_name)
   if (!dir.exists(directory)) {
@@ -1947,10 +1943,6 @@ process.alleles.PM <- function(
 }
 
 download.alleles.PM <- function(url_link, database, folder_name, progress) {
-  url_link1 <<- url_link
-  database1 <<- database
-  folder_name1 <<- folder_name
-
   # Make scheme directory
   directory <- file.path(database, folder_name)
   if (!dir.exists(directory)) {

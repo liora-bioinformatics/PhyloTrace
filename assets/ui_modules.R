@@ -683,7 +683,10 @@ initiate_multi_typing_ui <- renderUI({
       div(
         class = "metadata-declaration",
         uiOutput("multi_select_tab_ctrls"),
-        div(rHandsontableOutput("multi_select_table"))
+        div(
+          class = "multi-select-table",
+          rHandsontableOutput("multi_select_table")
+        )
       )
     )
   )
