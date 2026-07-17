@@ -228,7 +228,11 @@ read_geocode_cache <- function(path = geocode_cache_path()) {
     return(empty)
   }
   cached <- tryCatch(
-    read.csv(path, stringsAsFactors = FALSE, colClasses = c(place = "character")),
+    read.csv(
+      path,
+      stringsAsFactors = FALSE,
+      colClasses = c(place = "character")
+    ),
     error = function(e) empty
   )
   if (!all(c("place", "latitude", "longitude") %in% names(cached))) {
@@ -266,7 +270,10 @@ write_geocode_cache <- function(df, path = geocode_cache_path()) {
 # NA coords where a lookup failed), `n_cached` (distinct places served from the
 # cache) and `n_new` (distinct places freshly geocoded this call), for the
 # geocode-status feedback.
-geocode_places_cached <- function(place_vec, cache_path = geocode_cache_path()) {
+geocode_places_cached <- function(
+  place_vec,
+  cache_path = geocode_cache_path()
+) {
   places <- unique(place_vec[!is.na(place_vec) & nzchar(place_vec)])
   located <- data.frame(
     place = places,
@@ -304,7 +311,10 @@ geocode_places_cached <- function(place_vec, cache_path = geocode_cache_path()) 
     n_new <- sum(ok)
     if (n_new > 0) {
       write_geocode_cache(
-        rbind(cache, fresh[ok, c("place", "latitude", "longitude"), drop = FALSE]),
+        rbind(
+          cache,
+          fresh[ok, c("place", "latitude", "longitude"), drop = FALSE]
+        ),
         cache_path
       )
     }
@@ -956,12 +966,14 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # levels; wheelPxPerZoomLevel raises the scroll distance per zoom level so
   # each wheel notch moves less. zoomDelta keeps the +/- buttons and keyboard
   # in step with the finer snap.
-  m <- leaflet(options = leafletOptions(
-    zoomControl = o$show_controls,
-    zoomSnap = 0.25,
-    zoomDelta = 0.25,
-    wheelPxPerZoomLevel = 120
-  ))
+  m <- leaflet(
+    options = leafletOptions(
+      zoomControl = o$show_controls,
+      zoomSnap = 0.25,
+      zoomDelta = 0.25,
+      wheelPxPerZoomLevel = 120
+    )
+  )
 
   # Choropleth mode has no base tile layer at all — the basemap picker is
   # hidden for this mode (it had no visible effect once a fill covers the
@@ -1686,7 +1698,7 @@ map_controls <- function(ns) {
         input_switch(
           ns("map_chart_cluster"),
           "Cluster overlapping charts",
-          FALSE
+          TRUE
         ),
         shiny$div(
           class = "custom-slider",
@@ -1695,7 +1707,7 @@ map_controls <- function(ns) {
             "Cluster radius (px)",
             min = 20,
             max = 200,
-            value = 80,
+            value = 100,
             step = 10
           )
         )
@@ -2297,7 +2309,7 @@ server <- function(
           chart_size = input$map_chart_size %||% 40,
           chart_opacity = input$map_chart_opacity %||% 1,
           chart_cluster = isTRUE(input$map_chart_cluster),
-          chart_cluster_radius = input$map_chart_cluster_radius %||% 80
+          chart_cluster_radius = input$map_chart_cluster_radius %||% 100
         )
       }),
       250

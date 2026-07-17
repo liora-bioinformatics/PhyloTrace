@@ -238,7 +238,11 @@ server <- function(
           selectedTextFormat = "count > 3",
           countSelectedText = paste0("{0} / ", length(cols), " fields"),
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+          liveSearchPlaceholder = "Search fields ...",
+          # This tab pane is a bslib fill container (overflow: hidden), which
+          # clips the dropdown menu once it grows taller than the remaining
+          # space. Render it into <body> instead so it escapes that clip.
+          container = "body"
         )
       )
     })

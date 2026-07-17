@@ -56,6 +56,7 @@ box::use(
   app / view / visualization_mst,
   app / view / visualization_tree,
   app / view / visualization_map,
+  app / view / visualization_epi,
 )
 
 #' @export
@@ -77,7 +78,7 @@ ui <- function(id) {
         radioGroupButtons(
           ns("plot_type"),
           label = "Plot type",
-          choices = c("MST", "Tree", "Map"),
+          choices = c("MST", "Tree", "Map", "Epi"),
           selected = "MST",
           justified = TRUE
         ),
@@ -220,6 +221,11 @@ ui <- function(id) {
         title = "Map",
         value = "Map",
         visualization_map$ui(ns("map"), generate_id = ns("generate"))
+      )),
+      as_fill_carrier(nav_panel(
+        title = "Epi",
+        value = "Epi",
+        visualization_epi$ui(ns("epi"), generate_id = ns("generate"))
       ))
     ),
     # MutationObserver: as soon as a .viz-nav-wrap mounts in the DOM (the panels
@@ -573,12 +579,23 @@ server <- function(
       visualization_map$server,
       c(list("map"), shared, list(viz_metadata = viz_metadata_selected))
     )
+    # Like the Map, the Epi curve plots straight from local metadata (collection
+    # dates), so it takes the same non-distance bundle.
+    do.call(
+      visualization_epi$server,
+      c(list("epi"), shared, list(viz_metadata = viz_metadata_selected))
+    )
 
     # Swap the visible engine panel when the plot type changes, and show the
     # Tree-only algorithm picker / MST+Tree-only missing-value handling only
     # while relevant to the selected engine.
     observeEvent(input$plot_type, {
       bslib::nav_select("engine", selected = input$plot_type)
+      # Only the distance engines (MST/Tree) consume the missing-value handling
+      # and the staged peer isolates: both feed the pairwise-distance
+      # computation. The Map geocodes metadata and the Epi curve bins collection
+      # dates, so neither has any use for them.
+      needs_distance <- !input$plot_type %in% c("Map", "Epi")
       shinyjs::toggle(
         "algo_wrap",
         condition = identical(input$plot_type, "Tree")
@@ -587,27 +604,23 @@ server <- function(
         "zoom_view_wrap",
         condition = identical(input$plot_type, "Tree")
       )
-      shinyjs::toggle(
-        "na_handling_wrap",
-        condition = !identical(input$plot_type, "Map")
-      )
+      shinyjs::toggle("na_handling_wrap", condition = needs_distance)
       # Staged peer isolates only contribute allele identity, so they are
-      # offered to the distance engines and hidden for the Map.
-      shinyjs::toggle(
-        "imported_wrap",
-        condition = !identical(input$plot_type, "Map")
-      )
-      shinyjs::toggle(
-        "options_empty",
-        condition = identical(input$plot_type, "Map")
-      )
-      # Open the panel that actually holds content for this engine and collapse
-      # the one that only shows the "Not available" placeholder: MST/Tree have
-      # Options controls but no Info, whereas Map has no Options but populates
-      # Info with the geocode status after Generate.
+      # offered to the distance engines and hidden for the Map/Epi.
+      shinyjs::toggle("imported_wrap", condition = needs_distance)
+      shinyjs::toggle("options_empty", condition = !needs_distance)
+      # Open whichever panel actually holds content for this engine and collapse
+      # the ones that would only show a placeholder: MST/Tree have Options
+      # controls but no Info; Map has no Options but populates Info with the
+      # geocode status after Generate; Epi has neither (its own controls all
+      # live in its right-hand sidebar), so both stay collapsed rather than
+      # inviting a click on an empty panel.
       if (identical(input$plot_type, "Map")) {
         bslib::accordion_panel_open("setup_accordion", "Info")
         bslib::accordion_panel_close("setup_accordion", "Options")
+      } else if (identical(input$plot_type, "Epi")) {
+        bslib::accordion_panel_close("setup_accordion", "Options")
+        bslib::accordion_panel_close("setup_accordion", "Info")
       } else {
         bslib::accordion_panel_open("setup_accordion", "Options")
         bslib::accordion_panel_close("setup_accordion", "Info")

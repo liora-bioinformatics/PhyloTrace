@@ -133,7 +133,7 @@
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
-    padding: 0.75rem 0;
+    padding: .75rem 0.5rem;
 }
 
 // Applied to an .accordion-item when it's the only panel left visible in its
@@ -243,7 +243,7 @@
 // Dark mode: the light checkerboard stripes glare on the dark body bg, so swap
 // them for a faint light-on-dark tint that keeps the same subtle texture.
 [data-bs-theme="dark"] .viz-plot-stage {
-    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0.05) 75%, transparent 75%);
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.25) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.25) 50%, rgba(255, 255, 255, 0.25) 75%, transparent 75%);
 }
 
 // Tree display modes (see visualization_tree.R). The ggtree image is rendered
@@ -290,6 +290,72 @@
 .tree-stage.is-zoom .shiny-plot-output img {
     max-width: none;
     max-height: none;
+}
+
+// Epi plot stage (see visualization_epi.R). The curve is a ggplot image, so it
+// is presented the way the Tree's is: rendered at panel-width × aspect-ratio by
+// renderPlot(), then scaled down to fit the visible stage without distorting
+// its ratio. Keeps .viz-plot-stage for the shared `.viz-plot-prompt` overlay
+// and the `.viz-plot-stage.is-loading .viz-loading` toggle. The plotOutput div
+// carries an inline height (height="auto"), so the override needs !important to
+// win over it — same reason as .tree-stage.
+.epi-stage .shiny-plot-output {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100% !important;
+}
+
+.epi-stage .shiny-plot-output img {
+    width: auto !important;
+    height: auto !important;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+// Guidance under the interval picker: secondary to the control it explains.
+.epi-help {
+    margin-top: -0.25rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+// Annotation list in the Epi sidebar's "Annotations" tab: one card per active
+// milestone/period, each with a round remove button. Colors come from theme
+// variables so the list reads correctly in dark mode too.
+.epi-anno_label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.epi-anno_meta {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+.epi-anno_delete {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background-color: var(--bs-danger-bg-subtle);
+    color: var(--bs-danger-text-emphasis);
+}
+
+.epi-anno_delete:hover {
+    background-color: var(--bs-danger-border-subtle);
+    color: var(--bs-danger-text-emphasis);
 }
 
 // Map plot stage: unlike .viz-plot-stage (which centers a fixed-size plot
@@ -400,7 +466,11 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 // Dark mode: the fixed slate prompt text (and its icon) reads too dim against
 // the dark stage, so lift it to the theme's secondary color for legible contrast.
 [data-bs-theme="dark"] .viz-plot-prompt {
-    color: var(--bs-secondary-color);
+    color: rgb(255 255 255);
+}
+
+[data-bs-theme="dark"] .viz-plot-icon {
+    opacity: .7;
 }
 
 // Map's placeholder needs an opaque cover: unlike MST/Tree's blank
@@ -837,6 +907,10 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 
 .selectize-input>* {
     white-space: nowrap;
+}
+
+.navbar:not(.fixed-bottom):not(.navbar-fixed-bottom):not(.navbar-fixed-bottom)+div>.tab-content>.tab-pane {
+    margin-top: 0;
 }
 
 .selectize-input.full {
@@ -2337,6 +2411,33 @@ table.dataTable thead>tr>th.sorting {
     margin-bottom: 1rem;
 }
 
+// Plot-type selector (see visualization.R). shinyWidgets lays a justified
+// radioGroupButtons out as a flex row whose children each carry `w-100` and so
+// refuse to shrink below their min-content width. That fitted three engines in
+// the 320px sidebar; the fourth (Epi) pushed the row into overflow and got
+// clipped to a sliver. Lay the choices out as a 2-column grid instead: every
+// label keeps its full width, and a fifth engine wraps onto a new row rather
+// than squeezing the others.
+.plot-controls .btn-group-container-sw {
+    // Beats the `d-flex` utility class shinyWidgets hard-codes on the group.
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+}
+
+.plot-controls .btn-group-container-sw>.btn-group {
+    // Undo the -1px pull Bootstrap uses to collapse adjacent borders in a row;
+    // the grid gap separates the buttons now.
+    margin-left: 0 !important;
+}
+
+.plot-controls .btn-group-container-sw .btn {
+    width: 100%;
+    // Each button is its own cell now, not a segment of one continuous bar, so
+    // restore the corners Bootstrap flattens on a row's inner buttons.
+    border-radius: var(--bs-border-radius) !important;
+}
+
 #app-visualization-sel_table {
     .dataTables_info {
         padding-top: 0;
@@ -2349,7 +2450,9 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// Open the "Map mode" selectize dropdown upwards instead of downwards.
+// Open the "Map mode" selectize dropdown upwards instead of downwards. It's
+// pinned to the foot of the Map's control sidebar with no room below it, so
+// the menu has to open upwards or it would be clipped by the sidebar's edge.
 .map-mode-dropup {
     .selectize-dropdown {
         top: auto !important;

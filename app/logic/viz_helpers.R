@@ -57,6 +57,25 @@
 #     whichever module you're editing for the full trace of this failure
 #     mode.
 #
+#  5. A control the server *renders* (shiny::renderUI + uiOutput, e.g. the Epi
+#     engine's "Time interval" and "Stratify by" pickers, whose value/choices
+#     are fitted to the loaded database): shinyjs::reset() restores an input to
+#     the value it had at *page load*, and a server-rendered control had no
+#     existence then — so there is nothing for it to restore and it is skipped.
+#     Rebuild the control instead: have its renderUI depend on a reactiveVal
+#     counter and bump that from `reset_settings` (see visualization_epi.R's
+#     interval_rebuild / stratify_rebuild). Note this bucket exists precisely
+#     because bucket 4's update*Input() route is *unusable* for these: this
+#     engine's panel is only inserted into the DOM once a database loads, which
+#     is the same moment the fitted value becomes known, so the update fires at
+#     a control the browser has not built yet and is dropped on the floor.
+#     Rendering the control already carrying the right value has nothing to
+#     lose.
+#
+#  6. State that is not an input at all (the Epi engine's annotation list and
+#     playback position — plain reactiveVals): shinyjs::reset() cannot see it,
+#     no update*Input() addresses it. Reset it by hand in `reset_settings`.
+#
 # When in doubt, prefer testing the actual "Reset settings" button over
 # reasoning about it — bucket 1 is easy to get wrong by assuming it applies
 # to something that's actually bucket 4 (any control whose value is ever set
@@ -157,6 +176,19 @@ suitable_scale_categories <- function(resolved_type, vals) {
   } else {
     c("Sequential", "Gradient")
   }
+}
+
+# shiny$dateInput's text box is freely user-editable — typing something the
+# client's date parser can't make sense of (e.g. "20152-07-17") does not
+# reject the keystrokes; it round-trips to the server as Date(NA), silently
+# emitting an "not in a standard unambiguous format" warning. Any comparison
+# on that NA (e.g. `end < start`) then throws "missing value where TRUE/FALSE
+# needed" out of the `if`, which crashes the whole app rather than just the
+# observer. Every dateInput() value MUST be checked with this before it's
+# compared, arithmetic'd, or stored — show a notification and bail instead.
+#' @export
+any_invalid_date <- function(...) {
+  any(vapply(list(...), function(x) length(x) != 1 || is.na(x), logical(1)))
 }
 
 # --- small UI helpers --------------------------------------------------------

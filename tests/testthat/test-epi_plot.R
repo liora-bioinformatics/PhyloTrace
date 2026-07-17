@@ -1,0 +1,846 @@
+box::use(
+  testthat[
+    expect_equal,
+    expect_error,
+    expect_false,
+    expect_identical,
+    expect_length,
+    expect_s3_class,
+    expect_true,
+    test_that
+  ],
+)
+box::use(
+  app / logic / epi_plot,
+)
+
+# A small metadata frame shaped like make_metadata_table()'s output: ISO date
+# strings (free text, so unparseable and NA values are expected).
+meta_fixture <- function() {
+  data.frame(
+    isolate = paste0("ISO-", 1:6),
+    # 2026-01-14 is a Wednesday, 2026-01-18 the Sunday of the same ISO week.
+    sample_collection_date = c(
+      "2026-01-14",
+      "2026-01-18",
+      "2026-02-03",
+      "not-a-date",
+      NA,
+      "2026-02-04"
+    ),
+    organism = c("E. coli", "E. coli", "S. enterica", "E. coli", "E. coli", ""),
+    geo_loc_name_country = c(
+      "Germany",
+      "France",
+      "Germany",
+      "Germany",
+      "France",
+      NA
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+# --- floor_date_bin ----------------------------------------------------------
+
+test_that("floor_date_bin rounds down to each interval's start", {
+  d <- as.Date(c("2026-01-14", "2026-02-03"))
+
+  expect_identical(epi_plot$floor_date_bin(d, "day"), d)
+  expect_identical(
+    epi_plot$floor_date_bin(d, "month"),
+    as.Date(c("2026-01-01", "2026-02-01"))
+  )
+  expect_identical(
+    epi_plot$floor_date_bin(d, "year"),
+    as.Date(c("2026-01-01", "2026-01-01"))
+  )
+})
+
+test_that("floor_date_bin weeks start on the ISO Monday", {
+  # Wednesday and the Sunday of the same ISO week collapse onto one Monday;
+  # the next day (Monday) must start a new bin rather than join it.
+  week <- epi_plot$floor_date_bin(
+    as.Date(c("2026-01-14", "2026-01-18", "2026-01-19")),
+    "week"
+  )
+
+  expect_identical(week, as.Date(c("2026-01-12", "2026-01-12", "2026-01-19")))
+  expect_identical(unique(format(week, "%u")), "1")
+})
+
+test_that("floor_date_bin is NA-safe for every interval", {
+  # The collection-date column is free text, so NA reaches the binner.
+  for (interval in c("day", "week", "month", "year")) {
+    binned <- epi_plot$floor_date_bin(as.Date(c("2026-01-14", NA)), interval)
+    expect_length(binned, 2L)
+    expect_false(is.na(binned[1]))
+    expect_true(is.na(binned[2]))
+  }
+})
+
+test_that("floor_date_bin rejects an unknown interval", {
+  expect_error(epi_plot$floor_date_bin(as.Date("2026-01-14"), "fortnight"), "fortnight")
+})
+
+# --- build_epi_data ----------------------------------------------------------
+
+test_that("build_epi_data with no stratify field gives one total series", {
+  out <- epi_plot$build_epi_data(meta_fixture(), "sample_collection_date", character(), "week")
+
+  expect_identical(unique(out$stratum), epi_plot$EPI_ALL_LABEL)
+  expect_identical(out$date_bin, as.Date(c("2026-01-12", "2026-02-02")))
+  expect_identical(out$count, c(2L, 2L))
+})
+
+test_that("build_epi_data reports isolates dropped for unreadable dates", {
+  # One "not-a-date" plus one NA of six isolates.
+  out <- epi_plot$build_epi_data(meta_fixture(), "sample_collection_date", character(), "week")
+
+  expect_identical(attr(out, "dropped"), 2L)
+  expect_identical(sum(out$count), 4L)
+})
+
+test_that("build_epi_data colours by a single field", {
+  out <- epi_plot$build_epi_data(
+    meta_fixture(),
+    "sample_collection_date",
+    "organism",
+    "week"
+  )
+
+  expect_true("E. coli" %in% out$stratum)
+  expect_true("S. enterica" %in% out$stratum)
+  # The empty-string organism reads as unknown, not as a category named "".
+  expect_true(epi_plot$EPI_UNKNOWN_LABEL %in% out$stratum)
+})
+
+test_that("build_epi_data joins two fields into a composite category", {
+  out <- epi_plot$build_epi_data(
+    meta_fixture(),
+    "sample_collection_date",
+    c("organism", "geo_loc_name_country"),
+    "month"
+  )
+
+  expect_true("E. coli | Germany" %in% out$stratum)
+  expect_true("E. coli | France" %in% out$stratum)
+  expect_true("S. enterica | Germany" %in% out$stratum)
+  # Row 6 has an empty organism and an NA country: both sides read as unknown.
+  expect_true(
+    paste(epi_plot$EPI_UNKNOWN_LABEL, epi_plot$EPI_UNKNOWN_LABEL, sep = " | ") %in% out$stratum
+  )
+})
+
+test_that("build_epi_data ignores a stratify field the metadata lacks", {
+  # A selection can outlive a database switch that dropped the column.
+  out <- epi_plot$build_epi_data(
+    meta_fixture(),
+    "sample_collection_date",
+    c("organism", "gone_missing"),
+    "week"
+  )
+
+  expect_false(any(grepl("|", out$stratum, fixed = TRUE)))
+})
+
+test_that("build_epi_data returns empty for an absent date field", {
+  out <- epi_plot$build_epi_data(meta_fixture(), "nope", character(), "day")
+
+  expect_identical(nrow(out), 0L)
+  expect_s3_class(out$date_bin, "Date")
+})
+
+test_that("build_epi_data defaults to the collection-date column", {
+  # The date field is no longer user-pickable — every database carries exactly
+  # one collection-date column, so the engine plots that and nothing else.
+  out <- epi_plot$build_epi_data(meta_fixture(), stratify_by = character(), interval = "week")
+
+  expect_identical(nrow(out), 2L)
+  expect_identical(attr(out, "dropped"), 2L)
+})
+
+test_that("build_epi_data survives a date field where nothing parses", {
+  # as.Date() throws rather than returning NA when no value in the column
+  # parses, and the date field is user-pickable — so this must not error.
+  meta <- meta_fixture()
+
+  out <- epi_plot$build_epi_data(meta, "isolate", character(), "day")
+
+  expect_identical(nrow(out), 0L)
+  expect_identical(attr(out, "dropped"), 6L)
+})
+
+test_that("build_epi_data handles empty metadata", {
+  out <- epi_plot$build_epi_data(
+    meta_fixture()[0, , drop = FALSE],
+    "sample_collection_date",
+    character(),
+    "day"
+  )
+
+  expect_identical(nrow(out), 0L)
+})
+
+# --- epi_default_interval ----------------------------------------------------
+
+# `n` dates spread evenly between two bounds, as the free-text ISO strings the
+# metadata actually stores.
+date_span <- function(from, to, n = 50) {
+  format(seq(as.Date(from), as.Date(to), length.out = n))
+}
+
+test_that("epi_default_interval takes the finest interval that fits", {
+  # A short outbreak keeps daily resolution; a decade of surveillance would need
+  # 3653 daily bars, so it steps up until the count fits.
+  expect_identical(epi_plot$epi_default_interval(date_span("2026-01-01", "2026-04-30")), "day")
+  expect_identical(epi_plot$epi_default_interval(date_span("2026-01-01", "2026-12-31")), "week")
+  expect_identical(epi_plot$epi_default_interval(date_span("2015-01-01", "2024-12-31")), "month")
+})
+
+test_that("epi_default_interval never exceeds the bar budget", {
+  # The point of the fit: whatever the span, the chosen interval draws no more
+  # than EPI_MAX_BARS bars across it.
+  for (span in list(
+    c("2026-01-01", "2026-01-02"),
+    c("2026-01-01", "2026-06-30"),
+    c("2020-01-01", "2026-01-01"),
+    c("1995-01-01", "2026-01-01")
+  )) {
+    dates <- as.Date(date_span(span[1], span[2]))
+    interval <- epi_plot$epi_default_interval(format(dates))
+    width <- c(day = 1, week = 7, month = 30.4, year = 365.25)[[interval]]
+    bars <- ceiling(as.numeric(diff(range(dates))) / width) + 1
+
+    expect_true(bars <= epi_plot$EPI_MAX_BARS)
+  }
+})
+
+test_that("epi_default_interval fits the span, not the number of isolates", {
+  # Eighty isolates over three years occupy only 80 daily bins — under any
+  # count-based budget — but each bar would be 1/1100th of the axis. It's the
+  # span that decides readability.
+  sparse <- date_span("2015-01-01", "2017-12-31", n = 80)
+
+  expect_identical(epi_plot$epi_default_interval(sparse), "month")
+})
+
+test_that("epi_default_interval falls back to the coarsest when nothing fits", {
+  expect_identical(epi_plot$epi_default_interval(date_span("1825-01-01", "2025-01-01")), "year")
+})
+
+test_that("epi_default_interval copes with one date and with no dates", {
+  expect_identical(epi_plot$epi_default_interval("2026-01-01"), "day")
+  expect_identical(epi_plot$epi_default_interval(c(NA, "junk")), epi_plot$EPI_INTERVAL_FALLBACK)
+  expect_identical(epi_plot$epi_default_interval(character()), epi_plot$EPI_INTERVAL_FALLBACK)
+})
+
+test_that("epi_default_interval honours a custom budget", {
+  year <- date_span("2026-01-01", "2026-12-31")
+
+  # 365 daily bars fit a generous budget but not a tight one.
+  expect_identical(epi_plot$epi_default_interval(year, max_bars = 400L), "day")
+  expect_identical(epi_plot$epi_default_interval(year, max_bars = 20L), "month")
+})
+
+# --- epi_scale_choices -------------------------------------------------------
+
+test_that("epi_scale_choices only offers palettes with enough real swatches", {
+  # Set2, Dark2 and Accent stop at 8 colours, so they drop out at 9 strata;
+  # Set3 and Paired carry 12.
+  eight <- epi_plot$epi_scale_choices(8)
+  nine <- epi_plot$epi_scale_choices(9)
+
+  expect_true("Set2" %in% eight$Qualitative)
+  expect_false("Set2" %in% nine$Qualitative)
+  expect_true("Set3" %in% nine$Qualitative)
+})
+
+test_that("epi_scale_choices withdraws qualitative palettes past their cap", {
+  # Forty countries against a nine-swatch palette is forty interpolated
+  # neighbours nobody can tell apart — offer only the continuous ramps.
+  choices <- epi_plot$epi_scale_choices(40)
+
+  expect_false("Qualitative" %in% names(choices))
+  expect_true(all(c("Gradient", "Sequential") %in% names(choices)))
+  # ... and default to one that is defined for any number of categories.
+  expect_identical(unlist(choices, use.names = FALSE)[1], "viridis")
+})
+
+test_that("epi_scale_choices keeps qualitative first for few strata", {
+  choices <- epi_plot$epi_scale_choices(3)
+
+  expect_identical(names(choices)[1], "Qualitative")
+  expect_identical(unlist(choices, use.names = FALSE)[1], "Set1")
+})
+
+test_that("epi_palette fills a gradient across many strata", {
+  # The scale a high-cardinality stratification falls back to must actually
+  # produce one distinct colour per stratum.
+  pal <- epi_plot$epi_palette(paste0("country", 1:40), "viridis")
+
+  expect_length(pal, 40L)
+  expect_identical(anyDuplicated(pal), 0L)
+})
+
+# --- epi_palette -------------------------------------------------------------
+
+test_that("epi_palette names one colour per category", {
+  pal <- epi_plot$epi_palette(c("a", "b", "c"), "Set2")
+
+  expect_length(pal, 3L)
+  expect_identical(names(pal), c("a", "b", "c"))
+  expect_true(all(grepl("^#[0-9A-Fa-f]{6}", pal)))
+})
+
+test_that("epi_palette interpolates past a brewer palette's cap", {
+  # Set2 tops out at 8; 12 strata must still get 12 distinguishable colours
+  # rather than a recycled palette that makes two strata look identical.
+  cats <- paste0("c", 1:12)
+  pal <- epi_plot$epi_palette(cats, "Set2")
+
+  expect_length(pal, 12L)
+  expect_identical(names(pal), cats)
+  expect_identical(anyDuplicated(pal), 0L)
+})
+
+test_that("epi_palette handles fewer categories than brewer's minimum", {
+  # brewer.pal() errors below n = 3.
+  expect_length(epi_plot$epi_palette("only", "Set2"), 1L)
+  expect_length(epi_plot$epi_palette(c("a", "b"), "Set2"), 2L)
+})
+
+test_that("epi_palette accepts a viridis scale and falls back for unknowns", {
+  expect_length(epi_plot$epi_palette(c("a", "b"), "viridis"), 2L)
+  expect_length(epi_plot$epi_palette(c("a", "b"), "not-a-palette"), 2L)
+})
+
+test_that("epi_palette handles no categories", {
+  expect_length(epi_plot$epi_palette(character(), "Set2"), 0L)
+})
+
+# --- epi_annotation_layout ---------------------------------------------------
+
+annos_fixture <- function() {
+  data.frame(
+    id = c("a", "b", "c"),
+    type = c("milestone", "period", "milestone"),
+    start = as.Date(c("2026-01-20", "2026-02-10", "2026-01-22")),
+    end = as.Date(c(NA, "2026-03-01", NA)),
+    label = c("Intervention", "Outbreak window", "Second event"),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("epi_annotation_lanes is empty for no annotations", {
+  expect_identical(nrow(epi_plot$epi_annotation_lanes(epi_plot$empty_epi_annotations())), 0L)
+})
+
+test_that("epi_annotation_lanes assigns every annotation a lane", {
+  lanes <- epi_plot$epi_annotation_lanes(annos_fixture())
+
+  expect_identical(nrow(lanes), 3L)
+  # Only the row with an end date is a shaded period; the rest are milestones.
+  expect_identical(sum(lanes$period), 1L)
+  expect_true(all(lanes$lane >= 1L))
+})
+
+test_that("identical periods never share a lane", {
+  # Two periods covering exactly the same span cannot be told apart by their
+  # shading, so their brackets and labels must be drawn at different heights.
+  annos <- data.frame(
+    id = c("a", "b"),
+    type = c("period", "period"),
+    start = as.Date(c("2022-07-17", "2022-07-17")),
+    end = as.Date(c("2025-07-18", "2025-07-18")),
+    label = c("dd", "cddd"),
+    stringsAsFactors = FALSE
+  )
+  lanes <- epi_plot$epi_annotation_lanes(annos)$lane
+
+  expect_false(lanes[1] == lanes[2])
+})
+
+test_that("partly intersecting periods get separate lanes", {
+  annos <- data.frame(
+    id = c("a", "b"),
+    type = c("period", "period"),
+    start = as.Date(c("2022-01-01", "2023-01-01")),
+    end = as.Date(c("2024-01-01", "2025-01-01")),
+    label = c("first", "second"),
+    stringsAsFactors = FALSE
+  )
+  lanes <- epi_plot$epi_annotation_lanes(annos)$lane
+
+  expect_false(lanes[1] == lanes[2])
+})
+
+test_that("disjoint periods share the top lane", {
+  # Nothing overlaps, so there is no reason to push either one down.
+  annos <- data.frame(
+    id = c("a", "b"),
+    type = c("period", "period"),
+    start = as.Date(c("2016-01-01", "2023-01-01")),
+    end = as.Date(c("2017-01-01", "2024-01-01")),
+    label = c("first", "second"),
+    stringsAsFactors = FALSE
+  )
+  lanes <- epi_plot$epi_annotation_lanes(
+    annos,
+    as.Date(c("2015-01-01", "2026-01-01"))
+  )$lane
+
+  expect_identical(lanes[1], lanes[2])
+})
+
+test_that("label clearance scales with the plotted span, not a fixed gap", {
+  # Two milestones nine days apart are indistinguishable on a plot spanning ten
+  # years but comfortably apart on one spanning three months. A fixed
+  # day-count rule got the wide case wrong and overlapped the labels.
+  annos <- data.frame(
+    id = c("x", "y"),
+    type = c("milestone", "milestone"),
+    start = as.Date(c("2020-01-01", "2020-01-10")),
+    end = as.Date(c(NA, NA)),
+    label = c("A", "B"),
+    stringsAsFactors = FALSE
+  )
+  lanes_for <- function(range) {
+    epi_plot$epi_annotation_lanes(annos, as.Date(range))$lane
+  }
+
+  wide <- lanes_for(c("2015-01-01", "2026-01-01"))
+  narrow <- lanes_for(c("2019-12-01", "2020-03-01"))
+
+  expect_false(wide[1] == wide[2])
+  expect_identical(narrow[1], narrow[2])
+})
+
+test_that("epi_annotation_lanes treats a period without an end as a milestone", {
+  annos <- epi_plot$empty_epi_annotations()
+  annos <- rbind(annos, data.frame(
+    id = "a",
+    type = "period",
+    start = as.Date("2026-01-20"),
+    end = as.Date(NA),
+    label = "No end",
+    stringsAsFactors = FALSE
+  ))
+
+  expect_false(epi_plot$epi_annotation_lanes(annos)$period[1])
+})
+
+test_that("the x axis widens to take in annotations outside the data", {
+  # Otherwise an annotation dated past the last isolate is silently clipped —
+  # you add a milestone and simply never see it.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  far <- data.frame(
+    id = "a",
+    type = "milestone",
+    start = as.Date("2026-06-01"),
+    end = as.Date(NA),
+    label = "Well after the data",
+    stringsAsFactors = FALSE
+  )
+  x_max <- function(annos) {
+    max(ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, list(interval = "week", annos = annos))
+    )$layout$panel_params[[1]]$x.range)
+  }
+
+  expect_true(x_max(far) >= as.numeric(as.Date("2026-06-01")))
+  expect_true(x_max(far) > x_max(epi_plot$empty_epi_annotations()))
+})
+
+test_that("annotations are drawn onto the curve", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  n_layers <- function(annos) {
+    length(ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, list(interval = "week", annos = annos))
+    )$plot$layers)
+  }
+
+  # A period adds a wash, a bracket and a label; a milestone a line and a label.
+  expect_true(n_layers(annos_fixture()) > n_layers(epi_plot$empty_epi_annotations()))
+})
+
+# --- annotations lanes -------------------------------------------------------
+
+
+# --- epi_cumulate ------------------------------------------------------------
+
+test_that("epi_cumulate runs a monotone total per stratum", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  cu <- epi_plot$epi_cumulate(binned)
+
+  by_stratum <- split(cu$count, cu$stratum)
+  expect_true(all(vapply(by_stratum, function(x) all(diff(x) >= 0), logical(1))))
+  # Every stratum is evaluated at every bin, so the lines stay comparable.
+  expect_identical(
+    nrow(cu),
+    length(unique(binned$date_bin)) * length(unique(binned$stratum))
+  )
+  # The running totals end at the true per-stratum totals.
+  expect_equal(
+    sum(vapply(by_stratum, max, numeric(1))),
+    sum(binned$count)
+  )
+})
+
+test_that("epi_cumulate handles empty data", {
+  expect_identical(nrow(epi_plot$epi_cumulate(epi_plot$build_epi_data(meta_fixture(), "nope"))), 0L)
+})
+
+# --- build_epi_ggplot --------------------------------------------------------
+
+# The layer classes a mode draws with, as ggplot resolves them.
+built_geoms <- function(binned, opts = list()) {
+  vapply(
+    ggplot2::ggplot_build(epi_plot$build_epi_ggplot(binned, opts))$plot$layers,
+    function(l) class(l$geom)[1],
+    character(1)
+  )
+}
+
+test_that("each style draws with the geom that suits it", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+
+  expect_true("GeomCol" %in% built_geoms(binned, list(mode = "stacked")))
+  # One tile per case, so the column can be counted off the plot.
+  expect_true("GeomTile" %in% built_geoms(binned, list(mode = "stacked", square = TRUE)))
+  # A step, not an interpolation: nothing happens between two bins, so a sloped
+  # line would draw case counts that never existed.
+  expect_true("GeomStep" %in% built_geoms(binned, list(mode = "cumulative")))
+})
+
+test_that("every style renders to a real image", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+
+  for (mode in c("stacked", "cumulative")) {
+    file <- tempfile(fileext = ".png")
+    epi_plot$save_epi_plot(
+      epi_plot$build_epi_ggplot(binned, list(mode = mode, interval = "week")),
+      file,
+      "png"
+    )
+    expect_true(file.exists(file))
+    expect_true(file.size(file) > 0)
+  }
+})
+
+test_that("build_epi_ggplot handles empty data and absent options", {
+  empty <- epi_plot$build_epi_data(meta_fixture(), "nope")
+
+  expect_s3_class(epi_plot$build_epi_ggplot(empty, list()), "ggplot")
+})
+
+test_that("unit blocks draw one cell per case", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  tiles <- ggplot2::ggplot_build(
+    epi_plot$build_epi_ggplot(binned, list(mode = "stacked", interval = "week", square = TRUE))
+  )$data[[1]]
+
+  # Four datable isolates across two bins of two.
+  expect_identical(nrow(tiles), 4L)
+  # Cells are interval-wide so the columns touch, and one case tall.
+  expect_true(all(tiles$ymax - tiles$ymin == 1))
+})
+
+test_that("the case axis only ever carries integer breaks", {
+  # Cases are whole things: a "0.6 isolates" break is meaningless, and a
+  # tallest-bar-of-1 curve used to get ticked 0, 0.2, 0.4 ...
+  one_per_bin <- data.frame(
+    sample_collection_date = format(as.Date("2015-01-01") + (0:9) * 180),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(one_per_bin, interval = "day")
+  breaks <- ggplot2::ggplot_build(
+    epi_plot$build_epi_ggplot(binned, list(interval = "day"))
+  )$layout$panel_params[[1]]$y$breaks
+  breaks <- breaks[!is.na(breaks)]
+
+  expect_identical(max(binned$count), 1L)
+  expect_identical(breaks, c(0, 1))
+})
+
+test_that("square is ignored for the cumulative curve", {
+  # A step line has no cells to square off, so the option can't apply — and
+  # coord_fixed would otherwise squash the curve for no reason.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  coord <- ggplot2::ggplot_build(epi_plot$build_epi_ggplot(
+    binned,
+    list(mode = "cumulative", square = TRUE, interval = "week")
+  ))$layout$coord
+
+  expect_true(is.null(coord$ratio))
+})
+
+test_that("square_panel_ratio gives the shape the squares force", {
+  # Square cells mean panel_height/y_max == panel_width/n_bins, so the data
+  # fixes the panel's shape. The view sizes the plot from this instead of the
+  # aspect slider — honouring the slider letterboxes the curve into a strip and
+  # shrinks the squares to nothing.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+
+  # Two bins, tallest column two cases.
+  expect_equal(epi_plot$square_panel_ratio(binned), 1)
+
+  # A long, low dataset is legitimately a long, low plot.
+  wide <- epi_plot$build_epi_data(
+    data.frame(
+      sample_collection_date = format(as.Date("2020-01-01") + (0:99) * 7),
+      stringsAsFactors = FALSE
+    ),
+    interval = "week"
+  )
+  expect_true(epi_plot$square_panel_ratio(wide) < 0.05)
+
+  # Doesn't apply where squares don't.
+  expect_true(is.null(epi_plot$square_panel_ratio(binned, "cumulative")))
+  expect_true(is.null(epi_plot$square_panel_ratio(epi_plot$build_epi_data(meta_fixture(), "nope"))))
+})
+
+test_that("square blocks lock one case to one interval", {
+  # coord_fixed's ratio is in data units and a Date axis counts days, so the
+  # ratio is the bin width. (plotly's equivalent, scaleanchor, silently did
+  # nothing against a date axis — which is why the square style never worked
+  # there.)
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  coord <- function(square) {
+    ggplot2::ggplot_build(epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "stacked", interval = "week", square = square)
+    ))$layout$coord
+  }
+
+  expect_equal(coord(TRUE)$ratio, 7)
+  # Off by default: it hands the plot's aspect to the data, so the curve stops
+  # filling the panel.
+  expect_true(is.null(coord(FALSE)$ratio))
+})
+
+# --- line-end labels ---------------------------------------------------------
+
+test_that("label_ends only applies to the cumulative curve", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  n_text <- function(mode) {
+    p <- epi_plot$build_epi_ggplot(binned, list(mode = mode, label_ends = TRUE))
+    sum(vapply(p$layers, function(l) inherits(l$geom, "GeomText"), logical(1)))
+  }
+
+  # A bar chart has no line to label the end of.
+  expect_identical(n_text("stacked"), 0L)
+  expect_identical(n_text("cumulative"), 1L)
+})
+
+test_that("label_ends suppresses the legend, which would just repeat it", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  guide <- function(label_ends) {
+    p <- epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "cumulative", label_ends = label_ends)
+    )
+    p$guides$guides$fill
+  }
+
+  expect_identical(guide(TRUE), "none")
+  expect_false(identical(guide(FALSE), "none"))
+})
+
+test_that("label_ends widens the x axis to leave room for the text", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  x_max <- function(label_ends) {
+    max(ggplot2::ggplot_build(epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "cumulative", label_ends = label_ends, interval = "week")
+    ))$layout$panel_params[[1]]$x.range)
+  }
+
+  expect_true(x_max(TRUE) > x_max(FALSE))
+})
+
+# --- cumulative overlay -------------------------------------------------------
+
+test_that("show_cumulative overlays a step line on the stacked and square styles", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  n_steps <- function(opts) {
+    p <- epi_plot$build_epi_ggplot(binned, opts)
+    sum(vapply(p$layers, function(l) inherits(l$geom, "GeomStep"), logical(1)))
+  }
+
+  expect_identical(n_steps(list(mode = "stacked", interval = "week")), 0L)
+  # A background-coloured halo pass plus the dashed line drawn over it — see
+  # the comment in build_epi_ggplot on why the line needs the halo to stay
+  # legible over the bars.
+  expect_identical(
+    n_steps(list(mode = "stacked", show_cumulative = TRUE, interval = "week")),
+    2L
+  )
+  expect_identical(
+    n_steps(list(mode = "stacked", square = TRUE, show_cumulative = TRUE, interval = "week")),
+    2L
+  )
+  # Cumulative already draws the running total as its own main curve (also a
+  # GeomStep) — the overlay must not add to it.
+  expect_identical(
+    n_steps(list(mode = "cumulative", show_cumulative = TRUE, interval = "week")),
+    1L
+  )
+})
+
+test_that("the cumulative overlay is scaled to reach the panel's top at its final value", {
+  # cum_scale is picked so the running total's last (highest) point lands
+  # exactly on the tallest bar, however far the true grand total actually
+  # climbs — that's what lets it share the stacked curve's axis at all.
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  built <- ggplot2::ggplot_build(
+    epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "stacked", show_cumulative = TRUE, interval = "week")
+    )
+  )
+  step_layer <- which(vapply(
+    built$plot$layers,
+    function(l) inherits(l$geom, "GeomStep"),
+    logical(1)
+  ))
+  overlay_y <- built$data[[step_layer]]$y
+
+  totals <- tapply(binned$count, binned$date_bin, sum)
+  expect_equal(max(overlay_y), max(totals))
+})
+
+# --- playback ----------------------------------------------------------------
+
+test_that("reveal_to draws only the bins up to it", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  bins <- epi_plot$epi_bins(binned)
+  bars <- function(to) {
+    nrow(ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, list(interval = "week", reveal_to = to))
+    )$data[[1]])
+  }
+
+  expect_length(bins, 2L)
+  expect_identical(bars(bins[1]), 1L)
+  expect_identical(bars(bins[2]), 2L)
+  # NULL means the whole curve.
+  expect_identical(bars(NULL), 2L)
+})
+
+test_that("reveal_from draws only the bins from it onwards", {
+  # This is what the Time tab's date-range slider windows the curve with —
+  # reveal_to alone (the old single-slider playback) never needed a lower
+  # bound, but a genuine start/end window does.
+  many <- data.frame(
+    sample_collection_date = format(seq(as.Date("2020-01-01"), by = "month", length.out = 6)),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(many, interval = "month")
+  bins <- epi_plot$epi_bins(binned)
+  bars <- function(from, to = NULL) {
+    nrow(ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(
+        binned,
+        list(interval = "month", reveal_from = from, reveal_to = to)
+      )
+    )$data[[1]])
+  }
+
+  expect_length(bins, 6L)
+  # From the second-to-last bin, unbounded above: the last two bins.
+  expect_identical(bars(bins[5]), 2L)
+  # Windowed on both sides: exactly the bins in between.
+  expect_identical(bars(bins[3], bins[4]), 2L)
+  # NULL means unbounded on that side.
+  expect_identical(bars(NULL, NULL), 6L)
+})
+
+test_that("playback keeps one fixed frame", {
+  # The scales come from the whole dataset, before any reveal — otherwise the
+  # axes would crawl under the curve as it grows instead of it growing into
+  # place.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  bins <- epi_plot$epi_bins(binned)
+  ranges <- function(to) {
+    pp <- ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, list(interval = "week", reveal_to = to))
+    )$layout$panel_params[[1]]
+    list(x = pp$x.range, y = pp$y.range)
+  }
+
+  expect_identical(ranges(bins[1]), ranges(NULL))
+})
+
+test_that("fixed_axis defaults to fixed when the caller never mentions it", {
+  # isTRUE(NULL) is FALSE, so a naive `if (isTRUE(opts$fixed_axis))` would treat
+  # every caller that predates the Time tab's zoom switch — including every
+  # other test in this file — as having asked to zoom instead of leaving them
+  # on the documented default.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  bins <- epi_plot$epi_bins(binned)
+  x_range <- function(opts) {
+    ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, opts)
+    )$layout$panel_params[[1]]$x.range
+  }
+
+  unset <- x_range(list(interval = "week", reveal_to = bins[1]))
+  explicit_fixed <- x_range(list(interval = "week", reveal_to = bins[1], fixed_axis = TRUE))
+  full <- x_range(list(interval = "week"))
+
+  expect_identical(unset, explicit_fixed)
+  expect_identical(unset, full)
+})
+
+test_that("fixed_axis = FALSE zooms to the windowed span instead", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  bins <- epi_plot$epi_bins(binned)
+  x_range <- function(fixed_axis) {
+    ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(
+        binned,
+        list(interval = "week", reveal_to = bins[1], fixed_axis = fixed_axis)
+      )
+    )$layout$panel_params[[1]]$x.range
+  }
+
+  # Zoomed to just the first bin's window is a narrower axis than the fixed
+  # (whole-dataset) frame.
+  expect_true(diff(x_range(FALSE)) < diff(x_range(TRUE)))
+})
+
+test_that("epi_bins lists the bins in order", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+
+  expect_identical(epi_plot$epi_bins(binned), as.Date(c("2026-01-12", "2026-02-02")))
+  expect_length(epi_plot$epi_bins(epi_plot$build_epi_data(meta_fixture(), "nope")), 0L)
+})
