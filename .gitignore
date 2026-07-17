@@ -1,17 +1,27 @@
-# Ignore Rhistory
+# --- Claude Code / AI assistants ---
+.claude/
+.claude.json
+CLAUDE.local.md
+
+# --- R ---
+.Rproj.user/
 .Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+.Renviron
 
-# Ignore app launcher containing absolute system paths
-run_phylotrace.sh
+# --- Node / JS tooling ---
+node_modules/
 
-# Ignore R version manager renv
-/renv
-renv.lock
+# --- Office / editor lock & swap files ---
+.~lock.*#
+*~
+*.swp
 
-# Ignore R environment information csv
-r_packages.csv
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
 
-# Ignore report folder files
-Report/*
-!Report/Report.Rmd
-!Report/PhyloTrace_bw.png
+# --- Logs ---
+*.log

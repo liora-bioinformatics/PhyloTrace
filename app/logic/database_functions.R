@@ -1,0 +1,475 @@
+# app/logic/database_functions.R
+
+box::use(
+  DBI[
+    dbConnect,
+    dbDisconnect,
+    dbListTables,
+    dbSendQuery,
+    dbFetch,
+    dbClearResult,
+    dbReadTable,
+    dbWriteTable,
+    dbListFields,
+    dbGetQuery,
+    dbExecute
+  ],
+  RSQLite[SQLite],
+  app / logic / field_labels[MLST_COL_PREFIX],
+)
+
+# The scheme's `targets` table stores loci as "FTL_0001" while the `mlst` table
+# stores the same locus as "FTL-0001"; normalise the separator so the two can
+# be matched.
+.norm_locus <- function(x) gsub("[-_]", "-", x)
+
+
+#' @export
+load_db_scheme_overview <- function(db_path) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+
+  if (isFALSE("scheme_overview" %in% tables)) {
+    message("Database does not contain 'scheme_overview' table")
+    return(NULL)
+  }
+
+  return(dbReadTable(con, "scheme_overview"))
+}
+
+#' Read the organism/species name stored in the database's `mlst_type` table.
+#'
+#' This is the authoritative species of the loaded scheme (written at typing
+#' time) and is more robust than parsing it out of the scheme overview. Returns
+#' a single species string, or NULL when the table or value is absent.
+#' @export
+load_db_species <- function(db_path) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+
+  if (isFALSE("mlst_type" %in% tables)) {
+    message("Database does not contain 'mlst_type' table")
+    return(NULL)
+  }
+
+  species <- dbReadTable(con, "mlst_type")$species
+  species <- species[!is.na(species) & nzchar(species)]
+
+  if (!length(species)) {
+    return(NULL)
+  }
+
+  species[[1]]
+}
+
+#' @export
+make_metadata_table <- function(db_path) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+
+  if (isFALSE(all(c("mlst", "mlst_type", "sequences") %in% tables))) {
+    message("Database does not contain expected tables")
+    return()
+  }
+
+  # Get present isolates
+  res <- dbSendQuery(con, "SELECT DISTINCT souche FROM mlst")
+  all_isolates <- unname(unlist(dbFetch(res)))
+  dbClearResult(res)
+  isolates <- all_isolates[all_isolates != "ref"]
+  if (!length(isolates)) {
+    return()
+  }
+
+  # Get current organism
+  organism <- dbReadTable(con, "mlst_type")$species
+
+  # If metadata table exists, only append rows for isolates not yet listed
+  if ("metadata" %in% tables) {
+    # Migrate metadata tables created before newer columns were added: SQLite
+    # appends new columns at the end, matching the build-path column order.
+    added_cols <- c("geo_loc_name_city", "geo_loc_name_postal_code")
+    for (col in setdiff(added_cols, dbListFields(con, "metadata"))) {
+      dbExecute(con, sprintf('ALTER TABLE metadata ADD COLUMN "%s" TEXT', col))
+    }
+
+    existing <- dbReadTable(con, "metadata")
+    new_isolates <- setdiff(isolates, existing$isolate)
+
+    if (length(new_isolates)) {
+      new_rows <- data.frame(
+        isolate = new_isolates,
+        primary_laboratory_sample_id = NA_character_,
+        specimen_source_id = NA_character_,
+        sample_collection_date = NA_character_,
+        geo_loc_name_country = NA_character_,
+        geo_loc_name_state_province = NA_character_,
+        sample_collected_by = NA_character_,
+        sequence_submitted_by = NA_character_,
+        organism = organism,
+        purpose_of_sampling = NA_character_,
+        purpose_of_sequencing = NA_character_,
+        geo_loc_name_city = NA_character_,
+        geo_loc_name_postal_code = NA_character_,
+        stringsAsFactors = FALSE
+      )
+      dbWriteTable(con, "metadata", new_rows, append = TRUE)
+    }
+
+    return(dbReadTable(con, "metadata"))
+  }
+
+  # Build standard metadata table (GenEpiO-aligned fields)
+  metadata <- data.frame(
+    isolate = isolates,
+    primary_laboratory_sample_id = NA_character_,
+    specimen_source_id = NA_character_,
+    sample_collection_date = NA_character_,
+    geo_loc_name_country = NA_character_,
+    geo_loc_name_state_province = NA_character_,
+    sample_collected_by = NA_character_,
+    sequence_submitted_by = NA_character_,
+    organism = organism,
+    purpose_of_sampling = NA_character_,
+    purpose_of_sequencing = NA_character_,
+    geo_loc_name_city = NA_character_,
+    geo_loc_name_postal_code = NA_character_,
+    stringsAsFactors = FALSE
+  )
+
+  # Write table to database
+  dbWriteTable(con, "metadata", metadata)
+
+  return(metadata)
+}
+
+#' The `metadata` table's column names, or `character(0)` when the database has
+#' no metadata table. Read-only: unlike `make_metadata_table()` this never
+#' creates or migrates anything, so it is safe to call from a UI renderer.
+#' @export
+metadata_columns <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(character(0))
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  if (!"metadata" %in% dbListTables(con)) {
+    return(character(0))
+  }
+
+  dbListFields(con, "metadata")
+}
+
+# First non-empty value of `v`, or NA. Classical-MLST fields that are
+# strain-level (st, status) repeat across an isolate's per-locus rows, so any of
+# them stands in for the isolate.
+.first_nonempty <- function(v) {
+  v <- v[!is.na(v) & nzchar(v)]
+  if (length(v)) v[[1]] else NA_character_
+}
+
+#' Per-isolate classical-MLST summary, wide, for display only.
+#'
+#' `classical_mlst` (written by pymlst at typing time) stores one row per
+#' (isolate, locus), with the strain-level ST and status repeated on each of the
+#' isolate's rows. This pivots it to one row per isolate: a `<prefix>st` column
+#' plus one `<prefix><locus>` column per locus holding that isolate's allele,
+#' where `<prefix>` is `MLST_COL_PREFIX`. Loci keep the order in which they were
+#' typed. Every column is character.
+#'
+#' The sequence type shows the registered ST number for a known profile;
+#' otherwise it shows the call `status` (e.g. "novel", "partial"), because a
+#' novel/partial profile has no ST to report and that distinction is what the
+#' viewer needs to see. This is a display convenience only.
+#'
+#' This never touches the `metadata` table - it is a read-only companion other
+#' views merge in at display time (see `append_classical_mlst`). Returns NULL
+#' when the database has no `classical_mlst` table or it holds no rows.
+#' @export
+load_classical_mlst <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(NULL)
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  if (!"classical_mlst" %in% dbListTables(con)) {
+    return(NULL)
+  }
+
+  # `status` is part of the pymlst schema, but tolerate its absence so a
+  # partially-written table never errors the whole browse view.
+  has_status <- "status" %in% dbListFields(con, "classical_mlst")
+  cm <- dbGetQuery(
+    con,
+    sprintf(
+      "SELECT souche, gene, allele, st%s FROM classical_mlst ORDER BY id",
+      if (has_status) ", status" else ""
+    )
+  )
+  if (!nrow(cm)) {
+    return(NULL)
+  }
+  if (!has_status) {
+    cm$status <- NA_character_
+  }
+
+  isolates <- unique(cm$souche)
+  out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
+
+  # ST display: the registered number when known, otherwise the status word
+  # ("novel"/"partial") so a profile without an ST is still self-explanatory.
+  st <- vapply(
+    isolates,
+    function(s) .first_nonempty(cm$st[cm$souche == s]),
+    character(1)
+  )
+  status <- vapply(
+    isolates,
+    function(s) .first_nonempty(cm$status[cm$souche == s]),
+    character(1)
+  )
+  missing <- is.na(st) | !nzchar(st)
+  st[missing] <- status[missing]
+  out[[paste0(MLST_COL_PREFIX, "st")]] <- unname(st)
+
+  # One column per locus (first-typed order), holding the isolate's allele.
+  for (locus in unique(cm$gene)) {
+    sub <- cm[cm$gene == locus, c("souche", "allele"), drop = FALSE]
+    allele <- tapply(sub$allele, sub$souche, function(v) v[[1]])
+    out[[paste0(MLST_COL_PREFIX, locus)]] <- as.character(allele[isolates])
+  }
+
+  out
+}
+
+#' Merge the display-only classical-MLST columns into a metadata frame keyed on
+#' `isolate`.
+#'
+#' Reusable across views (the browse table, the visualization engines): given a
+#' metadata data frame and the database path, it appends the
+#' `load_classical_mlst` columns, matched by isolate, and records the names it
+#' added in the result's `"mlst_cols"` attribute (so callers can style them
+#' read-only, group them, or strip them before a save). Columns that would
+#' shadow an existing metadata field are skipped, so real metadata always wins.
+#' `meta` is returned unchanged (with an empty `"mlst_cols"`) when it is not a
+#' non-empty isolate-keyed frame or the database has no classical typing.
+#' @export
+append_classical_mlst <- function(meta, db_path) {
+  if (
+    !is.data.frame(meta) || !nrow(meta) || isFALSE("isolate" %in% names(meta))
+  ) {
+    return(meta)
+  }
+
+  appended <- character(0)
+  mlst <- load_classical_mlst(db_path)
+  if (!is.null(mlst)) {
+    add <- setdiff(names(mlst), c("isolate", names(meta)))
+    if (length(add)) {
+      idx <- match(meta$isolate, mlst$isolate)
+      for (col in add) {
+        meta[[col]] <- mlst[[col]][idx]
+      }
+      appended <- add
+    }
+  }
+
+  attr(meta, "mlst_cols") <- appended
+  meta
+}
+
+#' @export
+remove_isolates <- function(db_path, isolates) {
+  if (!length(isolates)) {
+    return(invisible(FALSE))
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+  placeholders <- paste(rep("?", length(isolates)), collapse = ", ")
+
+  if ("mlst" %in% tables) {
+    dbExecute(
+      con,
+      sprintf("DELETE FROM mlst WHERE souche IN (%s)", placeholders),
+      params = as.list(isolates)
+    )
+    # Remove sequences no longer referenced by any strain
+    dbExecute(
+      con,
+      "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
+    )
+    # …and their hashes. Leaving orphans behind is not cosmetic: a later insert
+    # allocating `MAX(sequences.id) + n` can reuse an id that a stale `hashes`
+    # row still holds, giving one seqid two hash rows and silently corrupting
+    # every query that joins mlst to hashes.
+    if ("hashes" %in% tables) {
+      dbExecute(
+        con,
+        "DELETE FROM hashes WHERE id NOT IN (SELECT id FROM sequences)"
+      )
+    }
+  }
+
+  if ("metadata" %in% tables) {
+    dbExecute(
+      con,
+      sprintf("DELETE FROM metadata WHERE isolate IN (%s)", placeholders),
+      params = as.list(isolates)
+    )
+  }
+
+  invisible(TRUE)
+}
+
+#' @export
+save_metadata_table <- function(db_path, data) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+  dbWriteTable(con, "metadata", data, overwrite = TRUE)
+  invisible(TRUE)
+}
+
+#' Read the scheme's `targets` (loci) table and enrich it with the number of
+#' distinct alleles stored per locus.
+#'
+#' Returns a data frame with the display columns `Locus`, `Gene`, `Start`,
+#' `Length`, `Product`, `Allele Count`, plus an internal `.gene` column that
+#' carries the matching `mlst` gene name (the loci-detail queries key on the
+#' `mlst` spelling, not the `targets` one). Returns NULL when the database is
+#' missing the `targets` or `mlst` table.
+#' @export
+load_loci_info <- function(db_path) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+  if (isFALSE(all(c("targets", "mlst") %in% tables))) {
+    message("Database does not contain 'targets' and 'mlst' tables")
+    return(NULL)
+  }
+
+  targets <- dbReadTable(con, "targets")
+
+  # Distinct alleles per locus (the synthetic "ref" allele is counted too, as
+  # it is a valid scheme allele).
+  counts <- dbGetQuery(
+    con,
+    "SELECT gene, COUNT(DISTINCT seqid) AS n FROM mlst GROUP BY gene"
+  )
+
+  idx <- match(.norm_locus(targets$Locus), .norm_locus(counts$gene))
+
+  targets$.gene <- counts$gene[idx]
+  allele_count <- counts$n[idx]
+  allele_count[is.na(allele_count)] <- 0L
+  targets[["Allele Count"]] <- allele_count
+
+  # `Start`/`Length` come back as character when stored as TEXT in SQLite, which
+  # makes the DataTable sort them lexicographically. Coerce to numeric so they
+  # (and the already-integer allele count) sort numerically.
+  for (col in c("Start", "Length")) {
+    if (col %in% names(targets)) {
+      targets[[col]] <- suppressWarnings(as.numeric(targets[[col]]))
+    }
+  }
+
+  # Replace the raw ".fasta" filename column with the integer count.
+  targets$Alleles <- NULL
+
+  targets
+}
+
+#' Allele usage for one locus.
+#'
+#' `gene` is the `mlst` gene name (the `.gene` column of `load_loci_info`).
+#' Returns a data frame of every distinct allele stored for the locus with
+#' columns `seqid` (integer allele index), `count` (isolates carrying it,
+#' excluding the synthetic "ref") and `present` (`count > 0`). Rows are ordered
+#' present-first, then by descending count.
+#' @export
+load_locus_alleles <- function(db_path, gene) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  all_ids <- dbGetQuery(
+    con,
+    "SELECT DISTINCT seqid FROM mlst WHERE gene = ?",
+    params = list(gene)
+  )$seqid
+
+  usage <- dbGetQuery(
+    con,
+    "SELECT seqid, COUNT(*) AS count FROM mlst
+       WHERE gene = ? AND souche != 'ref' GROUP BY seqid",
+    params = list(gene)
+  )
+
+  df <- data.frame(seqid = all_ids, stringsAsFactors = FALSE)
+  df$count <- usage$count[match(df$seqid, usage$seqid)]
+  df$count[is.na(df$count)] <- 0L
+  df$present <- df$count > 0L
+
+  df[order(!df$present, -df$count), , drop = FALSE]
+}
+
+#' Nucleotide sequence (character scalar) for a single allele index, or NULL
+#' when the index is not stored.
+#' @export
+load_allele_sequence <- function(db_path, seqid) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  res <- dbGetQuery(
+    con,
+    "SELECT sequence FROM sequences WHERE id = ?",
+    params = list(seqid)
+  )$sequence
+
+  if (!length(res)) NULL else res[[1]]
+}
+
+#' All alleles of a locus as FASTA text: one `>index` / sequence record per
+#' distinct allele stored for `gene`. Returns a character vector (one element
+#' per record), or an empty vector when the locus has no alleles.
+#' @export
+locus_fasta <- function(db_path, gene) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  res <- dbGetQuery(
+    con,
+    "SELECT DISTINCT s.id AS seqid, s.sequence AS sequence
+       FROM mlst m JOIN sequences s ON s.id = m.seqid
+      WHERE m.gene = ? ORDER BY s.id",
+    params = list(gene)
+  )
+
+  if (!nrow(res)) {
+    return(character(0))
+  }
+
+  paste0(">", res$seqid, "\n", res$sequence)
+}
