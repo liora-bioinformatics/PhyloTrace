@@ -738,6 +738,85 @@ test_that("label_ends suppresses the cumulative curve's colour legend too", {
   expect_false(identical(colour_guide(FALSE), "none"))
 })
 
+test_that("label_ends does not balloon the y axis below zero with many strata", {
+  # Many strata clustered at low cumulative counts push the greedy end-label
+  # stacking hundreds of units below 0. Reserving that whole distance as axis
+  # expansion used to open a huge empty band under the curve; the reservation
+  # is now capped at one label's worth of height. The panel floor must stay
+  # close to 0 rather than plunging to the lowest stacked label.
+  set.seed(1)
+  countries <- paste("Country", sprintf("%02d", 1:40))
+  meta <- data.frame(
+    isolate = paste0("ISO-", 1:400),
+    sample_collection_date = as.character(
+      as.Date("2015-01-01") + sample(0:3650, 400, TRUE)
+    ),
+    country = sample(countries, 400, TRUE),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(
+    meta,
+    stratify_by = "country",
+    interval = "month"
+  )
+  p <- epi_plot$build_epi_ggplot(
+    binned,
+    list(mode = "cumulative", label_ends = TRUE, interval = "month")
+  )
+  y_max <- max(epi_plot$epi_cumulate(binned)$count)
+  y_range <- suppressWarnings(
+    ggplot2::ggplot_build(p)$layout$panel_params[[1]]$y.range
+  )
+  # The floor must be a small fraction below 0 (one label height), never a
+  # multiple of the data's own extent.
+  expect_gt(y_range[1], -y_max * 0.2)
+  expect_lt(y_range[1], 0)
+})
+
+test_that("a windowed curve keeps a legend key for every stratum in the data", {
+  # Reveal windowing drops the bins outside the span, so strata that only occur
+  # elsewhere vanish from the drawn layer. ggplot then renders their legend keys
+  # blank. An invisible seed layer carrying every stratum keeps the legend
+  # complete and coloured — the same fixed-scale behaviour the Map offers.
+  binned <- data.frame(
+    date_bin = as.Date(c(
+      "2020-01-01", "2020-01-01",
+      "2020-06-01", "2020-06-01"
+    )),
+    stratum = c("early-A", "early-B", "late-C", "late-D"),
+    count = 1L,
+    stringsAsFactors = FALSE
+  )
+  cats <- sort(unique(binned$stratum))
+  seeds <- function(mode) {
+    p <- epi_plot$build_epi_ggplot(
+      binned,
+      list(
+        mode = mode,
+        interval = "month",
+        # Window to the first bin only: "late-C"/"late-D" fall outside it.
+        reveal_from = as.Date("2020-01-01"),
+        reveal_to = as.Date("2020-01-01")
+      )
+    )
+    # A layer whose data carries every stratum at a zero value is the seed that
+    # keeps the out-of-window keys coloured.
+    vapply(
+      p$layers,
+      function(l) {
+        d <- l$data
+        is.data.frame(d) &&
+          all(c("stratum", "count") %in% names(d)) &&
+          all(cats %in% d$stratum) &&
+          all(d$count == 0)
+      },
+      logical(1)
+    )
+  }
+  expect_true(any(seeds("stacked")))
+  expect_true(any(seeds("cumulative")))
+})
+
 test_that("label_ends widens the x axis to leave room for the text", {
   binned <- epi_plot$build_epi_data(
     meta_fixture(),
@@ -807,6 +886,128 @@ test_that("the cumulative overlay is scaled to reach the panel's top at its fina
 
   totals <- tapply(binned$count, binned$date_bin, sum)
   expect_equal(max(overlay_y), max(totals))
+})
+
+# --- moving average ----------------------------------------------------------
+
+test_that("epi_moving_average fills the gaps and smooths across strata", {
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  # A window of 1 is just the per-interval totals, so nothing is lost or added —
+  # but the empty weeks between the two occupied ones are filled in, so the
+  # frame is wider than the two occupied bins.
+  raw <- epi_plot$epi_moving_average(binned, window = 1, interval = "week")
+
+  expect_true(all(c("date_bin", "avg") %in% names(raw)))
+  expect_true(nrow(raw) > 2L)
+  # Four datable isolates spread over the (now gap-filled) weeks.
+  expect_equal(sum(raw$avg), 4)
+})
+
+test_that("epi_moving_average counts empty intervals as zero", {
+  # A quiet stretch has to pull the average down, not be skipped over: a
+  # trailing three-week mean landing on a lone final case, with the two weeks
+  # before it empty, is 1/3 — not 1.
+  meta <- data.frame(
+    sample_collection_date = c("2026-01-05", "2026-02-02"),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(meta, interval = "week")
+  ma <- epi_plot$epi_moving_average(
+    binned,
+    window = 3,
+    interval = "week",
+    align = "trailing"
+  )
+
+  # Five weekly slots: the three empty ones between the two cases are filled.
+  expect_identical(nrow(ma), 5L)
+  expect_equal(ma$avg[ma$date_bin == as.Date("2026-02-02")], 1 / 3)
+})
+
+test_that("epi_moving_average aligns the window centre or trailing", {
+  # Three weeks, a spike of five in the middle flanked by one either side. A
+  # centred window straddles both neighbours; a trailing one looks only back.
+  meta <- data.frame(
+    sample_collection_date = c(
+      "2026-01-05",
+      rep("2026-01-12", 5),
+      "2026-01-19"
+    ),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(meta, interval = "week")
+  peak <- as.Date("2026-01-12")
+  centred <- epi_plot$epi_moving_average(binned, 3, "week", "center")
+  trailing <- epi_plot$epi_moving_average(binned, 3, "week", "trailing")
+
+  # Centred at the peak averages both neighbours: (1 + 5 + 1) / 3.
+  expect_equal(centred$avg[centred$date_bin == peak], 7 / 3)
+  # Trailing at the peak sees only it and the (partial) week before: (1 + 5) / 2.
+  expect_equal(trailing$avg[trailing$date_bin == peak], 3)
+})
+
+test_that("epi_moving_average handles empty data", {
+  expect_identical(
+    nrow(epi_plot$epi_moving_average(epi_plot$build_epi_data(meta_fixture(), "nope"))),
+    0L
+  )
+})
+
+test_that("show_moving_avg overlays a trend line on the bar styles only", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  # GeomStep is a GeomPath but not a GeomLine, so this counts only the moving
+  # average's own lines, never the cumulative curve's steps.
+  n_lines <- function(opts) {
+    p <- epi_plot$build_epi_ggplot(binned, opts)
+    sum(vapply(p$layers, function(l) inherits(l$geom, "GeomLine"), logical(1)))
+  }
+
+  expect_identical(n_lines(list(mode = "stacked", interval = "week")), 0L)
+  # A background-coloured halo pass plus the line drawn over it — the same halo
+  # the cumulative overlay uses to stay legible over the bars.
+  expect_identical(
+    n_lines(list(mode = "stacked", show_moving_avg = TRUE, interval = "week")),
+    2L
+  )
+  expect_identical(
+    n_lines(list(
+      mode = "stacked",
+      square = TRUE,
+      show_moving_avg = TRUE,
+      interval = "week"
+    )),
+    2L
+  )
+  # Cumulative is a running total, with no per-interval counts to smooth.
+  expect_identical(
+    n_lines(list(mode = "cumulative", show_moving_avg = TRUE, interval = "week")),
+    0L
+  )
+})
+
+test_that("the moving-average line rides the primary case-count axis", {
+  # Unlike the cumulative overlay it needs no secondary axis: a mean of counts
+  # is a count. Its drawn y values must fall within the count axis, not be
+  # rescaled like the cumulative line is.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  built <- ggplot2::ggplot_build(
+    epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "stacked", show_moving_avg = TRUE, interval = "week")
+    )
+  )
+  line_layer <- which(vapply(
+    built$plot$layers,
+    function(l) inherits(l$geom, "GeomLine"),
+    logical(1)
+  ))[1]
+  y_max <- max(tapply(binned$count, binned$date_bin, sum))
+
+  expect_true(all(built$data[[line_layer]]$y <= y_max))
 })
 
 # --- playback ----------------------------------------------------------------

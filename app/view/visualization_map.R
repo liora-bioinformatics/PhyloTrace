@@ -1417,10 +1417,16 @@ map_controls <- function(ns) {
             "Top left" = "topleft"
           )
         ),
-        shiny$textInput(
-          ns("map_legend_title"),
-          "Title",
-          placeholder = "(variable name)"
+        # allow-free-text: a legend title is display text, so it takes spaces
+        # and punctuation — it opts out of the identifier charset restriction in
+        # app/js/index.js.
+        shiny$div(
+          class = "allow-free-text",
+          shiny$textInput(
+            ns("map_legend_title"),
+            "Title",
+            placeholder = "(variable name)"
+          )
         ),
         shiny$div(
           class = "custom-slider",
@@ -2103,15 +2109,14 @@ server <- function(
           icon = shiny$icon(if (playing) "pause" else "play")
         )
         # Lock every other Time control for the duration of playback: a manual
-        # drag, step, interval switch or scale/label toggle mid-run either
-        # races the tick loop that is driving map_daterange or rebins the very
-        # frames it is walking. Play itself stays live so it can pause.
+        # drag, interval switch or scale/label toggle mid-run either races the
+        # tick loop that is driving map_daterange or rebins the very frames it
+        # is walking. Play itself stays live so it can pause. The step buttons
+        # are NOT touched here — they are owned solely by the enable/disable
+        # observe further down (which already keys off anim_playing()), so no
+        # control is written by two observers in the same flush.
         shinyjs::toggleState("map_daterange", condition = !playing)
         shinyjs::toggleState("map_interval", condition = !playing)
-        shinyjs::toggleState("map_step_start_prev", condition = !playing)
-        shinyjs::toggleState("map_step_start_next", condition = !playing)
-        shinyjs::toggleState("map_step_end_prev", condition = !playing)
-        shinyjs::toggleState("map_step_end_next", condition = !playing)
         shinyjs::toggleState("map_show_time_label", condition = !playing)
         shinyjs::toggleState("map_region_fixed_scale", condition = !playing)
         # Hide the flickering slider behind its cover (see the Time nav_panel).
@@ -2223,17 +2228,28 @@ server <- function(
       format_daterange_label(rng)
     })
 
-    # A single date (or an interval with only one real boundary) has nothing
-    # to animate through — disable Play rather than let it silently do
-    # nothing. Each step button is disabled once nudging its own handle
-    # would run past the data on that side, or past the *other* handle —
-    # reactive off the live "Date range" value (not a frozen copy), so they
-    # stay in sync with whatever's currently selected.
+    # Single owner of the Play button and the four step buttons' enabled state
+    # (the anim_playing observer above deliberately does NOT touch these, so
+    # they can never be written by two observers in one flush). Reads
+    # anim_playing() so it re-evaluates on every play/pause transition too.
+    #
+    # A single date (or an interval with only one real boundary) has nothing to
+    # animate through, so Play is disabled then — but NOT while an animation is
+    # already running: its very first frame collapses "Date range" to a single
+    # point (bins[1]..bins[1]), which would otherwise disable the button at the
+    # exact moment the user needs it to read "Pause", so playing forces it on.
+    # Each step button is disabled once nudging its own handle would run past
+    # the data on that side, or past the *other* handle — reactive off the live
+    # "Date range" value (not a frozen copy), so they stay in sync with
+    # whatever's currently selected — and unconditionally while playing.
     shiny$observe({
-      preview <- tryCatch(anim_bins_preview(), error = function(e) NULL)
-      shinyjs::toggleState("map_play", condition = length(preview) >= 2)
-
       playing <- isTRUE(anim_playing())
+      preview <- tryCatch(anim_bins_preview(), error = function(e) NULL)
+      shinyjs::toggleState(
+        "map_play",
+        condition = playing || length(preview) >= 2
+      )
+
       rng <- input$map_daterange
       bounds <- daterange_bounds()
       can_step <- !playing && !is.null(rng) && !is.null(bounds)

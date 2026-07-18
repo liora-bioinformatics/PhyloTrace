@@ -12,7 +12,9 @@
 # beyond the first press: once a curve exists, every control re-bins live. See
 # epi_data() for why that matters.
 #
-# The plot is a ggplot rendered by renderPlot, exactly like the Tree. Playback
+# The plot is a ggplot rendered by renderImage (through ggsave, so the whole
+# frame takes the theme background — see the epi_plot output), like the Tree but
+# for that one detail. Playback
 # is this module's own tick loop (see anim_playing), which re-renders the curve
 # one interval further along on each tick — the pattern the Map's "Play" already
 # uses. gganimate would have wanted a GIF renderer (gifski/magick/av), none of
@@ -21,6 +23,8 @@
 
 box::use(
   bslib[
+    accordion,
+    accordion_panel,
     as_fill_carrier,
     card,
     card_body,
@@ -88,6 +92,20 @@ TEXT_COLOR_DEFAULT <- "#000000"
 # The running-total overlay's line colour. Defaults to black, which is what it
 # was drawn in (text_color) before it became its own control.
 CUMULATIVE_COLOR_DEFAULT <- "#000000"
+# The moving-average trend line's colour. A strong red so the smoothed trend
+# reads clearly against the bars it is drawn over, and stays distinct from the
+# (black by default) cumulative line when both overlays are shown at once.
+MOVING_AVG_COLOR_DEFAULT <- "#c0392b"
+# How each moving-average point is placed over its window: "center" (no phase
+# lag — the smoothed peak sits over the bars' peak) or "trailing" (the
+# surveillance convention, "the last N intervals").
+MOVING_AVG_ALIGNMENTS <- c(Centered = "center", Trailing = "trailing")
+MOVING_AVG_ALIGN_DEFAULT <- "center"
+# Widest smoothing window the slider offers, in intervals. Its default lives in
+# the logic layer (epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT) so the plot and the
+# control agree on it.
+MOVING_AVG_WINDOW_MIN <- 2L
+MOVING_AVG_WINDOW_MAX <- 30L
 # The colour a freshly added annotation takes; the orange the period wash used
 # before annotations became individually colourable. Kept in step with
 # epi_plot$EPI_ANNO_COLOR_DEFAULT, the fallback the plot builder applies.
@@ -104,52 +122,107 @@ epi_controls <- function(ns) {
       nav_panel(
         "Layout",
         icon = shiny$icon("sliders"),
-        shiny$selectInput(
-          ns("epi_plot_mode"),
-          "Plot mode",
-          choices = PLOT_MODES,
-          selected = PLOT_MODE_DEFAULT
-        ),
-        # Square blocks/Stacked only: overlays the running total on a secondary
-        # axis. Cumulative already *is* that total, drawn as the main curve, so
-        # the overlay would just repeat it.
-        shiny$conditionalPanel(
-          condition = "input.epi_plot_mode != 'cumulative'",
-          ns = ns,
-          input_switch(
-            ns("epi_show_cumulative"),
-            "Show cumulative curve",
-            FALSE
-          )
-        ),
-        # Cumulative only: names each line where it currently ends instead of
-        # relying on the legend to say which colour is which.
-        shiny$conditionalPanel(
-          condition = "input.epi_plot_mode == 'cumulative'",
-          ns = ns,
-          input_switch(ns("epi_label_ends"), "Label lines", TRUE)
-        ),
-        # Rendered server-side: the choices are this database's metadata
-        # columns, so the picker is built once they are known rather than being
-        # declared empty here and back-filled (an empty <select> initialises
-        # bootstrap-select in its disabled state). Same pattern as the staged
-        # peers picker in visualization.R.
-        shiny$uiOutput(ns("stratify_ui")),
-        # Square blocks mode fixes the panel's shape to the data grid via
-        # coord_fixed (see square_ratio / epi_plot's square split), so the
-        # aspect ratio has no effect there. The wrapper carries the id the
-        # server toggles: disabled and given an explanatory hover title while
-        # square mode is active.
-        shiny$div(
-          id = ns("epi_aspect_ratio_wrap"),
-          shiny$sliderInput(
-            ns("epi_aspect_ratio"),
-            "Aspect ratio",
-            min = 0.3,
-            max = 1,
-            value = ASPECT_DEFAULT,
-            step = 0.05,
-            ticks = FALSE
+        accordion(
+          open = "Plot Mode",
+          # Plot Mode ----------------------------------------------------------
+          accordion_panel(
+            "Plot Mode",
+            icon = shiny$icon("chart-column"),
+            shiny$selectInput(
+              ns("epi_plot_mode"),
+              "Plot mode",
+              choices = PLOT_MODES,
+              selected = PLOT_MODE_DEFAULT
+            ),
+            # Square blocks/Stacked only: overlays the running total on a
+            # secondary axis. Cumulative already *is* that total, drawn as the
+            # main curve, so the overlay would just repeat it.
+            shiny$conditionalPanel(
+              condition = "input.epi_plot_mode != 'cumulative'",
+              ns = ns,
+              input_switch(
+                ns("epi_show_cumulative"),
+                "Show cumulative curve",
+                FALSE
+              )
+            ),
+            # Square blocks/Stacked only: a smoothed trend line over the bars.
+            # Cumulative is a running total — already monotone, with no
+            # per-interval counts to smooth — so the option is hidden there,
+            # exactly like the cumulative overlay above. The window (in
+            # intervals) and its alignment only appear once the line itself is
+            # switched on.
+            shiny$conditionalPanel(
+              condition = "input.epi_plot_mode != 'cumulative'",
+              ns = ns,
+              input_switch(
+                ns("epi_show_moving_avg"),
+                "Show moving average",
+                FALSE
+              ),
+              shiny$conditionalPanel(
+                condition = "input.epi_show_moving_avg",
+                ns = ns,
+                shiny$sliderInput(
+                  ns("epi_moving_avg_window"),
+                  "Moving average window (intervals)",
+                  min = MOVING_AVG_WINDOW_MIN,
+                  max = MOVING_AVG_WINDOW_MAX,
+                  value = epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT,
+                  step = 1,
+                  ticks = FALSE
+                ),
+                shiny$selectInput(
+                  ns("epi_moving_avg_align"),
+                  "Window alignment",
+                  choices = MOVING_AVG_ALIGNMENTS,
+                  selected = MOVING_AVG_ALIGN_DEFAULT
+                )
+              )
+            ),
+            # Cumulative only: names each line where it currently ends instead
+            # of relying on the legend to say which colour is which.
+            shiny$conditionalPanel(
+              condition = "input.epi_plot_mode == 'cumulative'",
+              ns = ns,
+              input_switch(ns("epi_label_ends"), "Label lines", TRUE)
+            )
+          ),
+          # Stratification -----------------------------------------------------
+          accordion_panel(
+            "Stratification",
+            icon = shiny$icon("layer-group"),
+            # Rendered server-side: the choices are this database's metadata
+            # columns, so the picker is built once they are known rather than
+            # being declared empty here and back-filled (an empty <select>
+            # initialises bootstrap-select in its disabled state). Same pattern
+            # as the staged peers picker in visualization.R.
+            shiny$uiOutput(ns("stratify_ui"))
+          ),
+          # Axes & Sizing ------------------------------------------------------
+          accordion_panel(
+            "Axes & Sizing",
+            icon = shiny$icon("ruler-combined"),
+            # Off hides the x-axis title ("Date of collection") — the axis is
+            # self-evidently dates, so some users would rather reclaim the room.
+            input_switch(ns("epi_show_x_label"), "Show x-axis label", TRUE),
+            # Square blocks mode fixes the panel's shape to the data grid via
+            # coord_fixed (see square_ratio / epi_plot's square split), so the
+            # aspect ratio has no effect there. The wrapper carries the id the
+            # server toggles: disabled and given an explanatory hover title while
+            # square mode is active.
+            shiny$div(
+              id = ns("epi_aspect_ratio_wrap"),
+              shiny$sliderInput(
+                ns("epi_aspect_ratio"),
+                "Aspect ratio",
+                min = 0.3,
+                max = 1,
+                value = ASPECT_DEFAULT,
+                step = 0.05,
+                ticks = FALSE
+              )
+            )
           )
         )
       ),
@@ -272,6 +345,19 @@ epi_controls <- function(ns) {
               "Cumulative line",
               CUMULATIVE_COLOR_DEFAULT
             )
+          ),
+          # Same idea as the cumulative line: the moving-average line only exists
+          # in the bar modes and only when its switch is on, so its picker
+          # mirrors both conditions the line is drawn under.
+          shiny$conditionalPanel(
+            condition = "input.epi_plot_mode != 'cumulative' && input.epi_show_moving_avg",
+            ns = ns,
+            viz_color(
+              ns,
+              "epi_moving_avg_color",
+              "Moving average line",
+              MOVING_AVG_COLOR_DEFAULT
+            )
           )
         )
       ),
@@ -305,7 +391,13 @@ epi_controls <- function(ns) {
             autoclose = TRUE
           )
         ),
-        shiny$textInput(ns("epi_anno_label"), "Label", value = ""),
+        # allow-free-text: an annotation label is display text, so it takes
+        # spaces and punctuation — it opts out of the identifier charset
+        # restriction in app/js/index.js.
+        shiny$div(
+          class = "allow-free-text",
+          shiny$textInput(ns("epi_anno_label"), "Label", value = "")
+        ),
         # Stacked (label above, full-width swatch) to match the Type/date/Label
         # fields around it, rather than the Colors tab's side-by-side row.
         shiny$div(
@@ -369,7 +461,7 @@ ui <- function(id, generate_id) {
     waiter::useWaiter(),
     # Loading overlay: shown when Generate (parent namespace) is clicked, scoped
     # to this engine's own stage id, and cleared when the plot re-renders — the
-    # Tree's shiny:value variant, since this is a renderPlot output too.
+    # Tree's shiny:value variant, since this is an image output too.
     shiny$tags$script(
       shiny$HTML(
         paste0(
@@ -472,6 +564,15 @@ server <- function(
         !identical(input$epi_plot_mode, "cumulative")
     }
 
+    # The moving-average line, hidden in Cumulative mode for the same reason
+    # (see the conditionalPanel in epi_controls): a running total has no per-
+    # interval counts to smooth. Guarded server-side too rather than trusting
+    # the client to have cleared the switch.
+    show_moving_avg_for <- function() {
+      isTRUE(input$epi_show_moving_avg) &&
+        !identical(input$epi_plot_mode, "cumulative")
+    }
+
     # Whether Generate has been pressed for this engine. Retained across
     # plot-type switches (only session reset clears it). Once TRUE the curve
     # tracks the controls live — see epi_data().
@@ -483,6 +584,17 @@ server <- function(
     # Bumped to rebuild the server-rendered pickers (Reset settings).
     stratify_rebuild <- shiny$reactiveVal(0L)
     interval_rebuild <- shiny$reactiveVal(0L)
+
+    # TRUE for exactly one stratify_ui rebuild: the reset path forces the picker
+    # back to "No stratification", whereas a plain data-driven re-render (a new
+    # database / isolate set changing stratify_fields()) keeps the current field
+    # so a deliberate choice sticks. stratify_ui re-renders on both, and can't
+    # tell them apart from its dependencies alone — this flag is the signal,
+    # set by reset just before it bumps stratify_rebuild() and consumed (reset to
+    # FALSE) on read. Mirrors the force_default argument the Tree/Map pass to
+    # their update*Input reset path (visualization_tree.R populate_metadata_selects),
+    # adapted to a renderUI-rebuilt (bucket 5) control.
+    stratify_force_default <- shiny$reactiveVal(FALSE)
 
     # Whether "Play" is running. Drives the tick loop, the button label, and
     # locking the date-range slider and its step buttons (a manual drag
@@ -577,6 +689,14 @@ server <- function(
         return(NULL)
       }
       prev <- shiny$isolate(input$epi_stratify)
+      # Consumed here: TRUE only on a reset-driven rebuild, where the picker must
+      # return to "No stratification" rather than preserve prev (which a reset
+      # otherwise wouldn't clear, since prev is still a valid field). Read under
+      # isolate so writing it back doesn't re-invalidate this render.
+      force_default <- shiny$isolate(stratify_force_default())
+      if (force_default) {
+        stratify_force_default(FALSE)
+      }
       # Categorised, human-readable labels (a "Classical MLST" group holding the
       # derived ST + locus columns); the selected value stays the raw column
       # name the plot builder keys on. "" is the sentinel for no stratification
@@ -588,7 +708,7 @@ server <- function(
           list(`No stratification` = ""),
           grouped_field_choices(fields, attr(viz_metadata(), "mlst_cols"))
         ),
-        selected = if (isTRUE(prev %in% fields)) prev else "",
+        selected = if (!force_default && isTRUE(prev %in% fields)) prev else "",
         width = "100%",
         options = pickerOptions(
           size = 10,
@@ -650,6 +770,7 @@ server <- function(
         session,
         epi_single_color = SINGLE_COLOR_DEFAULT,
         epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
+        epi_moving_avg_color = MOVING_AVG_COLOR_DEFAULT,
         epi_text_color = TEXT_COLOR_DEFAULT,
         epi_background_color = BACKGROUND_DEFAULT,
         epi_anno_color = ANNO_COLOR_DEFAULT
@@ -664,6 +785,11 @@ server <- function(
       # drops any selection and re-applies the fit. daterange_ui shares the
       # interval's counter because its bounds are just this dataset's bins at
       # the (possibly just-reset) interval — one bump keeps both in step.
+      # stratify_ui would otherwise *preserve* the current field across the
+      # rebuild (that's what keeps a deliberate choice through a data change),
+      # so signal it to force "No stratification" for this one rebuild. Set
+      # before the bump so the re-render sees it.
+      stratify_force_default(TRUE)
       stratify_rebuild(stratify_rebuild() + 1L)
       interval_rebuild(interval_rebuild() + 1L)
 
@@ -834,7 +960,7 @@ server <- function(
     epi_bins <- shiny$reactive(epi_plot$epi_bins(epi_data()))
 
     # The panel shape square cells force on this data; NULL when it doesn't
-    # apply. Drives the plot's height — see the renderPlot below.
+    # apply. Drives the plot's height — see the epi_plot renderImage below.
     square_ratio <- shiny$reactive({
       epi_plot$square_panel_ratio(epi_data(), mode_for())
     })
@@ -947,26 +1073,39 @@ server <- function(
     # Reads win_start_date()/win_end_date() rather than raw bin indices so a
     # rebuild (reset, or a genuinely new bin set) always bakes in "the full
     # span" without needing its own special-cased default.
+    #
+    # Those two window reactives are read under isolate(), NOT as live
+    # dependencies. That is what makes playback flicker-free: the tick loop
+    # advances win_end_idx() every frame, and if this renderUI depended on it
+    # the whole slider uiOutput would re-render each tick — the browser draws
+    # the "recalculating" grey overlay over an output while it rebuilds, which
+    # is exactly the defective flashing that was showing. The only things that
+    # SHOULD rebuild this control are structural (a new bin set, or a reset —
+    # interval_rebuild()/epi_bins()), and on every one of those the window has
+    # just been rewound to the full span anyway, so an isolated read still bakes
+    # in the correct value. Live window moves (stepping, playback) reach the
+    # slider through updateSliderInput instead, never a re-render.
     output$daterange_ui <- shiny$renderUI({
       render_info("visualization_epi daterange_ui")
       interval_rebuild()
       bins <- epi_bins()
       shiny$req(length(bins) >= 2)
+      win_value <- shiny$isolate(c(win_start_date(), win_end_date()))
       shiny$div(
         class = "custom-slider date-slider",
-        # Covered while Play is running (see the anim_playing observer): the
-        # per-tick updateSliderInput redraws the ion.rangeSlider — handles,
-        # rotated tick labels and all — on every frame, which reads as a
-        # flickering, half-broken control. The window it would show is already
-        # narrated by the on-plot reveal, so the slider is hidden behind an
-        # opaque "Animating…" cover for the duration rather than left twitching.
+        # Covered while Play is running (see the anim_playing observer): even
+        # with the re-render gone, the per-tick updateSliderInput still redraws
+        # the ion.rangeSlider handles and rotated tick labels underneath. The
+        # window it would show is already narrated by the on-plot reveal, so the
+        # slider is hidden behind an opaque "Animating…" cover for the duration
+        # rather than left twitching.
         id = ns("daterange_slider_wrap"),
         shiny$sliderInput(
           ns("epi_daterange"),
           NULL,
           min = bins[1],
           max = bins[length(bins)],
-          value = c(win_start_date(), win_end_date()),
+          value = win_value,
           step = epi_plot$bin_width_days(
             input$epi_interval %||% fitted_interval()
           ),
@@ -1156,7 +1295,15 @@ server <- function(
           square = square_for(),
           fixed_axis = !isTRUE(input$epi_zoom_axis),
           label_ends = isTRUE(input$epi_label_ends),
+          show_x_label = isTRUE(input$epi_show_x_label),
           show_cumulative = show_cumulative_for(),
+          show_moving_avg = show_moving_avg_for(),
+          moving_avg_window = input$epi_moving_avg_window %||%
+            epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT,
+          moving_avg_align = input$epi_moving_avg_align %||%
+            MOVING_AVG_ALIGN_DEFAULT,
+          moving_avg_color = input$epi_moving_avg_color %||%
+            MOVING_AVG_COLOR_DEFAULT,
           annos = annotations(),
           reveal_from = win_start_date(),
           reveal_to = win_end_date()
@@ -1217,71 +1364,53 @@ server <- function(
       ignoreNULL = FALSE
     )
 
-    output$epi_plot <- shiny$renderPlot(
+    # Rendered through ggsave (via renderImage) rather than renderPlot so the
+    # whole frame takes the chosen background. In Square blocks mode the curve
+    # uses coord_fixed, whose respect=TRUE centres the entire ggplot in the
+    # device and leaves a letterbox around it; renderPlot fills that letterbox
+    # with its device background, which is hardwired white and — unlike a normal
+    # argument — forced once at module init, so it can never track the colour
+    # picker. ggsave instead derives the device background from the theme's
+    # plot.background, so the letterbox takes the selected colour too — exactly
+    # as the PNG export already does (see save_epi_plot). This is the same image
+    # the Download button writes, just sized to the on-screen panel.
+    output$epi_plot <- shiny$renderImage(
       {
         render_info("visualization_epi epi_plot")
-        epi_ggplot()
-      },
-      # Height follows the panel width, like the Tree's. The width is only
-      # known after a first render, so fall back until the browser reports it.
-      #
-      # Square mode is the exception: coord_fixed ties the panel's shape to the
-      # data (see square_panel_ratio), so honouring the aspect slider there just
-      # letterboxes the curve into a strip with the squares shrunk to nothing.
-      # Give it the height its squares actually need instead — a decade of
-      # months against a handful of cases is legitimately a long, low plot.
-      height = function() {
+        p <- epi_ggplot()
         w <- session$clientData[[paste0("output_", ns("epi_plot"), "_width")]]
-        w <- w %||% 900L
-        ratio <- if (square_for()) {
-          square_ratio()
+        w <- as.integer(w %||% 900L)
+        # Height follows the panel width, like the Tree's. Square mode is the
+        # exception: coord_fixed ties the panel's shape to the data grid (see
+        # square_ratio), so it gets the height its squares actually need rather
+        # than the aspect slider's — a decade of months against a handful of
+        # cases is legitimately a long, low plot.
+        ratio <- if (square_for()) square_ratio() else NULL
+        h <- if (is.null(ratio)) {
+          as.integer(w * (input$epi_aspect_ratio %||% ASPECT_DEFAULT))
         } else {
-          NULL
+          # The axes, labels and legend take room the panel doesn't.
+          as.integer(min(
+            2000,
+            max(240, (w - PANEL_CHROME_PX) * ratio + PANEL_CHROME_PX)
+          ))
         }
-        if (is.null(ratio)) {
-          return(as.integer(w * (input$epi_aspect_ratio %||% ASPECT_DEFAULT)))
-        }
-        # The axes, labels and legend take room the panel doesn't.
-        as.integer(min(
-          2000,
-          max(240, (w - PANEL_CHROME_PX) * ratio + PANEL_CHROME_PX)
-        ))
+        # Lay the plot out as if at 96dpi (what the renderPlot `res` used to do,
+        # so 13pt text keeps its size) but render at the browser's device pixel
+        # ratio so the PNG stays crisp on HiDPI screens.
+        pr <- session$clientData$pixelratio %||% 1
+        tmp <- tempfile(fileext = ".png")
+        epi_plot$render_epi_png(
+          p,
+          tmp,
+          width_px = w,
+          height_px = h,
+          res = 96,
+          scale = pr
+        )
+        list(src = tmp, width = w, height = h, alt = "Epidemiological curve")
       },
-      # 96dpi keeps the type proportionate: `res` is what the device believes
-      # its resolution to be, so at 192 a 1200px panel thinks it is six inches
-      # across and 13pt text comes out looking enormous.
-      res = 96,
-      # Square blocks mode uses coord_fixed, whose respect=TRUE draws the whole
-      # ggplot — plot.background and all — inside a centred square viewport and
-      # leaves the letterbox showing the *device* background. A white device
-      # background would then frame a black plot with white bands. Render the
-      # device transparent instead and paint the chosen colour onto the output
-      # container (see the epi_background_color observer), so the background
-      # covers the whole frame rather than just the panel. bg can't be reactive
-      # here — renderPlot forces its device args once at module init — hence the
-      # split into a static transparent device plus a live container colour.
-      bg = "transparent"
-    )
-
-    # Paint the chosen background onto the plot's output container. With the
-    # device rendered transparent (see renderPlot bg), this colour shows through
-    # everywhere the ggplot itself doesn't paint — chiefly the coord_fixed
-    # letterbox in Square blocks mode — so the whole frame takes the background,
-    # not just the panel. The plotOutput div persists across plot re-renders, so
-    # the colour set here survives every redraw; only a picker change refreshes
-    # it. The guard covers the first fire racing the div's initial mount; the
-    # default (#ffffff) matches the stage anyway, so any early miss is invisible.
-    shiny$observeEvent(
-      input$epi_background_color,
-      {
-        col <- input$epi_background_color %||% BACKGROUND_DEFAULT
-        shinyjs::runjs(sprintf(
-          "var el=document.getElementById('%s'); if(el){el.style.backgroundColor='%s';}",
-          ns("epi_plot"),
-          col
-        ))
-      },
-      ignoreNULL = FALSE
+      deleteFile = TRUE
     )
 
     output$download_epi <- shiny$downloadHandler(

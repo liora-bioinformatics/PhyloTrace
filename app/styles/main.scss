@@ -1751,9 +1751,19 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 // While Play is running the slider wrapper gets .date-slider--playing (see the
 // anim_playing observers in visualization_epi.R / visualization_map.R). The
 // per-tick updateSliderInput redraws the ion.rangeSlider on every frame, which
-// reads as a flickering, half-broken control — so the whole widget is hidden
-// (visibility, not display, to keep its box and avoid a layout jump) and an
-// opaque cover with an "Animating…" spinner is laid over it instead.
+// reads as a flickering, half-broken control — so an opaque cover with an
+// "Animating…" spinner is laid over it instead.
+//
+// The cover deliberately does NOT rely on `visibility: hidden` on the slider:
+// ionRangeSlider sets INLINE `visibility: visible` on its handle tooltips as
+// they move, which beats any stylesheet rule and was leaking the from/to
+// bubbles through. Instead the cover is a fully opaque box painted on top.
+// `overflow: hidden` on the playing wrapper is what makes that airtight: it
+// establishes a block formatting context so the slider's 3rem/4rem form-group
+// margins are contained in the wrapper box (they otherwise collapse through it,
+// leaving the track and the rotated grid labels rendered ABOVE/BELOW the
+// inset:0 cover — exactly the top bar and "YYYY-MM" labels that were leaking),
+// and it clips the negatively-offset tooltips/grid to that same box.
 .date-slider {
     position: relative;
 }
@@ -1762,8 +1772,8 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: none;
 }
 
-.date-slider--playing .irs {
-    visibility: hidden;
+.date-slider--playing {
+    overflow: hidden;
 }
 
 .date-slider--playing .date-slider_cover {

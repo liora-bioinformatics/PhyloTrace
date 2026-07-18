@@ -35,6 +35,7 @@ box::use(
     element_text,
     expansion,
     geom_col,
+    geom_line,
     geom_step,
     geom_text,
     geom_tile,
@@ -323,6 +324,100 @@ epi_bins <- function(binned) {
     return(as.Date(character()))
   }
   sort(unique(binned$date_bin))
+}
+
+# --- moving average ----------------------------------------------------------
+
+# Default smoothing window, in number of intervals. Seven is the window every
+# surveillance dashboard reaches for: over daily bins a "7-day average" reads
+# out one week of trend and cancels the weekday reporting cycle, and it reads
+# just as sensibly over any other interval as "the last seven bins".
+#' @export
+EPI_MOVING_AVG_WINDOW_DEFAULT <- 7L
+
+# Rolling mean over `x` with an integer window, aligned centre or trailing.
+# NA-padding the ends where a full window doesn't fit would clip the line's
+# start and finish; instead each edge point averages the partial window it does
+# have, so the trend line runs the full width of the data. `align`: "trailing"
+# ends the window on each point (the surveillance convention, "the last N
+# intervals"); anything else centres it (no phase lag — the peak of the smoothed
+# line sits over the peak of the bars).
+.rolling_mean <- function(x, window, align = "center") {
+  n <- length(x)
+  w <- max(1L, as.integer(window))
+  if (w <= 1L || n == 0L) {
+    return(as.numeric(x))
+  }
+  half <- (w - 1L) %/% 2L
+  vapply(
+    seq_len(n),
+    function(i) {
+      if (identical(align, "trailing")) {
+        lo <- max(1L, i - w + 1L)
+        hi <- i
+      } else {
+        lo <- max(1L, i - half)
+        hi <- min(n, i + (w - 1L - half))
+      }
+      mean(x[lo:hi])
+    },
+    numeric(1)
+  )
+}
+
+# The rolling mean of the per-interval case total, summed across every stratum.
+#
+# A moving average smooths the bin-to-bin noise so the outbreak's underlying
+# trend shows through — the line every epi dashboard draws over its bars. It is
+# summed across strata for the same reason the cumulative overlay is (a per-
+# stratum smoother would need as many lines as there are strata, cluttering the
+# very thing it is meant to clarify), but unlike that overlay it stays in the
+# bars' own units — a mean of counts is still a count — so it rides the primary
+# axis directly rather than needing a second one.
+#
+# Empty intervals inside the span count as zero, not as missing: a moving
+# average that skipped the quiet stretches would read a lull as if it never
+# happened. The regular bin grid is rebuilt from `interval` (seq() over the same
+# Day/Week/Month/Year vocabulary the binner uses) so every slot between the
+# first and last bin is represented. Returns date_bin / avg, ordered by date.
+#' @export
+epi_moving_average <- function(
+  binned,
+  window = EPI_MOVING_AVG_WINDOW_DEFAULT,
+  interval = "day",
+  align = "center"
+) {
+  empty <- data.frame(
+    date_bin = as.Date(character()),
+    avg = numeric(),
+    stringsAsFactors = FALSE
+  )
+  if (is.null(binned) || !nrow(binned)) {
+    return(empty)
+  }
+  totals <- binned |>
+    group_by(date_bin) |>
+    summarise(count = sum(count), .groups = "drop") |>
+    arrange(date_bin) |>
+    as.data.frame()
+
+  grid <- data.frame(
+    date_bin = seq(
+      min(totals$date_bin),
+      max(totals$date_bin),
+      by = tolower(interval %||% "day")
+    ),
+    stringsAsFactors = FALSE
+  )
+  filled <- merge(grid, totals, by = "date_bin", all.x = TRUE)
+  filled$count[is.na(filled$count)] <- 0L
+  filled <- filled[order(filled$date_bin), , drop = FALSE]
+
+  data.frame(
+    date_bin = filled$date_bin,
+    avg = .rolling_mean(filled$count, window, align),
+    stringsAsFactors = FALSE
+  )
 }
 
 # --- palette -----------------------------------------------------------------
@@ -798,6 +893,45 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
   }
 }
 
+# An invisible layer carrying one entry per stratum, so the legend shows a
+# coloured key for *every* stratum in the dataset — not just those the current
+# reveal window happens to include.
+#
+# ggplot derives each legend key's glyph from the drawn layer's data, so when
+# reveal_from/reveal_to drop the strata outside the window their keys come back
+# blank (the `limits`/`drop = FALSE` entry survives, but with no colour). The
+# palette is fixed to the whole dataset, so the legend should be too. This seeds
+# the scale with every stratum at a zero value, drawn with the same aesthetic
+# the mode maps strata to (fill for the bars, colour for the cumulative curve):
+# the key glyph is independent of that zeroed value, so it renders in the
+# stratum's colour while the layer itself draws nothing on the panel. Two rows
+# per stratum keep the cumulative seed's step path a zero-length no-op rather
+# than a one-observation warning.
+.legend_seed_layer <- function(cats, mode, x0) {
+  if (length(cats) < 2L || is.null(x0)) {
+    return(NULL)
+  }
+  seed <- data.frame(
+    date_bin = rep(x0, 2L * length(cats)),
+    count = 0,
+    stratum = rep(cats, each = 2L),
+    stringsAsFactors = FALSE
+  )
+  if (identical(mode, "cumulative")) {
+    geom_step(
+      data = seed,
+      aes(x = .data$date_bin, y = .data$count, colour = .data$stratum),
+      na.rm = TRUE
+    )
+  } else {
+    geom_col(
+      data = seed,
+      aes(x = .data$date_bin, y = .data$count, fill = .data$stratum),
+      na.rm = TRUE
+    )
+  }
+}
+
 # Expand each (date_bin, stratum, count) row into `count` unit rows, numbered
 # 1..n *within a date bin* so the cells stack into one column per interval.
 # Rows are pre-sorted by stratum so each bin's categories form contiguous bands
@@ -849,7 +983,7 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
 #
 # `opts`: mode ("stacked" | "cumulative"), square, col_scale, single_color,
 # cumulative_color, background, text_color, interval, annos, reveal_from,
-# reveal_to, fixed_axis, label_ends, plot_width. `col_scale` colours the strata when
+# reveal_to, fixed_axis, label_ends, show_x_label, plot_width. `col_scale` colours the strata when
 # stratified; `single_color` colours the lone "All isolates" series when not;
 # `cumulative_color` colours the running-total overlay (Stacked/Square only).
 #
@@ -883,12 +1017,26 @@ build_epi_ggplot <- function(binned, opts = list()) {
   # drawn as the main curve, so overlaying one on top of it would just repeat
   # it.
   show_cumulative <- isTRUE(opts$show_cumulative) && identical(mode, "stacked")
+  # Same restriction as the cumulative overlay: a moving average smooths the
+  # per-interval counts, and the cumulative curve carries no per-interval counts
+  # to smooth (it is a running total, already monotone), so the option only
+  # applies to the bar modes.
+  show_moving_avg <- isTRUE(opts$show_moving_avg) &&
+    !identical(mode, "cumulative")
+  # Off drops the x-axis title but keeps the tick labels — the dates are still
+  # named, only the "Date of collection" caption goes.
+  show_x_label <- opts$show_x_label %||% TRUE
   background <- opts$background %||% "#ffffff"
   text_color <- opts$text_color %||% "#000000"
   # The overlaid running total's own colour, independent of the axis/text so it
   # can be picked out against the bars it sits on. Defaults to text_color, which
   # is what it was drawn in before it became a separate control.
   cumulative_color <- opts$cumulative_color %||% text_color
+  # The moving-average line's own colour, likewise pickable so it stands out
+  # against the bars. Defaults to text_color.
+  moving_avg_color <- opts$moving_avg_color %||% text_color
+  moving_avg_window <- opts$moving_avg_window %||% EPI_MOVING_AVG_WINDOW_DEFAULT
+  moving_avg_align <- opts$moving_avg_align %||% "center"
   interval <- opts$interval %||% "day"
   width_days <- bin_width_days(interval)
 
@@ -977,6 +1125,27 @@ build_epi_ggplot <- function(binned, opts = list()) {
     }
   }
 
+  # The moving-average trend line. Computed over the *whole* dataset (like the
+  # cumulative overlay and the y axis itself) so the smoothing window doesn't
+  # shrink and the line doesn't rescale as a playback window sweeps across it,
+  # then trimmed to the revealed span. Sits on the primary axis — a mean of
+  # counts is a count — so it needs no secondary axis.
+  mov_shown <- NULL
+  if (show_moving_avg && nrow(binned)) {
+    mov_shown <- epi_moving_average(
+      binned,
+      moving_avg_window,
+      interval,
+      moving_avg_align
+    )
+    if (!is.null(opts$reveal_from)) {
+      mov_shown <- mov_shown[mov_shown$date_bin >= opts$reveal_from, , drop = FALSE]
+    }
+    if (!is.null(opts$reveal_to)) {
+      mov_shown <- mov_shown[mov_shown$date_bin <= opts$reveal_to, , drop = FALSE]
+    }
+  }
+
   # Worked out ahead of the y scale (rather than left to .cumulative_end_labels
   # alone) so the panel can reserve enough room below its lowest label —
   # otherwise a stratum whose curve ends near 0 gets its label clipped by the
@@ -986,8 +1155,17 @@ build_epi_ggplot <- function(binned, opts = list()) {
   } else {
     NULL
   }
+  # Capped at one label's worth of height. The reservation exists so a single
+  # stratum whose curve ends right on 0 isn't clipped by the panel's bottom
+  # edge — half a line of text is all that needs. Left uncapped it exploded:
+  # with many strata crammed at low counts the greedy stacking in
+  # .cumulative_end_positions marches the lowest labels hundreds of units below
+  # 0, and reserving that whole distance ballooned the axis into a huge empty
+  # band under the curve. Labels pushed past the visible range are dropped by
+  # ggplot regardless, so there is nothing there to make room for.
   bottom_room <- if (!is.null(end_positions)) {
-    max(0, .label_half_height(y_max) - min(end_positions$y_label))
+    half <- .label_half_height(y_max)
+    min(half, max(0, half - min(end_positions$y_label)))
   } else {
     0
   }
@@ -1029,7 +1207,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
       limits = xlim
     ) +
     labs(
-      x = "Date of collection",
+      x = if (show_x_label) "Date of collection" else NULL,
       y = if (identical(mode, "cumulative")) {
         "Cumulative cases"
       } else {
@@ -1048,6 +1226,16 @@ build_epi_ggplot <- function(binned, opts = list()) {
       colour = .strata_guide(show_legend, cats, opts$plot_width)
     )
 
+  # Seed the legend with every stratum before the visible layers, so a windowed
+  # curve still shows a coloured key for the strata its span leaves out (see
+  # .legend_seed_layer). Only when a legend is actually drawn.
+  if (show_legend) {
+    seed <- .legend_seed_layer(cats, mode, if (!is.null(x_range)) x_range[1] else NULL)
+    if (!is.null(seed)) {
+      p <- p + seed
+    }
+  }
+
   p <- p + .mode_layers(shown, mode, square, interval)
 
   if (label_ends) {
@@ -1064,6 +1252,30 @@ build_epi_ggplot <- function(binned, opts = list()) {
   )
   for (l in layers) {
     p <- p + l
+  }
+
+  if (!is.null(mov_shown) && nrow(mov_shown) > 1) {
+    # Drawn at each bin's centre so it tracks the tops of the bars it smooths
+    # (the bars are centred on date_bin + width/2 too), with a background-
+    # coloured halo pass underneath so the trend stays legible wherever it
+    # crosses a bar of a similar colour — the same halo the cumulative overlay
+    # uses. On the primary axis: the average is in the bars' own units.
+    mov_shown$x <- mov_shown$date_bin +
+      exact_bin_widths(mov_shown$date_bin, interval) / 2
+    mapping <- aes(x = .data$x, y = .data$avg)
+    p <- p +
+      geom_line(
+        data = mov_shown,
+        mapping = mapping,
+        colour = background,
+        linewidth = 2
+      ) +
+      geom_line(
+        data = mov_shown,
+        mapping = mapping,
+        colour = moving_avg_color,
+        linewidth = 0.9
+      )
   }
 
   if (!is.null(cum_shown) && nrow(cum_shown)) {
@@ -1289,6 +1501,32 @@ save_epi_plot <- function(
     width = width,
     height = width * aspect_ratio,
     dpi = dpi,
+    limitsize = FALSE
+  )
+}
+
+# Render the curve to a PNG at an exact pixel size, for the on-screen view.
+#
+# The view draws the plot through this rather than renderPlot precisely because
+# ggsave sets the output device's background from the theme's plot.background —
+# so the whole frame, including the coord_fixed letterbox that Square blocks
+# mode leaves around the panel, takes the chosen background colour. renderPlot's
+# device is hardwired white and can't be made to follow the colour picker (its
+# device args are forced once), which is what left the letterbox white.
+#
+# `width_px`/`height_px` are the CSS pixels the image occupies. `res` is the dpi
+# the layout is measured against (keeps text at its intended point size); `scale`
+# multiplies the actual pixels rendered (pass the browser's devicePixelRatio) so
+# the PNG stays crisp on HiDPI screens while laying out identically.
+#' @export
+render_epi_png <- function(plot, file, width_px, height_px, res = 96, scale = 1) {
+  ggsave(
+    filename = file,
+    plot = plot,
+    device = "png",
+    width = width_px / res,
+    height = height_px / res,
+    dpi = res * scale,
     limitsize = FALSE
   )
 }

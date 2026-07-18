@@ -1,20 +1,24 @@
 // Restrict free-text entry to a filesystem-/SQL-safe character set
-// ([a-zA-Z0-9_-]) so anything the user types to *name* or *label* something
-// stays safe to persist, export as a filename, and feed to ggplot's plotmath.
+// ([a-zA-Z0-9_-]) so anything the user types to *name* an identifier (a
+// database, a scheme, an isolate) stays safe to persist, export as a filename,
+// and query with.
 //
-// This is a labelling restriction, not a blanket one: it must NOT touch inputs
-// where symbols and spaces are legitimate and expected — colour-picker hex
-// fields (which need "#") and the search boxes inside select/picker dropdowns
-// (where you type a query, not a label). Those are skipped below, which is what
-// scopes the rule to "text the user is labelling something with" across the
-// visualization submodules and the rest of the app alike.
+// It must NOT touch inputs where symbols and spaces are legitimate and
+// expected, which the exemptions below carve out:
+//   * colour-picker hex fields (which need "#"),
+//   * the search boxes inside select/picker dropdowns (a query, not a name),
+//   * anything a user is *labelling a plot* with rather than naming — plot
+//     titles, subtitles, annotation labels — which are display text and should
+//     take spaces and punctuation freely. Those inputs opt out by sitting
+//     inside a ".allow-free-text" wrapper (see the visualization submodules).
 function isExemptFromCharset(el) {
   return Boolean(
     el.classList.contains("pcr-result") || // colour-picker hex field
     el.closest(".pickr") ||                 // anywhere inside a colour picker
     el.closest(".bs-searchbox") ||          // pickerInput live-search box
     el.closest(".selectize-control") ||     // selectize search / entry
-    el.closest(".dropdown-menu")            // any dropdown's own search field
+    el.closest(".dropdown-menu") ||         // any dropdown's own search field
+    el.closest(".allow-free-text")          // plot labels/titles: display text
   );
 }
 

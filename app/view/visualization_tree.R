@@ -133,7 +133,13 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Title & Subtitle",
             icon = shiny$icon("heading"),
-            shiny$textInput(ns("nj_title"), "Title", placeholder = "Plot title"),
+            # allow-free-text: title/subtitle are display text, so they take
+            # spaces and punctuation — they opt out of the identifier charset
+            # restriction in app/js/index.js.
+            shiny$div(
+              class = "allow-free-text",
+              shiny$textInput(ns("nj_title"), "Title", placeholder = "Plot title")
+            ),
             shiny$sliderInput(
               ns("nj_title_size"),
               "Title size",
@@ -142,10 +148,13 @@ tree_controls <- function(ns) {
               30,
               ticks = FALSE
             ),
-            shiny$textInput(
-              ns("nj_subtitle"),
-              "Subtitle",
-              placeholder = "Plot subtitle"
+            shiny$div(
+              class = "allow-free-text",
+              shiny$textInput(
+                ns("nj_subtitle"),
+                "Subtitle",
+                placeholder = "Plot subtitle"
+              )
             ),
             shiny$sliderInput(
               ns("nj_subtitle_size"),
