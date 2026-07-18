@@ -165,7 +165,10 @@ epi_controls <- function(ns) {
                 ns = ns,
                 shiny$sliderInput(
                   ns("epi_moving_avg_window"),
-                  "Moving average window (intervals)",
+                  # Refined server-side to name the span in the current
+                  # interval's unit ("… 7 weeks") — see the updateSliderInput
+                  # observer.
+                  "Moving average window",
                   min = MOVING_AVG_WINDOW_MIN,
                   max = MOVING_AVG_WINDOW_MAX,
                   value = epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT,
@@ -572,6 +575,27 @@ server <- function(
       isTRUE(input$epi_show_moving_avg) &&
         !identical(input$epi_plot_mode, "cumulative")
     }
+
+    # Keep the window slider's label naming the span it actually smooths, in
+    # whatever interval the Time tab currently uses — "Moving average window:
+    # 7 weeks" — so the abstract "intervals" count reads as a concrete duration.
+    # Tracks both the interval buttons and the slider itself; the label-only
+    # update leaves the value untouched, so it can't feed back on the slider it
+    # depends on. Falls back to the fitted interval before the buttons render.
+    shiny$observe({
+      iv <- input$epi_interval %||% fitted_interval()
+      n <- input$epi_moving_avg_window %||%
+        epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT
+      shiny$updateSliderInput(
+        session,
+        "epi_moving_avg_window",
+        label = sprintf(
+          "Moving average window: %d %s",
+          as.integer(n),
+          epi_plot$epi_interval_noun(iv, n)
+        )
+      )
+    })
 
     # Whether Generate has been pressed for this engine. Retained across
     # plot-type switches (only session reset clears it). Once TRUE the curve

@@ -46,6 +46,7 @@ box::use(
     labs,
     scale_colour_manual,
     scale_fill_manual,
+    scale_linetype_manual,
     scale_x_date,
     scale_y_continuous,
     sec_axis,
@@ -334,6 +335,31 @@ epi_bins <- function(binned) {
 # just as sensibly over any other interval as "the last seven bins".
 #' @export
 EPI_MOVING_AVG_WINDOW_DEFAULT <- 7L
+
+# The interval's display noun, singular or pluralised for a count `n`: "week",
+# or "weeks" for n > 1. Keyed off EPI_INTERVALS so the word always matches the
+# Time tab's own interval buttons ("day"/"week"/"month"/"year"). Used to name a
+# span in the unit the curve is actually binned by — the moving-average control
+# label and its legend entry both read out "weeks" when the curve is weekly.
+#' @export
+epi_interval_noun <- function(interval, n = 1) {
+  nm <- names(EPI_INTERVALS)[match(tolower(interval %||% "day"), EPI_INTERVALS)]
+  word <- tolower(if (is.na(nm)) "interval" else nm)
+  if (as.integer(n) == 1L) word else paste0(word, "s")
+}
+
+# The legend/label text for the moving-average line: the span it smooths over,
+# named in the curve's own interval — "7-week moving average". So the reader
+# sees not just that a trend line is drawn but exactly how much smoothing it
+# carries, in the unit the x axis already uses.
+#' @export
+epi_moving_avg_label <- function(window, interval) {
+  sprintf(
+    "%d-%s moving average",
+    as.integer(window),
+    epi_interval_noun(interval, 1)
+  )
+}
 
 # Rolling mean over `x` with an integer window, aligned centre or trailing.
 # NA-padding the ends where a full window doesn't fit would clip the line's
@@ -1262,19 +1288,35 @@ build_epi_ggplot <- function(binned, opts = list()) {
     # uses. On the primary axis: the average is in the bars' own units.
     mov_shown$x <- mov_shown$date_bin +
       exact_bin_widths(mov_shown$date_bin, interval) / 2
-    mapping <- aes(x = .data$x, y = .data$avg)
+    # The visible line maps `linetype` to a single constant — its span-and-unit
+    # label — so it earns one key in a legend of its own, separate from the
+    # strata colour/fill legend and shown even for an unstratified curve that
+    # has no strata legend at all. The key's colour is forced to the line's own
+    # via override.aes (linetype carries no colour of its own). The halo pass is
+    # drawn without the aes so it adds no second key.
+    ma_label <- epi_moving_avg_label(moving_avg_window, interval)
+    mov_shown$series <- ma_label
     p <- p +
       geom_line(
         data = mov_shown,
-        mapping = mapping,
+        mapping = aes(x = .data$x, y = .data$avg),
         colour = background,
         linewidth = 2
       ) +
       geom_line(
         data = mov_shown,
-        mapping = mapping,
+        mapping = aes(x = .data$x, y = .data$avg, linetype = .data$series),
         colour = moving_avg_color,
         linewidth = 0.9
+      ) +
+      scale_linetype_manual(
+        name = NULL,
+        values = setNames("solid", ma_label),
+        guide = guide_legend(
+          # After the strata legend, never interleaved with it.
+          order = 99,
+          override.aes = list(colour = moving_avg_color, linewidth = 0.9)
+        )
       )
   }
 

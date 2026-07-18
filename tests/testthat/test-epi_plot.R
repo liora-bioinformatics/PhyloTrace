@@ -1010,6 +1010,47 @@ test_that("the moving-average line rides the primary case-count axis", {
   expect_true(all(built$data[[line_layer]]$y <= y_max))
 })
 
+test_that("epi_interval_noun names the interval, pluralised for a count", {
+  expect_identical(epi_plot$epi_interval_noun("week"), "week")
+  expect_identical(epi_plot$epi_interval_noun("week", 7), "weeks")
+  expect_identical(epi_plot$epi_interval_noun("month", 3), "months")
+  expect_identical(epi_plot$epi_interval_noun("day", 1), "day")
+})
+
+test_that("epi_moving_avg_label reads the span in the curve's own unit", {
+  expect_identical(
+    epi_plot$epi_moving_avg_label(7, "week"),
+    "7-week moving average"
+  )
+  expect_identical(
+    epi_plot$epi_moving_avg_label(3, "month"),
+    "3-month moving average"
+  )
+})
+
+test_that("the moving average earns its own legend entry", {
+  # A linetype scale, separate from the strata colour/fill legend, keyed by the
+  # span-and-unit label — so the reader sees a line labelled "3-week moving
+  # average" rather than an unexplained curve over the bars.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  p <- epi_plot$build_epi_ggplot(
+    binned,
+    list(
+      mode = "stacked",
+      show_moving_avg = TRUE,
+      moving_avg_window = 3,
+      interval = "week"
+    )
+  )
+  lt <- p$scales$get_scales("linetype")
+  expect_false(is.null(lt))
+  # A manual scale's labels are only known once it has seen the mapped value;
+  # train it with the label the line is mapped to, then read it back.
+  label <- epi_plot$epi_moving_avg_label(3, "week")
+  lt$train(label)
+  expect_identical(lt$get_labels(), label)
+})
+
 # --- playback ----------------------------------------------------------------
 
 test_that("reveal_to draws only the bins up to it", {
