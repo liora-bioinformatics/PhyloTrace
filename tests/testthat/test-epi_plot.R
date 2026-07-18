@@ -319,6 +319,55 @@ test_that("epi_palette handles no categories", {
   expect_length(epi_plot$epi_palette(character(), "Set2"), 0L)
 })
 
+# --- epi_legend_ncol ---------------------------------------------------------
+
+test_that("epi_legend_ncol narrows the legend so long labels fit the width", {
+  # The failure this guards against: a fixed ncol overflows the panel and the
+  # legend is clipped. Full institution names two-per-column already fill a
+  # typical panel, so eleven of them must wrap to well under the old fixed six.
+  long <- c(
+    "Broad Institute of MIT and Harvard",
+    "US Centers for Disease Control and Prevention",
+    "Wellcome Centre for Human Genetics"
+  )
+  wide <- epi_plot$epi_legend_ncol(long, width_px = 1180)
+  expect_true(wide >= 1L && wide < 6L)
+  # A narrower panel takes fewer columns still.
+  expect_true(epi_plot$epi_legend_ncol(long, width_px = 400) <= wide)
+})
+
+test_that("epi_legend_ncol never asks for more columns than categories", {
+  expect_identical(epi_plot$epi_legend_ncol(c("A", "B", "C"), 4000), 3L)
+  expect_identical(epi_plot$epi_legend_ncol("All isolates", 1180), 1L)
+})
+
+test_that("epi_legend_ncol falls back for an unknown width", {
+  short <- LETTERS[1:8]
+  # NULL / non-finite widths must still yield a usable positive column count.
+  expect_gte(epi_plot$epi_legend_ncol(short, NULL), 1L)
+  expect_gte(epi_plot$epi_legend_ncol(short, NA_real_), 1L)
+})
+
+test_that("the fill legend carries the adaptive column count", {
+  binned <- data.frame(
+    date_bin = as.Date(rep(c("2023-01-02", "2023-01-09"), each = 2)),
+    stratum = rep(
+      c("US Centers for Disease Control and Prevention", "EMBL-EBI"),
+      2
+    ),
+    count = 1L,
+    stringsAsFactors = FALSE
+  )
+  p <- epi_plot$build_epi_ggplot(
+    binned,
+    list(mode = "stacked", interval = "week", plot_width = 500)
+  )
+  expect_identical(
+    p$guides$guides$fill$params$ncol,
+    epi_plot$epi_legend_ncol(c("EMBL-EBI", "US Centers for Disease Control and Prevention"), 500)
+  )
+})
+
 # --- epi_annotation_layout ---------------------------------------------------
 
 annos_fixture <- function() {
@@ -665,6 +714,28 @@ test_that("label_ends suppresses the legend, which would just repeat it", {
 
   expect_identical(guide(TRUE), "none")
   expect_false(identical(guide(FALSE), "none"))
+})
+
+test_that("label_ends suppresses the cumulative curve's colour legend too", {
+  # The cumulative curve maps its strata to `colour` (geom_step), not `fill`, so
+  # silencing only the fill guide left a full stratum legend rendering under a
+  # "Label lines" plot — the legend that letterboxed the curve into a band of
+  # empty space. The colour guide has to be suppressed on the same condition.
+  binned <- epi_plot$build_epi_data(
+    meta_fixture(),
+    stratify_by = "organism",
+    interval = "week"
+  )
+  colour_guide <- function(label_ends) {
+    p <- epi_plot$build_epi_ggplot(
+      binned,
+      list(mode = "cumulative", label_ends = label_ends)
+    )
+    p$guides$guides$colour
+  }
+
+  expect_identical(colour_guide(TRUE), "none")
+  expect_false(identical(colour_guide(FALSE), "none"))
 })
 
 test_that("label_ends widens the x axis to leave room for the text", {

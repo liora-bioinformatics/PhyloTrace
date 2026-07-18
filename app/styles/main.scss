@@ -204,6 +204,22 @@
     margin-bottom: 0;
 }
 
+// The annotation Color picker sits among full-width, label-above form fields
+// (Type, Start date, Label), so it stacks to match them rather than using the
+// Colors tab's side-by-side label/swatch grid. It also needs their vertical
+// rhythm: the wrapper is a plain div, so it doesn't inherit the form-group
+// bottom margin its siblings have, and its inner container is pinned to 0 —
+// leaving the swatch flush against the "Add to timeline" button without this.
+.epi-anno-color {
+    margin-bottom: 1rem;
+}
+
+.epi-anno-color .viz-color-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+
 // Export menu: stacked full-width controls.
 .viz-export {
     display: flex;
@@ -326,6 +342,24 @@
 // Annotation list in the Epi sidebar's "Annotations" tab: one card per active
 // milestone/period, each with a round remove button. Colors come from theme
 // variables so the list reads correctly in dark mode too.
+
+// Empty-state placeholder shown when no annotations are active.
+.epi-anno-empty {
+    font-size: 0.9rem;
+}
+
+// One annotation card. --epi-anno-stripe is the annotation's own colour, set
+// per row from R; the fallback matches ANNO_COLOR_DEFAULT in visualization_epi.R.
+.epi-anno-card {
+    min-height: 55px;
+    border-left: 5px solid var(--epi-anno-stripe, #f39c12);
+}
+
+// The label/meta column, kept clear of the round remove button on its right.
+.epi-anno_body {
+    max-width: 75%;
+}
+
 .epi-anno_label {
     font-weight: 600;
     font-size: 0.9rem;
@@ -1712,6 +1746,37 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .date-slider .form-group {
     margin-bottom: 4rem;
     margin-top: 3rem;
+}
+
+// While Play is running the slider wrapper gets .date-slider--playing (see the
+// anim_playing observers in visualization_epi.R / visualization_map.R). The
+// per-tick updateSliderInput redraws the ion.rangeSlider on every frame, which
+// reads as a flickering, half-broken control — so the whole widget is hidden
+// (visibility, not display, to keep its box and avoid a layout jump) and an
+// opaque cover with an "Animating…" spinner is laid over it instead.
+.date-slider {
+    position: relative;
+}
+
+.date-slider_cover {
+    display: none;
+}
+
+.date-slider--playing .irs {
+    visibility: hidden;
+}
+
+.date-slider--playing .date-slider_cover {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: var(--bs-body-bg);
+    color: var(--bs-secondary-color);
+    font-size: 0.85rem;
 }
 
 .custom-slider .form-group>span {

@@ -51,7 +51,7 @@ box::use(
     theme,
     theme_minimal,
   ],
-  grDevices[colorRampPalette],
+  grDevices[col2rgb, colorRampPalette, rgb],
   grid[unit],
   stats[ave, setNames],
   viridisLite[viridis],
@@ -403,6 +403,12 @@ epi_fit_scale <- function(scale, n_strata) {
 
 # --- timeline annotations ----------------------------------------------------
 
+# The colour an annotation falls back to when none was stored on it (older
+# rows, or a call site that hasn't set one). The orange the period wash used
+# before annotations became individually colourable.
+#' @export
+EPI_ANNO_COLOR_DEFAULT <- "#f39c12"
+
 #' @export
 empty_epi_annotations <- function() {
   data.frame(
@@ -411,8 +417,74 @@ empty_epi_annotations <- function() {
     start = as.Date(character()),
     end = as.Date(character()),
     label = character(),
+    color = character(),
     stringsAsFactors = FALSE
   )
+}
+
+# What the eye actually sees when `fg` is drawn at opacity `alpha` (0..1) over
+# `bg`: the alpha-composited hex. Used to judge the contrast of label text on a
+# semi-transparent wash, where the true backdrop is the blend, not `fg` itself.
+.blend <- function(fg, bg, alpha) {
+  f <- col2rgb(fg)
+  b <- col2rgb(bg)
+  mix <- f * alpha + b * (1 - alpha)
+  rgb(mix[1], mix[2], mix[3], maxColorValue = 255)
+}
+
+# Black or white text, whichever stays legible on `bg` — so a label keeps its
+# contrast whatever colour the user picks. Thresholds the perceived luminance
+# (ITU-R BT.601): a light backdrop gets black text, a dark one white.
+.contrast_text <- function(bg) {
+  c <- col2rgb(bg)
+  luma <- (0.299 * c[1] + 0.587 * c[2] + 0.114 * c[3]) / 255
+  if (luma > 0.55) "#000000" else "#ffffff"
+}
+
+# The colour stored on annotation row `i`, falling back to the default when the
+# column is absent (an empty frame) or the value is missing/blank.
+.anno_color <- function(annos, i) {
+  col <- if ("color" %in% names(annos)) annos$color[i] else NA_character_
+  if (is.na(col) || !nzchar(col)) EPI_ANNO_COLOR_DEFAULT else col
+}
+
+# Approx. rendered width of one label character, in px, for geom text drawn at
+# `size` (ggplot's mm-based size, so the point size is size * .pt). At renderPlot's
+# 96 dpi a point is 96/72 px; ~0.5 em wide per character. Mirrors the estimate
+# epi_legend_ncol makes for the legend.
+.GG_PT <- 72.27 / 25.4
+.anno_char_px <- function(size = 3) size * .GG_PT * (96 / 72) * 0.5
+
+# Fit `label` into a period's bracket by wrapping it over up to `max_lines`
+# lines that each hold `max_chars` characters, so a long label uses the
+# bracket's height rather than bleeding past the dates it marks. Wraps on spaces
+# where it can and hard-breaks a single over-long token; when even the wrapped
+# text won't fit, the last line is truncated with an ellipsis. Returns a string
+# with embedded newlines, which annotate("text") renders as separate lines.
+.wrap_label <- function(label, max_chars, max_lines = 2L) {
+  max_chars <- max(1L, as.integer(max_chars))
+  if (nchar(label) <= max_chars) {
+    return(label)
+  }
+  # strwrap breaks on whitespace but leaves an over-long word on its own line
+  # untouched, so hard-break any line that is still wider than the bracket.
+  lines <- unlist(lapply(strwrap(label, width = max_chars), function(l) {
+    if (nchar(l) <= max_chars) {
+      return(l)
+    }
+    starts <- seq(1L, nchar(l), by = max_chars)
+    substring(l, starts, pmin(starts + max_chars - 1L, nchar(l)))
+  }))
+  if (length(lines) > max_lines) {
+    lines <- lines[seq_len(max_lines)]
+    last <- lines[max_lines]
+    lines[max_lines] <- if (nchar(last) >= max_chars && max_chars >= 2L) {
+      paste0(substr(last, 1L, max_chars - 1L), "…")
+    } else {
+      paste0(last, "…")
+    }
+  }
+  paste(lines, collapse = "\n")
 }
 
 # Fraction of the plot's height one annotation lane occupies, measured down from
@@ -489,17 +561,25 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   annos <- annos[order(annos$start), , drop = FALSE]
   pad <- .anno_span(annos, x_range) * .label_pad_frac
 
-  annos$period <- vapply(seq_len(nrow(annos)), function(i) {
-    .is_period(annos, i)
-  }, logical(1))
+  annos$period <- vapply(
+    seq_len(nrow(annos)),
+    function(i) {
+      .is_period(annos, i)
+    },
+    logical(1)
+  )
 
   # A milestone's label extends to the right of its line; a period's bracket
   # spans its dates, but never less than a label's worth of room.
   left <- as.numeric(annos$start)
-  right <- vapply(seq_len(nrow(annos)), function(i) {
-    end <- if (annos$period[i]) as.numeric(annos$end[i]) else left[i]
-    max(end, left[i] + pad)
-  }, numeric(1))
+  right <- vapply(
+    seq_len(nrow(annos)),
+    function(i) {
+      end <- if (annos$period[i]) as.numeric(annos$end[i]) else left[i]
+      max(end, left[i] + pad)
+    },
+    numeric(1)
+  )
 
   annos$lane <- .assign_lanes(left, right)
   rownames(annos) <- NULL
@@ -513,7 +593,20 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
 # in its own lane carrying the label. The bracket is what disambiguates
 # overlapping periods: the wash may be shared, but each period's extent and
 # label are drawn once, at their own height.
-.annotation_layers <- function(annos, x_range, y_max) {
+#
+# `background` is the plot's own background colour, and `xlim`/`plot_width` the
+# drawn x-axis extent (Dates) and panel width (px): together they let a period's
+# label be trimmed to the bracket it sits in, and its colour chosen for contrast
+# against the wash (which is the user's annotation colour, so it can be any
+# lightness). Both degrade gracefully when unknown.
+.annotation_layers <- function(
+  annos,
+  x_range,
+  y_max,
+  background = "#ffffff",
+  xlim = NULL,
+  plot_width = NULL
+) {
   lanes <- epi_annotation_lanes(annos, x_range)
   if (!nrow(lanes)) {
     return(list())
@@ -522,67 +615,105 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   top <- max(y_max, 1)
   layers <- list()
 
+  # For fitting a period label to its bracket: how many px the panel is wide,
+  # and how wide one label character is, so a bracket's date-span can be turned
+  # into a character budget (see .wrap_label). The panel is narrower than
+  # the whole output by the y axis and margins.
+  char_px <- .anno_char_px(3)
+  panel_px <- (plot_width %||% 900) - 70
+  axis_days <- if (!is.null(xlim)) as.numeric(diff(range(xlim))) else NA_real_
+
   for (i in seq_len(nrow(lanes))) {
     lane <- ((lanes$lane[i] - 1L) %% .max_lanes)
     y_top <- top * (1 - lane * .lane_height)
     y_bot <- y_top - top * .lane_height * 0.72
     y_mid <- (y_top + y_bot) / 2
 
+    # The user's chosen colour for this annotation.
+    col <- .anno_color(lanes, i)
+
     if (lanes$period[i]) {
-      layers <- c(layers, list(
-        annotate(
-          "rect",
-          xmin = lanes$start[i],
-          xmax = lanes$end[i],
-          ymin = -Inf,
-          ymax = Inf,
-          fill = "#f39c12",
-          alpha = 0.10
-        ),
-        annotate(
-          "rect",
-          xmin = lanes$start[i],
-          xmax = lanes$end[i],
-          ymin = y_bot,
-          ymax = y_top,
-          fill = "#f39c12",
-          alpha = 0.55,
-          colour = "#d35400",
-          linewidth = 0.3
-        ),
-        annotate(
-          "text",
-          x = lanes$start[i] + (lanes$end[i] - lanes$start[i]) / 2,
-          y = y_mid,
-          label = lanes$label[i],
-          colour = "#7a3e00",
-          size = 3,
-          vjust = 0.5
+      # The label sits on the bracket — a wash of `col` over the background — so
+      # its colour is chosen for contrast against that blend, not against `col`
+      # alone (a dark pick would otherwise get near-black text on a dark wash).
+      label_col <- .contrast_text(.blend(col, background, 0.55))
+      # And it is wrapped to the bracket's own width, so a long label uses the
+      # bracket's height instead of spilling past the dates it describes.
+      label <- lanes$label[i]
+      if (is.finite(axis_days) && axis_days > 0) {
+        bracket_days <- as.numeric(lanes$end[i] - lanes$start[i])
+        avail_px <- (bracket_days / axis_days) * panel_px
+        label <- .wrap_label(label, floor(avail_px / char_px), max_lines = 2L)
+      }
+      # Grow the bracket downward to enclose every wrapped line: text spilling
+      # onto the fainter full-height wash (0.10) would lose the contrast the
+      # bracket blend (0.55) was chosen against, so it must stay on the bracket.
+      n_lines <- length(strsplit(label, "\n", fixed = TRUE)[[1]])
+      if (n_lines > 1L) {
+        y_bot <- y_top - (y_top - y_bot) * n_lines
+        y_mid <- (y_top + y_bot) / 2
+      }
+      layers <- c(
+        layers,
+        list(
+          annotate(
+            "rect",
+            xmin = lanes$start[i],
+            xmax = lanes$end[i],
+            ymin = -Inf,
+            ymax = Inf,
+            fill = col,
+            alpha = 0.10
+          ),
+          annotate(
+            "rect",
+            xmin = lanes$start[i],
+            xmax = lanes$end[i],
+            ymin = y_bot,
+            ymax = y_top,
+            fill = col,
+            alpha = 0.55
+          ),
+          annotate(
+            "text",
+            x = lanes$start[i] + (lanes$end[i] - lanes$start[i]) / 2,
+            y = y_mid,
+            label = label,
+            colour = label_col,
+            size = 3,
+            vjust = 0.5
+          )
         )
-      ))
+      )
     } else {
-      layers <- c(layers, list(
-        annotate(
-          "segment",
-          x = lanes$start[i],
-          xend = lanes$start[i],
-          y = -Inf,
-          yend = y_mid,
-          colour = "#c0392b",
-          linetype = "dashed",
-          linewidth = 0.4
-        ),
-        annotate(
-          "text",
-          x = lanes$start[i],
-          y = y_mid,
-          label = paste0(" ", lanes$label[i]),
-          colour = "#c0392b",
-          size = 3,
-          hjust = 0,
-          vjust = 0.5
+      # A milestone's label sits beside its line on the plain background, not on
+      # a wash, so it reads in the annotation's own colour — matching the line —
+      # and extends freely to the right (it stands in for a legend entry).
+      layers <- c(
+        layers,
+        list(
+          annotate(
+            "segment",
+            x = lanes$start[i],
+            xend = lanes$start[i],
+            y = -Inf,
+            yend = y_mid,
+            colour = col,
+            linetype = "dashed",
+            linewidth = 0.4
+          ),
+          annotate(
+            "text",
+            x = lanes$start[i],
+            y = y_mid,
+            label = paste0(" ", lanes$label[i]),
+            colour = col,
+            size = 3,
+            hjust = 0,
+            vjust = 0.5
+          )
         )
-      ))
+      )
     }
   }
   layers
@@ -622,6 +753,49 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
 #' @export
 count_breaks <- function(maxv) {
   seq(0, max(1, ceiling(maxv)), by = .count_step(maxv))
+}
+
+# How many columns the bottom legend can have before it overflows the plot.
+#
+# guide_legend(ncol =) is rigid: ggplot honours the column count even when the
+# resulting legend is wider than the device, so a fixed count with long stratum
+# names (full institution names, say) runs off both edges of the panel and is
+# clipped — which no time-window or aspect change fixes, because the legend
+# always carries every category. Estimate instead how many of the *widest*
+# label fit across `width_px`, so the legend wraps to as many rows as it needs
+# rather than being cut off. `width_px` NULL (before the browser reports the
+# panel width) falls back to a typical panel so the first draw is still sane.
+#' @export
+epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
+  n <- length(cats)
+  if (n <= 1L) {
+    return(1L)
+  }
+  w <- if (is.null(width_px) || !is.finite(width_px) || width_px <= 0) {
+    900
+  } else {
+    width_px
+  }
+  # Rendered width of one entry, in px at renderPlot's 96 dpi: the colour key
+  # and its padding, plus ~half an em per character of the widest label.
+  # legend.text is ~0.8 * base_size pt, and a point is 96/72 px at res = 96.
+  char_px <- base_size * 0.8 * (96 / 72) * 0.5
+  entry_px <- 34 + char_px * max(nchar(cats))
+  cols <- floor(w / entry_px)
+  max(1L, min(n, as.integer(cols)))
+}
+
+# The guide the strata scales carry: a wrapped legend when it should show, or
+# "none" to suppress it. Applied to both fill and colour in build_epi_ggplot so
+# whichever aesthetic a mode maps the strata to (fill for the bars, colour for
+# the cumulative curve) is governed identically — the legend can neither leak in
+# when hidden nor render with the wrong column count when shown.
+.strata_guide <- function(show_legend, cats, plot_width) {
+  if (show_legend) {
+    guide_legend(ncol = epi_legend_ncol(cats, plot_width))
+  } else {
+    "none"
+  }
 }
 
 # Expand each (date_bin, stratum, count) row into `count` unit rows, numbered
@@ -673,8 +847,11 @@ count_breaks <- function(maxv) {
 
 # Build the epi-curve ggplot.
 #
-# `opts`: mode ("stacked" | "cumulative"), square, col_scale, background,
-# text_color, interval, annos, reveal_from, reveal_to, fixed_axis, label_ends.
+# `opts`: mode ("stacked" | "cumulative"), square, col_scale, single_color,
+# cumulative_color, background, text_color, interval, annos, reveal_from,
+# reveal_to, fixed_axis, label_ends, plot_width. `col_scale` colours the strata when
+# stratified; `single_color` colours the lone "All isolates" series when not;
+# `cumulative_color` colours the running-total overlay (Stacked/Square only).
 #
 # `square` applies to the stacked mode only, and is what turns it from solid
 # bars into the textbook block curve: one countable square per case.
@@ -690,6 +867,11 @@ count_breaks <- function(maxv) {
 #
 # `label_ends` (cumulative only) writes each stratum's name directly beside the
 # most recently plotted point on its line, instead of relying on the legend.
+#
+# `plot_width` is the panel width in px (the browser-reported render width). It
+# only sizes the legend: the number of columns is picked so a many-stratum
+# legend wraps to fit that width rather than overflowing the panel edges — see
+# epi_legend_ncol. Unset (NULL) falls back to a typical width.
 #' @export
 build_epi_ggplot <- function(binned, opts = list()) {
   mode <- opts$mode %||% "stacked"
@@ -703,6 +885,10 @@ build_epi_ggplot <- function(binned, opts = list()) {
   show_cumulative <- isTRUE(opts$show_cumulative) && identical(mode, "stacked")
   background <- opts$background %||% "#ffffff"
   text_color <- opts$text_color %||% "#000000"
+  # The overlaid running total's own colour, independent of the axis/text so it
+  # can be picked out against the bars it sits on. Defaults to text_color, which
+  # is what it was drawn in before it became a separate control.
+  cumulative_color <- opts$cumulative_color %||% text_color
   interval <- opts$interval %||% "day"
   width_days <- bin_width_days(interval)
 
@@ -710,10 +896,19 @@ build_epi_ggplot <- function(binned, opts = list()) {
     binned <- epi_cumulate(binned)
   }
   cats <- sort(unique(binned$stratum))
-  # Resolve the scale against the strata actually present rather than trusting
-  # the picker: a stratification can outgrow its palette a round-trip before the
-  # picker hears about it.
-  pal <- epi_palette(cats, epi_fit_scale(opts$col_scale, length(cats)))
+  # A single unstratified series (the "All isolates" sentinel) is coloured by a
+  # plain colour picker, not the scale: there is one bar colour to set, not a
+  # palette to divide between strata. The scale only means anything once there
+  # is more than one series to tell apart — see the Colors panel in the view,
+  # which swaps the scale select for a colour picker on the same condition.
+  # Otherwise resolve the scale against the strata actually present rather than
+  # trusting the picker: a stratification can outgrow its palette a round-trip
+  # before the picker hears about it.
+  pal <- if (identical(cats, EPI_ALL_LABEL) && !is.null(opts$single_color)) {
+    setNames(opts$single_color, cats)
+  } else {
+    epi_palette(cats, epi_fit_scale(opts$col_scale, length(cats)))
+  }
   # A lone "All isolates" series has nothing to distinguish, so its legend
   # would just be noise — and when the lines are labelled directly, the legend
   # would just be saying the same thing twice.
@@ -767,10 +962,18 @@ build_epi_ggplot <- function(binned, opts = list()) {
   cum_shown <- cum_totals
   if (!is.null(cum_shown) && nrow(cum_shown)) {
     if (!is.null(opts$reveal_from)) {
-      cum_shown <- cum_shown[cum_shown$date_bin >= opts$reveal_from, , drop = FALSE]
+      cum_shown <- cum_shown[
+        cum_shown$date_bin >= opts$reveal_from,
+        ,
+        drop = FALSE
+      ]
     }
     if (!is.null(opts$reveal_to)) {
-      cum_shown <- cum_shown[cum_shown$date_bin <= opts$reveal_to, , drop = FALSE]
+      cum_shown <- cum_shown[
+        cum_shown$date_bin <= opts$reveal_to,
+        ,
+        drop = FALSE
+      ]
     }
   }
 
@@ -778,7 +981,11 @@ build_epi_ggplot <- function(binned, opts = list()) {
   # alone) so the panel can reserve enough room below its lowest label —
   # otherwise a stratum whose curve ends near 0 gets its label clipped by the
   # panel's bottom edge, which sits exactly on the 0 line with no expansion.
-  end_positions <- if (label_ends) .cumulative_end_positions(shown, y_max) else NULL
+  end_positions <- if (label_ends) {
+    .cumulative_end_positions(shown, y_max)
+  } else {
+    NULL
+  }
   bottom_room <- if (!is.null(end_positions)) {
     max(0, .label_half_height(y_max) - min(end_positions$y_label))
   } else {
@@ -794,8 +1001,23 @@ build_epi_ggplot <- function(binned, opts = list()) {
     expand = expansion(mult = c(0, 0.08), add = c(bottom_room, 0))
   )
   if (!is.null(cum_totals)) {
-    y_scale_args$sec.axis <- sec_axis(~ . * cum_scale, name = "Cumulative cases")
+    y_scale_args$sec.axis <- sec_axis(
+      ~ . * cum_scale,
+      name = "Cumulative cases"
+    )
   }
+
+  # The drawn x-axis extent, computed once so the annotation layer can trim a
+  # period's label to the fraction of the panel its bracket actually spans.
+  xlim <- .x_limits(
+    axis_range,
+    opts$annos,
+    interval,
+    # Line-end labels need room to the right of the last point; reserved
+    # as a fraction of the span since text width can't be known in data
+    # units up front.
+    extra_right_frac = if (label_ends) 0.22 else 0
+  )
 
   p <- ggplot() +
     .epi_theme(background, text_color) +
@@ -804,15 +1026,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
     do.call(scale_y_continuous, y_scale_args) +
     scale_x_date(
       date_labels = .date_labels(interval),
-      limits = .x_limits(
-        axis_range,
-        opts$annos,
-        interval,
-        # Line-end labels need room to the right of the last point; reserved
-        # as a fraction of the span since text width can't be known in data
-        # units up front.
-        extra_right_frac = if (label_ends) 0.22 else 0
-      )
+      limits = xlim
     ) +
     labs(
       x = "Date of collection",
@@ -822,7 +1036,17 @@ build_epi_ggplot <- function(binned, opts = list()) {
         "Number of cases"
       }
     ) +
-    guides(fill = if (show_legend) guide_legend(ncol = 6) else "none")
+    # Both fill and colour carry the strata, but which one is actually mapped
+    # depends on the mode: the bar modes colour by `fill` (geom_col/geom_tile),
+    # the cumulative curve by `colour` (geom_step). Only the mapped aesthetic
+    # produces a legend, so the guide setting has to cover both — silencing only
+    # `fill` left the cumulative curve's colour legend to render regardless of
+    # show_legend, which is what put a full stratum legend (and the whitespace it
+    # letterboxes the curve into) under a "Label lines" cumulative plot.
+    guides(
+      fill = .strata_guide(show_legend, cats, opts$plot_width),
+      colour = .strata_guide(show_legend, cats, opts$plot_width)
+    )
 
   p <- p + .mode_layers(shown, mode, square, interval)
 
@@ -830,7 +1054,14 @@ build_epi_ggplot <- function(binned, opts = list()) {
     p <- p + .cumulative_end_labels(end_positions)
   }
 
-  layers <- .annotation_layers(opts$annos, x_range, y_max)
+  layers <- .annotation_layers(
+    opts$annos,
+    x_range,
+    y_max,
+    background = background,
+    xlim = xlim,
+    plot_width = opts$plot_width
+  )
   for (l in layers) {
     p <- p + l
   }
@@ -839,24 +1070,19 @@ build_epi_ggplot <- function(binned, opts = list()) {
     # Added last so it sits in front of every other layer, including
     # annotations — a running total is only useful if it's never the thing
     # buried under the bars/tiles (or a period's shading) it's overlaid on.
-    # A background-coloured halo goes down first so the dashed line itself
-    # stays legible over whichever fill colour it happens to cross, the same
-    # trick map labels use to read over a busy background.
-    overlay_aes <- aes(x = .data$date_bin, y = .data$cum / cum_scale)
+    mapping <- aes(x = .data$date_bin, y = .data$cum / cum_scale)
     p <- p +
       geom_step(
         data = cum_shown,
-        mapping = overlay_aes,
+        mapping = mapping,
         colour = background,
-        linewidth = 2.2,
-        lineend = "round"
+        linewidth = 2
       ) +
       geom_step(
         data = cum_shown,
-        mapping = overlay_aes,
-        colour = text_color,
-        linewidth = 0.8,
-        linetype = "dashed"
+        mapping = mapping,
+        colour = cumulative_color,
+        linewidth = 0.8
       )
   }
 
@@ -911,7 +1137,11 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   pad <- bin_width_days(interval) / 4
   last_width <- exact_bin_widths(x_range[2], interval)
   span <- as.numeric(diff(x_range))
-  right_extra <- if (extra_right_frac > 0) max(span, 1) * extra_right_frac else 0
+  right_extra <- if (extra_right_frac > 0) {
+    max(span, 1) * extra_right_frac
+  } else {
+    0
+  }
   lims <- c(x_range[1] - pad, x_range[2] + last_width + pad + right_extra)
   if (!is.null(annos) && nrow(annos)) {
     dates <- c(annos$start, annos$end[!is.na(annos$end)])
@@ -1044,7 +1274,13 @@ square_panel_ratio <- function(binned, mode = "stacked") {
 # external toolchain, so every raster and vector format is genuinely available
 # rather than HTML only. Mirrors save_tree_plot() in app/logic/tree_plot.R.
 #' @export
-save_epi_plot <- function(plot, file, filetype = "png", aspect_ratio = 0.55, dpi = 192) {
+save_epi_plot <- function(
+  plot,
+  file,
+  filetype = "png",
+  aspect_ratio = 0.55,
+  dpi = 192
+) {
   width <- 12
   ggsave(
     filename = file,

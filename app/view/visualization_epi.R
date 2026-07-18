@@ -31,7 +31,7 @@ box::use(
     sidebar,
   ],
   shiny,
-  shinyWidgets[radioGroupButtons],
+  shinyWidgets[radioGroupButtons, pickerInput, pickerOptions],
 )
 box::use(
   app / logic / epi_plot,
@@ -80,8 +80,18 @@ ASPECT_DEFAULT <- 0.55
 PANEL_CHROME_PX <- 200
 
 COL_SCALE_DEFAULT <- "Set2"
+# The single-series colour used when the curve is not stratified. Matches Set2's
+# first swatch so switching stratification on and off keeps the same base hue.
+SINGLE_COLOR_DEFAULT <- "#66C2A5"
 BACKGROUND_DEFAULT <- "#ffffff"
 TEXT_COLOR_DEFAULT <- "#000000"
+# The running-total overlay's line colour. Defaults to black, which is what it
+# was drawn in (text_color) before it became its own control.
+CUMULATIVE_COLOR_DEFAULT <- "#000000"
+# The colour a freshly added annotation takes; the orange the period wash used
+# before annotations became individually colourable. Kept in step with
+# epi_plot$EPI_ANNO_COLOR_DEFAULT, the fallback the plot builder applies.
+ANNO_COLOR_DEFAULT <- "#f39c12"
 
 ANNO_PERIOD <- "period"
 
@@ -90,10 +100,10 @@ ANNO_PERIOD <- "period"
 epi_controls <- function(ns) {
   shiny$tagList(
     navset_tab(
-      # Elements -----------------------------------------------------------------
+      # Layout -----------------------------------------------------------------
       nav_panel(
-        "Elements",
-        icon = shiny$icon("shapes"),
+        "Layout",
+        icon = shiny$icon("sliders"),
         shiny$selectInput(
           ns("epi_plot_mode"),
           "Plot mode",
@@ -119,21 +129,29 @@ epi_controls <- function(ns) {
           ns = ns,
           input_switch(ns("epi_label_ends"), "Label lines", TRUE)
         ),
-        shiny$sliderInput(
-          ns("epi_aspect_ratio"),
-          "Aspect ratio",
-          min = 0.3,
-          max = 1,
-          value = ASPECT_DEFAULT,
-          step = 0.05,
-          ticks = FALSE
-        ),
         # Rendered server-side: the choices are this database's metadata
         # columns, so the picker is built once they are known rather than being
         # declared empty here and back-filled (an empty <select> initialises
         # bootstrap-select in its disabled state). Same pattern as the staged
         # peers picker in visualization.R.
-        shiny$uiOutput(ns("stratify_ui"))
+        shiny$uiOutput(ns("stratify_ui")),
+        # Square blocks mode fixes the panel's shape to the data grid via
+        # coord_fixed (see square_ratio / epi_plot's square split), so the
+        # aspect ratio has no effect there. The wrapper carries the id the
+        # server toggles: disabled and given an explanatory hover title while
+        # square mode is active.
+        shiny$div(
+          id = ns("epi_aspect_ratio_wrap"),
+          shiny$sliderInput(
+            ns("epi_aspect_ratio"),
+            "Aspect ratio",
+            min = 0.3,
+            max = 1,
+            value = ASPECT_DEFAULT,
+            step = 0.05,
+            ticks = FALSE
+          )
+        )
       ),
       # Time — the same date-range slider, Interval buttons and Play/step
       # controls as the Map's own Time tab (visualization_map.R), adapted to
@@ -208,17 +226,52 @@ epi_controls <- function(ns) {
       nav_panel(
         "Colors",
         icon = shiny$icon("palette"),
-        # Placeholder choices: which scales are actually offered depends on how
-        # many strata there are, and is swapped in by apply_scale_choices().
-        scale_select(ns, "epi_col_scale", categories = "Qualitative"),
+        # A colour scale only means anything once the curve is split into
+        # strata to tell apart; with a single series there is just one bar
+        # colour to set. So the scale select shows only while stratified, and a
+        # plain colour picker takes its place otherwise. The empty string is the
+        # "no stratification" sentinel (see stratify_selected); an undefined
+        # epi_stratify — before stratify_ui has rendered — counts as unstratified
+        # too, which `!= null` (JS ==/!= treat undefined and null alike) covers.
+        shiny$conditionalPanel(
+          condition = "input.epi_stratify != '' && input.epi_stratify != null",
+          ns = ns,
+          # Placeholder choices: which scales are actually offered depends on how
+          # many strata there are, and is swapped in by apply_scale_choices().
+          scale_select(ns, "epi_col_scale", categories = "Qualitative")
+        ),
+        # The single-series colour lives in the same grid as Text and Background
+        # so all three colour rows share one gap; only its visibility is
+        # conditional (shown when not stratified). Keeping it in a separate grid
+        # would space it differently from the rows below it.
         shiny$div(
           class = "viz-color-grid",
+          shiny$conditionalPanel(
+            condition = "input.epi_stratify == '' || input.epi_stratify == null",
+            ns = ns,
+            viz_color(ns, "epi_single_color", "Series", SINGLE_COLOR_DEFAULT)
+          ),
           viz_color(ns, "epi_text_color", "Text", TEXT_COLOR_DEFAULT),
           viz_color(
             ns,
             "epi_background_color",
             "Background",
             BACKGROUND_DEFAULT
+          ),
+          # The running-total overlay only exists in Stacked/Square blocks mode
+          # (Cumulative already *is* that total, so there is no separate line to
+          # colour) *and* only when the "Show cumulative curve" switch is on — so
+          # its picker mirrors both conditions the overlay itself is drawn under,
+          # and there is no colour to pick when there is no line.
+          shiny$conditionalPanel(
+            condition = "input.epi_plot_mode != 'cumulative' && input.epi_show_cumulative",
+            ns = ns,
+            viz_color(
+              ns,
+              "epi_cumulative_color",
+              "Cumulative line",
+              CUMULATIVE_COLOR_DEFAULT
+            )
           )
         )
       ),
@@ -231,13 +284,34 @@ epi_controls <- function(ns) {
           "Type",
           c(`Milestone (line)` = "milestone", `Time period (shaded)` = "period")
         ),
-        shiny$dateInput(ns("epi_anno_start"), "Start date", value = Sys.Date()),
+        # startview = "decade" opens the picker on a year grid, so jumping to a
+        # collection year (often years before today's default) is one click
+        # rather than paging month-by-month. autoclose closes on day selection.
+        shiny$dateInput(
+          ns("epi_anno_start"),
+          "Start date",
+          value = Sys.Date(),
+          startview = "decade",
+          autoclose = TRUE
+        ),
         shiny$conditionalPanel(
           condition = "input.epi_anno_type == 'period'",
           ns = ns,
-          shiny$dateInput(ns("epi_anno_end"), "End date", value = Sys.Date())
+          shiny$dateInput(
+            ns("epi_anno_end"),
+            "End date",
+            value = Sys.Date(),
+            startview = "decade",
+            autoclose = TRUE
+          )
         ),
         shiny$textInput(ns("epi_anno_label"), "Label", value = ""),
+        # Stacked (label above, full-width swatch) to match the Type/date/Label
+        # fields around it, rather than the Colors tab's side-by-side row.
+        shiny$div(
+          class = "epi-anno-color",
+          viz_color(ns, "epi_anno_color", "Color", ANNO_COLOR_DEFAULT)
+        ),
         shiny$actionButton(
           ns("epi_add_anno"),
           "Add to timeline",
@@ -365,6 +439,31 @@ server <- function(
     }
     square_for <- function() identical(input$epi_plot_mode, "square")
 
+    # The aspect ratio is ignored in Square blocks mode (coord_fixed sizes the
+    # panel to the data grid — see the epi_plot height handler), so the slider
+    # is disabled there and given a hover title saying why. The title lives on
+    # the wrapper div because a disabled slider swallows its own hover events.
+    ASPECT_SQUARE_HINT <-
+      "Aspect ratio is fixed in Square blocks mode: the layout is sized to the data grid."
+    shiny$observeEvent(
+      input$epi_plot_mode,
+      {
+        square <- square_for()
+        shinyjs::toggleState("epi_aspect_ratio", condition = !square)
+        wrap <- ns("epi_aspect_ratio_wrap")
+        shinyjs::runjs(sprintf(
+          "var el=document.getElementById('%s'); if(el){%s}",
+          wrap,
+          if (square) {
+            sprintf("el.setAttribute('title','%s');", ASPECT_SQUARE_HINT)
+          } else {
+            "el.removeAttribute('title');"
+          }
+        ))
+      },
+      ignoreNULL = FALSE
+    )
+
     # The switch is hidden once Cumulative is picked (see the conditionalPanel
     # in epi_controls), but its last value survives underneath — guard here too
     # rather than trust the client to have cleared it.
@@ -482,7 +581,7 @@ server <- function(
       # derived ST + locus columns); the selected value stays the raw column
       # name the plot builder keys on. "" is the sentinel for no stratification
       # — see stratify_selected().
-      shiny$selectInput(
+      pickerInput(
         ns("epi_stratify"),
         "Stratify by",
         choices = c(
@@ -490,7 +589,12 @@ server <- function(
           grouped_field_choices(fields, attr(viz_metadata(), "mlst_cols"))
         ),
         selected = if (isTRUE(prev %in% fields)) prev else "",
-        width = "100%"
+        width = "100%",
+        options = pickerOptions(
+          size = 10,
+          liveSearch = TRUE,
+          liveSearchPlaceholder = "Search fields ..."
+        )
       )
     })
 
@@ -544,8 +648,11 @@ server <- function(
 
       reset_viz_colors(
         session,
+        epi_single_color = SINGLE_COLOR_DEFAULT,
+        epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
         epi_text_color = TEXT_COLOR_DEFAULT,
-        epi_background_color = BACKGROUND_DEFAULT
+        epi_background_color = BACKGROUND_DEFAULT,
+        epi_anno_color = ANNO_COLOR_DEFAULT
       )
       annotations(epi_plot$empty_epi_annotations())
       anim_playing(FALSE)
@@ -611,6 +718,7 @@ server <- function(
           start = start,
           end = end,
           label = label,
+          color = input$epi_anno_color %||% ANNO_COLOR_DEFAULT,
           stringsAsFactors = FALSE
         )
       ))
@@ -636,8 +744,7 @@ server <- function(
       df <- annotations()
       if (!nrow(df)) {
         return(shiny$div(
-          class = "text-muted fst-italic mb-2",
-          style = "font-size: 0.9rem;",
+          class = "text-muted fst-italic mb-2 epi-anno-empty",
           "No active annotations."
         ))
       }
@@ -645,6 +752,13 @@ server <- function(
         lapply(seq_len(nrow(df)), function(i) {
           anno <- df[i, ]
           is_period <- identical(anno$type, ANNO_PERIOD) && !is.na(anno$end)
+          color <- if (
+            "color" %in% names(anno) && !is.na(anno$color) && nzchar(anno$color)
+          ) {
+            anno$color
+          } else {
+            ANNO_COLOR_DEFAULT
+          }
           subtitle <- if (is_period) {
             paste(
               format(anno$start, "%d %b %Y"),
@@ -657,11 +771,14 @@ server <- function(
           shiny$div(
             class = paste(
               "card p-2 mb-2 d-flex flex-row align-items-center",
-              "justify-content-between border-light shadow-sm"
+              "justify-content-between epi-anno-card"
             ),
-            style = "min-height: 55px;",
+            # The annotation's own colour, drawn as a left stripe by
+            # .epi-anno-card so the list mirrors what is on the curve. Passed as
+            # a CSS custom property — the only per-row value the stylesheet needs.
+            style = sprintf("--epi-anno-stripe: %s;", color),
             shiny$div(
-              style = "max-width: 75%;",
+              class = "epi-anno_body",
               shiny$div(
                 class = "epi-anno_label",
                 title = anno$label,
@@ -837,6 +954,13 @@ server <- function(
       shiny$req(length(bins) >= 2)
       shiny$div(
         class = "custom-slider date-slider",
+        # Covered while Play is running (see the anim_playing observer): the
+        # per-tick updateSliderInput redraws the ion.rangeSlider — handles,
+        # rotated tick labels and all — on every frame, which reads as a
+        # flickering, half-broken control. The window it would show is already
+        # narrated by the on-plot reveal, so the slider is hidden behind an
+        # opaque "Animating…" cover for the duration rather than left twitching.
+        id = ns("daterange_slider_wrap"),
         shiny$sliderInput(
           ns("epi_daterange"),
           NULL,
@@ -847,6 +971,11 @@ server <- function(
             input$epi_interval %||% fitted_interval()
           ),
           timeFormat = "%Y-%m-%d"
+        ),
+        shiny$div(
+          class = "date-slider_cover",
+          shiny$icon("circle-notch", class = "fa-spin"),
+          shiny$span("Animating…")
         )
       )
     })
@@ -947,11 +1076,24 @@ server <- function(
         label = if (playing) "Pause" else "Play",
         icon = shiny$icon(if (playing) "pause" else "play")
       )
+      # Lock every other Time control for the duration of playback: a manual
+      # drag, step, interval switch or axis-zoom toggle mid-run is either
+      # indistinguishable server-side from a tick or rebinds the very bins the
+      # loop is walking, both of which race the animation into buggy behaviour.
+      # Play itself stays live so it can pause.
       shinyjs::toggleState("epi_daterange", condition = !playing)
       shinyjs::toggleState("epi_step_start_prev", condition = !playing)
       shinyjs::toggleState("epi_step_start_next", condition = !playing)
       shinyjs::toggleState("epi_step_end_prev", condition = !playing)
       shinyjs::toggleState("epi_step_end_next", condition = !playing)
+      shinyjs::toggleState("epi_interval", condition = !playing)
+      shinyjs::toggleState("epi_zoom_axis", condition = !playing)
+      # Hide the flickering slider behind its cover (see daterange_ui).
+      shinyjs::toggleClass(
+        id = "daterange_slider_wrap",
+        class = "date-slider--playing",
+        condition = playing
+      )
     })
 
     # The tick loop. Mirrors the guarded observe() + invalidateLater() pattern
@@ -991,11 +1133,23 @@ server <- function(
     epi_ggplot <- shiny$reactive({
       binned <- epi_data()
       shiny$req(nrow(binned) > 0)
+      # The browser-reported panel width, so the legend can be given a column
+      # count that keeps it inside the plot rather than clipped at the edges
+      # (see epi_legend_ncol). NULL until the first render reports it, which
+      # build_epi_ggplot handles with a sensible fallback; re-reading it here
+      # re-flows the legend when the panel is resized.
+      plot_width <- session$clientData[[
+        paste0("output_", ns("epi_plot"), "_width")
+      ]]
       epi_plot$build_epi_ggplot(
         binned,
         list(
           mode = mode_for(),
+          plot_width = plot_width,
           col_scale = input$epi_col_scale %||% COL_SCALE_DEFAULT,
+          single_color = input$epi_single_color %||% SINGLE_COLOR_DEFAULT,
+          cumulative_color = input$epi_cumulative_color %||%
+            CUMULATIVE_COLOR_DEFAULT,
           background = input$epi_background_color %||% BACKGROUND_DEFAULT,
           text_color = input$epi_text_color %||% TEXT_COLOR_DEFAULT,
           interval = input$epi_interval %||% fitted_interval(),
@@ -1048,7 +1202,7 @@ server <- function(
         shiny$plotOutput(ns("epi_plot"), height = "auto"),
         # Hidden target the export action button clicks to start the download.
         shiny$div(
-          style = "display:none;",
+          class = "d-none",
           shiny$downloadButton(ns("download_epi"), "Download plot")
         )
       )
@@ -1096,7 +1250,38 @@ server <- function(
       # 96dpi keeps the type proportionate: `res` is what the device believes
       # its resolution to be, so at 192 a 1200px panel thinks it is six inches
       # across and 13pt text comes out looking enormous.
-      res = 96
+      res = 96,
+      # Square blocks mode uses coord_fixed, whose respect=TRUE draws the whole
+      # ggplot — plot.background and all — inside a centred square viewport and
+      # leaves the letterbox showing the *device* background. A white device
+      # background would then frame a black plot with white bands. Render the
+      # device transparent instead and paint the chosen colour onto the output
+      # container (see the epi_background_color observer), so the background
+      # covers the whole frame rather than just the panel. bg can't be reactive
+      # here — renderPlot forces its device args once at module init — hence the
+      # split into a static transparent device plus a live container colour.
+      bg = "transparent"
+    )
+
+    # Paint the chosen background onto the plot's output container. With the
+    # device rendered transparent (see renderPlot bg), this colour shows through
+    # everywhere the ggplot itself doesn't paint — chiefly the coord_fixed
+    # letterbox in Square blocks mode — so the whole frame takes the background,
+    # not just the panel. The plotOutput div persists across plot re-renders, so
+    # the colour set here survives every redraw; only a picker change refreshes
+    # it. The guard covers the first fire racing the div's initial mount; the
+    # default (#ffffff) matches the stage anyway, so any early miss is invisible.
+    shiny$observeEvent(
+      input$epi_background_color,
+      {
+        col <- input$epi_background_color %||% BACKGROUND_DEFAULT
+        shinyjs::runjs(sprintf(
+          "var el=document.getElementById('%s'); if(el){el.style.backgroundColor='%s';}",
+          ns("epi_plot"),
+          col
+        ))
+      },
+      ignoreNULL = FALSE
     )
 
     output$download_epi <- shiny$downloadHandler(

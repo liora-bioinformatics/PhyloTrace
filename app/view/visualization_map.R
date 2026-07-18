@@ -1499,6 +1499,14 @@ map_controls <- function(ns) {
         icon = shiny$icon("clock"),
         shiny$div(
           class = "custom-slider date-slider",
+          # Covered while Play is running (see the anim_playing observer): the
+          # per-tick updateSliderInput redraws the ion.rangeSlider — handles,
+          # rotated tick labels and all — on every frame, which reads as a
+          # flickering, half-broken control. The window it would show is already
+          # narrated by the on-map date label and map_anim_label, so the slider
+          # is hidden behind an opaque "Animating…" cover for the duration
+          # rather than left twitching.
+          id = ns("daterange_slider_wrap"),
           shiny$sliderInput(
             ns("map_daterange"),
             NULL,
@@ -1506,6 +1514,11 @@ map_controls <- function(ns) {
             max = Sys.Date(),
             value = c(Sys.Date() - 30, Sys.Date()),
             timeFormat = "%Y-%m-%d"
+          ),
+          shiny$div(
+            class = "date-slider_cover",
+            shiny$icon("circle-notch", class = "fa-spin"),
+            shiny$span("Animating…")
           )
         ),
         radioGroupButtons(
@@ -2089,12 +2102,24 @@ server <- function(
           label = if (playing) "Pause" else "Play",
           icon = shiny$icon(if (playing) "pause" else "play")
         )
+        # Lock every other Time control for the duration of playback: a manual
+        # drag, step, interval switch or scale/label toggle mid-run either
+        # races the tick loop that is driving map_daterange or rebins the very
+        # frames it is walking. Play itself stays live so it can pause.
         shinyjs::toggleState("map_daterange", condition = !playing)
         shinyjs::toggleState("map_interval", condition = !playing)
         shinyjs::toggleState("map_step_start_prev", condition = !playing)
         shinyjs::toggleState("map_step_start_next", condition = !playing)
         shinyjs::toggleState("map_step_end_prev", condition = !playing)
         shinyjs::toggleState("map_step_end_next", condition = !playing)
+        shinyjs::toggleState("map_show_time_label", condition = !playing)
+        shinyjs::toggleState("map_region_fixed_scale", condition = !playing)
+        # Hide the flickering slider behind its cover (see the Time nav_panel).
+        shinyjs::toggleClass(
+          id = "daterange_slider_wrap",
+          class = "date-slider--playing",
+          condition = playing
+        )
       },
       ignoreInit = TRUE
     )
