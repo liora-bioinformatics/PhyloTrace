@@ -46,6 +46,8 @@ box::use(
       export_panel,
       reset_viz_colors,
       reset_viz_radio_buttons,
+      collect_input_snapshot,
+      apply_input_snapshot,
     ],
 )
 
@@ -1151,5 +1153,112 @@ server <- function(
     # navset_hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
     shiny$outputOptions(output, "tree_plot", suspendWhenHidden = FALSE)
+
+    # ---- Dashboard "Save Analysis" contract ---------------------------------
+    # Snapshot the nj_* controls plus the two pieces of state held in
+    # reactiveVals rather than inputs (per-tile config and the heatmap columns).
+    snapshot <- shiny$reactive(c(
+      collect_input_snapshot(input, "nj_"),
+      list(.tiles = nj_tiles(), .heatmap_select = nj_heatmap_select())
+    ))
+
+    restore <- function(vals) {
+      apply_input_snapshot(
+        session,
+        vals,
+        switches = c(
+          "nj_tiplab_show", "nj_align", "nj_show_branch_label",
+          "nj_mapping_show", "nj_tipcolor_mapping_show",
+          "nj_tipshape_mapping_show", "nj_tiles_show", "nj_heatmap_show",
+          "nj_tippoint_show", "nj_nodepoint_show", "nj_nodelabel_show",
+          "nj_ladder", "nj_rootedge_show", "nj_treescale_show"
+        ),
+        selects = c(
+          "nj_tiplab_fontface", "nj_tiplab_scale", "nj_tippoint_scale",
+          "nj_tiles_scale", "nj_heatmap_scale", "nj_tippoint_shape",
+          "nj_nodepoint_shape", "nj_tile_num", "nj_tile_number",
+          "nj_clade_type", "nj_layout"
+        ),
+        sliders = c(
+          "nj_tiplab_size", "nj_tiplab_alpha", "nj_tiplab_angle",
+          "nj_branch_size", "nj_branchlabel_cutoff", "nj_title_size",
+          "nj_subtitle_size", "nj_tippoint_alpha", "nj_tippoint_size",
+          "nj_nodepoint_alpha", "nj_nodepoint_size", "nj_fruit_alpha",
+          "nj_fruit_width", "nj_fruit_offset", "nj_aspect_ratio", "nj_v",
+          "nj_h", "nj_zoom", "nj_legend_size", "nj_legend_x", "nj_legend_y"
+        ),
+        texts = c("nj_title", "nj_subtitle"),
+        colors = c(
+          "nj_color", "nj_bg", "nj_title_color", "nj_tiplab_color",
+          "nj_tiplab_fill", "nj_branch_color", "nj_branch_label_color",
+          "nj_tippoint_color", "nj_nodepoint_color", "nj_clade_scale"
+        ),
+        radio_groups = "nj_legend_orientation"
+      )
+
+      # Metadata-/isolate-backed selects: set choices alongside the value so the
+      # saved field/isolate/node sticks (mirrors populate_metadata_selects()).
+      meta <- viz_metadata()
+      if (!is.null(meta) && length(names(meta))) {
+        fields <- names(meta)
+        setsel <- function(id, choices) {
+          if (!is.null(vals[[id]])) {
+            shiny$updateSelectInput(session, id, choices = choices,
+              selected = vals[[id]])
+          }
+        }
+        setsel("nj_tiplab", fields)
+        setsel("nj_color_mapping", fields)
+        setsel("nj_tipcolor_mapping", fields)
+        setsel("nj_tipshape_mapping", fields)
+        setsel("nj_fruit_variable", fields)
+        setsel("nj_branch_label", c("Allelic Distance", fields))
+
+        tips <- meta$isolate
+        if (!is.null(vals$nj_root_isolate)) {
+          shiny$updateSelectInput(session, "nj_root_isolate",
+            choices = c("Automatic", tips), selected = vals$nj_root_isolate)
+        }
+        n_tip <- length(tips)
+        if (n_tip >= 3 && !is.null(vals$nj_parentnode)) {
+          n_node <- if (identical(algo(), "UPGMA")) n_tip - 1L else n_tip - 2L
+          nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
+          shinyWidgets::updatePickerInput(session, "nj_parentnode",
+            choices = nodes, selected = intersect(vals$nj_parentnode, nodes))
+        }
+      }
+
+      if (!is.null(vals$.tiles)) {
+        try(nj_tiles(vals$.tiles), silent = TRUE)
+      }
+      if (!is.null(vals$.heatmap_select)) {
+        try(nj_heatmap_select(vals$.heatmap_select), silent = TRUE)
+      }
+    }
+
+    # Thumbnail: server-render the ggtree to a small PNG (width fixed at 10in in
+    # save_tree_plot, so dpi sets the pixel width).
+    save_thumb <- function(file, w, h) {
+      aspect <- if (
+        identical(input$nj_layout, "circular") ||
+          identical(input$nj_layout, "inward")
+      ) {
+        1
+      } else {
+        input$nj_aspect_ratio %||% 0.6
+      }
+      save_tree_plot(
+        tree_plot_built(), file, "png", aspect,
+        dpi = max(24, round(w / 10))
+      )
+    }
+
+    list(
+      snapshot = snapshot,
+      restore = restore,
+      save_thumb = save_thumb,
+      request_thumb = NULL,
+      thumb_data = NULL
+    )
   })
 }

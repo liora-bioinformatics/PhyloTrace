@@ -85,6 +85,8 @@ box::use(
       viz_color,
       reset_viz_colors,
       reset_viz_radio_buttons,
+      collect_input_snapshot,
+      apply_input_snapshot,
     ],
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
@@ -2935,6 +2937,108 @@ server <- function(
     # default suspend-when-hidden behavior (see its own comment above).
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
 
-    list(geocode_status = map_geocode_status)
+    # ---- Dashboard "Save Analysis" contract ---------------------------------
+    snapshot <- shiny$reactive(collect_input_snapshot(input, "map_"))
+
+    restore <- function(vals) {
+      apply_input_snapshot(
+        session,
+        vals,
+        switches = c(
+          "map_color_var", "map_coverage", "map_graticule", "map_legend",
+          "map_minimap", "map_permanent", "map_reverse", "map_scalebar",
+          "map_show_controls", "map_spiderfy", "map_chart_cluster",
+          "map_region_fixed_scale", "map_region_label_nonzero",
+          "map_region_permanent", "map_show_time_label", "map_zoom_to_bounds"
+        ),
+        selects = c(
+          "map_mode", "map_tiles", "map_legend_pos", "map_chart_type",
+          "map_col_scale", "map_chart_scale", "map_heat_scale"
+        ),
+        sliders = c(
+          "map_radius", "map_opacity", "map_weight", "map_bins",
+          "map_legend_opacity", "map_label_size", "map_cluster_radius",
+          "map_cluster_zoom_level", "map_region_opacity", "map_heat_radius",
+          "map_heat_max", "map_chart_size", "map_chart_opacity",
+          "map_chart_cluster_radius"
+        ),
+        numerics = "map_legend_digits",
+        texts = "map_legend_title",
+        colors = c(
+          "map_marker_color", "map_stroke_color", "map_na_color",
+          "map_region_border"
+        ),
+        radio_groups = "map_interval"
+      )
+
+      # Base radioButtons (scale mode / region transform).
+      if (!is.null(vals$map_scale_type)) {
+        shiny$updateRadioButtons(session, "map_scale_type",
+          selected = vals$map_scale_type)
+      }
+      if (!is.null(vals$map_region_transform)) {
+        shiny$updateRadioButtons(session, "map_region_transform",
+          selected = vals$map_region_transform)
+      }
+
+      # Date-range slider: restore as Dates.
+      if (!is.null(vals$map_daterange)) {
+        dr <- tryCatch(as.Date(unlist(vals$map_daterange)), error = function(e) NULL)
+        if (!is.null(dr) && length(dr) == 2 && !any(is.na(dr))) {
+          shiny$updateSliderInput(session, "map_daterange", value = dr)
+        }
+      }
+
+      # Metadata-backed selects / pickers (mirror populate_metadata_selects()).
+      meta <- viz_metadata()
+      if (!is.null(meta) && nrow(meta)) {
+        fields <- setdiff(names(meta), "isolate")
+        if (length(fields)) {
+          if (!is.null(vals$map_col_var)) {
+            shiny$updateSelectInput(session, "map_col_var", choices = fields,
+              selected = vals$map_col_var)
+          }
+          if (!is.null(vals$map_chart_var)) {
+            shiny$updateSelectInput(session, "map_chart_var", choices = fields,
+              selected = vals$map_chart_var)
+          }
+          popup_ids <- unique(c("isolate", "place", fields))
+          popup_choices <- stats::setNames(
+            popup_ids, vapply(popup_ids, field_label, character(1))
+          )
+          if (!is.null(vals$map_popup)) {
+            updatePickerInput(session, "map_popup", choices = popup_choices,
+              selected = intersect(unlist(vals$map_popup), popup_ids))
+          }
+          hover_ids <- unique(c("isolate", fields))
+          hover_choices <- stats::setNames(
+            hover_ids, vapply(hover_ids, field_label, character(1))
+          )
+          if (!is.null(vals$map_hover_field)) {
+            updatePickerInput(session, "map_hover_field", choices = hover_choices,
+              selected = intersect(unlist(vals$map_hover_field), hover_ids))
+          }
+        }
+      }
+    }
+
+    # Thumbnail: capture the Leaflet container in the browser (html2canvas),
+    # returned via input$thumb_data.
+    request_thumb <- function() {
+      session$sendCustomMessage("phylotrace_capture", list(
+        selector = paste0("#", ns("map")),
+        mode = "html2canvas",
+        inputId = session$ns("thumb_data")
+      ))
+    }
+
+    list(
+      geocode_status = map_geocode_status,
+      snapshot = snapshot,
+      restore = restore,
+      save_thumb = NULL,
+      request_thumb = request_thumb,
+      thumb_data = shiny$reactive(input$thumb_data)
+    )
   })
 }

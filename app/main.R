@@ -220,6 +220,11 @@ server <- function(id) {
     # Modules observe it with ignoreInit = TRUE and tear down their own state.
     session_reset <- reactiveVal(0L)
 
+    # Shared change signal for saved Analyses/Plots. Bumped by whichever module
+    # writes (the dashboard on add/rename/delete, the Visualization module on
+    # Save); both re-read the database when it advances so they stay in sync.
+    plots_changed <- reactiveVal(0L)
+
     SCHEME_BROWSER_vals <- scheme_browser$server(
       "scheme_browser",
       session_reset = session_reset
@@ -318,18 +323,32 @@ server <- function(id) {
       },
       ignoreInit = TRUE
     )
-    analysis_dashboard$server(
+    ANALYSIS_DASHBOARD_vals <- analysis_dashboard$server(
       "analysis_dashboard",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset
+      session_reset = session_reset,
+      plots_changed = plots_changed
     )
     visualization$server(
       "visualization",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = session_reset,
       typing_status = TYPING_vals$typing_status,
-      db_updated = TYPING_vals$db_updated
+      db_updated = TYPING_vals$db_updated,
+      # Dashboard -> Visualization: "Add Plot" for an Analysis and "open a saved
+      # plot" both route here and preselect / restore in the Save panel.
+      launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,
+      open_ctx = ANALYSIS_DASHBOARD_vals$request_open_plot,
+      plots_changed = plots_changed
     )
+
+    # Dashboard buttons that hand off to the Visualization tab.
+    observeEvent(ANALYSIS_DASHBOARD_vals$request_add_plot(), {
+      nav_select(id = "tabs", selected = "visualization_panel")
+    })
+    observeEvent(ANALYSIS_DASHBOARD_vals$request_open_plot(), {
+      nav_select(id = "tabs", selected = "visualization_panel")
+    })
     resistance_screening$server(
       "resistance_screening",
       db_path = LANDING_PAGE_vals$db_path,

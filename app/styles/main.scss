@@ -259,7 +259,7 @@
 // Dark mode: the light checkerboard stripes glare on the dark body bg, so swap
 // them for a faint light-on-dark tint that keeps the same subtle texture.
 [data-bs-theme="dark"] .viz-plot-stage {
-    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.25) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.25) 50%, rgba(255, 255, 255, 0.25) 75%, transparent 75%);
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.2) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.2) 75%, transparent 75%);
 }
 
 // Tree display modes (see visualization_tree.R). The ggtree image is rendered
@@ -406,7 +406,7 @@
 // Dark mode: match .viz-plot-stage — swap the light checkerboard stripes for a
 // faint light-on-dark tint so the empty map placeholder reads as themed.
 [data-bs-theme="dark"] .map-plot-stage {
-    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0.05) 75%, transparent 75%);
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.2) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.2) 75%, transparent 75%);
 }
 
 // renderLeaflet() rebuilds the whole map (including the tile layer) on every
@@ -418,6 +418,10 @@
 // hold instead of a flash of the page background.
 #app-visualization-map-map {
     background-color: #ddd;
+}
+
+.ad-group-stack .bslib-value-box .value-box-showcase {
+    padding: 5px 0 0 5px;
 }
 
 // Unified backing for every floating Map control -----------------------------
@@ -767,6 +771,68 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     z-index: 10;
     display: flex;
     gap: 5px;
+}
+
+// Analysis (group) header: rename + delete buttons on the right.
+.ad-group-header-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+// Saved-plot miniature shown as the value box's showcase. Clickable to reopen.
+.ad-plot-thumb-wrap {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.ad-plot-thumb {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.ad-plot-thumb-empty {
+    color: var(--bs-secondary-color);
+    font-size: 2rem;
+    opacity: 0.5;
+}
+
+// Plot-type badge shown as the value box value.
+.ad-plot-badge {
+    display: inline-block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.ad-box-meta {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+    margin-bottom: 0;
+}
+
+// "Fixed isolate selection" badge on an Analysis card.
+.ad-static-badge {
+    color: var(--bs-info);
+    font-weight: 500;
+}
+
+// Hidden trigger the thumbnail click forwards to (open in Visualization).
+.ad-open-trigger {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
 }
 
 // Empty-state messages (no groups / inactive selection).

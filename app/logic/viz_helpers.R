@@ -83,9 +83,28 @@
 # NOT bucket 1).
 
 box::use(
-  shiny[div, selectInput, actionButton, icon, hr, tags, HTML, singleton],
-  bslib[nav_panel],
-  shinyWidgets[colorPickr, updateRadioGroupButtons],
+  shiny[
+    div,
+    selectInput,
+    actionButton,
+    icon,
+    hr,
+    tags,
+    HTML,
+    singleton,
+    reactiveValuesToList,
+    updateSelectInput,
+    updateSliderInput,
+    updateNumericInput,
+    updateTextInput,
+  ],
+  bslib[nav_panel, update_switch],
+  shinyWidgets[
+    colorPickr,
+    updateRadioGroupButtons,
+    updatePrettyRadioButtons,
+    updatePickerInput,
+  ],
 )
 
 # --- shared option sets ------------------------------------------------------
@@ -317,4 +336,89 @@ reset_viz_radio_buttons <- function(session, ...) {
   for (id in names(defaults)) {
     updateRadioGroupButtons(session, id, selected = defaults[[id]])
   }
+}
+
+# --- plot snapshot / restore (dashboard "Save Analysis") --------------------
+
+# A plain named list of an engine's control inputs (keyed by namespace-relative
+# id), restricted to ids beginning with `prefix`. This is the reproduction
+# payload the dashboard stores per saved plot; call it reactively so it reads
+# the live control values at save time. Button/trigger inputs sharing the prefix
+# come along harmlessly — restore only touches the ids it is told about.
+#' @export
+collect_input_snapshot <- function(input, prefix) {
+  vals <- reactiveValuesToList(input)
+  vals[startsWith(names(vals), prefix)]
+}
+
+# Restore an engine's controls from a snapshot produced by
+# collect_input_snapshot(). Each widget family needs its own update path (see
+# the reset checklist at the top of this file for why a blanket approach fails);
+# callers pass the ids grouped by family. `colors` is a named vector of ids used
+# only to select which snapshot colors to push — the values come from the
+# snapshot, applied through the same changestop-emitting handler reset uses so
+# both the swatch and input$<id> update. Missing ids in `vals` are skipped, so a
+# snapshot from before a control existed restores everything else cleanly.
+#' @export
+apply_input_snapshot <- function(
+  session,
+  vals,
+  switches = character(),
+  selects = character(),
+  sliders = character(),
+  numerics = character(),
+  texts = character(),
+  colors = character(),
+  radio_groups = character(),
+  pretty_radios = character(),
+  pickers = character()
+) {
+  if (is.null(vals)) {
+    return(invisible(NULL))
+  }
+  get <- function(id) if (id %in% names(vals)) vals[[id]] else NULL
+
+  for (id in switches) {
+    v <- get(id)
+    if (!is.null(v)) update_switch(id, value = isTRUE(v), session = session)
+  }
+  for (id in selects) {
+    v <- get(id)
+    if (!is.null(v)) updateSelectInput(session, id, selected = v)
+  }
+  for (id in sliders) {
+    v <- get(id)
+    if (!is.null(v)) updateSliderInput(session, id, value = v)
+  }
+  for (id in numerics) {
+    v <- get(id)
+    if (!is.null(v)) updateNumericInput(session, id, value = v)
+  }
+  for (id in texts) {
+    v <- get(id)
+    if (!is.null(v)) updateTextInput(session, id, value = v)
+  }
+  for (id in radio_groups) {
+    v <- get(id)
+    if (!is.null(v)) updateRadioGroupButtons(session, id, selected = v)
+  }
+  for (id in pretty_radios) {
+    v <- get(id)
+    if (!is.null(v)) updatePrettyRadioButtons(session, id, selected = v)
+  }
+  for (id in pickers) {
+    v <- get(id)
+    if (!is.null(v)) updatePickerInput(session, id, selected = v)
+  }
+
+  color_vals <- list()
+  for (id in colors) {
+    v <- get(id)
+    if (!is.null(v)) color_vals[[id]] <- v
+  }
+  if (length(color_vals)) {
+    do.call(reset_viz_colors, c(list(session), color_vals))
+  }
+
+  invisible(NULL)
 }

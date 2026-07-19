@@ -28,7 +28,14 @@ box::use(
   app / logic / field_labels[grouped_field_choices],
   app /
     logic /
-    viz_helpers[meta_vars, viz_color, export_panel, reset_viz_colors],
+    viz_helpers[
+      meta_vars,
+      viz_color,
+      export_panel,
+      reset_viz_colors,
+      collect_input_snapshot,
+      apply_input_snapshot
+    ],
 )
 
 # --- MST control tabs --------------------------------------------------------
@@ -640,5 +647,71 @@ server <- function(
     # navset_hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
     shiny$outputOptions(output, "mst_plot", suspendWhenHidden = FALSE)
+
+    # ---- Dashboard "Save Analysis" contract ---------------------------------
+    # Snapshot every mst_* control for reproduction.
+    snapshot <- shiny$reactive(collect_input_snapshot(input, "mst_"))
+
+    # Restore controls from a snapshot. Metadata-backed selects
+    # (mst_node_label / mst_col_var) get their choices set alongside the value
+    # so the saved field sticks even before Generate repopulates them.
+    restore <- function(vals) {
+      apply_input_snapshot(
+        session,
+        vals,
+        switches = c(
+          "mst_show_label", "mst_color_var", "mst_background_transparent",
+          "mst_scale_nodes", "mst_scale_edges", "mst_shadow",
+          "mst_show_clusters"
+        ),
+        selects = c(
+          "mst_col_scale", "mst_node_shape", "mst_cluster_col_scale",
+          "mst_cluster_type", "mst_legend_ori"
+        ),
+        sliders = c(
+          "mst_node_size", "mst_edge_length_scale", "mst_edge_font_size",
+          "mst_node_label_fontsize", "mst_aspect_ratio", "mst_cluster_width",
+          "mst_font_size", "mst_symbol_size"
+        ),
+        numerics = "mst_cluster_threshold",
+        colors = c(
+          "mst_text_color", "mst_color_node", "mst_color_edge",
+          "mst_edge_font_color", "mst_background_color"
+        )
+      )
+      meta <- viz_metadata()
+      if (!is.null(meta) && length(names(meta))) {
+        fc <- grouped_field_choices(names(meta))
+        if (!is.null(vals$mst_node_label)) {
+          shiny$updateSelectInput(
+            session, "mst_node_label", choices = fc,
+            selected = vals$mst_node_label
+          )
+        }
+        if (!is.null(vals$mst_col_var)) {
+          shiny$updateSelectInput(
+            session, "mst_col_var", choices = fc, selected = vals$mst_col_var
+          )
+        }
+      }
+    }
+
+    # Thumbnail: capture the vis-network <canvas> in the browser and return the
+    # PNG data URI through input$thumb_data.
+    request_thumb <- function() {
+      session$sendCustomMessage("phylotrace_capture", list(
+        selector = paste0("#", ns("mst_plot"), " canvas"),
+        mode = "canvas",
+        inputId = session$ns("thumb_data")
+      ))
+    }
+
+    list(
+      snapshot = snapshot,
+      restore = restore,
+      save_thumb = NULL,
+      request_thumb = request_thumb,
+      thumb_data = shiny$reactive(input$thumb_data)
+    )
   })
 }

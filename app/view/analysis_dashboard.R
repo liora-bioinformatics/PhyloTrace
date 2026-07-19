@@ -1,5 +1,14 @@
 # app/view/analysis_dashboard.R
-# Tier 3: Main analysis dashboard — manages the group list and navigation.
+# Tier 3: the Analysis Dashboard. Lists the Analyses stored in the loaded
+# database and lets the user add/navigate them. Each Analysis is a persistent
+# container of saved Plots (see group.R / item.R).
+#
+# State is no longer in-memory: Analyses and their Plots live in the database
+# (app/logic/analysis_store.R) and are refreshed on the shared `plots_changed`
+# tick. The module bubbles two requests up to main.R, which routes them to the
+# Visualization module:
+#   * request_add_plot  — user clicked "Add Plot" in an Analysis
+#   * request_open_plot — user clicked a saved Plot to reopen/restore it
 
 box::use(
   shiny[
@@ -8,19 +17,24 @@ box::use(
     div,
     hr,
     icon,
+    isolate,
     modalButton,
     modalDialog,
     moduleServer,
+    observe,
     observeEvent,
     outputOptions,
     p,
+    reactive,
     reactiveVal,
-    reactiveValues,
     removeModal,
     renderUI,
     req,
     selectInput,
     showModal,
+    span,
+    tagList,
+    textAreaInput,
     textInput,
     uiOutput,
   ],
@@ -28,7 +42,11 @@ box::use(
     page_sidebar,
     sidebar,
   ],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows],
   app / view / analysis_dashboard / group,
+  app / logic / analysis_store,
+  app / logic / database_functions[make_metadata_table, append_classical_mlst],
+  jsonlite[toJSON, fromJSON],
 )
 
 #' @export
@@ -41,7 +59,7 @@ ui <- function(id) {
       title = "Analysis Dashboard",
       actionButton(
         ns("trigger_group_modal"),
-        "Add New Group",
+        "Add Analysis",
         icon = icon("folder-plus"),
         class = "btn-success w-100 mb-3"
       ),
@@ -55,59 +73,116 @@ ui <- function(id) {
   )
 }
 
+.usable_path <- function(path) {
+  !is.null(path) &&
+    length(path) == 1 &&
+    !is.na(path) &&
+    nzchar(path) &&
+    file.exists(path)
+}
+
 #' @export
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  session_reset = shiny::reactive(0L),
+  plots_changed = shiny::reactiveVal(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    group_counter <- reactiveVal(1)
-    active_groups <- reactiveVal(1)
-
-    group_names_map <- reactiveValues()
-    group_names_map[["1"]] <- "Analysis Group"
-
     current_view <- reactiveVal("all")
 
-    # Reset the group list to just the initial group and return to the "all"
-    # view. Dynamic group servers remain alive but hidden; they reset via their
-    # own observer that receives the same session_reset signal.
-    observeEvent(session_reset(), {
-      for (i in seq_len(group_counter())[-1]) {
-        group_names_map[[as.character(i)]] <- NULL
-      }
-      group_names_map[["1"]] <- "Analysis Group"
-      group_counter(1)
-      active_groups(1)
-      current_view("all")
-    }, ignoreInit = TRUE)
+    # Requests bubbled up to main.R. Each carries a monotonic `n` so repeated
+    # clicks on the same target still fire the downstream observeEvent.
+    request_add_plot <- reactiveVal(NULL)
+    request_open_plot <- reactiveVal(NULL)
+    add_seq <- 0L
+    open_seq <- 0L
+    handle_add_plot <- function(analysis_id) {
+      add_seq <<- add_seq + 1L
+      request_add_plot(list(analysis_id = analysis_id, n = add_seq))
+    }
+    handle_open_plot <- function(plot_id) {
+      open_seq <<- open_seq + 1L
+      request_open_plot(list(plot_id = plot_id, n = open_seq))
+    }
 
-    group$server(
-      id = "group_instance_1",
-      assigned_name = "Analysis Group",
-      remove_group_callback = function() {
-        active_groups(setdiff(active_groups(), 1))
-        if (current_view() == "1") current_view("all")
+    # Current Analyses, refreshed whenever the store changes or the DB reloads.
+    analyses <- reactive({
+      plots_changed()
+      analysis_store$list_analyses(db_path())
+    })
+
+    # On DB load / reload: ensure the schema exists and guarantee at least one
+    # Analysis to land in, then trigger a refresh.
+    sync_db <- function() {
+      path <- db_path()
+      if (!.usable_path(path)) {
+        return()
+      }
+      analysis_store$ensure_schema(path)
+      if (nrow(analysis_store$list_analyses(path)) == 0L) {
+        analysis_store$add_analysis(path, "Analysis 1")
+      }
+      plots_changed(isolate(plots_changed()) + 1L)
+    }
+    observeEvent(db_path(), sync_db(), ignoreNULL = FALSE)
+    observeEvent(
+      session_reset(),
+      {
+        current_view("all")
+        sync_db()
       },
-      session_reset = session_reset
+      ignoreInit = TRUE
     )
 
+    # Instantiate a group server once per Analysis id. Servers persist and read
+    # db_path() reactively, so reusing an id for a different DB is safe.
+    instantiated <- reactiveVal(integer(0))
+    observe({
+      ids <- analyses()$id
+      isolate({
+        new_ids <- setdiff(ids, instantiated())
+        for (aid in new_ids) {
+          local({
+            this_aid <- aid
+            group$server(
+              id = paste0("group_instance_", this_aid),
+              analysis_id = this_aid,
+              db_path = db_path,
+              plots_changed = plots_changed,
+              on_add_plot = handle_add_plot,
+              on_open_plot = handle_open_plot,
+              session_reset = session_reset
+            )
+          })
+        }
+        if (length(new_ids)) {
+          instantiated(c(instantiated(), new_ids))
+        }
+      })
+    })
+
     observeEvent(input$trigger_group_modal, {
-      next_num <- group_counter() + 1
+      next_num <- nrow(isolate(analyses())) + 1L
       showModal(modalDialog(
-        title = "📁 Setup group environment",
-        textInput(
-          ns("modal_group_name"),
-          "Assign Group Name",
-          value = paste("Analysis Group", next_num)
+        title = "📁 New Analysis",
+        # allow-free-text: an Analysis name is display text, so it takes spaces
+        # and punctuation — it opts out of the identifier charset restriction in
+        # app/js/index.js.
+        div(
+          class = "allow-free-text",
+          textInput(
+            ns("modal_group_name"),
+            "Analysis name",
+            value = paste("Analysis", next_num)
+          )
         ),
         footer = list(
           actionButton(
             ns("submit_new_group"),
-            "Initialize Group",
+            "Create Analysis",
             class = "btn-primary"
           ),
           modalButton("Cancel")
@@ -119,49 +194,32 @@ server <- function(
     observeEvent(input$submit_new_group, {
       req(input$modal_group_name)
       removeModal()
-
-      new_id <- group_counter() + 1
-      group_counter(new_id)
-
-      id_str <- as.character(new_id)
-      chosen_name <- input$modal_group_name
-
-      group_names_map[[id_str]] <- chosen_name
-
-      local({
-        current_g_id <- new_id
-        g_id_str <- id_str
-        group$server(
-          id = paste0("group_instance_", g_id_str),
-          assigned_name = chosen_name,
-          remove_group_callback = function() {
-            active_groups(setdiff(active_groups(), current_g_id))
-            if (current_view() == g_id_str) current_view("all")
-          },
-          session_reset = session_reset
-        )
-      })
-
-      active_groups(c(active_groups(), new_id))
-      current_view(id_str)
+      new_id <- analysis_store$add_analysis(db_path(), input$modal_group_name)
+      plots_changed(isolate(plots_changed()) + 1L)
+      current_view(as.character(new_id))
     })
 
     output$sidebar_navigation <- renderUI({
-      g_ids <- active_groups()
-      choices_list <- c("Show All Groups" = "all")
+      df <- analyses()
+      choices_list <- c("Show All Analyses" = "all")
 
-      if (length(g_ids) > 0) {
-        for (g_id in g_ids) {
-          id_str <- as.character(g_id)
-          choices_list[group_names_map[[id_str]]] <- id_str
+      if (nrow(df) > 0) {
+        for (i in seq_len(nrow(df))) {
+          choices_list[df$name[i]] <- as.character(df$id[i])
         }
+      }
+
+      # Keep the current selection valid after a delete.
+      sel <- isolate(current_view())
+      if (!sel %in% choices_list) {
+        sel <- "all"
       }
 
       selectInput(
         ns("selected_group_view"),
-        label = "Navigate Groups:",
+        label = "Navigate Analyses:",
         choices = choices_list,
-        selected = current_view()
+        selected = sel
       )
     })
 
@@ -170,37 +228,42 @@ server <- function(
     })
 
     output$groups_vertical_stack <- renderUI({
-      g_ids <- active_groups()
+      df <- analyses()
 
-      if (length(g_ids) == 0) {
+      if (nrow(df) == 0) {
         return(p(
           class = "ad-empty ad-empty-block",
           paste(
-            "No dynamic groups generated yet. Click 'Add New Group' to",
-            "initialize new analysis groups."
+            "No analyses yet. Click 'Add Analysis' to create a container,",
+            "then build and save plots into it from the Visualization tab."
           )
         ))
       }
 
-      visible_ids <- if (current_view() == "all") {
-        g_ids
+      view <- current_view()
+      visible_ids <- if (view == "all") {
+        df$id
       } else {
-        intersect(g_ids, as.numeric(current_view()))
+        intersect(df$id, suppressWarnings(as.numeric(view)))
       }
 
       if (length(visible_ids) == 0) {
-        return(p(class = "ad-empty", "The selected group is no longer active."))
+        return(p(class = "ad-empty", "The selected analysis is no longer active."))
       }
 
-      lapply(visible_ids, function(g_id) {
-        group$ui(ns(paste0("group_instance_", g_id)))
+      lapply(visible_ids, function(a_id) {
+        group$ui(ns(paste0("group_instance_", a_id)))
       })
     })
 
-    # Keep all rendered outputs reactive while the analysis dashboard panel is
-    # absent from the DOM (removed by nav_remove on session reset) so reset-
-    # triggered reactive changes propagate before the panel is re-inserted.
+    # Keep outputs live while the panel is detached from the DOM (nav_remove on
+    # session reset) so reset-triggered changes propagate before re-insertion.
     outputOptions(output, "sidebar_navigation", suspendWhenHidden = FALSE)
     outputOptions(output, "groups_vertical_stack", suspendWhenHidden = FALSE)
+
+    list(
+      request_add_plot = request_add_plot,
+      request_open_plot = request_open_plot
+    )
   })
 }

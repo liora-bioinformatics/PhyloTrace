@@ -7,10 +7,11 @@
 // expected, which the exemptions below carve out:
 //   * colour-picker hex fields (which need "#"),
 //   * the search boxes inside select/picker dropdowns (a query, not a name),
-//   * anything a user is *labelling a plot* with rather than naming — plot
-//     titles, subtitles, annotation labels — which are display text and should
-//     take spaces and punctuation freely. Those inputs opt out by sitting
-//     inside a ".allow-free-text" wrapper (see the visualization submodules).
+//   * anything a user is *labelling* rather than naming an identifier — plot
+//     titles, subtitles, annotation labels, and the analysis/plot names on the
+//     dashboard — which are display text and should take spaces and punctuation
+//     freely. Those inputs opt out by sitting inside a ".allow-free-text"
+//     wrapper (see the visualization and analysis_dashboard submodules).
 function isExemptFromCharset(el) {
   return Boolean(
     el.classList.contains("pcr-result") || // colour-picker hex field

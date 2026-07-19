@@ -48,6 +48,8 @@ box::use(
       reset_viz_colors,
       scale_select,
       viz_color,
+      collect_input_snapshot,
+      apply_input_snapshot,
     ],
 )
 
@@ -1468,6 +1470,62 @@ server <- function(
     # display:none-hidden by navset_hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
     shiny$outputOptions(output, "epi_plot", suspendWhenHidden = FALSE)
+
+    # ---- Dashboard "Save Analysis" contract ---------------------------------
+    # Snapshot the epi_* controls plus the annotation list (a reactiveVal, not
+    # an input).
+    snapshot <- shiny$reactive(c(
+      collect_input_snapshot(input, "epi_"),
+      list(.annotations = annotations())
+    ))
+
+    restore <- function(vals) {
+      apply_input_snapshot(
+        session,
+        vals,
+        switches = c(
+          "epi_label_ends", "epi_show_cumulative", "epi_show_moving_avg",
+          "epi_show_x_label", "epi_zoom_axis"
+        ),
+        selects = c(
+          "epi_plot_mode", "epi_moving_avg_align", "epi_anno_type",
+          "epi_col_scale"
+        ),
+        sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
+        texts = "epi_anno_label",
+        colors = c(
+          "epi_single_color", "epi_text_color", "epi_anno_color",
+          "epi_cumulative_color", "epi_background_color", "epi_moving_avg_color"
+        ),
+        # Time interval / stratify are server-rendered controls (rebuilt on a
+        # counter); best-effort here, corrected by the user's Generate.
+        radio_groups = "epi_interval",
+        pickers = "epi_stratify"
+      )
+
+      if (!is.null(vals$.annotations)) {
+        a <- vals$.annotations
+        if (is.data.frame(a) && nrow(a)) {
+          try(annotations(a), silent = TRUE)
+        }
+      }
+    }
+
+    # Thumbnail: server-render the Epi curve to a small PNG.
+    save_thumb <- function(file, w, h) {
+      epi_plot$render_epi_png(
+        epi_ggplot(), file,
+        width_px = w, height_px = h, res = 96, scale = 1
+      )
+    }
+
+    list(
+      snapshot = snapshot,
+      restore = restore,
+      save_thumb = save_thumb,
+      request_thumb = NULL,
+      thumb_data = NULL
+    )
   })
 }
 
