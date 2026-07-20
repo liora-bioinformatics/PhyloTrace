@@ -466,8 +466,7 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
       # Run download
       status <- download_cgmlst_scheme(
         input$scheme_selector,
-        db_location,
-        env_name = "pymlst"
+        db_location
       )
 
       # Check download process status
