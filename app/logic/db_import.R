@@ -474,6 +474,81 @@ import_preview <- function(
 }
 
 # ---------------------------------------------------------------------------
+# Analysis-result tables (classical_mlst / amr_*)
+# ---------------------------------------------------------------------------
+
+# Copy one isolate-keyed result table from the attached `ext` database into
+# `main`, remapping `souche` via the `import_souches` rename map. These tables
+# key solely on `souche` (no `seqid` / allele foreign keys), so no allele remap
+# is involved. Runs on the working copy's connection inside the merge
+# transaction. Creates the table in `main` from the external DDL when the local
+# database never ran that analysis; replaces overwritten isolates' rows first;
+# the autoincrement `id` is dropped so SQLite assigns fresh, collision-free ids.
+# Returns the number of rows inserted.
+.merge_result_table <- function(con, nm) {
+  if (!nm %in% dbListTables(con)) {
+    ddl <- dbGetQuery(
+      con,
+      "SELECT sql FROM ext.sqlite_master WHERE type = 'table' AND name = ?",
+      params = list(nm)
+    )$sql
+    if (!length(ddl) || is.na(ddl[1])) {
+      return(0L)
+    }
+    dbExecute(con, ddl[1])
+  }
+
+  # Columns common to both sides, minus the autoincrement id. `souche` comes from
+  # the rename map; the column intersection guards against schema drift.
+  ext_cols <- names(dbGetQuery(
+    con,
+    sprintf("SELECT * FROM ext.%s LIMIT 0", nm)
+  ))
+  cols <- setdiff(intersect(dbListFields(con, nm), ext_cols), "id")
+  if (!("souche" %in% cols)) {
+    return(0L)
+  }
+
+  # Replace overwritten isolates' existing rows so re-typed isolates never
+  # accumulate stale result rows.
+  dbExecute(
+    con,
+    sprintf(
+      "DELETE FROM main.%s WHERE souche IN
+         (SELECT final_souche FROM import_souches WHERE action = 'overwrite')",
+      nm
+    )
+  )
+
+  quoted <- vapply(cols, .quote_ident, character(1))
+  select_exprs <- vapply(
+    cols,
+    function(c) {
+      if (identical(c, "souche")) {
+        "s.final_souche"
+      } else {
+        paste0("em.", .quote_ident(c))
+      }
+    },
+    character(1)
+  )
+
+  dbExecute(
+    con,
+    sprintf(
+      "INSERT INTO main.%s (%s)
+         SELECT %s
+           FROM ext.%s em
+           JOIN import_souches s ON s.ext_souche = em.souche",
+      nm,
+      paste(quoted, collapse = ", "),
+      paste(select_exprs, collapse = ", "),
+      nm
+    )
+  )
+}
+
+# ---------------------------------------------------------------------------
 # Backups
 # ---------------------------------------------------------------------------
 
@@ -546,6 +621,8 @@ merge_databases <- function(
   ext_path,
   resolutions,
   metadata_cols = character(0),
+  include_classical = FALSE,
+  include_amr = FALSE,
   backup = TRUE,
   progress = NULL
 ) {
@@ -655,6 +732,16 @@ merge_databases <- function(
 
   n_new_alleles <- 0L
   n_calls <- 0L
+  result_rows <- 0L
+
+  # Isolate-keyed analysis-result tables to carry (only those the peer has).
+  result_tables <- intersect(
+    c(
+      if (isTRUE(include_classical)) "classical_mlst",
+      if (isTRUE(include_amr)) c("amr_results", "amr_summary")
+    ),
+    ext_tables
+  )
 
   dbBegin(con)
   tryCatch(
@@ -747,6 +834,14 @@ merge_databases <- function(
       progress(0.85, "Merging metadata …")
       .write_metadata(con, accepted, metadata_cols, organism, ext_tables)
 
+      if (length(result_tables)) {
+        progress(0.88, "Merging analysis results …")
+        for (nm in result_tables) {
+          result_rows <- result_rows +
+            as.integer(.merge_result_table(con, nm))
+        }
+      }
+
       dbCommit(con)
     },
     error = function(e) {
@@ -770,6 +865,7 @@ merge_databases <- function(
   progress(1, "Done")
 
   list(
+    result_rows = as.integer(result_rows),
     added = sum(accepted$action == "add"),
     overwritten = sum(accepted$action == "overwrite"),
     renamed = sum(accepted$action == "rename"),

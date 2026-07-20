@@ -54,7 +54,7 @@ box::use(
 box::use(
   app / logic / functions[render_info],
   app / logic / schemes[cgmlst_org_schemes],
-  app / logic / pymlst[download_cgmlst_scheme],
+  app / logic / pymlst[download_cgmlst_scheme, conda_env],
   app /
     logic /
     scheme_browser[
@@ -467,7 +467,7 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
       status <- download_cgmlst_scheme(
         input$scheme_selector,
         db_location,
-        env_name = "pymlst"
+        env_name = conda_env
       )
 
       # Check download process status

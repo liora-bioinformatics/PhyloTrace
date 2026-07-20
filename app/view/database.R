@@ -7,7 +7,7 @@ box::use(
 )
 box::use(
   app / logic / functions[sidebar_menu],
-  app / view / database_browse_entries,
+  app / view / database_browser,
   app / view / database_scheme_info,
   app / view / database_loci_info,
   app / view / database_import,
@@ -19,7 +19,7 @@ db_menu <- list(
   list(
     value = "browse_entries",
     label = "Browse Entries",
-    module = database_browse_entries
+    module = database_browser
   ),
   list(
     value = "scheme_info",

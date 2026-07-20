@@ -1053,6 +1053,17 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: none !important;
 }
 
+// Prevent long cell values from wrapping into many lines and blowing up row
+// height. table-cell boxes ignore max-height/overflow clamping and
+// -webkit-line-clamp requires display: -webkit-box, which strips the td's
+// required table-cell display and collapses the whole table layout - so
+// instead of clamping lines, cells stay single-line and grow in width;
+// tables that opt into DT's scrollX already have the horizontal scroll
+// container to absorb that width.
+table.dataTable td {
+    white-space: nowrap;
+}
+
 // Database Browser sub-page layout -------------------------------------------
 
 .tab-content>.tab-pane.html-fill-container,
@@ -2581,10 +2592,12 @@ label {
     >.bslib-card>.tab-content>.tab-pane.active {
         display: flex;
         flex-direction: column;
+        height: 100%;
 
         >* {
             flex: 1 1 auto;
             min-height: 0;
+            padding: 0.5rem 0 0.5rem 0 !important;
         }
     }
 }

@@ -196,6 +196,77 @@ meta_df <- function(isolates, species = "Testus organismus", extra = NULL) {
   df
 }
 
+# Seed the isolate-keyed analysis-result tables (classical_mlst, amr_results,
+# amr_summary) for one or more souches, using the same DDL the app creates
+# (pymlst.R / amr.R). Each souche gets a couple of deterministic rows per table.
+# `classical` / `amr` gate which tables are written, so a fixture can carry one
+# family without the other.
+seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  if (classical) {
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS classical_mlst (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         souche TEXT, gene TEXT, allele TEXT, sequence TEXT, st TEXT,
+         status TEXT, scheme TEXT, scheme_version TEXT, alembic_version TEXT,
+         repository TEXT, identity REAL, coverage REAL, pymlst_version TEXT,
+         called_at TEXT)"
+    )
+    for (s in souche) {
+      for (g in c("acsA", "aroE")) {
+        DBI::dbExecute(
+          con,
+          "INSERT INTO classical_mlst
+             (souche, gene, allele, st, status, scheme, called_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)",
+          list(s, g, "1", "42", "known", "Testus organismus", "2026-01-01")
+        )
+      }
+    }
+  }
+
+  if (amr) {
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS amr_results (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         souche TEXT, gene_symbol TEXT, sequence_name TEXT, element_type TEXT,
+         element_subtype TEXT, class TEXT, subclass TEXT, method TEXT,
+         pct_coverage REAL, pct_identity REAL, contig TEXT, start INTEGER,
+         stop INTEGER, strand TEXT, ref_accession TEXT, ref_name TEXT,
+         organism TEXT, point_mutations INTEGER, identity_threshold REAL,
+         abritamr_version TEXT, amrfinder_version TEXT,
+         amrfinder_db_version TEXT, called_at TEXT)"
+    )
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS amr_summary (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         souche TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
+    )
+    for (s in souche) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_results
+           (souche, gene_symbol, element_type, class, method, called_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        list(s, "blaTEST", "AMR", "BETA-LACTAM", "EXACTX", "2026-01-01")
+      )
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_summary (souche, section, drug_class, genes, called_at)
+         VALUES (?, ?, ?, ?, ?)",
+        list(s, "matches", "Beta-lactam", "blaTEST", "2026-01-01")
+      )
+    }
+  }
+
+  invisible(path)
+}
+
 q1 <- function(path, sql, params = NULL) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)

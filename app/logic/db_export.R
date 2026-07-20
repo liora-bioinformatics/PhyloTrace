@@ -45,6 +45,48 @@ SCHEME_TABLES <- c(
   "scheme_overview"
 )
 
+# Isolate-keyed analysis-result tables, carried only when the caller opts in.
+# All three key solely on `souche` (no `seqid` / allele foreign keys), so they
+# copy with a plain souche filter - no interaction with the allele remap.
+# `include_classical` gates `classical_mlst`; `include_amr` gates both AMR tables
+# (they are produced together).
+CLASSICAL_TABLES <- c("classical_mlst")
+AMR_TABLES <- c("amr_results", "amr_summary")
+
+# Resolve the requested result tables that actually exist in the source.
+.result_tables <- function(src_tables, include_classical, include_amr) {
+  wanted <- c(
+    if (isTRUE(include_classical)) CLASSICAL_TABLES,
+    if (isTRUE(include_amr)) AMR_TABLES
+  )
+  intersect(wanted, src_tables)
+}
+
+#' Which optional analysis-result tables a database actually contains, so the
+#' UI can enable/disable the export/import toggles. Returns a list with logical
+#' `classical` (has `classical_mlst`) and `amr` (has both AMR tables).
+#' @export
+available_result_tables <- function(db_path) {
+  out <- list(classical = FALSE, amr = FALSE)
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(out)
+  }
+  con <- tryCatch(connect_ro(db_path), error = function(e) NULL)
+  if (is.null(con)) {
+    return(out)
+  }
+  on.exit(dbDisconnect(con))
+  tbls <- dbListTables(con)
+  out$classical <- all(CLASSICAL_TABLES %in% tbls)
+  out$amr <- all(AMR_TABLES %in% tbls)
+  out
+}
+
 # Always present in the output, never user-selectable.
 #' @export
 METADATA_FIXED_COLS <- c("isolate", "organism")
@@ -161,6 +203,8 @@ export_database <- function(
   isolates,
   metadata_cols = character(0),
   include_metadata = TRUE,
+  include_classical = FALSE,
+  include_amr = FALSE,
   progress = NULL
 ) {
   progress <- progress %||% .noop_progress
@@ -190,6 +234,9 @@ export_database <- function(
   }
   write_meta <- length(meta_cols) > 0L
 
+  # Isolate-keyed result tables to carry (only those the source actually has).
+  result_tables <- .result_tables(src_tables, include_classical, include_amr)
+
   part <- paste0(dest_path, ".part")
   if (file.exists(part)) {
     unlink(part)
@@ -215,7 +262,8 @@ export_database <- function(
     intersect(SCHEME_TABLES, src_tables),
     "mlst",
     "sequences",
-    intersect("hashes", src_tables)
+    intersect("hashes", src_tables),
+    result_tables
   )
 
   table_ddl <- .source_ddl(src, "table", copy_tables)
@@ -300,6 +348,24 @@ export_database <- function(
             cols
           )
         )
+      }
+
+      # Analysis-result tables, filtered to the selected isolates. Their DDL was
+      # already replayed above (they are in `copy_tables`); each keys on `souche`
+      # with no allele foreign keys, so a plain filter suffices. The fresh output
+      # has a single source, so carrying source ids via `SELECT *` cannot collide.
+      if (length(result_tables)) {
+        progress(0.85, "Copying analysis results …")
+        for (nm in result_tables) {
+          dbExecute(
+            con,
+            sprintf(
+              "INSERT INTO %1$s SELECT * FROM src.%1$s
+                WHERE souche IN (SELECT souche FROM sel)",
+              nm
+            )
+          )
+        }
       }
 
       dbExecute(con, "DROP TABLE sel")

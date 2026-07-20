@@ -20,6 +20,33 @@ box::use(
   dplyr[select, left_join],
 )
 
+### Single conda environment for every external CLI the app shells out to
+# All bioinformatics tooling - cgMLST/classical typing (wgMLST/claMLST + blat +
+# mafft) and AMR screening (abritamr/AMRFinderPlus) - lives in one env alongside
+# the R/Shiny app itself. Keeping it a single named constant (rather than the
+# strings "pymlst"/"PhyloTrace" scattered across modules) is the one source of
+# truth: change the env here and every caller follows.
+#' @export
+conda_env <- "PhyloTrace"
+
+### Resolve the base conda executable
+# The app can be launched with an env-local `conda` ahead of the base conda on
+# PATH - e.g. a full conda installed inside the PhyloTrace env at
+# `<root>/envs/PhyloTrace/bin/conda`. That env-local conda computes its root
+# prefix as the env itself, so `conda run -n <env>` resolves `<env>` under
+# `<root>/envs/PhyloTrace/envs/<env>` and dies with EnvironmentLocationNotFound.
+# `CONDA_EXE` is set by `conda init`/activation and always points at the base
+# conda (whose root holds the real envs), so prefer it and fall back to a bare
+# `conda` only when it is unset or missing.
+#' @export
+conda_exe <- function() {
+  exe <- Sys.getenv("CONDA_EXE", unset = "")
+  if (nzchar(exe) && file.exists(exe)) {
+    return(exe)
+  }
+  "conda"
+}
+
 ### Download cgmlst scheme
 # db_path - target database path including '.db' file ending
 # scheme - scheme corresponding to cgmlst.org schemes
@@ -28,12 +55,12 @@ box::use(
 download_cgmlst_scheme <- function(
   scheme,
   db_path,
-  env_name,
+  env_name = conda_env,
   overwrite = FALSE
 ) {
   download_status <- tryCatch(
     run(
-      command = "conda",
+      command = conda_exe(),
       args = c(
         "run",
         "-n",
@@ -73,6 +100,12 @@ download_cgmlst_scheme <- function(
 # derives the ST per genome, and leaves the DB in place for the R caller to read
 # its reference sequences / metadata and then delete. Omitting `-s`/`-m` makes
 # the script skip classical MLST entirely.
+# AMR screening rides along too: when `amr_out` (a per-run output directory) and
+# `amr_env` (the conda env holding abritamr / AMRFinderPlus) are given, the
+# script screens each genome with abritamr into `amr_out/<strain>`. `amr_species`
+# is the abritamr `--species` token when the organism is supported for point
+# mutations, or NA for the acquired-genes-only fallback. Omitting `amr_out` skips
+# AMR entirely.
 typing_args <- function(
   db_path,
   genome_files,
@@ -81,7 +114,10 @@ typing_args <- function(
   env,
   species = NA_character_,
   repo = "pubmlst",
-  cla_db = NA_character_
+  cla_db = NA_character_,
+  amr_env = NA_character_,
+  amr_species = NA_character_,
+  amr_out = NA_character_
 ) {
   args <- c(
     "-d",
@@ -102,6 +138,12 @@ typing_args <- function(
       args <- c(args, "-m", cla_db)
     }
   }
+  if (scalar_chr(amr_out) && scalar_chr(amr_env)) {
+    args <- c(args, "-A", amr_env, "-o", amr_out)
+    if (scalar_chr(amr_species)) {
+      args <- c(args, "-p", amr_species)
+    }
+  }
   c(args, "--", genome_files)
 }
 
@@ -114,7 +156,7 @@ type_genomes <- function(
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
   coverage = 0.9,
-  env = "pymlst"
+  env = conda_env
 ) {
   # Run the process. `bash <script>` avoids depending on the script's execute
   # bit.
@@ -195,10 +237,13 @@ start_typing <- function(
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
   coverage = 0.9,
-  env = "pymlst",
+  env = conda_env,
   species = NA_character_,
   repo = "pubmlst",
-  cla_db = NA_character_
+  cla_db = NA_character_,
+  amr_env = NA_character_,
+  amr_species = NA_character_,
+  amr_out = NA_character_
 ) {
   process$new(
     command = "bash",
@@ -212,7 +257,10 @@ start_typing <- function(
         env,
         species,
         repo,
-        cla_db
+        cla_db,
+        amr_env,
+        amr_species,
+        amr_out
       )
     ),
     wd = dirname(db_path),
@@ -382,6 +430,21 @@ parse_typing_log <- function(log_lines, strains) {
     metrics$st <- cla_st
     metrics$alleles <- cla_alleles
     metrics$cla_status <- clamlst_status(cla_st, cla_alleles)
+    # AMR screening (best-effort, may be absent): the loop-pymlst.sh sentinels
+    # for this strain - "AMR: screening", "AMR: done <strain> (<n> elements)",
+    # "AMR: failed". `amr_elements` is the detected-element count on success;
+    # `amr_status` is "done" / "failed" / "screening", or NA when AMR was off.
+    amr_elements <- num(chunk, "AMR: done .* \\(([0-9]+) elements\\)")
+    metrics$amr_elements <- amr_elements
+    metrics$amr_status <- if (!is.na(amr_elements)) {
+      "done"
+    } else if (grepl("AMR: failed", chunk, fixed = TRUE)) {
+      "failed"
+    } else if (grepl("AMR: screening", chunk, fixed = TRUE)) {
+      "screening"
+    } else {
+      NA_character_
+    }
     outcome <- function(status, detail) {
       c(metrics, list(status = status, detail = detail))
     }
@@ -445,7 +508,9 @@ parse_typing_log <- function(log_lines, strains) {
         detail = "Waiting in queue ...",
         st = NA_character_,
         alleles = NA_character_,
-        cla_status = NA_character_
+        cla_status = NA_character_,
+        amr_status = NA_character_,
+        amr_elements = NA_integer_
       )
     } else {
       # A section is complete once another section follows it or the run is over.
@@ -467,6 +532,8 @@ parse_typing_log <- function(log_lines, strains) {
       st = info$st,
       alleles = info$alleles,
       cla_status = info$cla_status,
+      amr_status = info$amr_status,
+      amr_elements = info$amr_elements,
       stringsAsFactors = FALSE
     )
   })

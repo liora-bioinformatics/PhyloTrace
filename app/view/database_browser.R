@@ -1,4 +1,4 @@
-# app/view/database_browse_entries.R
+# app/view/database_browser.R
 
 box::use(
   shiny[

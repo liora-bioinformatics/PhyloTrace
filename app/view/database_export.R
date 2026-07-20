@@ -23,6 +23,8 @@ box::use(
     icon,
     actionButton,
     selectInput,
+    checkboxInput,
+    updateCheckboxInput,
     uiOutput,
     renderUI,
     showNotification,
@@ -40,7 +42,14 @@ box::use(
 )
 
 box::use(
-  app / logic / db_export[export_preview, export_database, METADATA_FIXED_COLS],
+  app /
+    logic /
+    db_export[
+      export_preview,
+      export_database,
+      available_result_tables,
+      METADATA_FIXED_COLS
+    ],
   app / logic / database_functions[metadata_columns, make_metadata_table],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_chips, field_labels_for],
@@ -215,6 +224,24 @@ ui <- function(id) {
             )
           )),
 
+          # Optional analysis-result tables, carried only for a `.db` export and
+          # only when the loaded database actually holds them (the boxes are
+          # disabled otherwise, driven server-side).
+          shinyjs::hidden(control_group(
+            "Analysis results",
+            id = ns("results_group"),
+            checkboxInput(
+              ns("include_classical"),
+              "Classical MLST results",
+              value = TRUE
+            ),
+            checkboxInput(
+              ns("include_amr"),
+              "AMR results",
+              value = TRUE
+            )
+          )),
+
           # -- 3. Where ------------------------------------------------------
           # The closing step, set apart from the choices that feed it: pick a
           # file, see the file you will get, write it.
@@ -309,8 +336,29 @@ server <- function(
       {
         shinyjs::toggle("content_group", condition = typing())
         shinyjs::toggle("format_group", condition = typing())
+        # Result-table toggles apply only to a `.db` export.
+        shinyjs::toggle("results_group", condition = !typing())
       },
       ignoreInit = FALSE
+    )
+
+    # Enable each result-table toggle only when the loaded database holds that
+    # table; uncheck a box the moment its table is unavailable so the summary
+    # never implies data that will not travel.
+    observeEvent(
+      db_path(),
+      {
+        present <- available_result_tables(db_path())
+        shinyjs::toggleState("include_classical", condition = present$classical)
+        shinyjs::toggleState("include_amr", condition = present$amr)
+        if (!present$classical) {
+          updateCheckboxInput(session, "include_classical", value = FALSE)
+        }
+        if (!present$amr) {
+          updateCheckboxInput(session, "include_amr", value = FALSE)
+        }
+      },
+      ignoreNULL = FALSE
     )
 
     # The file the current selection will land in, named in the toolbar itself so
@@ -672,6 +720,8 @@ server <- function(
             dest_path = dest,
             isolates = input$isolates,
             metadata_cols = input$meta_cols %||% character(0),
+            include_classical = isTRUE(input$include_classical),
+            include_amr = isTRUE(input$include_amr),
             progress = step
           )
         },

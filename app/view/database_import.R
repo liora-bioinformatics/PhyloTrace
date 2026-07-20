@@ -28,6 +28,7 @@ box::use(
     actionButton,
     selectInput,
     textInput,
+    checkboxInput,
     uiOutput,
     renderUI,
     showNotification,
@@ -62,6 +63,7 @@ box::use(
       restore_backup,
       METADATA_RESERVED
     ],
+  app / logic / db_export[available_result_tables],
   app / logic / database_functions[metadata_columns],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_labels_for],
@@ -237,6 +239,14 @@ ui <- function(id) {
             class = "control-group",
             div(class = "control-group-label", "Metadata fields"),
             div(class = "control-group-items", uiOutput(ns("meta_picker_ui")))
+          ),
+          div(
+            class = "control-group",
+            div(class = "control-group-label", "Analysis results"),
+            div(
+              class = "control-group-items",
+              uiOutput(ns("results_picker_ui"))
+            )
           ),
           div(
             class = "control-group",
@@ -556,6 +566,35 @@ server <- function(
           liveSearch = TRUE,
           liveSearchPlaceholder = "Search fields ..."
         )
+      )
+    })
+
+    # Optional analysis-result tables, offered only for a `.db` merge and only
+    # for the tables the external database actually carries. When a checkbox is
+    # not rendered, its input is NULL, so the merge simply does not carry it.
+    output$results_picker_ui <- renderUI({
+      staged <- prep()
+      if (typing() || is.null(staged)) {
+        return(div(class = "text-muted small", "—"))
+      }
+      present <- tryCatch(
+        available_result_tables(staged$path),
+        error = function(e) list(classical = FALSE, amr = FALSE)
+      )
+      if (!present$classical && !present$amr) {
+        return(div(class = "text-muted small", "No analysis results to import"))
+      }
+      tagList(
+        if (present$classical) {
+          checkboxInput(
+            ns("include_classical"),
+            "Classical MLST results",
+            value = TRUE
+          )
+        },
+        if (present$amr) {
+          checkboxInput(ns("include_amr"), "AMR results", value = TRUE)
+        }
       )
     })
 
@@ -1064,6 +1103,8 @@ server <- function(
           ext_path = staged$path,
           resolutions = resolutions(),
           metadata_cols = input$meta_cols %||% character(0),
+          include_classical = isTRUE(input$include_classical),
+          include_amr = isTRUE(input$include_amr),
           backup = TRUE,
           progress = step
         ),

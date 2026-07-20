@@ -226,3 +226,75 @@ test_that("a failed export leaves no partial file behind", {
   expect_identical(list.files(dir, pattern = "\\.part$"), character(0))
   expect_false(file.exists(dest))
 })
+
+# --- Analysis-result tables (classical_mlst / amr_*) -----------------------
+
+test_that("result tables travel only when requested, filtered to the selection", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, c("A", "B")) # both isolates get classical + AMR rows
+  dest <- file.path(dir, "out.db")
+
+  export_database(
+    src,
+    dest,
+    "A",
+    include_classical = TRUE,
+    include_amr = TRUE
+  )
+
+  # Only the selected isolate's rows travel; B's are left behind.
+  for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_setequal(
+      q1(dest, sprintf("SELECT DISTINCT souche FROM %s", tbl)),
+      "A"
+    )
+  }
+})
+
+test_that("result tables are omitted by default", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A")
+  dest <- file.path(dir, "out.db")
+
+  export_database(src, dest, "A")
+
+  tbls <- qdf(dest, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+  expect_false("amr_summary" %in% tbls)
+})
+
+test_that("requesting a result table the source lacks is a no-op, not an error", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A", classical = TRUE, amr = FALSE) # no AMR tables
+  dest <- file.path(dir, "out.db")
+
+  expect_error(
+    export_database(src, dest, "A", include_classical = TRUE, include_amr = TRUE),
+    NA
+  )
+
+  tbls <- qdf(dest, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_true("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+})
+
+test_that("exported result-table DDL matches the source verbatim", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A")
+  dest <- file.path(dir, "out.db")
+
+  export_database(src, dest, "A", include_classical = TRUE, include_amr = TRUE)
+
+  for (nm in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_identical(
+      q1(dest, "SELECT sql FROM sqlite_master WHERE name = ?", list(nm)),
+      q1(src, "SELECT sql FROM sqlite_master WHERE name = ?", list(nm)),
+      info = nm
+    )
+  }
+})

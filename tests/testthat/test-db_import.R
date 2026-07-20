@@ -490,3 +490,110 @@ test_that("a removed isolate can be re-imported to a byte-equal profile", {
   # No allele was duplicated on the way back in.
   expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_seq)
 })
+
+# --- Analysis-result tables (classical_mlst / amr_*) -----------------------
+
+test_that("result tables merge for accepted isolates when requested", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, c("B", "C")) # peer carries classical + AMR results
+
+  res <- quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    include_classical = TRUE,
+    include_amr = TRUE,
+    backup = FALSE
+  ))
+
+  # Tables were created in a local DB that never ran these analyses.
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_true(all(
+    c("classical_mlst", "amr_results", "amr_summary") %in% tbls
+  ))
+
+  # Only C is accepted (B is an identical duplicate -> skipped), so only C's
+  # result rows come across.
+  for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_setequal(
+      q1(p$local, sprintf("SELECT DISTINCT souche FROM %s", tbl)),
+      "C"
+    )
+  }
+  # 2 classical rows + 1 amr_results + 1 amr_summary for C.
+  expect_equal(res$result_rows, 4L)
+})
+
+test_that("a renamed import remaps result-table souche to the new name", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, "C")
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "rename", "C_imp"),
+    include_classical = TRUE,
+    include_amr = TRUE,
+    backup = FALSE
+  ))
+
+  expect_setequal(
+    q1(p$local, "SELECT DISTINCT souche FROM classical_mlst"),
+    "C_imp"
+  )
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'C'"),
+    0L
+  )
+})
+
+test_that("overwrite replaces result rows and re-import is idempotent", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$local, "B", classical = FALSE, amr = TRUE) # local already has B's AMR
+  seed_results(p$peer, "B", classical = FALSE, amr = TRUE)
+
+  merge_once <- function() {
+    quiet(merge_databases(
+      p$local,
+      p$peer,
+      resolve("B", "overwrite"),
+      include_amr = TRUE,
+      backup = FALSE
+    ))
+  }
+
+  merge_once()
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'B'"),
+    1L # replaced, not appended to the pre-existing local row
+  )
+
+  merge_once()
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'B'"),
+    1L # a second identical import stays stable
+  )
+})
+
+test_that("result tables are left untouched when the flags are off", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, "C")
+
+  res <- quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    backup = FALSE
+  ))
+
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+  expect_equal(res$result_rows, 0L)
+  # The ordinary merge still happened.
+  expect_setequal(names(isolate_profile_hashes(p$local)), c("A", "B", "C"))
+})

@@ -26,6 +26,7 @@ box::use(
     actionButton,
     numericInput,
     radioButtons,
+    checkboxInput,
     showNotification,
     HTML
   ],
@@ -66,6 +67,7 @@ box::use(
   app /
     logic /
     pymlst[
+      conda_env,
       start_typing,
       parse_typing_log,
       parse_clamlst_meta,
@@ -73,6 +75,13 @@ box::use(
       store_clamlst_results,
       existing_strains,
       scheme_size,
+    ],
+  app /
+    logic /
+    amr[
+      amr_species,
+      parse_amr_meta,
+      store_amr_results,
     ],
 )
 
@@ -218,6 +227,24 @@ ui <- function(id) {
             choices = c("PubMLST" = "pubmlst", "Pasteur" = "pasteur"),
             selected = "pubmlst",
             inline = TRUE
+          ),
+          checkboxInput(
+            ns("run_amr"),
+            tooltip(
+              span(
+                "Screen for antimicrobial resistance ",
+                icon("circle-info", class = "text-muted")
+              ),
+              paste(
+                "Screen each newly typed genome for antimicrobial resistance",
+                "with abritamr / AMRFinderPlus, alongside cgMLST typing.",
+                "Detects acquired resistance genes, virulence factors and",
+                "stress/metal elements; resistance point mutations are added",
+                "when the scheme's species is supported. Results are stored in",
+                "the database (amr_results / amr_summary)."
+              )
+            ),
+            value = TRUE
           )
         )
       ),
@@ -300,6 +327,9 @@ server <- function(
       # Path to this run's interim claMLST reference DB (built by the typing
       # script, read once for reference sequences / metadata, then deleted).
       cla_db = NULL,
+      # Base output dir for this run's AMR screens (one subdir per strain, read
+      # once on finalize into amr_results / amr_summary, then deleted).
+      amr_out = NULL,
       status = "idle",
       results = NULL,
       terminated = FALSE,
@@ -315,6 +345,14 @@ server <- function(
       }
     }
 
+    # Delete this run's AMR output directory (per-strain abritamr outputs). Safe
+    # to call with NULL / NA / a non-existent path.
+    cleanup_amr_out <- function(path) {
+      if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
+        unlink(path, recursive = TRUE)
+      }
+    }
+
     # Non-reactive mirror of the live typing process. onSessionEnded() runs
     # outside the reactive context (it cannot read Typing$proc), so we keep a
     # plain handle here to guarantee the process tree is killed when the app
@@ -324,11 +362,14 @@ server <- function(
     # Non-reactive mirror of this run's interim claMLST DB path, for the same
     # out-of-reactive-context cleanup on window close.
     live_cla_db <- NULL
+    # Non-reactive mirror of this run's AMR output dir, cleaned up the same way.
+    live_amr_out <- NULL
     session$onSessionEnded(function() {
       if (!is.null(live_proc) && live_proc$is_alive()) {
         tryCatch(live_proc$kill_tree(), error = function(e) NULL)
       }
       cleanup_cla_db(live_cla_db)
+      cleanup_amr_out(live_amr_out)
     })
 
     # Reset server reactives on session reset
@@ -342,6 +383,8 @@ server <- function(
         live_proc <<- NULL
         cleanup_cla_db(live_cla_db)
         live_cla_db <<- NULL
+        cleanup_amr_out(live_amr_out)
+        live_amr_out <<- NULL
         Typing$genome_input <- NULL
         Typing$files <- character(0)
         Typing$strains <- character(0)
@@ -350,6 +393,7 @@ server <- function(
         Typing$proc <- NULL
         Typing$log_file <- NULL
         Typing$cla_db <- NULL
+        Typing$amr_out <- NULL
         Typing$status <- "idle"
         Typing$results <- NULL
         Typing$terminated <- FALSE
@@ -687,10 +731,44 @@ server <- function(
         dash(results$st)
       }
 
+      # AMR screening cell: a hit count once done, a live "screening …" badge
+      # while abritamr runs, a failure flag, or "—" when AMR was not run. The
+      # count spans all detected elements (AMR + virulence + stress/metal).
+      amr_cell <- function(status, n) {
+        if (is.null(status) || is.na(status)) {
+          return("—")
+        }
+        switch(
+          status,
+          done = if (!is.na(n) && n > 0) {
+            sprintf(
+              '<span class="badge text-bg-success">%d hit%s</span>',
+              n,
+              if (n == 1L) "" else "s"
+            )
+          } else {
+            '<span class="badge text-bg-secondary">none</span>'
+          },
+          screening = '<span class="badge text-bg-info">screening …</span>',
+          failed = '<span class="badge text-bg-danger">failed</span>',
+          "—"
+        )
+      }
+      amr_column <- if ("amr_status" %in% names(results)) {
+        vapply(
+          seq_len(nrow(results)),
+          function(i) amr_cell(results$amr_status[i], results$amr_elements[i]),
+          character(1)
+        )
+      } else {
+        rep("—", nrow(results))
+      }
+
       data.frame(
         Strain = results$strain,
         Status = vapply(results$status, status_badge, character(1)),
         ST = st_column,
+        AMR = amr_column,
         `Loci found` = dash(results$found),
         `Alleles added` = dash(results$added),
         Partial = dash(results$partial),
@@ -826,6 +904,22 @@ server <- function(
       }
       live_cla_db <<- Typing$cla_db
 
+      # AMR screening rides along too (opt-out via the sidebar checkbox). Each
+      # genome is screened into a per-strain subdir of this run's temp AMR dir,
+      # read back on finalize. The scheme's species is mapped to an abritamr
+      # `--species` token when supported (enabling point mutations); an
+      # unsupported / unknown species falls back to acquired-genes-only.
+      run_amr <- isTRUE(input$run_amr)
+      amr_sp <- if (run_amr) amr_species(species) else NA_character_
+      Typing$amr_out <- if (run_amr) {
+        d <- tempfile("amr_")
+        dir.create(d, recursive = TRUE, showWarnings = FALSE)
+        d
+      } else {
+        NULL
+      }
+      live_amr_out <<- Typing$amr_out
+
       proc <- tryCatch(
         start_typing(
           db_path = db_path(),
@@ -833,10 +927,13 @@ server <- function(
           log_file = Typing$log_file,
           identity = or_default(input$identity, 0.95),
           coverage = or_default(input$coverage, 0.9),
-          env = "pymlst",
+          env = conda_env,
           species = species,
           repo = or_default(input$cla_repo, "pubmlst"),
-          cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db
+          cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db,
+          amr_env = if (run_amr) conda_env else NA_character_,
+          amr_species = amr_sp,
+          amr_out = if (is.null(Typing$amr_out)) NA_character_ else Typing$amr_out
         ),
         error = function(e) e
       )
@@ -991,6 +1088,52 @@ server <- function(
       duplicate <- sum(results$status == "Duplicate")
       failed <- sum(results$status %in% c("Incompatible", "Error"))
 
+      # Persist AMR screening results for the strains that were actually added
+      # (so amr_results never keys rows to an isolate the mother DB rejected).
+      # Each strain's abritamr output was written to amr_out/<strain>; read it
+      # back into amr_results / amr_summary with run-level provenance (tool /
+      # AMRFinder DB versions, whether point mutations were enabled). Best-effort
+      # and additive - any failure never affects cgMLST / classical MLST results.
+      # The per-run AMR output dir is a disposable artifact, deleted right after.
+      amr_enabled <- !is.null(Typing$amr_out)
+      amr_screened <- 0L
+      amr_elements <- 0L
+      if (amr_enabled) {
+        amr_meta <- parse_amr_meta(lines)
+        organism <- amr_species(db_species(db_path()))
+        point_mutations <- !is.na(organism)
+        for (strain in results$strain[results$status == "Added"]) {
+          stored <- tryCatch(
+            store_amr_results(
+              db_path = db_path(),
+              strain = strain,
+              amr_dir = file.path(Typing$amr_out, strain),
+              abritamr_version = amr_meta$abritamr_version,
+              amrfinder_version = amr_meta$amrfinder_version,
+              amrfinder_db_version = amr_meta$amrfinder_db_version,
+              organism = organism,
+              point_mutations = point_mutations,
+              identity = NA_real_
+            ),
+            error = function(e) FALSE
+          )
+          if (isTRUE(stored)) amr_screened <- amr_screened + 1L
+        }
+        # Total detected elements, scraped from the script's per-strain sentinel.
+        el <- regmatches(
+          lines,
+          regexec("AMR: done .* \\(([0-9]+) elements\\)", lines)
+        )
+        amr_elements <- sum(vapply(
+          el,
+          function(m) if (length(m) > 1) as.integer(m[2]) else 0L,
+          integer(1)
+        ))
+        cleanup_amr_out(Typing$amr_out)
+        Typing$amr_out <- NULL
+        live_amr_out <<- NULL
+      }
+
       # Signal other modules that the DB has new data.
       if (added > 0L) {
         db_updated(db_updated() + 1L)
@@ -998,16 +1141,25 @@ server <- function(
 
       showNotification(
         HTML(paste(
-          if (identical(Typing$status, "terminated")) {
-            "Typing terminated"
-          } else {
-            "Typing complete"
-          },
-          sprintf(
-            "%d added, %d duplicate, %d failed.",
-            added,
-            duplicate,
-            failed
+          c(
+            if (identical(Typing$status, "terminated")) {
+              "Typing terminated"
+            } else {
+              "Typing complete"
+            },
+            sprintf(
+              "%d added, %d duplicate, %d failed.",
+              added,
+              duplicate,
+              failed
+            ),
+            if (amr_enabled) {
+              sprintf(
+                "AMR: %d genome(s) screened, %d element(s) detected.",
+                amr_screened,
+                amr_elements
+              )
+            }
           ),
           collapse = "<br>"
         )),

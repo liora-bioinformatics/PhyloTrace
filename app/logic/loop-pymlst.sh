@@ -1,16 +1,28 @@
 #!/bin/bash
 
+# Resolve the base conda executable. A full conda can live inside an activated
+# env (e.g. <root>/envs/PhyloTrace/bin/conda) and be first on PATH; that
+# env-local conda treats the env as its root prefix, so `conda run -n <env>`
+# looks for <root>/envs/PhyloTrace/envs/<env> and fails with
+# EnvironmentLocationNotFound. CONDA_EXE (set by `conda init`/activation) always
+# points at the base conda, so prefer it and fall back to a bare `conda`.
+CONDA="${CONDA_EXE:-conda}"
+
 # Default values
 IDENTITY=0.95
 COVERAGE=0.9
-env=pymlst_env
+env=PhyloTrace
 SPECIES=""
 REPO=pubmlst
 CLA_DB=""
+# AMR screening (abritamr / AMRFinderPlus) rides along when -o is given.
+AMR_ENV=""
+AMR_SPECIES=""
+AMR_OUT=""
 
 # --- Help Message ---
 usage() {
-    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-r <pubmlst|pasteur>] [-m <cla_db_path>] -- <genome_file> [<genome_file> ...]"
+    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-r <pubmlst|pasteur>] [-m <cla_db_path>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
     exit 1
 }
 
@@ -29,7 +41,7 @@ process_genome() {
     echo "Using Database: $db"
 
     # Use conda run to ensure the environment is used correctly
-    conda run -n "$env" wgMLST add "$db" "$file" \
+    "$CONDA" run -n "$env" wgMLST add "$db" "$file" \
         --strain "$strain_name" \
         --identity "$id" \
         --coverage "$cov"
@@ -43,7 +55,7 @@ process_genome() {
     # a missing DB or no match just yields "NA".
     if [[ -n "$CLA_DB" && -f "$CLA_DB" ]]; then
         local cla_out st alleles
-        cla_out=$(conda run -n "$env" claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" 2>/dev/null)
+        cla_out=$("$CONDA" run -n "$env" claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" 2>/dev/null)
         st=$(echo "$cla_out" | awk -F'\t' 'NR==2{print $2}')
         alleles=$(echo "$cla_out" | awk -F'\t' \
             'NR==1{for (i=3;i<=NF;i++) g[i]=$i}
@@ -52,10 +64,43 @@ process_genome() {
         echo "Classical MLST ST: $st"
         [[ -n "$alleles" ]] && echo "Classical MLST alleles: $alleles"
     fi
+
+    # --- AMR screening (best-effort) ---------------------------------------
+    # When an AMR output dir (-o) and env (-A) were given, screen this genome
+    # with abritamr. abritamr always runs `amrfinder --plus` (acquired AMR +
+    # virulence + stress/metal); `--species` (when supported for this organism)
+    # additionally calls point mutations. Outputs land in "$AMR_OUT/$strain":
+    # amrfinder.out + summary_{matches,partials,virulence}.txt, read back by the
+    # R caller once this process exits. Never fails the strain.
+    #
+    # `--no-capture-output` and `</dev/null` are essential here, not cosmetic:
+    # this whole script runs as a detached background process, and abritamr
+    # spawns long-lived children (amrfinder -> blast/hmmer). Under a plain
+    # `conda run` those children inherit conda's capture pipes and an open
+    # stdin, which deadlocks the run (screening starts but never finishes).
+    # `--no-capture-output` execs with inherited stdio (no buffering pipe) and
+    # the redirects give it a closed stdin and a /dev/null sink.
+    if [[ -n "$AMR_OUT" && -n "$AMR_ENV" ]]; then
+        local amr_prefix="$AMR_OUT/$strain_name"
+        echo "AMR: screening $strain_name"
+        if "$CONDA" run --no-capture-output -n "$AMR_ENV" \
+                abritamr run -c "$file" -px "$amr_prefix" \
+                ${AMR_SPECIES:+--species "$AMR_SPECIES"} --jobs 1 \
+                >/dev/null 2>&1 </dev/null; then
+            local n_amr=0
+            if [[ -f "$amr_prefix/amrfinder.out" ]]; then
+                n_amr=$(($(wc -l < "$amr_prefix/amrfinder.out") - 1))
+                (( n_amr < 0 )) && n_amr=0
+            fi
+            echo "AMR: done $strain_name ($n_amr elements)"
+        else
+            echo "AMR: failed $strain_name"
+        fi
+    fi
 }
 
 # --- Parse flags ---
-while getopts "d:i:c:e:s:r:m:" opt; do
+while getopts "d:i:c:e:s:r:m:A:p:o:" opt; do
     case "$opt" in
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
@@ -64,6 +109,9 @@ while getopts "d:i:c:e:s:r:m:" opt; do
         s) SPECIES="$OPTARG" ;;
         r) REPO="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
+        A) AMR_ENV="$OPTARG" ;;
+        p) AMR_SPECIES="$OPTARG" ;;
+        o) AMR_OUT="$OPTARG" ;;
         *) usage ;;
     esac
 done
@@ -98,7 +146,7 @@ if [[ -n "$SPECIES" && -n "$CLA_DB" ]]; then
     built=0
     for repo in "${REPOS[@]}"; do
         echo "Trying classical MLST repository: $repo"
-        if conda run -n "$env" claMLST import --no-prompt -f -r "$repo" "$CLA_DB" "$SPECIES"; then
+        if "$CONDA" run -n "$env" claMLST import --no-prompt -f -r "$repo" "$CLA_DB" "$SPECIES"; then
             built=1
             break
         fi
@@ -109,16 +157,28 @@ if [[ -n "$SPECIES" && -n "$CLA_DB" ]]; then
         # Emit run-level provenance (parsed once by the R side). `claMLST info`
         # reports the repository actually used, the resolved species, and the
         # reference database's release date.
-        cla_info=$(conda run -n "$env" claMLST info "$CLA_DB" 2>/dev/null)
+        cla_info=$("$CONDA" run -n "$env" claMLST info "$CLA_DB" 2>/dev/null)
         echo "Classical MLST repository: $(echo "$cla_info" | awk -F'\t' '$1=="source"{print $2}')"
         echo "Classical MLST scheme: $(echo "$cla_info" | awk -F'\t' '$1=="species"{print $2}')"
         echo "Classical MLST scheme version: $(echo "$cla_info" | awk -F'\t' '$1=="version"{print $2}')"
-        echo "pyMLST version: $(conda run -n "$env" claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
+        echo "pyMLST version: $("$CONDA" run -n "$env" claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
     else
         # Disable per-genome search; R will find no file at this path.
         CLA_DB=""
         echo "Classical MLST: no scheme found for '$SPECIES' (skipping ST calls)"
     fi
+fi
+
+# --- AMR provenance -----------------------------------------------------------
+# Emit the abritamr / AMRFinderPlus / reference-DB versions once (parsed once by
+# the R side and stamped onto every stored AMR row). The DB version is the newest
+# dated directory in abritamr's bundled AMRFinder data dir.
+if [[ -n "$AMR_OUT" && -n "$AMR_ENV" ]]; then
+    echo "------------------------------------------------"
+    echo "AMR screening enabled (env: $AMR_ENV, species: ${AMR_SPECIES:-none/fallback})"
+    echo "AMR abritamr version: $("$CONDA" run -n "$AMR_ENV" abritamr --version 2>/dev/null | awk '{print $NF}')"
+    echo "AMR finder version: $("$CONDA" run -n "$AMR_ENV" amrfinder --version 2>/dev/null | tr -d '\r')"
+    echo "AMR database version: $("$CONDA" run -n "$AMR_ENV" python -c "import abritamr, os; d = os.path.join(os.path.dirname(abritamr.__file__), 'db', 'amrfinderplus', 'data'); print(sorted(os.listdir(d))[-1])" 2>/dev/null)"
 fi
 
 echo "Starting allele calling..."

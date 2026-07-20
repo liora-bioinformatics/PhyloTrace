@@ -1,0 +1,35 @@
+# PhyloTrace conda environment — the ONE env holding every external CLI the app
+# shells out to (matches `conda_env` in app/logic/pymlst.R).
+#
+# Scope: this env is *only* the command-line bioinformatics toolchain invoked
+# via `conda run -n PhyloTrace ...`:
+#   - pyMLST (wgMLST / claMLST) + blat + mafft   -> cgMLST + classical typing
+#   - abritamr + ncbi-amrfinderplus (pulls blast + hmmer) -> AMR screening
+#
+# The Shiny app itself does NOT run from this env: it runs under system R with
+# its renv library (dependencies.R + renv.lock). Keep the two separate — the
+# conda env is the tools, renv is the R packages.
+#
+# Rebuild from scratch:   conda env create -f environment.yml
+# Update an existing env:  conda env update -f environment.yml --prune
+#
+# pyMLST is pinned to 2.2.2 via pip — the version the typing/parsing logic in
+# loop-pymlst.sh + pymlst.R is written against — and installed non-editable so
+# it stays self-contained (an editable install from a since-deleted checkout is
+# what originally broke scheme downloads).
+name: PhyloTrace
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  # --- cgMLST / classical MLST typing (pyMLST toolchain) ---
+  - blat=35
+  - mafft=7.525
+  # --- AMR screening (blast + hmmer come in transitively) ---
+  - abritamr=1.0.19
+  - ncbi-amrfinderplus=3.12.8
+  # --- pyMLST itself (pip, pinned, non-editable) ---
+  - pip
+  - pip:
+      - pymlst==2.2.2
