@@ -50,6 +50,8 @@ box::use(
   stats[quantile],
 )
 
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
+
 # Palette names that belong to the viridis family (the rest are ColorBrewer).
 .viridis_scales <- c(
   "viridis",

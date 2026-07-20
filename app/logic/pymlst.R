@@ -28,17 +28,12 @@ box::use(
 download_cgmlst_scheme <- function(
   scheme,
   db_path,
-  env_name,
   overwrite = FALSE
 ) {
   download_status <- tryCatch(
     run(
-      command = "conda",
+      command = "wgMLST",
       args = c(
-        "run",
-        "-n",
-        env_name,
-        "wgMLST",
         "import",
         if (overwrite) {
           "--force"
@@ -78,7 +73,6 @@ typing_args <- function(
   genome_files,
   identity,
   coverage,
-  env,
   species = NA_character_,
   repo = "pubmlst",
   cla_db = NA_character_
@@ -89,9 +83,7 @@ typing_args <- function(
     "-i",
     as.character(identity),
     "-c",
-    as.character(coverage),
-    "-e",
-    env
+    as.character(coverage)
   )
   scalar_chr <- function(x) {
     !is.null(x) && length(x) == 1 && !is.na(x) && nzchar(x)
@@ -113,8 +105,7 @@ type_genomes <- function(
   genome_files,
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
-  coverage = 0.9,
-  env = "pymlst"
+  coverage = 0.9
 ) {
   # Run the process. `bash <script>` avoids depending on the script's execute
   # bit.
@@ -122,7 +113,7 @@ type_genomes <- function(
     command = "bash",
     args = c(
       normalizePath(script_path, mustWork = TRUE),
-      typing_args(db_path, genome_files, identity, coverage, env)
+      typing_args(db_path, genome_files, identity, coverage)
     ),
     wd = dirname(db_path),
     echo_cmd = TRUE,
@@ -195,7 +186,6 @@ start_typing <- function(
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
   coverage = 0.9,
-  env = "pymlst",
   species = NA_character_,
   repo = "pubmlst",
   cla_db = NA_character_
@@ -209,7 +199,6 @@ start_typing <- function(
         genome_files,
         identity,
         coverage,
-        env,
         species,
         repo,
         cla_db
@@ -218,10 +207,10 @@ start_typing <- function(
     wd = dirname(db_path),
     stdout = log_file,
     stderr = "2>&1",
-    # The bash wrapper spawns `conda run` -> python (wgMLST), and it is that
-    # descendant that actually holds the SQLite lock. cleanup_tree tags the whole
-    # subtree so it can be killed as a unit (via kill_tree() or on GC) - killing
-    # just the bash wrapper would orphan pymlst and leave the database locked.
+    # The bash wrapper spawns wgMLST (python), and it is that descendant that
+    # actually holds the SQLite lock. cleanup_tree tags the whole subtree so it
+    # can be killed as a unit (via kill_tree() or on GC) - killing just the bash
+    # wrapper would orphan pymlst and leave the database locked.
     cleanup_tree = TRUE
   )
 }

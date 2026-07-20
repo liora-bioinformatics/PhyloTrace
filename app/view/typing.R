@@ -833,7 +833,6 @@ server <- function(
           log_file = Typing$log_file,
           identity = or_default(input$identity, 0.95),
           coverage = or_default(input$coverage, 0.9),
-          env = "pymlst",
           species = species,
           repo = or_default(input$cla_repo, "pubmlst"),
           cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db

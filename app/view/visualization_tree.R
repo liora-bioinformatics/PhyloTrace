@@ -51,6 +51,8 @@ box::use(
     ],
 )
 
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
+
 # --- Metadata tile strips ----------------------------------------------------
 
 # Canonical shape of one tile strip's settings. `nj_tiles` holds N_TILES of

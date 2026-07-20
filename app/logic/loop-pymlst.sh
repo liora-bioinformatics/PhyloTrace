@@ -3,14 +3,13 @@
 # Default values
 IDENTITY=0.95
 COVERAGE=0.9
-env=pymlst_env
 SPECIES=""
 REPO=pubmlst
 CLA_DB=""
 
 # --- Help Message ---
 usage() {
-    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-r <pubmlst|pasteur>] [-m <cla_db_path>] -- <genome_file> [<genome_file> ...]"
+    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-s <species>] [-r <pubmlst|pasteur>] [-m <cla_db_path>] -- <genome_file> [<genome_file> ...]"
     exit 1
 }
 
@@ -28,8 +27,7 @@ process_genome() {
     echo "Processing Strain: $strain_name"
     echo "Using Database: $db"
 
-    # Use conda run to ensure the environment is used correctly
-    conda run -n "$env" wgMLST add "$db" "$file" \
+    wgMLST add "$db" "$file" \
         --strain "$strain_name" \
         --identity "$id" \
         --coverage "$cov"
@@ -43,7 +41,7 @@ process_genome() {
     # a missing DB or no match just yields "NA".
     if [[ -n "$CLA_DB" && -f "$CLA_DB" ]]; then
         local cla_out st alleles
-        cla_out=$(conda run -n "$env" claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" 2>/dev/null)
+        cla_out=$(claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" 2>/dev/null)
         st=$(echo "$cla_out" | awk -F'\t' 'NR==2{print $2}')
         alleles=$(echo "$cla_out" | awk -F'\t' \
             'NR==1{for (i=3;i<=NF;i++) g[i]=$i}
@@ -55,12 +53,11 @@ process_genome() {
 }
 
 # --- Parse flags ---
-while getopts "d:i:c:e:s:r:m:" opt; do
+while getopts "d:i:c:s:r:m:" opt; do
     case "$opt" in
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
         c) COVERAGE="$OPTARG" ;;
-        e) env="$OPTARG" ;;
         s) SPECIES="$OPTARG" ;;
         r) REPO="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
@@ -98,7 +95,7 @@ if [[ -n "$SPECIES" && -n "$CLA_DB" ]]; then
     built=0
     for repo in "${REPOS[@]}"; do
         echo "Trying classical MLST repository: $repo"
-        if conda run -n "$env" claMLST import --no-prompt -f -r "$repo" "$CLA_DB" "$SPECIES"; then
+        if claMLST import --no-prompt -f -r "$repo" "$CLA_DB" "$SPECIES"; then
             built=1
             break
         fi
@@ -109,11 +106,11 @@ if [[ -n "$SPECIES" && -n "$CLA_DB" ]]; then
         # Emit run-level provenance (parsed once by the R side). `claMLST info`
         # reports the repository actually used, the resolved species, and the
         # reference database's release date.
-        cla_info=$(conda run -n "$env" claMLST info "$CLA_DB" 2>/dev/null)
+        cla_info=$(claMLST info "$CLA_DB" 2>/dev/null)
         echo "Classical MLST repository: $(echo "$cla_info" | awk -F'\t' '$1=="source"{print $2}')"
         echo "Classical MLST scheme: $(echo "$cla_info" | awk -F'\t' '$1=="species"{print $2}')"
         echo "Classical MLST scheme version: $(echo "$cla_info" | awk -F'\t' '$1=="version"{print $2}')"
-        echo "pyMLST version: $(conda run -n "$env" claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
+        echo "pyMLST version: $(claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
     else
         # Disable per-genome search; R will find no file at this path.
         CLA_DB=""
