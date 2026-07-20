@@ -256,7 +256,10 @@ ui <- function(id, generate_id) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
-    id = "plot-sidebar",
+    # `padding`, not a CSS id: layout_sidebar has no `id` formal, so an `id`
+    # would be spliced onto the inner .main div — and with one engine instance
+    # per plot tab that id is no longer unique anyway.
+    padding = 0,
     border = FALSE,
     sidebar = sidebar(
       id = ns("controls_sidebar"),

@@ -1583,7 +1583,13 @@ map_controls <- function(ns) {
         ),
         shiny$tags$small(
           class = "text-muted",
-          shiny$textOutput(ns("map_anim_label"))
+          # Class rather than the namespaced id, so the spacing rule survives
+          # one map instance per plot tab. It sits on the textOutput span
+          # itself — the same element the old #...-map_anim_label rule matched.
+          shiny$tagAppendAttributes(
+            shiny$textOutput(ns("map_anim_label")),
+            class = "map-anim-label"
+          )
         ),
         input_switch(
           ns("map_show_time_label"),
@@ -1879,7 +1885,9 @@ ui <- function(id, generate_id) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
-    id = "plot-sidebar",
+    # See visualization_mst.R: `padding` replaces the old non-unique
+    # `id = "plot-sidebar"`, which layout_sidebar has no formal for.
+    padding = 0,
     border = FALSE,
     sidebar = sidebar(
       id = ns("controls_sidebar"),
@@ -1959,9 +1967,15 @@ ui <- function(id, generate_id) {
              if(n.classList&&n.classList.contains('viz-countdown')){start(n);}
              if(n.querySelectorAll){n.querySelectorAll('.viz-countdown').forEach(start);}
            }
-           new MutationObserver(function(muts){
-             muts.forEach(function(m){m.addedNodes.forEach(scan);});
-           }).observe(document.body,{childList:true,subtree:true});
+           // One body-wide observer for the whole app: it matches on the
+           // .viz-countdown class, so it already covers every map instance,
+           // and without this guard each plot tab would add another.
+           if(!window.__phylotraceCountdownRegistered){
+             window.__phylotraceCountdownRegistered=true;
+             new MutationObserver(function(muts){
+               muts.forEach(function(m){m.addedNodes.forEach(scan);});
+             }).observe(document.body,{childList:true,subtree:true});
+           }
          })();"
       )
     ),
@@ -1984,7 +1998,13 @@ server <- function(
   selected_isolates = shiny$reactive(NULL),
   na_handling = shiny$reactive("ignore_na"),
   generate = shiny$reactive(0L),
-  plot_type = shiny$reactive("MST")
+  plot_type = shiny$reactive("MST"),
+  # TRUE while this engine's panel is the visible one. Leaflet initialises at
+  # zero size in a hidden container and never recomputes on its own, so the
+  # coordinator drives this to trigger the resize nudge below. It used to be
+  # inferred from plot_type(), which no longer changes now that each plot tab
+  # fixes its type for life.
+  visible = shiny$reactive(TRUE)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -2253,17 +2273,16 @@ server <- function(
     # playing. Mirrors the guarded shiny$observe()+shiny$invalidateLater() polling pattern
     # already used in app/view/typing.R for the typing-progress loop. Stops
     # (does not reschedule) once the bins are exhausted; also goes dormant
-    # while the Map engine is hidden behind MST/Tree — navset_hidden only hides
-    # panels via CSS, it does not suspend a running shiny$observe() loop the way
-    # Shiny auto-suspends hidden *outputs* — and resumes automatically once
-    # plot_type() next reads back "Map", since reading it here creates the
-    # reactive dependency. Always reveals cumulatively from the frozen bins'
-    # first (selected) bound.
+    # while this plot's tab is in the background — a hidden tab is only
+    # display:none, and Shiny auto-suspends hidden *outputs* but not a running
+    # shiny$observe() loop — and resumes automatically once visible() next
+    # reads back TRUE, since reading it here creates the reactive dependency.
+    # Always reveals cumulatively from the frozen bins' first (selected) bound.
     shiny$observe({
       if (!isTRUE(anim_playing())) {
         return(NULL)
       }
-      if (!identical(plot_type(), "Map")) {
+      if (!isTRUE(visible())) {
         return(NULL)
       }
       bins <- anim_bins()
@@ -2462,7 +2481,13 @@ server <- function(
           } else {
             "display:none; height:100%;"
           },
-          leafletOutput(ns("map"), height = "100%")
+          # The class (not the namespaced id) is what main.scss hangs the
+          # neutral #ddd backing off, so it keeps working for every plot tab's
+          # own map instance. See the .viz-map-canvas rule for why it exists.
+          shiny$tagAppendAttributes(
+            leafletOutput(ns("map"), height = "100%"),
+            class = "viz-map-canvas"
+          )
         )
       )
     })
@@ -2574,8 +2599,8 @@ server <- function(
         delay
       ))
     }
-    shiny$observeEvent(plot_type(), {
-      if (identical(plot_type(), "Map")) {
+    shiny$observeEvent(visible(), {
+      if (isTRUE(visible())) {
         nudge_resize()
       }
     })

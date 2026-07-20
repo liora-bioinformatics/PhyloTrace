@@ -283,7 +283,7 @@ server <- function(
       if (is.null(df)) {
         return(datatable(
           data.frame(
-            " " = "No entries in this database yet.<br>Add isolates by typing them in the <strong>Allelic Typing</strong> module.",
+            " " = "No entries in this database yet.<br>Add isolates by typing them in the <strong>Add Isolates</strong> module.",
             check.names = FALSE
           ),
           rownames = FALSE,
@@ -407,8 +407,7 @@ server <- function(
       # Drop the display-only MLST columns; they live in classical_mlst, not the
       # metadata table, and must never be written back.
       strip <- mlst_cols()
-      to_save <- State$data[
-        ,
+      to_save <- State$data[,
         setdiff(names(State$data), strip),
         drop = FALSE
       ]
@@ -493,7 +492,9 @@ server <- function(
         show_idx <- .dt_idx(names(df), intersect(optional, selected))
         hide_idx <- .dt_idx(names(df), setdiff(optional, selected))
 
-        if (length(show_idx)) showCols(proxy, show_idx, reset = FALSE)
+        if (length(show_idx)) {
+          showCols(proxy, show_idx, reset = FALSE)
+        }
         if (length(hide_idx)) hideCols(proxy, hide_idx, reset = FALSE)
       },
       ignoreNULL = FALSE,

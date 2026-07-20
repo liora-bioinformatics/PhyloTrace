@@ -543,7 +543,9 @@ ui <- function(id, generate_id) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
-    id = "plot-sidebar",
+    # See visualization_mst.R: `padding` replaces the old non-unique
+    # `id = "plot-sidebar"`, which layout_sidebar has no formal for.
+    padding = 0,
     border = FALSE,
     sidebar = sidebar(
       id = ns("controls_sidebar"),
@@ -1198,11 +1200,15 @@ server <- function(
       shinyjs::click("download_nj")
     })
 
-    # Keep the outputs reactive while hidden: the panel is nav_remove'd on
-    # session reset AND the inactive engine's panel is display:none-hidden by
-    # navset_hidden.
+    # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
+    # the plot output has to bind through it, so it stays live while hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
-    shiny$outputOptions(output, "tree_plot", suspendWhenHidden = FALSE)
+    # The tree itself is a server-side ggplot with no client state to lose, so
+    # let Shiny suspend it while its plot tab is in the background. With
+    # several tabs open that is the difference between one metadata change
+    # re-rendering every tree in the session and re-rendering only the visible
+    # one; it re-executes on the way back in.
+    shiny$outputOptions(output, "tree_plot", suspendWhenHidden = TRUE)
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
     # Snapshot the nj_* controls plus the two pieces of state held in

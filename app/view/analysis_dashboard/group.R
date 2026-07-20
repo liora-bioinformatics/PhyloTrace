@@ -198,16 +198,11 @@ server <- function(
         item$ui(ns(paste0("box_", i)))
       })
 
-      add_card_placeholder <- value_box(
-        class = "add-box",
-        title = NULL,
-        value = actionButton(
-          ns("add_box_btn"),
-          "Add Plot",
-          icon = icon("plus"),
-          class = "btn-primary"
-        ),
-        theme = "secondary"
+      add_card_placeholder <- actionButton(
+        ns("add_box_btn"),
+        "Add Plot",
+        icon = icon("plus"),
+        class = "add-box"
       )
 
       name_content <- tags$strong(row$name)

@@ -50,7 +50,6 @@ box::use(
   app / view / typing,
   app / view / analysis_dashboard,
   app / view / visualization,
-  app / view / resistance_screening,
 )
 
 fillable_panel <- function(...) {
@@ -158,25 +157,27 @@ server <- function(id) {
     # balloons; the cap is far above any real working set so it never limits
     # actual work. Scaled to physical RAM (Linux /proc/meminfo) so it adapts
     # across machines, with an 8 GB fallback when that can't be read.
-    if (FALSE) local({
-      mem_total_mb <- tryCatch(
-        {
-          line <- grep(
-            "^MemTotal",
-            readLines("/proc/meminfo"),
-            value = TRUE
-          )[1]
-          as.numeric(gsub("\\D", "", line)) / 1024
-        },
-        error = function(e) NA_real_
-      )
-      cap <- if (is.finite(mem_total_mb)) {
-        max(4096, floor(mem_total_mb * 0.5))
-      } else {
-        8192
-      }
-      suppressWarnings(try(mem.maxVSize(cap), silent = TRUE))
-    })
+    if (FALSE) {
+      local({
+        mem_total_mb <- tryCatch(
+          {
+            line <- grep(
+              "^MemTotal",
+              readLines("/proc/meminfo"),
+              value = TRUE
+            )[1]
+            as.numeric(gsub("\\D", "", line)) / 1024
+          },
+          error = function(e) NA_real_
+        )
+        cap <- if (is.finite(mem_total_mb)) {
+          max(4096, floor(mem_total_mb * 0.5))
+        } else {
+          8192
+        }
+        suppressWarnings(try(mem.maxVSize(cap), silent = TRUE))
+      })
+    }
 
     # Kill server on session end
     session$onSessionEnded(function() {
@@ -349,13 +350,6 @@ server <- function(id) {
     observeEvent(ANALYSIS_DASHBOARD_vals$request_open_plot(), {
       nav_select(id = "tabs", selected = "visualization_panel")
     })
-    resistance_screening$server(
-      "resistance_screening",
-      db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset,
-      typing_status = TYPING_vals$typing_status,
-      db_updated = TYPING_vals$db_updated
-    )
 
     observeEvent(LANDING_PAGE_vals$create_scheme(), {
       nav_select(id = "tabs", selected = "scheme_browser_panel")
@@ -382,10 +376,6 @@ server <- function(id) {
       )
       w$show()
 
-      # Hash database
-      # TODO: a hashed databse takes currently much longer to perform allelic typing on
-      # maybe hash_database() should be appled after each isolate addition?
-      # check underlying pymlst implementation and why the hash changes slow typing down
       hash_database(db_path)
 
       app_panels <- list(
@@ -407,16 +397,9 @@ server <- function(id) {
           strip_shinyfiles_assets(visualization$ui(ns("visualization")))
         ),
         fillable_panel(
-          "Allelic Typing",
+          "Add Isolates",
           value = "typing_panel",
           strip_shinyfiles_assets(typing$ui(ns("typing")))
-        ),
-        fillable_panel(
-          "Resistance Screening",
-          value = "resistance_screening_panel",
-          strip_shinyfiles_assets(resistance_screening$ui(ns(
-            "resistance_screening"
-          )))
         )
       )
 
@@ -448,7 +431,7 @@ server <- function(id) {
             title = "Return to the start screen"
           )
         ),
-        target = "resistance_screening_panel",
+        target = "typing_panel",
         position = "after"
       )
 
@@ -464,7 +447,7 @@ server <- function(id) {
             )
           }
         ),
-        target = "resistance_screening_panel",
+        target = "typing_panel",
         position = "after"
       )
 
@@ -533,8 +516,7 @@ server <- function(id) {
         "database_panel",
         "analysis_dashboard_panel",
         "visualization_panel",
-        "typing_panel",
-        "resistance_screening_panel"
+        "typing_panel"
       )) {
         nav_remove(id = "tabs", target = panel)
       }

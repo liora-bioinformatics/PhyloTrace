@@ -5,6 +5,20 @@
     --bs-card-border-radius: 8px;
 }
 
+// Full-height anchor -----------------------------------------------------------
+// main.R emits page_navbar() inside a tagList, so bslib's `.bslib-page-fill`
+// (which is `height: 100%`) lands as a nested <div> rather than the document
+// <body>. Its height then has no definite ancestor to resolve against, so any
+// fillable panel without tall intrinsic content — the Visualization card and
+// its Leaflet map above all — collapses to content height instead of filling
+// the viewport. Give the real document a definite height so the whole
+// height:100% fill chain (page-fill → container-fluid → tab-content → panes →
+// the plot card) can resolve down to the viewport.
+html,
+body {
+    height: 100%;
+}
+
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
 
 @keyframes waiter-fade-in {
@@ -69,6 +83,55 @@
 }
 
 // Visualization module -------------------------------------------------------
+
+// Plot-tab strip (see visualization.R). One tab per live plot, each labelled
+// with the plot's name and a close affordance; a permanent "New plot" tab
+// (first in the strip) is where another plot gets started — there is no
+// separate "+" shortcut.
+.viz-tab-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+// Plot-type glyph at the head of each tab label (see .type_icon in
+// visualization.R): circle-nodes/sitemap/earth-europe/chart-column for
+// MST/Tree/Map/Epi. Muted so the plot name stays the emphasis.
+.viz-tab-type-icon {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.85em;
+    opacity: 0.75;
+}
+
+.viz-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.45;
+    font-size: 0.8em;
+    line-height: 1;
+    border-radius: 50%;
+    cursor: pointer;
+    // Enlarge the click target well beyond the glyph, but pull the extra size
+    // back into the label with negative margins so the tab isn't inflated.
+    padding: 6px;
+    min-width: 22px;
+    min-height: 22px;
+    margin: -6px -4px -6px -2px;
+}
+
+.viz-tab-close:hover {
+    opacity: 1;
+    color: var(--bs-danger);
+    background: var(--bs-tertiary-bg);
+}
+
+// The creator form supplies its own padding: the navset's card body is
+// zero-padded so the plot tabs' full-bleed layouts sit flush.
+.viz-creator {
+    max-width: 420px;
+}
 
 // Engine controls live directly in the right sidebar (no card). The wrapper is
 // a flex column so the tab bar stays put and the panel content scrolls.
@@ -428,7 +491,9 @@
 // is behind it for a frame. Pinning the same #ddd here directly on the div,
 // independent of that class, turns the gap into an unnoticeable neutral
 // hold instead of a flash of the page background.
-#app-visualization-map-map {
+// Matched by class rather than by the module's namespaced id, so it holds for
+// every plot tab's own map instance (see visualization_map.R's leafletOutput).
+.viz-map-canvas {
     background-color: #ddd;
 }
 
@@ -766,7 +831,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .ad-group-meta {
     display: flex;
     gap: 20px;
-    margin-bottom: 12px;
     font-size: 0.8rem;
     color: var(--bs-secondary-color);
 }
@@ -1480,16 +1544,12 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin-top: 0 !important;
 }
 
-.add-box .btn {
+.add-box {
     height: 100%;
     margin: 0;
     padding: 1rem;
-}
-
-.add-box .card-body,
-.add-box .value-box-area,
-.add-box {
-    padding: 0;
+    border: none;
+    font-size: 1.5em;
 }
 
 .bslib-sidebar-layout .sidebar-title {
@@ -2048,7 +2108,9 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     transform: translateX(0);
 }
 
-#app-visualization-map-map_anim_label {
+// Class, not the module's namespaced id, so it survives one map instance per
+// plot tab. Sits on the same textOutput span the id used to match.
+.map-anim-label {
     margin-top: 1rem;
     margin-bottom: 1rem;
 }
@@ -2493,6 +2555,41 @@ label {
     padding-bottom: 8px;
 }
 
+.tab-pane[data-value="visualization_panel"] {
+    padding: 0 !important;
+
+    .bslib-card {
+        border-radius: 0;
+        border: none;
+        box-shadow: unset;
+    }
+
+    .bslib-card .card-header {
+        height: 49px;
+    }
+
+    // Inner plot navset (see visualization.R's `plot_set`). bslib gives its
+    // construction-time panes the fillable card_body treatment via `wrapper`,
+    // but panes added with nav_insert — every live plot tab — come through as
+    // plain tab-panes sized to their content, so they stopped short of the
+    // card's full height. Stretch every pane (creator and plot alike) into a
+    // fill column and let its single child grow to fill it.
+    >.bslib-card>.tab-content>.tab-pane {
+        min-height: 0;
+    }
+
+    >.bslib-card>.tab-content>.tab-pane.active {
+        display: flex;
+        flex-direction: column;
+
+        >* {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+    }
+}
+
+
 .tab-pane[data-value="scheme_browser_panel"] .waiter-overlay,
 .tab-pane[data-value="import"] .waiter-overlay,
 .tab-pane[data-value="export"] .waiter-overlay,
@@ -2609,6 +2706,23 @@ label {
     background-image: var(--bs-primary-rgb);
 }
 
+.ad-group-stack .bslib-card {
+    border: 1px solid #000000;
+    border-radius: 4px;
+}
+
+.bootstrap-select .dropdown-menu {
+    box-shadow: 0 0 5px 0 #8a8a8a;
+}
+
+[data-bs-theme="dark"] .ad-group-stack .bslib-card {
+    border: 1px solid #ffffff;
+}
+
+[data-bs-theme="dark"] .ad-plot-box {
+    box-shadow: 0 1px 3px rgb(255 255 255 / 25%);
+}
+
 [data-bs-theme="dark"] .sF-fileList.sF-detail .sF-file-header {
     background: var(--bs-tertiary-bg);
     color: var(--bs-body-color);
@@ -2682,8 +2796,12 @@ table.dataTable thead>tr>th.sorting {
     font-style: unset !important;
 }
 
-.plot-card .card-body,
-#plot-sidebar {
+// The engines' own sidebar layouts used to be flattened here via a shared
+// `#plot-sidebar` id. That id was never unique (all four engines emitted it)
+// and is impossible now that each plot tab runs its own engine instance, so
+// they pass `layout_sidebar(padding = 0)` instead — an inline style, which
+// also beats bslib's `.bslib-sidebar-layout>.main` padding without a fight.
+.plot-card .card-body {
     padding: 0;
 }
 

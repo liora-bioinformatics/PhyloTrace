@@ -135,7 +135,7 @@ ui <- function(id) {
     sidebar = sidebar(
       title = div(
         class = "typing-sidebar-title",
-        div(class = "sidebar-title", "Allelic Typing"),
+        div(class = "sidebar-title", "Add Isolates"),
         tooltip(
           icon("circle-info", class = "text-muted"),
           paste(
@@ -310,9 +310,7 @@ server <- function(
     # Delete an interim claMLST reference DB (and any SQLite side files). Safe to
     # call with NULL / NA / a non-existent path.
     cleanup_cla_db <- function(path) {
-      if (
-        !is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)
-      ) {
+      if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
         unlink(c(path, paste0(path, c("-wal", "-shm"))))
       }
     }
