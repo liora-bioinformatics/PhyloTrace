@@ -30,7 +30,6 @@ box::use(
     removeModal,
     renderUI,
     req,
-    selectInput,
     showModal,
     span,
     tagList,
@@ -38,6 +37,7 @@ box::use(
     textInput,
     uiOutput,
   ],
+  shinyWidgets[pickerInput, pickerOptions],
   bslib[
     page_sidebar,
     sidebar,
@@ -71,6 +71,15 @@ ui <- function(id) {
       uiOutput(ns("groups_vertical_stack"))
     )
   )
+}
+
+# An Analysis's stored isolate_selection JSON as a character vector, or NULL
+# when it fixes nothing (i.e. all isolates).
+.parse_selection <- function(raw) {
+  if (is.null(raw) || length(raw) != 1 || is.na(raw)) {
+    return(NULL)
+  }
+  as.character(fromJSON(raw))
 }
 
 .usable_path <- function(path) {
@@ -154,6 +163,7 @@ server <- function(
               plots_changed = plots_changed,
               on_add_plot = handle_add_plot,
               on_open_plot = handle_open_plot,
+              on_edit_settings = handle_edit_settings,
               session_reset = session_reset
             )
           })
@@ -164,40 +174,322 @@ server <- function(
       })
     })
 
-    observeEvent(input$trigger_group_modal, {
-      next_num <- nrow(isolate(analyses())) + 1L
-      showModal(modalDialog(
-        title = "📁 New Analysis",
-        # allow-free-text: an Analysis name is display text, so it takes spaces
-        # and punctuation — it opts out of the identifier charset restriction in
-        # app/js/index.js.
-        div(
-          class = "allow-free-text",
-          textInput(
-            ns("modal_group_name"),
-            "Analysis name",
-            value = paste("Analysis", next_num)
-          )
-        ),
-        footer = list(
-          actionButton(
-            ns("submit_new_group"),
-            "Create Analysis",
-            class = "btn-primary"
-          ),
-          modalButton("Cancel")
-        ),
-        easyClose = FALSE
-      ))
+    # ----------------------------------------------- Analysis setup wizard ---
+    # Creating (or editing) an Analysis walks the user through two steps:
+    #   1. name + optional description
+    #   2. the isolate table — the set every plot in this Analysis will use
+    # `editing_analysis` is NULL while creating, or the id being edited. The
+    # step values live in reactiveVals so they survive the modal being re-shown
+    # as the user moves between steps.
+    wizard_step <- reactiveVal(1L)
+    editing_analysis <- reactiveVal(NULL)
+    wizard_name <- reactiveVal("")
+    wizard_desc <- reactiveVal("")
+    wizard_selection <- reactiveVal(NULL)
+
+    # Isolate metadata backing the selection step — the same table the
+    # Visualization module's isolate picker shows.
+    settings_meta <- reactive({
+      req(db_path())
+      append_classical_mlst(make_metadata_table(db_path()), db_path())
     })
 
-    observeEvent(input$submit_new_group, {
-      req(input$modal_group_name)
-      removeModal()
-      new_id <- analysis_store$add_analysis(db_path(), input$modal_group_name)
-      plots_changed(isolate(plots_changed()) + 1L)
-      current_view(as.character(new_id))
+    # Isolate names currently ticked in the wizard's table.
+    selected_from_table <- function() {
+      meta <- settings_meta()
+      rows <- input$wiz_table_rows_selected
+      if (is.null(meta) || !length(rows)) {
+        return(NULL)
+      }
+      meta$isolate[rows]
+    }
+
+    show_wizard <- function() {
+      creating <- is.null(editing_analysis())
+      if (identical(wizard_step(), 1L)) {
+        showModal(modalDialog(
+          title = if (creating) "New Analysis" else "Analysis settings",
+          # allow-free-text: name/description are display text, so they take
+          # spaces and punctuation (see isExemptFromCharset in app/js/index.js).
+          div(
+            class = "allow-free-text",
+            textInput(
+              ns("wiz_name"),
+              "Analysis name",
+              value = wizard_name(),
+              width = "100%"
+            ),
+            textAreaInput(
+              ns("wiz_desc"),
+              "Description (optional)",
+              value = wizard_desc(),
+              width = "100%",
+              rows = 3
+            )
+          ),
+          footer = tagList(
+            modalButton("Cancel"),
+            actionButton(
+              ns("wiz_next"),
+              "Next",
+              icon = icon("arrow-right"),
+              class = "btn-primary"
+            )
+          ),
+          easyClose = FALSE
+        ))
+      } else {
+        # Editing an Analysis that already holds plots: warn up front that the
+        # isolate set is what those plots were built from.
+        n_saved <- if (creating) {
+          0L
+        } else {
+          nrow(analysis_store$list_plots(db_path(), editing_analysis()))
+        }
+        retro_warning <- if (n_saved > 0) {
+          div(
+            class = "ad-retro-warning",
+            icon("triangle-exclamation"),
+            sprintf(
+              paste(
+                " This Analysis already contains %d saved plot%s built from",
+                "the current isolate set. Changing it re-bases them onto",
+                "different data — they will be flagged as out of date."
+              ),
+              n_saved,
+              if (n_saved == 1) "" else "s"
+            )
+          )
+        }
+
+        showModal(div(
+          class = "selection-modal",
+          modalDialog(
+            title = "Select isolates",
+            retro_warning,
+            div(
+              class = "selection-modal-toolbar",
+              actionButton(
+                ns("wiz_sel_all"),
+                title = "Select all",
+                label = "All",
+                icon = icon("check-double")
+              ),
+              actionButton(
+                ns("wiz_sel_none"),
+                title = "Select none",
+                label = "None",
+                icon = icon("xmark")
+              ),
+              # Compact hint so the modal keeps the same footprint as
+              # Visualization's own isolate picker; leaving the selection empty
+              # is explained here rather than in a separate paragraph.
+              span(
+                class = "text-muted small ms-2",
+                "Empty = all isolates; every plot here uses this set."
+              ),
+              uiOutput(ns("wiz_sel_count"), class = "selection-modal-count")
+            ),
+            div(
+              class = "isolate-selection-table",
+              DTOutput(ns("wiz_table"), fill = FALSE)
+            ),
+            footer = tagList(
+              modalButton("Cancel"),
+              actionButton(ns("wiz_back"), "Back", icon = icon("arrow-left")),
+              actionButton(
+                ns("wiz_confirm"),
+                if (creating) "Create Analysis" else "Save settings",
+                class = "btn-primary"
+              )
+            ),
+            easyClose = FALSE
+          )
+        ))
+      }
+    }
+
+    # "Add Analysis" starts a fresh wizard.
+    observeEvent(input$trigger_group_modal, {
+      editing_analysis(NULL)
+      wizard_name(paste("Analysis", nrow(isolate(analyses())) + 1L))
+      wizard_desc("")
+      wizard_selection(NULL)
+      wizard_step(1L)
+      show_wizard()
     })
+
+    # The pencil on an Analysis card reopens the same wizard, prefilled.
+    handle_edit_settings <- function(analysis_id) {
+      row <- analysis_store$get_analysis(db_path(), analysis_id)
+      if (is.null(row)) {
+        return()
+      }
+      editing_analysis(analysis_id)
+      wizard_name(row$name)
+      wizard_desc(if (is.na(row$description)) "" else row$description)
+      wizard_selection(.parse_selection(row$isolate_selection))
+      wizard_step(1L)
+      show_wizard()
+    }
+
+    observeEvent(input$wiz_next, {
+      wizard_name(if (is.null(input$wiz_name)) "" else input$wiz_name)
+      wizard_desc(if (is.null(input$wiz_desc)) "" else input$wiz_desc)
+      wizard_step(2L)
+      show_wizard()
+    })
+
+    observeEvent(input$wiz_back, {
+      # Carry the table's current ticks back so returning to step 2 keeps them.
+      wizard_selection(selected_from_table())
+      wizard_step(1L)
+      show_wizard()
+    })
+
+    output$wiz_table <- renderDT(
+      {
+        meta <- settings_meta()
+        req(meta)
+        pre <- wizard_selection()
+        sel_idx <- if (is.null(pre)) NULL else which(meta$isolate %in% pre)
+        datatable(
+          meta,
+          rownames = FALSE,
+          filter = "top",
+          class = "row-border hover order-column",
+          selection = list(mode = "multiple", selected = sel_idx),
+          options = list(
+            dom = "tip",
+            pageLength = 10,
+            scrollX = TRUE,
+            scrollY = "42vh",
+            scrollCollapse = TRUE
+          )
+        )
+      },
+      server = FALSE
+    )
+
+    output$wiz_sel_count <- renderUI({
+      meta <- settings_meta()
+      req(meta)
+      n <- length(input$wiz_table_rows_selected)
+      span(sprintf("%d of %d selected", n, nrow(meta)))
+    })
+
+    # Select all / none act on the currently filtered rows, like the
+    # Visualization module's isolate picker.
+    wiz_proxy <- dataTableProxy("wiz_table")
+    observeEvent(
+      input$wiz_sel_all,
+      selectRows(wiz_proxy, input$wiz_table_rows_all)
+    )
+    observeEvent(input$wiz_sel_none, selectRows(wiz_proxy, NULL))
+
+    # Writes the wizard's collected settings. `isolate_universe` records the
+    # concrete isolate list the database held at this moment even when nothing
+    # is restricted, so isolates added later are detectable (see the drift hint
+    # on the Analysis card).
+    commit_settings <- function() {
+      meta <- settings_meta()
+      req(meta)
+      sel <- selected_from_table()
+      # Empty (or everything ticked) means "no restriction", stored as NULL.
+      sel_json <- if (is.null(sel) || setequal(sel, meta$isolate)) {
+        NULL
+      } else {
+        as.character(toJSON(sel, auto_unbox = FALSE))
+      }
+      universe_json <- as.character(
+        toJSON(as.character(meta$isolate), auto_unbox = FALSE)
+      )
+      nm <- wizard_name()
+      if (!nzchar(nm)) {
+        nm <- "Analysis"
+      }
+      desc <- wizard_desc()
+      desc <- if (nzchar(desc)) desc else NULL
+
+      if (is.null(editing_analysis())) {
+        new_id <- analysis_store$add_analysis(
+          db_path(),
+          nm,
+          desc,
+          sel_json,
+          universe_json
+        )
+        current_view(as.character(new_id))
+      } else {
+        analysis_store$update_analysis_settings(
+          db_path(),
+          editing_analysis(),
+          nm,
+          desc,
+          sel_json,
+          universe_json
+        )
+      }
+      plots_changed(isolate(plots_changed()) + 1L)
+      removeModal()
+    }
+
+    observeEvent(input$wiz_confirm, {
+      aid <- editing_analysis()
+
+      # Editing an existing Analysis that already holds plots: changing the
+      # isolate set retroactively re-bases every saved plot onto different
+      # data, so confirm before committing. Creating a new Analysis, or
+      # editing one with no plots yet, has nothing to invalidate.
+      if (!is.null(aid)) {
+        n_plots <- nrow(analysis_store$list_plots(db_path(), aid))
+        row <- analysis_store$get_analysis(db_path(), aid)
+        prev_sel <- if (is.null(row)) {
+          NULL
+        } else {
+          .parse_selection(row$isolate_selection)
+        }
+        meta <- settings_meta()
+        new_sel <- selected_from_table()
+        if (
+          !is.null(meta) && !is.null(new_sel) && setequal(new_sel, meta$isolate)
+        ) {
+          new_sel <- NULL
+        }
+
+        if (
+          n_plots > 0 && analysis_store$selection_differs(prev_sel, new_sel)
+        ) {
+          showModal(modalDialog(
+            title = "⚠️ Change isolate selection?",
+            paste0(
+              "This Analysis already contains ",
+              n_plots,
+              " saved plot",
+              if (n_plots == 1) "" else "s",
+              ". They were built from the current isolate set; changing it",
+              " means they no longer match the data they were saved with.",
+              " Affected plots will be flagged on the dashboard, and",
+              " reopening one rebuilds it against the new selection."
+            ),
+            footer = tagList(
+              modalButton("Cancel"),
+              actionButton(
+                ns("confirm_selection_change"),
+                "Change selection",
+                class = "btn-danger"
+              )
+            ),
+            easyClose = TRUE
+          ))
+          return()
+        }
+      }
+
+      commit_settings()
+    })
+
+    observeEvent(input$confirm_selection_change, commit_settings())
 
     output$sidebar_navigation <- renderUI({
       df <- analyses()
@@ -215,11 +507,16 @@ server <- function(
         sel <- "all"
       }
 
-      selectInput(
+      pickerInput(
         ns("selected_group_view"),
-        label = "Navigate Analyses:",
+        "Navigate Analyses",
         choices = choices_list,
-        selected = sel
+        selected = sel,
+        options = pickerOptions(
+          title = "No analysis",
+          size = 10,
+          container = "body"
+        )
       )
     })
 
@@ -248,7 +545,10 @@ server <- function(
       }
 
       if (length(visible_ids) == 0) {
-        return(p(class = "ad-empty", "The selected analysis is no longer active."))
+        return(p(
+          class = "ad-empty",
+          "The selected analysis is no longer active."
+        ))
       }
 
       lapply(visible_ids, function(a_id) {

@@ -25,6 +25,7 @@ box::use(
     renderUI,
     req,
     showModal,
+    showNotification,
     span,
     tags,
     textInput,
@@ -34,7 +35,33 @@ box::use(
     value_box,
   ],
   app / logic / analysis_store,
+  jsonlite[fromJSON],
 )
+
+# The concrete isolate set a saved plot was built from, or NULL when it can't
+# be determined (plots saved before `selection_resolved` was recorded fall back
+# to the stored restriction; if that is absent too there is nothing to compare
+# against, so no staleness is claimed).
+.plot_isolates <- function(inputs_json) {
+  if (
+    is.null(inputs_json) || length(inputs_json) != 1 || is.na(inputs_json)
+  ) {
+    return(NULL)
+  }
+  snap <- tryCatch(fromJSON(inputs_json), error = function(e) NULL)
+  if (is.null(snap)) {
+    return(NULL)
+  }
+  resolved <- snap$selection_resolved
+  if (!is.null(resolved)) {
+    return(as.character(unlist(resolved, use.names = FALSE)))
+  }
+  sel <- snap$selection
+  if (is.null(sel)) {
+    return(NULL)
+  }
+  as.character(unlist(sel, use.names = FALSE))
+}
 
 #' @export
 ui <- function(id) {
@@ -74,6 +101,7 @@ server <- function(
   db_path = shiny::reactive(NULL),
   plots_changed = shiny::reactiveVal(0L),
   on_open = function(plot_id) NULL,
+  analysis_isolates = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L)
 ) {
   moduleServer(id, function(input, output, session) {
@@ -89,7 +117,31 @@ server <- function(
 
     observeEvent(session_reset(), is_editing(FALSE), ignoreInit = TRUE)
 
-    # Open (thumbnail click or explicit button) -> bubble up to the dashboard.
+    # Whether this plot was built from a different isolate set than the
+    # Analysis currently resolves to — either because the Analysis's selection
+    # was edited afterwards, or because isolates were added to / removed from
+    # the database while the Analysis is unrestricted. NULL when undeterminable.
+    stale_isolates <- reactive({
+      row <- plot_row()
+      if (is.null(row)) {
+        return(NULL)
+      }
+      built_from <- .plot_isolates(row$inputs_json)
+      current <- analysis_isolates()
+      if (is.null(built_from) || is.null(current)) {
+        return(NULL)
+      }
+      if (!analysis_store$selection_differs(built_from, current)) {
+        return(NULL)
+      }
+      list(
+        added = setdiff(current, built_from),
+        removed = setdiff(built_from, current)
+      )
+    })
+
+    # Clicking the thumbnail opens the plot (via the hidden .ad-open-trigger
+    # button below) -> bubble the request up to the dashboard.
     observeEvent(input$open_plot, {
       req(plot_id)
       on_open(plot_id)
@@ -163,14 +215,17 @@ server <- function(
       btn_icon <- if (is_editing()) icon("check") else icon("pencil")
 
       div(
+        class = "ad-plot-box",
+        # Fills the box edge-to-edge; everything else overlays on top of it.
+        .thumb_ui(row$thumb_b64, ns),
         div(
           class = "ad-box-actions",
           actionButton(
-            ns("open_plot_visible"),
+            ns("duplicate_plot"),
             label = NULL,
-            icon = icon("up-right-from-square"),
+            icon = icon("copy"),
             class = "btn-sm btn-light",
-            title = "Open in Visualization"
+            title = "Duplicate this plot"
           ),
           actionButton(
             ns("toggle_edit"),
@@ -187,64 +242,66 @@ server <- function(
             title = "Delete"
           )
         ),
-        .thumb_ui(row$thumb_b64, ns),
+        # Flagged when the Analysis's isolate set no longer matches the one this
+        # plot was built from, so a card that silently no longer represents its
+        # Analysis is visible at a glance.
+        {
+          stale <- stale_isolates()
+          if (!is.null(stale)) {
+            parts <- c(
+              if (length(stale$added)) sprintf("+%d", length(stale$added)),
+              if (length(stale$removed)) sprintf("-%d", length(stale$removed))
+            )
+            span(
+              class = "ad-plot-stale",
+              title = paste(
+                "Built from a different isolate set than this Analysis now",
+                "uses — reopen it to rebuild against the current selection."
+              ),
+              icon("triangle-exclamation"),
+              sprintf(" Isolates changed (%s)", paste(parts, collapse = " "))
+            )
+          }
+        },
         div(
-          header_content
+          class = "ad-plot-overlay-info",
+          div(class = "ad-plot-name", header_content),
+          div(
+            class = "ad-plot-overlay-meta",
+            span(class = "ad-plot-badge", row$plot_type),
+            span(class = "ad-box-meta", paste("Saved:", row$created))
+          )
         ),
-        div(
-          span(class = "ad-plot-badge", row$plot_type)
-        ),
-        p(class = "ad-box-meta", paste("Saved:", row$created)),
+        # Hidden open trigger, clicked by the thumbnail wrapper.
         actionButton(
           ns("open_plot"),
           label = NULL,
           class = "ad-open-trigger"
         )
       )
-
-      # value_box(
-      #   title = header_content,
-      #   showcase = .thumb_ui(row$thumb_b64, ns),
-      #   theme = "teal",
-      #   value = span(class = "ad-plot-badge", row$plot_type),
-      #   p(class = "ad-box-meta", paste("Saved:", row$created)),
-      #   # Hidden open trigger, clicked by the thumbnail wrapper.
-      #   actionButton(
-      #     ns("open_plot"),
-      #     label = NULL,
-      #     class = "ad-open-trigger"
-      #   ),
-      #   div(
-      #     class = "ad-box-actions",
-      #     actionButton(
-      #       ns("open_plot_visible"),
-      #       label = NULL,
-      #       icon = icon("up-right-from-square"),
-      #       class = "btn-sm btn-light",
-      #       title = "Open in Visualization"
-      #     ),
-      #     actionButton(
-      #       ns("toggle_edit"),
-      #       label = NULL,
-      #       icon = btn_icon,
-      #       class = "btn-sm btn-light",
-      #       title = "Rename"
-      #     ),
-      #     actionButton(
-      #       ns("trigger_delete_box"),
-      #       label = NULL,
-      #       icon = icon("trash"),
-      #       class = "btn-sm btn-light",
-      #       title = "Delete"
-      #     )
-      #   )
-      # )
     })
 
-    # The visible open button shares the open action.
-    observeEvent(input$open_plot_visible, {
+    # Duplicate: copies this plot's settings snapshot and thumbnail into a new
+    # card in the same Analysis. Purely additive, so no confirmation — but the
+    # copy is appended at the end of the row and may be off-screen, hence the
+    # notification naming it.
+    observeEvent(input$duplicate_plot, {
       req(plot_id)
-      on_open(plot_id)
+      new_id <- analysis_store$duplicate_plot(db_path(), plot_id)
+      if (is.null(new_id)) {
+        showNotification("Could not duplicate this plot.", type = "error")
+        return()
+      }
+      plots_changed(plots_changed() + 1L)
+      copy <- analysis_store$get_plot(db_path(), new_id)
+      showNotification(
+        paste0(
+          "Duplicated as '",
+          if (is.null(copy)) "copy" else copy$name,
+          "'."
+        ),
+        type = "message"
+      )
     })
   })
 }

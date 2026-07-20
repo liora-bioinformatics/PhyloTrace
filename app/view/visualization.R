@@ -43,7 +43,6 @@ box::use(
     accordion_panel,
     navset_hidden,
     nav_panel,
-    tooltip,
     input_switch,
     as_fill_carrier,
   ],
@@ -102,15 +101,13 @@ ui <- function(id) {
       ),
       accordion(
         id = ns("setup_accordion"),
-        # Initial state matches the default plot type (MST): "Options" shows the
-        # missing-value control so it's open, while "Info" is just the "Not
-        # available" placeholder (no geocoding) so it starts collapsed. The
-        # plot_type observer flips Options/Info as the engine changes — for Map
-        # it's the opposite (Options has no controls, Info gets geocode status
-        # after Generate).
+        # Initial state matches the default plot type (MST): "Options" shows
+        # the missing-value control so it's open. The plot_type observer
+        # toggles it as the engine changes — closed for Map/Epi, whose
+        # controls (if any) live in their own right-hand sidebar instead.
         open = c("Selection", "Options"),
-        # Isolate preselection (present for all three plot types, like Options
-        # and Info). The button opens a modal with the metadata table where the
+        # Isolate preselection (present for all three plot types, like
+        # Options). The button opens a modal with the metadata table where the
         # user picks which isolates feed the plots; the info line summarises the
         # current selection. See the selection_button / sel_* handlers in the
         # server for the modal, and viz_metadata_selected for how the choice is
@@ -123,21 +120,7 @@ ui <- function(id) {
             "Choose isolates",
             icon = icon("list-check")
           ),
-          uiOutput(ns("selection_info")),
-          # Analysis-level static selection: when this Analysis fixes an isolate
-          # set, every plot saved into it uses it. Only shown while an Analysis
-          # is the active Save target (toggled from the server).
-          shinyjs::hidden(
-            div(
-              id = ns("static_selection_wrap"),
-              class = "mt-2",
-              input_switch(
-                ns("static_selection"),
-                "Fix selection for this Analysis",
-                FALSE
-              )
-            )
-          )
+          uiOutput(ns("selection_info"))
         ),
         accordion_panel(
           "Options",
@@ -212,17 +195,6 @@ ui <- function(id) {
             )
           )
         ),
-        # Always present, same for all three plot types, so the sidebar
-        # layout is identical regardless of which is selected) — currently
-        # only ever gets content for Map: how many isolates' locations
-        # Nominatim could resolve on the last Generate. MST/Tree keep the
-        # "Info" panel with an empty body — see output$map_geocode_status,
-        # which returns NULL whenever Map isn't the active engine.
-        accordion_panel(
-          "Info",
-          icon = icon("circle-info"),
-          uiOutput(ns("map_geocode_status"))
-        ),
         # Save the currently displayed plot into an Analysis on the dashboard.
         # The picker's grouped choices are the Analyses (each with a "New plot"
         # entry) and the plots already saved in them; picking a plot overwrites
@@ -235,9 +207,9 @@ ui <- function(id) {
             "Save into",
             choices = list(),
             options = pickerOptions(
-              liveSearch = TRUE,
               title = "No analysis",
-              size = 10
+              size = 10,
+              container = "body"
             )
           ),
           actionButton(
@@ -449,8 +421,12 @@ server <- function(
 
       # Union of columns, so a peer field the local table lacks (and vice versa)
       # simply comes through as NA rather than dropping the rows.
-      for (col in setdiff(names(local), names(ext))) ext[[col]] <- NA_character_
-      for (col in setdiff(names(ext), names(local))) local[[col]] <- NA_character_
+      for (col in setdiff(names(local), names(ext))) {
+        ext[[col]] <- NA_character_
+      }
+      for (col in setdiff(names(ext), names(local))) {
+        local[[col]] <- NA_character_
+      }
 
       rbind(local, ext[, names(local), drop = FALSE])
     })
@@ -512,7 +488,10 @@ server <- function(
             # .selection-modal-count SCSS rule).
             uiOutput(ns("sel_count"), class = "selection-modal-count")
           ),
-          DTOutput(ns("sel_table"), fill = FALSE),
+          div(
+            class = "isolate-selection-table",
+            DTOutput(ns("sel_table"), fill = FALSE)
+          ),
           footer = tagList(
             modalButton("Cancel"),
             actionButton(
@@ -583,18 +562,6 @@ server <- function(
       # An empty confirmation means "no filter" — fall back to all isolates
       # (NULL), so the plots use the full set rather than nothing.
       selected_isolates(if (length(rows)) meta$isolate[rows] else NULL)
-
-      # If the active Analysis fixes its selection, editing the isolates here
-      # updates the Analysis-wide selection (so all its plots follow).
-      aid <- active_analysis_id()
-      if (!is.null(aid) && isTRUE(input$static_selection)) {
-        analysis_store$set_analysis_selection(
-          db_path(), aid,
-          as.character(toJSON(resolve_selection(), auto_unbox = FALSE))
-        )
-        plots_changed(isolate(plots_changed()) + 1L)
-      }
-
       removeModal()
     })
 
@@ -617,13 +584,13 @@ server <- function(
           sprintf("%d of %d isolates selected", length(sel), total)
         )
       }
-      if (!is.null(analysis_static_selection())) {
+      if (!is.null(active_analysis_restriction())) {
         tagList(
           base,
           div(
             class = "small text-info",
             icon("lock"),
-            " Fixed for this Analysis"
+            " Set by this Analysis"
           )
         )
       } else {
@@ -693,7 +660,10 @@ server <- function(
     #   save_thumb(f,w,h) OR request_thumb()/thumb_data() — thumbnail capture
     # (server-rendered ggplots use save_thumb; client widgets capture in the
     # browser and return the PNG through thumb_data).
-    mst_ret <- do.call(visualization_mst$server, c(list("mst"), distance_shared))
+    mst_ret <- do.call(
+      visualization_mst$server,
+      c(list("mst"), distance_shared)
+    )
     tree_ret <- do.call(
       visualization_tree$server,
       c(
@@ -739,87 +709,14 @@ server <- function(
       # offered to the distance engines and hidden for the Map/Epi.
       shinyjs::toggle("imported_wrap", condition = needs_distance)
       shinyjs::toggle("options_empty", condition = !needs_distance)
-      # Open whichever panel actually holds content for this engine and collapse
-      # the ones that would only show a placeholder: MST/Tree have Options
-      # controls but no Info; Map has no Options but populates Info with the
-      # geocode status after Generate; Epi has neither (its own controls all
-      # live in its right-hand sidebar), so both stay collapsed rather than
-      # inviting a click on an empty panel.
-      if (identical(input$plot_type, "Map")) {
-        bslib::accordion_panel_open("setup_accordion", "Info")
-        bslib::accordion_panel_close("setup_accordion", "Options")
-      } else if (identical(input$plot_type, "Epi")) {
-        bslib::accordion_panel_close("setup_accordion", "Options")
-        bslib::accordion_panel_close("setup_accordion", "Info")
-      } else {
+      # Open the Options panel for the engines that actually have controls in
+      # it (MST/Tree); Map and Epi keep their controls in their own
+      # right-hand sidebar, so it stays collapsed rather than inviting a
+      # click on an empty/placeholder panel.
+      if (needs_distance) {
         bslib::accordion_panel_open("setup_accordion", "Options")
-        bslib::accordion_panel_close("setup_accordion", "Info")
-      }
-    })
-
-    # Geocoding feedback for the "Info" accordion: how many isolates the last
-    # Generate was able to place on the map, with a warning + a few example
-    # place names when some couldn't be resolved. NULL (nothing rendered,
-    # leaving the "Info" panel body empty) unless Map is the active engine
-    # and a Generate has produced a status — this keeps MST/Tree's "Info"
-    # panel genuinely empty rather than showing stale Map feedback after
-    # switching plot types.
-    output$map_geocode_status <- renderUI({
-      # Empty-state placeholder so the "Info" panel body is never blank: shown
-      # for MST/Tree (no geocoding) and for Map until a Generate produces a
-      # status.
-      not_available <- div(class = "text-muted small", "Not available")
-      if (!identical(input$plot_type, "Map")) {
-        return(not_available)
-      }
-      s <- map_ret$geocode_status()
-      if (is.null(s) || s$n_isolates == 0) {
-        return(not_available)
-      }
-      # Distinct places resolved (each backs one or more of the mapped isolates)
-      # — shown under the isolate summary so it's clear how many geocode lookups
-      # the mapped isolates collapsed to, plus how many of those came from the
-      # persistent cross-session cache vs. were freshly fetched this Generate
-      # (see build_map_coords()'s status / geocode_places_cached()). The cache
-      # breakdown is only appended when there's actually something cached to
-      # report, so a first-ever run stays a plain count.
-      cache_note <- if (s$n_cached > 0 && s$n_new > 0) {
-        sprintf(" (%d cached, %d newly fetched)", s$n_cached, s$n_new)
-      } else if (s$n_cached > 0) {
-        " (all from cache)"
       } else {
-        ""
-      }
-      locations_line <- div(
-        class = "small text-muted",
-        sprintf(
-          "%d location%s geocoded%s",
-          s$n_locations,
-          if (s$n_locations == 1) "" else "s",
-          cache_note
-        )
-      )
-      if (s$n_failed_places == 0) {
-        tagList(
-          div(
-            class = "mt-2 small text-success",
-            icon("circle-check"),
-            sprintf(" All %d isolates mapped", s$n_mapped)
-          ),
-          locations_line
-        )
-      } else {
-        tagList(
-          tooltip(
-            div(
-              class = "mt-2 small text-warning",
-              icon("triangle-exclamation"),
-              sprintf(" %d of %d isolates mapped", s$n_mapped, s$n_isolates)
-            ),
-            paste("Could not geocode:", s$failed_preview)
-          ),
-          locations_line
-        )
+        bslib::accordion_panel_close("setup_accordion", "Options")
       }
     })
 
@@ -842,15 +739,18 @@ server <- function(
       switch(pt, MST = mst_ret, Tree = tree_ret, Map = map_ret, Epi = epi_ret)
     }
 
-    # Grouped picker choices: one optgroup per Analysis, each led by a "New
-    # plot" entry (value "analysis:<id>") followed by its saved plots (value
-    # "plot:<id>"). Refreshed whenever the store changes.
+    # Grouped picker choices: an ungrouped "None" entry (the plot isn't part of
+    # any Analysis — the default) followed by one optgroup per Analysis, each
+    # led by a "New plot" entry (value "analysis:<id>") and its saved plots
+    # (value "plot:<id>"). Refreshed whenever the store changes.
+    NONE_TARGET <- "none"
     picker_choices <- reactive({
       plots_changed()
       path <- db_path()
+      none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       df_a <- analysis_store$list_analyses(path)
       if (!nrow(df_a)) {
-        return(list())
+        return(none_entry)
       }
       groups <- lapply(seq_len(nrow(df_a)), function(i) {
         aid <- df_a$id[i]
@@ -861,15 +761,17 @@ server <- function(
         }
         ch
       })
-      stats::setNames(groups, df_a$name)
+      c(none_entry, stats::setNames(groups, df_a$name))
     })
 
-    # Keep the picker in sync, preserving the current selection when still valid.
+    # Keep the picker in sync, preserving the current selection when still
+    # valid and defaulting to "None" (not "" — this is the picker's own resting
+    # state, so it must always resolve to a real choice) when it isn't.
     observe({
       ch <- picker_choices()
       cur <- isolate(input$save_target)
       valid <- unlist(ch, use.names = FALSE)
-      sel <- if (!is.null(cur) && cur %in% valid) cur else NULL
+      sel <- if (!is.null(cur) && cur %in% valid) cur else NONE_TARGET
       updatePickerInput(session, "save_target", choices = ch, selected = sel)
     })
 
@@ -904,7 +806,12 @@ server <- function(
       as.character(fromJSON(raw))
     }
 
-    analysis_static_selection <- reactive({
+    # The targeted Analysis's fixed isolate set, or NULL when either no
+    # Analysis is targeted ("None" / a fresh plot) or the targeted Analysis
+    # doesn't restrict isolates. Some Analyses fix a selection and some don't —
+    # this (not merely "is an Analysis targeted") is what should gate the
+    # per-plot isolate controls.
+    active_analysis_restriction <- reactive({
       plots_changed()
       aid <- active_analysis_id()
       if (is.null(aid)) {
@@ -917,58 +824,22 @@ server <- function(
       parse_static(row$isolate_selection)
     })
 
-    # Show the switch only in an Analysis context and keep its on/off state in
-    # step with whether that Analysis has a static selection. The flag suppresses
-    # the switch's own handler for these programmatic updates.
-    static_switch_programmatic <- reactiveVal(FALSE)
+    # A restricting Analysis owns the isolate set (defined in the dashboard's
+    # setup wizard): apply it and lock the per-plot controls. "None" and an
+    # unrestricted Analysis both leave the normal per-plot selection enabled.
     observe({
-      aid <- active_analysis_id()
-      has_static <- !is.null(analysis_static_selection())
-      shinyjs::toggle("static_selection_wrap", condition = !is.null(aid))
-      if (!is.null(aid)) {
-        cur <- isolate(input$static_selection)
-        if (!identical(isTRUE(cur), has_static)) {
-          static_switch_programmatic(TRUE)
-          bslib::update_switch(
-            "static_selection", value = has_static, session = session
-          )
-        }
+      sel <- active_analysis_restriction()
+      restricted <- !is.null(sel)
+      shinyjs::toggleState("selection_button", condition = !restricted)
+      shinyjs::toggleClass(
+        id = "selection_info",
+        class = "viz-disabled-note",
+        condition = restricted
+      )
+      if (restricted) {
+        isolate(selected_isolates(sel))
       }
     })
-
-    # Resolve the "effective" concrete isolate set for the current selection,
-    # expanding NULL ("all") to the full isolate list so a fixed selection is
-    # always explicit.
-    resolve_selection <- function() {
-      sel <- selected_isolates()
-      if (!is.null(sel)) {
-        return(sel)
-      }
-      meta <- viz_metadata()
-      if (!is.null(meta)) meta$isolate else character(0)
-    }
-
-    # User toggling the switch fixes (to the current selection) or clears the
-    # Analysis's static selection.
-    observeEvent(input$static_selection, {
-      if (isTRUE(static_switch_programmatic())) {
-        static_switch_programmatic(FALSE)
-        return()
-      }
-      aid <- active_analysis_id()
-      if (is.null(aid)) {
-        return()
-      }
-      if (isTRUE(input$static_selection)) {
-        analysis_store$set_analysis_selection(
-          db_path(), aid,
-          as.character(toJSON(resolve_selection(), auto_unbox = FALSE))
-        )
-      } else {
-        analysis_store$set_analysis_selection(db_path(), aid, NULL)
-      }
-      plots_changed(isolate(plots_changed()) + 1L)
-    }, ignoreInit = TRUE)
 
     # Pending save (holds the snapshot while an async client thumbnail is
     # captured); NULL when idle, which also guards against overlapping saves.
@@ -989,39 +860,38 @@ server <- function(
         sub("^data:image/[^;]+;base64,", "", b64)
       }
 
-      ok <- tryCatch({
-        analysis_store$upsert_plot(
-          db_path(),
-          p$analysis_id,
-          p$plot_id,
-          p$name,
-          p$plot_type,
-          p$inputs_json,
-          thumb
-        )
-        TRUE
-      }, error = function(e) FALSE)
+      ok <- tryCatch(
+        {
+          analysis_store$upsert_plot(
+            db_path(),
+            p$analysis_id,
+            p$plot_id,
+            p$name,
+            p$plot_type,
+            p$inputs_json,
+            thumb
+          )
+          TRUE
+        },
+        error = function(e) FALSE
+      )
 
       if (ok) {
         plots_changed(isolate(plots_changed()) + 1L)
         saved(isolate(saved()) + 1L)
-        showNotification("Plot saved to the Analysis dashboard.", type = "message")
+        showNotification(
+          "Plot saved to the Analysis dashboard.",
+          type = "message"
+        )
       } else {
         showNotification("Could not save the plot.", type = "error")
       }
     }
 
-    observeEvent(input$save_plot, {
-      target <- input$save_target
-      if (is.null(target) || !nzchar(target)) {
-        showNotification("Pick an Analysis to save into.", type = "warning")
-        return()
-      }
-      if (!is.null(pending())) {
-        showNotification("A save is already in progress…", type = "message")
-        return()
-      }
-
+    # Runs the actual save (snapshot + thumbnail dispatch) for a resolved
+    # `save_target` value. Split out from the save_plot observer so an
+    # overwrite can be confirmed first — see below.
+    perform_save <- function(target) {
       pt <- input$plot_type
       eng <- engine_ret(pt)
 
@@ -1029,7 +899,11 @@ server <- function(
       if (identical(parts[1], "plot")) {
         pid <- as.integer(parts[2])
         existing <- analysis_store$get_plot(db_path(), pid)
-        analysis_id <- if (is.null(existing)) NA_integer_ else existing$analysis_id
+        analysis_id <- if (is.null(existing)) {
+          NA_integer_
+        } else {
+          existing$analysis_id
+        }
         plot_id <- pid
         name <- if (is.null(existing)) paste(pt, "plot") else existing$name
       } else {
@@ -1039,19 +913,33 @@ server <- function(
       }
 
       # If the target Analysis fixes an isolate selection, the plot is saved
-      # with it (not whatever the sidebar currently shows), so every plot in the
-      # Analysis stays consistent.
+      # with it (not whatever the sidebar currently shows), so every plot in
+      # the Analysis stays consistent. Reuses the same reactive the Selection
+      # panel's enable/disable state is driven by, since both read the
+      # currently targeted Analysis's restriction.
       static_sel <- if (!is.na(analysis_id)) {
-        row <- analysis_store$get_analysis(db_path(), analysis_id)
-        if (is.null(row)) NULL else parse_static(row$isolate_selection)
+        active_analysis_restriction()
       } else {
         NULL
       }
       effective_selection <- static_sel %||% selected_isolates()
 
+      # `selection` is the *restriction* (NULL = "all isolates"), which on its
+      # own can't distinguish "all" at save time from "all" later — so a plot
+      # built before isolates were added to the database would silently look
+      # unchanged. Record the concrete set that was actually used alongside it,
+      # so drift (a changed Analysis selection *or* new isolates in the
+      # database) is detectable when the plot is reopened or listed.
+      resolved_selection <- effective_selection
+      if (is.null(resolved_selection)) {
+        m <- viz_metadata()
+        resolved_selection <- if (is.null(m)) character(0) else m$isolate
+      }
+
       snap <- list(
         plot_type = pt,
         selection = effective_selection,
+        selection_resolved = resolved_selection,
         na_handling = input$na_handling,
         imported_sets = input$imported_sets,
         algo = input$algo,
@@ -1077,16 +965,73 @@ server <- function(
       # engines trigger an async browser capture that returns via thumb_data().
       if (!is.null(eng$save_thumb)) {
         f <- tempfile(fileext = ".png")
-        b64 <- tryCatch({
-          eng$save_thumb(f, THUMB_W, THUMB_H)
-          if (file.exists(f)) base64encode(f) else NA_character_
-        }, error = function(e) NA_character_)
+        b64 <- tryCatch(
+          {
+            eng$save_thumb(f, THUMB_W, THUMB_H)
+            if (file.exists(f)) base64encode(f) else NA_character_
+          },
+          error = function(e) NA_character_
+        )
         finalize_save(b64)
       } else if (!is.null(eng$request_thumb)) {
         eng$request_thumb()
       } else {
         finalize_save(NA_character_)
       }
+    }
+
+    # Target stashed while an overwrite confirmation modal is open (see below).
+    pending_save_target <- reactiveVal(NULL)
+
+    observeEvent(input$save_plot, {
+      target <- input$save_target
+      if (
+        is.null(target) || !nzchar(target) || identical(target, NONE_TARGET)
+      ) {
+        showNotification("Pick an Analysis to save into.", type = "warning")
+        return()
+      }
+      if (!is.null(pending())) {
+        showNotification("A save is already in progress…", type = "message")
+        return()
+      }
+
+      parts <- strsplit(target, ":", fixed = TRUE)[[1]]
+      if (identical(parts[1], "plot")) {
+        # Overwriting an existing saved plot destroys its prior snapshot and
+        # thumbnail irreversibly — confirm before proceeding.
+        existing <- analysis_store$get_plot(db_path(), as.integer(parts[2]))
+        pending_save_target(target)
+        showModal(modalDialog(
+          title = "Overwrite saved plot?",
+          paste0(
+            "This replaces the saved plot '",
+            if (is.null(existing)) "this plot" else existing$name,
+            "' with the plot currently shown. The previous version cannot",
+            " be recovered."
+          ),
+          footer = tagList(
+            modalButton("Cancel"),
+            actionButton(
+              ns("confirm_overwrite_save"),
+              "Overwrite",
+              class = "btn-danger"
+            )
+          ),
+          easyClose = TRUE
+        ))
+      } else {
+        # A new plot in an Analysis is purely additive — nothing to confirm.
+        perform_save(target)
+      }
+    })
+
+    observeEvent(input$confirm_overwrite_save, {
+      removeModal()
+      t <- pending_save_target()
+      pending_save_target(NULL)
+      req(t)
+      perform_save(t)
     })
 
     # Completion of an async (client-captured) thumbnail for MST / Map.
@@ -1132,7 +1077,11 @@ server <- function(
         # Apply the Analysis's fixed selection, if any, so the plot is built
         # against it from the start.
         row <- analysis_store$get_analysis(db_path(), ctx$analysis_id)
-        static <- if (is.null(row)) NULL else parse_static(row$isolate_selection)
+        static <- if (is.null(row)) {
+          NULL
+        } else {
+          parse_static(row$isolate_selection)
+        }
         if (!is.null(static)) {
           selected_isolates(static)
         }
@@ -1172,15 +1121,43 @@ server <- function(
         if (!is.null(snap$algo)) {
           updatePrettyRadioButtons(session, "algo", selected = snap$algo)
         }
-        session$sendInputMessage("zoom_view", list(value = isTRUE(snap$zoom_view)))
+        session$sendInputMessage(
+          "zoom_view",
+          list(value = isTRUE(snap$zoom_view))
+        )
         selected_isolates(snap$selection)
 
         # A static Analysis selection overrides the plot's own snapshot so every
         # plot in the Analysis stays on the same isolate set.
         arow <- analysis_store$get_analysis(db_path(), row$analysis_id)
-        astatic <- if (is.null(arow)) NULL else parse_static(arow$isolate_selection)
+        astatic <- if (is.null(arow)) {
+          NULL
+        } else {
+          parse_static(arow$isolate_selection)
+        }
         if (!is.null(astatic)) {
           selected_isolates(astatic)
+        }
+
+        # The Analysis's selection may have been edited after this plot was
+        # saved, in which case it is about to be regenerated against a different
+        # isolate set than it was built from — say so, rather than leaving the
+        # user to wonder why it no longer matches its thumbnail.
+        if (
+          analysis_store$selection_differs(
+            snap$selection,
+            isolate(selected_isolates())
+          )
+        ) {
+          showNotification(
+            paste(
+              "This Analysis's isolate selection changed after this plot was",
+              "saved. It is being rebuilt with the Analysis's current",
+              "isolates, so it may differ from its saved preview."
+            ),
+            type = "warning",
+            duration = 12
+          )
         }
 
         eng <- engine_ret(pt)

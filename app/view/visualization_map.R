@@ -30,6 +30,7 @@ box::use(
     accordion_panel,
     card,
     card_body,
+    tooltip,
   ],
   shinyWidgets[
     radioGroupButtons,
@@ -1761,6 +1762,10 @@ map_controls <- function(ns) {
         choices = c("Markers", "Choropleth", "Heatmap", "Charts")
       )
     ),
+    # Geocoding feedback: how many isolates the last Generate was able to
+    # place on the map, with a warning + a few example place names when some
+    # couldn't be resolved. See output$map_geocode_status_ui in the server.
+    shiny$uiOutput(ns("map_geocode_status_ui"), class = "map-geocode-status"),
     shiny$div(
       class = "reset-buttons",
       shiny$actionButton(
@@ -1997,10 +2002,65 @@ server <- function(
     map_coords <- shiny$reactiveVal(NULL)
 
     # Geocoding success/failure summary for the currently generated map (see
-    # build_map_coords()'s status list) — returned to visualization.R so the
-    # shared setup sidebar can show "N of M isolates mapped" feedback without
-    # this engine's own control panel needing to be visible.
+    # build_map_coords()'s status list) — drives output$map_geocode_status_ui
+    # below, shown under the "Map mode" picker in this engine's own sidebar.
     map_geocode_status <- shiny$reactiveVal(NULL)
+
+    # How many isolates the last Generate was able to place on the map, with a
+    # warning + a few example place names when some couldn't be resolved. NULL
+    # (the "Not available" placeholder) until a Generate has produced a status.
+    output$map_geocode_status_ui <- shiny$renderUI({
+      not_available <- shiny$div(class = "text-muted small", "Not available")
+      s <- map_geocode_status()
+      if (is.null(s) || s$n_isolates == 0) {
+        return(not_available)
+      }
+      # Distinct places resolved (each backs one or more of the mapped isolates)
+      # — shown under the isolate summary so it's clear how many geocode lookups
+      # the mapped isolates collapsed to, plus how many of those came from the
+      # persistent cross-session cache vs. were freshly fetched this Generate
+      # (see build_map_coords()'s status / geocode_places_cached()). The cache
+      # breakdown is only appended when there's actually something cached to
+      # report, so a first-ever run stays a plain count.
+      cache_note <- if (s$n_cached > 0 && s$n_new > 0) {
+        sprintf(" (%d cached, %d newly fetched)", s$n_cached, s$n_new)
+      } else if (s$n_cached > 0) {
+        " (all from cache)"
+      } else {
+        ""
+      }
+      locations_line <- shiny$div(
+        class = "small text-muted",
+        sprintf(
+          "%d location%s geocoded%s",
+          s$n_locations,
+          if (s$n_locations == 1) "" else "s",
+          cache_note
+        )
+      )
+      if (s$n_failed_places == 0) {
+        shiny$tagList(
+          shiny$div(
+            class = "mt-2 small text-success",
+            shiny$icon("circle-check"),
+            sprintf(" All %d isolates mapped", s$n_mapped)
+          ),
+          locations_line
+        )
+      } else {
+        shiny$tagList(
+          tooltip(
+            shiny$div(
+              class = "mt-2 small text-warning",
+              shiny$icon("triangle-exclamation"),
+              sprintf(" %d of %d isolates mapped", s$n_mapped, s$n_isolates)
+            ),
+            paste("Could not geocode:", s$failed_preview)
+          ),
+          locations_line
+        )
+      }
+    })
 
     # --- Time animation -------------------------------------------------------
     # The full extent "Date range" can be dragged across — i.e. the slider's
@@ -3033,7 +3093,6 @@ server <- function(
     }
 
     list(
-      geocode_status = map_geocode_status,
       snapshot = snapshot,
       restore = restore,
       save_thumb = NULL,

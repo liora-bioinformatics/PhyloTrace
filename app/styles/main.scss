@@ -157,6 +157,18 @@
     padding: 0.75rem 0 0 0;
 }
 
+.ad-group-stack .bslib-gap-spacing {
+    gap: 5px;
+}
+
+
+// Selection summary while the isolate set is fixed by the targeted Analysis
+// (the "Choose isolates" button is also disabled via shinyjs at the same time).
+.viz-disabled-note {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
 // Right controls sidebar: fill the full available height at any display ratio,
 // so the tab panel scrolls internally and open dropdowns are not clipped.
 .viz-controls-sidebar,
@@ -418,10 +430,6 @@
 // hold instead of a flash of the page background.
 #app-visualization-map-map {
     background-color: #ddd;
-}
-
-.ad-group-stack .bslib-value-box .value-box-showcase {
-    padding: 5px 0 0 5px;
 }
 
 // Unified backing for every floating Map control -----------------------------
@@ -763,14 +771,65 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     color: var(--bs-secondary-color);
 }
 
-// Floating edit / delete controls inside an analysis value box.
+// A saved-plot box: the thumbnail fills the whole card and every other
+// element (actions, name, meta) overlays on top of it. `position: relative`
+// here is what makes the two `position: absolute` overlays below anchor to
+// the box itself instead of the nearest positioned ancestor further up the
+// tree (which without this rule ends up being the viewport).
+.ad-plot-box {
+    position: relative;
+    overflow: hidden;
+    min-height: 200px;
+    height: 100%;
+    border-radius: var(--bs-border-radius, 0.375rem);
+    background-color: var(--bs-tertiary-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+// Shared "frosted glass" backing for anything overlaid on the plot image, so
+// text and controls stay legible over any plot's colors.
+@mixin ad-plot-overlay-glass {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background-color: rgba(255, 255, 255, 0.55);
+}
+
+[data-bs-theme="dark"] {
+    .ad-plot-overlay-info {
+        background-color: rgba(30, 30, 30, 0.55);
+    }
+
+    // Bootstrap's .btn-light hard-codes a light bg + dark icon/text via its own
+    // --bs-btn-* custom properties, which Bootstrap's own dark-mode support
+    // never re-maps — so a plain .btn-light stays visually "light" (and its
+    // icon stays dark) no matter what data-bs-theme says. Left unpatched, the
+    // glass background above darkens but the icon glyph doesn't follow,
+    // leaving a near-invisible dark icon on a dark backing.
+    .ad-box-actions .btn,
+    .ad-group-header-actions .btn-light {
+        background-color: rgba(30, 30, 30, 0.55);
+        border-color: rgba(255, 255, 255, 0.15);
+        color: rgba(255, 255, 255, 0.85);
+    }
+}
+
+// Floating edit / delete controls, pinned over the top-right of the thumbnail.
+// The row itself stays fully transparent; each button gets its own blurred
+// glass backing so only the icons — not a big blurred rectangle — stand out
+// against the plot underneath.
 .ad-box-actions {
     position: absolute;
-    top: 10px;
-    right: 10px;
+    top: 8px;
+    right: 8px;
     z-index: 10;
     display: flex;
     gap: 5px;
+}
+
+.ad-box-actions .btn {
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    background-color: rgba(255, 255, 255, 0.55);
 }
 
 // Analysis (group) header: rename + delete buttons on the right.
@@ -780,21 +839,22 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     align-items: center;
 }
 
-// Saved-plot miniature shown as the value box's showcase. Clickable to reopen.
+// Saved-plot miniature, stretched to fill `.ad-plot-box` as a background.
+// Clickable to reopen.
 .ad-plot-thumb-wrap {
+    position: absolute;
+    inset: 0;
     cursor: pointer;
     display: flex;
     align-items: center;
-    height: 100%;
-    width: 100%;
+    justify-content: center;
     overflow: hidden;
 }
 
 .ad-plot-thumb {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: 4px;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .ad-plot-thumb-empty {
@@ -803,7 +863,35 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.5;
 }
 
-// Plot-type badge shown as the value box value.
+.accordion-body {
+    padding: 0.5rem 0.75rem;
+}
+
+// Name / badge / "Saved: ..." strip, pinned over the bottom of the thumbnail.
+.ad-plot-overlay-info {
+    @include ad-plot-overlay-glass;
+    position: absolute;
+    left: -1px;
+    right: 0;
+    bottom: -1px;
+    z-index: 5;
+    padding: 8px 10px;
+}
+
+.ad-plot-name {
+    font-weight: 600;
+    margin-bottom: 2px;
+    overflow-wrap: anywhere;
+}
+
+.ad-plot-overlay-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+// Plot-type badge shown in the overlay info strip.
 .ad-plot-badge {
     display: inline-block;
     font-size: 0.85rem;
@@ -815,12 +903,63 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     font-size: 0.75rem;
     color: var(--bs-secondary-color);
     margin-bottom: 0;
+    white-space: nowrap;
 }
 
 // "Fixed isolate selection" badge on an Analysis card.
 .ad-static-badge {
     color: var(--bs-info);
     font-weight: 500;
+}
+
+// Optional Analysis description, shown under the card header. pre-wrap keeps
+// the line breaks the user typed in the textarea (HTML would otherwise collapse
+// them into single spaces) while still wrapping long lines — done in CSS rather
+// than converting "\n" to <br/> so the text is never treated as markup.
+.ad-group-description {
+    font-size: 0.9rem;
+    color: var(--bs-secondary-color);
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+}
+
+// "Database changed since setup" note on an Analysis card.
+.ad-drift-note {
+    font-size: 0.8rem;
+    color: var(--bs-warning-text-emphasis, #997404);
+    margin-bottom: 8px;
+}
+
+// Retrospective-change warning inside the settings wizard's isolate step.
+.ad-retro-warning {
+    font-size: 0.85rem;
+    color: var(--bs-warning-text-emphasis, #997404);
+    background-color: var(--bs-warning-bg-subtle, #fff3cd);
+    border: 1px solid var(--bs-warning-border-subtle, #ffe69c);
+    border-radius: var(--bs-border-radius);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+// Badge pinned to a plot card whose isolate set no longer matches its Analysis.
+.ad-plot-stale {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    z-index: 10;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: var(--bs-border-radius);
+    color: var(--bs-warning-text-emphasis, #997404);
+    background-color: rgba(255, 243, 205, 0.9);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+}
+
+[data-bs-theme="dark"] .ad-plot-stale {
+    color: #ffda6a;
+    background-color: rgba(60, 50, 10, 0.75);
 }
 
 // Hidden trigger the thumbnail click forwards to (open in Visualization).
@@ -2425,7 +2564,15 @@ label {
     flex-direction: column;
 }
 
+// flex: 1 1 auto is load-bearing: without it a flex child's basis defaults to
+// its own content size, so .modal-body never actually claims the space left
+// over by the header/footer — a modal with more header content (e.g. an extra
+// title or hint line) then overflows .modal-content's overflow:hidden instead
+// of scrolling internally, clipping the footer off-screen. Reserving the
+// space explicitly is what makes the comment above ("scroll internally") true
+// regardless of how much content sits above the table.
 .selection-modal .modal-body {
+    flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
 }
@@ -2579,7 +2726,7 @@ table.dataTable thead>tr>th.sorting {
     border-radius: var(--bs-border-radius) !important;
 }
 
-#app-visualization-sel_table {
+.isolate-selection-table {
     .dataTables_info {
         padding-top: 0;
 
@@ -2599,4 +2746,9 @@ table.dataTable thead>tr>th.sorting {
         top: auto !important;
         bottom: calc(100% + 2px) !important;
     }
+}
+
+// Geocoding feedback shown directly under the "Map mode" picker.
+.map-geocode-status {
+    margin-top: 0.5rem;
 }

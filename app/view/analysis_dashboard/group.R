@@ -43,6 +43,16 @@ box::use(
   jsonlite[fromJSON],
 )
 
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# A stored isolate JSON array as a character vector, or NULL when unset.
+.parse_selection <- function(raw) {
+  if (is.null(raw) || length(raw) != 1 || is.na(raw)) {
+    return(NULL)
+  }
+  as.character(fromJSON(raw))
+}
+
 #' @export
 ui <- function(id) {
   ns <- NS(id)
@@ -57,12 +67,11 @@ server <- function(
   plots_changed = shiny::reactiveVal(0L),
   on_add_plot = function(analysis_id) NULL,
   on_open_plot = function(plot_id) NULL,
+  on_edit_settings = function(analysis_id) NULL,
   session_reset = shiny::reactive(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-
-    is_editing_name <- reactiveVal(FALSE)
 
     # This Analysis's row (for its name) and its plots, refreshed on any change.
     analysis_row <- reactive({
@@ -75,7 +84,43 @@ server <- function(
       analysis_store$list_plots(db_path(), analysis_id)
     })
 
-    observeEvent(session_reset(), is_editing_name(FALSE), ignoreInit = TRUE)
+    # The isolate set this Analysis resolves to *right now*: its restriction if
+    # it has one, otherwise every isolate currently in the database. Computed
+    # once here and handed to each plot card, so a card can tell whether it was
+    # built from a different set (changed restriction, or isolates added to the
+    # database since) without each one re-querying.
+    current_isolates <- reactive({
+      plots_changed()
+      row <- analysis_row()
+      restriction <- if (is.null(row)) {
+        NULL
+      } else {
+        .parse_selection(row$isolate_selection)
+      }
+      restriction %||% analysis_store$list_isolates(db_path())
+    })
+
+    # Isolates added to (or removed from) the database since this Analysis was
+    # set up. Only meaningful once a universe was recorded.
+    universe_drift <- reactive({
+      plots_changed()
+      row <- analysis_row()
+      recorded <- if (is.null(row)) {
+        NULL
+      } else {
+        .parse_selection(row$isolate_universe)
+      }
+      if (is.null(recorded)) {
+        return(NULL)
+      }
+      now <- analysis_store$list_isolates(db_path())
+      added <- setdiff(now, recorded)
+      removed <- setdiff(recorded, now)
+      if (!length(added) && !length(removed)) {
+        return(NULL)
+      }
+      list(added = added, removed = removed)
+    })
 
     # Instantiate an item server once per plot id it hasn't been seen for.
     instantiated <- reactiveVal(integer(0))
@@ -92,6 +137,7 @@ server <- function(
               db_path = db_path,
               plots_changed = plots_changed,
               on_open = on_open_plot,
+              analysis_isolates = current_isolates,
               session_reset = session_reset
             )
           })
@@ -107,18 +153,10 @@ server <- function(
       on_add_plot(analysis_id)
     })
 
-    # Inline Analysis rename.
+    # The pencil opens the Analysis settings wizard (name / description /
+    # isolate selection), which the dashboard tier owns.
     observeEvent(input$toggle_group_edit, {
-      if (is_editing_name()) {
-        new_name <- input$group_name_input
-        if (!is.null(new_name) && nzchar(new_name)) {
-          analysis_store$rename_analysis(db_path(), analysis_id, new_name)
-          plots_changed(plots_changed() + 1L)
-        }
-        is_editing_name(FALSE)
-      } else {
-        is_editing_name(TRUE)
-      }
+      on_edit_settings(analysis_id)
     })
 
     observeEvent(input$trigger_delete_group, {
@@ -172,24 +210,8 @@ server <- function(
         theme = "secondary"
       )
 
-      name_content <- if (is_editing_name()) {
-        # allow-free-text: an Analysis name is display text, so it takes spaces
-        # and punctuation — it opts out of the identifier charset restriction in
-        # app/js/index.js.
-        div(
-          class = "allow-free-text",
-          textInput(
-            ns("group_name_input"),
-            label = NULL,
-            value = row$name,
-            width = "100%"
-          )
-        )
-      } else {
-        tags$strong(row$name)
-      }
-
-      edit_icon <- if (is_editing_name()) icon("check") else icon("pencil")
+      name_content <- tags$strong(row$name)
+      edit_icon <- icon("pencil")
 
       card(
         card_header(
@@ -197,13 +219,30 @@ server <- function(
             class = "ad-group-header",
             span(class = "ad-group-name", name_content),
             div(
+              class = "ad-group-meta",
+              span(paste("Created:", row$created)),
+              " | ",
+              span(paste("Last Modified:", row$modified)),
+              {
+                raw <- row$isolate_selection
+                if (!is.null(raw) && length(raw) == 1 && !is.na(raw)) {
+                  n <- length(fromJSON(raw))
+                  span(
+                    class = "ad-static-badge",
+                    icon("lock"),
+                    sprintf(" %d fixed isolate%s", n, if (n == 1) "" else "s")
+                  )
+                }
+              }
+            ),
+            div(
               class = "ad-group-header-actions",
               actionButton(
                 ns("toggle_group_edit"),
                 label = NULL,
                 icon = edit_icon,
                 class = "btn-sm btn-light",
-                title = "Rename Analysis"
+                title = "Analysis settings"
               ),
               actionButton(
                 ns("trigger_delete_group"),
@@ -215,23 +254,47 @@ server <- function(
           )
         ),
         card_body(
-          div(
-            class = "ad-group-meta",
-            span(paste("Created:", row$created)),
-            " | ",
-            span(paste("Last Modified:", row$modified)),
-            {
-              raw <- row$isolate_selection
-              if (!is.null(raw) && length(raw) == 1 && !is.na(raw)) {
-                n <- length(fromJSON(raw))
-                span(
-                  class = "ad-static-badge",
-                  icon("lock"),
-                  sprintf(" %d fixed isolate%s", n, if (n == 1) "" else "s")
+          if (
+            !is.null(row$description) &&
+              length(row$description) == 1 &&
+              !is.na(row$description) &&
+              nzchar(row$description)
+          ) {
+            div(class = "ad-group-description", row$description)
+          },
+          # The database gained/lost isolates since this Analysis was set up.
+          # Relevant even for an unrestricted Analysis: its plots were built
+          # from a smaller set than "all isolates" now resolves to.
+          {
+            drift <- universe_drift()
+            if (!is.null(drift)) {
+              parts <- c(
+                if (length(drift$added)) {
+                  sprintf(
+                    "%d new isolate%s in the database",
+                    length(drift$added),
+                    if (length(drift$added) == 1) "" else "s"
+                  )
+                },
+                if (length(drift$removed)) {
+                  sprintf(
+                    "%d isolate%s removed",
+                    length(drift$removed),
+                    if (length(drift$removed) == 1) "" else "s"
+                  )
+                }
+              )
+              div(
+                class = "ad-drift-note",
+                icon("triangle-exclamation"),
+                sprintf(
+                  " %s since this Analysis was set up. Reopen its settings to
+                   take them into account.",
+                  paste(parts, collapse = " and ")
                 )
-              }
+              )
             }
-          ),
+          },
           layout_column_wrap(
             width = "250px",
             !!!c(box_uis, list(add_card_placeholder))

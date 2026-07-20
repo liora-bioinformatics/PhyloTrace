@@ -86,13 +86,17 @@ SCHEMA_VERSION <- "1"
        description TEXT,
        created TEXT NOT NULL,
        modified TEXT NOT NULL,
-       isolate_selection TEXT
+       isolate_selection TEXT,
+       isolate_universe TEXT
      )"
   )
   # Migrations: add columns introduced after the table first shipped (SQLite
   # appends them; NULL = unset / no static selection).
   have_cols <- dbListFields(con, "phylotrace_analyses")
-  for (col in setdiff(c("description", "isolate_selection"), have_cols)) {
+  for (col in setdiff(
+    c("description", "isolate_selection", "isolate_universe"),
+    have_cols
+  )) {
     dbExecute(
       con,
       sprintf("ALTER TABLE phylotrace_analyses ADD COLUMN %s TEXT", col)
@@ -179,6 +183,48 @@ list_analyses <- function(db_path) {
   )
 }
 
+#' Whether two isolate selections describe a different set.
+#'
+#' NULL means "all isolates" (no restriction), so it is only equal to another
+#' NULL. Order is irrelevant. Shared by the dashboard (retrospective-change
+#' confirmation, drift hints) and the Visualization module (reopen warning).
+#' @export
+selection_differs <- function(a, b) {
+  if (is.null(a) && is.null(b)) {
+    return(FALSE)
+  }
+  if (is.null(a) || is.null(b)) {
+    return(TRUE)
+  }
+  !setequal(a, b)
+}
+
+#' The isolate names currently in the database, sorted.
+#'
+#' Read-only on purpose: `make_metadata_table()` also yields the isolate list
+#' but creates/backfills the `metadata` table as a side effect, which is far too
+#' heavy for the drift checks the dashboard runs on every render. Returns
+#' `character(0)` when the database is unusable or has no `mlst` table.
+#' @export
+list_isolates <- function(db_path) {
+  if (!.usable(db_path)) {
+    return(character(0))
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  if (!"mlst" %in% dbListTables(con)) {
+    return(character(0))
+  }
+
+  res <- dbGetQuery(
+    con,
+    "SELECT DISTINCT souche FROM mlst WHERE souche != 'ref' ORDER BY souche"
+  )
+  as.character(res$souche)
+}
+
 #' A single Analysis row, or NULL when not found.
 #' @export
 get_analysis <- function(db_path, id) {
@@ -195,7 +241,8 @@ get_analysis <- function(db_path, id) {
 
   res <- dbGetQuery(
     con,
-    "SELECT id, name, description, created, modified, isolate_selection
+    "SELECT id, name, description, created, modified, isolate_selection,
+            isolate_universe
        FROM phylotrace_analyses
       WHERE id = ?",
     params = list(as.integer(id))
@@ -232,13 +279,17 @@ set_analysis_selection <- function(db_path, id, selection_json) {
 
 #' Insert a new Analysis; returns its integer id. `description` and
 #' `isolate_selection` (a JSON array, or NULL for "all isolates") are optional
-#' and captured during the dashboard's setup wizard.
+#' and captured during the dashboard's setup wizard. `isolate_universe` is the
+#' concrete isolate list the database held when the Analysis was configured —
+#' recorded even when nothing is restricted, so later isolate additions to the
+#' database can be detected (see list_isolates()).
 #' @export
 add_analysis <- function(
   db_path,
   name,
   description = NULL,
-  isolate_selection = NULL
+  isolate_selection = NULL,
+  isolate_universe = NULL
 ) {
   con <- dbConnect(SQLite(), db_path)
   on.exit(dbDisconnect(con))
@@ -248,14 +299,16 @@ add_analysis <- function(
   dbExecute(
     con,
     "INSERT INTO phylotrace_analyses
-       (name, description, created, modified, isolate_selection)
-       VALUES (?, ?, ?, ?, ?)",
+       (name, description, created, modified, isolate_selection,
+        isolate_universe)
+       VALUES (?, ?, ?, ?, ?, ?)",
     params = list(
       name,
       if (is.null(description)) NA_character_ else description,
       now,
       now,
-      if (is.null(isolate_selection)) NA_character_ else isolate_selection
+      if (is.null(isolate_selection)) NA_character_ else isolate_selection,
+      if (is.null(isolate_universe)) NA_character_ else isolate_universe
     )
   )
   .last_id(con)
@@ -276,14 +329,16 @@ rename_analysis <- function(db_path, id, name) {
 }
 
 #' Update an Analysis's full settings (name, description, static isolate
-#' selection) from the dashboard's setup wizard. NULL clears the field.
+#' selection, recorded isolate universe) from the dashboard's setup wizard.
+#' NULL clears the field.
 #' @export
 update_analysis_settings <- function(
   db_path,
   id,
   name,
   description = NULL,
-  isolate_selection = NULL
+  isolate_selection = NULL,
+  isolate_universe = NULL
 ) {
   con <- dbConnect(SQLite(), db_path)
   on.exit(dbDisconnect(con))
@@ -292,12 +347,14 @@ update_analysis_settings <- function(
   dbExecute(
     con,
     "UPDATE phylotrace_analyses
-        SET name = ?, description = ?, isolate_selection = ?, modified = ?
+        SET name = ?, description = ?, isolate_selection = ?,
+            isolate_universe = ?, modified = ?
       WHERE id = ?",
     params = list(
       name,
       if (is.null(description)) NA_character_ else description,
       if (is.null(isolate_selection)) NA_character_ else isolate_selection,
+      if (is.null(isolate_universe)) NA_character_ else isolate_universe,
       .now(),
       as.integer(id)
     )
@@ -436,6 +493,68 @@ upsert_plot <- function(
     )
   )
   as.integer(plot_id)
+}
+
+# Name for a copy of `base`, avoiding anything already in `existing`.
+# "MST plot" -> "MST plot (copy)" -> "MST plot (copy 2)" -> ...
+# An existing copy suffix is stripped first, so duplicating "MST plot (copy)"
+# yields "MST plot (copy 2)" rather than "MST plot (copy) (copy)".
+.copy_name <- function(base, existing) {
+  root <- sub(" \\(copy(?: [0-9]+)?\\)$", "", base)
+  candidate <- paste0(root, " (copy)")
+  n <- 1L
+  while (candidate %in% existing) {
+    n <- n + 1L
+    candidate <- sprintf("%s (copy %d)", root, n)
+  }
+  candidate
+}
+
+#' Duplicate a Plot within its Analysis, carrying over its full settings
+#' snapshot and thumbnail under a non-clashing "(copy)" name. Returns the new
+#' plot's id, or NULL when the source doesn't exist.
+#' @export
+duplicate_plot <- function(db_path, id) {
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  .ensure_tables(con)
+  src <- dbGetQuery(
+    con,
+    "SELECT analysis_id, name, plot_type, inputs_json, thumb_b64
+       FROM phylotrace_plots
+      WHERE id = ?",
+    params = list(as.integer(id))
+  )
+  if (!nrow(src)) {
+    return(NULL)
+  }
+
+  analysis_id <- src$analysis_id[[1]]
+  existing <- dbGetQuery(
+    con,
+    "SELECT name FROM phylotrace_plots WHERE analysis_id = ?",
+    params = list(analysis_id)
+  )$name
+
+  now <- .now()
+  dbExecute(
+    con,
+    "INSERT INTO phylotrace_plots
+       (analysis_id, name, plot_type, inputs_json, thumb_b64,
+        created, modified)
+       VALUES (?, ?, ?, ?, ?, ?, ?)",
+    params = list(
+      analysis_id,
+      .copy_name(src$name[[1]], existing),
+      src$plot_type[[1]],
+      src$inputs_json[[1]],
+      src$thumb_b64[[1]],
+      now,
+      now
+    )
+  )
+  .last_id(con)
 }
 
 #' Update just a Plot's display name (used by the box inline rename).

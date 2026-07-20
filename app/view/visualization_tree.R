@@ -51,6 +51,65 @@ box::use(
     ],
 )
 
+# --- Metadata tile strips ----------------------------------------------------
+
+# Canonical shape of one tile strip's settings. `nj_tiles` holds N_TILES of
+# these in a plain list of lists; the snapshot/restore path must rebuild exactly
+# that shape (see .normalize_tiles).
+N_TILES <- 5L
+TILE_DEFAULTS <- list(
+  show = FALSE,
+  variable = NULL,
+  scale = "viridis",
+  alpha = 1,
+  width = 2,
+  offset = 0.05
+)
+
+# jsonlite reads a JSON array of same-shaped objects back as a *data.frame*, so
+# a saved snapshot's `.tiles` does NOT come back as the list-of-lists `nj_tiles`
+# requires. Assigning that straight into the reactiveVal corrupts it, and the
+# tile observers then fail with "replacement has 6 rows, data has 5" (they do
+# `tiles[[i]]$show <- ...`, which on a data.frame column coerces the LHS to a
+# list and grows it). Rebuild the canonical shape from whatever JSON handed us,
+# filling anything absent from the defaults so older/partial snapshots restore
+# cleanly too.
+.normalize_tiles <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  rows <- if (is.data.frame(x)) {
+    lapply(seq_len(nrow(x)), function(i) as.list(x[i, , drop = FALSE]))
+  } else if (is.list(x)) {
+    x
+  } else {
+    return(NULL)
+  }
+
+  lapply(seq_len(N_TILES), function(i) {
+    tile <- TILE_DEFAULTS
+    row <- if (i <= length(rows)) rows[[i]] else NULL
+    if (is.list(row)) {
+      for (f in names(TILE_DEFAULTS)) {
+        v <- row[[f]]
+        # A JSON null arrives as NULL or NA — keep the default for those.
+        if (!is.null(v) && !is.list(v) && length(v) == 1L && !is.na(v)) {
+          tile[[f]] <- unname(v[[1]])
+        }
+      }
+    }
+    tile
+  })
+}
+
+# `character(0)` serialises to `[]`, which jsonlite reads back as an empty
+# *list* rather than a character vector — coerce it back so the heatmap column
+# selection stays the type the plot builder expects.
+.normalize_heatmap_select <- function(x) {
+  v <- unlist(x, use.names = FALSE)
+  if (!length(v)) character(0) else as.character(v)
+}
+
 # --- Tree (NJ / UPGMA) control tabs ------------------------------------------
 
 tree_controls <- function(ns) {
@@ -708,21 +767,12 @@ server <- function(
     # the guarded Generate observer below when Tree is the active engine.
     tree_obj <- shiny$reactiveVal(NULL)
 
-    # Settings for the five metadata tile strips. The Mapping and Elements tabs
-    # each edit one strip (selected by nj_tile_num / nj_tile_number).
+    # Settings for the metadata tile strips. The Mapping and Elements tabs each
+    # edit one strip (selected by nj_tile_num / nj_tile_number). Shape is
+    # TILE_DEFAULTS x N_TILES — see .normalize_tiles(), which the restore path
+    # uses to rebuild exactly this from a snapshot.
     nj_tiles <- shiny$reactiveVal(
-      replicate(
-        5,
-        list(
-          show = FALSE,
-          variable = NULL,
-          scale = "viridis",
-          alpha = 1,
-          width = 2,
-          offset = 0.05
-        ),
-        simplify = FALSE
-      )
+      replicate(N_TILES, TILE_DEFAULTS, simplify = FALSE)
     )
 
     # Metadata columns selected for the heatmap annotation (via its modal).
@@ -1216,8 +1266,16 @@ server <- function(
 
         tips <- meta$isolate
         if (!is.null(vals$nj_root_isolate)) {
+          # An Analysis's isolate selection can change after a plot was saved,
+          # so the stored outgroup may no longer be among the current isolates.
+          # Fall back to "Automatic" rather than leaving the select pinned to a
+          # value it can no longer offer (which renders it blank).
+          root <- vals$nj_root_isolate
+          if (!isTRUE(root %in% c("Automatic", tips))) {
+            root <- "Automatic"
+          }
           shiny$updateSelectInput(session, "nj_root_isolate",
-            choices = c("Automatic", tips), selected = vals$nj_root_isolate)
+            choices = c("Automatic", tips), selected = root)
         }
         n_tip <- length(tips)
         if (n_tip >= 3 && !is.null(vals$nj_parentnode)) {
@@ -1228,11 +1286,16 @@ server <- function(
         }
       }
 
+      # Both come back from JSON in the wrong container type — normalise before
+      # storing, or the tile observers crash on the next control change.
       if (!is.null(vals$.tiles)) {
-        try(nj_tiles(vals$.tiles), silent = TRUE)
+        tiles <- .normalize_tiles(vals$.tiles)
+        if (!is.null(tiles)) {
+          nj_tiles(tiles)
+        }
       }
       if (!is.null(vals$.heatmap_select)) {
-        try(nj_heatmap_select(vals$.heatmap_select), silent = TRUE)
+        nj_heatmap_select(.normalize_heatmap_select(vals$.heatmap_select))
       }
     }
 
