@@ -70,27 +70,142 @@ box::use(
   app / view / visualization_tree,
   app / view / visualization_map,
   app / view / visualization_epi,
+  app / view / visualization_amr,
   jsonlite[toJSON, fromJSON],
   base64enc[base64encode],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
-# The four engines, keyed by the plot-type values the creator form offers.
+# The engines, keyed by the plot-type values the creator form offers.
 # `distance` marks the two engines built on a pairwise-distance computation:
 # they are the ones that consume the missing-value handling and can fold staged
 # peer isolates into their input, so they get the wider metadata bundle and the
-# Options panel. The Map geocodes metadata and the Epi curve bins collection
-# dates, so neither has any use for either.
+# Options panel. The Map geocodes metadata, the Epi curve bins collection dates
+# and the AMR views read the screening tables, so none of the three has any use
+# for either.
 .ENGINES <- list(
   MST = list(mod = visualization_mst, distance = TRUE),
   Tree = list(mod = visualization_tree, distance = TRUE),
   Map = list(mod = visualization_map, distance = FALSE),
-  Epi = list(mod = visualization_epi, distance = FALSE)
+  Epi = list(mod = visualization_epi, distance = FALSE),
+  AMR = list(mod = visualization_amr, distance = FALSE)
 )
 
 #' @export
 plot_types <- names(.ENGINES)
+
+# What the creator's plot-type picker shows for each engine: the preview image
+# that backs its tile, a one-line tagline, the prose description and the
+# technical notes shown once a type is selected. It lives here, beside
+# .ENGINES, so the copy cannot drift away from the engines it describes —
+# `distance` is read from .ENGINES below rather than restated. Preview images
+# are resolved by the browser against the app root (Rhino serves app/static at
+# /static), exactly like the logos in app/main.R.
+.TYPE_INFO <- list(
+  MST = list(
+    title = "Minimum-Spanning Tree",
+    icon = "circle-nodes",
+    tagline = "Allelic distances as an interactive network",
+    image = "static/images/tiles/tile_mst.png",
+    about = paste(
+      "The minimum-spanning tree over the pairwise allelic distance matrix:",
+      "every isolate is a node, every edge is labelled with the number of",
+      "differing loci. Nodes can be dragged, zoomed and clicked to select",
+      "isolates, and single-linkage clusters below a chosen threshold are",
+      "shaded behind the network."
+    ),
+    technical = c(
+      "visNetwork (vis.js) over a distance matrix built in app/logic/phylo.R",
+      "Nodes can be drawn as pie charts over any categorical metadata field",
+      "Missing loci follow the missing-value handling set in the Options panel",
+      "Export as a self-contained interactive HTML file or as a canvas PNG"
+    )
+  ),
+  Tree = list(
+    title = "Phylogenetic Tree",
+    icon = "sitemap",
+    tagline = "Neighbour-Joining or UPGMA dendrogram",
+    image = "static/images/tiles/tile_tree.png",
+    about = paste(
+      "A dendrogram inferred from the same allelic distance matrix, using",
+      "either Neighbour-Joining or UPGMA. Tips carry metadata as coloured",
+      "symbols and rings, so host, country and collection date can be read",
+      "off the tree alongside its topology."
+    ),
+    technical = c(
+      "ggtree/ape; algorithm chosen per plot in the engine's control panel",
+      "Rectangular, slanted and circular layouts with adjustable tip labels",
+      "Metadata mapped onto tip shape, tip colour and surrounding heat rings",
+      "Export via ggsave: PNG, JPEG, PDF or SVG at a chosen size and DPI"
+    )
+  ),
+  Map = list(
+    title = "Geographic Map",
+    icon = "earth-europe",
+    tagline = "Isolates placed on an interactive world map",
+    image = "static/images/tiles/tile_map.png",
+    about = paste(
+      "Plots isolates at the places their metadata names. City, state and",
+      "country fields are geocoded once per distinct location when you press",
+      "Generate, then drawn in one of four modes: markers, a country",
+      "choropleth, a density heatmap, or a mini-chart per location."
+    ),
+    technical = c(
+      "leaflet; coordinates from OSM/Nominatim, cached per distinct place",
+      "Reads geo_loc_name_city, _state_province and _country from the metadata",
+      "Choropleth shading uses Natural Earth country polygons",
+      "Export as an interactive HTML map; timeline playback over collection date"
+    )
+  ),
+  Epi = list(
+    title = "Epidemiological Curve",
+    icon = "chart-column",
+    tagline = "Case counts binned over collection date",
+    image = "static/images/tiles/tile_epi.png",
+    about = paste(
+      "The classic epi curve: collection dates binned into equal intervals,",
+      "one bar per interval, optionally stacked or faceted by a metadata",
+      "field. A moving average can be laid over the bars, and playback walks",
+      "the curve forward one interval at a time."
+    ),
+    technical = c(
+      "ggplot2; day/week/month/year bins with integer-only count axes",
+      "Bars are exactly one interval wide, so gaps are real gaps in the data",
+      "Optional moving average, cumulative view and per-group faceting",
+      "Export via ggsave: PNG, JPEG, PDF or SVG"
+    )
+  ),
+  AMR = list(
+    title = "Resistance Profile",
+    icon = "shield-virus",
+    tagline = "Screening results across isolates and genes",
+    image = "static/images/tiles/tile_amr.png",
+    about = paste(
+      "Views over the antimicrobial-resistance screening stored with your",
+      "isolates: a presence/absence heatmap of isolates against genes, a",
+      "coarser isolates-against-drug-classes grid keeping abritamr's",
+      "confident/partial distinction, or a ranked prevalence bar chart."
+    ),
+    technical = c(
+      "ggplot2 plots built in app/logic/amr_plot.R from the amr_results tables",
+      "Screening comes from abritamr/NCBI AMRFinderPlus, run alongside typing",
+      "Genes group by element type or drug class, or cluster hierarchically",
+      "Only isolates screened in this database appear; export via ggsave"
+    )
+  )
+)
+
+#' Plot-type presentation metadata for the creator form, keyed by plot type and
+#' carrying the engine's own `distance` flag so the picker can state what each
+#' view needs without a second copy of that fact.
+#' @export
+plot_type_meta <- stats::setNames(
+  lapply(plot_types, function(k) {
+    c(.TYPE_INFO[[k]], list(key = k, distance = .ENGINES[[k]]$distance))
+  }),
+  plot_types
+)
 
 # Restrict a metadata table to the confirmed isolate preselection; NULL
 # selection means "no filter" and passes the table through untouched.

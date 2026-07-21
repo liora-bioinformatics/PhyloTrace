@@ -33,6 +33,12 @@ field_labels <- c(
 #' @export
 MLST_COL_PREFIX <- "mlst_"
 
+# Reserved name prefix for the display-only AMR-screening columns (a resistance
+# profile summary plus one per drug class / virulence-stress group) derived from
+# the `amr_summary` table. Same convention as MLST_COL_PREFIX.
+#' @export
+AMR_COL_PREFIX <- "amr_"
+
 #' @export
 prettify_field <- function(x) {
   words <- strsplit(gsub("_", " ", x), " ")[[1]]
@@ -54,6 +60,12 @@ field_label <- function(f) {
   if (startsWith(f, MLST_COL_PREFIX)) {
     locus <- substring(f, nchar(MLST_COL_PREFIX) + 1L)
     return(if (identical(locus, "st")) "Sequence Type (ST)" else locus)
+  }
+  # Derived AMR columns read as the bare drug class / group; the summary column
+  # as "AMR Profile".
+  if (startsWith(f, AMR_COL_PREFIX)) {
+    key <- substring(f, nchar(AMR_COL_PREFIX) + 1L)
+    return(if (identical(key, "profile")) "AMR Profile" else key)
   }
   prettify_field(f)
 }
@@ -95,21 +107,37 @@ field_chips <- function(x) {
 #' against the flat `fields`, not against the returned structure: `x %in% choices`
 #' does not see into optgroups.
 #' @export
-grouped_field_choices <- function(fields, mlst_cols = NULL) {
+grouped_field_choices <- function(fields, mlst_cols = NULL, amr_cols = NULL) {
   mlst_cols <- if (is.null(mlst_cols)) {
     fields[startsWith(fields, MLST_COL_PREFIX)]
   } else {
     intersect(fields, mlst_cols)
   }
-  base_cols <- setdiff(fields, mlst_cols)
+  amr_cols <- if (is.null(amr_cols)) {
+    fields[startsWith(fields, AMR_COL_PREFIX)]
+  } else {
+    intersect(fields, amr_cols)
+  }
+  base_cols <- setdiff(fields, c(mlst_cols, amr_cols))
   base_choices <- stats::setNames(base_cols, field_labels_for(base_cols))
 
-  if (!length(mlst_cols)) {
+  # No derived columns at all: stay flat, exactly as a plain metadata select.
+  if (!length(mlst_cols) && !length(amr_cols)) {
     return(base_choices)
   }
 
-  list(
-    "Sample metadata" = base_choices,
-    "Classical MLST" = stats::setNames(mlst_cols, field_labels_for(mlst_cols))
-  )
+  out <- list("Sample metadata" = base_choices)
+  if (length(mlst_cols)) {
+    out[["Classical MLST"]] <- stats::setNames(
+      mlst_cols,
+      field_labels_for(mlst_cols)
+    )
+  }
+  if (length(amr_cols)) {
+    out[["AMR screening"]] <- stats::setNames(
+      amr_cols,
+      field_labels_for(amr_cols)
+    )
+  }
+  out
 }

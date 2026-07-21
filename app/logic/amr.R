@@ -227,7 +227,16 @@ parse_amrfinder_out <- function(path) {
     if (is.na(val) || !nzchar(val)) {
       return(NULL)
     }
-    data.frame(drug_class = cl, genes = val, stringsAsFactors = FALSE)
+    # abritamr packs every gene it found for a drug class into one comma-joined
+    # cell (e.g. "mexE,mexX*"). Split it so each gene becomes its own row - the
+    # amr_summary table stays tidy (one gene per row), keeping its `*`/`^` quality
+    # flags intact.
+    genes <- trimws(strsplit(val, ",", fixed = TRUE)[[1]])
+    genes <- genes[nzchar(genes)]
+    if (!length(genes)) {
+      return(NULL)
+    }
+    data.frame(drug_class = cl, genes = genes, stringsAsFactors = FALSE)
   })
   out <- do.call(rbind, out)
   if (is.null(out)) empty else out

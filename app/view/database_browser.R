@@ -46,7 +46,8 @@ box::use(
       make_metadata_table,
       save_metadata_table,
       remove_isolates,
-      append_classical_mlst
+      append_classical_mlst,
+      append_amr
     ],
   app / logic / field_labels[field_labels_for, grouped_field_choices],
 )
@@ -178,15 +179,18 @@ server <- function(
         return(NULL)
       }
 
-      # Append the classical-MLST columns for display only (see
-      # append_classical_mlst): never persisted - the Save handler strips them
-      # again before writing.
+      # Append the classical-MLST and AMR-screening columns for display only
+      # (see append_classical_mlst / append_amr): never persisted - the Save
+      # handler strips them again before writing.
       df <- append_classical_mlst(df, path)
-      appended <- attr(df, "mlst_cols", exact = TRUE)
+      df <- append_amr(df, path)
+      appended_mlst <- attr(df, "mlst_cols", exact = TRUE)
+      appended_amr <- attr(df, "amr_cols", exact = TRUE)
 
       df[is.na(df)] <- ""
-      # Re-set last so it survives the NA replacement above.
-      attr(df, "mlst_cols") <- appended
+      # Re-set last so they survive the NA replacement above.
+      attr(df, "mlst_cols") <- appended_mlst
+      attr(df, "amr_cols") <- appended_amr
       df
     })
 
@@ -199,6 +203,18 @@ server <- function(
         return(character(0))
       }
       cols <- attr(df, "mlst_cols", exact = TRUE)
+      if (is.null(cols)) character(0) else cols
+    })
+
+    # Names of the appended AMR-screening columns (empty when the database has no
+    # AMR screening). Like mlst_cols: read-only, grouped under "AMR screening",
+    # and stripped before save.
+    amr_cols <- reactive({
+      df <- metadata_base()
+      if (is.null(df)) {
+        return(character(0))
+      }
+      cols <- attr(df, "amr_cols", exact = TRUE)
       if (is.null(cols)) character(0) else cols
     })
 
@@ -218,19 +234,21 @@ server <- function(
     output$col_picker_ui <- renderUI({
       cols <- optional_cols()
       mlst <- mlst_cols()
+      amr <- amr_cols()
 
-      # Group the derived MLST columns under their own heading so the user can
-      # pick them out as a category. Without any MLST columns the picker stays
-      # flat, exactly as before.
-      choices <- grouped_field_choices(cols, mlst)
+      # Group the derived MLST and AMR columns under their own headings so the
+      # user can pick them out as categories. Without any derived columns the
+      # picker stays flat, exactly as before.
+      choices <- grouped_field_choices(cols, mlst, amr)
 
       pickerInput(
         ns("col_picker"),
         label = NULL,
         choices = choices,
-        # MLST columns start hidden - the user opts into the category to show
-        # them. Keep this consistent with the DT's initial column visibility.
-        selected = setdiff(cols, mlst),
+        # Derived MLST / AMR columns start hidden - the user opts into the
+        # category to show them. Keep this consistent with the DT's initial
+        # column visibility.
+        selected = setdiff(cols, c(mlst, amr)),
         multiple = TRUE,
         options = pickerOptions(
           actionsBox = TRUE,
@@ -294,10 +312,11 @@ server <- function(
       }
 
       cols <- names(df)
-      mlst <- mlst_cols()
-      # MLST columns are derived from typing (classical_mlst): never editable.
-      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, mlst))
-      hidden_idx <- .dt_idx(cols, mlst)
+      # MLST / AMR columns are derived from typing (classical_mlst / amr_summary):
+      # never editable, and hidden until the user opts into their category.
+      derived <- c(mlst_cols(), amr_cols())
+      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived))
+      hidden_idx <- .dt_idx(cols, derived)
       # -1 when the column is absent, so the JS never matches a real column.
       date_idx <- c(.dt_idx(cols, DATE_COL), -1L)[[1]]
 
@@ -404,9 +423,9 @@ server <- function(
     })
 
     observeEvent(input$save, {
-      # Drop the display-only MLST columns; they live in classical_mlst, not the
-      # metadata table, and must never be written back.
-      strip <- mlst_cols()
+      # Drop the display-only MLST / AMR columns; they live in classical_mlst /
+      # amr_summary, not the metadata table, and must never be written back.
+      strip <- c(mlst_cols(), amr_cols())
       to_save <- State$data[,
         setdiff(names(State$data), strip),
         drop = FALSE

@@ -130,7 +130,228 @@ body {
 // The creator form supplies its own padding: the navset's card body is
 // zero-padded so the plot tabs' full-bleed layouts sit flush.
 .viz-creator {
-    max-width: 420px;
+    padding: 1rem;
+}
+
+.viz-creator-intro h4 {
+    margin-bottom: 0.25rem;
+}
+
+.viz-creator-intro p {
+    max-width: 68ch;
+    margin-bottom: 1.25rem;
+}
+
+// Plot-type picker.
+//
+// Style against the *live* DOM, not the markup radioGroupButtons() emits:
+// bslib rewrites that Bootstrap 3 button group on load into the Bootstrap 5
+// pattern, so by the time these rules run the per-choice `.btn-group` wrappers
+// are gone and each choice is an `input.btn-check` + `label.btn.radiobtn`
+// sibling pair sitting directly in `.btn-group-container-sw`. The rewrite also
+// hands every label `btn-outline-primary`, whose checked state would flood the
+// tile with solid primary — hence the explicit background/colour resets below.
+//
+// The container query needs a container that is not the queried element
+// itself, which is what this outer wrapper is for.
+.viz-type-picker {
+    container-type: inline-size;
+}
+
+// Grid rather than the inherited flex row: with wrapping flex the tiles size
+// off their caption text and break one-per-row. `!important` beats the `d-flex`
+// utility bslib leaves on the container.
+.viz-type-picker .btn-group-container-sw {
+    display: grid !important;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.85rem;
+}
+
+// One row of five while it fits, then a deliberate 3 + 2 (and 2 + 2 + 1 once
+// even that is cramped) rather than whatever a ragged wrap would give.
+@container (max-width: 1000px) {
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@container (max-width: 620px) {
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+// The radio itself is never seen: the tile is the affordance. It stays in the
+// DOM, sized away rather than display:none, so it keeps taking focus and
+// shinyWidgets' own :checked lookup still finds it. Absolute positioning also
+// keeps it out of the grid's flow, so it claims no cell.
+.viz-type-picker .btn-check {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+}
+
+.viz-type-picker .radiobtn {
+    padding: 0;
+    overflow: hidden;
+    text-align: left;
+    white-space: normal;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius-lg);
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    transition: transform 0.15s ease, box-shadow 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.viz-type-picker .radiobtn:hover,
+.viz-type-picker .radiobtn:active,
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn,
+.viz-type-picker .btn-check:focus-visible+.radiobtn {
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border-color: var(--bs-primary);
+}
+
+.viz-type-picker .radiobtn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn {
+    box-shadow: 0 0 0 2px rgba(var(--bs-primary-rgb), 0.35);
+}
+
+.viz-type-tile {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+// The preview is its own layer under the caption rather than a background on
+// the button: the caption then keeps a solid backdrop and stays readable
+// whatever the image behind it. Unselected tiles are muted so the picked one
+// reads at a glance.
+.viz-type-tile-preview {
+    height: 118px;
+    background-color: var(--bs-secondary-bg);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: grayscale(0.5) opacity(0.8);
+    transition: filter 0.2s ease, transform 0.3s ease;
+}
+
+.viz-type-picker .radiobtn:hover .viz-type-tile-preview,
+.viz-type-picker .radiobtn.active .viz-type-tile-preview,
+.viz-type-picker .btn-check:checked+.radiobtn .viz-type-tile-preview {
+    filter: none;
+    transform: scale(1.04);
+}
+
+// margin-top:auto pins the caption to the bottom, so captions line up across
+// tiles even when one tagline wraps to a second line. font-style is reset
+// because bslib's rewrite makes each tile the content of a <label>, which the
+// app styles italic.
+.viz-type-tile-caption {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 0.55rem;
+    margin-top: auto;
+    padding: 0.6rem 0.7rem;
+    font-style: normal;
+    border-top: 1px solid var(--bs-border-color);
+}
+
+.viz-type-tile-icon {
+    grid-row: 1 / span 2;
+    align-self: center;
+    font-size: 1.15rem;
+    color: var(--bs-primary);
+}
+
+.viz-type-tile-name {
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.viz-type-tile-tagline {
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--bs-secondary-color);
+}
+
+// Details of the selected type, beside the name/Initiate card.
+.viz-creator-cols {
+    margin-top: 1.25rem;
+}
+
+.viz-type-info-icon {
+    margin-right: 0.5rem;
+    color: var(--bs-primary);
+    font-size: 1.5em;
+}
+
+.viz-type-info-title {
+    font-weight: 600;
+    font-size: 1.5em;
+}
+
+.viz-type-info-about {
+    margin-bottom: 0.85rem;
+}
+
+.viz-type-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.viz-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 999px;
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech li {
+    margin-bottom: 0.3rem;
+}
+
+.viz-type-tech li::marker {
+    color: var(--bs-primary);
+}
+
+.viz-creator-form .card-body {
+    gap: 0.75rem;
+}
+
+.viz-creator-form .card-header {
+    font-size: 1.5em;
+}
+
+// The preset banner is only rendered when the dashboard sent the user here, and
+// bslib's card gap would otherwise reserve a slot for the empty placeholder.
+.viz-creator-form .shiny-html-output:empty {
+    display: none;
+}
+
+.viz-creator-form .btn-lg {
+    margin-top: 0.25rem;
 }
 
 // Engine controls live directly in the right sidebar (no card). The wrapper is
@@ -383,14 +604,15 @@ body {
     max-height: none;
 }
 
-// Epi plot stage (see visualization_epi.R). The curve is a ggplot image, so it
-// is presented the way the Tree's is: rendered at panel-width × aspect-ratio by
-// renderPlot(), then scaled down to fit the visible stage without distorting
-// its ratio. Keeps .viz-plot-stage for the shared `.viz-plot-prompt` overlay
-// and the `.viz-plot-stage.is-loading .viz-loading` toggle. The plotOutput div
-// carries an inline height (height="auto"), so the override needs !important to
-// win over it — same reason as .tree-stage.
-.epi-stage .shiny-plot-output {
+// Epi and AMR plot stages (see visualization_epi.R / visualization_amr.R).
+// Both are ggplot images, so they are presented the way the Tree's is: rendered
+// at panel-width × aspect-ratio, then scaled down to fit the visible stage
+// without distorting the ratio. Keeps .viz-plot-stage for the shared
+// `.viz-plot-prompt` overlay and the `.viz-plot-stage.is-loading .viz-loading`
+// toggle. The plotOutput div carries an inline height (height="auto"), so the
+// override needs !important to win over it — same reason as .tree-stage.
+.epi-stage .shiny-plot-output,
+.amr-stage .shiny-plot-output {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -398,7 +620,8 @@ body {
     height: 100% !important;
 }
 
-.epi-stage .shiny-plot-output img {
+.epi-stage .shiny-plot-output img,
+.amr-stage .shiny-plot-output img {
     width: auto !important;
     height: auto !important;
     max-width: 100%;
@@ -406,8 +629,9 @@ body {
     object-fit: contain;
 }
 
-// Guidance under the interval picker: secondary to the control it explains.
-.epi-help {
+// Guidance under a control: secondary to the control it explains.
+.epi-help,
+.amr-help {
     margin-top: -0.25rem;
     margin-bottom: 0.75rem;
     font-size: 0.8rem;
@@ -2708,6 +2932,19 @@ label {
         font-weight: bold;
         font-size: 1.2em;
     }
+}
+
+// Confirm-discard modal for closing an unsaved plot tab: wide enough that its
+// three footer buttons (Cancel / Close anyway / Save and close) stay on one
+// row instead of wrapping at Bootstrap's default 500px modal width.
+.unsaved-plot-modal .modal-dialog {
+    width: auto;
+    max-width: 560px;
+    margin: 1.75rem auto;
+}
+
+.unsaved-plot-modal .modal-footer {
+    flex-wrap: nowrap;
 }
 
 

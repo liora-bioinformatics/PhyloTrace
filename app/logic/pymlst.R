@@ -397,13 +397,25 @@ parse_typing_log <- function(log_lines, strains) {
     } else {
       as.POSIXct(NA)
     }
+    # Prefer the whole-pipeline sentinels loop-pymlst.sh emits at the end of each
+    # strain: the "[INFO]" timestamps above cover only cgMLST allele calling,
+    # whereas "Strain elapsed"/"Strain finished" bracket the entire per-strain
+    # pipeline (allele calling + classical MLST + AMR). Fall back to the allele-
+    # calling DONE timing while the strain is still mid-run (sentinel not yet
+    # written) or for logs produced before the sentinels existed.
+    total_elapsed <- num(chunk, "Strain elapsed:[ \t]*([0-9]+)")
+    total_finished <- strval(chunk, "Strain finished:[ \t]*([0-9:]+)")
     list(
-      finished = if (!is.na(done_ts)) {
+      finished = if (!is.na(total_finished)) {
+        total_finished
+      } else if (!is.na(done_ts)) {
         format(done_ts, "%H:%M:%S")
       } else {
         NA_character_
       },
-      elapsed = if (!is.na(done_ts) && !is.na(start_ts)) {
+      elapsed = if (!is.na(total_elapsed)) {
+        as.numeric(total_elapsed)
+      } else if (!is.na(done_ts) && !is.na(start_ts)) {
         as.numeric(difftime(done_ts, start_ts, units = "secs"))
       } else {
         NA_real_
@@ -514,9 +526,16 @@ parse_typing_log <- function(log_lines, strains) {
       )
     } else {
       # A section is complete once another section follows it or the run is over.
+      # AMR screening runs after cgMLST + classical MLST within the same section
+      # and can take a minute per genome, so an "AMR:" sentinel also marks the
+      # cgMLST result final - otherwise the strain would sit at "Running" (and
+      # the progress bar stall) for the whole screen even though typing is done.
       idx <- match(strain, order_seen)
-      complete <- idx < length(order_seen) || finished_all
-      info <- classify(sections[[strain]], complete)
+      chunk <- sections[[strain]]
+      complete <- idx < length(order_seen) ||
+        finished_all ||
+        grepl("AMR: ", chunk, fixed = TRUE)
+      info <- classify(chunk, complete)
     }
     data.frame(
       strain = strain,

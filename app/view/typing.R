@@ -716,8 +716,8 @@ server <- function(
         switch(
           status,
           known = as.character(st),
-          novel = '<span class="badge text-bg-warning">novel</span>',
-          partial = '<span class="badge text-bg-secondary">partial</span>',
+          novel = '<span class="badge text-bg-warning">Novel</span>',
+          partial = '<span class="badge text-bg-secondary">Partial</span>',
           "—"
         )
       }
@@ -747,10 +747,10 @@ server <- function(
               if (n == 1L) "" else "s"
             )
           } else {
-            '<span class="badge text-bg-secondary">none</span>'
+            '<span class="badge text-bg-secondary">None</span>'
           },
-          screening = '<span class="badge text-bg-info">screening …</span>',
-          failed = '<span class="badge text-bg-danger">failed</span>',
+          screening = '<span class="badge text-bg-info">Screening …</span>',
+          failed = '<span class="badge text-bg-danger">Failed</span>',
           "—"
         )
       }
@@ -933,7 +933,11 @@ server <- function(
           cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db,
           amr_env = if (run_amr) conda_env else NA_character_,
           amr_species = amr_sp,
-          amr_out = if (is.null(Typing$amr_out)) NA_character_ else Typing$amr_out
+          amr_out = if (is.null(Typing$amr_out)) {
+            NA_character_
+          } else {
+            Typing$amr_out
+          }
         ),
         error = function(e) e
       )
@@ -989,12 +993,6 @@ server <- function(
     # least one new strain to the database
     db_updated <- reactiveVal(0L)
 
-    # [INSTR-CHURN] Cumulative bytes this loop re-reads/re-parses over a run.
-    # Cheap accounting only (nchar) — deliberately NO gc()/gc-reading here, which
-    # would force collection and hide the very pile-up we're measuring.
-    .instr_tick <- 0L
-    .instr_cum_read <- 0
-
     # Poll the background process: tail the log, refresh the results table and
     # the progress bar, and finalise once the process exits. invalidateLater
     # returns control to the event loop each tick so updates reach the browser
@@ -1012,19 +1010,6 @@ server <- function(
       } else {
         character(0)
       }
-
-      # [INSTR-CHURN] per-tick + cumulative re-read/re-parse volume
-      .instr_tick <<- .instr_tick + 1L
-      tick_bytes <- sum(nchar(lines, type = "bytes")) + length(lines)
-      .instr_cum_read <<- .instr_cum_read + tick_bytes
-      message(sprintf(
-        "%s [INSTR-CHURN] tick=%d lines=%d tick_read=%.2f MB cum_reparsed=%.3f GB",
-        format(Sys.time(), "%H:%M:%OS2"),
-        .instr_tick,
-        length(lines),
-        tick_bytes / 1e6,
-        .instr_cum_read / 1e9
-      ))
 
       log_text(paste(lines, collapse = "\n"))
 

@@ -36,6 +36,12 @@ process_genome() {
     # Dynamically handle extension (removes .fna, .fasta, or .fa)
     local strain_name=$(basename "$file" | sed 's/\.[^.]*$//')
 
+    # Wall-clock start of this strain's whole pipeline (cgMLST + classical MLST +
+    # AMR). The per-step [INFO] timestamps only cover allele calling, so the R
+    # side reads the "Strain elapsed"/"Strain finished" sentinels emitted at the
+    # end of this function to report the full per-strain duration.
+    local strain_start=$(date +%s)
+
     echo "------------------------------------------------"
     echo "Processing Strain: $strain_name"
     echo "Using Database: $db"
@@ -73,19 +79,26 @@ process_genome() {
     # amrfinder.out + summary_{matches,partials,virulence}.txt, read back by the
     # R caller once this process exits. Never fails the strain.
     #
-    # `--no-capture-output` and `</dev/null` are essential here, not cosmetic:
-    # this whole script runs as a detached background process, and abritamr
-    # spawns long-lived children (amrfinder -> blast/hmmer). Under a plain
-    # `conda run` those children inherit conda's capture pipes and an open
-    # stdin, which deadlocks the run (screening starts but never finishes).
-    # `--no-capture-output` execs with inherited stdio (no buffering pipe) and
-    # the redirects give it a closed stdin and a /dev/null sink.
+    # Threads matter a lot: abritamr passes `--jobs` straight to amrfinder's
+    # `--threads`, and a single-threaded `--plus --organism` screen of a several-
+    # megabase genome takes minutes (HMMER over thousands of profiles + BLAST +
+    # point mutations). Screening is sequential per genome, and cgMLST/claMLST
+    # for this strain are already done by now, so the cores are free - use all
+    # of them but one, leaving a core for the OS and the Shiny UI to stay
+    # responsive. `timeout` bounds a genuinely stuck screen so AMR can never hang
+    # the whole typing run: on expiry the strain is simply reported "failed" and
+    # the loop moves on. `--no-capture-output` streams straight to the /dev/null
+    # sink (no conda buffering); `</dev/null` gives the children a closed stdin.
     if [[ -n "$AMR_OUT" && -n "$AMR_ENV" ]]; then
         local amr_prefix="$AMR_OUT/$strain_name"
+        local amr_cores amr_jobs
+        amr_cores=$(nproc 2>/dev/null || echo 2)
+        amr_jobs=$(( amr_cores - 2 ))
+        (( amr_jobs < 1 )) && amr_jobs=1
         echo "AMR: screening $strain_name"
-        if "$CONDA" run --no-capture-output -n "$AMR_ENV" \
+        if timeout -k 30 1200 "$CONDA" run --no-capture-output -n "$AMR_ENV" \
                 abritamr run -c "$file" -px "$amr_prefix" \
-                ${AMR_SPECIES:+--species "$AMR_SPECIES"} --jobs 1 \
+                ${AMR_SPECIES:+--species "$AMR_SPECIES"} --jobs "$amr_jobs" \
                 >/dev/null 2>&1 </dev/null; then
             local n_amr=0
             if [[ -f "$amr_prefix/amrfinder.out" ]]; then
@@ -97,6 +110,11 @@ process_genome() {
             echo "AMR: failed $strain_name"
         fi
     fi
+
+    # Whole-pipeline timing for this strain (allele calling + classical MLST +
+    # AMR), read by parse_typing_log() for the "Elapsed" / "Finished" columns.
+    echo "Strain elapsed: $(( $(date +%s) - strain_start ))"
+    echo "Strain finished: $(date +%H:%M:%S)"
 }
 
 # --- Parse flags ---

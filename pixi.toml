@@ -1,0 +1,19 @@
+[workspace]
+authors = ["infinity-a11y <marian-freisleben@outlook.com>"]
+channels = ["conda-forge", "bioconda"]
+name = "PhyloTrace"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+blat = "35.*"
+mafft = "7.525.*"
+abritamr = "1.0.19.*"
+ncbi-amrfinderplus = "3.12.8.*"
+pip = "*"
+
+[pypi-dependencies]
+pymlst = "==2.2.2"

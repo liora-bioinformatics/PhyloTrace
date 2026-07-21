@@ -15,7 +15,7 @@ box::use(
     dbExecute
   ],
   RSQLite[SQLite],
-  app / logic / field_labels[MLST_COL_PREFIX],
+  app / logic / field_labels[MLST_COL_PREFIX, AMR_COL_PREFIX],
 )
 
 # The scheme's `targets` table stores loci as "FTL_0001" while the `mlst` table
@@ -295,6 +295,107 @@ append_classical_mlst <- function(meta, db_path) {
   }
 
   attr(meta, "mlst_cols") <- appended
+  meta
+}
+
+#' Per-isolate AMR-screening summary, wide, for display only.
+#'
+#' `amr_summary` (written by the AMR screen at typing time) stores one row per
+#' (isolate, section, drug_class, gene), tidy. This pivots it to one row per
+#' isolate: an `<prefix>profile` column listing the drug classes with a confident
+#' (`matches`) hit, plus one `<prefix><drug_class>` column per drug class /
+#' virulence-stress group holding that isolate's genes (comma-joined, keeping the
+#' `*`/`^` quality flags), where `<prefix>` is `AMR_COL_PREFIX`. Drug classes keep
+#' the order they first appear in the table. Every column is character.
+#'
+#' Display-only companion, mirroring `load_classical_mlst`: never touches
+#' `metadata`. Returns NULL when the database has no `amr_summary` table or it
+#' holds no rows.
+#' @export
+load_amr <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(NULL)
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  if (!"amr_summary" %in% dbListTables(con)) {
+    return(NULL)
+  }
+
+  as <- dbGetQuery(
+    con,
+    "SELECT souche, section, drug_class, genes FROM amr_summary ORDER BY id"
+  )
+  if (!nrow(as)) {
+    return(NULL)
+  }
+
+  isolates <- unique(as$souche)
+  out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
+
+  # Resistance profile: the drug classes with a confident (matches) hit.
+  profile <- vapply(
+    isolates,
+    function(s) {
+      cls <- unique(as$drug_class[
+        as$souche == s & as$section == "matches"
+      ])
+      if (length(cls)) paste(cls, collapse = ", ") else NA_character_
+    },
+    character(1)
+  )
+  out[[paste0(AMR_COL_PREFIX, "profile")]] <- unname(profile)
+
+  # One column per drug class / group (first-seen order), holding the isolate's
+  # genes across all sections, comma-joined.
+  for (dc in unique(as$drug_class)) {
+    sub <- as[as$drug_class == dc, c("souche", "genes"), drop = FALSE]
+    genes <- tapply(
+      sub$genes,
+      sub$souche,
+      function(v) paste(unique(v[!is.na(v) & nzchar(v)]), collapse = ", ")
+    )
+    out[[paste0(AMR_COL_PREFIX, dc)]] <- as.character(genes[isolates])
+  }
+
+  out
+}
+
+#' Merge the display-only AMR-screening columns into a metadata frame keyed on
+#' `isolate`, recording the added names in the result's `"amr_cols"` attribute.
+#' The AMR analogue of `append_classical_mlst`: reusable across views, columns
+#' that would shadow an existing metadata field are skipped, and `meta` is
+#' returned unchanged (empty `"amr_cols"`) when it is not a non-empty
+#' isolate-keyed frame or the database has no AMR screening.
+#' @export
+append_amr <- function(meta, db_path) {
+  if (
+    !is.data.frame(meta) || !nrow(meta) || isFALSE("isolate" %in% names(meta))
+  ) {
+    return(meta)
+  }
+
+  appended <- character(0)
+  amr <- load_amr(db_path)
+  if (!is.null(amr)) {
+    add <- setdiff(names(amr), c("isolate", names(meta)))
+    if (length(add)) {
+      idx <- match(meta$isolate, amr$isolate)
+      for (col in add) {
+        meta[[col]] <- amr[[col]][idx]
+      }
+      appended <- add
+    }
+  }
+
+  attr(meta, "amr_cols") <- appended
   meta
 }
 

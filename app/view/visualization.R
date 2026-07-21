@@ -37,6 +37,8 @@ box::use(
     renderUI,
     textInput,
     updateTextInput,
+    h4,
+    p,
   ],
   bslib[
     navset_card_tab,
@@ -44,13 +46,18 @@ box::use(
     nav_insert,
     nav_remove,
     nav_select,
+    card,
+    card_header,
     card_body,
+    layout_columns,
     as_fill_carrier,
   ],
   shinyWidgets[radioGroupButtons],
 )
 box::use(
-  app / logic / database_functions[make_metadata_table, append_classical_mlst],
+  app /
+    logic /
+    database_functions[append_amr, append_classical_mlst, make_metadata_table],
   app / logic / db_staging[list_imported_sets],
   app / logic / analysis_store,
   app / view / visualization_plot,
@@ -63,31 +70,77 @@ box::use(
 # the first plot tab lands directly after it.
 .NEW_TAB <- "new_plot"
 
+# One plot type's tile, used as a radio button's label. The preview sits in its
+# own layer rather than on the button itself: the caption then keeps a solid
+# background and stays legible without a scrim washing out the image. Preview
+# URLs come from visualization_plot$plot_type_meta and are resolved against the
+# app root by the browser, the same way app/main.R's logos are.
+.type_tile <- function(m) {
+  div(
+    class = "viz-type-tile",
+    div(
+      class = "viz-type-tile-preview",
+      style = sprintf("background-image: url('%s');", m$image)
+    ),
+    div(
+      class = "viz-type-tile-caption",
+      span(class = "viz-type-tile-icon", icon(m$icon)),
+      span(class = "viz-type-tile-name", m$key),
+      span(class = "viz-type-tile-tagline", m$tagline)
+    )
+  )
+}
+
 # The creator form. Emitted exactly once, in the permanent first tab — the
 # whole point of keeping that tab rather than inserting a fresh copy of the
 # form per "Add", which would put duplicate input ids in the page.
 .creator_ui <- function(ns) {
+  meta <- visualization_plot$plot_type_meta
   div(
-    class = "viz-creator p-3",
-    radioGroupButtons(
-      ns("plot_type"),
-      label = "Plot type",
-      choices = visualization_plot$plot_types,
-      selected = "MST",
-      justified = TRUE
+    class = "viz-creator",
+    div(
+      class = "viz-type-picker",
+      radioGroupButtons(
+        ns("plot_type"),
+        label = NULL,
+        # choiceNames/choiceValues rather than `choices`: the label of each
+        # button is a whole tile, while the input's value stays the bare plot
+        # type the rest of the module keys on.
+        choiceNames = unname(lapply(meta, .type_tile)),
+        choiceValues = names(meta),
+        selected = "MST",
+        justified = TRUE
+      )
     ),
-    textInput(
-      ns("plot_name"),
-      "Plot name",
-      value = "Plot 1",
-      width = "100%"
-    ),
-    uiOutput(ns("preset_info")),
-    actionButton(
-      ns("initiate"),
-      "Initiate",
-      icon = icon("plus"),
-      class = "btn-primary"
+    layout_columns(
+      class = "viz-creator-cols",
+      col_widths = c(7, 5),
+      uiOutput(ns("type_info")),
+      card(
+        class = "viz-creator-form",
+        card_header("Create"),
+        card_body(
+          div(
+            # Plot names are display text, not identifiers: opt out of the
+            # global charset filter in app/js/index.js so spaces and
+            # punctuation survive typing.
+            class = "allow-free-text",
+            textInput(
+              ns("plot_name"),
+              "Plot name",
+              value = "Plot 1",
+              width = "100%"
+            )
+          ),
+          uiOutput(ns("preset_info")),
+          actionButton(
+            ns("initiate"),
+            "Initiate plot",
+            icon = icon("plus"),
+            class = "btn-primary btn-lg w-100"
+          )
+        )
+      )
     )
   )
 }
@@ -221,10 +274,17 @@ server <- function(
     # on a map it was never geocoded for.
     viz_metadata <- reactive({
       req(db_path())
-      # Surface the classical-MLST columns (ST + per-locus alleles) as ordinary
-      # metadata so every engine can label, colour and map by them. Display
-      # only — append_classical_mlst never writes them back to the database.
-      append_classical_mlst(make_metadata_table(db_path()), db_path())
+      # Surface the classical-MLST columns (ST + per-locus alleles) and the
+      # AMR-screening columns (the resistance profile plus one per drug class)
+      # as ordinary metadata so every engine can label, colour and map by them.
+      # Display only — neither appender writes anything back to the database.
+      # Each records what it added in its own attribute ("mlst_cols" /
+      # "amr_cols"), which grouped_field_choices() turns into the optgroups the
+      # engines' field pickers show.
+      append_amr(
+        append_classical_mlst(make_metadata_table(db_path()), db_path()),
+        db_path()
+      )
     })
 
     staged_sets <- reactive({
@@ -282,6 +342,7 @@ server <- function(
         Tree = "sitemap",
         Map = "earth-europe",
         Epi = "chart-column",
+        AMR = "shield-virus",
         NULL
       )
       if (is.null(nm)) NULL else span(class = "viz-tab-type-icon", icon(nm))
@@ -423,6 +484,50 @@ server <- function(
     }
 
     # ---------------------------------------------------- creator form -----
+    # What the currently picked plot type draws, and what it needs to draw it.
+    # Copy and preview images come from the engine registry
+    # (visualization_plot$plot_type_meta), so this reacts to the picker without
+    # knowing anything about the engines itself.
+    output$type_info <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      # The two distance engines are the ones that can fold staged peer
+      # isolates in and that consume the missing-value handling; the other
+      # three read metadata straight off the local database.
+      badges <- if (isTRUE(m$distance)) {
+        list(
+          c("diagram-project", "Pairwise allelic distances"),
+          c("layer-group", "Staged peer isolates can be included")
+        )
+      } else {
+        list(
+          c("database", "Reads isolate metadata directly"),
+          c("house", "Local isolates only")
+        )
+      }
+
+      card(
+        class = "viz-type-info",
+        card_header(
+          span(class = "viz-type-info-icon", icon(m$icon)),
+          span(class = "viz-type-info-title", m$title)
+        ),
+        card_body(
+          p(class = "viz-type-info-about", m$about),
+          div(
+            class = "viz-type-badges",
+            lapply(badges, function(b) {
+              span(class = "viz-type-badge", icon(b[[1]]), span(b[[2]]))
+            })
+          ),
+          tags$ul(
+            class = "viz-type-tech",
+            lapply(m$technical, function(t) tags$li(t))
+          )
+        )
+      )
+    })
+
     # What the next created tab will be bound to, when the dashboard sent the
     # user here from an Analysis.
     output$preset_info <- renderUI({
@@ -470,29 +575,32 @@ server <- function(
       }
 
       closing_tab(tid)
-      showModal(modalDialog(
-        title = "Unsaved plot",
-        sprintf(
-          paste(
-            "'%s' has been generated but not saved to an Analysis.",
-            "Closing it discards the plot."
+      showModal(div(
+        class = "unsaved-plot-modal",
+        modalDialog(
+          title = "Unsaved plot",
+          sprintf(
+            paste(
+              "'%s' has been generated but not saved to an Analysis.",
+              "Closing it discards the plot."
+            ),
+            entry$handle$name()
           ),
-          entry$handle$name()
-        ),
-        footer = tagList(
-          modalButton("Cancel"),
-          actionButton(
-            ns("close_discard"),
-            "Close anyway",
-            class = "btn-danger"
+          footer = tagList(
+            modalButton("Cancel"),
+            actionButton(
+              ns("close_discard"),
+              "Close anyway",
+              class = "btn-danger"
+            ),
+            actionButton(
+              ns("close_save"),
+              "Save and close",
+              class = "btn-primary"
+            )
           ),
-          actionButton(
-            ns("close_save"),
-            "Save and close",
-            class = "btn-primary"
-          )
-        ),
-        easyClose = FALSE
+          easyClose = FALSE
+        )
       ))
     })
 
