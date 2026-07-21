@@ -97,9 +97,19 @@ box::use(
 .creator_ui <- function(ns) {
   meta <- visualization_plot$plot_type_meta
   div(
-    class = "viz-creator",
+    # html-fill-container/-item: the creator sits in a fillable, height="100%"
+    # card_body (see the caller below), but a plain div doesn't join bslib's
+    # fill system on its own. Tagging it both roles lets it claim the card's
+    # full height *and* hand that height down to its own children — see
+    # viz-type-picker below, and .viz-creator-cols' layout_columns() which
+    # already carries html-fill-item but had no fill-container parent to act on.
+    class = "viz-creator html-fill-container html-fill-item",
     div(
-      class = "viz-type-picker",
+      # html-fill-item: without this the picker takes only its natural content
+      # height and every byte of the card's leftover height goes to the
+      # sibling form card instead — see .viz-type-tile-preview's CSS for the
+      # rest of the chain this feeds.
+      class = "viz-type-picker html-fill-item",
       radioGroupButtons(
         ns("plot_type"),
         label = NULL,

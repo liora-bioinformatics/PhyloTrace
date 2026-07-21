@@ -1,3 +1,5 @@
+import "./busy-shield";
+
 // Restrict free-text entry to a filesystem-/SQL-safe character set
 // ([a-zA-Z0-9_-]) so anything the user types to *name* an identifier (a
 // database, a scheme, an isolate) stays safe to persist, export as a filename,

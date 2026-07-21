@@ -322,8 +322,10 @@ clamlst_status <- function(st, alleles) {
 #   partial  - partial genes detected
 #   filled   - partial genes recovered
 #   removed  - genes dropped (bad coverage / failed CDS test)
-#   finished - wall-clock time of the "DONE" log line ("HH:MM:SS")
-#   elapsed  - analysis duration in seconds (DONE minus first timestamp)
+#   finished - wall-clock time the strain's whole pipeline ended ("HH:MM:SS"),
+#              NA until every step has run
+#   elapsed  - whole-pipeline duration in seconds, NA until every step has run
+#   cg_done  - TRUE once allele calling alone reached its "DONE" line
 #   detail   - short human-readable explanation
 #   st         - classical MLST Sequence Type (NA when unavailable)
 #   alleles    - classical MLST per-gene allele profile ("gene=allele,...")
@@ -371,55 +373,38 @@ parse_typing_log <- function(log_lines, strains) {
     }
   }
 
-  # Per-strain wall-clock timing taken from the "[INFO: <ts>]" log prefixes
-  # (e.g. "[INFO: 2026-06-25 21:16:40,224] DONE"). `finished` is the time on the
-  # DONE line; `elapsed` is DONE minus the strain's first timestamp (the BLAT
-  # search). Both are NA when the strain never reached DONE.
+  # Per-strain wall-clock timing. `finished` / `elapsed` describe the strain's
+  # whole pipeline - allele calling, classical MLST and AMR screening - and are
+  # therefore taken exclusively from the "Strain finished" / "Strain elapsed"
+  # sentinels loop-pymlst.sh emits once all three are done. They stay NA for a
+  # strain that is still mid-run or was killed part-way through, so a reported
+  # duration always covers the complete strain.
+  #
+  # `cg_done` marks the end of allele calling alone, read off the "[INFO: <ts>]
+  # DONE" line pymlst prints (e.g. "[INFO: 2026-06-25 21:16:40,224] DONE"). It
+  # is what separates "allele calling still running" from "the steps after it
+  # are running", which the UI needs while the sentinels are still pending.
   ts_pattern <-
     "\\[INFO: ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[.,][0-9]+)\\]"
   timing <- function(chunk) {
     to_posix <- function(x) {
       as.POSIXct(gsub(",", ".", x), format = "%Y-%m-%d %H:%M:%OS")
     }
-    matches <- regmatches(chunk, gregexpr(ts_pattern, chunk))[[1]]
-    stamps <- if (length(matches)) {
-      to_posix(sub(ts_pattern, "\\1", matches))
-    } else {
-      as.POSIXct(character(0))
-    }
     done <- regmatches(
       chunk,
       regexec(paste0(ts_pattern, "[ \t]*DONE"), chunk)
     )[[1]]
     done_ts <- if (length(done) > 1) to_posix(done[2]) else as.POSIXct(NA)
-    start_ts <- if (length(stamps)) {
-      min(stamps, na.rm = TRUE)
-    } else {
-      as.POSIXct(NA)
-    }
-    # Prefer the whole-pipeline sentinels loop-pymlst.sh emits at the end of each
-    # strain: the "[INFO]" timestamps above cover only cgMLST allele calling,
-    # whereas "Strain elapsed"/"Strain finished" bracket the entire per-strain
-    # pipeline (allele calling + classical MLST + AMR). Fall back to the allele-
-    # calling DONE timing while the strain is still mid-run (sentinel not yet
-    # written) or for logs produced before the sentinels existed.
     total_elapsed <- num(chunk, "Strain elapsed:[ \t]*([0-9]+)")
     total_finished <- strval(chunk, "Strain finished:[ \t]*([0-9:]+)")
     list(
-      finished = if (!is.na(total_finished)) {
-        total_finished
-      } else if (!is.na(done_ts)) {
-        format(done_ts, "%H:%M:%S")
-      } else {
-        NA_character_
-      },
+      finished = total_finished,
       elapsed = if (!is.na(total_elapsed)) {
         as.numeric(total_elapsed)
-      } else if (!is.na(done_ts) && !is.na(start_ts)) {
-        as.numeric(difftime(done_ts, start_ts, units = "secs"))
       } else {
         NA_real_
-      }
+      },
+      cg_done = !is.na(done_ts)
     )
   }
 
@@ -432,7 +417,8 @@ parse_typing_log <- function(log_lines, strains) {
       filled = num(chunk, "partial genes, filled ([0-9]+)"),
       removed = num(chunk, "Removed ([0-9]+) genes"),
       finished = times$finished,
-      elapsed = times$elapsed
+      elapsed = times$elapsed,
+      cg_done = times$cg_done
     )
     # Classical MLST (best-effort, may be absent): the ST and the per-gene allele
     # profile echoed by loop-pymlst.sh after `claMLST search`, plus a known /
@@ -517,6 +503,7 @@ parse_typing_log <- function(log_lines, strains) {
         removed = NA_integer_,
         finished = NA_character_,
         elapsed = NA_real_,
+        cg_done = FALSE,
         detail = "Waiting in queue ...",
         st = NA_character_,
         alleles = NA_character_,
@@ -547,6 +534,7 @@ parse_typing_log <- function(log_lines, strains) {
       removed = info$removed,
       finished = info$finished,
       elapsed = info$elapsed,
+      cg_done = info$cg_done,
       detail = info$detail,
       st = info$st,
       alleles = info$alleles,

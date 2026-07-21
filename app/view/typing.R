@@ -28,6 +28,9 @@ box::use(
     radioButtons,
     checkboxInput,
     showNotification,
+    showModal,
+    modalDialog,
+    modalButton,
     HTML
   ],
   stats[setNames],
@@ -38,7 +41,6 @@ box::use(
     accordion_panel,
     accordion_panel_close,
     as_fill_item,
-    tooltip,
   ],
   shinyFiles[
     shinyFilesButton,
@@ -59,7 +61,8 @@ box::use(
     addClass,
     removeClass
   ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, replaceData],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, replaceData, JS],
+  htmltools[htmlEscape],
   fs[path_home],
 )
 box::use(
@@ -99,6 +102,7 @@ status_badge <- function(status) {
     Error = "text-bg-danger",
     Running = "text-bg-info",
     Pending = "text-bg-light text-dark",
+    Stopped = "text-bg-warning",
     New = "text-bg-success",
     "Already present" = "text-bg-warning",
     "text-bg-light"
@@ -123,6 +127,211 @@ completeness_badge <- function(pct) {
   sprintf('<span class="badge %s">%.1f%%</span>', cls, pct)
 }
 
+# Layout of the "Typing Results" table: one entry per column, in display order.
+# `name` is the header label, `tip` the hover explanation, `class` an optional
+# CSS class (see main.scss) that reserves horizontal space for the columns whose
+# cell content changes while a run is in progress - without it the widest badge
+# of the moment sets the column width and every column to its right shifts on
+# each polling tick.
+#
+# Each of the three analyses that ride along in a run gets its own column
+# reporting that analysis' own state and outcome: cgMLST allele calling
+# (`wgMLST add`), classical 7-gene MLST (`claMLST search`) and AMR screening
+# (abritamr). They appear in execution order, and the allele-calling metrics
+# (loci found through completeness) sit directly behind the cgMLST column they
+# belong to rather than after all three analyses.
+results_columns <- list(
+  list(
+    name = "Strain",
+    class = "pt-col-strain",
+    tip = "Assembly file name, without extension."
+  ),
+  list(
+    name = "cgMLST",
+    class = "pt-col-cgmlst",
+    tip = paste(
+      "Allele calling against the loaded scheme.",
+      "Added, Duplicate, Incompatible (no core gene matched) or Error."
+    )
+  ),
+  list(
+    name = "Loci found",
+    tip = "Scheme loci located in the assembly by BLAT."
+  ),
+  list(
+    name = "Alleles added",
+    tip = "Loci whose allele was stored for this strain."
+  ),
+  list(
+    name = "Partial",
+    tip = "Loci matched over less than their full length."
+  ),
+  list(
+    name = "Filled",
+    tip = "Partial loci completed from the assembly and kept."
+  ),
+  list(
+    name = "Removed",
+    tip = "Loci dropped for low coverage or a failed coding-sequence test."
+  ),
+  list(
+    name = "Completeness",
+    tip = paste(
+      "Share of the scheme's loci called.",
+      "A low value points to a poor assembly or a species mismatch."
+    )
+  ),
+  list(
+    name = "MLST",
+    class = "pt-col-mlst",
+    tip = paste(
+      "Classical 7-gene MLST: the Sequence Type, Novel (complete but",
+      "unregistered profile) or Partial (some loci not called)."
+    )
+  ),
+  list(
+    name = "AMR",
+    class = "pt-col-amr",
+    tip = paste(
+      "Resistance screening (abritamr). Hits count all detected elements:",
+      "acquired resistance, virulence and stress/metal genes."
+    )
+  ),
+  list(
+    name = "Finished",
+    class = "pt-col-time",
+    tip = "Clock time at which the strain's last step ended."
+  ),
+  list(
+    name = "Elapsed",
+    tip = "Total time for this strain: cgMLST, classical MLST and AMR."
+  ),
+  list(
+    name = "Detail",
+    tip = "What the strain is doing, or why it was not added."
+  )
+)
+
+# Header row for the results table, built as a DT `container` so each header
+# cell can carry its explanation (a Bootstrap tooltip, falling back to the
+# browser's native `title` tooltip) and its width-reserving class.
+results_header <- tags$table(
+  class = "display",
+  tags$thead(tags$tr(
+    lapply(results_columns, function(col) {
+      tags$th(
+        class = col$class,
+        title = col$tip,
+        `data-bs-toggle` = "tooltip",
+        `data-bs-placement` = "bottom",
+        col$name
+      )
+    })
+  ))
+)
+
+# Attach a Bootstrap tooltip to every header cell that carries an explanation.
+# Runs once per render (the header survives replaceData, so the live polling
+# updates never re-trigger it). `container: body` keeps the tooltip out of the
+# accordion body, which scrolls and would otherwise clip it. Falls back to the
+# native title tooltip if Bootstrap's JS is unavailable.
+header_tooltips <- JS(
+  "function(settings, json) {",
+  "  if (!window.bootstrap || !window.bootstrap.Tooltip) return;",
+  "  $(this.api().table().header())",
+  "    .find('th[data-bs-toggle=\"tooltip\"]')",
+  "    .each(function() {",
+  "      window.bootstrap.Tooltip.getOrCreateInstance(",
+  "        this, { container: 'body', trigger: 'hover' });",
+  "    });",
+  "}"
+)
+
+# One step of the typing pipeline, as a sidebar accordion panel. Every genome
+# goes through the same steps in this order - pick the input, then the three
+# analyses - and each panel owns the settings for its step, so the accordion
+# is the process: numbered, in execution order, and named (from step 2 on)
+# exactly like the results table's columns, which ties a setting to the step -
+# and the column - it governs.
+#
+# `info_id` is the namespaced id of a click target that opens this step's
+# in-depth explanation as a modal (server-side observeEvent, see
+# step_info_modal below) rather than a hover tooltip or an always-visible
+# paragraph: a step's full explanation is longer than a tooltip comfortably
+# holds, and the sidebar is only 320px wide, so keeping it opt-in is what keeps
+# the panel a single line tall. `.tooltip-bttn` is the existing "looks like an
+# icon, is a button" style already used elsewhere in the app (see
+# visualization_plot.R's missing-values help); `.info-modal` (main.scss) is its
+# matching modal style.
+#
+# bslib renders `title` *inside* its own accordion-toggle <button>, which rules
+# out a real shiny::actionButton() here twice over:
+#
+# 1. Browsers do not allow a <button> nested inside another <button> - the outer
+#    one is silently closed the moment the HTML parser meets the inner one,
+#    corrupting the whole panel's markup before any JS runs. So the trigger is
+#    a <span> carrying its input id in a data attribute.
+#
+# 2. That span is still a *descendant* of the toggle button, and Bootstrap's
+#    collapse plugin catches clicks with one delegated listener that walks the
+#    clicked element's ancestors for `[data-bs-toggle="collapse"]`. Clicking
+#    the icon would therefore open the modal *and* toggle the panel.
+#    step_info_click_script below stops that; see its own comment.
+step_panel <- function(number, label, info_id, ...) {
+  accordion_panel(
+    title = tags$span(
+      class = "typing-step-title",
+      span(label),
+      tags$span(
+        class = "tooltip-bttn typing-step-info",
+        `data-info-id` = info_id,
+        role = "button",
+        tabindex = "0",
+        `aria-label` = "More information",
+        onkeydown = paste(
+          "if(event.key==='Enter'||event.key===' '){",
+          "event.preventDefault();this.click();}"
+        ),
+        icon("circle-info")
+      )
+    ),
+    value = label,
+    icon = span(class = "typing-step-num", number),
+    ...
+  )
+}
+
+# Makes each step's info icon open its modal without also toggling the panel it
+# sits in.
+#
+# Bootstrap's collapse plugin listens for clicks on `document`, so a listener
+# on the icon itself is too late to head it off - by the time the event reaches
+# the icon in the bubble phase, the panel has already toggled. The one place
+# that runs *earlier* is the capture phase on `window`, which sits above
+# `document` in the capture path: stopping propagation there means the click
+# never reaches Bootstrap's listener at all.
+#
+# That also stops the click reaching the icon, so Shiny's own click binding
+# would never see it either - hence setting the input value directly here. The
+# counter mirrors what actionButton() reports, and `priority: 'event'` makes
+# every click fire observeEvent even if the value were to repeat.
+#
+# Keeping the icon in its natural place in the header (rather than repositioning
+# it out of the button) is what keeps it painted correctly across collapse and
+# re-expand.
+step_info_click_script <- tags$script(HTML(
+  "window.addEventListener('click', function(e) {",
+  "  var t = e.target.closest && e.target.closest('.typing-step-info');",
+  "  if (!t) return;",
+  "  e.stopPropagation();",
+  "  e.preventDefault();",
+  "  if (!window.Shiny || !window.Shiny.setInputValue) return;",
+  "  var n = (parseInt(t.dataset.clicks || '0', 10) || 0) + 1;",
+  "  t.dataset.clicks = n;",
+  "  window.Shiny.setInputValue(t.dataset.infoId, n, {priority: 'event'});",
+  "}, true);"
+))
+
 # Human-readable per-strain analysis duration: seconds -> "3.9s" or "1m 04s".
 format_elapsed <- function(secs) {
   if (is.na(secs)) {
@@ -142,124 +351,130 @@ ui <- function(id) {
     useShinyjs(),
     fillable = TRUE,
     sidebar = sidebar(
-      title = div(
-        class = "typing-sidebar-title",
-        div(class = "sidebar-title", "Add Isolates"),
-        tooltip(
-          icon("circle-info", class = "text-muted"),
-          paste(
-            "Select a single assembled genome (.fasta, .fa, .fna) or a folder",
-            "of assemblies to type against the loaded scheme."
-          ),
-          placement = "right"
-        )
-      ),
+      title = NULL,
       width = 320,
-      uiOutput(ns("scheme_info")),
-      shinyFilesButton(
-        ns("genome_file"),
-        "Select File",
-        title = "Choose a genome assembly",
-        icon = icon("file-lines"),
-        buttonType = "default",
-        multiple = FALSE,
-        root = path_home()
-      ),
-      shinyDirButton(
-        ns("genome_dir"),
-        "Select Folder",
-        title = "Choose a folder of assemblies",
-        icon = icon("folder-open"),
-        buttonType = "default",
-        root = path_home()
-      ),
+      # The pipeline, one panel per step, in the order a genome runs them.
+      # Genome input is step 1 - picking the assemblies is as much a required
+      # step as any analysis that follows, so it gets a number and a panel like
+      # the rest rather than sitting above the accordion as a control of its
+      # own. All panels start open: with `multiple = TRUE` they don't compete
+      # for space the way the results-table accordion's log/results/selection
+      # panels do, so there is no need to hide any of them by default.
       accordion(
+        class = "typing-steps",
         open = TRUE,
-        accordion_panel(
-          "Parameters",
-          icon = icon("sliders"),
-          numericInput(
-            ns("identity"),
-            tooltip(
-              span("Min. identity ", icon("circle-info", class = "text-muted")),
-              paste(
-                "Minimum sequence identity for BLAT to call a locus: the",
-                "fraction of identical bases between the assembly and the",
-                "reference allele (passed to BLAT as -minIdentity). Raise it for",
-                "stricter matches; lower it to recover more divergent alleles."
+        multiple = TRUE,
+        step_panel(
+          1,
+          "Genome input",
+          ns("info_genome"),
+          # File and folder do the same job - resolving to a list of
+          # assemblies - so they share one row rather than each claiming a
+          # full-width row of its own.
+          div(
+            class = "row g-2",
+            div(
+              class = "col-6",
+              shinyFilesButton(
+                ns("genome_file"),
+                "File",
+                title = "Choose a genome assembly",
+                icon = icon("file-lines"),
+                buttonType = "default",
+                multiple = FALSE,
+                class = "w-100",
+                root = path_home()
               )
             ),
-            value = 0.95,
-            min = 0,
-            max = 1,
-            step = 0.01
-          ),
-          numericInput(
-            ns("coverage"),
-            tooltip(
-              span("Min. coverage ", icon("circle-info", class = "text-muted")),
-              paste(
-                "Minimum fraction of a reference locus the alignment must span",
-                "to keep a hit (aligned length / locus length). Hits below this",
-                "are discarded; partial hits above it are aligned and gap-filled."
+            div(
+              class = "col-6",
+              shinyDirButton(
+                ns("genome_dir"),
+                "Folder",
+                title = "Choose a folder of assemblies",
+                icon = icon("folder-open"),
+                buttonType = "default",
+                class = "w-100",
+                root = path_home()
+              )
+            )
+          )
+        ),
+        step_panel(
+          2,
+          "cgMLST",
+          ns("info_cgmlst"),
+          # The scheme is what cgMLST is called against, so its size (the
+          # completeness metric's denominator) is shown here rather than as a
+          # standalone sidebar line with no obvious home.
+          uiOutput(ns("scheme_info")),
+          # Both thresholds are fractions in [0, 1], so they pair naturally in
+          # one row - and the panel stays a single line tall when open.
+          div(
+            class = "row g-2",
+            div(
+              class = "col-6",
+              numericInput(
+                ns("identity"),
+                "Min. identity",
+                value = 0.95,
+                min = 0,
+                max = 1,
+                step = 0.01,
+                width = "100%"
               )
             ),
-            value = 0.9,
-            min = 0,
-            max = 1,
-            step = 0.01
-          ),
+            div(
+              class = "col-6",
+              numericInput(
+                ns("coverage"),
+                "Min. coverage",
+                value = 0.9,
+                min = 0,
+                max = 1,
+                step = 0.01,
+                width = "100%"
+              )
+            )
+          )
+        ),
+        step_panel(
+          3,
+          "Classical MLST",
+          ns("info_mlst"),
           radioButtons(
             ns("cla_repo"),
-            tooltip(
-              span(
-                "Classical MLST source ",
-                icon("circle-info", class = "text-muted")
-              ),
-              paste(
-                "Online repository used to fetch the classical 7-gene MLST",
-                "scheme for this species (via claMLST import). The Sequence Type",
-                "(ST) is derived alongside cgMLST typing. If the selected",
-                "repository has no scheme for the species, the other one is tried",
-                "automatically; if neither has it, the ST is left blank."
-              )
-            ),
+            "Scheme source",
             choices = c("PubMLST" = "pubmlst", "Pasteur" = "pasteur"),
             selected = "pubmlst",
             inline = TRUE
-          ),
+          )
+        ),
+        step_panel(
+          4,
+          "AMR screening",
+          ns("info_amr"),
           checkboxInput(
             ns("run_amr"),
-            tooltip(
-              span(
-                "Screen for antimicrobial resistance ",
-                icon("circle-info", class = "text-muted")
-              ),
-              paste(
-                "Screen each newly typed genome for antimicrobial resistance",
-                "with abritamr / AMRFinderPlus, alongside cgMLST typing.",
-                "Detects acquired resistance genes, virulence factors and",
-                "stress/metal elements; resistance point mutations are added",
-                "when the scheme's species is supported. Results are stored in",
-                "the database (amr_results / amr_summary)."
-              )
-            ),
+            "Run screening",
             value = TRUE
           )
         )
       ),
+      step_info_click_script,
       disabled(actionButton(
         ns("start"),
-        "Start Typing",
+        "Start Analysis",
         icon = icon("play")
       )),
       disabled(actionButton(
         ns("terminate"),
         "Terminate",
         icon = icon("stop"),
-        class = "btn-danger"
-      )),
-      uiOutput(ns("status_badge"))
+        # pt-no-lock: the one control that must stay clickable while a long run
+        # is in progress, so it opts out of the global input shield (busy-shield.js).
+        class = "btn-danger pt-no-lock"
+      ))
     ),
     div(
       progressBar(
@@ -271,7 +486,7 @@ ui <- function(id) {
         striped = TRUE,
         title = "Typing progress"
       ),
-      textOutput(ns("current_strain"))
+      textOutput(ns("status_line"))
     ),
     as_fill_item(
       accordion(
@@ -290,12 +505,12 @@ ui <- function(id) {
           DTOutput(ns("selection_table"))
         ),
         accordion_panel(
-          "Typing Log",
+          "Process Log",
           icon = icon("terminal"),
           verbatimTextOutput(ns("log"))
         ),
         accordion_panel(
-          "Typing Results",
+          "Results",
           icon = icon("table"),
           DTOutput(ns("results_table"))
         )
@@ -332,6 +547,12 @@ server <- function(
       amr_out = NULL,
       status = "idle",
       results = NULL,
+      # Whether the current run includes classical MLST / AMR screening. Kept
+      # separate from cla_db / amr_out (which are cleared on finalize) so the
+      # results table can keep telling those columns apart from "not run" once
+      # the run is over.
+      cla_enabled = FALSE,
+      amr_enabled = FALSE,
       terminated = FALSE,
       refresh = 0L
     )
@@ -394,6 +615,8 @@ server <- function(
         Typing$log_file <- NULL
         Typing$cla_db <- NULL
         Typing$amr_out <- NULL
+        Typing$cla_enabled <- FALSE
+        Typing$amr_enabled <- FALSE
         Typing$status <- "idle"
         Typing$results <- NULL
         Typing$terminated <- FALSE
@@ -512,6 +735,117 @@ server <- function(
       )
     })
 
+    # In-depth explanation for one sidebar step, opened by its info button
+    # (see step_panel). A modal rather than a tooltip since the explanation is
+    # longer than a hover bubble comfortably holds; `.info-modal` (main.scss) is
+    # the same "large tooltip" style already used elsewhere in the app (e.g.
+    # visualization_plot.R's missing-values help).
+    step_info_modal <- function(title, ...) {
+      showModal(div(
+        class = "info-modal",
+        modalDialog(
+          title = title,
+          tags$dl(...),
+          easyClose = TRUE,
+          footer = modalButton("Close")
+        )
+      ))
+    }
+
+    observeEvent(input$info_genome, {
+      step_info_modal(
+        "Genome input",
+        tags$dt("Supported formats"),
+        tags$dd("Assembled genomes as .fasta, .fa or .fna files."),
+        tags$dt("Single file or folder"),
+        tags$dd(
+          "Pick one assembly, or a folder - scanned non-recursively - of",
+          "several."
+        ),
+        tags$dt("Duplicate detection"),
+        tags$dd(
+          "Genomes already in the database - matched by strain name, the",
+          "file name without extension - are detected automatically and",
+          "skipped."
+        ),
+        tags$dt("Pipeline"),
+        tags$dd("Every selected genome then runs the three steps below, in order.")
+      )
+    })
+
+    observeEvent(input$info_cgmlst, {
+      step_info_modal(
+        "cgMLST",
+        tags$dt("Allele calling"),
+        tags$dd(
+          "Each genome is BLAT-searched against the loaded scheme and added",
+          "via wgMLST add."
+        ),
+        tags$dt("Min. identity"),
+        tags$dd(
+          "Minimum sequence identity for BLAT to call a locus: the fraction",
+          "of identical bases between the assembly and the reference allele",
+          "(-minIdentity). Raise it for stricter matches; lower it to recover",
+          "more divergent alleles."
+        ),
+        tags$dt("Min. coverage"),
+        tags$dd(
+          "Minimum fraction of a reference locus the alignment must span to",
+          "keep a hit (aligned length / locus length). Hits below this are",
+          "discarded; partial hits above it are aligned and gap-filled."
+        ),
+        tags$dt("Result columns"),
+        tags$dd(
+          "Drives the cgMLST, Loci found, Alleles added, Partial, Filled,",
+          "Removed and Completeness columns in Typing Results."
+        )
+      )
+    })
+
+    observeEvent(input$info_mlst, {
+      step_info_modal(
+        "Classical MLST",
+        tags$dt("Sequence Type"),
+        tags$dd(
+          "Derived per genome right after allele calling (claMLST search),",
+          "using the same identity / coverage thresholds as cgMLST."
+        ),
+        tags$dt("Scheme source"),
+        tags$dd(
+          "Repository the 7-gene scheme is fetched from. If the chosen",
+          "repository has no scheme for the species, the other is tried",
+          "automatically; if neither has it, the ST is left blank."
+        ),
+        tags$dt("When it's skipped"),
+        tags$dd("No classical MLST is attempted when the scheme has no resolvable species.")
+      )
+    })
+
+    observeEvent(input$info_amr, {
+      step_info_modal(
+        "AMR screening",
+        tags$dt("Screening"),
+        tags$dd(
+          "Runs last, after cgMLST and classical MLST, with abritamr /",
+          "AMRFinderPlus."
+        ),
+        tags$dt("Detected elements"),
+        tags$dd(
+          "Acquired resistance genes, virulence factors and stress/metal",
+          "elements. Resistance point mutations are added when the scheme's",
+          "species is supported."
+        ),
+        tags$dt("Reference database"),
+        tags$dd(
+          "Matches are looked up against NCBI's curated AMRFinderPlus",
+          "reference gene database, so hits come back as standardised gene",
+          "names rather than raw sequence matches."
+        ),
+        tags$dt("Storage"),
+        tags$dd("Results are stored in the database (amr_results / amr_summary).")
+      )
+    })
+
     # Selected Genomes accordion header summary: counts of files that would
     # actually be queued for typing vs. ones already in the database (mirrors
     # the "New" / "Already present" split shown per-row in the selection table).
@@ -555,6 +889,7 @@ server <- function(
         disable("identity")
         disable("coverage")
         disable("cla_repo")
+        disable("run_amr")
       } else {
         enable("genome_file")
         removeClass("genome_file", "custom-disable")
@@ -563,6 +898,7 @@ server <- function(
         enable("identity")
         enable("coverage")
         enable("cla_repo")
+        enable("run_amr")
       }
     })
 
@@ -660,58 +996,141 @@ server <- function(
       if (!nzchar(text)) "No typing run yet." else text
     })
 
-    # Current strain / phase line under the progress bar
-    output$current_strain <- renderText({
+    # Status line under the progress bar. Reports the module's whole run
+    # status - idle, failed-to-start, terminated, complete, or (while running)
+    # the live strain / phase - so this one line replaces the sidebar's old
+    # standalone status badge; it always renders some text so the line never
+    # goes blank and collapses the layout under it.
+    #
+    # Genomes are processed strictly one at a time, and within a genome the
+    # three analyses run in sequence, so exactly one (strain, phase) pair is
+    # live at any moment. Reporting only `status == "Running"` used to leave the
+    # line blank for most of a genome's run time: that status covers allele
+    # calling alone, and the strain flips to its final cgMLST outcome as soon as
+    # the AMR sentinel appears - so the line vanished for the whole classical
+    # MLST + AMR screening stretch, which is by far the longest part.
+    #
+    # The phases are read back off the same per-strain log state the results
+    # table uses, most-advanced first:
+    #   AMR screening   - the strain's "AMR: screening" sentinel is out
+    #   Classical MLST  - allele calling reached its DONE line (`cg_done`) but
+    #                     the section has not been closed out yet
+    #   Allele calling  - the section is open and cgMLST is still working
+    output$status_line <- renderText({
       results <- Typing$results
-      if (is.null(results)) {
-        return("")
+      if (identical(Typing$status, "terminated")) {
+        return("Run terminated.")
       }
-      running <- results$strain[results$status == "Running"]
-      if (length(running)) {
-        paste("Typing:", running[1])
-      } else if (identical(Typing$status, "done")) {
-        "All genomes processed."
-      } else {
-        ""
+      # The process failed before any genome could start, so there is no
+      # per-strain phase to read back - report the run-level outcome directly.
+      if (identical(Typing$status, "failed")) {
+        return("Typing failed to start.")
       }
-    })
+      if (is.null(results) || nrow(results) == 0) {
+        return("Idle")
+      }
 
-    # Status badge in the sidebar
-    output$status_badge <- renderUI({
-      spec <- switch(
-        Typing$status,
-        idle = c("secondary", "Idle"),
-        running = c("info", "Running ..."),
-        done = c("success", "Complete"),
-        terminated = c("warning", "Terminated"),
-        failed = c("danger", "Failed"),
-        c("secondary", Typing$status)
+      screening <- which(
+        !is.na(results$amr_status) & results$amr_status == "screening"
       )
-      div(
-        class = "mt-2",
-        span(class = paste0("badge text-bg-", spec[1]), spec[2])
-      )
+      running <- which(results$status == "Running")
+
+      if (length(screening)) {
+        return(paste("AMR screening:", results$strain[screening[1]]))
+      }
+      if (length(running)) {
+        i <- running[1]
+        phase <- if (isTRUE(Typing$cla_enabled) && isTRUE(results$cg_done[i])) {
+          "Classical MLST"
+        } else {
+          "Allele calling"
+        }
+        return(paste0(phase, ": ", results$strain[i]))
+      }
+      if (identical(Typing$status, "done")) {
+        return("All genomes processed.")
+      }
+      # Nothing is running (idle): no phase to report.
+      if (!identical(Typing$status, "running")) {
+        return("Idle")
+      }
+      # No phase is live. Either the script has not reached the first genome yet
+      # - it is still building this run's classical MLST reference database,
+      # which downloads the scheme and can take a while - or it is between two
+      # genomes.
+      if (all(results$status == "Pending")) {
+        "Preparing run ..."
+      } else {
+        "Starting next genome ..."
+      }
     })
 
     # Builds the display data frame for the results table. Kept as a local
     # function so both the initial renderDT and the live replaceData observer
     # produce identical column structure.
-    build_results_df <- function(results, total) {
+    build_results_df <- function(
+      results,
+      total,
+      cla_on = FALSE,
+      amr_on = FALSE
+    ) {
+      dash <- function(x) ifelse(is.na(x), "—", as.character(x))
+
+      cg_done <- if ("cg_done" %in% names(results)) {
+        results$cg_done
+      } else {
+        rep(FALSE, nrow(results))
+      }
+
+      # The three analyses run strictly in sequence within a strain's section of
+      # the log (allele calling, then classical MLST, then AMR screening), so a
+      # step that has produced no result yet is queued behind the ones before it
+      # rather than finished: TRUE while this strain is still working.
+      in_flight <- results$status %in% c("Pending", "Running")
+
+      # Allele calling is over the moment pymlst prints its DONE line, but a
+      # strain's log section is only closed out once the steps behind it report
+      # in (see parse_typing_log), so `status` still reads "Running" all through
+      # the classical MLST search and the AMR screen. Report the cgMLST outcome
+      # as soon as it is actually known: otherwise cgMLST and MLST both sit at
+      # "Running", which reads as two steps running at once. Only a successful
+      # run reaches DONE, so this can never pre-empt a failure verdict.
+      cg_status <- ifelse(
+        results$status == "Running" & cg_done,
+        "Added",
+        results$status
+      )
+
+      # Completeness (loci called / scheme size) is a metric of allele calling
+      # alone, so it is filled once allele calling is done - in step with the
+      # cgMLST outcome and the other allele-calling columns - rather than being
+      # held back until the whole strain, AMR screen included, has finished.
       completeness <- if (!is.na(total) && total > 0) {
         round(results$found / total * 100, 1)
       } else {
         rep(NA_real_, nrow(results))
       }
-      completeness[results$status != "Added"] <- NA_real_
+      completeness[cg_status != "Added"] <- NA_real_
 
-      dash <- function(x) ifelse(is.na(x), "—", as.character(x))
+      # `claMLST search` is a single call that prints nothing until it returns
+      # the ST, so classical MLST has no progress output to key off. Its state is
+      # read off the step it follows instead: queued while allele calling is
+      # still going, running once allele calling hit its DONE line and no ST has
+      # come back yet. Empty once the step is no longer waiting on anything.
+      cla_state <- if (cla_on) {
+        ifelse(!in_flight, "", ifelse(cg_done, "Running", "Pending"))
+      } else {
+        rep("", nrow(results))
+      }
 
       # Classical MLST cell: the registered ST number when known, otherwise a
       # badge flagging a novel profile (complete but unregistered) or a partial
-      # one (some loci uncalled). "—" while pending / when no classical result.
-      st_cell <- function(status, st) {
+      # one (some loci uncalled). While the strain is still running it shows the
+      # step's own state; "—" when no classical scheme was used or the search
+      # returned nothing usable.
+      st_cell <- function(status, st, state) {
         if (is.na(status)) {
-          return("—")
+          return(if (nzchar(state)) status_badge(state) else "—")
         }
         switch(
           status,
@@ -724,7 +1143,9 @@ server <- function(
       st_column <- if ("cla_status" %in% names(results)) {
         vapply(
           seq_len(nrow(results)),
-          function(i) st_cell(results$cla_status[i], results$st[i]),
+          function(i) {
+            st_cell(results$cla_status[i], results$st[i], cla_state[i])
+          },
           character(1)
         )
       } else {
@@ -732,11 +1153,12 @@ server <- function(
       }
 
       # AMR screening cell: a hit count once done, a live "screening …" badge
-      # while abritamr runs, a failure flag, or "—" when AMR was not run. The
-      # count spans all detected elements (AMR + virulence + stress/metal).
-      amr_cell <- function(status, n) {
+      # while abritamr runs, a failure flag, the queue state while the strain's
+      # earlier steps are still running, or "—" when AMR was not run. The count
+      # spans all detected elements (AMR + virulence + stress/metal).
+      amr_cell <- function(status, n, pending) {
         if (is.null(status) || is.na(status)) {
-          return("—")
+          return(if (pending) status_badge("Pending") else "—")
         }
         switch(
           status,
@@ -757,24 +1179,42 @@ server <- function(
       amr_column <- if ("amr_status" %in% names(results)) {
         vapply(
           seq_len(nrow(results)),
-          function(i) amr_cell(results$amr_status[i], results$amr_elements[i]),
+          function(i) {
+            amr_cell(
+              results$amr_status[i],
+              results$amr_elements[i],
+              amr_on && in_flight[i]
+            )
+          },
           character(1)
         )
       } else {
         rep("—", nrow(results))
       }
 
+      # Strain names are assembly file names and can be long enough to crowd out
+      # every other column, so they are clipped to a fixed width (see the
+      # .pt-strain rule in main.scss) with the full name on hover.
+      strain_names <- htmlEscape(results$strain, attribute = TRUE)
+      strain_column <- sprintf(
+        '<span class="pt-strain" title="%s">%s</span>',
+        strain_names,
+        strain_names
+      )
+
+      # Column names and their order must stay in step with `results_columns`,
+      # which supplies the rendered header (labels, tooltips and width classes).
       data.frame(
-        Strain = results$strain,
-        Status = vapply(results$status, status_badge, character(1)),
-        ST = st_column,
-        AMR = amr_column,
+        Strain = strain_column,
+        cgMLST = vapply(cg_status, status_badge, character(1)),
         `Loci found` = dash(results$found),
         `Alleles added` = dash(results$added),
         Partial = dash(results$partial),
         Filled = dash(results$filled),
         Removed = dash(results$removed),
         Completeness = vapply(completeness, completeness_badge, character(1)),
+        MLST = st_column,
+        AMR = amr_column,
         Finished = dash(results$finished),
         Elapsed = vapply(results$elapsed, format_elapsed, character(1)),
         Detail = results$detail,
@@ -812,14 +1252,21 @@ server <- function(
       }
 
       datatable(
-        isolate(build_results_df(Typing$results, scheme_total())),
+        isolate(build_results_df(
+          Typing$results,
+          scheme_total(),
+          Typing$cla_enabled,
+          Typing$amr_enabled
+        )),
+        container = results_header,
         rownames = FALSE,
         escape = FALSE,
         selection = "none",
         options = list(
           dom = "t",
           paging = FALSE,
-          ordering = FALSE
+          ordering = FALSE,
+          initComplete = header_tooltips
         )
       )
     })
@@ -833,7 +1280,12 @@ server <- function(
       req(!is.null(results), nrow(results) > 0)
       replaceData(
         results_proxy,
-        build_results_df(results, scheme_total()),
+        build_results_df(
+          results,
+          scheme_total(),
+          Typing$cla_enabled,
+          Typing$amr_enabled
+        ),
         resetPaging = FALSE,
         rownames = FALSE
       )
@@ -847,7 +1299,7 @@ server <- function(
     outputOptions(output, "selection_table", suspendWhenHidden = FALSE)
     outputOptions(output, "results_table", suspendWhenHidden = FALSE)
     outputOptions(output, "log", suspendWhenHidden = FALSE)
-    outputOptions(output, "status_badge", suspendWhenHidden = FALSE)
+    outputOptions(output, "status_line", suspendWhenHidden = FALSE)
 
     # Start typing
     observeEvent(input$start, {
@@ -903,6 +1355,7 @@ server <- function(
         NULL
       }
       live_cla_db <<- Typing$cla_db
+      Typing$cla_enabled <- !is.null(Typing$cla_db)
 
       # AMR screening rides along too (opt-out via the sidebar checkbox). Each
       # genome is screened into a per-strain subdir of this run's temp AMR dir,
@@ -919,6 +1372,7 @@ server <- function(
         NULL
       }
       live_amr_out <<- Typing$amr_out
+      Typing$amr_enabled <- run_amr
 
       proc <- tryCatch(
         start_typing(
@@ -1036,6 +1490,18 @@ server <- function(
         "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
         ns("progress")
       ))
+      # A killed run stops short of its queue, so the bar is left part-filled.
+      # Recolour it to say so - a half-full primary bar otherwise reads as a run
+      # that is still going.
+      if (isTRUE(Typing$terminated)) {
+        updateProgressBar(
+          session,
+          "progress",
+          value = done,
+          total = max(1L, length(Typing$queued_strains)),
+          status = "warning"
+        )
+      }
       Typing$refresh <- Typing$refresh + 1L
 
       # Persist any classical MLST STs derived during this run into the mother
@@ -1122,6 +1588,31 @@ server <- function(
       # Signal other modules that the DB has new data.
       if (added > 0L) {
         db_updated(db_updated() + 1L)
+      }
+
+      # A killed run freezes its table mid-flight: the genome that was being
+      # worked on, and everything still queued behind it, will never produce a
+      # result. Retire those rows to "Stopped" so no badge keeps claiming work is
+      # in progress - the tables, their per-step columns (which key off Pending /
+      # Running) and the selection list all follow from this one rewrite. It is
+      # applied last, so the persistence above still sees the run as it happened.
+      if (isTRUE(Typing$terminated)) {
+        # A genome killed during its AMR screen has a closed cgMLST section, so
+        # it is not "Running" - the live screening marker is what makes it
+        # unfinished.
+        screening <- !is.na(results$amr_status) &
+          results$amr_status == "screening"
+        frozen <- results$status %in% c("Pending", "Running") | screening
+        # A genome killed after allele calling reached its DONE line was still
+        # added to the database, so it keeps that verdict; only the steps behind
+        # it are lost. Everything else never got a cgMLST result at all.
+        results$status[frozen & results$cg_done] <- "Added"
+        results$status[frozen & !results$cg_done] <- "Stopped"
+        # The killed screen produced nothing, so drop its marker rather than let
+        # the AMR column keep advertising work in progress.
+        results$amr_status[screening] <- NA_character_
+        results$detail[frozen] <- "Run terminated."
+        Typing$results <- results
       }
 
       showNotification(
