@@ -1,7 +1,6 @@
 <img src="app/static/images/PhyloTrace_bw.png#gh-light-mode-only" width="90%"/>
 <img src="app/static/images/PhyloTrace.png#gh-dark-mode-only" width="90%"/>
 
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.10996423-00e896?labelColor=gray&color=609ea5&logoColor=black)](https://doi.org/10.5281/zenodo.10996423)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-659DA3.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Work in Progress](https://img.shields.io/badge/status-work%20in%20progress-orange)
 

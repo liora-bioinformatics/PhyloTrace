@@ -101,41 +101,6 @@ cp "$SCRIPT_DIR/app/static/images/PhyloTrace_flat_256.png" "$HOME/.local/share/i
 cp "$SCRIPT_DIR/app/static/images/PhyloTrace_flat_512.png" "$HOME/.local/share/icons/hicolor/512x512/apps/PhyloTrace_flat.png"
 # Use 512x512 for scalable/apps
 cp "$SCRIPT_DIR/app/static/images/PhyloTrace_flat_512.png" "$HOME/.local/share/icons/hicolor/scalable/apps/PhyloTrace_flat.png"
-# Update index.theme
-cat > "$HOME/.local/share/icons/hicolor/index.theme" << EOF
-[Icon Theme]
-Name=Hicolor
-Comment=Fallback icon theme
-Hidden=false
-Directories=scalable/apps,48x48/apps,64x64/apps,256x256/apps,512x512/apps
-
-[scalable/apps]
-Size=128
-Type=Scalable
-MinSize=1
-MaxSize=512
-Context=Applications
-
-[48x48/apps]
-Size=48
-Type=Fixed
-Context=Applications
-
-[64x64/apps]
-Size=64
-Type=Fixed
-Context=Applications
-
-[256x256/apps]
-Size=256
-Type=Fixed
-Context=Applications
-
-[512x512/apps]
-Size=512
-Type=Fixed
-Context=Applications
-EOF
 # Update icon cache
 gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
 chmod 700 "$SCRIPT_DIR/run_phylotrace.sh"
