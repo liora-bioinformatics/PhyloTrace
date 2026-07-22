@@ -55,6 +55,7 @@ box::use(
   shinyWidgets[radioGroupButtons],
 )
 box::use(
+  app / logic / custom_fields[append_custom],
   app /
     logic /
     database_functions[append_amr, append_classical_mlst, make_metadata_table],
@@ -284,15 +285,20 @@ server <- function(
     # on a map it was never geocoded for.
     viz_metadata <- reactive({
       req(db_path())
-      # Surface the classical-MLST columns (ST + per-locus alleles) and the
+      # Surface the classical-MLST columns (ST + per-locus alleles), the
       # AMR-screening columns (the resistance profile plus one per drug class)
-      # as ordinary metadata so every engine can label, colour and map by them.
-      # Display only — neither appender writes anything back to the database.
-      # Each records what it added in its own attribute ("mlst_cols" /
-      # "amr_cols"), which grouped_field_choices() turns into the optgroups the
-      # engines' field pickers show.
-      append_amr(
-        append_classical_mlst(make_metadata_table(db_path()), db_path()),
+      # and the user-defined custom variables as ordinary metadata so every
+      # engine can label, colour and map by them. Display only — no appender
+      # writes anything back to the database. Each records what it added in its
+      # own attribute ("mlst_cols" / "amr_cols" / "custom_cols"), which
+      # grouped_field_choices() turns into the optgroups the engines' field
+      # pickers show; engines that pass no explicit sets get the same grouping
+      # from the columns' name prefixes.
+      append_custom(
+        append_amr(
+          append_classical_mlst(make_metadata_table(db_path()), db_path()),
+          db_path()
+        ),
         db_path()
       )
     })

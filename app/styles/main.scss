@@ -1593,6 +1593,9 @@ table.dataTable td {
     .selectize-input,
     .bootstrap-select,
     .bootstrap-select>.dropdown-toggle,
+    .vscomp-ele,
+    .vscomp-wrapper,
+    .vscomp-toggle-button,
     select.shiny-input-select,
     .form-control,
     .form-select,
@@ -3358,4 +3361,167 @@ table.dataTable thead>tr>th.sorting {
 // Geocoding feedback shown directly under the "Map mode" picker.
 .map-geocode-status {
     margin-top: 0.5rem;
+}
+
+// virtualSelectInput (Browse Entries' column picker) ---------------------------
+//
+// virtual-select is the only multi-select in the stack that offers a checkbox on
+// each optgroup header, which is what makes "(de)select this whole category"
+// possible. Its stylesheet is injected by its own JS bundle and hard-codes a
+// light palette (#fff boxes, #333 text, a purple tick), so every colour is
+// re-pointed at the Bootstrap variables here — that way the widget tracks the
+// theme in both light and dark mode instead of staying white in one of them.
+
+.vscomp-ele {
+    // Its own default caps the control at 250px; in the toolbar the surrounding
+    // .control-group sizes it instead.
+    max-width: none;
+    min-width: 260px;
+}
+
+.vscomp-wrapper {
+    color: var(--bs-body-color);
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.vscomp-toggle-button {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    color: var(--bs-body-color);
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button {
+    border-color: var(--bs-primary);
+}
+
+// The chevron and the clear "x" are drawn with borders/backgrounds, not glyphs.
+.vscomp-arrow::after {
+    border-bottom-color: var(--bs-secondary-color);
+    border-right-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-icon::before,
+.vscomp-clear-icon::after {
+    background-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-button:hover {
+    background: var(--bs-tertiary-bg);
+}
+
+.vscomp-dropbox {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.175);
+}
+
+.vscomp-option.selected {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.vscomp-option.focused,
+.vscomp-option:hover {
+    background-color: var(--bs-secondary-bg);
+}
+
+// The optgroup header. It carries the group's own checkbox (the whole point of
+// this widget here), so unlike virtual-select's default it must not read as
+// disabled — only as quieter than its options.
+.vscomp-option.group-title {
+    height: 32px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+
+    .vscomp-option-text {
+        opacity: 1;
+    }
+}
+
+.vscomp-search-container {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.vscomp-search-input,
+.vscomp-search-input::placeholder {
+    color: var(--bs-body-color);
+    font-size: inherit;
+}
+
+.vscomp-wrapper .checkbox-icon::after {
+    border-color: var(--bs-secondary-color);
+}
+
+.vscomp-wrapper .checkbox-icon.checked::after {
+    border-color: var(--bs-primary);
+    border-left-color: transparent;
+    border-top-color: transparent;
+}
+
+.vscomp-no-options,
+.vscomp-no-search-results {
+    color: var(--bs-secondary-color);
+}
+
+
+// Custom Variables panel (see database_custom.R) ------------------------------
+//
+// A fixed-height overview of what is defined over an isolate x variable table
+// that fills the rest. The values table reuses .db-page_body, so it inherits the
+// Browse Entries fill/scroll rules verbatim.
+
+.custom-fields-layout {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.custom-fields-overview {
+    flex: 0 0 auto;
+    max-height: 38%;
+    overflow-y: auto;
+    padding: 0.5rem 0.5rem 0;
+
+    .card {
+        margin-bottom: 0;
+    }
+}
+
+// Browse Entries excludes its 9th column (the uneditable `organism`) from the
+// editable-cell cursor. Here every column but the isolate is editable.
+.custom-fields-values table.dataTable tbody td:not(:first-child) {
+    cursor: cell;
+}
+
+.custom-fields-hint {
+    max-width: 42rem;
+    margin: 2rem auto;
+
+    h5 {
+        margin-bottom: 1rem;
+    }
+
+    p {
+        color: var(--bs-secondary-color);
+    }
+}
+
+.custom-fields-hint_examples {
+    list-style: none;
+    padding-left: 0;
+    margin-bottom: 1.5rem;
+
+    li {
+        padding: 0.15rem 0;
+    }
+
+    code {
+        font-weight: 600;
+    }
 }

@@ -53,6 +53,13 @@ SCHEME_TABLES <- c(
 CLASSICAL_TABLES <- c("classical_mlst")
 AMR_TABLES <- c("amr_results", "amr_summary")
 
+# The user-defined custom variables (see app/logic/custom_fields.R). Unlike the
+# result tables these are carried per *variable*, not all-or-nothing: a custom
+# variable can hold data a lab does not want to share, exactly like a metadata
+# column, so the panel offers the same per-field choice.
+#' @export
+CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
+
 # Resolve the requested result tables that actually exist in the source.
 .result_tables <- function(src_tables, include_classical, include_amr) {
   wanted <- c(
@@ -87,6 +94,49 @@ available_result_tables <- function(db_path) {
   out
 }
 
+#' The custom variables a database defines, by name, in display order.
+#'
+#' Read-only and tolerant of a database that predates the feature (returns
+#' `character(0)`), so the export panel can offer them without depending on the
+#' store module's write paths.
+#' @export
+exportable_custom_fields <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(character(0))
+  }
+  con <- tryCatch(connect_ro(db_path), error = function(e) NULL)
+  if (is.null(con)) {
+    return(character(0))
+  }
+  on.exit(dbDisconnect(con))
+
+  if (!all(CUSTOM_TABLES %in% dbListTables(con))) {
+    return(character(0))
+  }
+  dbGetQuery(
+    con,
+    "SELECT name FROM phylotrace_custom_fields ORDER BY COALESCE(position, id)"
+  )$name
+}
+
+# The custom variables to carry: those the caller selected that the source
+# actually defines. Empty when the source has no custom tables at all.
+.custom_out_fields <- function(con, src_tables, custom_fields) {
+  if (!length(custom_fields) || !all(CUSTOM_TABLES %in% src_tables)) {
+    return(character(0))
+  }
+  have <- dbGetQuery(
+    con,
+    "SELECT name FROM phylotrace_custom_fields ORDER BY COALESCE(position, id)"
+  )$name
+  intersect(have, custom_fields)
+}
+
 # Always present in the output, never user-selectable.
 #' @export
 METADATA_FIXED_COLS <- c("isolate", "organism")
@@ -119,7 +169,8 @@ export_preview <- function(
   src_path,
   isolates,
   metadata_cols = character(0),
-  include_metadata = TRUE
+  include_metadata = TRUE,
+  custom_fields = character(0)
 ) {
   con <- connect_ro(src_path)
   on.exit(dbDisconnect(con), add = TRUE)
@@ -133,6 +184,7 @@ export_preview <- function(
       n_alleles = 0L,
       n_calls = 0L,
       columns = character(0),
+      custom_fields = character(0),
       est_bytes = 0
     ))
   }
@@ -158,7 +210,8 @@ export_preview <- function(
       .metadata_out_cols(con, metadata_cols)
     } else {
       character(0)
-    }
+    },
+    custom_fields = .custom_out_fields(con, dbListTables(con), custom_fields)
   )
 }
 
@@ -205,6 +258,7 @@ export_database <- function(
   include_metadata = TRUE,
   include_classical = FALSE,
   include_amr = FALSE,
+  custom_fields = character(0),
   progress = NULL
 ) {
   progress <- progress %||% .noop_progress
@@ -237,6 +291,12 @@ export_database <- function(
   # Isolate-keyed result tables to carry (only those the source actually has).
   result_tables <- .result_tables(src_tables, include_classical, include_amr)
 
+  # Custom variables to carry; the two tables travel only when at least one
+  # variable was selected, so an export that withholds them all looks exactly
+  # like one from a database that never had any.
+  out_custom <- .custom_out_fields(src, src_tables, custom_fields)
+  custom_tables <- if (length(out_custom)) CUSTOM_TABLES else character(0)
+
   part <- paste0(dest_path, ".part")
   if (file.exists(part)) {
     unlink(part)
@@ -263,7 +323,8 @@ export_database <- function(
     "mlst",
     "sequences",
     intersect("hashes", src_tables),
-    result_tables
+    result_tables,
+    custom_tables
   )
 
   table_ddl <- .source_ddl(src, "table", copy_tables)
@@ -368,6 +429,30 @@ export_database <- function(
         }
       }
 
+      # Custom variables: the selected definitions, then the values those
+      # definitions hold for the selected isolates. Definition ids carry over
+      # verbatim (same argument as the result tables: one source, fresh output),
+      # so the values' field_id keeps pointing at the right variable.
+      if (length(out_custom)) {
+        progress(0.87, "Copying custom variables …")
+        dbExecute(
+          con,
+          sprintf(
+            "INSERT INTO phylotrace_custom_fields
+               SELECT * FROM src.phylotrace_custom_fields WHERE name IN (%s)",
+            paste(rep("?", length(out_custom)), collapse = ", ")
+          ),
+          params = as.list(out_custom)
+        )
+        dbExecute(
+          con,
+          "INSERT INTO phylotrace_custom_values
+             SELECT * FROM src.phylotrace_custom_values
+            WHERE souche IN (SELECT souche FROM sel)
+              AND field_id IN (SELECT id FROM phylotrace_custom_fields)"
+        )
+      }
+
       dbExecute(con, "DROP TABLE sel")
       dbCommit(con)
     },
@@ -412,6 +497,7 @@ export_database <- function(
     n_alleles = as.integer(result$alleles),
     n_calls = as.integer(result$calls),
     metadata_cols = meta_cols,
+    custom_fields = out_custom,
     bytes = file.size(dest_path)
   )
 }

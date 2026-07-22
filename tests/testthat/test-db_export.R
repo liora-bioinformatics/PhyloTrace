@@ -11,7 +11,9 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
-  app / logic / db_export[export_preview, export_database],
+  app /
+    logic /
+    db_export[export_preview, export_database, exportable_custom_fields],
   app / logic / db_compat[check_import_compatibility],
 )
 

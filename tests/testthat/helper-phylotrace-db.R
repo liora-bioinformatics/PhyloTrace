@@ -267,6 +267,69 @@ seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
   invisible(path)
 }
 
+# Define custom variables and seed their values, as the Custom Variables panel
+# would (app/logic/custom_fields.R). `fields` is a named list, one entry per
+# variable: `type` plus an optional `values` vector named by souche. The DDL is
+# written out here rather than imported so a fixture keeps documenting the shape
+# the app expects, exactly like MLST_DDL above.
+seed_custom <- function(path, fields) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS phylotrace_custom_fields (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name TEXT NOT NULL UNIQUE, type TEXT NOT NULL, description TEXT,
+       levels TEXT, position INTEGER, created TEXT NOT NULL,
+       modified TEXT NOT NULL)"
+  )
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS phylotrace_custom_values (
+       field_id INTEGER NOT NULL, souche TEXT NOT NULL, value TEXT,
+       PRIMARY KEY (field_id, souche))"
+  )
+
+  for (nm in names(fields)) {
+    spec <- fields[[nm]]
+    DBI::dbExecute(
+      con,
+      "INSERT INTO phylotrace_custom_fields
+         (name, type, description, levels, position, created, modified)
+       VALUES (?, ?, ?, ?, ?, ?, ?)",
+      list(
+        nm,
+        spec$type,
+        spec$description %||% NA_character_,
+        spec$levels %||% NA_character_,
+        match(nm, names(fields)),
+        "2026-01-01 00:00:00",
+        "2026-01-01 00:00:00"
+      )
+    )
+    id <- DBI::dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]]
+
+    values <- spec$values
+    if (length(values)) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO phylotrace_custom_values (field_id, souche, value)
+         VALUES (?, ?, ?)",
+        list(
+          rep(as.integer(id), length(values)),
+          names(values),
+          unname(values)
+        )
+      )
+    }
+  }
+
+  invisible(path)
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
 q1 <- function(path, sql, params = NULL) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)

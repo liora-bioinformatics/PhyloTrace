@@ -25,7 +25,7 @@ box::use(
   ],
   bslib[as_fill_carrier],
   shinyjs[disabled, disable, enable, addClass, removeClass],
-  shinyWidgets[pickerInput, pickerOptions],
+  shinyWidgets[pickerInput, pickerOptions, virtualSelectInput],
   waiter[Waiter, spin_flower, useWaiter],
   DT[
     DTOutput,
@@ -40,6 +40,7 @@ box::use(
 )
 
 box::use(
+  app / logic / custom_fields[append_custom],
   app /
     logic /
     database_functions[
@@ -142,7 +143,8 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  db_updated = shiny::reactiveVal(0L)
+  db_updated = shiny::reactiveVal(0L),
+  custom_updated = shiny::reactiveVal(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -188,9 +190,18 @@ server <- function(
       appended_amr <- attr(df, "amr_cols", exact = TRUE)
 
       df[is.na(df)] <- ""
+
+      # The user-defined custom variables, also display only, edited in the
+      # Custom Variables panel. Appended *after* the NA replacement above:
+      # assigning "" into a numeric column would coerce it to character and cost
+      # a numeric variable its numeric sort order.
+      df <- append_custom(df, path)
+      appended_custom <- attr(df, "custom_cols", exact = TRUE)
+
       # Re-set last so they survive the NA replacement above.
       attr(df, "mlst_cols") <- appended_mlst
       attr(df, "amr_cols") <- appended_amr
+      attr(df, "custom_cols") <- appended_custom
       df
     })
 
@@ -218,6 +229,18 @@ server <- function(
       if (is.null(cols)) character(0) else cols
     })
 
+    # Names of the appended custom-variable columns (empty when the database has
+    # none defined). Read-only here - values are edited in the Custom Variables
+    # panel, which is the single write path into phylotrace_custom_values.
+    custom_cols <- reactive({
+      df <- metadata_base()
+      if (is.null(df)) {
+        return(character(0))
+      }
+      cols <- attr(df, "custom_cols", exact = TRUE)
+      if (is.null(cols)) character(0) else cols
+    })
+
     observeEvent(metadata_base(), {
       State$data <- metadata_base()
       State$pending <- FALSE
@@ -235,33 +258,41 @@ server <- function(
       cols <- optional_cols()
       mlst <- mlst_cols()
       amr <- amr_cols()
+      custom <- custom_cols()
 
-      # Group the derived MLST and AMR columns under their own headings so the
-      # user can pick them out as categories. Without any derived columns the
-      # picker stays flat, exactly as before.
-      choices <- grouped_field_choices(cols, mlst, amr)
+      # Group the derived MLST / AMR columns and the custom variables under
+      # their own headings so the user can pick them out as categories. Without
+      # any of them the picker stays flat, exactly as before.
+      choices <- grouped_field_choices(cols, mlst, amr, custom)
 
-      pickerInput(
+      # virtualSelectInput rather than pickerInput: in multiple mode it puts a
+      # checkbox on every optgroup header (disableOptionGroupCheckbox defaults
+      # to FALSE), which is the only way to (de)select a whole category at once
+      # - bootstrap-select has no equivalent. Same nested-list `choices`, and
+      # the input value is still a plain character vector of column names.
+      virtualSelectInput(
         ns("col_picker"),
         label = NULL,
         choices = choices,
         # Derived MLST / AMR columns start hidden - the user opts into the
-        # category to show them. Keep this consistent with the DT's initial
-        # column visibility.
+        # category to show them. Custom variables, being the user's own data,
+        # start visible. Keep this consistent with the DT's initial column
+        # visibility.
         selected = setdiff(cols, c(mlst, amr)),
         multiple = TRUE,
-        options = pickerOptions(
-          actionsBox = TRUE,
-          title = "Show fields …",
-          selectedTextFormat = "count > 3",
-          countSelectedText = paste0("{0} / ", length(cols), " fields"),
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ...",
-          # This tab pane is a bslib fill container (overflow: hidden), which
-          # clips the dropdown menu once it grows taller than the remaining
-          # space. Render it into <body> instead so it escapes that clip.
-          container = "body"
-        )
+        search = TRUE,
+        searchPlaceholderText = "Search fields ...",
+        placeholder = "Show fields …",
+        optionsCount = 8,
+        noOfDisplayValues = 2,
+        # This tab pane is a bslib fill container (overflow: hidden), which
+        # clips the dropdown once it grows taller than the remaining space.
+        # Render it into <body> instead so it escapes that clip.
+        dropboxWrapper = "body",
+        # One column-visibility pass per dropdown session rather than one per
+        # click: toggling a whole group otherwise redraws the table per option.
+        updateOn = "close",
+        width = "100%"
       )
     })
 
@@ -295,6 +326,20 @@ server <- function(
       ignoreInit = TRUE
     )
 
+    # The Custom Variables panel changed a definition or a value: pick the new
+    # columns up. Skipped while edits are pending — the same reason db_updated()
+    # is not a dependency of metadata_base(): a reload would wipe them. The user
+    # sees the change after they save or discard.
+    observeEvent(
+      custom_updated(),
+      {
+        if (!isTRUE(State$pending)) {
+          reload_token(reload_token() + 1L)
+        }
+      },
+      ignoreInit = TRUE
+    )
+
     output$metadata_table <- renderDT({
       df <- metadata_base()
 
@@ -312,10 +357,12 @@ server <- function(
       }
 
       cols <- names(df)
-      # MLST / AMR columns are derived from typing (classical_mlst / amr_summary):
-      # never editable, and hidden until the user opts into their category.
+      # MLST / AMR columns are derived from typing (classical_mlst / amr_summary)
+      # and custom variables live in their own table: none of them is editable
+      # here. The derived ones additionally start hidden, until the user opts
+      # into their category.
       derived <- c(mlst_cols(), amr_cols())
-      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived))
+      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived, custom_cols()))
       hidden_idx <- .dt_idx(cols, derived)
       # -1 when the column is absent, so the JS never matches a real column.
       date_idx <- c(.dt_idx(cols, DATE_COL), -1L)[[1]]
@@ -423,9 +470,10 @@ server <- function(
     })
 
     observeEvent(input$save, {
-      # Drop the display-only MLST / AMR columns; they live in classical_mlst /
-      # amr_summary, not the metadata table, and must never be written back.
-      strip <- c(mlst_cols(), amr_cols())
+      # Drop the display-only MLST / AMR / custom columns; they live in
+      # classical_mlst, amr_summary and phylotrace_custom_values, not the
+      # metadata table, and must never be written back.
+      strip <- c(mlst_cols(), amr_cols(), custom_cols())
       to_save <- State$data[,
         setdiff(names(State$data), strip),
         drop = FALSE

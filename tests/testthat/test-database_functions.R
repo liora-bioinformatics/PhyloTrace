@@ -3,7 +3,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
-  app / logic / database_functions[load_classical_mlst],
+  app / logic / database_functions[load_classical_mlst, remove_isolates],
   app / logic / field_labels[MLST_COL_PREFIX],
 )
 
@@ -93,4 +93,18 @@ test_that("load_classical_mlst omits isolates absent from classical_mlst", {
   # for it - exactly what the browse view fills in as an empty cell.
   idx <- match(c("A", "B"), out$isolate)
   expect_identical(out[[paste0(MLST_COL_PREFIX, "adk")]][idx], c("1", NA))
+})
+
+test_that("removing an isolate drops its custom-variable values", {
+  path <- file.path(withr::local_tempdir(), "db.db")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  seed_custom(
+    path,
+    list(ward = list(type = "text", values = c(A = "ICU", B = "ER")))
+  )
+
+  remove_isolates(path, "A")
+
+  left <- qdf(path, "SELECT souche FROM phylotrace_custom_values")
+  expect_identical(left$souche, "B")
 })

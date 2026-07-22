@@ -42,12 +42,14 @@ box::use(
 )
 
 box::use(
+  app / logic / custom_fields[append_custom, custom_col],
   app /
     logic /
     db_export[
       export_preview,
       export_database,
       available_result_tables,
+      exportable_custom_fields,
       METADATA_FIXED_COLS
     ],
   app / logic / database_functions[metadata_columns, make_metadata_table],
@@ -201,6 +203,15 @@ ui <- function(id) {
           # table is never fully withheld — the field picker alone says which of
           # the remaining fields come along.
           control_group("Metadata", uiOutput(ns("meta_picker_ui"))),
+
+          # The user's own fields, offered per variable for the same reason the
+          # metadata fields are: one of them may hold data this export should
+          # not carry. Hidden when the database defines none.
+          shinyjs::hidden(control_group(
+            "Custom variables",
+            id = ns("custom_group"),
+            uiOutput(ns("custom_picker_ui"))
+          )),
 
           # -- 2. How --------------------------------------------------------
           # Only a profile table has an allele encoding or a file format to
@@ -405,9 +416,11 @@ server <- function(
     # The metadata the profile export ships, built from the panel's existing
     # column picker so both export types honour the same confidentiality choice.
     typing_metadata <- reactive({
-      # No optional field selected: ship the profile table on its own rather
-      # than forcing an isolate/organism-only metadata sheet nobody asked for.
-      if (!length(input$meta_cols %||% character(0))) {
+      selected_meta <- input$meta_cols %||% character(0)
+      selected_custom <- input$custom_fields %||% character(0)
+      # Nothing optional selected: ship the profile table on its own rather than
+      # forcing an isolate/organism-only metadata sheet nobody asked for.
+      if (!length(selected_meta) && !length(selected_custom)) {
         return(NULL)
       }
 
@@ -421,14 +434,23 @@ server <- function(
 
       keep <- union(
         intersect(METADATA_FIXED_COLS, names(md)),
-        input$meta_cols
+        selected_meta
       )
       md <- md[
         md$isolate %in% input$isolates,
         names(md)[names(md) %in% keep],
         drop = FALSE
       ]
-      if (!nrow(md) || !ncol(md)) NULL else md
+      if (!nrow(md) || !ncol(md)) {
+        return(NULL)
+      }
+
+      # A tabular export has no place to put the custom tables, so the selected
+      # variables ride along as ordinary columns of the metadata sheet.
+      if (length(selected_custom)) {
+        md <- append_custom(md, path, fields = selected_custom)
+      }
+      md
     })
 
     # Where the file will actually land: a bare table when that is all there is,
@@ -483,6 +505,40 @@ server <- function(
       )
     })
 
+    # The custom variables this database defines. Empty for a database that has
+    # never had one, which is what hides the whole control group.
+    custom_choices <- reactive({
+      path <- db_path()
+      if (is.null(path) || is.na(path)) {
+        return(character(0))
+      }
+      exportable_custom_fields(path)
+    })
+
+    observe({
+      shinyjs::toggle("custom_group", condition = length(custom_choices()) > 0)
+    })
+
+    output$custom_picker_ui <- renderUI({
+      cols <- custom_choices()
+      req(length(cols) > 0)
+      pickerInput(
+        ns("custom_fields"),
+        label = NULL,
+        choices = stats::setNames(cols, field_labels_for(cols)),
+        selected = cols,
+        multiple = TRUE,
+        options = pickerOptions(
+          actionsBox = TRUE,
+          title = "Select variables …",
+          selectedTextFormat = "count > 3",
+          countSelectedText = paste0("{0} / ", length(cols), " variables"),
+          liveSearch = TRUE,
+          liveSearchPlaceholder = "Search variables ..."
+        )
+      )
+    })
+
     output$meta_picker_ui <- renderUI({
       cols <- optional_meta()
       pickerInput(
@@ -525,9 +581,11 @@ server <- function(
       full <- export_preview(
         path,
         sel,
-        input$meta_cols %||% character(0)
+        input$meta_cols %||% character(0),
+        custom_fields = input$custom_fields %||% character(0)
       )
       p$columns <- full$columns
+      p$custom_fields <- full$custom_fields
       p
     })
 
@@ -605,6 +663,18 @@ server <- function(
                 tags$p(tagList(
                   strong("No metadata table"),
                   " will be written — only allele data and the scheme."
+                ))
+              },
+              # Named separately from the metadata fields: they are the user's
+              # own definitions, and for a `.db` they travel as their own
+              # tables rather than as metadata columns.
+              if (length(p$custom_fields)) {
+                tags$p(tagList(
+                  strong("Custom variables: "),
+                  div(
+                    class = "species-details_lineage",
+                    field_chips(custom_col(p$custom_fields))
+                  )
                 ))
               },
               if (!is.null(dest_path())) {
@@ -722,6 +792,7 @@ server <- function(
             metadata_cols = input$meta_cols %||% character(0),
             include_classical = isTRUE(input$include_classical),
             include_amr = isTRUE(input$include_amr),
+            custom_fields = input$custom_fields %||% character(0),
             progress = step
           )
         },

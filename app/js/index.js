@@ -19,6 +19,7 @@ function isExemptFromCharset(el) {
     el.classList.contains("pcr-result") || // colour-picker hex field
     el.closest(".pickr") ||                 // anywhere inside a colour picker
     el.closest(".bs-searchbox") ||          // pickerInput live-search box
+    el.closest(".vscomp-dropbox") ||        // virtualSelectInput search box
     el.closest(".selectize-control") ||     // selectize search / entry
     el.closest(".dropdown-menu") ||         // any dropdown's own search field
     el.closest(".allow-free-text")          // plot labels/titles: display text

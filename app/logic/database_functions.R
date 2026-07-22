@@ -442,6 +442,20 @@ remove_isolates <- function(db_path, isolates) {
     )
   }
 
+  # Custom-variable values key on `souche` with no foreign key onto `mlst` (like
+  # classical_mlst / amr_*), so they have to be pruned here or a later isolate
+  # of the same name would silently inherit the removed one's values.
+  if ("phylotrace_custom_values" %in% tables) {
+    dbExecute(
+      con,
+      sprintf(
+        "DELETE FROM phylotrace_custom_values WHERE souche IN (%s)",
+        placeholders
+      ),
+      params = as.list(isolates)
+    )
+  }
+
   invisible(TRUE)
 }
 

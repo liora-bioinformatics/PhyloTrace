@@ -38,6 +38,14 @@ function isTypingSurface(el) {
   return el.type === "text" || el.type === "search";
 }
 
+// A pickerInput bound to a `multiple` select: the menu stays open and the user
+// keeps clicking options. Single-select pickers are NOT exempt — committing one
+// is a discrete choice that usually drives an expensive rebuild.
+function isMultiSelectMenu(el) {
+  var wrapper = el.closest(".bootstrap-select");
+  return Boolean(wrapper && wrapper.querySelector("select[multiple]"));
+}
+
 function isExemptFromShield(el) {
   if (!el || typeof el.closest !== "function") return true;
 
@@ -46,13 +54,22 @@ function isExemptFromShield(el) {
   // gesture the shield exists for. Only the search *field* inside it is exempt,
   // which the typing-surface test below already covers — along with the DT
   // filter box and every textInput.
+  //
+  // The three widget families after the first group are exempt for one shared
+  // reason: their normal use is a *rapid repeated* interaction, and blocking
+  // optimistically on the first click swallows the second. A DT cell sends
+  // `_cell_clicked` on the opening click of a double-click, so shielding there
+  // means the dblclick never lands and inline editing silently stops working.
   return Boolean(
     isTypingSurface(el) ||
     el.closest(".time-step-buttons") || // Map/Epi play + step transport
     el.closest(".pt-no-lock") ||        // generic opt-out (typing Terminate)
     el.closest(".leaflet") ||           // map pan-zoom streams inputs
     el.closest(".vis-network") ||       // MST node drags stream inputs
-    el.closest(".pickr")                // colour picker updates while dragging
+    el.closest(".pickr") ||             // colour picker updates while dragging
+    el.closest("table.dataTable tbody") || // dblclick-to-edit, row selection
+    isMultiSelectMenu(el) ||            // menu stays open across picks
+    (el.tagName === "INPUT" && el.type === "number") // stepper arrows
   );
   // Sliders are deliberately absent: the pointerDown guard already suppresses
   // the values ionRangeSlider streams mid-drag, and exempting `.irs` outright

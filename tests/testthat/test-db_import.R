@@ -17,6 +17,7 @@ box::use(
       classify_isolate_collisions,
       default_resolutions,
       import_preview,
+      importable_custom_fields,
       isolate_profile_hashes,
       list_backups,
       merge_databases,
@@ -596,4 +597,162 @@ test_that("result tables are left untouched when the flags are off", {
   expect_equal(res$result_rows, 0L)
   # The ordinary merge still happened.
   expect_setequal(names(isolate_profile_hashes(p$local)), c("A", "B", "C"))
+})
+
+test_that("selected custom variables are merged and mapped onto local ids", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  # The local database already knows `ward`; `outbreak_id` is new to it.
+  seed_custom(p$local, list(ward = list(type = "text", values = c(A = "ICU"))))
+  seed_custom(
+    p$peer,
+    list(
+      ward = list(type = "text", values = c(C = "ER")),
+      outbreak_id = list(type = "text", values = c(C = "OB-1")),
+      withheld = list(type = "text", values = c(C = "secret"))
+    )
+  )
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = c("ward", "outbreak_id"),
+    backup = FALSE
+  ))
+
+  defs <- qdf(p$local, "SELECT id, name FROM phylotrace_custom_fields")
+  # `ward` is merged into the existing definition, not duplicated.
+  expect_setequal(defs$name, c("ward", "outbreak_id"))
+
+  values <- qdf(
+    p$local,
+    "SELECT f.name AS name, v.souche AS souche, v.value AS value
+       FROM phylotrace_custom_values v
+       JOIN phylotrace_custom_fields f ON f.id = v.field_id
+      ORDER BY f.name, v.souche"
+  )
+  # The local value survives, the peer's lands under the local field id.
+  expect_identical(values$value[values$name == "ward" & values$souche == "A"], "ICU")
+  expect_identical(values$value[values$name == "ward" & values$souche == "C"], "ER")
+  expect_identical(values$value[values$name == "outbreak_id"], "OB-1")
+})
+
+test_that("unselected custom variables are not adopted", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(p$peer, list(secret = list(type = "text", values = c(C = "s"))))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = character(0),
+    backup = FALSE
+  ))
+
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("phylotrace_custom_fields" %in% tbls)
+})
+
+test_that("a custom variable with a clashing type is never imported", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(p$local, list(ct_value = list(type = "text")))
+  seed_custom(
+    p$peer,
+    list(ct_value = list(type = "numeric", values = c(C = "12.5")))
+  )
+
+  split <- importable_custom_fields(p$local, p$peer)
+  expect_identical(split$importable, character(0))
+  expect_identical(split$conflicts$name, "ct_value")
+  expect_identical(split$conflicts$local_type, "text")
+  expect_identical(split$conflicts$ext_type, "numeric")
+
+  # Even when the caller asks for it anyway, the merge leaves it behind rather
+  # than adopting values canonicalised under another type.
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = "ct_value",
+    backup = FALSE
+  ))
+
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM phylotrace_custom_values"), 0L)
+  expect_identical(
+    q1(p$local, "SELECT type FROM phylotrace_custom_fields WHERE name='ct_value'"),
+    "text"
+  )
+})
+
+test_that("custom values follow a renamed isolate and a rewritten one", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$peer,
+    list(ward = list(type = "text", values = c(B = "peer-B", C = "peer-C")))
+  )
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    rbind(resolve("B", "rename", "B_ext"), resolve("C", "add")),
+    custom_fields = "ward",
+    backup = FALSE
+  ))
+
+  values <- qdf(
+    p$local,
+    "SELECT souche, value FROM phylotrace_custom_values ORDER BY souche"
+  )
+  # The renamed isolate carries its value under its new name, never its old one.
+  expect_setequal(values$souche, c("B_ext", "C"))
+  expect_identical(values$value[values$souche == "B_ext"], "peer-B")
+})
+
+test_that("overwriting an isolate replaces its custom values", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$local,
+    list(ward = list(type = "text", values = c(B = "stale")))
+  )
+  seed_custom(p$peer, list(ward = list(type = "text", values = c(B = "fresh"))))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("B", "overwrite"),
+    custom_fields = "ward",
+    backup = FALSE
+  ))
+
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM phylotrace_custom_values"), 1L)
+  expect_identical(q1(p$local, "SELECT value FROM phylotrace_custom_values"), "fresh")
+})
+
+test_that("import_preview classifies the peer's custom variables", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$local,
+    list(ward = list(type = "text"), ct_value = list(type = "text"))
+  )
+  seed_custom(
+    p$peer,
+    list(
+      ward = list(type = "text"),
+      ct_value = list(type = "numeric"),
+      outbreak_id = list(type = "text")
+    )
+  )
+
+  pv <- quiet(import_preview(p$local, p$peer))
+
+  expect_setequal(pv$custom_importable, c("ward", "outbreak_id"))
+  expect_identical(pv$custom_shared, "ward")
+  expect_identical(pv$custom_only_ext, "outbreak_id")
+  expect_identical(pv$custom_conflicts$name, "ct_value")
 })
