@@ -12,10 +12,14 @@ box::use(
     dbWriteTable,
     dbListFields,
     dbGetQuery,
-    dbExecute
+    dbExecute,
+    dbBegin,
+    dbCommit,
+    dbRollback
   ],
   RSQLite[SQLite],
   app / logic / field_labels[MLST_COL_PREFIX, AMR_COL_PREFIX],
+  app / logic / db_compat[REF_SOUCHE],
 )
 
 # The scheme's `targets` table stores loci as "FTL_0001" while the `mlst` table
@@ -466,68 +470,104 @@ append_amr <- function(meta, db_path) {
   meta
 }
 
+### Delete isolates and everything that hangs off them
+# One isolate spans the whole schema, and the pieces are joined by *name* rather
+# than by a foreign key, so removal has to visit each table explicitly:
+#
+#   mlst                      pyMLST's own table - the key is `souche` there
+#   sequences / hashes        allele storage, keyed on seqid; pruned to whatever
+#                             `mlst` still references
+#   metadata                  keyed on `isolate`
+#   ISOLATE_KEYED_TABLES      classical_mlst / amr_* / custom values / digests
+#
+# Two properties this has to guarantee:
+#
+#   * Atomicity. A half-finished removal leaves an isolate present in some
+#     tables and gone from others, and because the key is a name, the next
+#     isolate typed under that name silently inherits the leftovers. The whole
+#     removal therefore runs in one transaction and rolls back as a unit.
+#   * The scheme reference survives. `ref` is not an isolate: it is the seed
+#     genome whose `mlst` rows define the scheme. Deleting it would strip the
+#     file of its scheme while leaving the isolates in place, so it is filtered
+#     out here rather than trusted not to arrive.
+#
+# `phylotrace_analyses` is deliberately NOT pruned: a saved Analysis records the
+# isolate set it was built from, and the dashboard reports the drift ("n isolates
+# removed"). Rewriting the selection would erase exactly that signal.
+#
+# Returns TRUE when a removal was attempted, FALSE when there was nothing to do
+# or the transaction rolled back.
 #' @export
 remove_isolates <- function(db_path, isolates) {
+  isolates <- setdiff(unique(isolates[!is.na(isolates)]), REF_SOUCHE)
   if (!length(isolates)) {
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
   placeholders <- paste(rep("?", length(isolates)), collapse = ", ")
 
-  if ("mlst" %in% tables) {
-    dbExecute(
-      con,
-      sprintf("DELETE FROM mlst WHERE souche IN (%s)", placeholders),
-      params = as.list(isolates)
-    )
-    # Remove sequences no longer referenced by any strain
-    dbExecute(
-      con,
-      "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
-    )
-    # …and their hashes. Leaving orphans behind is not cosmetic: a later insert
-    # allocating `MAX(sequences.id) + n` can reuse an id that a stale `hashes`
-    # row still holds, giving one seqid two hash rows and silently corrupting
-    # every query that joins mlst to hashes.
-    if ("hashes" %in% tables) {
-      dbExecute(
-        con,
-        "DELETE FROM hashes WHERE id NOT IN (SELECT id FROM sequences)"
-      )
-    }
-  }
+  dbBegin(con)
+  ok <- tryCatch(
+    {
+      if ("mlst" %in% tables) {
+        dbExecute(
+          con,
+          sprintf("DELETE FROM mlst WHERE souche IN (%s)", placeholders),
+          params = as.list(isolates)
+        )
+        # Remove sequences no longer referenced by any strain
+        dbExecute(
+          con,
+          "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
+        )
+        # …and their hashes. Leaving orphans behind is not cosmetic: a later
+        # insert allocating `MAX(sequences.id) + n` can reuse an id that a stale
+        # `hashes` row still holds, giving one seqid two hash rows and silently
+        # corrupting every query that joins mlst to hashes.
+        if ("hashes" %in% tables) {
+          dbExecute(
+            con,
+            "DELETE FROM hashes WHERE id NOT IN (SELECT id FROM sequences)"
+          )
+        }
+      }
 
-  if ("metadata" %in% tables) {
-    dbExecute(
-      con,
-      sprintf("DELETE FROM metadata WHERE isolate IN (%s)", placeholders),
-      params = as.list(isolates)
-    )
-  }
+      if ("metadata" %in% tables) {
+        dbExecute(
+          con,
+          sprintf("DELETE FROM metadata WHERE isolate IN (%s)", placeholders),
+          params = as.list(isolates)
+        )
+      }
 
-  # Every remaining table keys on `isolate` with no foreign key onto `mlst`
-  # (whose matching column is pyMLST's `souche`), so nothing cascades the delete
-  # for us - each has to be pruned here. Leaving the rows behind is not
-  # cosmetic, because the key is a *name*:
-  # a later isolate typed under the same name silently inherits the removed
-  # one's classical ST, AMR calls and custom-variable values. For
-  # `genome_hashes` the consequence is sharper still - a stale digest makes that
-  # new isolate read as a re-type of the deleted one, or raises a name conflict
-  # against an assembly the database no longer holds, corrupting the very signal
-  # the table exists to give.
-  for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
-    dbExecute(
-      con,
-      sprintf("DELETE FROM %s WHERE isolate IN (%s)", nm, placeholders),
-      params = as.list(isolates)
-    )
-  }
+      # Every remaining table keys on `isolate` with no foreign key onto `mlst`
+      # (whose matching column is pyMLST's `souche`), so nothing cascades the
+      # delete for us - each has to be pruned here. Leaving the rows behind is
+      # not cosmetic, because the key is a *name*: a later isolate typed under
+      # the same name silently inherits the removed one's classical ST, AMR
+      # calls and custom-variable values. For `genome_hashes` the consequence is
+      # sharper still - a stale digest makes that new isolate read as a re-type
+      # of the deleted one, or raises a name conflict against an assembly the
+      # database no longer holds, corrupting the very signal the table exists to
+      # give.
+      for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
+        dbExecute(
+          con,
+          sprintf("DELETE FROM %s WHERE isolate IN (%s)", nm, placeholders),
+          params = as.list(isolates)
+        )
+      }
+      TRUE
+    },
+    error = function(e) FALSE
+  )
+  if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
 
-  invisible(TRUE)
+  invisible(ok)
 }
 
 #' @export

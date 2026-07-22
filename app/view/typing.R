@@ -63,7 +63,7 @@ box::use(
     addClass,
     removeClass
   ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, replaceData, JS],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, replaceData, selectRows, JS],
   htmltools[htmlEscape],
   fs[path_home],
 )
@@ -106,6 +106,7 @@ status_badge <- function(status) {
     status,
     Added = "text-bg-success",
     Duplicate = "text-bg-secondary",
+    Excluded = "text-bg-dark",
     Incompatible = "text-bg-danger",
     Error = "text-bg-danger",
     Running = "text-bg-info",
@@ -510,7 +511,40 @@ ui <- function(id) {
           ),
           value = "Selected Genomes",
           icon = icon("dna"),
-          DTOutput(ns("selection_table"))
+          # .typing-scrollpane takes the scrolling off the accordion body so the
+          # toolbar stays pinned above the list and the table's sticky header has
+          # a scrollport with no padding above it (see main.scss).
+          div(
+            class = "typing-scrollpane",
+            div(
+              class = "typing-selection-toolbar",
+              actionButton(
+                ns("select_all"),
+                "All",
+                icon = icon("check-double"),
+                class = "btn-sm btn-outline-secondary"
+              ),
+              actionButton(
+                ns("select_none"),
+                "None",
+                icon = icon("xmark"),
+                class = "btn-sm btn-outline-secondary"
+              ),
+              actionButton(
+                ns("exclude_selected"),
+                "Exclude selected",
+                icon = icon("ban"),
+                class = "btn-sm btn-outline-secondary"
+              ),
+              actionButton(
+                ns("include_selected"),
+                "Include selected",
+                icon = icon("rotate-left"),
+                class = "btn-sm btn-outline-secondary"
+              )
+            ),
+            DTOutput(ns("selection_table"))
+          )
         ),
         accordion_panel(
           "Process Log",
@@ -520,7 +554,10 @@ ui <- function(id) {
         accordion_panel(
           "Results",
           icon = icon("table"),
-          DTOutput(ns("results_table"))
+          div(
+            class = "typing-scrollpane",
+            DTOutput(ns("results_table"))
+          )
         )
       )
     )
@@ -545,6 +582,9 @@ server <- function(
       # present in the database are dropped, so only new genomes are typed.
       queued_files = character(0),
       queued_strains = character(0),
+      # Strains manually excluded from typing via the selection table, on top of
+      # the automatic "already present" exclusion.
+      excluded_strains = character(0),
       proc = NULL,
       log_file = NULL,
       # Path to this run's interim claMLST reference DB (built by the typing
@@ -619,6 +659,7 @@ server <- function(
         Typing$strains <- character(0)
         Typing$queued_files <- character(0)
         Typing$queued_strains <- character(0)
+        Typing$excluded_strains <- character(0)
         Typing$proc <- NULL
         Typing$log_file <- NULL
         Typing$cla_db <- NULL
@@ -685,6 +726,7 @@ server <- function(
       Typing$genome_input <- path
       Typing$files <- files
       Typing$strains <- sub("\\.[^.]*$", "", basename(files))
+      Typing$excluded_strains <- character(0)
       Typing$results <- NULL
       log_text("")
       updateProgressBar(session, "progress", value = 0, total = 1)
@@ -862,8 +904,11 @@ server <- function(
       if (n_total == 0) {
         return(NULL)
       }
-      n_present <- sum(Typing$strains %in% existing())
-      n_new <- n_total - n_present
+      is_present <- Typing$strains %in% existing()
+      is_excluded <- Typing$strains %in% Typing$excluded_strains & !is_present
+      n_present <- sum(is_present)
+      n_excluded <- sum(is_excluded)
+      n_new <- n_total - n_present - n_excluded
       tags$span(
         class = "typing-accordion-summary",
         tags$span(class = "badge text-bg-success", paste(n_new, "New")),
@@ -871,6 +916,12 @@ server <- function(
           tags$span(
             class = "badge text-bg-warning",
             paste(n_present, "Already present")
+          )
+        },
+        if (n_excluded > 0) {
+          tags$span(
+            class = "badge text-bg-dark",
+            paste(n_excluded, "Excluded")
           )
         }
       )
@@ -910,11 +961,33 @@ server <- function(
       }
     })
 
+    # Exclude / include act on the rows ticked in the selection table, so they
+    # stay dead until something is ticked (and while a run owns the queue). Kept
+    # apart from the observer above so ticking a row does not re-send that whole
+    # block of enable/disable messages for the sidebar on every click.
+    observe({
+      running <- identical(Typing$status, "running")
+      picked <- !running && length(input$selection_table_rows_selected) > 0
+      toggleState("exclude_selected", condition = picked)
+      toggleState("include_selected", condition = picked)
+      toggleState("select_all", condition = !running && length(Typing$strains) > 0)
+      toggleState("select_none", condition = picked)
+    })
+
     # Builds the display data frame for the Selected Genomes table. Called by
     # both the initial renderDT and the live replaceData observer so the column
     # structure is always identical.
-    build_selection_df <- function(files, strains, results, existing_strains) {
+    build_selection_df <- function(
+      files,
+      strains,
+      results,
+      existing_strains,
+      excluded_strains
+    ) {
       is_present <- strains %in% existing_strains
+      # Manually excluded strains are dropped from the queue same as
+      # already-present ones; "Already present" wins if both apply.
+      is_excluded <- strains %in% excluded_strains & !is_present
       if (!is.null(results) && nrow(results) > 0) {
         status_map <- setNames(results$status, results$strain)
         statuses <- status_map[strains]
@@ -922,8 +995,13 @@ server <- function(
         # Already-present genomes are excluded from the run, so they never
         # appear in `results`; keep their flag rather than showing "Pending".
         statuses[is_present] <- "Already present"
+        statuses[is_excluded] <- "Excluded"
       } else {
-        statuses <- ifelse(is_present, "Already present", "New")
+        statuses <- ifelse(
+          is_present,
+          "Already present",
+          ifelse(is_excluded, "Excluded", "New")
+        )
       }
       # `status_map[strains]` yields NA-named elements for any selected strain
       # absent from `results` (e.g. already-present genomes excluded from the
@@ -969,12 +1047,16 @@ server <- function(
             Typing$files,
             Typing$strains,
             Typing$results,
-            existing()
+            existing(),
+            Typing$excluded_strains
           )
         ),
         rownames = FALSE,
         escape = FALSE,
-        selection = "none",
+        # Rows are selected here only as a picker for the Exclude/Include
+        # buttons below - the actual exclusion state lives in
+        # Typing$excluded_strains and is reflected via the Status column.
+        selection = list(mode = "multiple", target = "row"),
         options = list(dom = "t", paging = FALSE, ordering = FALSE)
       )
     })
@@ -991,11 +1073,46 @@ server <- function(
           Typing$files,
           Typing$strains,
           Typing$results,
-          existing()
+          existing(),
+          Typing$excluded_strains
         ),
         resetPaging = FALSE,
         rownames = FALSE
       )
+    })
+
+    # Exclude / include the rows currently picked in the selection table.
+    # Picking is a plain row click (mode = "multiple"); the buttons commit that
+    # pick into Typing$excluded_strains and clear it so the next click starts
+    # fresh.
+    observeEvent(input$exclude_selected, {
+      rows <- input$selection_table_rows_selected
+      req(length(rows))
+      Typing$excluded_strains <- union(
+        Typing$excluded_strains,
+        Typing$strains[rows]
+      )
+      selectRows(selection_proxy, NULL)
+    })
+
+    observeEvent(input$include_selected, {
+      rows <- input$selection_table_rows_selected
+      req(length(rows))
+      Typing$excluded_strains <- setdiff(
+        Typing$excluded_strains,
+        Typing$strains[rows]
+      )
+      selectRows(selection_proxy, NULL)
+    })
+
+    # Row-picker helpers: tick every row / clear the tick, independent of the
+    # Exclude/Include commit step above.
+    observeEvent(input$select_all, {
+      selectRows(selection_proxy, seq_along(Typing$strains))
+    })
+
+    observeEvent(input$select_none, {
+      selectRows(selection_proxy, NULL)
     })
 
     # Live log
@@ -1122,11 +1239,14 @@ server <- function(
 
       # `claMLST search` is a single call that prints nothing until it returns
       # the ST, so classical MLST has no progress output to key off. Its state is
-      # read off the step it follows instead: queued while allele calling is
-      # still going, running once allele calling hit its DONE line and no ST has
-      # come back yet. Empty once the step is no longer waiting on anything.
+      # read off the steps around it instead: queued while allele calling is
+      # still going, running once allele calling hit its DONE line, and over once
+      # the strain has settled or the step *behind* it has started - any AMR
+      # sentinel means the search has already returned, whether or not it
+      # returned anything usable.
       cla_state <- if (cla_on) {
-        ifelse(!in_flight, "", ifelse(cg_done, "Running", "Pending"))
+        settled <- !in_flight | !is.na(results$amr_status)
+        ifelse(settled, "", ifelse(cg_done, "Running", "Pending"))
       } else {
         rep("", nrow(results))
       }
@@ -1316,11 +1436,30 @@ server <- function(
         return()
       }
 
-      # Type only assemblies that are not already in the database; their
-      # `wgMLST add` would otherwise be rejected as a duplicate, wasting time.
-      keep <- !(Typing$strains %in% existing())
+      # Type only assemblies that are not already in the database (their
+      # `wgMLST add` would otherwise be rejected as a duplicate, wasting time)
+      # and not manually excluded via the selection table.
+      keep <- !(Typing$strains %in% existing()) &
+        !(Typing$strains %in% Typing$excluded_strains)
       Typing$queued_files <- Typing$files[keep]
       Typing$queued_strains <- Typing$strains[keep]
+
+      # Nothing survives the filter: bail out before the digest pass below, which
+      # would otherwise flash its "Checking genomes" progress panel for the
+      # instant it takes to walk an empty queue. Reusing one notification id
+      # keeps repeated clicks from stacking copies of the same message.
+      if (length(Typing$queued_files) == 0) {
+        showNotification(
+          paste(
+            "All selected genomes are either already present in the",
+            "database or excluded."
+          ),
+          id = ns("empty_queue"),
+          type = "warning",
+          duration = 5
+        )
+        return()
+      }
 
       # Content digests of every selected assembly (see app/logic/genome_hash.R).
       # The filter above matches on strain *name* only, which hides two things
@@ -1336,8 +1475,8 @@ server <- function(
         value = 0,
         check_genomes(
           db_path(),
-          Typing$strains,
-          Typing$files,
+          Typing$queued_strains,
+          Typing$queued_files,
           known_strains = existing(),
           progress = function(value, detail) {
             setProgress(value = value, detail = detail)
@@ -1377,15 +1516,6 @@ server <- function(
           type = "error",
           duration = NULL
         )
-      }
-
-      if (length(Typing$queued_files) == 0) {
-        showNotification(
-          "All selected genomes are already present in the database.",
-          type = "warning",
-          duration = 5
-        )
-        return()
       }
 
       # Click the "Typing Results" accordion button
@@ -1484,14 +1614,18 @@ server <- function(
         value = 0,
         total = length(Typing$queued_strains)
       )
-      skipped <- length(Typing$strains) - length(Typing$queued_strains)
+      # Break the skipped count down the same way as the selection_summary
+      # badges (already present vs. manually excluded), so this message never
+      # contradicts what the badges just showed.
+      n_present <- sum(Typing$strains %in% existing())
+      n_excluded <- length(Typing$strains) - length(Typing$queued_files) - n_present
       showNotification(
         paste0(
           length(Typing$queued_strains),
           " genome(s) queued.",
-          if (skipped > 0) {
-            sprintf(" %d already present, skipped.", skipped)
-          }
+          if (n_present > 0) sprintf(" %d already present,", n_present),
+          if (n_excluded > 0) sprintf(" %d excluded,", n_excluded),
+          if (n_present > 0 || n_excluded > 0) " skipped."
         ),
         type = "message",
         duration = 3
@@ -1534,6 +1668,10 @@ server <- function(
 
       results <- parse_typing_log(lines, Typing$queued_strains)
       Typing$results <- results
+      # Genomes whose whole pipeline is over - allele calling, classical MLST and
+      # the AMR screen alike. The bar counts genomes, so a genome still being
+      # screened is not one of them; the phase it is in is named by the status
+      # line underneath instead of being rounded up into the bar.
       done <- sum(
         results$status %in% c("Added", "Duplicate", "Incompatible", "Error")
       )

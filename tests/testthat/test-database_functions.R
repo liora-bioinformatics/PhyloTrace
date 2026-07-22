@@ -185,3 +185,136 @@ test_that("remove_isolates copes with a database missing the optional tables", {
   expect_identical(remove_isolates(path, "A"), TRUE)
   expect_identical(q1(path, "SELECT COUNT(DISTINCT souche) FROM mlst"), 2L)
 })
+
+# A database carrying every isolate-keyed table at once, so a removal can be
+# checked across the whole schema rather than one table at a time.
+full_db <- function(dir, isolates = c("A", "B")) {
+  path <- file.path(dir, "full.db")
+  build_db(path, default_local(), metadata = meta_df(isolates))
+  seed_results(path, isolates)
+  seed_custom(
+    path,
+    list(ward = list(type = "text", values = c(A = "ICU", B = "ER")))
+  )
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE genome_hashes (
+       isolate TEXT PRIMARY KEY, genome_digest TEXT NOT NULL,
+       file_sha256 TEXT, algorithm TEXT NOT NULL, n_contigs INTEGER,
+       total_length INTEGER, file_bytes INTEGER, hashed_at TEXT)"
+  )
+  for (s in isolates) {
+    DBI::dbExecute(
+      con,
+      "INSERT INTO genome_hashes (isolate, genome_digest, algorithm)
+       VALUES (?, ?, 'ga4gh-sorted-sequences-v1')",
+      list(s, paste0("digest-", s))
+    )
+  }
+  path
+}
+
+# Every place an isolate name is stored. `mlst` is queried by `souche` because
+# that is pyMLST's spelling; everything else is PhyloTrace's own and says
+# `isolate`. That split is the point of the test.
+isolate_footprint <- function(path, name) {
+  c(
+    mlst = q1(path, "SELECT COUNT(*) FROM mlst WHERE souche = ?", list(name)),
+    metadata = q1(
+      path, "SELECT COUNT(*) FROM metadata WHERE isolate = ?", list(name)
+    ),
+    classical_mlst = q1(
+      path, "SELECT COUNT(*) FROM classical_mlst WHERE isolate = ?", list(name)
+    ),
+    amr_results = q1(
+      path, "SELECT COUNT(*) FROM amr_results WHERE isolate = ?", list(name)
+    ),
+    amr_summary = q1(
+      path, "SELECT COUNT(*) FROM amr_summary WHERE isolate = ?", list(name)
+    ),
+    custom = q1(
+      path,
+      "SELECT COUNT(*) FROM phylotrace_custom_values WHERE isolate = ?",
+      list(name)
+    ),
+    genome_hashes = q1(
+      path, "SELECT COUNT(*) FROM genome_hashes WHERE isolate = ?", list(name)
+    )
+  )
+}
+
+test_that("remove_isolates clears an isolate from every table that stores it", {
+  dir <- local_tempdir()
+  path <- full_db(dir)
+
+  # Precondition: A really is present everywhere, or the test proves nothing.
+  expect_true(all(isolate_footprint(path, "A") > 0L))
+
+  expect_true(remove_isolates(path, "A"))
+
+  expect_identical(
+    unname(isolate_footprint(path, "A")),
+    rep(0L, 7)
+  )
+  # ...and B is untouched in all of them.
+  expect_true(all(isolate_footprint(path, "B") > 0L))
+})
+
+test_that("remove_isolates never deletes the scheme reference", {
+  # `ref` is not an isolate: its mlst rows *are* the scheme. Removing it would
+  # leave a file with isolates but no scheme to compare them against.
+  dir <- local_tempdir()
+  path <- full_db(dir)
+  ref_rows <- q1(path, "SELECT COUNT(*) FROM mlst WHERE souche = 'ref'")
+  expect_true(ref_rows > 0L)
+
+  # Asked for on its own: nothing to do.
+  expect_false(remove_isolates(path, "ref"))
+  expect_identical(q1(path, "SELECT COUNT(*) FROM mlst WHERE souche = 'ref'"), ref_rows)
+
+  # ...and smuggled in alongside a real isolate: A goes, ref stays.
+  expect_true(remove_isolates(path, c("A", "ref")))
+  expect_identical(q1(path, "SELECT COUNT(*) FROM mlst WHERE souche = 'ref'"), ref_rows)
+  expect_identical(q1(path, "SELECT COUNT(*) FROM mlst WHERE souche = 'A'"), 0L)
+})
+
+test_that("remove_isolates handles multiple names and ignores unknown ones", {
+  dir <- local_tempdir()
+  path <- full_db(dir)
+
+  # An unknown name is a harmless no-op alongside a real one.
+  expect_true(remove_isolates(path, c("A", "never_typed")))
+  expect_identical(unname(isolate_footprint(path, "A")), rep(0L, 7))
+  expect_true(all(isolate_footprint(path, "B") > 0L))
+
+  # Duplicates in the request collapse rather than double-deleting.
+  expect_true(remove_isolates(path, c("B", "B")))
+  expect_identical(unname(isolate_footprint(path, "B")), rep(0L, 7))
+  expect_identical(q1(path, "SELECT COUNT(DISTINCT souche) FROM mlst"), 1L)
+})
+
+test_that("remove_isolates is atomic: a mid-way failure leaves nothing removed", {
+  # The isolate key is a *name*, so a half-applied removal is worse than none:
+  # the next isolate typed under that name inherits whatever survived. Make one
+  # of the later deletes impossible and check the earlier ones were rolled back.
+  dir <- local_tempdir()
+  path <- full_db(dir)
+  before <- isolate_footprint(path, "A")
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  # A trigger that always raises turns the amr_summary delete - which runs after
+  # mlst and metadata - into a failure.
+  DBI::dbExecute(
+    con,
+    "CREATE TRIGGER boom BEFORE DELETE ON amr_summary
+     BEGIN SELECT RAISE(ABORT, 'boom'); END"
+  )
+  DBI::dbDisconnect(con)
+
+  expect_false(remove_isolates(path, "A"))
+
+  # Nothing removed, including from the tables visited before the failure.
+  expect_identical(isolate_footprint(path, "A"), before)
+})

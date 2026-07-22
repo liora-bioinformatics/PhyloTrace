@@ -269,11 +269,20 @@ viz_color <- function(ns, id, label, value) {
 # whichever variable is currently mapped (see suitable_scale_categories()).
 #' @export
 scale_select <- function(ns, id, categories = names(color_scales)) {
-  selectInput(
-    ns(id),
-    "Color scale",
-    choices = color_scales[categories],
-    width = "100%"
+  # Wrapped in a static class rather than styled off ns(id) directly: each
+  # plot tab is its own module instance, so the rendered id is namespaced
+  # per-tab (e.g. "plot_xyz-engine-nj_tiplab_scale") and differs across tabs
+  # showing the same engine. A shared class lets one CSS rule in main.scss
+  # (.viz-scale-select .option[data-value=...]) swatch every scale picker's
+  # dropdown regardless of which tab or instance renders it.
+  div(
+    class = "viz-scale-select",
+    selectInput(
+      ns(id),
+      "Color scale",
+      choices = color_scales[categories],
+      width = "100%"
+    )
   )
 }
 

@@ -268,7 +268,7 @@ amr_controls <- function(ns) {
               # up on a delay.
               shiny$selectInput(
                 ns("amr_column_grouping"),
-                "Group columns by",
+                "Group genes by",
                 choices = COLUMN_GROUPINGS,
                 selected = COLUMN_GROUPING_DEFAULT
               ),
@@ -873,15 +873,21 @@ server <- function(
           selected = COLUMN_GROUPING_DEFAULT
         )
         apply_scale_choices(
-          "amr_anno_scale", 1L, ANNO_SCALE_DEFAULT,
+          "amr_anno_scale",
+          1L,
+          ANNO_SCALE_DEFAULT,
           force_default = TRUE
         )
         apply_scale_choices(
-          "amr_class_scale", 1L, CLASS_SCALE_DEFAULT,
+          "amr_class_scale",
+          1L,
+          CLASS_SCALE_DEFAULT,
           force_default = TRUE
         )
         apply_scale_choices(
-          "amr_bar_scale", 1L, BAR_SCALE_DEFAULT,
+          "amr_bar_scale",
+          1L,
+          BAR_SCALE_DEFAULT,
           force_default = TRUE
         )
       })
@@ -1172,23 +1178,41 @@ server <- function(
         session,
         vals,
         switches = c(
-          "amr_cluster_rows", "amr_show_row_names", "amr_auto_fontsize",
+          "amr_cluster_rows",
+          "amr_show_row_names",
+          "amr_auto_fontsize",
           "amr_show_class_anno"
         ),
         selects = c(
-          "amr_mode", "amr_column_grouping", "amr_cluster_distance",
-          "amr_cluster_method", "amr_anno_scale", "amr_class_scale",
-          "amr_bar_scale", "amr_filetype"
+          "amr_mode",
+          "amr_column_grouping",
+          "amr_cluster_distance",
+          "amr_cluster_method",
+          "amr_anno_scale",
+          "amr_class_scale",
+          "amr_bar_scale",
+          "amr_filetype"
         ),
         sliders = c(
-          "amr_top_n", "amr_min_identity", "amr_min_coverage", "amr_dend_row",
-          "amr_dend_col", "amr_fontsize_row", "amr_fontsize_col",
-          "amr_fontsize_title", "amr_fontsize_legend", "amr_grid_width",
+          "amr_top_n",
+          "amr_min_identity",
+          "amr_min_coverage",
+          "amr_dend_row",
+          "amr_dend_col",
+          "amr_fontsize_row",
+          "amr_fontsize_col",
+          "amr_fontsize_title",
+          "amr_fontsize_legend",
+          "amr_grid_width",
           "amr_aspect_ratio"
         ),
         colors = c(
-          "amr_present_color", "amr_partial_color", "amr_absent_color",
-          "amr_grid_color", "amr_dend_color", "amr_text_color",
+          "amr_present_color",
+          "amr_partial_color",
+          "amr_absent_color",
+          "amr_grid_color",
+          "amr_dend_color",
+          "amr_text_color",
           "amr_background_color"
         ),
         radio_groups = "amr_level",
@@ -1197,7 +1221,10 @@ server <- function(
         # the control exists. The element and section pickers are declared in
         # the UI and restore straight away.
         pickers = c(
-          "amr_elements", "amr_sections", "amr_genes", "amr_anno_field"
+          "amr_elements",
+          "amr_sections",
+          "amr_genes",
+          "amr_anno_field"
         )
       )
     }
@@ -1205,8 +1232,12 @@ server <- function(
     # Thumbnail: server-render the current view to a small PNG.
     save_thumb <- function(file, w, h) {
       amr_plot$render_amr_png(
-        amr_ggplot(), file,
-        width_px = w, height_px = h, res = 96, scale = 1
+        amr_ggplot(),
+        file,
+        width_px = w,
+        height_px = h,
+        res = 96,
+        scale = 1
       )
     }
 

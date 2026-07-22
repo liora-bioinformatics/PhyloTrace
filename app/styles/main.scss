@@ -642,6 +642,202 @@ $viz-tile-row-gap: 0.85rem;
     gap: 0.75rem;
 }
 
+// Color-scale pickers (scale_select() in viz_helpers.R): swatch each palette
+// option in its own dropdown instead of showing the bare RColorBrewer/viridis
+// name, and swatch the closed control itself once a palette is chosen (the
+// :has(.item[data-value=...]) half — selectize renders the current selection
+// as a .item inside .selectize-input.full, same as an option in the open
+// dropdown, so it can be targeted the same way). Carried over from master's
+// www/body.css (formerly one repeated rule per hard-coded input id —
+// #nj_tiplab_scale, #gs_amrclass_scale_ui, etc.), though master never styled
+// the closed control. Sequential palettes get black text here rather than
+// master's white — white was unreadable at the light end every one of them
+// starts from. Keyed off the wrapper's static class rather than an id because
+// plot tabs are module instances with a per-tab namespaced id (scale_select()
+// wraps every call in a div.viz-scale-select for exactly this reason), so one
+// rule set covers every scale picker across every engine and every tab.
+// `!important` on both properties: selectize.bootstrap3.css's own
+// `.selectize-dropdown .active:not(.selected)` (the hovered/keyboard-active
+// row) ties our selector's specificity exactly (three class-level selectors
+// each), so which one wins would otherwise come down to include order rather
+// than intent — this makes sure the swatch always wins over that hover
+// state instead of graying out while the pointer is over it.
+.viz-scale-select .option[data-value="Set1"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set1"]) {
+    background: linear-gradient(to right, #E41A1C 0%, #E41A1C 11%, #377EB8 11%, #377EB8 22%, #4DAF4A 22%, #4DAF4A 33%, #984EA3 33%, #984EA3 44%, #FF7F00 44%, #FF7F00 55%, #FFFF33 55%, #FFFF33 66%, #A65628 66%, #A65628 77%, #F781BF 77%, #F781BF 88%, #999999 88%, #999999 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Set2"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set2"]) {
+    background: linear-gradient(to right, #66C2A5 0%, #66C2A5 12.5%, #FC8D62 12.5%, #FC8D62 25%, #8DA0CB 25%, #8DA0CB 37.5%, #E78AC3 37.5%, #E78AC3 50%, #A6D854 50%, #A6D854 62.5%, #FFD92F 62.5%, #FFD92F 75%, #E5C494 75%, #E5C494 87.5%, #B3B3B3 87.5%, #B3B3B3 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Set3"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set3"]) {
+    background: linear-gradient(to right, #8DD3C7 0%, #8DD3C7 8.33333%, #FFFFB3 8.33333%, #FFFFB3 16.6667%, #BEBADA 16.6667%, #BEBADA 25%, #FB8072 25%, #FB8072 33.3333%, #80B1D3 33.3333%, #80B1D3 41.6667%, #FDB462 41.6667%, #FDB462 50%, #B3DE69 50%, #B3DE69 58.3333%, #FCCDE5 58.3333%, #FCCDE5 66.6667%, #D9D9D9 66.6667%, #D9D9D9 75%, #BC80BD 75%, #BC80BD 83.3333%, #CCEBC5 83.3333%, #CCEBC5 91.6667%, #FFED6F 91.6667%, #FFED6F 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Pastel1"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Pastel1"]) {
+    background: linear-gradient(to right, #FBB4AE 0%, #FBB4AE 11.1111%, #B3CDE3 11.1111%, #B3CDE3 22.2222%, #CCEBC5 22.2222%, #CCEBC5 33.3333%, #DECBE4 33.3333%, #DECBE4 44.4444%, #FED9A6 44.4444%, #FED9A6 55.5556%, #FFFFCC 55.5556%, #FFFFCC 66.6667%, #E5D8BD 66.6667%, #E5D8BD 77.7778%, #FDDAEC 77.7778%, #FDDAEC 88.8889%, #F2F2F2 88.8889%, #F2F2F2 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Paired"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Paired"]) {
+    background: linear-gradient(to right, #A6CEE3 0%, #A6CEE3 8.33333%, #1F78B4 8.33333%, #1F78B4 16.6667%, #B2DF8A 16.6667%, #B2DF8A 25%, #33A02C 25%, #33A02C 33.3333%, #FB9A99 33.3333%, #FB9A99 41.6667%, #E31A1C 41.6667%, #E31A1C 50%, #FDBF6F 50%, #FDBF6F 58.3333%, #FF7F00 58.3333%, #FF7F00 66.6667%, #CAB2D6 66.6667%, #CAB2D6 75%, #6A3D9A 75%, #6A3D9A 83.3333%, #FFFF99 83.3333%, #FFFF99 91.6667%, #B15928 91.6667%, #B15928 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Dark2"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Dark2"]) {
+    background: linear-gradient(to right, #1B9E77 0%, #1B9E77 12.5%, #D95F02 12.5%, #D95F02 25%, #7570B3 25%, #7570B3 37.5%, #E7298A 37.5%, #E7298A 50%, #66A61E 50%, #66A61E 62.5%, #E6AB02 62.5%, #E6AB02 75%, #A6761D 75%, #A6761D 87.5%, #666666 87.5%, #666666 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Accent"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Accent"]) {
+    background: linear-gradient(to right, #7FC97F 0%, #7FC97F 12.5%, #BEAED4 12.5%, #BEAED4 25%, #FDC086 25%, #FDC086 37.5%, #FFFF99 37.5%, #FFFF99 50%, #386CB0 50%, #386CB0 62.5%, #F0027F 62.5%, #F0027F 75%, #BF5B17 75%, #BF5B17 87.5%, #666666 87.5%, #666666 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Blues"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Blues"]) {
+    background: linear-gradient(to right, #F7FBFF 0%, #F7FBFF 11.1111%, #DEEBF7 11.1111%, #DEEBF7 22.2222%, #C6DBEF 22.2222%, #C6DBEF 33.3333%, #9ECAE1 33.3333%, #9ECAE1 44.4444%, #6BAED6 44.4444%, #6BAED6 55.5556%, #4292C6 55.5556%, #4292C6 66.6667%, #2171B5 66.6667%, #2171B5 77.7778%, #08519C 77.7778%, #08519C 88.8889%, #08306B 88.8889%, #08306B 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Greens"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Greens"]) {
+    background: linear-gradient(to right, #F7FCF5 0%, #F7FCF5 11.1111%, #E5F5E0 11.1111%, #E5F5E0 22.2222%, #C7E9C0 22.2222%, #C7E9C0 33.3333%, #A1D99B 33.3333%, #A1D99B 44.4444%, #74C476 44.4444%, #74C476 55.5556%, #41AB5D 55.5556%, #41AB5D 66.6667%, #238B45 66.6667%, #238B45 77.7778%, #006D2C 77.7778%, #006D2C 88.8889%, #00441B 88.8889%, #00441B 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Reds"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Reds"]) {
+    background: linear-gradient(to right, #FFF5F0 0%, #FFF5F0 11.1111%, #FEE0D2 11.1111%, #FEE0D2 22.2222%, #FCBBA1 22.2222%, #FCBBA1 33.3333%, #FC9272 33.3333%, #FC9272 44.4444%, #FB6A4A 44.4444%, #FB6A4A 55.5556%, #EF3B2C 55.5556%, #EF3B2C 66.6667%, #CB181D 66.6667%, #CB181D 77.7778%, #A50F15 77.7778%, #A50F15 88.8889%, #67000D 88.8889%, #67000D 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Purples"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Purples"]) {
+    background: linear-gradient(to right, #FCFBFD 0%, #FCFBFD 11.1111%, #EFEDF5 11.1111%, #EFEDF5 22.2222%, #DADAEB 22.2222%, #DADAEB 33.3333%, #BCBDDC 33.3333%, #BCBDDC 44.4444%, #9E9AC8 44.4444%, #9E9AC8 55.5556%, #807DBA 55.5556%, #807DBA 66.6667%, #6A51A3 66.6667%, #6A51A3 77.7778%, #54278F 77.7778%, #54278F 88.8889%, #3F007D 88.8889%, #3F007D 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Oranges"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Oranges"]) {
+    background: linear-gradient(to right, #FFF5EB 0%, #FFF5EB 11.1111%, #FEE6CE 11.1111%, #FEE6CE 22.2222%, #FDD0A2 22.2222%, #FDD0A2 33.3333%, #FDAE6B 33.3333%, #FDAE6B 44.4444%, #FD8D3C 44.4444%, #FD8D3C 55.5556%, #F16913 55.5556%, #F16913 66.6667%, #D94801 66.6667%, #D94801 77.7778%, #A63603 77.7778%, #A63603 88.8889%, #7F2704 88.8889%, #7F2704 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Greys"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Greys"]) {
+    background: linear-gradient(to right, #FFFFFF 0%, #FFFFFF 11.1111%, #F0F0F0 11.1111%, #F0F0F0 22.2222%, #D9D9D9 22.2222%, #D9D9D9 33.3333%, #BDBDBD 33.3333%, #BDBDBD 44.4444%, #969696 44.4444%, #969696 55.5556%, #737373 55.5556%, #737373 66.6667%, #525252 66.6667%, #525252 77.7778%, #252525 77.7778%, #252525 88.8889%, #000000 88.8889%, #000000 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="YlGnBu"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="YlGnBu"]) {
+    background: linear-gradient(to right, #FFFFD9 0%, #FFFFD9 11.1111%, #EDF8B1 11.1111%, #EDF8B1 22.2222%, #C7E9B4 22.2222%, #C7E9B4 33.3333%, #7FCDBB 33.3333%, #7FCDBB 44.4444%, #41B6C4 44.4444%, #41B6C4 55.5556%, #1D91C0 55.5556%, #1D91C0 66.6667%, #225EA8 66.6667%, #225EA8 77.7778%, #253494 77.7778%, #253494 88.8889%, #081D58 88.8889%, #081D58 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="viridis"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="viridis"]) {
+    background: linear-gradient(to right, #440154FF, #481568FF, #482677FF, #453781FF, #3F4788FF, #39558CFF, #32648EFF, #2D718EFF, #287D8EFF, #238A8DFF, #1F968BFF, #20A386FF, #29AF7FFF, #3CBC75FF, #56C667FF, #74D055FF, #94D840FF, #B8DE29FF, #DCE318FF, #FDE725FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="magma"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="magma"]) {
+    background: linear-gradient(to right, #000004FF, #07071DFF, #160F3BFF, #29115AFF, #400F73FF, #56147DFF, #6B1D81FF, #802582FF, #952C80FF, #AB337CFF, #C03A76FF, #D6456CFF, #E85362FF, #F4685CFF, #FA815FFF, #FD9A6AFF, #FEB37BFF, #FECC8FFF, #FDE4A6FF, #FCFDBFFF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="plasma"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="plasma"]) {
+    background: linear-gradient(to right, #0D0887FF, #2D0594FF, #44039EFF, #5901A5FF, #6F00A8FF, #8305A7FF, #9512A1FF, #A72197FF, #B6308BFF, #C5407EFF, #D14E72FF, #DD5E66FF, #E76E5BFF, #EF7F4FFF, #F79044FF, #FBA238FF, #FEB72DFF, #FDCB26FF, #F7E225FF, #F0F921FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="inferno"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="inferno"]) {
+    background: linear-gradient(to right, #000004FF, #08051EFF, #190C3EFF, #300A5BFF, #460B6AFF, #5C126EFF, #711A6EFF, #87216BFF, #9C2964FF, #B1325AFF, #C43C4EFF, #D64B40FF, #E55C30FF, #F17020FF, #F8870EFF, #FCA007FF, #FBB91FFF, #F7D340FF, #F1ED6FFF, #FCFFA4FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="cividis"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="cividis"]) {
+    background: linear-gradient(to right, #00204DFF, #002A64FF, #00336FFF, #1F3C6DFF, #35466BFF, #444F6BFF, #53596CFF, #5F636EFF, #6B6C71FF, #777776FF, #838079FF, #908B79FF, #9D9677FF, #ABA074FF, #B9AC70FF, #C7B76BFF, #D7C463FF, #E5D05AFF, #F5DD4DFF, #FFEA46FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="turbo"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="turbo"]) {
+    background: linear-gradient(to right, #30123BFF, #3F3994FF, #455ED2FF, #4681F7FF, #3AA2FCFF, #23C3E4FF, #18DEC1FF, #2CF09EFF, #5BFB72FF, #8EFF49FF, #B5F836FF, #D6E635FF, #EFCD3AFF, #FCB036FF, #FD8A26FF, #F36215FF, #E14209FF, #C82803FF, #A51301FF, #7A0403FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="mako"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="mako"]) {
+    background: linear-gradient(to right, #0B0405FF, #190E19FF, #27182DFF, #312142FF, #3A2C59FF, #3F3770FF, #414388FF, #3C5397FF, #38639DFF, #3573A1FF, #3482A4FF, #3491A8FF, #35A0ABFF, #3AAEADFF, #46BEADFF, #5ACCADFF, #7ED7AFFF, #A4E0BBFF, #C3E9CEFF, #DEF5E5FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="Spectral"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Spectral"]) {
+    background: linear-gradient(to right, #9E0142, #D53E4F, #F46D43, #FDAE61, #FEE08B, #FFFFBF, #E6F598, #ABDDA4, #66C2A5, #3288BD, #5E4FA2) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="RdYlGn"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="RdYlGn"]) {
+    background: linear-gradient(to right, #A50026, #D73027, #F46D43, #FDAE61, #FEE08B, #FFFFBF, #D9EF8B, #A6D96A, #66BD63, #1A9850, #006837) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="RdBu"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="RdBu"]) {
+    background: linear-gradient(to right, #67001F, #B2182B, #D6604D, #F4A582, #FDDBC7, #F7F7F7, #D1E5F0, #92C5DE, #4393C3, #2166AC, #053061) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PuOr"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PuOr"]) {
+    background: linear-gradient(to right, #7F3B08, #B35806, #E08214, #FDB863, #FEE0B6, #F7F7F7, #D8DAEB, #B2ABD2, #8073AC, #542788, #2D004B) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PRGn"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PRGn"]) {
+    background: linear-gradient(to right, #40004B, #762A83, #9970AB, #C2A5CF, #E7D4E8, #F7F7F7, #D9F0D3, #A6DBA0, #5AAE61, #1B7837, #00441B) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PiYG"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PiYG"]) {
+    background: linear-gradient(to right, #8E0152, #C51B7D, #DE77AE, #F1B6DA, #FDE0EF, #F7F7F7, #E6F5D0, #B8E186, #7FBC41, #4D9221, #276419) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="BrBG"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="BrBG"]) {
+    background: linear-gradient(to right, #543005, #8C510A, #BF812D, #DFC27D, #F6E8C3, #F5F5F5, #C7EAE5, #80CDC1, #35978F, #01665E, #003C30) !important;
+    color: black !important;
+}
+
+// The swatch rules above suppress selectize's usual hover/keyboard-active
+// background swap (that's the whole point — otherwise the gradient
+// disappears under it), so the row needs its own hover cue instead of relying
+// on one already lost to !important.
+.viz-scale-select .selectize-dropdown-content .option.active {
+    font-weight: 700;
+}
+
 // Plot preview placeholder shown before a plot is generated.
 .viz-plot-empty {
     display: flex;
@@ -1262,7 +1458,7 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.5;
 }
 
-.accordion-body {
+.viz-nav-wrap .accordion-body {
     padding: 0.5rem 0.75rem;
 }
 
@@ -1463,7 +1659,7 @@ table.dataTable td {
     }
 
     table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
-        cursor: cell;
+        cursor: copy;
 
         &:hover {
             box-shadow: inset 0 0 0 1px #838383 !important;
@@ -1474,6 +1670,10 @@ table.dataTable td {
 
 .db-page_body table.dataTable {
     cursor: not-allowed;
+}
+
+#app-database-custom_fields-fields_table td {
+    cursor: pointer;
 }
 
 .db-page_body table.dataTable tbody .col-readonly {
@@ -1917,16 +2117,19 @@ table.dataTable td {
 }
 
 // Sticky table headers inside the typing accordion panels.
-// .accordion-body (overflow-y: auto) is the scroll container. Bootstrap gives
-// it padding: 1rem by default. With padding-top > 0 the first tbody rows can
-// scroll into the padding area above the sticky thead before the sticky kicks
-// in — visually they appear above the header. Removing vertical padding
-// eliminates that gap so the table starts flush at top: 0 and nothing can
-// scroll above the header.
+//
+// The panel body cannot be the scroll container: Bootstrap gives it 1rem of
+// padding, and padding is *inside* the scrollport, so rows scrolled up into the
+// strip above the sticky thead stayed visible there — they appeared above the
+// header. Zeroing the body's padding fixes that but takes the panel's gutters
+// with it.
+//
+// So the scrolling moves one level down, onto .typing-scrollpane's table wrapper,
+// which carries the gutters everywhere except the top. The header then pins at
+// top: 0 of a scrollport whose first pixel is the table's own first pixel, and
+// nothing can render above it. Anything that must stay put while the list
+// scrolls (the Exclude / Include toolbar) sits in the pane outside that wrapper.
 .typing-accordion .accordion-body {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-
     table.dataTable {
         border-collapse: separate !important;
         border-spacing: 0;
@@ -1934,13 +2137,39 @@ table.dataTable td {
 
     thead {
         position: sticky;
-        top: -1px;
+        top: 0;
         z-index: 10;
     }
 
     thead th {
         background-color: var(--bs-body-bg) !important;
         box-shadow: 0 2px 0 var(--bs-border-color);
+    }
+}
+
+// Specificity has to clear `.typing-accordion .accordion-collapse.show
+// .accordion-body` below, which sets overflow-y: auto — hence the :has() rather
+// than a bare class (the :has() argument contributes its own class weight).
+.typing-accordion .accordion-collapse.show .accordion-body:has(> .typing-scrollpane) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+.typing-scrollpane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+
+    // DTOutput's own container — the scrollport the sticky header pins against.
+    >.datatables {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        // No top padding: that is the whole point of the split above.
+        padding: 0 1rem 1rem;
     }
 }
 
@@ -1989,7 +2218,7 @@ table.dataTable td {
 
     // Fade the opened body in instead, since height can't be animated here.
     .accordion-collapse.show .accordion-body {
-        animation: pt-accordion-fade 0.15s ease;
+        animation: pt-accordion-fade 0.18s ease-out;
     }
 
     // The header's title div only grows to fit its text by default (it's a
@@ -2001,13 +2230,18 @@ table.dataTable td {
     }
 }
 
+// The panel's own geometry cannot be animated (see transition: none above), so
+// the body slides down into the space instead - the opening reads as motion
+// even though the box itself snaps to its final size.
 @keyframes pt-accordion-fade {
     from {
         opacity: 0;
+        transform: translateY(-6px);
     }
 
     to {
         opacity: 1;
+        transform: none;
     }
 }
 
@@ -2043,6 +2277,22 @@ table.dataTable td {
 // already clears the floor and propagates the same number to both tables.
 .edit-table table.dataTable tbody td {
     min-width: 6rem;
+}
+
+// Date columns need a floor that clears a native <input type="date">'s
+// rendered width (~144px in Chromium, incl. the calendar-icon affordance),
+// not just short text. At the 6rem floor above, opening the editor forces the
+// input past the column's width and DT widens the whole column to fit it,
+// which then reflows every column to its right. Reserving the room up front
+// means the editor never has to grow the column.
+//
+// Applied via a columnDef className rather than nth-child, because which
+// columns are dates is not fixed: besides the schema's sample_collection_date,
+// a user can define any number of date variables (phylotrace_custom_fields.type
+// == "date"). Both tables that render those columns tag them, and both carry
+// .edit-table, so one selector covers Browse Entries and Custom Variables.
+.edit-table table.dataTable tbody td.col-date {
+    min-width: 9rem;
 }
 
 // One scrollport per table -------------------------------------------------
@@ -2084,7 +2334,7 @@ table.dataTable td {
         // FixedColumns draws the table's left edge on the body only; carrying
         // it on the scroller keeps the body from being offset against the
         // header by that border.
-        border-left: 1px solid #ddd;
+        // border-left: 1px solid #ddd;
     }
 
     .dataTables_scrollHead {
@@ -2116,7 +2366,7 @@ table.dataTable td {
 }
 
 .pop-comp-wrapper {
-    z-index: 5;
+    z-index: 5 !important;
 }
 
 .datatables .dataTables_wrapper div.dataTables_info {
@@ -2283,6 +2533,16 @@ table.dataTable thead>tr>th.sorting {
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+}
+
+// Exclude/Include buttons above the Selected Genomes table. Sits outside the
+// pane's scrolling wrapper (see .typing-scrollpane), so it stays reachable
+// however far down a long selection the user has scrolled.
+.typing-selection-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem 0.5rem;
 }
 
 .typing-accordion-summary {
@@ -3197,6 +3457,13 @@ label {
     width: 100%;
 }
 
+.tab-pane[data-value="custom_fields"],
+.tab-pane[data-value="visualization_panel"] {
+    .bslib-card .card-header {
+        height: 49px;
+    }
+}
+
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
 
@@ -3204,10 +3471,6 @@ label {
         border-radius: 0;
         border: none;
         box-shadow: unset;
-    }
-
-    .bslib-card .card-header {
-        height: 49px;
     }
 
     // Inner plot navset (see visualization.R's `plot_set`). bslib gives its
@@ -3668,10 +3931,16 @@ table.dataTable thead>tr>th.sorting {
 //     overflow: hidden;
 // }
 
-.edit-table input[type="text"] {
+.edit-table input[type="text"],
+.edit-table input[type="date"] {
     padding: 0;
     border: none;
     outline: none;
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button,
+.vscomp-wrapper:focus .vscomp-toggle-button {
+    box-shadow: unset;
 }
 
 .custom-fields-overview {
@@ -3688,7 +3957,7 @@ table.dataTable thead>tr>th.sorting {
 // Browse Entries excludes its 9th column (the uneditable `organism`) from the
 // editable-cell cursor. Here every column but the isolate is editable.
 .custom-fields-values table.dataTable tbody td:not(:first-child) {
-    cursor: cell;
+    cursor: copy;
 }
 
 .custom-fields-hint {

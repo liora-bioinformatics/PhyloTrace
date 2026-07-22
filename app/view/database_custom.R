@@ -157,6 +157,22 @@ server <- function(
       custom_updated(shiny$isolate(custom_updated()) + 1L)
     }
 
+    # Browse Entries edits these same values now, so the signal runs both ways:
+    # re-read when someone else writes the store. Skipped while this panel has
+    # unsaved edits — a reload would wipe them — exactly as Browse Entries
+    # guards its own reload. The bump `reload()` raises is caught here too, but
+    # only ever costs one redundant re-read: reload_token does not feed back
+    # into custom_updated.
+    shiny$observeEvent(
+      custom_updated(),
+      {
+        if (!isTRUE(State$pending)) {
+          reload_token(shiny$isolate(reload_token()) + 1L)
+        }
+      },
+      ignoreInit = TRUE
+    )
+
     # -- Store reads ---------------------------------------------------------
 
     fields <- shiny$reactive({
@@ -227,17 +243,12 @@ server <- function(
 
       bslib::navset_card_tab(
         bslib::nav_panel("Variables", DTOutput(ns("fields_table"))),
-        bslib::nav_panel("Values", DTOutput(ns("values_table"), fill = TRUE))
-        # shiny$div(
-        #   class = "custom-fields-overview",
-        #   panel_card("Defined variables", DTOutput(ns("fields_table")))
-        # ),
-        # # allow-free-text: a Text value is display text, so it takes spaces and
-        # # punctuation, unlike the variable's own (identifier) name.
-        # as_fill_carrier(shiny$div(
-        #   class = "db-page_body custom-fields-values allow-free-text edit-table",
-        #   DTOutput(ns("values_table"), fill = TRUE)
-        # ))
+        # allow-free-text: a Text value is display text, so it takes spaces and
+        # punctuation, unlike the variable's own (identifier) name.
+        bslib::nav_panel("Values", as_fill_carrier(shiny$div(
+          class = "db-page_body custom-fields-values allow-free-text edit-table",
+          DTOutput(ns("values_table"), fill = TRUE)
+        )))
       )
     })
 
@@ -321,6 +332,11 @@ server <- function(
         .dt_idx(cols, names(types)[types %in% wanted])
       }
       isolate_idx <- .dt_idx(cols, "isolate")
+      date_idx <- of_type("date")
+      cat("DEBUG cols:", paste(cols, collapse = ","), "\n")
+      cat("DEBUG types:", paste(names(types), types, sep = "=", collapse = ", "), "\n")
+      cat("DEBUG date_idx:", paste(of_type("date"), collapse = ","), "\n")
+      cat("DEBUG numeric_idx:", paste(of_type(custom_fields$NUMERIC_TYPES), collapse = ","), "\n")
 
       # Values drawn from a fixed list are offered as a <datalist> on the cell's
       # input (see initComplete below): a hint that leaves DT's own editing
@@ -350,7 +366,7 @@ server <- function(
           # picker. Both are also exempt from the app-wide charset filter in
           # app/js/index.js, which only rewrites `input[type=text]`.
           numeric = of_type(custom_fields$NUMERIC_TYPES),
-          date = of_type("date")
+          date = date_idx
         ),
         selection = "none",
         options = list(
@@ -359,9 +375,17 @@ server <- function(
           scrollX = TRUE,
           scrollY = "1px",
           scrollCollapse = TRUE,
-          columnDefs = list(
-            list(className = "dt-left", targets = "_all"),
-            list(className = "col-readonly", targets = isolate_idx)
+          columnDefs = c(
+            list(
+              list(className = "dt-left", targets = "_all"),
+              list(className = "col-readonly", targets = isolate_idx)
+            ),
+            # Reserve the width a native date input needs, so opening the
+            # editor doesn't widen the column (see col-date in main.scss).
+            # Empty `targets` would mean "all columns" to DT, hence the guard.
+            if (length(date_idx)) {
+              list(list(className = "col-date", targets = date_idx))
+            }
           ),
           initComplete = JS(sprintf(
             "function(settings) {
@@ -444,13 +468,32 @@ server <- function(
       stored <- checked$value
       # The displayed frame keeps the column's R type, so a numeric variable
       # keeps sorting as a number rather than as a string.
-      State$data[[col]][info$row] <- if (
-        def$type[[1]] %in% custom_fields$NUMERIC_TYPES
-      ) {
+      new_value <- if (def$type[[1]] %in% custom_fields$NUMERIC_TYPES) {
         suppressWarnings(as.numeric(stored))
       } else {
         stored
       }
+
+      # DT's own inline editor fires a cell_edit event whenever the input's
+      # value differs from the cell's raw JS data even when nothing was
+      # typed: an empty (NA) cell serialises to `null`, but the editor input
+      # always reads back as `""` on blur, so `"" !== null` trips DT's change
+      # check on a no-op click. Re-check the actual value here so that
+      # doesn't mark the panel dirty (compare, not `df[is.na(df)] <- ""` as
+      # database_browser.R's metadata_table does — that would coerce this
+      # table's numeric columns to character and break their sort order).
+      old_value <- State$data[[col]][[info$row]]
+      unchanged <- if (is.na(old_value) || is.na(new_value)) {
+        is.na(old_value) && is.na(new_value)
+      } else {
+        old_value == new_value
+      }
+      if (isTRUE(unchanged)) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        return()
+      }
+
+      State$data[[col]][info$row] <- new_value
 
       entry <- data.frame(
         field_id = def$id[[1]],

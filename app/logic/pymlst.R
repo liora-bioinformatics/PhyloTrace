@@ -513,15 +513,24 @@ parse_typing_log <- function(log_lines, strains) {
       )
     } else {
       # A section is complete once another section follows it or the run is over.
-      # AMR screening runs after cgMLST + classical MLST within the same section
-      # and can take a minute per genome, so an "AMR:" sentinel also marks the
-      # cgMLST result final - otherwise the strain would sit at "Running" (and
-      # the progress bar stall) for the whole screen even though typing is done.
+      # For the strain currently being processed neither holds yet, so fall back
+      # to the "Strain finished:" sentinel loop-pymlst.sh prints at the very end
+      # of a strain's pipeline - after allele calling, classical MLST *and* the
+      # AMR screen, and unconditionally, including for a strain that failed.
+      #
+      # It has to be that sentinel and not the "AMR: screening" one: screening
+      # takes minutes, and treating its *start* as the end of the strain marked
+      # the strain done while its AMR badge still read "Screening ...", which ran
+      # the progress bar up to 100% with a genome still in flight. The window
+      # this was meant to cover - allele calling finished, later steps still
+      # going - is reported off `cg_done` instead (see build_results_df's
+      # cg_status in app/view/typing.R), so the cgMLST column still flips to
+      # "Added" the moment allele calling is actually over.
       idx <- match(strain, order_seen)
       chunk <- sections[[strain]]
       complete <- idx < length(order_seen) ||
         finished_all ||
-        grepl("AMR: ", chunk, fixed = TRUE)
+        grepl("Strain finished:", chunk, fixed = TRUE)
       info <- classify(chunk, complete)
     }
     data.frame(

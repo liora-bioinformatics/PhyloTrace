@@ -7,6 +7,7 @@ box::use(
     observeEvent,
     reactive,
     reactiveVal,
+    isolate,
     div,
     h5,
     h2,
@@ -40,7 +41,17 @@ box::use(
 )
 
 box::use(
-  app / logic / custom_fields[append_custom],
+  app /
+    logic /
+    custom_fields[
+      CUSTOM_TYPES,
+      NUMERIC_TYPES,
+      append_custom,
+      coerce_custom_value,
+      custom_col,
+      list_custom_fields,
+      save_custom_values
+    ],
   app /
     logic /
     database_functions[
@@ -59,7 +70,10 @@ box::use(
 # extra metadata columns in any order.
 READONLY_COLS <- c("isolate", "organism")
 
-# Column rendered with a native date picker instead of a text input.
+# The one date-typed field in the fixed GenEpiO metadata schema. User-defined
+# date variables are *not* listed here — they are discovered from
+# `phylotrace_custom_fields.type`, so this stays the schema's own constant
+# rather than a hardcoded list of every date column on screen.
 DATE_COL <- "sample_collection_date"
 
 # 0-based DT column indices for `cols` within `all_cols`; NAs dropped.
@@ -149,7 +163,9 @@ server <- function(
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    State <- reactiveValues(data = NULL, pending = FALSE)
+    # custom_dirty buffers edits bound for phylotrace_custom_values, which the
+    # metadata write path cannot carry (see the cell-edit observer).
+    State <- reactiveValues(data = NULL, pending = FALSE, custom_dirty = NULL)
 
     # Removing many isolates re-hashes what's left and can block the R
     # session for a while; cover the whole tab so the UI reads as busy
@@ -230,8 +246,9 @@ server <- function(
     })
 
     # Names of the appended custom-variable columns (empty when the database has
-    # none defined). Read-only here - values are edited in the Custom Variables
-    # panel, which is the single write path into phylotrace_custom_values.
+    # none defined). Editable here as well as in the Custom Variables panel;
+    # both route through coerce_custom_value() / save_custom_values(), so
+    # phylotrace_custom_values still has exactly one validated write path.
     custom_cols <- reactive({
       df <- metadata_base()
       if (is.null(df)) {
@@ -241,8 +258,42 @@ server <- function(
       if (is.null(cols)) character(0) else cols
     })
 
+    # The custom-variable definitions (id / name / type / levels) behind those
+    # columns, keyed by the prefixed column name they appear under. This is what
+    # makes the type in `phylotrace_custom_fields` the authority here too: which
+    # editor a cell gets and how its value is validated both come from `type`,
+    # never from guessing at the column's contents.
+    custom_defs <- reactive({
+      cols <- custom_cols()
+      defs <- list_custom_fields(db_path())
+      if (!is.data.frame(defs) || !nrow(defs)) {
+        return(defs)
+      }
+      defs$column <- custom_col(defs$name)
+      defs[defs$column %in% cols, , drop = FALSE]
+    })
+
+    # Custom columns of a given type, as column names. Used to hand DT the
+    # right native editor per column.
+    custom_cols_of_type <- function(wanted) {
+      defs <- custom_defs()
+      if (!is.data.frame(defs) || !nrow(defs)) {
+        return(character(0))
+      }
+      defs$column[defs$type %in% wanted]
+    }
+
+    # Every date-typed column on screen: the fixed schema's collection date plus
+    # any user-defined date variable. Drives both the native date editor and the
+    # `col-date` width floor, so a custom date column behaves exactly like the
+    # built-in one.
+    date_cols <- reactive({
+      c(DATE_COL, custom_cols_of_type("date"))
+    })
+
     observeEvent(metadata_base(), {
       State$data <- metadata_base()
+      State$custom_dirty <- NULL
       State$pending <- FALSE
     })
 
@@ -358,19 +409,30 @@ server <- function(
 
       cols <- names(df)
       # MLST / AMR columns are derived from typing (classical_mlst / amr_summary)
-      # and custom variables live in their own table: none of them is editable
-      # here. The derived ones additionally start hidden, until the user opts
-      # into their category.
+      # and are never editable here. Custom variables are: their edits are
+      # validated and routed to phylotrace_custom_values on save. The derived
+      # ones additionally start hidden, until the user opts into their category.
       derived <- c(mlst_cols(), amr_cols())
-      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived, custom_cols()))
+      readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived))
       hidden_idx <- .dt_idx(cols, derived)
-      # -1 when the column is absent, so the JS never matches a real column.
-      date_idx <- c(.dt_idx(cols, DATE_COL), -1L)[[1]]
+      date_idx <- .dt_idx(cols, date_cols())
+      numeric_idx <- .dt_idx(cols, custom_cols_of_type(NUMERIC_TYPES))
 
       column_defs <- list(
         list(className = "dt-left", targets = "_all"),
         list(className = "col-readonly", targets = readonly_idx)
       )
+      # Give every date column a wider floor than the rest (see col-date in
+      # main.scss): a native date input is wider than the 6rem general floor, so
+      # without this DT grows the column the moment the editor opens and reflows
+      # everything to its right. Guarded on length() because DT's columnDefs
+      # treat an empty `targets` as "all columns".
+      if (length(date_idx)) {
+        column_defs <- c(
+          column_defs,
+          list(list(className = "col-date", targets = date_idx))
+        )
+      }
       # Start the MLST columns hidden; the picker toggles them. This keeps the
       # initial DT state consistent with the picker (which starts them
       # deselected).
@@ -391,7 +453,15 @@ server <- function(
         class = "row-border hover order-column",
         editable = list(
           target = "cell",
-          disable = list(columns = readonly_idx)
+          disable = list(columns = readonly_idx),
+          # Native inputs per column type, the same way database_custom.R does
+          # it: DT builds a <input type="date"> / <input type="number"> itself
+          # and its own blur/Escape teardown keeps working. (This replaces a
+          # MutationObserver that retyped DT's text input after the fact —
+          # which had to re-parse and re-focus the input, and only ever knew
+          # about the one hardcoded collection-date column.)
+          numeric = numeric_idx,
+          date = date_idx
         ),
         selection = "none",
         extensions = "FixedColumns",
@@ -403,11 +473,10 @@ server <- function(
           scrollCollapse = TRUE,
           fixedColumns = list(leftColumns = 1),
           columnDefs = column_defs,
-          initComplete = DT::JS(sprintf(
+          initComplete = DT::JS(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
-              var dateCol = %d;
 
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
@@ -416,44 +485,104 @@ server <- function(
               api.on('column-visibility.dt', function() {
                 api.columns.adjust().draw(false);
               });
-
-              // Swap the default text input with a native date picker for
-              // the collection-date column.
-              var observer = new MutationObserver(function(mutations) {
-                for (var i = 0; i < mutations.length; i++) {
-                  var added = mutations[i].addedNodes;
-                  for (var j = 0; j < added.length; j++) {
-                    var node = added[j];
-                    if (node.tagName !== 'INPUT') continue;
-                    var idx = api.cell(node.parentNode).index();
-                    if (idx && idx.column === dateCol) {
-                      node.type = 'date';
-                      var v = (node.value || '').trim();
-                      if (v) {
-                        var d = new Date(v);
-                        if (!isNaN(d.getTime()))
-                          node.value = d.toISOString().split('T')[0];
-                      }
-                      node.focus();
-                    }
-                  }
-                }
-              });
-              observer.observe(tableNode, { childList: true, subtree: true });
-            }",
-            date_idx
-          ))
+            }"
+          )
         )
       )
     })
 
     proxy <- dataTableProxy("metadata_table", session = session)
 
-    # Apply cell edit to in-memory state and push to table without full re-render
+    # Apply cell edit to in-memory state and push to table without full re-render.
+    #
+    # Two destinations behind one table: a metadata column is edited in place in
+    # State$data and written by save_metadata_table(), while a custom-variable
+    # column is validated against its declared type first and buffered in
+    # State$custom_dirty for save_custom_values(). Mirrors the same flow in
+    # database_custom.R, which is why the rejection and no-op handling below
+    # read the same.
     observeEvent(input$metadata_table_cell_edit, {
       req(is.data.frame(State$data))
       info <- input$metadata_table_cell_edit
-      State$data <- editData(State$data, info, rownames = FALSE)
+      col <- names(State$data)[info$col + 1L]
+
+      if (!col %in% custom_cols()) {
+        State$data <- editData(State$data, info, rownames = FALSE)
+        State$pending <- TRUE
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        return()
+      }
+
+      defs <- custom_defs()
+      def <- defs[defs$column == col, , drop = FALSE]
+      req(nrow(def) == 1)
+
+      checked <- coerce_custom_value(
+        info$value,
+        def$type[[1]],
+        def$levels[[1]]
+      )
+
+      if (!isTRUE(checked$ok)) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        showNotification(
+          paste0(
+            "\"",
+            info$value,
+            "\" is not a valid ",
+            tolower(CUSTOM_TYPES[[def$type[[1]]]]),
+            " value. ",
+            checked$reason
+          ),
+          type = "warning",
+          duration = 6
+        )
+        return()
+      }
+
+      stored <- checked$value
+      # Keep the column's R type so a numeric variable still sorts as a number.
+      new_value <- if (def$type[[1]] %in% NUMERIC_TYPES) {
+        suppressWarnings(as.numeric(stored))
+      } else {
+        stored
+      }
+
+      # DT fires cell_edit whenever the input's value differs from the cell's
+      # raw JS data, and an empty custom cell is NA (`null` in JS) while the
+      # editor always reads back "" on blur — so a click-in/click-out with no
+      # typing would otherwise mark the table dirty. Compare the real values.
+      old_value <- State$data[[col]][[info$row]]
+      unchanged <- if (is.na(old_value) || is.na(new_value)) {
+        is.na(old_value) && is.na(new_value)
+      } else {
+        old_value == new_value
+      }
+      if (isTRUE(unchanged)) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        return()
+      }
+
+      State$data[[col]][info$row] <- new_value
+
+      entry <- data.frame(
+        field_id = def$id[[1]],
+        isolate = State$data$isolate[[info$row]],
+        value = stored,
+        stringsAsFactors = FALSE
+      )
+      # One row per cell: re-editing a cell replaces its pending value.
+      keep <- if (is.null(State$custom_dirty)) {
+        NULL
+      } else {
+        State$custom_dirty[
+          !(State$custom_dirty$field_id == entry$field_id &
+            State$custom_dirty$isolate == entry$isolate),
+          ,
+          drop = FALSE
+        ]
+      }
+      State$custom_dirty <- rbind(keep, entry)
       State$pending <- TRUE
       replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
     })
@@ -472,15 +601,25 @@ server <- function(
     })
 
     observeEvent(input$save, {
-      # Drop the display-only MLST / AMR / custom columns; they live in
-      # classical_mlst, amr_summary and phylotrace_custom_values, not the
-      # metadata table, and must never be written back.
+      # Two destinations. The MLST / AMR columns are derived and never written
+      # back; the custom columns are user data but live in
+      # phylotrace_custom_values, so they are stripped from the metadata write
+      # and sent through save_custom_values() instead.
       strip <- c(mlst_cols(), amr_cols(), custom_cols())
       to_save <- State$data[,
         setdiff(names(State$data), strip),
         drop = FALSE
       ]
       save_metadata_table(db_path(), to_save)
+
+      if (is.data.frame(State$custom_dirty) && nrow(State$custom_dirty)) {
+        save_custom_values(db_path(), State$custom_dirty)
+        State$custom_dirty <- NULL
+        # Same signal the Custom Variables panel raises when it writes, so the
+        # two views of phylotrace_custom_values cannot drift apart.
+        custom_updated(isolate(custom_updated()) + 1L)
+      }
+
       State$pending <- FALSE
       showNotification(
         "Database changes saved.",
@@ -493,6 +632,7 @@ server <- function(
     observeEvent(input$discard, {
       fresh <- metadata_base()
       State$data <- fresh
+      State$custom_dirty <- NULL
       State$pending <- FALSE
       replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
     })
