@@ -31,6 +31,8 @@ box::use(
     showModal,
     modalDialog,
     modalButton,
+    withProgress,
+    setProgress,
     HTML
   ],
   stats[setNames],
@@ -85,6 +87,12 @@ box::use(
       amr_species,
       parse_amr_meta,
       store_amr_results,
+    ],
+  app /
+    logic /
+    genome_hash[
+      check_genomes,
+      store_genome_hash,
     ],
 )
 
@@ -1314,6 +1322,63 @@ server <- function(
       Typing$queued_files <- Typing$files[keep]
       Typing$queued_strains <- Typing$strains[keep]
 
+      # Content digests of every selected assembly (see app/logic/genome_hash.R).
+      # The filter above matches on strain *name* only, which hides two things
+      # the digest can see: an assembly already stored under a different isolate
+      # (typing it again enters one isolate twice), and an isolate whose stored
+      # assembly differs from the file selected now (pyMLST rejects the file as
+      # a duplicate, so its data is silently dropped). Both are reported and
+      # neither blocks the run - re-typing an assembly under a new name is
+      # legitimate, and only the metadata can settle whether two records are
+      # really the same epidemiological isolate.
+      checked <- withProgress(
+        message = "Checking genomes",
+        value = 0,
+        check_genomes(
+          db_path(),
+          Typing$strains,
+          Typing$files,
+          known_strains = existing(),
+          progress = function(value, detail) {
+            setProgress(value = value, detail = detail)
+          }
+        )
+      )
+      same_genome <- checked[checked$status == "same_genome", , drop = FALSE]
+      if (nrow(same_genome)) {
+        showNotification(
+          HTML(paste0(
+            "<strong>", nrow(same_genome), " selected assembly/assemblies ",
+            "already in the database under another name:</strong><br>",
+            paste0(
+              htmlEscape(same_genome$strain),
+              " &rarr; stored as ",
+              htmlEscape(same_genome$other),
+              collapse = "<br>"
+            ),
+            "<br><em>Identical assembly, not necessarily the same isolate - ",
+            "check the metadata before treating these as duplicates.</em>"
+          )),
+          type = "warning",
+          duration = NULL
+        )
+      }
+
+      name_conflict <- checked[checked$status == "name_conflict", , drop = FALSE]
+      if (nrow(name_conflict)) {
+        showNotification(
+          HTML(paste0(
+            "<strong>", nrow(name_conflict), " selected assembly/assemblies ",
+            "share a name with a different assembly already typed:</strong><br>",
+            paste(htmlEscape(name_conflict$strain), collapse = "<br>"),
+            "<br><em>These are skipped as duplicates and will NOT be typed. ",
+            "Rename them to type them.</em>"
+          )),
+          type = "error",
+          duration = NULL
+        )
+      }
+
       if (length(Typing$queued_files) == 0) {
         showNotification(
           "All selected genomes are already present in the database.",
@@ -1538,6 +1603,23 @@ server <- function(
       added <- sum(results$status == "Added")
       duplicate <- sum(results$status == "Duplicate")
       failed <- sum(results$status %in% c("Incompatible", "Error"))
+
+      # Record the assembly each isolate was actually typed from, for the
+      # strains the mother DB accepted (so genome_hashes never keys a row to an
+      # isolate that was rejected). This is the only provenance cgMLST has: the
+      # allele calls say nothing about the input they were called from.
+      # Best-effort and additive, exactly like the AMR / classical MLST blocks
+      # around it - a genome that can no longer be read is simply not recorded.
+      for (strain in results$strain[results$status == "Added"]) {
+        file <- Typing$queued_files[match(strain, Typing$queued_strains)]
+        if (is.na(file)) {
+          next
+        }
+        tryCatch(
+          store_genome_hash(db_path(), strain, file),
+          error = function(e) NULL
+        )
+      }
 
       # Persist AMR screening results for the strains that were actually added
       # (so amr_results never keys rows to an isolate the mother DB rejected).

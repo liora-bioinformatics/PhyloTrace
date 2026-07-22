@@ -496,7 +496,7 @@ server <- function(
       isTRUE(attr(resolved()$checks, "blocked"))
     })
 
-    # Staged isolates must not collide with a local souche or another set.
+    # Staged isolates must not collide with a local isolate or another set.
     typing_clashes <- reactive({
       r <- resolved()
       if (!isTRUE(r$linkable)) {
@@ -554,12 +554,12 @@ server <- function(
     resolutions <- reactive({
       res <- default_resolutions(classification())
       for (i in seq_len(nrow(res))) {
-        if (res$ext_souche[i] %in% clashes()) {
+        if (res$ext_isolate[i] %in% clashes()) {
           action <- input[[paste0("action_", i)]] %||% "skip"
           res$action[i] <- action
           if (identical(action, "rename")) {
             nm <- input[[paste0("rename_", i)]] %||% ""
-            res$final_souche[i] <- trimws(nm)
+            res$final_isolate[i] <- trimws(nm)
           }
         }
       }

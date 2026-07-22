@@ -44,6 +44,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database],
+  app / logic / database_functions[migrate_isolate_key],
   app / view / landing_page,
   app / view / scheme_browser,
   app / view / database,
@@ -376,6 +377,9 @@ server <- function(id) {
       )
       w$show()
 
+      # Bring the isolate key up to the current spelling before anything reads
+      # the database, then fill in any missing allele hashes.
+      migrate_isolate_key(db_path)
       hash_database(db_path)
 
       app_panels <- list(

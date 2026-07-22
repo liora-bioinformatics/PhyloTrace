@@ -669,8 +669,8 @@ clamlst_refs <- function(cla_db_path) {
 
 ### Persist classical MLST results (+ provenance) into the mother database
 # Stored long / per-allele, mirroring the mother DB's own `mlst` table
-# (one row per locus, keyed on `souche`): each row is one gene's allele call for
-# a strain, columns `souche, gene, allele, sequence`. The strain's ST and the
+# (one row per locus, keyed on `isolate`): each row is one gene's allele call for
+# a strain, columns `isolate, gene, allele, sequence`. The strain's ST and the
 # run-level provenance (scheme, reference release, alembic schema marker,
 # repository, identity/coverage, pyMLST version, timestamp) are carried on every
 # allele row so each is self-describing - strains may be typed across separate
@@ -782,7 +782,7 @@ store_clamlst_results <- function(
     con,
     "CREATE TABLE IF NOT EXISTS classical_mlst (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       souche TEXT,
+       isolate TEXT,
        gene TEXT,
        allele TEXT,
        sequence TEXT,
@@ -804,7 +804,7 @@ store_clamlst_results <- function(
   ok <- tryCatch(
     {
       for (i in seq_len(nrow(results))) {
-        souche <- as.character(results$strain[i])
+        isolate <- as.character(results$strain[i])
         status <- status_vec[i]
         # The ST number is only meaningful for a registered (known) profile;
         # novel / partial results carry NULL st and are identified by `status`.
@@ -825,20 +825,20 @@ store_clamlst_results <- function(
         # Refresh this strain's rows so re-typing never duplicates them.
         dbExecute(
           con,
-          "DELETE FROM classical_mlst WHERE souche = ?",
-          params = list(souche)
+          "DELETE FROM classical_mlst WHERE isolate = ?",
+          params = list(isolate)
         )
 
         for (j in seq_len(nrow(genes))) {
           dbExecute(
             con,
             "INSERT INTO classical_mlst
-               (souche, gene, allele, sequence, st, status, scheme,
+               (isolate, gene, allele, sequence, st, status, scheme,
                 scheme_version, alembic_version, repository, identity, coverage,
                 pymlst_version, called_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params = list(
-              souche,
+              isolate,
               genes$gene[j],
               genes$allele[j],
               seq_for(genes$gene[j], genes$allele[j]),

@@ -129,7 +129,7 @@ box::use(
       uiOutput(ns("type_info")),
       card(
         class = "viz-creator-form",
-        card_header("Create"),
+        card_header(uiOutput(ns("create_header"), inline = TRUE)),
         card_body(
           div(
             # Plot names are display text, not identifiers: opt out of the
@@ -500,6 +500,14 @@ server <- function(
     }
 
     # ---------------------------------------------------- creator form -----
+    # "Create <Plot Type>" — keeps the form header in sync with the picker
+    # without the header needing its own copy of the type-name lookup.
+    output$create_header <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      sprintf("Create %s", m$title)
+    })
+
     # What the currently picked plot type draws, and what it needs to draw it.
     # Copy and preview images come from the engine registry
     # (visualization_plot$plot_type_meta), so this reacts to the picker without

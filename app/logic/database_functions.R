@@ -23,6 +23,73 @@ box::use(
 # be matched.
 .norm_locus <- function(x) gsub("[-_]", "-", x)
 
+# PhyloTrace-owned tables that key on an isolate name. pyMLST's own `mlst` is
+# deliberately absent: it spells the same key `souche`, that column is written by
+# pyMLST/alembic, and it is the one place in the schema allowed to say so.
+ISOLATE_KEYED_TABLES <- c(
+  "classical_mlst",
+  "amr_results",
+  "amr_summary",
+  "phylotrace_custom_values",
+  "genome_hashes"
+)
+
+### Bring a database's isolate key up to the current spelling
+# These tables used to inherit pyMLST's `souche` for their isolate column. They
+# now say `isolate`, so a database written before that change carries columns no
+# query can find - the app fails on load with "no such column: isolate". The
+# rename is metadata-only (SQLite rewrites the schema, not the rows), so it costs
+# nothing on a large database and is safe to attempt on every load: a table
+# already using `isolate`, or missing entirely, is skipped.
+#
+# Runs beside hash_database() when a database is opened. Best-effort by design -
+# a failure here must not stop the database from loading, and the caller finds
+# out through the same "no such column" error it would have had anyway.
+#' @export
+migrate_isolate_key <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(invisible(character(0)))
+  }
+
+  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  on.exit(dbDisconnect(con))
+
+  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
+  renamed <- character(0)
+
+  for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
+    cols <- tryCatch(dbListFields(con, nm), error = function(e) character(0))
+    if (!("souche" %in% cols) || "isolate" %in% cols) {
+      next
+    }
+    ok <- tryCatch(
+      {
+        dbExecute(
+          con,
+          sprintf("ALTER TABLE %s RENAME COLUMN souche TO isolate", nm)
+        )
+        TRUE
+      },
+      error = function(e) FALSE
+    )
+    if (isTRUE(ok)) renamed <- c(renamed, nm)
+  }
+
+  if (length(renamed)) {
+    message(paste(
+      "Renamed souche -> isolate in:",
+      paste(renamed, collapse = ", ")
+    ))
+  }
+
+  invisible(renamed)
+}
+
 
 #' @export
 load_db_scheme_overview <- function(db_path) {
@@ -222,7 +289,7 @@ load_classical_mlst <- function(db_path) {
   cm <- dbGetQuery(
     con,
     sprintf(
-      "SELECT souche, gene, allele, st%s FROM classical_mlst ORDER BY id",
+      "SELECT isolate, gene, allele, st%s FROM classical_mlst ORDER BY id",
       if (has_status) ", status" else ""
     )
   )
@@ -233,19 +300,19 @@ load_classical_mlst <- function(db_path) {
     cm$status <- NA_character_
   }
 
-  isolates <- unique(cm$souche)
+  isolates <- unique(cm$isolate)
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
   # ST display: the registered number when known, otherwise the status word
   # ("novel"/"partial") so a profile without an ST is still self-explanatory.
   st <- vapply(
     isolates,
-    function(s) .first_nonempty(cm$st[cm$souche == s]),
+    function(s) .first_nonempty(cm$st[cm$isolate == s]),
     character(1)
   )
   status <- vapply(
     isolates,
-    function(s) .first_nonempty(cm$status[cm$souche == s]),
+    function(s) .first_nonempty(cm$status[cm$isolate == s]),
     character(1)
   )
   missing <- is.na(st) | !nzchar(st)
@@ -254,8 +321,8 @@ load_classical_mlst <- function(db_path) {
 
   # One column per locus (first-typed order), holding the isolate's allele.
   for (locus in unique(cm$gene)) {
-    sub <- cm[cm$gene == locus, c("souche", "allele"), drop = FALSE]
-    allele <- tapply(sub$allele, sub$souche, function(v) v[[1]])
+    sub <- cm[cm$gene == locus, c("isolate", "allele"), drop = FALSE]
+    allele <- tapply(sub$allele, sub$isolate, function(v) v[[1]])
     out[[paste0(MLST_COL_PREFIX, locus)]] <- as.character(allele[isolates])
   }
 
@@ -331,13 +398,13 @@ load_amr <- function(db_path) {
 
   as <- dbGetQuery(
     con,
-    "SELECT souche, section, drug_class, genes FROM amr_summary ORDER BY id"
+    "SELECT isolate, section, drug_class, genes FROM amr_summary ORDER BY id"
   )
   if (!nrow(as)) {
     return(NULL)
   }
 
-  isolates <- unique(as$souche)
+  isolates <- unique(as$isolate)
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
   # Resistance profile: the drug classes with a confident (matches) hit.
@@ -345,7 +412,7 @@ load_amr <- function(db_path) {
     isolates,
     function(s) {
       cls <- unique(as$drug_class[
-        as$souche == s & as$section == "matches"
+        as$isolate == s & as$section == "matches"
       ])
       if (length(cls)) paste(cls, collapse = ", ") else NA_character_
     },
@@ -356,10 +423,10 @@ load_amr <- function(db_path) {
   # One column per drug class / group (first-seen order), holding the isolate's
   # genes across all sections, comma-joined.
   for (dc in unique(as$drug_class)) {
-    sub <- as[as$drug_class == dc, c("souche", "genes"), drop = FALSE]
+    sub <- as[as$drug_class == dc, c("isolate", "genes"), drop = FALSE]
     genes <- tapply(
       sub$genes,
-      sub$souche,
+      sub$isolate,
       function(v) paste(unique(v[!is.na(v) & nzchar(v)]), collapse = ", ")
     )
     out[[paste0(AMR_COL_PREFIX, dc)]] <- as.character(genes[isolates])
@@ -442,16 +509,20 @@ remove_isolates <- function(db_path, isolates) {
     )
   }
 
-  # Custom-variable values key on `souche` with no foreign key onto `mlst` (like
-  # classical_mlst / amr_*), so they have to be pruned here or a later isolate
-  # of the same name would silently inherit the removed one's values.
-  if ("phylotrace_custom_values" %in% tables) {
+  # Every remaining table keys on `isolate` with no foreign key onto `mlst`
+  # (whose matching column is pyMLST's `souche`), so nothing cascades the delete
+  # for us - each has to be pruned here. Leaving the rows behind is not
+  # cosmetic, because the key is a *name*:
+  # a later isolate typed under the same name silently inherits the removed
+  # one's classical ST, AMR calls and custom-variable values. For
+  # `genome_hashes` the consequence is sharper still - a stale digest makes that
+  # new isolate read as a re-type of the deleted one, or raises a name conflict
+  # against an assembly the database no longer holds, corrupting the very signal
+  # the table exists to give.
+  for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
     dbExecute(
       con,
-      sprintf(
-        "DELETE FROM phylotrace_custom_values WHERE souche IN (%s)",
-        placeholders
-      ),
+      sprintf("DELETE FROM %s WHERE isolate IN (%s)", nm, placeholders),
       params = as.list(isolates)
     )
   }

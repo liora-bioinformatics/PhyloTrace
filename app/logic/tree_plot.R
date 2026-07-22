@@ -65,7 +65,7 @@ box::use(
 .circular_layouts <- c("circular", "inward")
 
 # Per-tip metadata keyed by tip label, for `%<+%`. The tree's tip labels are the
-# souche names, so the join key is the `isolate` column (one row per souche).
+# isolate names, so the join key is the `isolate` column (one row per isolate).
 # The first column (`label`) must match the tree's tip labels.
 #' @export
 tree_tip_metadata <- function(tree, metadata) {

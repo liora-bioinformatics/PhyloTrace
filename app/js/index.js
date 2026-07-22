@@ -1,4 +1,5 @@
 import "./busy-shield";
+import "./dt-column-sizing";
 
 // Restrict free-text entry to a filesystem-/SQL-safe character set
 // ([a-zA-Z0-9_-]) so anything the user types to *name* an identifier (a
@@ -37,6 +38,17 @@ document.addEventListener("input", function (event) {
   if (!regex.test(el.value)) {
     el.value = el.value.replace(/[^a-zA-Z0-9_-]/g, "");
   }
+});
+
+// Editable DT tables (database_browser.R, database_custom.R) only enter
+// cell-edit mode on double click — DT hard-codes a `dblclick.dt` handler in
+// its own htmlwidget bundle with no option to configure the trigger. Promote
+// the first click to that same event so editing starts immediately. Mirrors
+// DT's own `e.target !== this` guard, so a click on a cell's already-open
+// <input> (itself inside the td) is left alone rather than re-opening it.
+$(document).on("click", ".edit-table table.dataTable tbody td", function (e) {
+  if (e.target !== this) return;
+  $(this).trigger("dblclick");
 });
 
 $(document).one("shiny:idle", function () {

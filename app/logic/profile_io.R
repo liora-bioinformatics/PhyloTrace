@@ -144,12 +144,12 @@ build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   sql <- if (identical(value_kind, "hash")) {
     "SELECT m.souche AS isolate, m.gene AS gene, h.hash AS value
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche
+       JOIN sel ON sel.isolate = m.souche
        JOIN hashes h ON h.id = m.seqid"
   } else {
     "SELECT m.souche AS isolate, m.gene AS gene, CAST(m.seqid AS TEXT) AS value
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche"
+       JOIN sel ON sel.isolate = m.souche"
   }
 
   long_to_wide(dbGetQuery(con, sql), isolates, loci)
@@ -160,7 +160,7 @@ write_selection <- function(con, isolates) {
   dbWriteTable(
     con,
     "sel",
-    data.frame(souche = isolates, stringsAsFactors = FALSE),
+    data.frame(isolate = isolates, stringsAsFactors = FALSE),
     temporary = TRUE,
     overwrite = TRUE
   )
@@ -217,7 +217,7 @@ allele_fasta <- function(db_path, isolates) {
     con,
     "SELECT DISTINCT m.gene AS gene, h.hash AS hash, s.sequence AS sequence
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche
+       JOIN sel ON sel.isolate = m.souche
        JOIN hashes h ON h.id = m.seqid
        JOIN sequences s ON s.id = m.seqid
       ORDER BY m.gene, h.hash"
@@ -354,7 +354,7 @@ typing_preview <- function(db_path, isolates) {
   counts <- dbGetQuery(
     con,
     "SELECT COUNT(*) AS calls, COUNT(DISTINCT m.seqid) AS alleles
-       FROM mlst m JOIN sel ON sel.souche = m.souche"
+       FROM mlst m JOIN sel ON sel.isolate = m.souche"
   )
 
   cells <- length(isolates) * n_loci

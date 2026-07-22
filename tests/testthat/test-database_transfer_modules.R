@@ -377,7 +377,7 @@ test_that("import module surfaces name clashes and honours rename", {
       )
 
       expect_equal(accepted(), 2L)
-      expect_identical(resolutions()$final_souche[idx], "B_imp")
+      expect_identical(resolutions()$final_isolate[idx], "B_imp")
 
       session$setInputs(confirm_merge = 1)
       expect_equal(session$returned$imported(), 1L)

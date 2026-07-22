@@ -46,12 +46,19 @@ SCHEME_TABLES <- c(
 )
 
 # Isolate-keyed analysis-result tables, carried only when the caller opts in.
-# All three key solely on `souche` (no `seqid` / allele foreign keys), so they
-# copy with a plain souche filter - no interaction with the allele remap.
+# All three key solely on `isolate` (no `seqid` / allele foreign keys), so they
+# copy with a plain isolate filter - no interaction with the allele remap.
 # `include_classical` gates `classical_mlst`; `include_amr` gates both AMR tables
 # (they are produced together).
 CLASSICAL_TABLES <- c("classical_mlst")
 AMR_TABLES <- c("amr_results", "amr_summary")
+
+# The assembly digests (app/logic/genome_hash.R). Unlike the tables above these
+# are not an analysis result to opt into but provenance: a few hundred bytes per
+# isolate, carrying no lab-internal path or file name, and the only thing that
+# lets the receiving lab check an isolate was typed from the assembly it thinks.
+# They therefore always travel when the source has them.
+GENOME_TABLES <- c("genome_hashes")
 
 # The user-defined custom variables (see app/logic/custom_fields.R). Unlike the
 # result tables these are carried per *variable*, not all-or-nothing: a custom
@@ -64,7 +71,8 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 .result_tables <- function(src_tables, include_classical, include_amr) {
   wanted <- c(
     if (isTRUE(include_classical)) CLASSICAL_TABLES,
-    if (isTRUE(include_amr)) AMR_TABLES
+    if (isTRUE(include_amr)) AMR_TABLES,
+    GENOME_TABLES
   )
   intersect(wanted, src_tables)
 }
@@ -197,7 +205,7 @@ export_preview <- function(
             COUNT(DISTINCT gene) AS loci,
             COUNT(DISTINCT seqid) AS alleles
        FROM mlst
-      WHERE souche = ? OR souche IN (SELECT souche FROM sel)",
+      WHERE souche = ? OR souche IN (SELECT isolate FROM sel)",
     params = list(REF_SOUCHE)
   )
 
@@ -221,7 +229,7 @@ export_preview <- function(
   dbWriteTable(
     con,
     "sel",
-    data.frame(souche = isolates, stringsAsFactors = FALSE),
+    data.frame(isolate = isolates, stringsAsFactors = FALSE),
     temporary = TRUE,
     overwrite = TRUE
   )
@@ -377,7 +385,7 @@ export_database <- function(
       dbExecute(
         con,
         "INSERT INTO mlst SELECT * FROM src.mlst
-          WHERE souche = ? OR souche IN (SELECT souche FROM sel)",
+          WHERE souche = ? OR souche IN (SELECT isolate FROM sel)",
         params = list(REF_SOUCHE)
       )
 
@@ -404,7 +412,7 @@ export_database <- function(
           con,
           sprintf(
             "INSERT INTO metadata (%s) SELECT %s FROM src.metadata
-              WHERE isolate IN (SELECT souche FROM sel)",
+              WHERE isolate IN (SELECT isolate FROM sel)",
             cols,
             cols
           )
@@ -412,7 +420,7 @@ export_database <- function(
       }
 
       # Analysis-result tables, filtered to the selected isolates. Their DDL was
-      # already replayed above (they are in `copy_tables`); each keys on `souche`
+      # already replayed above (they are in `copy_tables`); each keys on `isolate`
       # with no allele foreign keys, so a plain filter suffices. The fresh output
       # has a single source, so carrying source ids via `SELECT *` cannot collide.
       if (length(result_tables)) {
@@ -422,7 +430,7 @@ export_database <- function(
             con,
             sprintf(
               "INSERT INTO %1$s SELECT * FROM src.%1$s
-                WHERE souche IN (SELECT souche FROM sel)",
+                WHERE isolate IN (SELECT isolate FROM sel)",
               nm
             )
           )
@@ -448,7 +456,7 @@ export_database <- function(
           con,
           "INSERT INTO phylotrace_custom_values
              SELECT * FROM src.phylotrace_custom_values
-            WHERE souche IN (SELECT souche FROM sel)
+            WHERE isolate IN (SELECT isolate FROM sel)
               AND field_id IN (SELECT id FROM phylotrace_custom_fields)"
         )
       }

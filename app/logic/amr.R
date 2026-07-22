@@ -4,7 +4,7 @@
 # classical MLST typing run. Each freshly typed assembly is screened with
 # abritamr (a curation wrapper around NCBI AMRFinderPlus, installed in the app's
 # own conda env) and the results are stored in the mother database, keyed on the
-# same `souche` (strain name = FASTA basename) used by `mlst` / `classical_mlst`
+# same isolate key (strain name = FASTA basename) used by `classical_mlst`
 # / `metadata`.
 #
 # AMRFinderPlus always runs with `--plus`, so it reports acquired AMR genes,
@@ -18,7 +18,7 @@
 #   * amr_results  - one row per detected element (parsed from amrfinder.out),
 #                    the granular source of truth.
 #   * amr_summary  - abritamr's curated per-isolate drug-class rollup, stored
-#                    tidy/long (souche, section, drug_class, genes) so it pivots
+#                    tidy/long (isolate, section, drug_class, genes) so it pivots
 #                    trivially to the classic matrix without dynamic columns.
 # Run-level provenance (tool versions, AMRFinder DB version, whether point
 # mutations were enabled) is denormalised onto every amr_results row.
@@ -196,7 +196,7 @@ parse_amrfinder_out <- function(path) {
 # Melt one abritamr summary_*.txt (single-sample: a header row of drug-class /
 # group names led by "Isolate", then one data row of comma-joined gene lists).
 # The "Isolate" cell holds abritamr's own label (the output prefix path), so it
-# is dropped - the caller supplies the real souche. Returns (drug_class, genes)
+# is dropped - the caller supplies the real isolate. Returns (drug_class, genes)
 # for every non-empty cell.
 .melt_summary <- function(path) {
   empty <- data.frame(
@@ -275,7 +275,7 @@ parse_abritamr_summary <- function(dir) {
 ### Persist one strain's AMR screen into the mother database
 # Reads `amr_dir/amrfinder.out` (granular hits) and `amr_dir/summary_*.txt`
 # (curated rollup) and writes them to `amr_results` / `amr_summary`, both keyed
-# on `souche = strain`. A strain's existing rows are replaced so re-screening
+# on `isolate = strain`. A strain's existing rows are replaced so re-screening
 # never duplicates them. When amrfinder.out is absent the screen did not run for
 # this strain, so nothing is touched (existing rows are preserved). A strain that
 # was screened but had no hits ends up with no rows - matching how a genome with
@@ -327,7 +327,7 @@ store_amr_results <- function(
     con,
     "CREATE TABLE IF NOT EXISTS amr_results (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       souche TEXT,
+       isolate TEXT,
        gene_symbol TEXT,
        sequence_name TEXT,
        element_type TEXT,
@@ -356,7 +356,7 @@ store_amr_results <- function(
     con,
     "CREATE TABLE IF NOT EXISTS amr_summary (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       souche TEXT,
+       isolate TEXT,
        section TEXT,
        drug_class TEXT,
        genes TEXT,
@@ -371,12 +371,12 @@ store_amr_results <- function(
       # Refresh this strain's rows so re-screening never duplicates them.
       dbExecute(
         con,
-        "DELETE FROM amr_results WHERE souche = ?",
+        "DELETE FROM amr_results WHERE isolate = ?",
         params = list(strain)
       )
       dbExecute(
         con,
-        "DELETE FROM amr_summary WHERE souche = ?",
+        "DELETE FROM amr_summary WHERE isolate = ?",
         params = list(strain)
       )
 
@@ -384,7 +384,7 @@ store_amr_results <- function(
         dbExecute(
           con,
           "INSERT INTO amr_results
-             (souche, gene_symbol, sequence_name, element_type, element_subtype,
+             (isolate, gene_symbol, sequence_name, element_type, element_subtype,
               class, subclass, method, pct_coverage, pct_identity, contig,
               start, stop, strand, ref_accession, ref_name, organism,
               point_mutations, identity_threshold, abritamr_version,
@@ -421,7 +421,7 @@ store_amr_results <- function(
       for (i in seq_len(nrow(summary))) {
         dbExecute(
           con,
-          "INSERT INTO amr_summary (souche, section, drug_class, genes, called_at)
+          "INSERT INTO amr_summary (isolate, section, drug_class, genes, called_at)
            VALUES (?, ?, ?, ?, ?)",
           params = list(
             strain,

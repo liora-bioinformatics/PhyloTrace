@@ -13,7 +13,7 @@
 # to their database and travel with the file:
 #
 #   phylotrace_custom_fields   one row per variable  (name, type, description)
-#   phylotrace_custom_values   one row per filled cell (field_id, souche, value)
+#   phylotrace_custom_values   one row per filled cell (field_id, isolate, value)
 #
 # The values are stored long rather than as one column per variable: renaming a
 # variable is then a single UPDATE with no DDL, and pivoting long -> wide at
@@ -114,9 +114,9 @@ CUSTOM_SCHEMA_DDL <- c(
    )",
   "CREATE TABLE IF NOT EXISTS phylotrace_custom_values (
      field_id INTEGER NOT NULL,
-     souche TEXT NOT NULL,
+     isolate TEXT NOT NULL,
      value TEXT,
-     PRIMARY KEY (field_id, souche)
+     PRIMARY KEY (field_id, isolate)
    )"
 )
 
@@ -594,25 +594,25 @@ load_custom_values <- function(db_path, fields = NULL) {
   values <- if ("phylotrace_custom_values" %in% dbListTables(con)) {
     dbGetQuery(
       con,
-      "SELECT field_id, souche, value FROM phylotrace_custom_values"
+      "SELECT field_id, isolate, value FROM phylotrace_custom_values"
     )
   } else {
     data.frame(
       field_id = integer(0),
-      souche = character(0),
+      isolate = character(0),
       value = character(0),
       stringsAsFactors = FALSE
     )
   }
   values <- values[values$field_id %in% defs$id, , drop = FALSE]
 
-  isolates <- unique(values$souche)
+  isolates <- unique(values$isolate)
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
   for (i in seq_len(nrow(defs))) {
     sub <- values[values$field_id == defs$id[[i]], , drop = FALSE]
     col <- rep(NA_character_, length(isolates))
-    col[match(sub$souche, isolates)] <- sub$value
+    col[match(sub$isolate, isolates)] <- sub$value
     out[[custom_col(defs$name[[i]])]] <- .cast_values(col, defs$type[[i]])
   }
 
@@ -658,7 +658,7 @@ append_custom <- function(meta, db_path, fields = NULL) {
 
 #' Write edited cells back.
 #'
-#' `edits` is a data frame of `field_id` / `souche` / `value`, where `value` is
+#' `edits` is a data frame of `field_id` / `isolate` / `value`, where `value` is
 #' already canonical (i.e. it came out of `coerce_custom_value()`). An NA or
 #' empty value deletes the row rather than storing a blank, so `n_filled` and
 #' the export filters stay meaningful. The whole batch is one transaction.
@@ -682,10 +682,10 @@ save_custom_values <- function(db_path, edits) {
         dbExecute(
           con,
           "DELETE FROM phylotrace_custom_values
-            WHERE field_id = ? AND souche = ?",
+            WHERE field_id = ? AND isolate = ?",
           params = list(
             as.integer(edits$field_id[clear]),
-            as.character(edits$souche[clear])
+            as.character(edits$isolate[clear])
           )
         )
       }
@@ -695,10 +695,10 @@ save_custom_values <- function(db_path, edits) {
         dbExecute(
           con,
           "INSERT OR REPLACE INTO phylotrace_custom_values
-             (field_id, souche, value) VALUES (?, ?, ?)",
+             (field_id, isolate, value) VALUES (?, ?, ?)",
           params = list(
             as.integer(edits$field_id[!clear]),
-            as.character(edits$souche[!clear]),
+            as.character(edits$isolate[!clear]),
             value[!clear]
           )
         )

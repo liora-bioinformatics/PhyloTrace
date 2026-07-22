@@ -140,7 +140,7 @@ server <- function(
     ns <- session$ns
 
     # `data` is the displayed isolate x variable frame, `dirty` the cells edited
-    # since the last save (one row per cell: field_id / souche / value), so a
+    # since the last save (one row per cell: field_id / isolate / value), so a
     # save writes only what actually changed.
     State <- shiny$reactiveValues(data = NULL, dirty = NULL, pending = FALSE)
 
@@ -225,18 +225,19 @@ server <- function(
         )))
       }
 
-      shiny$div(
-        class = "custom-fields-layout",
-        shiny$div(
-          class = "custom-fields-overview",
-          panel_card("Defined variables", DTOutput(ns("fields_table")))
-        ),
-        # allow-free-text: a Text value is display text, so it takes spaces and
-        # punctuation, unlike the variable's own (identifier) name.
-        as_fill_carrier(shiny$div(
-          class = "db-page_body custom-fields-values allow-free-text",
-          DTOutput(ns("values_table"), fill = TRUE)
-        ))
+      bslib::navset_card_tab(
+        bslib::nav_panel("Variables", DTOutput(ns("fields_table"))),
+        bslib::nav_panel("Values", DTOutput(ns("values_table"), fill = TRUE))
+        # shiny$div(
+        #   class = "custom-fields-overview",
+        #   panel_card("Defined variables", DTOutput(ns("fields_table")))
+        # ),
+        # # allow-free-text: a Text value is display text, so it takes spaces and
+        # # punctuation, unlike the variable's own (identifier) name.
+        # as_fill_carrier(shiny$div(
+        #   class = "db-page_body custom-fields-values allow-free-text edit-table",
+        #   DTOutput(ns("values_table"), fill = TRUE)
+        # ))
       )
     })
 
@@ -453,7 +454,7 @@ server <- function(
 
       entry <- data.frame(
         field_id = def$id[[1]],
-        souche = State$data$isolate[[info$row]],
+        isolate = State$data$isolate[[info$row]],
         value = stored,
         stringsAsFactors = FALSE
       )
@@ -463,7 +464,7 @@ server <- function(
       } else {
         State$dirty[
           !(State$dirty$field_id == entry$field_id &
-            State$dirty$souche == entry$souche),
+            State$dirty$isolate == entry$isolate),
           ,
           drop = FALSE
         ]

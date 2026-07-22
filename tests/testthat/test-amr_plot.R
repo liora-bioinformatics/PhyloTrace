@@ -21,7 +21,7 @@ impl <- attr(amr_plot, "namespace")
 # as an all-zero row) and ISO-6 carries only a low-identity hit.
 hits_fixture <- function() {
   data.frame(
-    souche = c(
+    isolate = c(
       "ISO-1", "ISO-1", "ISO-1",
       "ISO-2", "ISO-2",
       "ISO-3", "ISO-3",
@@ -61,7 +61,7 @@ hits_fixture <- function() {
 # abritamr's curated rollup, shaped like `amr_summary`.
 sections_fixture <- function() {
   data.frame(
-    souche = c(
+    isolate = c(
       "ISO-1", "ISO-1", "ISO-1",
       "ISO-2", "ISO-2",
       "ISO-3",
@@ -93,7 +93,7 @@ test_that("readers return correctly shaped empty frames without a database", {
   expect_s3_class(hits, "data.frame")
   expect_identical(nrow(hits), 0L)
   expect_true(all(
-    c("souche", "gene_symbol", "element_type", "class", "pct_identity") %in%
+    c("isolate", "gene_symbol", "element_type", "class", "pct_identity") %in%
       names(hits)
   ))
 
@@ -102,7 +102,7 @@ test_that("readers return correctly shaped empty frames without a database", {
   expect_identical(nrow(sections), 0L)
   expect_named(
     sections,
-    c("souche", "section", "drug_class", "genes")
+    c("isolate", "section", "drug_class", "genes")
   )
 
   expect_false(amr_plot$has_amr_data(NULL))
@@ -163,7 +163,7 @@ test_that("the identity and coverage floors drop only weak hits", {
   hits <- hits_fixture()
 
   kept <- amr_plot$filter_amr_hits(hits, min_identity = 90)
-  expect_false("ISO-6" %in% kept$souche)
+  expect_false("ISO-6" %in% kept$isolate)
   expect_identical(nrow(kept), nrow(hits) - 1L)
 
   expect_identical(
@@ -180,7 +180,7 @@ test_that("hits with no measured percentages survive a floor", {
   hits$pct_coverage[1] <- NA_real_
 
   kept <- amr_plot$filter_amr_hits(hits, min_identity = 99, min_coverage = 99)
-  expect_true("blaTEM" %in% kept$gene_symbol[kept$souche == "ISO-1"])
+  expect_true("blaTEM" %in% kept$gene_symbol[kept$isolate == "ISO-1"])
 })
 
 # --- presence matrix ---------------------------------------------------------
@@ -266,7 +266,7 @@ test_that("the strongest call wins when an isolate appears in two sections", {
   sections <- rbind(
     sections,
     data.frame(
-      souche = "ISO-1",
+      isolate = "ISO-1",
       section = "matches",
       drug_class = "Quinolone",
       genes = "x",

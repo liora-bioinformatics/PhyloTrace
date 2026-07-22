@@ -51,7 +51,7 @@ box::use(
 
 # Read the wide allele profile (rows = samples, cols = loci, value = allele id)
 # from the `mlst` table. The synthetic `ref` core-genome strain is excluded.
-# Returns an integer matrix with sample (souche) names as rownames; absent
+# Returns an integer matrix with sample (isolate) names as rownames; absent
 # sample/locus combinations are NA. When `isolates` is non-NULL, the matrix is
 # restricted to those sample names (the Visualization isolate preselection) —
 # NULL means all isolates.
@@ -72,7 +72,7 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
 
   long <- dbGetQuery(
     con,
-    "SELECT souche, gene, seqid FROM mlst WHERE souche != 'ref'"
+    "SELECT souche AS isolate, gene, seqid FROM mlst WHERE souche != 'ref'"
   )
 
   if (length(imported_sets)) {
@@ -84,13 +84,13 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
   }
 
   wide <- long |>
-    select(souche, gene, seqid) |>
+    select(isolate, gene, seqid) |>
     pivot_wider(names_from = gene, values_from = seqid)
 
-  souche <- wide$souche
-  mat <- as.matrix(wide[, setdiff(names(wide), "souche"), drop = FALSE])
+  isolate <- wide$isolate
+  mat <- as.matrix(wide[, setdiff(names(wide), "isolate"), drop = FALSE])
   storage.mode(mat) <- "integer"
-  rownames(mat) <- souche
+  rownames(mat) <- isolate
 
   if (!is.null(isolates)) {
     mat <- mat[rownames(mat) %in% isolates, , drop = FALSE]
@@ -123,7 +123,7 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
   }
 
   data.frame(
-    souche = imp$isolate,
+    isolate = imp$isolate,
     gene = imp$gene,
     seqid = as.integer(imp$seqid),
     stringsAsFactors = FALSE

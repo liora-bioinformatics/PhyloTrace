@@ -130,7 +130,7 @@ ui <- function(id) {
       ),
       as_fill_carrier(
         div(
-          class = "db-page_body",
+          class = "db-page_body edit-table",
           DTOutput(ns("metadata_table"), fill = TRUE)
         )
       )
@@ -394,12 +394,14 @@ server <- function(
           disable = list(columns = readonly_idx)
         ),
         selection = "none",
+        extensions = "FixedColumns",
         options = list(
           dom = "ti",
           paging = FALSE,
           scrollX = TRUE,
           scrollY = "1px",
           scrollCollapse = TRUE,
+          fixedColumns = list(leftColumns = 1),
           columnDefs = column_defs,
           initComplete = DT::JS(sprintf(
             "function(settings) {

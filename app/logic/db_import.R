@@ -79,11 +79,11 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 # ordered so the concatenation is canonical. DISTINCT guards the join against a
 # `hashes` table that carries more than one row for a seqid.
 .PROFILE_SQL <- "
-  SELECT souche, group_concat(gh, char(10) ORDER BY gh) AS profile FROM (
-    SELECT DISTINCT m.souche AS souche, m.gene || char(9) || h.hash AS gh
+  SELECT isolate, group_concat(gh, char(10) ORDER BY gh) AS profile FROM (
+    SELECT DISTINCT m.souche AS isolate, m.gene || char(9) || h.hash AS gh
       FROM %1$s.mlst m JOIN %1$s.hashes h ON h.id = m.seqid
      WHERE m.souche <> ?
-  ) GROUP BY souche"
+  ) GROUP BY isolate"
 
 # ---------------------------------------------------------------------------
 # Hash availability
@@ -150,10 +150,10 @@ release_source <- function(prep) {
   if (!nrow(df)) {
     return(stats::setNames(character(0), character(0)))
   }
-  stats::setNames(as.character(sha256(df$profile)), df$souche)
+  stats::setNames(as.character(sha256(df$profile)), df$isolate)
 }
 
-#' A content hash of each isolate's full allele profile, keyed by souche.
+#' A content hash of each isolate's full allele profile, keyed by isolate.
 #'
 #' Two isolates with the same name in different databases are the *same*
 #' isolate only if their profile hashes agree.
@@ -214,9 +214,9 @@ classify_isolate_collisions <- function(local_path, ext_path) {
 #' @export
 default_resolutions <- function(classification) {
   data.frame(
-    ext_souche = classification$isolate,
+    ext_isolate = classification$isolate,
     action = ifelse(classification$status == "new", "add", "skip"),
-    final_souche = classification$isolate,
+    final_isolate = classification$isolate,
     stringsAsFactors = FALSE
   )
 }
@@ -234,7 +234,7 @@ suggest_rename <- function(name, taken) {
 }
 
 .validate_resolutions <- function(resolutions, local_isolates, ext_isolates) {
-  need <- c("ext_souche", "action", "final_souche")
+  need <- c("ext_isolate", "action", "final_isolate")
   if (!all(need %in% names(resolutions))) {
     stop("`resolutions` needs columns: ", paste(need, collapse = ", "))
   }
@@ -247,7 +247,7 @@ suggest_rename <- function(name, taken) {
     stop("Unknown action(s): ", paste(bad_action, collapse = ", "))
   }
 
-  if (REF_SOUCHE %in% resolutions$ext_souche) {
+  if (REF_SOUCHE %in% resolutions$ext_isolate) {
     stop(
       "The scheme reference '",
       REF_SOUCHE,
@@ -255,7 +255,7 @@ suggest_rename <- function(name, taken) {
     )
   }
 
-  unknown <- setdiff(resolutions$ext_souche, ext_isolates)
+  unknown <- setdiff(resolutions$ext_isolate, ext_isolates)
   if (length(unknown)) {
     stop(
       "Not present in the external database: ",
@@ -268,34 +268,34 @@ suggest_rename <- function(name, taken) {
     stop("Nothing selected to import.")
   }
 
-  if (anyDuplicated(accepted$final_souche)) {
-    dup <- unique(accepted$final_souche[duplicated(accepted$final_souche)])
+  if (anyDuplicated(accepted$final_isolate)) {
+    dup <- unique(accepted$final_isolate[duplicated(accepted$final_isolate)])
     stop("Duplicate target name(s): ", paste(dup, collapse = ", "))
   }
 
-  if (any(!nzchar(accepted$final_souche))) {
+  if (any(!nzchar(accepted$final_isolate))) {
     stop("Every imported isolate needs a non-empty name.")
   }
 
   # `add`/`rename` must land on a free name; `overwrite` must land on a taken one.
   fresh <- accepted$action %in% c("add", "rename")
-  clash <- accepted$final_souche[fresh] %in% local_isolates
+  clash <- accepted$final_isolate[fresh] %in% local_isolates
   if (any(clash)) {
     stop(
       "Target name(s) already in the database: ",
       paste(
-        utils::head(accepted$final_souche[fresh][clash], 5),
+        utils::head(accepted$final_isolate[fresh][clash], 5),
         collapse = ", "
       )
     )
   }
 
   ow <- accepted$action == "overwrite"
-  missing <- !accepted$final_souche[ow] %in% local_isolates
+  missing <- !accepted$final_isolate[ow] %in% local_isolates
   if (any(missing)) {
     stop(
       "Cannot overwrite isolate(s) that do not exist locally: ",
-      paste(utils::head(accepted$final_souche[ow][missing], 5), collapse = ", ")
+      paste(utils::head(accepted$final_isolate[ow][missing], 5), collapse = ", ")
     )
   }
 
@@ -360,7 +360,7 @@ import_preview <- function(
     dbWriteTable(
       con,
       "acc",
-      data.frame(souche = accepted$ext_souche, stringsAsFactors = FALSE),
+      data.frame(isolate = accepted$ext_isolate, stringsAsFactors = FALSE),
       temporary = TRUE,
       overwrite = TRUE
     )
@@ -370,7 +370,7 @@ import_preview <- function(
          SELECT DISTINCT em.gene AS gene, eh.hash AS hash
            FROM ext.mlst em
            JOIN ext.hashes eh ON eh.id = em.seqid
-           JOIN acc a ON a.souche = em.souche
+           JOIN acc a ON a.isolate = em.souche
        ),
        local_alleles AS (
          SELECT DISTINCT lm.gene AS gene, lh.hash AS hash
@@ -466,13 +466,13 @@ import_preview <- function(
   }
 
   rows <- data.frame(
-    isolate = accepted$final_souche,
+    isolate = accepted$final_isolate,
     organism = organism %||% NA_character_,
     stringsAsFactors = FALSE
   )
 
   if (length(selected)) {
-    idx <- match(accepted$ext_souche, ext_meta$isolate)
+    idx <- match(accepted$ext_isolate, ext_meta$isolate)
     for (col in selected) {
       rows[[col]] <- as.character(ext_meta[[col]][idx])
     }
@@ -575,7 +575,7 @@ importable_custom_fields <- function(local_path, ext_path) {
 
 # Merge the selected custom variables into the working copy, inside the merge
 # transaction. Definitions are matched by name (new ones are created, conflicting
-# ones skipped — see `.custom_split()`); values follow the `import_souches`
+# ones skipped — see `.custom_split()`); values follow the `import_isolates`
 # rename map, so a renamed isolate carries its values under its new name.
 # Returns the number of values written.
 .write_custom <- function(con, selected_fields, ext_tables) {
@@ -676,19 +676,19 @@ importable_custom_fields <- function(local_path, ext_path) {
   dbExecute(
     con,
     "DELETE FROM main.phylotrace_custom_values
-      WHERE souche IN (
-        SELECT final_souche FROM import_souches WHERE action = 'overwrite'
+      WHERE isolate IN (
+        SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
       )"
   )
 
   n <- dbExecute(
     con,
     "INSERT OR REPLACE INTO main.phylotrace_custom_values
-       (field_id, souche, value)
-       SELECT cm.local_id, s.final_souche, ev.value
+       (field_id, isolate, value)
+       SELECT cm.local_id, s.final_isolate, ev.value
          FROM ext.phylotrace_custom_values ev
          JOIN custom_map cm ON cm.ext_id = ev.field_id
-         JOIN import_souches s ON s.ext_souche = ev.souche"
+         JOIN import_isolates s ON s.ext_isolate = ev.isolate"
   )
   dbExecute(con, "DROP TABLE custom_map")
 
@@ -700,8 +700,8 @@ importable_custom_fields <- function(local_path, ext_path) {
 # ---------------------------------------------------------------------------
 
 # Copy one isolate-keyed result table from the attached `ext` database into
-# `main`, remapping `souche` via the `import_souches` rename map. These tables
-# key solely on `souche` (no `seqid` / allele foreign keys), so no allele remap
+# `main`, remapping `isolate` via the `import_isolates` rename map. These tables
+# key solely on `isolate` (no `seqid` / allele foreign keys), so no allele remap
 # is involved. Runs on the working copy's connection inside the merge
 # transaction. Creates the table in `main` from the external DDL when the local
 # database never ran that analysis; replaces overwritten isolates' rows first;
@@ -720,14 +720,14 @@ importable_custom_fields <- function(local_path, ext_path) {
     dbExecute(con, ddl[1])
   }
 
-  # Columns common to both sides, minus the autoincrement id. `souche` comes from
+  # Columns common to both sides, minus the autoincrement id. `isolate` comes from
   # the rename map; the column intersection guards against schema drift.
   ext_cols <- names(dbGetQuery(
     con,
     sprintf("SELECT * FROM ext.%s LIMIT 0", nm)
   ))
   cols <- setdiff(intersect(dbListFields(con, nm), ext_cols), "id")
-  if (!("souche" %in% cols)) {
+  if (!("isolate" %in% cols)) {
     return(0L)
   }
 
@@ -736,8 +736,8 @@ importable_custom_fields <- function(local_path, ext_path) {
   dbExecute(
     con,
     sprintf(
-      "DELETE FROM main.%s WHERE souche IN
-         (SELECT final_souche FROM import_souches WHERE action = 'overwrite')",
+      "DELETE FROM main.%s WHERE isolate IN
+         (SELECT final_isolate FROM import_isolates WHERE action = 'overwrite')",
       nm
     )
   )
@@ -746,8 +746,8 @@ importable_custom_fields <- function(local_path, ext_path) {
   select_exprs <- vapply(
     cols,
     function(c) {
-      if (identical(c, "souche")) {
-        "s.final_souche"
+      if (identical(c, "isolate")) {
+        "s.final_isolate"
       } else {
         paste0("em.", .quote_ident(c))
       }
@@ -755,13 +755,20 @@ importable_custom_fields <- function(local_path, ext_path) {
     character(1)
   )
 
+  # OR REPLACE guards `genome_hashes`, whose key is `isolate` itself rather than
+  # an autoincrement id. The DELETE above already clears the overwrite path, so
+  # this only matters when a caller supplies a `final_isolate` that collides with
+  # an isolate the local database already holds: without it the PK conflict
+  # would abort the entire merge, where every other result table simply absorbs
+  # the row. For the id-keyed tables it is a no-op - `id` is not among `cols`,
+  # so no unique constraint is left for a conflict to fire on.
   dbExecute(
     con,
     sprintf(
-      "INSERT INTO main.%s (%s)
+      "INSERT OR REPLACE INTO main.%s (%s)
          SELECT %s
            FROM ext.%s em
-           JOIN import_souches s ON s.ext_souche = em.souche",
+           JOIN import_isolates s ON s.ext_isolate = em.isolate",
       nm,
       paste(quoted, collapse = ", "),
       paste(select_exprs, collapse = ", "),
@@ -831,7 +838,7 @@ restore_backup <- function(db_path, backup_path) {
 
 #' Merge `ext_path` into `local_path`.
 #'
-#' `resolutions` is a data.frame of `ext_souche` / `action` / `final_souche`,
+#' `resolutions` is a data.frame of `ext_isolate` / `action` / `final_isolate`,
 #' where action is one of `add`, `skip`, `overwrite`, `rename` (see
 #' `default_resolutions()`). `metadata_cols` names the external metadata columns
 #' to adopt; `isolate` and `organism` are handled automatically.
@@ -921,8 +928,8 @@ merge_databases <- function(
 
   dbWriteTable(
     con,
-    "import_souches",
-    accepted[, c("ext_souche", "final_souche", "action")],
+    "import_isolates",
+    accepted[, c("ext_isolate", "final_isolate", "action")],
     temporary = TRUE,
     overwrite = TRUE
   )
@@ -941,7 +948,7 @@ merge_databases <- function(
        SELECT DISTINCT em.gene AS gene, eh.hash AS hash, em.seqid AS ext_seqid
          FROM ext.mlst em
          JOIN ext.hashes eh ON eh.id = em.seqid
-         JOIN import_souches s ON s.ext_souche = em.souche"
+         JOIN import_isolates s ON s.ext_isolate = em.souche"
   )
   dbExecute(
     con,
@@ -962,7 +969,11 @@ merge_databases <- function(
   result_tables <- intersect(
     c(
       if (isTRUE(include_classical)) "classical_mlst",
-      if (isTRUE(include_amr)) c("amr_results", "amr_summary")
+      if (isTRUE(include_amr)) c("amr_results", "amr_summary"),
+      # Assembly digests are provenance rather than an analysis result, so they
+      # are not behind a toggle: they always come along when the peer has them
+      # (see GENOME_TABLES in db_export.R).
+      "genome_hashes"
     ),
     ext_tables
   )
@@ -1012,7 +1023,7 @@ merge_databases <- function(
         con,
         "DELETE FROM main.mlst
           WHERE souche IN (
-            SELECT final_souche FROM import_souches WHERE action = 'overwrite'
+            SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
           )"
       )
       if ("metadata" %in% dbListTables(con)) {
@@ -1020,7 +1031,7 @@ merge_databases <- function(
           con,
           "DELETE FROM main.metadata
             WHERE isolate IN (
-              SELECT final_souche FROM import_souches WHERE action = 'overwrite'
+              SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
             )"
         )
       }
@@ -1028,13 +1039,13 @@ merge_databases <- function(
       progress(0.7, "Writing allele calls …")
       # `mlst.id` is a rowid alias, so omitting it lets SQLite assign fresh ids
       # that cannot collide with the local ones. `ref` never appears in
-      # import_souches, so the scheme reference is never imported as an isolate.
+      # import_isolates, so the scheme reference is never imported as an isolate.
       n_calls <- dbExecute(
         con,
         "INSERT INTO main.mlst (souche, gene, seqid)
-           SELECT s.final_souche, em.gene, sm.local_seqid
+           SELECT s.final_isolate, em.gene, sm.local_seqid
              FROM ext.mlst em
-             JOIN import_souches s ON s.ext_souche = em.souche
+             JOIN import_isolates s ON s.ext_isolate = em.souche
              JOIN seqid_map sm ON sm.ext_seqid = em.seqid"
       )
 
@@ -1045,7 +1056,7 @@ merge_databases <- function(
       expected <- dbGetQuery(
         con,
         "SELECT COUNT(*) AS n FROM ext.mlst em
-           JOIN import_souches s ON s.ext_souche = em.souche"
+           JOIN import_isolates s ON s.ext_isolate = em.souche"
       )$n
       if (!identical(as.integer(n_calls), as.integer(expected))) {
         stop(sprintf(

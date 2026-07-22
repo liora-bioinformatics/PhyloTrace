@@ -198,10 +198,10 @@ meta_df <- function(isolates, species = "Testus organismus", extra = NULL) {
 
 # Seed the isolate-keyed analysis-result tables (classical_mlst, amr_results,
 # amr_summary) for one or more souches, using the same DDL the app creates
-# (pymlst.R / amr.R). Each souche gets a couple of deterministic rows per table.
+# (pymlst.R / amr.R). Each isolate gets a couple of deterministic rows per table.
 # `classical` / `amr` gate which tables are written, so a fixture can carry one
 # family without the other.
-seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
+seed_results <- function(path, isolate, classical = TRUE, amr = TRUE) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
 
@@ -210,17 +210,17 @@ seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
       con,
       "CREATE TABLE IF NOT EXISTS classical_mlst (
          id INTEGER PRIMARY KEY AUTOINCREMENT,
-         souche TEXT, gene TEXT, allele TEXT, sequence TEXT, st TEXT,
+         isolate TEXT, gene TEXT, allele TEXT, sequence TEXT, st TEXT,
          status TEXT, scheme TEXT, scheme_version TEXT, alembic_version TEXT,
          repository TEXT, identity REAL, coverage REAL, pymlst_version TEXT,
          called_at TEXT)"
     )
-    for (s in souche) {
+    for (s in isolate) {
       for (g in c("acsA", "aroE")) {
         DBI::dbExecute(
           con,
           "INSERT INTO classical_mlst
-             (souche, gene, allele, st, status, scheme, called_at)
+             (isolate, gene, allele, st, status, scheme, called_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)",
           list(s, g, "1", "42", "known", "Testus organismus", "2026-01-01")
         )
@@ -233,7 +233,7 @@ seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
       con,
       "CREATE TABLE IF NOT EXISTS amr_results (
          id INTEGER PRIMARY KEY AUTOINCREMENT,
-         souche TEXT, gene_symbol TEXT, sequence_name TEXT, element_type TEXT,
+         isolate TEXT, gene_symbol TEXT, sequence_name TEXT, element_type TEXT,
          element_subtype TEXT, class TEXT, subclass TEXT, method TEXT,
          pct_coverage REAL, pct_identity REAL, contig TEXT, start INTEGER,
          stop INTEGER, strand TEXT, ref_accession TEXT, ref_name TEXT,
@@ -245,19 +245,19 @@ seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
       con,
       "CREATE TABLE IF NOT EXISTS amr_summary (
          id INTEGER PRIMARY KEY AUTOINCREMENT,
-         souche TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
+         isolate TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
     )
-    for (s in souche) {
+    for (s in isolate) {
       DBI::dbExecute(
         con,
         "INSERT INTO amr_results
-           (souche, gene_symbol, element_type, class, method, called_at)
+           (isolate, gene_symbol, element_type, class, method, called_at)
          VALUES (?, ?, ?, ?, ?, ?)",
         list(s, "blaTEST", "AMR", "BETA-LACTAM", "EXACTX", "2026-01-01")
       )
       DBI::dbExecute(
         con,
-        "INSERT INTO amr_summary (souche, section, drug_class, genes, called_at)
+        "INSERT INTO amr_summary (isolate, section, drug_class, genes, called_at)
          VALUES (?, ?, ?, ?, ?)",
         list(s, "matches", "Beta-lactam", "blaTEST", "2026-01-01")
       )
@@ -269,7 +269,7 @@ seed_results <- function(path, souche, classical = TRUE, amr = TRUE) {
 
 # Define custom variables and seed their values, as the Custom Variables panel
 # would (app/logic/custom_fields.R). `fields` is a named list, one entry per
-# variable: `type` plus an optional `values` vector named by souche. The DDL is
+# variable: `type` plus an optional `values` vector named by isolate. The DDL is
 # written out here rather than imported so a fixture keeps documenting the shape
 # the app expects, exactly like MLST_DDL above.
 seed_custom <- function(path, fields) {
@@ -287,8 +287,8 @@ seed_custom <- function(path, fields) {
   DBI::dbExecute(
     con,
     "CREATE TABLE IF NOT EXISTS phylotrace_custom_values (
-       field_id INTEGER NOT NULL, souche TEXT NOT NULL, value TEXT,
-       PRIMARY KEY (field_id, souche))"
+       field_id INTEGER NOT NULL, isolate TEXT NOT NULL, value TEXT,
+       PRIMARY KEY (field_id, isolate))"
   )
 
   for (nm in names(fields)) {
@@ -314,7 +314,7 @@ seed_custom <- function(path, fields) {
     if (length(values)) {
       DBI::dbExecute(
         con,
-        "INSERT INTO phylotrace_custom_values (field_id, souche, value)
+        "INSERT INTO phylotrace_custom_values (field_id, isolate, value)
          VALUES (?, ?, ?)",
         list(
           rep(as.integer(id), length(values)),

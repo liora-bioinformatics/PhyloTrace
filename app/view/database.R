@@ -58,7 +58,6 @@ ui <- function(id) {
     fillable = TRUE,
     sidebar = sidebar(
       title = "Database Browser",
-      width = 350,
       sidebar_menu(ns, db_menu)
     ),
     # Hidden tabset: one panel per interface, swapped via nav_select(). Each

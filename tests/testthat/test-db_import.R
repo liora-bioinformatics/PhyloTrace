@@ -48,16 +48,16 @@ pair <- function(dir, local_meta = TRUE, peer_meta = TRUE, ...) {
   list(local = local, peer = peer)
 }
 
-resolve <- function(souche, action, final = souche) {
+resolve <- function(isolate, action, final = isolate) {
   data.frame(
-    ext_souche = souche,
+    ext_isolate = isolate,
     action = action,
-    final_souche = final,
+    final_isolate = final,
     stringsAsFactors = FALSE
   )
 }
 
-test_that("isolate_profile_hashes keys by souche and excludes ref", {
+test_that("isolate_profile_hashes keys by isolate and excludes ref", {
   dir <- local_tempdir()
   p <- pair(dir)
 
@@ -518,7 +518,7 @@ test_that("result tables merge for accepted isolates when requested", {
   # result rows come across.
   for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
     expect_setequal(
-      q1(p$local, sprintf("SELECT DISTINCT souche FROM %s", tbl)),
+      q1(p$local, sprintf("SELECT DISTINCT isolate FROM %s", tbl)),
       "C"
     )
   }
@@ -526,7 +526,7 @@ test_that("result tables merge for accepted isolates when requested", {
   expect_equal(res$result_rows, 4L)
 })
 
-test_that("a renamed import remaps result-table souche to the new name", {
+test_that("a renamed import remaps result-table isolate to the new name", {
   dir <- local_tempdir()
   p <- pair(dir)
   seed_results(p$peer, "C")
@@ -541,11 +541,11 @@ test_that("a renamed import remaps result-table souche to the new name", {
   ))
 
   expect_setequal(
-    q1(p$local, "SELECT DISTINCT souche FROM classical_mlst"),
+    q1(p$local, "SELECT DISTINCT isolate FROM classical_mlst"),
     "C_imp"
   )
   expect_equal(
-    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'C'"),
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'C'"),
     0L
   )
 })
@@ -568,13 +568,13 @@ test_that("overwrite replaces result rows and re-import is idempotent", {
 
   merge_once()
   expect_equal(
-    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'B'"),
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'B'"),
     1L # replaced, not appended to the pre-existing local row
   )
 
   merge_once()
   expect_equal(
-    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE souche = 'B'"),
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'B'"),
     1L # a second identical import stays stable
   )
 })
@@ -627,14 +627,14 @@ test_that("selected custom variables are merged and mapped onto local ids", {
 
   values <- qdf(
     p$local,
-    "SELECT f.name AS name, v.souche AS souche, v.value AS value
+    "SELECT f.name AS name, v.isolate AS isolate, v.value AS value
        FROM phylotrace_custom_values v
        JOIN phylotrace_custom_fields f ON f.id = v.field_id
-      ORDER BY f.name, v.souche"
+      ORDER BY f.name, v.isolate"
   )
   # The local value survives, the peer's lands under the local field id.
-  expect_identical(values$value[values$name == "ward" & values$souche == "A"], "ICU")
-  expect_identical(values$value[values$name == "ward" & values$souche == "C"], "ER")
+  expect_identical(values$value[values$name == "ward" & values$isolate == "A"], "ICU")
+  expect_identical(values$value[values$name == "ward" & values$isolate == "C"], "ER")
   expect_identical(values$value[values$name == "outbreak_id"], "OB-1")
 })
 
@@ -705,11 +705,11 @@ test_that("custom values follow a renamed isolate and a rewritten one", {
 
   values <- qdf(
     p$local,
-    "SELECT souche, value FROM phylotrace_custom_values ORDER BY souche"
+    "SELECT isolate, value FROM phylotrace_custom_values ORDER BY isolate"
   )
   # The renamed isolate carries its value under its new name, never its old one.
-  expect_setequal(values$souche, c("B_ext", "C"))
-  expect_identical(values$value[values$souche == "B_ext"], "peer-B")
+  expect_setequal(values$isolate, c("B_ext", "C"))
+  expect_identical(values$value[values$isolate == "B_ext"], "peer-B")
 })
 
 test_that("overwriting an isolate replaces its custom values", {

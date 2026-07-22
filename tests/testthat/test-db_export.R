@@ -248,7 +248,7 @@ test_that("result tables travel only when requested, filtered to the selection",
   # Only the selected isolate's rows travel; B's are left behind.
   for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
     expect_setequal(
-      q1(dest, sprintf("SELECT DISTINCT souche FROM %s", tbl)),
+      q1(dest, sprintf("SELECT DISTINCT isolate FROM %s", tbl)),
       "A"
     )
   }

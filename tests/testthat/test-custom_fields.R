@@ -68,7 +68,7 @@ test_that("create_custom_field stores the definition and counts fills", {
 
   custom_fields$save_custom_values(
     path,
-    data.frame(field_id = id, souche = "A", value = "ICU")
+    data.frame(field_id = id, isolate = "A", value = "ICU")
   )
   expect_equal(custom_fields$list_custom_fields(path)$n_filled, 1L)
 })
@@ -150,7 +150,7 @@ test_that("save_custom_values upserts and clears", {
     path,
     data.frame(
       field_id = id,
-      souche = c("A", "B"),
+      isolate = c("A", "B"),
       value = c("ICU", "ER"),
       stringsAsFactors = FALSE
     )
@@ -160,13 +160,13 @@ test_that("save_custom_values upserts and clears", {
   # Same key again: replaced, not duplicated.
   custom_fields$save_custom_values(
     path,
-    data.frame(field_id = id, souche = "A", value = "WARD3")
+    data.frame(field_id = id, isolate = "A", value = "WARD3")
   )
   expect_equal(q1(path, "SELECT COUNT(*) FROM phylotrace_custom_values"), 2L)
   expect_identical(
     q1(
       path,
-      "SELECT value FROM phylotrace_custom_values WHERE souche = 'A'"
+      "SELECT value FROM phylotrace_custom_values WHERE isolate = 'A'"
     ),
     "WARD3"
   )
@@ -174,7 +174,7 @@ test_that("save_custom_values upserts and clears", {
   # An emptied cell deletes its row rather than storing a blank.
   custom_fields$save_custom_values(
     path,
-    data.frame(field_id = id, souche = "A", value = NA_character_)
+    data.frame(field_id = id, isolate = "A", value = NA_character_)
   )
   expect_equal(q1(path, "SELECT COUNT(*) FROM phylotrace_custom_values"), 1L)
 })
@@ -189,7 +189,7 @@ test_that("load_custom_values pivots wide and types numeric variables", {
     path,
     data.frame(
       field_id = c(ward, ward, ct),
-      souche = c("A", "B", "B"),
+      isolate = c("A", "B", "B"),
       value = c("ICU", "ER", "12.5"),
       stringsAsFactors = FALSE
     )
@@ -221,7 +221,7 @@ test_that("append_custom merges by isolate and records what it added", {
   ward <- custom_fields$create_custom_field(path, "ward", "text")
   custom_fields$save_custom_values(
     path,
-    data.frame(field_id = ward, souche = "A", value = "ICU")
+    data.frame(field_id = ward, isolate = "A", value = "ICU")
   )
 
   meta <- data.frame(
@@ -245,7 +245,7 @@ test_that("update_custom_field renames and delete_custom_field cascades", {
   id <- custom_fields$create_custom_field(path, "ward", "text")
   custom_fields$save_custom_values(
     path,
-    data.frame(field_id = id, souche = "A", value = "ICU")
+    data.frame(field_id = id, isolate = "A", value = "ICU")
   )
 
   custom_fields$update_custom_field(path, id, name = "unit", description = "x")

@@ -35,7 +35,7 @@ amr_db <- function(env = parent.frame()) {
   )
   seed_results(path, paste0("ISO-", 1:3), classical = FALSE, amr = TRUE)
 
-  # seed_results gives every souche the same single gene, which cannot produce
+  # seed_results gives every isolate the same single gene, which cannot produce
   # a heatmap worth clustering — add a second gene and a virulence hit so the
   # element-type split and the drug-class strip have something to work with.
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
@@ -50,7 +50,7 @@ amr_db <- function(env = parent.frame()) {
     DBI::dbExecute(
       con,
       "INSERT INTO amr_results
-         (souche, gene_symbol, element_type, class, method, pct_identity,
+         (isolate, gene_symbol, element_type, class, method, pct_identity,
           pct_coverage, called_at)
        VALUES (?, ?, ?, ?, 'EXACTX', 99, 100, '2026-01-01')",
       row
@@ -58,7 +58,7 @@ amr_db <- function(env = parent.frame()) {
   }
   DBI::dbExecute(
     con,
-    "INSERT INTO amr_summary (souche, section, drug_class, genes, called_at)
+    "INSERT INTO amr_summary (isolate, section, drug_class, genes, called_at)
      VALUES ('ISO-2', 'partials', 'Quinolone', 'gyrA', '2026-01-01')"
   )
   path

@@ -8,14 +8,14 @@
 # unit-testable without Shiny.
 #
 # Two tables feed this, both written by app/logic/amr.R at typing time and both
-# keyed on `souche` (the same isolate key as `mlst` / `metadata`):
+# keyed on `isolate` (the same key as `metadata`; pyMLST's `mlst` spells it `souche`):
 #
 #   * amr_results  - one row per detected element. The granular source: gene
 #                    symbol, element type (AMR / VIRULENCE / STRESS), AMRFinder's
 #                    drug class and subclass, and the % identity / coverage of
 #                    the hit. Drives the gene heatmap and the gene-level
 #                    prevalence bars.
-#   * amr_summary  - abritamr's curated per-isolate rollup, tidy (souche,
+#   * amr_summary  - abritamr's curated per-isolate rollup, tidy (isolate,
 #                    section, drug_class, genes) with section in
 #                    matches / partials / virulence. Drives the drug-class matrix
 #                    and the class-level prevalence bars. `matches` is a
@@ -138,7 +138,7 @@ amr_palette <- function(cats, scale) epi_palette(cats, scale)
 # --- database reads ----------------------------------------------------------
 
 .EMPTY_HITS <- data.frame(
-  souche = character(0),
+  isolate = character(0),
   gene_symbol = character(0),
   element_type = character(0),
   element_subtype = character(0),
@@ -151,7 +151,7 @@ amr_palette <- function(cats, scale) epi_palette(cats, scale)
 )
 
 .EMPTY_SECTIONS <- data.frame(
-  souche = character(0),
+  isolate = character(0),
   section = character(0),
   drug_class = character(0),
   genes = character(0),
@@ -203,7 +203,7 @@ load_amr_hits <- function(db_path) {
   }
   hits <- dbGetQuery(
     con,
-    "SELECT souche, gene_symbol, element_type, element_subtype, class, subclass,
+    "SELECT isolate, gene_symbol, element_type, element_subtype, class, subclass,
             method, pct_identity, pct_coverage
        FROM amr_results
       ORDER BY id"
@@ -235,7 +235,7 @@ load_amr_sections <- function(db_path) {
   }
   sections <- dbGetQuery(
     con,
-    "SELECT souche, section, drug_class, genes FROM amr_summary ORDER BY id"
+    "SELECT isolate, section, drug_class, genes FROM amr_summary ORDER BY id"
   )
   if (!nrow(sections)) {
     return(.EMPTY_SECTIONS)
@@ -391,7 +391,7 @@ amr_presence_matrix <- function(
   present <- if (is.null(hits) || !nrow(hits)) {
     .EMPTY_HITS
   } else {
-    hits[hits$souche %in% isolates, , drop = FALSE]
+    hits[hits$isolate %in% isolates, , drop = FALSE]
   }
 
   genes <- if (is.null(genes)) {
@@ -411,7 +411,7 @@ amr_presence_matrix <- function(
     present <- present[present$gene_symbol %in% genes, , drop = FALSE]
     if (nrow(present)) {
       mat[cbind(
-        match(present$souche, isolates),
+        match(present$isolate, isolates),
         match(present$gene_symbol, genes)
       )] <- 1L
     }
@@ -457,7 +457,7 @@ amr_class_matrix <- function(
   rows <- if (is.null(sections) || !nrow(sections)) {
     .EMPTY_SECTIONS
   } else {
-    sections[sections$souche %in% isolates, , drop = FALSE]
+    sections[sections$isolate %in% isolates, , drop = FALSE]
   }
   if (!is.null(keep_sections) && length(keep_sections)) {
     rows <- rows[rows$section %in% keep_sections, , drop = FALSE]
@@ -471,7 +471,7 @@ amr_class_matrix <- function(
     dimnames = list(isolates, classes)
   )
   if (nrow(rows) && length(classes) && length(isolates)) {
-    ri <- match(rows$souche, isolates)
+    ri <- match(rows$isolate, isolates)
     ci <- match(rows$drug_class, classes)
     rank <- .section_rank(rows$section)
     # pmax against what is already there: an isolate can appear in several
@@ -531,7 +531,7 @@ amr_prevalence <- function(
     rows <- if (is.null(sections) || !nrow(sections)) {
       .EMPTY_SECTIONS
     } else {
-      sections[sections$souche %in% isolates, , drop = FALSE]
+      sections[sections$isolate %in% isolates, , drop = FALSE]
     }
     if (!nrow(rows)) {
       return(empty)
@@ -555,12 +555,12 @@ amr_prevalence <- function(
       USE.NAMES = FALSE
     )
     group <- setNames(group, unique(item))
-    souche <- rows$souche
+    isolate <- rows$isolate
   } else {
     rows <- if (is.null(hits) || !nrow(hits)) {
       .EMPTY_HITS
     } else {
-      hits[hits$souche %in% isolates, , drop = FALSE]
+      hits[hits$isolate %in% isolates, , drop = FALSE]
     }
     if (!nrow(rows)) {
       return(empty)
@@ -577,12 +577,12 @@ amr_prevalence <- function(
       USE.NAMES = FALSE
     )
     group <- setNames(group, unique(item))
-    souche <- rows$souche
+    isolate <- rows$isolate
   }
 
   counts <- vapply(
     names(group),
-    function(it) length(unique(souche[item == it])),
+    function(it) length(unique(isolate[item == it])),
     integer(1),
     USE.NAMES = FALSE
   )

@@ -255,6 +255,7 @@ $viz-tile-row-gap: 0.85rem;
 // One row of five while it fits, then a deliberate 3 + 2 (and 2 + 2 + 1 once
 // even that is cramped) rather than whatever a ragged wrap would give.
 @container (max-width: 1000px) {
+
     // 3 columns of 5 tiles wrap to 2 rows.
     .viz-type-picker {
         min-height: calc(#{$viz-tile-row-min} * 2 + #{$viz-tile-row-gap});
@@ -267,6 +268,7 @@ $viz-tile-row-gap: 0.85rem;
 }
 
 @container (max-width: 620px) {
+
     // 2 columns of 5 tiles wrap to 3 rows.
     .viz-type-picker {
         min-height: calc(#{$viz-tile-row-min} * 3 + #{$viz-tile-row-gap} * 2);
@@ -1424,23 +1426,12 @@ table.dataTable td {
         flex-direction: column;
     }
 
+    // Takes the height left under the toolbar and scrolls internally. It is
+    // the table's only scrollport - see the shared rules under
+    // "One scrollport per table" below.
     .dataTables_scroll {
         flex: 1 1 auto;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .dataTables_scrollHead {
-        flex-shrink: 0;
-        overflow: hidden !important;
-    }
-
-    .dataTables_scrollBody {
-        flex: 1 1 auto !important;
-        min-height: 0 !important;
-        max-height: none !important;
-        overflow-y: auto !important;
     }
 
     .dataTables_info {
@@ -1448,6 +1439,27 @@ table.dataTable td {
         padding-top: 0.35rem;
         font-size: 0.85rem;
         color: var(--bs-secondary-color);
+    }
+
+    // FixedColumns ships with a hardcoded white background for the pinned
+    // column, gated on a `html.dark` class this app never sets (theming runs
+    // through bslib's `data-bs-theme` attribute instead) - swap in the
+    // bootstrap variable so the pinned column tracks light/dark automatically.
+    table.dataTable thead tr>.dtfc-fixed-left,
+    table.dataTable tbody tr>.dtfc-fixed-left {
+        background-color: var(--bs-body-bg);
+    }
+
+    // FixedColumns only pins the cell DataTables considers each column's
+    // "header" (the sortable title row), so with filter = "top" the search-box
+    // row underneath - a second <tr> of <td>s DT bolts onto <thead> outside
+    // that API - never gets sticky positioning and scrolls out from under its
+    // column.
+    table.dataTable thead tr:nth-child(2)>td:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        background-color: var(--bs-body-bg);
     }
 
     table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
@@ -1975,6 +1987,11 @@ table.dataTable td {
         transition: none !important;
     }
 
+    // Fade the opened body in instead, since height can't be animated here.
+    .accordion-collapse.show .accordion-body {
+        animation: pt-accordion-fade 0.15s ease;
+    }
+
     // The header's title div only grows to fit its text by default (it's a
     // flex item alongside the chevron pseudo-element), so the custom title
     // below needs to claim the remaining width itself to push the summary
@@ -1982,6 +1999,149 @@ table.dataTable td {
     .accordion-title {
         flex: 1 1 auto;
     }
+}
+
+@keyframes pt-accordion-fade {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td,
+.isolate-selection-table table.dataTable th,
+.edit-table table.dataTable th {
+    font-size: 0.8em;
+    border-bottom: 1px solid #ddd;
+    border-right: 1px solid #ddd;
+}
+
+// The rule above loses to `table.dataTable thead>tr>th.sorting` further down
+// (four element selectors vs. two here, so it wins the specificity tie on
+// classes) — that's why only the body shrank and the sortable headers stayed
+// at its hard-coded 12px. Match its selector shape to take priority back.
+.isolate-selection-table table.dataTable thead>tr>th.sorting,
+.edit-table table.dataTable thead>tr>th.sorting {
+    font-size: 0.8em;
+}
+
+// Editable metadata tables auto-size columns to their content, so short
+// values ("City") end up too narrow to comfortably show or edit. Enforce a
+// floor on the column.
+//
+// It has to sit on the *body* cells, not the header ones. With scrollX the
+// header and the body are two separate <table>s, and DataTables sizes them by
+// measuring the body and then writing the result as an inline width onto the
+// header cells. A floor on the header alone therefore overrides DT's own
+// arithmetic on one table only: the header column renders at 6rem while the
+// body column keeps the narrower width DT computed, and the error accumulates
+// across the row. Measured from the body instead, DT arrives at a width that
+// already clears the floor and propagates the same number to both tables.
+.edit-table table.dataTable tbody td {
+    min-width: 6rem;
+}
+
+// One scrollport per table -------------------------------------------------
+//
+// With scrollX, DataTables splits the table into two <table>s in two separate
+// scroll containers and keeps them aligned from JavaScript: it copies
+// scrollLeft from the body onto the header on every scroll, and pads the
+// header by the width it believes the body's vertical scrollbar to be, so the
+// two have the same scrollable extent.
+//
+// That padding is only applied while DT believes the body scrolls vertically,
+// and these tables override the body's height (scrollY is a placeholder — 1px
+// for the fill layouts — with the real height coming from CSS). After a
+// resize DT re-measures, concludes there is no scrollbar, drops the padding,
+// and the header can then no longer scroll as far as the body: the columns
+// come apart by a scrollbar's width at the right-hand end of the scroll. It
+// cannot be corrected from CSS either, because DT normalises the header
+// wrapper's border-box width — extra padding or border is subtracted straight
+// back out of its width.
+//
+// So don't keep two scrollports in sync: use one. The header and the body
+// scroll together as a single element and the header is pinned with
+// position: sticky rather than being held outside the scroller. There is then
+// only one scroll offset in play and drift is impossible. DT still runs its
+// scrollLeft sync, which is a no-op once neither child scrolls by itself.
+//
+// DT writes overflow, position and border inline on the header wrapper
+// (jQuery .css()), which is what the !important flags here are for.
+.edit-table,
+.isolate-selection-table {
+
+    .dataTables_scroll {
+        overflow: auto;
+        // These wrappers are flex containers, and a flex item's automatic
+        // minimum size is its content's — the full uncollapsed table. Without
+        // this the scroller is stretched to the table's width and overflows
+        // the pane instead of scrolling inside it.
+        min-width: 0;
+        // FixedColumns draws the table's left edge on the body only; carrying
+        // it on the scroller keeps the body from being offset against the
+        // header by that border.
+        border-left: 1px solid #ddd;
+    }
+
+    .dataTables_scrollHead {
+        position: sticky !important;
+        top: 0;
+        // Above the body's own sticky (FixedColumns) cells, which sit at 1.
+        z-index: 4;
+        overflow: visible !important;
+    }
+
+    // DT's scrollbar compensation, now that nothing is being compensated for.
+    .dataTables_scrollHeadInner {
+        padding-right: 0 !important;
+    }
+
+    .dataTables_scrollBody {
+        overflow: visible !important;
+        max-height: none !important;
+        height: auto !important;
+        border-left: 0 !important;
+    }
+}
+
+// The isolate pickers cap the table instead of filling a pane, so the cap
+// moves onto the scroller with the scrolling. Mirrors `scrollY = "42vh"` in
+// visualization_plot.R / analysis_dashboard.R.
+.isolate-selection-table .dataTables_scroll {
+    max-height: 42vh;
+}
+
+.pop-comp-wrapper {
+    z-index: 5;
+}
+
+.datatables .dataTables_wrapper div.dataTables_info {
+    padding-top: 1rem;
+}
+
+// Vertical space saving measures for isolate selection tables that are rendered within
+// a modal window
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info,
+.selection-modal .modal-footer {
+    padding-top: 0;
+}
+
+#app-database-menu_custom_fields {
+    .action-label {
+        white-space: nowrap;
+    }
+}
+
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info {
+    align-content: center;
+}
+
+table.dataTable thead>tr>th.sorting {
+    padding-top: 0;
 }
 
 // Typing Results: reserve horizontal space for the columns whose cell content
@@ -3032,6 +3192,11 @@ label {
     padding-bottom: 8px;
 }
 
+.tab-pane[data-value="database_panel"] .sidebar-menu {
+    min-width: max-content;
+    width: 100%;
+}
+
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
 
@@ -3337,14 +3502,35 @@ table.dataTable thead>tr>th.sorting {
 }
 
 .isolate-selection-table {
+
+    // dom = "tip" renders the table, info and paginate as plain sibling
+    // divs (no bootstrap row/col wrapper), so they stack by default. Force
+    // the table onto its own full-width row and let info + paginate share
+    // the row below instead, without hard-coding the table wrapper's class.
+    .dataTables_wrapper {
+        display: flex;
+        flex-wrap: wrap;
+
+        >*:not(.dataTables_info):not(.dataTables_paginate) {
+            flex: 1 1 100%;
+            // Flex items default to `min-width: auto`, which floors their
+            // width at the content's natural size — here the unscrolled
+            // table — and lets it blow past the row instead of scrolling
+            // inside .dataTables_scrollBody. Let it shrink to the row.
+            min-width: 0;
+        }
+    }
+
     .dataTables_info {
         padding-top: 0;
-
+        flex: 1 1 auto;
     }
 
     .dataTables_paginate {
         padding-left: 1rem;
         padding-top: 0rem;
+        flex: 0 0 auto;
+        margin-left: auto;
     }
 }
 
@@ -3475,11 +3661,17 @@ table.dataTable thead>tr>th.sorting {
 // that fills the rest. The values table reuses .db-page_body, so it inherits the
 // Browse Entries fill/scroll rules verbatim.
 
-.custom-fields-layout {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
+// .custom-fields-layout {
+//     display: flex;
+//     flex-direction: column;
+//     height: 100%;
+//     overflow: hidden;
+// }
+
+.edit-table input[type="text"] {
+    padding: 0;
+    border: none;
+    outline: none;
 }
 
 .custom-fields-overview {
