@@ -333,10 +333,16 @@ server <- function(
       }
       isolate_idx <- .dt_idx(cols, "isolate")
       date_idx <- of_type("date")
-      cat("DEBUG cols:", paste(cols, collapse = ","), "\n")
-      cat("DEBUG types:", paste(names(types), types, sep = "=", collapse = ", "), "\n")
-      cat("DEBUG date_idx:", paste(of_type("date"), collapse = ","), "\n")
-      cat("DEBUG numeric_idx:", paste(of_type(custom_fields$NUMERIC_TYPES), collapse = ","), "\n")
+      numeric_idx <- of_type(custom_fields$NUMERIC_TYPES)
+      # DT's own DT:::makeEditableField() silently subtracts 1 from
+      # `editable$numeric`/`editable$date` (but *not* from `disable$columns` or
+      # `columnDefs` targets) whenever `rownames = FALSE`, to compensate for a
+      # rownames column it assumes the caller counted in and this table
+      # doesn't have. `date_idx`/`numeric_idx` stay true 0-based indices for
+      # the other uses below (`col-readonly`/`col-date` targets); only the
+      # `editable` values need the +1 to land back on the right column.
+      editable_date_idx <- date_idx + 1L
+      editable_numeric_idx <- numeric_idx + 1L
 
       # Values drawn from a fixed list are offered as a <datalist> on the cell's
       # input (see initComplete below): a hint that leaves DT's own editing
@@ -365,8 +371,8 @@ server <- function(
           # Whole/decimal numbers get a native number input, dates a native date
           # picker. Both are also exempt from the app-wide charset filter in
           # app/js/index.js, which only rewrites `input[type=text]`.
-          numeric = of_type(custom_fields$NUMERIC_TYPES),
-          date = date_idx
+          numeric = editable_numeric_idx,
+          date = editable_date_idx
         ),
         selection = "none",
         options = list(
@@ -416,6 +422,21 @@ server <- function(
                 if (!idx) return;
                 var id = ids[idx.column];
                 if (id) this.setAttribute('list', id);
+              });
+
+              // A native date input only accepts YYYY-MM-DD, so a value stored
+              // in any other shape lands in the editor blank — and blurring
+              // that blank would commit it, wiping the date. Recover it from
+              // the cell's own data, which DT has not touched yet.
+              $(tableNode).on('focusin', 'input[type=date]', function() {
+                if (this.value) return;
+                var td = $(this).closest('td');
+                if (!td.length) return;
+                var raw = api.cell(td[0]).data();
+                raw = (raw === null || raw === undefined) ? '' : String(raw).trim();
+                if (!raw) return;
+                var d = new Date(raw);
+                if (!isNaN(d.getTime())) this.value = d.toISOString().split('T')[0];
               });
 
               $(tableNode).on('keyup', 'input', function(e) {

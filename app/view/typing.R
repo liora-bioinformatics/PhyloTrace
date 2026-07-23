@@ -730,6 +730,22 @@ server <- function(
       Typing$results <- NULL
       log_text("")
       updateProgressBar(session, "progress", value = 0, total = 1)
+
+      # A fresh pick from either the file or folder chooser goes through here,
+      # so open "Selected Genomes" right where the new selection lands instead
+      # of leaving the user to notice the summary badge changed while whatever
+      # panel they had open (e.g. Results, from a previous run) stays shown.
+      runjs(sprintf(
+        "(function(){
+           var acc = document.getElementById('%s');
+           if (!acc) return;
+           var item = acc.querySelector('[data-value=\"Selected Genomes\"]');
+           if (!item) return;
+           var btn = item.querySelector('.accordion-button.collapsed');
+           if (btn) btn.click();
+         })();",
+        ns("typing_accordion")
+      ))
     }
 
     # File / folder choosers
@@ -1518,12 +1534,12 @@ server <- function(
         )
       }
 
-      # Click the "Typing Results" accordion button
+      # Click the "Results" accordion button
       runjs(sprintf(
         "(function(){
            var acc = document.getElementById('%s');
            if (!acc) return;
-           var item = acc.querySelector('[data-value=\"Typing Results\"]');
+           var item = acc.querySelector('[data-value=\"Results\"]');
            if (!item) return;
            var btn = item.querySelector('.accordion-button.collapsed');
            if (btn) btn.click();

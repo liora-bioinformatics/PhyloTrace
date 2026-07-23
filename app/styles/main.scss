@@ -1591,7 +1591,8 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 // instead of clamping lines, cells stay single-line and grow in width;
 // tables that opt into DT's scrollX already have the horizontal scroll
 // container to absorb that width.
-table.dataTable td {
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td {
     white-space: nowrap;
 }
 

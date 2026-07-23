@@ -82,6 +82,18 @@ DATE_COL <- "sample_collection_date"
   as.integer(idx[!is.na(idx)] - 1L)
 }
 
+# The same columns, in the base DT's `editable` list wants for its
+# numeric/date/area fields — which is *not* the base columnDefs targets use.
+# DT::makeEditableField() ends with `z - is.null(rn)`: with rownames = FALSE
+# there is no rownames column, so it shifts whatever it is given one column to
+# the left before handing it to the JS. Passing 0-based indices therefore opens
+# the date picker on the column *before* the date one. Hand it 1-based indices
+# so the shift lands on the intended column.
+#
+# `disable$columns` goes through no such adjustment and stays 0-based, which is
+# why READONLY_COLS is indexed with .dt_idx() directly.
+.dt_editable_idx <- function(all_cols, cols) .dt_idx(all_cols, cols) + 1L
+
 #' @export
 ui <- function(id) {
   ns <- NS(id)
@@ -267,7 +279,16 @@ server <- function(
       cols <- custom_cols()
       defs <- list_custom_fields(db_path())
       if (!is.data.frame(defs) || !nrow(defs)) {
-        return(defs)
+        # Still carry `column`, so every consumer can index on it without
+        # first re-checking whether any variables are defined.
+        return(data.frame(
+          id = integer(0),
+          name = character(0),
+          type = character(0),
+          levels = character(0),
+          column = character(0),
+          stringsAsFactors = FALSE
+        ))
       }
       defs$column <- custom_col(defs$name)
       defs[defs$column %in% cols, , drop = FALSE]
@@ -277,9 +298,6 @@ server <- function(
     # right native editor per column.
     custom_cols_of_type <- function(wanted) {
       defs <- custom_defs()
-      if (!is.data.frame(defs) || !nrow(defs)) {
-        return(character(0))
-      }
       defs$column[defs$type %in% wanted]
     }
 
@@ -415,8 +433,11 @@ server <- function(
       derived <- c(mlst_cols(), amr_cols())
       readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived))
       hidden_idx <- .dt_idx(cols, derived)
+      # Two bases on purpose — see .dt_editable_idx(). The className targets
+      # below are columnDefs (0-based); the editable list is not.
       date_idx <- .dt_idx(cols, date_cols())
-      numeric_idx <- .dt_idx(cols, custom_cols_of_type(NUMERIC_TYPES))
+      edit_date_idx <- .dt_editable_idx(cols, date_cols())
+      edit_numeric_idx <- .dt_editable_idx(cols, custom_cols_of_type(NUMERIC_TYPES))
 
       column_defs <- list(
         list(className = "dt-left", targets = "_all"),
@@ -460,8 +481,8 @@ server <- function(
           # MutationObserver that retyped DT's text input after the fact —
           # which had to re-parse and re-focus the input, and only ever knew
           # about the one hardcoded collection-date column.)
-          numeric = numeric_idx,
-          date = date_idx
+          numeric = edit_numeric_idx,
+          date = edit_date_idx
         ),
         selection = "none",
         extensions = "FixedColumns",
@@ -480,6 +501,22 @@ server <- function(
 
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
+              });
+
+              // A native date input only accepts YYYY-MM-DD, so a stored value
+              // in any other shape (legacy rows, an import) lands in the editor
+              // blank — and blurring that blank would commit it, wiping the
+              // date. Recover it from the cell's own data, which DT has not
+              // touched yet, and offer it in the form the input can hold.
+              $(tableNode).on('focusin', 'input[type=date]', function() {
+                if (this.value) return;
+                var td = $(this).closest('td');
+                if (!td.length) return;
+                var raw = api.cell(td[0]).data();
+                raw = (raw === null || raw === undefined) ? '' : String(raw).trim();
+                if (!raw) return;
+                var d = new Date(raw);
+                if (!isNaN(d.getTime())) this.value = d.toISOString().split('T')[0];
               });
 
               api.on('column-visibility.dt', function() {
