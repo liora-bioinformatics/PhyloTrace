@@ -33,6 +33,18 @@ field_labels <- c(
 #' @export
 MLST_COL_PREFIX <- "mlst_"
 
+# Reserved name prefix for the display-only AMR-screening columns (a resistance
+# profile summary plus one per drug class / virulence-stress group) derived from
+# the `amr_summary` table. Same convention as MLST_COL_PREFIX.
+#' @export
+AMR_COL_PREFIX <- "amr_"
+
+# Reserved name prefix for the user-defined custom variables surfaced from
+# `phylotrace_custom_values` (see app/logic/custom_fields.R). Same convention as
+# MLST_COL_PREFIX; the variable's own name follows the prefix.
+#' @export
+CUSTOM_COL_PREFIX <- "custom_"
+
 #' @export
 prettify_field <- function(x) {
   words <- strsplit(gsub("_", " ", x), " ")[[1]]
@@ -54,6 +66,17 @@ field_label <- function(f) {
   if (startsWith(f, MLST_COL_PREFIX)) {
     locus <- substring(f, nchar(MLST_COL_PREFIX) + 1L)
     return(if (identical(locus, "st")) "Sequence Type (ST)" else locus)
+  }
+  # Derived AMR columns read as the bare drug class / group; the summary column
+  # as "AMR Profile".
+  if (startsWith(f, AMR_COL_PREFIX)) {
+    key <- substring(f, nchar(AMR_COL_PREFIX) + 1L)
+    return(if (identical(key, "profile")) "AMR Profile" else key)
+  }
+  # Custom variables read as their own name, prettified the same way an unknown
+  # metadata column is ("sampling_site" -> "Sampling Site").
+  if (startsWith(f, CUSTOM_COL_PREFIX)) {
+    return(prettify_field(substring(f, nchar(CUSTOM_COL_PREFIX) + 1L)))
   }
   prettify_field(f)
 }
@@ -80,14 +103,16 @@ field_chips <- function(x) {
 
 #' Build a select / picker `choices` structure that groups metadata fields into
 #' a "Sample metadata" optgroup and, when present, a "Classical MLST" optgroup
-#' for the derived MLST columns (see `MLST_COL_PREFIX`). Option labels come from
-#' `field_labels_for()`; option values stay the raw column names, so a caller's
-#' selection logic still keys on the column name. With no MLST columns it returns
-#' a flat named vector (no optgroups), identical to a plain labelled metadata
-#' select. The nested-list form is understood by both `shiny::selectInput()` and
-#' `shinyWidgets::pickerInput()`.
+#' for the derived MLST columns (see `MLST_COL_PREFIX`), an "AMR screening" one,
+#' and a "Custom variables" one for the user-defined fields. Option labels come
+#' from `field_labels_for()`; option values stay the raw column names, so a
+#' caller's selection logic still keys on the column name. With no grouped
+#' columns at all it returns a flat named vector (no optgroups), identical to a
+#' plain labelled metadata select. The nested-list form is understood by
+#' `shiny::selectInput()`, `shinyWidgets::pickerInput()` and
+#' `shinyWidgets::virtualSelectInput()` alike.
 #'
-#' `mlst_cols` defaults to detecting the MLST columns by their name prefix; pass
+#' Each `*_cols` argument defaults to detecting its columns by name prefix; pass
 #' the exact set where the caller already tracks it (e.g. the browse table's
 #' `"mlst_cols"` attribute). Order within each group follows `fields`.
 #'
@@ -95,21 +120,58 @@ field_chips <- function(x) {
 #' against the flat `fields`, not against the returned structure: `x %in% choices`
 #' does not see into optgroups.
 #' @export
-grouped_field_choices <- function(fields, mlst_cols = NULL) {
-  mlst_cols <- if (is.null(mlst_cols)) {
-    fields[startsWith(fields, MLST_COL_PREFIX)]
-  } else {
-    intersect(fields, mlst_cols)
+grouped_field_choices <- function(
+  fields,
+  mlst_cols = NULL,
+  amr_cols = NULL,
+  custom_cols = NULL
+) {
+  # An explicitly named set wins over prefix detection: a caller that declares a
+  # column for one group must not see it claimed by another group's prefix too.
+  claimed <- unlist(lapply(
+    list(mlst_cols, amr_cols, custom_cols),
+    function(cols) if (is.null(cols)) NULL else intersect(fields, cols)
+  ))
+
+  by_prefix <- function(cols, prefix) {
+    if (is.null(cols)) {
+      setdiff(fields[startsWith(fields, prefix)], claimed)
+    } else {
+      intersect(fields, cols)
+    }
   }
-  base_cols <- setdiff(fields, mlst_cols)
+
+  mlst_cols <- by_prefix(mlst_cols, MLST_COL_PREFIX)
+  amr_cols <- by_prefix(amr_cols, AMR_COL_PREFIX)
+  custom_cols <- by_prefix(custom_cols, CUSTOM_COL_PREFIX)
+
+  grouped <- c(mlst_cols, amr_cols, custom_cols)
+  base_cols <- setdiff(fields, grouped)
   base_choices <- stats::setNames(base_cols, field_labels_for(base_cols))
 
-  if (!length(mlst_cols)) {
+  # No grouped columns at all: stay flat, exactly as a plain metadata select.
+  if (!length(grouped)) {
     return(base_choices)
   }
 
-  list(
-    "Sample metadata" = base_choices,
-    "Classical MLST" = stats::setNames(mlst_cols, field_labels_for(mlst_cols))
-  )
+  out <- list("Sample metadata" = base_choices)
+  if (length(mlst_cols)) {
+    out[["Classical MLST"]] <- stats::setNames(
+      mlst_cols,
+      field_labels_for(mlst_cols)
+    )
+  }
+  if (length(amr_cols)) {
+    out[["AMR screening"]] <- stats::setNames(
+      amr_cols,
+      field_labels_for(amr_cols)
+    )
+  }
+  if (length(custom_cols)) {
+    out[["Custom variables"]] <- stats::setNames(
+      custom_cols,
+      field_labels_for(custom_cols)
+    )
+  }
+  out
 }

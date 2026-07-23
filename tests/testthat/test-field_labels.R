@@ -1,6 +1,13 @@
 box::use(
   testthat[test_that, expect_identical, expect_named, expect_type],
-  app / logic / field_labels[grouped_field_choices, MLST_COL_PREFIX],
+  app /
+    logic /
+    field_labels[
+      CUSTOM_COL_PREFIX,
+      field_label,
+      grouped_field_choices,
+      MLST_COL_PREFIX
+    ],
 )
 
 test_that("grouped_field_choices stays flat without MLST columns", {
@@ -38,9 +45,32 @@ test_that("grouped_field_choices splits MLST columns into their own group", {
 
 test_that("grouped_field_choices honours an explicit mlst_cols set", {
   fields <- c("isolate", "custom_col")
-  # custom_col has no MLST prefix but is declared MLST by the caller.
+  # An explicitly declared set wins over prefix detection: "custom_col" carries
+  # the custom-variable prefix but the caller declares it MLST.
   ch <- grouped_field_choices(fields, mlst_cols = "custom_col")
 
   expect_named(ch, c("Sample metadata", "Classical MLST"))
   expect_identical(unname(ch[["Classical MLST"]]), "custom_col")
+})
+
+test_that("grouped_field_choices splits custom variables into their own group", {
+  fields <- c(
+    "isolate",
+    paste0(MLST_COL_PREFIX, "st"),
+    paste0(CUSTOM_COL_PREFIX, "ward"),
+    paste0(CUSTOM_COL_PREFIX, "ct_value")
+  )
+  ch <- grouped_field_choices(fields)
+
+  expect_named(
+    ch,
+    c("Sample metadata", "Classical MLST", "Custom variables")
+  )
+  expect_identical(unname(ch[["Custom variables"]]), fields[3:4])
+  # A custom variable reads as its own name, prettified.
+  expect_identical(names(ch[["Custom variables"]]), c("Ward", "Ct Value"))
+})
+
+test_that("field_label prettifies a custom variable's own name", {
+  expect_identical(field_label("custom_sampling_site"), "Sampling Site")
 })

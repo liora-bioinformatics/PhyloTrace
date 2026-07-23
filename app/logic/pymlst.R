@@ -20,6 +20,33 @@ box::use(
   dplyr[select, left_join],
 )
 
+### Single conda environment for every external CLI the app shells out to
+# All bioinformatics tooling - cgMLST/classical typing (wgMLST/claMLST + blat +
+# mafft) and AMR screening (abritamr/AMRFinderPlus) - lives in one env alongside
+# the R/Shiny app itself. Keeping it a single named constant (rather than the
+# strings "pymlst"/"PhyloTrace" scattered across modules) is the one source of
+# truth: change the env here and every caller follows.
+#' @export
+conda_env <- "PhyloTrace"
+
+### Resolve the base conda executable
+# The app can be launched with an env-local `conda` ahead of the base conda on
+# PATH - e.g. a full conda installed inside the PhyloTrace env at
+# `<root>/envs/PhyloTrace/bin/conda`. That env-local conda computes its root
+# prefix as the env itself, so `conda run -n <env>` resolves `<env>` under
+# `<root>/envs/PhyloTrace/envs/<env>` and dies with EnvironmentLocationNotFound.
+# `CONDA_EXE` is set by `conda init`/activation and always points at the base
+# conda (whose root holds the real envs), so prefer it and fall back to a bare
+# `conda` only when it is unset or missing.
+#' @export
+conda_exe <- function() {
+  exe <- Sys.getenv("CONDA_EXE", unset = "")
+  if (nzchar(exe) && file.exists(exe)) {
+    return(exe)
+  }
+  "conda"
+}
+
 ### Download cgmlst scheme
 # db_path - target database path including '.db' file ending
 # scheme - scheme corresponding to cgmlst.org schemes
@@ -28,12 +55,12 @@ box::use(
 download_cgmlst_scheme <- function(
   scheme,
   db_path,
-  env_name,
+  env_name = conda_env,
   overwrite = FALSE
 ) {
   download_status <- tryCatch(
     run(
-      command = "conda",
+      command = conda_exe(),
       args = c(
         "run",
         "-n",
@@ -73,6 +100,12 @@ download_cgmlst_scheme <- function(
 # derives the ST per genome, and leaves the DB in place for the R caller to read
 # its reference sequences / metadata and then delete. Omitting `-s`/`-m` makes
 # the script skip classical MLST entirely.
+# AMR screening rides along too: when `amr_out` (a per-run output directory) and
+# `amr_env` (the conda env holding abritamr / AMRFinderPlus) are given, the
+# script screens each genome with abritamr into `amr_out/<strain>`. `amr_species`
+# is the abritamr `--species` token when the organism is supported for point
+# mutations, or NA for the acquired-genes-only fallback. Omitting `amr_out` skips
+# AMR entirely.
 typing_args <- function(
   db_path,
   genome_files,
@@ -81,7 +114,10 @@ typing_args <- function(
   env,
   species = NA_character_,
   repo = "pubmlst",
-  cla_db = NA_character_
+  cla_db = NA_character_,
+  amr_env = NA_character_,
+  amr_species = NA_character_,
+  amr_out = NA_character_
 ) {
   args <- c(
     "-d",
@@ -102,6 +138,12 @@ typing_args <- function(
       args <- c(args, "-m", cla_db)
     }
   }
+  if (scalar_chr(amr_out) && scalar_chr(amr_env)) {
+    args <- c(args, "-A", amr_env, "-o", amr_out)
+    if (scalar_chr(amr_species)) {
+      args <- c(args, "-p", amr_species)
+    }
+  }
   c(args, "--", genome_files)
 }
 
@@ -114,7 +156,7 @@ type_genomes <- function(
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
   coverage = 0.9,
-  env = "pymlst"
+  env = conda_env
 ) {
   # Run the process. `bash <script>` avoids depending on the script's execute
   # bit.
@@ -195,10 +237,13 @@ start_typing <- function(
   script_path = "app/logic/loop-pymlst.sh",
   identity = 0.95,
   coverage = 0.9,
-  env = "pymlst",
+  env = conda_env,
   species = NA_character_,
   repo = "pubmlst",
-  cla_db = NA_character_
+  cla_db = NA_character_,
+  amr_env = NA_character_,
+  amr_species = NA_character_,
+  amr_out = NA_character_
 ) {
   process$new(
     command = "bash",
@@ -212,7 +257,10 @@ start_typing <- function(
         env,
         species,
         repo,
-        cla_db
+        cla_db,
+        amr_env,
+        amr_species,
+        amr_out
       )
     ),
     wd = dirname(db_path),
@@ -274,8 +322,10 @@ clamlst_status <- function(st, alleles) {
 #   partial  - partial genes detected
 #   filled   - partial genes recovered
 #   removed  - genes dropped (bad coverage / failed CDS test)
-#   finished - wall-clock time of the "DONE" log line ("HH:MM:SS")
-#   elapsed  - analysis duration in seconds (DONE minus first timestamp)
+#   finished - wall-clock time the strain's whole pipeline ended ("HH:MM:SS"),
+#              NA until every step has run
+#   elapsed  - whole-pipeline duration in seconds, NA until every step has run
+#   cg_done  - TRUE once allele calling alone reached its "DONE" line
 #   detail   - short human-readable explanation
 #   st         - classical MLST Sequence Type (NA when unavailable)
 #   alleles    - classical MLST per-gene allele profile ("gene=allele,...")
@@ -323,43 +373,38 @@ parse_typing_log <- function(log_lines, strains) {
     }
   }
 
-  # Per-strain wall-clock timing taken from the "[INFO: <ts>]" log prefixes
-  # (e.g. "[INFO: 2026-06-25 21:16:40,224] DONE"). `finished` is the time on the
-  # DONE line; `elapsed` is DONE minus the strain's first timestamp (the BLAT
-  # search). Both are NA when the strain never reached DONE.
+  # Per-strain wall-clock timing. `finished` / `elapsed` describe the strain's
+  # whole pipeline - allele calling, classical MLST and AMR screening - and are
+  # therefore taken exclusively from the "Strain finished" / "Strain elapsed"
+  # sentinels loop-pymlst.sh emits once all three are done. They stay NA for a
+  # strain that is still mid-run or was killed part-way through, so a reported
+  # duration always covers the complete strain.
+  #
+  # `cg_done` marks the end of allele calling alone, read off the "[INFO: <ts>]
+  # DONE" line pymlst prints (e.g. "[INFO: 2026-06-25 21:16:40,224] DONE"). It
+  # is what separates "allele calling still running" from "the steps after it
+  # are running", which the UI needs while the sentinels are still pending.
   ts_pattern <-
     "\\[INFO: ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}[.,][0-9]+)\\]"
   timing <- function(chunk) {
     to_posix <- function(x) {
       as.POSIXct(gsub(",", ".", x), format = "%Y-%m-%d %H:%M:%OS")
     }
-    matches <- regmatches(chunk, gregexpr(ts_pattern, chunk))[[1]]
-    stamps <- if (length(matches)) {
-      to_posix(sub(ts_pattern, "\\1", matches))
-    } else {
-      as.POSIXct(character(0))
-    }
     done <- regmatches(
       chunk,
       regexec(paste0(ts_pattern, "[ \t]*DONE"), chunk)
     )[[1]]
     done_ts <- if (length(done) > 1) to_posix(done[2]) else as.POSIXct(NA)
-    start_ts <- if (length(stamps)) {
-      min(stamps, na.rm = TRUE)
-    } else {
-      as.POSIXct(NA)
-    }
+    total_elapsed <- num(chunk, "Strain elapsed:[ \t]*([0-9]+)")
+    total_finished <- strval(chunk, "Strain finished:[ \t]*([0-9:]+)")
     list(
-      finished = if (!is.na(done_ts)) {
-        format(done_ts, "%H:%M:%S")
-      } else {
-        NA_character_
-      },
-      elapsed = if (!is.na(done_ts) && !is.na(start_ts)) {
-        as.numeric(difftime(done_ts, start_ts, units = "secs"))
+      finished = total_finished,
+      elapsed = if (!is.na(total_elapsed)) {
+        as.numeric(total_elapsed)
       } else {
         NA_real_
-      }
+      },
+      cg_done = !is.na(done_ts)
     )
   }
 
@@ -372,7 +417,8 @@ parse_typing_log <- function(log_lines, strains) {
       filled = num(chunk, "partial genes, filled ([0-9]+)"),
       removed = num(chunk, "Removed ([0-9]+) genes"),
       finished = times$finished,
-      elapsed = times$elapsed
+      elapsed = times$elapsed,
+      cg_done = times$cg_done
     )
     # Classical MLST (best-effort, may be absent): the ST and the per-gene allele
     # profile echoed by loop-pymlst.sh after `claMLST search`, plus a known /
@@ -382,6 +428,21 @@ parse_typing_log <- function(log_lines, strains) {
     metrics$st <- cla_st
     metrics$alleles <- cla_alleles
     metrics$cla_status <- clamlst_status(cla_st, cla_alleles)
+    # AMR screening (best-effort, may be absent): the loop-pymlst.sh sentinels
+    # for this strain - "AMR: screening", "AMR: done <strain> (<n> elements)",
+    # "AMR: failed". `amr_elements` is the detected-element count on success;
+    # `amr_status` is "done" / "failed" / "screening", or NA when AMR was off.
+    amr_elements <- num(chunk, "AMR: done .* \\(([0-9]+) elements\\)")
+    metrics$amr_elements <- amr_elements
+    metrics$amr_status <- if (!is.na(amr_elements)) {
+      "done"
+    } else if (grepl("AMR: failed", chunk, fixed = TRUE)) {
+      "failed"
+    } else if (grepl("AMR: screening", chunk, fixed = TRUE)) {
+      "screening"
+    } else {
+      NA_character_
+    }
     outcome <- function(status, detail) {
       c(metrics, list(status = status, detail = detail))
     }
@@ -442,16 +503,35 @@ parse_typing_log <- function(log_lines, strains) {
         removed = NA_integer_,
         finished = NA_character_,
         elapsed = NA_real_,
+        cg_done = FALSE,
         detail = "Waiting in queue ...",
         st = NA_character_,
         alleles = NA_character_,
-        cla_status = NA_character_
+        cla_status = NA_character_,
+        amr_status = NA_character_,
+        amr_elements = NA_integer_
       )
     } else {
       # A section is complete once another section follows it or the run is over.
+      # For the strain currently being processed neither holds yet, so fall back
+      # to the "Strain finished:" sentinel loop-pymlst.sh prints at the very end
+      # of a strain's pipeline - after allele calling, classical MLST *and* the
+      # AMR screen, and unconditionally, including for a strain that failed.
+      #
+      # It has to be that sentinel and not the "AMR: screening" one: screening
+      # takes minutes, and treating its *start* as the end of the strain marked
+      # the strain done while its AMR badge still read "Screening ...", which ran
+      # the progress bar up to 100% with a genome still in flight. The window
+      # this was meant to cover - allele calling finished, later steps still
+      # going - is reported off `cg_done` instead (see build_results_df's
+      # cg_status in app/view/typing.R), so the cgMLST column still flips to
+      # "Added" the moment allele calling is actually over.
       idx <- match(strain, order_seen)
-      complete <- idx < length(order_seen) || finished_all
-      info <- classify(sections[[strain]], complete)
+      chunk <- sections[[strain]]
+      complete <- idx < length(order_seen) ||
+        finished_all ||
+        grepl("Strain finished:", chunk, fixed = TRUE)
+      info <- classify(chunk, complete)
     }
     data.frame(
       strain = strain,
@@ -463,10 +543,13 @@ parse_typing_log <- function(log_lines, strains) {
       removed = info$removed,
       finished = info$finished,
       elapsed = info$elapsed,
+      cg_done = info$cg_done,
       detail = info$detail,
       st = info$st,
       alleles = info$alleles,
       cla_status = info$cla_status,
+      amr_status = info$amr_status,
+      amr_elements = info$amr_elements,
       stringsAsFactors = FALSE
     )
   })
@@ -595,8 +678,8 @@ clamlst_refs <- function(cla_db_path) {
 
 ### Persist classical MLST results (+ provenance) into the mother database
 # Stored long / per-allele, mirroring the mother DB's own `mlst` table
-# (one row per locus, keyed on `souche`): each row is one gene's allele call for
-# a strain, columns `souche, gene, allele, sequence`. The strain's ST and the
+# (one row per locus, keyed on `isolate`): each row is one gene's allele call for
+# a strain, columns `isolate, gene, allele, sequence`. The strain's ST and the
 # run-level provenance (scheme, reference release, alembic schema marker,
 # repository, identity/coverage, pyMLST version, timestamp) are carried on every
 # allele row so each is self-describing - strains may be typed across separate
@@ -708,7 +791,7 @@ store_clamlst_results <- function(
     con,
     "CREATE TABLE IF NOT EXISTS classical_mlst (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       souche TEXT,
+       isolate TEXT,
        gene TEXT,
        allele TEXT,
        sequence TEXT,
@@ -730,7 +813,7 @@ store_clamlst_results <- function(
   ok <- tryCatch(
     {
       for (i in seq_len(nrow(results))) {
-        souche <- as.character(results$strain[i])
+        isolate <- as.character(results$strain[i])
         status <- status_vec[i]
         # The ST number is only meaningful for a registered (known) profile;
         # novel / partial results carry NULL st and are identified by `status`.
@@ -751,20 +834,20 @@ store_clamlst_results <- function(
         # Refresh this strain's rows so re-typing never duplicates them.
         dbExecute(
           con,
-          "DELETE FROM classical_mlst WHERE souche = ?",
-          params = list(souche)
+          "DELETE FROM classical_mlst WHERE isolate = ?",
+          params = list(isolate)
         )
 
         for (j in seq_len(nrow(genes))) {
           dbExecute(
             con,
             "INSERT INTO classical_mlst
-               (souche, gene, allele, sequence, st, status, scheme,
+               (isolate, gene, allele, sequence, st, status, scheme,
                 scheme_version, alembic_version, repository, identity, coverage,
                 pymlst_version, called_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params = list(
-              souche,
+              isolate,
               genes$gene[j],
               genes$allele[j],
               seq_for(genes$gene[j], genes$allele[j]),

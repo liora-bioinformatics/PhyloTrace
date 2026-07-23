@@ -44,6 +44,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database],
+  app / logic / database_functions[migrate_isolate_key],
   app / view / landing_page,
   app / view / scheme_browser,
   app / view / database,
@@ -217,9 +218,20 @@ server <- function(id) {
       later::later(stopApp, delay = 0.5)
     })
 
-    # Shared reset signal: incremented each time the user resets the session.
-    # Modules observe it with ignoreInit = TRUE and tear down their own state.
+    # Shared reset signal: incremented only when the user returns to the
+    # landing screen (input$reset). Landing Page and Scheme Browser are the
+    # only listeners - Landing Page nulls its load_trigger on this signal so
+    # a stale remembered db_path isn't picked up before the user explicitly
+    # loads one again.
     session_reset <- reactiveVal(0L)
+
+    # Bumped whenever every other module should tear down / re-query its
+    # state: on a full session_reset AND on "Reload Database" (input$reload_db).
+    # Deliberately NOT observed by Landing Page/Scheme Browser - if it were,
+    # "Reload Database" would null out Landing Page's load_trigger (hence
+    # db_path) without ever re-firing it, since that lightweight reload never
+    # sends the user back to the landing screen to press Load again.
+    data_reset <- reactiveVal(0L)
 
     # Shared change signal for saved Analyses/Plots. Bumped by whichever module
     # writes (the dashboard on add/rename/delete, the Visualization module on
@@ -245,7 +257,7 @@ server <- function(id) {
     TYPING_vals <- typing$server(
       "typing",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset
+      session_reset = data_reset
     )
 
     # ID of the most-recently shown "new isolates" notification; used to
@@ -255,7 +267,7 @@ server <- function(id) {
     DATABASE_vals <- database$server(
       "database",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset,
+      session_reset = data_reset,
       typing_status = TYPING_vals$typing_status,
       db_updated = TYPING_vals$db_updated
     )
@@ -327,13 +339,13 @@ server <- function(id) {
     ANALYSIS_DASHBOARD_vals <- analysis_dashboard$server(
       "analysis_dashboard",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset,
+      session_reset = data_reset,
       plots_changed = plots_changed
     )
     visualization$server(
       "visualization",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = session_reset,
+      session_reset = data_reset,
       typing_status = TYPING_vals$typing_status,
       db_updated = TYPING_vals$db_updated,
       # Dashboard -> Visualization: "Add Plot" for an Analysis and "open a saved
@@ -376,6 +388,9 @@ server <- function(id) {
       )
       w$show()
 
+      # Bring the isolate key up to the current spelling before anything reads
+      # the database, then fill in any missing allele hashes.
+      migrate_isolate_key(db_path)
       hash_database(db_path)
 
       app_panels <- list(
@@ -477,17 +492,27 @@ server <- function(id) {
       )
     })
 
-    # Increment the shared reset signal so every subscribed module observer
-    # fires and tears down its own reactive state (files, results, processes).
-    reset_session <- function() {
+    # Increment data_reset so every subscribed module observer fires and
+    # tears down its own reactive state (files, results, processes), without
+    # touching Landing Page's load_trigger / db_path.
+    reload_data <- function() {
       # Reclaim accumulated garbage and return it to the OS at the reset point,
       # before the teardown/rebuild cascade runs. The vector-heap cap above keeps
       # the session from ballooning; this full collection additionally hands the
       # freed pages back to the OS promptly (Linux malloc_trim) so a reload on a
       # memory-tight machine renders with headroom rather than in swap. Cheap on
       # the app's small live set (~130 MB); synchronous so it finishes before
-      # session_reset() triggers the rebuild flush.
+      # data_reset() triggers the rebuild flush.
       # gc(full = TRUE) # [A/B TEST — TEMPORARY] disabled; re-enable to restore fix
+      data_reset(data_reset() + 1L)
+    }
+
+    # Full reset: everything reload_data() does, plus the true session_reset
+    # signal that sends Landing Page/Scheme Browser back to their pre-load
+    # state (see session_reset's definition above for why they're excluded
+    # from data_reset).
+    reset_session <- function() {
+      reload_data()
       session_reset(session_reset() + 1L)
     }
 
@@ -500,10 +525,12 @@ server <- function(id) {
 
     # Reload the database: reset all module-internal state (so every module
     # re-queries the updated DB) without removing panels or returning to the
-    # landing screen, then navigate directly to the Database Browser.
+    # landing screen, then navigate directly to the Database Browser. Uses
+    # reload_data() rather than reset_session() - db_path must stay intact so
+    # Database Browser (and everything else) can actually re-query it.
     observeEvent(input$reload_db, {
       hide_db_notification()
-      reset_session()
+      reload_data()
       nav_select(id = "tabs", selected = "database_panel")
     })
 

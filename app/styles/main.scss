@@ -5,6 +5,14 @@
     --bs-card-border-radius: 8px;
 }
 
+// Shared "frosted glass" backing for anything overlaid on an image, so text
+// and controls stay legible over whatever colors sit underneath.
+@mixin frosted-glass-overlay {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background-color: rgba(255, 255, 255, 0.55);
+}
+
 // Full-height anchor -----------------------------------------------------------
 // main.R emits page_navbar() inside a tagList, so bslib's `.bslib-page-fill`
 // (which is `height: 100%`) lands as a nested <div> rather than the document
@@ -17,6 +25,37 @@
 html,
 body {
     height: 100%;
+}
+
+// Input shield ----------------------------------------------------------------
+// Engaged by app/js/busy-shield.js for the duration of a user-triggered server
+// round trip, so clicks cannot pile up behind a blocked R process and replay in
+// a burst once it frees up. The shield re-enables pointer-events on itself
+// against the `body` rule below, so it is the hit target: it swallows the click
+// outright rather than letting it fall through, and can render the wait cursor.
+.pt-shield {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000; // above bslib modals (1055) and the waiter overlay
+    display: none;
+    background: transparent;
+    pointer-events: auto;
+}
+
+html.pt-busy {
+    body {
+        pointer-events: none;
+    }
+
+    .pt-shield {
+        display: block;
+    }
+}
+
+// Delayed by the shield's probe timer, so the many sub-250ms handlers cause no
+// cursor flicker. Blocking itself is immediate from millisecond zero.
+html.pt-busy-visible .pt-shield {
+    cursor: wait;
 }
 
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
@@ -129,8 +168,309 @@ body {
 
 // The creator form supplies its own padding: the navset's card body is
 // zero-padded so the plot tabs' full-bleed layouts sit flush.
+//
+// container-type lives here rather than on .viz-type-picker itself so the
+// picker can be *styled* by the container query below (a container can't
+// size itself off its own queried containment).
 .viz-creator {
-    max-width: 420px;
+    padding: 1rem;
+    container-type: inline-size;
+}
+
+.viz-creator-intro h4 {
+    margin-bottom: 0.25rem;
+}
+
+.viz-creator-intro p {
+    max-width: 68ch;
+    margin-bottom: 1.25rem;
+}
+
+// Plot-type picker.
+//
+// Style against the *live* DOM, not the markup radioGroupButtons() emits:
+// bslib rewrites that Bootstrap 3 button group on load into the Bootstrap 5
+// pattern, so by the time these rules run the per-choice `.btn-group` wrappers
+// are gone and each choice is an `input.btn-check` + `label.btn.radiobtn`
+// sibling pair sitting directly in `.btn-group-container-sw`. The rewrite also
+// hands every label `btn-outline-primary`, whose checked state would flood the
+// tile with solid primary — hence the explicit background/colour resets below.
+//
+// One tile row's height range. Growing .viz-type-picker's own min/max-height
+// per breakpoint (below) turned out to be the reliable way to size it: with
+// nothing but flex-grow + grid-auto-rows relying on content to propagate a
+// size up through the shinyWidgets/bslib wrapper chain, browsers reliably
+// under-computed it to ~0, collapsing every tile to the grid's bare row
+// floor regardless of how much room the card actually had.
+$viz-tile-row-min: 118px;
+$viz-tile-row-max: 222px;
+$viz-tile-row-gap: 0.85rem;
+
+// display:flex/column makes this a fill *container* for its own children,
+// same shape as bslib's .html-fill-container (see viz-creator's comment) —
+// shinyWidgets' generated wrappers below can't carry the html-fill-item class
+// themselves, so the flex/min-height chain has to be spelled out by hand down
+// to .btn-group-container-sw.
+//
+// min/max-height bound how tall the picker (and so the tiles in it, whose
+// preview + caption are both absolutely positioned and carry no intrinsic
+// height of their own — see .viz-type-tile) may grow. Sized here for one row
+// of five; the container queries below scale both up for the 2- and 3-row
+// layouts narrower widths fall back to, so a row is never starved just
+// because the flat number was written for a wider one.
+.viz-type-picker {
+    display: flex;
+    flex-direction: column;
+    min-height: $viz-tile-row-min;
+    max-height: $viz-tile-row-max;
+}
+
+// The two shinyWidgets/Shiny wrappers between .viz-type-picker and the grid
+// (a .form-group and the widget's own #id.radio-group-buttons div) are plain
+// blocks by default, so without this the fill height from .viz-type-picker
+// stops dead at the first one instead of reaching the grid.
+.viz-type-picker .form-group,
+.viz-type-picker .radio-group-buttons {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+// Grid rather than the inherited flex row: with wrapping flex the tiles size
+// off their caption text and break one-per-row. `!important` beats the `d-flex`
+// utility bslib leaves on the container. grid-auto-rows mirrors the picker's
+// own min/max so that once there's more than one row, the extra height the
+// picker claims (see the container queries below) is shared evenly between
+// rows instead of piling onto whichever row happens to size first.
+.viz-type-picker .btn-group-container-sw {
+    display: grid !important;
+    grid-template-columns: repeat(5, 1fr);
+    grid-auto-rows: minmax($viz-tile-row-min, $viz-tile-row-max);
+    gap: $viz-tile-row-gap;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+// One row of five while it fits, then a deliberate 3 + 2 (and 2 + 2 + 1 once
+// even that is cramped) rather than whatever a ragged wrap would give.
+@container (max-width: 1000px) {
+
+    // 3 columns of 5 tiles wrap to 2 rows.
+    .viz-type-picker {
+        min-height: calc(#{$viz-tile-row-min} * 2 + #{$viz-tile-row-gap});
+        max-height: calc(#{$viz-tile-row-max} * 2 + #{$viz-tile-row-gap});
+    }
+
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@container (max-width: 620px) {
+
+    // 2 columns of 5 tiles wrap to 3 rows.
+    .viz-type-picker {
+        min-height: calc(#{$viz-tile-row-min} * 3 + #{$viz-tile-row-gap} * 2);
+        max-height: calc(#{$viz-tile-row-max} * 3 + #{$viz-tile-row-gap} * 2);
+    }
+
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+// The radio itself is never seen: the tile is the affordance. It stays in the
+// DOM, sized away rather than display:none, so it keeps taking focus and
+// shinyWidgets' own :checked lookup still finds it. Absolute positioning also
+// keeps it out of the grid's flow, so it claims no cell.
+.viz-type-picker .btn-check {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+}
+
+.viz-type-picker .radiobtn {
+    padding: 0;
+    overflow: hidden;
+    text-align: left;
+    white-space: normal;
+    border: 1px solid var(--bs-border-color);
+    // !important beats Bootstrap's connected-button-group corner rules
+    // (`.btn-group > .btn:not(:first-child)` etc.), which otherwise flatten
+    // every corner but the two outer ones on the group's end buttons.
+    border-radius: 4px !important;
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    transition: transform 0.15s ease, box-shadow 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.viz-type-picker .radiobtn:hover,
+.viz-type-picker .radiobtn:active,
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn,
+.viz-type-picker .btn-check:focus-visible+.radiobtn {
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border-color: var(--bs-primary);
+}
+
+.viz-type-picker .radiobtn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn {
+    box-shadow: 0 0 0 2px rgba(var(--bs-primary-rgb), 0.35);
+}
+
+// `position: relative` anchors the preview and caption below, which both sit
+// on top of each other rather than stacking in flow — see .ad-plot-box, the
+// same pattern used for the dashboard's saved-plot thumbnails. `height: 100%`
+// matches whatever the grid's own row height resolves to (already clamped by
+// .btn-group-container-sw's grid-auto-rows), so there's no separate cap here.
+.viz-type-tile {
+    position: relative;
+    overflow: hidden;
+    height: 100%;
+}
+
+// Fills the whole tile now that the caption is an overlay rather than a
+// stacked block underneath it — nothing to reserve caption space for.
+// Unselected tiles are muted so the picked one reads at a glance.
+.viz-type-tile-preview {
+    position: absolute;
+    inset: 0;
+    background-color: var(--bs-secondary-bg);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: grayscale(0.5) opacity(0.8);
+    transition: filter 0.2s ease, transform 0.3s ease;
+}
+
+.viz-type-picker .radiobtn:hover .viz-type-tile-preview,
+.viz-type-picker .radiobtn.active .viz-type-tile-preview,
+.viz-type-picker .btn-check:checked+.radiobtn .viz-type-tile-preview {
+    filter: none;
+    transform: scale(1.04);
+}
+
+// Frosted-glass strip pinned over the bottom of the preview image, same
+// treatment as .ad-plot-overlay-info on the dashboard's plot thumbnails.
+// font-style is reset because bslib's rewrite makes each tile the content of
+// a <label>, which the app styles italic.
+.viz-type-tile-caption {
+    @include frosted-glass-overlay;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 0.55rem;
+    padding: 0.6rem 0.7rem;
+    font-style: normal;
+}
+
+[data-bs-theme="dark"] .viz-type-tile-caption {
+    background-color: rgba(30, 30, 30, 0.55);
+}
+
+.viz-type-tile-icon {
+    grid-row: 1 / span 2;
+    align-self: center;
+    font-size: 1.15rem;
+    color: var(--bs-primary);
+}
+
+.viz-type-tile-name {
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.viz-type-tile-tagline {
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--bs-secondary-color);
+}
+
+// Details of the selected type, beside the name/Initiate card.
+.viz-creator-cols {
+    margin-top: 1.25rem;
+}
+
+.viz-type-info-icon {
+    margin-right: 0.5rem;
+    color: var(--bs-primary);
+    font-size: 1.5em;
+}
+
+.viz-type-info-title {
+    font-weight: 600;
+    font-size: 1.5em;
+}
+
+.viz-type-info-about {
+    margin-bottom: 0.85rem;
+}
+
+#app-visualization-type_info>.bslib-card {
+    padding-right: 1rem;
+}
+
+.viz-type-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.viz-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 999px;
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech li {
+    margin-bottom: 0.3rem;
+}
+
+.viz-type-tech li::marker {
+    color: var(--bs-primary);
+}
+
+.viz-creator-form .card-body {
+    gap: 0.75rem;
+}
+
+.viz-creator-form .card-header {
+    font-size: 1.5em;
+}
+
+// The preset banner is only rendered when the dashboard sent the user here, and
+// bslib's card gap would otherwise reserve a slot for the empty placeholder.
+.viz-creator-form .shiny-html-output:empty {
+    display: none;
+}
+
+.viz-creator-form .btn-lg {
+    margin-top: 0.25rem;
 }
 
 // Engine controls live directly in the right sidebar (no card). The wrapper is
@@ -302,6 +642,202 @@ body {
     gap: 0.75rem;
 }
 
+// Color-scale pickers (scale_select() in viz_helpers.R): swatch each palette
+// option in its own dropdown instead of showing the bare RColorBrewer/viridis
+// name, and swatch the closed control itself once a palette is chosen (the
+// :has(.item[data-value=...]) half — selectize renders the current selection
+// as a .item inside .selectize-input.full, same as an option in the open
+// dropdown, so it can be targeted the same way). Carried over from master's
+// www/body.css (formerly one repeated rule per hard-coded input id —
+// #nj_tiplab_scale, #gs_amrclass_scale_ui, etc.), though master never styled
+// the closed control. Sequential palettes get black text here rather than
+// master's white — white was unreadable at the light end every one of them
+// starts from. Keyed off the wrapper's static class rather than an id because
+// plot tabs are module instances with a per-tab namespaced id (scale_select()
+// wraps every call in a div.viz-scale-select for exactly this reason), so one
+// rule set covers every scale picker across every engine and every tab.
+// `!important` on both properties: selectize.bootstrap3.css's own
+// `.selectize-dropdown .active:not(.selected)` (the hovered/keyboard-active
+// row) ties our selector's specificity exactly (three class-level selectors
+// each), so which one wins would otherwise come down to include order rather
+// than intent — this makes sure the swatch always wins over that hover
+// state instead of graying out while the pointer is over it.
+.viz-scale-select .option[data-value="Set1"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set1"]) {
+    background: linear-gradient(to right, #E41A1C 0%, #E41A1C 11%, #377EB8 11%, #377EB8 22%, #4DAF4A 22%, #4DAF4A 33%, #984EA3 33%, #984EA3 44%, #FF7F00 44%, #FF7F00 55%, #FFFF33 55%, #FFFF33 66%, #A65628 66%, #A65628 77%, #F781BF 77%, #F781BF 88%, #999999 88%, #999999 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Set2"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set2"]) {
+    background: linear-gradient(to right, #66C2A5 0%, #66C2A5 12.5%, #FC8D62 12.5%, #FC8D62 25%, #8DA0CB 25%, #8DA0CB 37.5%, #E78AC3 37.5%, #E78AC3 50%, #A6D854 50%, #A6D854 62.5%, #FFD92F 62.5%, #FFD92F 75%, #E5C494 75%, #E5C494 87.5%, #B3B3B3 87.5%, #B3B3B3 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Set3"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Set3"]) {
+    background: linear-gradient(to right, #8DD3C7 0%, #8DD3C7 8.33333%, #FFFFB3 8.33333%, #FFFFB3 16.6667%, #BEBADA 16.6667%, #BEBADA 25%, #FB8072 25%, #FB8072 33.3333%, #80B1D3 33.3333%, #80B1D3 41.6667%, #FDB462 41.6667%, #FDB462 50%, #B3DE69 50%, #B3DE69 58.3333%, #FCCDE5 58.3333%, #FCCDE5 66.6667%, #D9D9D9 66.6667%, #D9D9D9 75%, #BC80BD 75%, #BC80BD 83.3333%, #CCEBC5 83.3333%, #CCEBC5 91.6667%, #FFED6F 91.6667%, #FFED6F 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Pastel1"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Pastel1"]) {
+    background: linear-gradient(to right, #FBB4AE 0%, #FBB4AE 11.1111%, #B3CDE3 11.1111%, #B3CDE3 22.2222%, #CCEBC5 22.2222%, #CCEBC5 33.3333%, #DECBE4 33.3333%, #DECBE4 44.4444%, #FED9A6 44.4444%, #FED9A6 55.5556%, #FFFFCC 55.5556%, #FFFFCC 66.6667%, #E5D8BD 66.6667%, #E5D8BD 77.7778%, #FDDAEC 77.7778%, #FDDAEC 88.8889%, #F2F2F2 88.8889%, #F2F2F2 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Paired"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Paired"]) {
+    background: linear-gradient(to right, #A6CEE3 0%, #A6CEE3 8.33333%, #1F78B4 8.33333%, #1F78B4 16.6667%, #B2DF8A 16.6667%, #B2DF8A 25%, #33A02C 25%, #33A02C 33.3333%, #FB9A99 33.3333%, #FB9A99 41.6667%, #E31A1C 41.6667%, #E31A1C 50%, #FDBF6F 50%, #FDBF6F 58.3333%, #FF7F00 58.3333%, #FF7F00 66.6667%, #CAB2D6 66.6667%, #CAB2D6 75%, #6A3D9A 75%, #6A3D9A 83.3333%, #FFFF99 83.3333%, #FFFF99 91.6667%, #B15928 91.6667%, #B15928 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Dark2"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Dark2"]) {
+    background: linear-gradient(to right, #1B9E77 0%, #1B9E77 12.5%, #D95F02 12.5%, #D95F02 25%, #7570B3 25%, #7570B3 37.5%, #E7298A 37.5%, #E7298A 50%, #66A61E 50%, #66A61E 62.5%, #E6AB02 62.5%, #E6AB02 75%, #A6761D 75%, #A6761D 87.5%, #666666 87.5%, #666666 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Accent"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Accent"]) {
+    background: linear-gradient(to right, #7FC97F 0%, #7FC97F 12.5%, #BEAED4 12.5%, #BEAED4 25%, #FDC086 25%, #FDC086 37.5%, #FFFF99 37.5%, #FFFF99 50%, #386CB0 50%, #386CB0 62.5%, #F0027F 62.5%, #F0027F 75%, #BF5B17 75%, #BF5B17 87.5%, #666666 87.5%, #666666 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Blues"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Blues"]) {
+    background: linear-gradient(to right, #F7FBFF 0%, #F7FBFF 11.1111%, #DEEBF7 11.1111%, #DEEBF7 22.2222%, #C6DBEF 22.2222%, #C6DBEF 33.3333%, #9ECAE1 33.3333%, #9ECAE1 44.4444%, #6BAED6 44.4444%, #6BAED6 55.5556%, #4292C6 55.5556%, #4292C6 66.6667%, #2171B5 66.6667%, #2171B5 77.7778%, #08519C 77.7778%, #08519C 88.8889%, #08306B 88.8889%, #08306B 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Greens"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Greens"]) {
+    background: linear-gradient(to right, #F7FCF5 0%, #F7FCF5 11.1111%, #E5F5E0 11.1111%, #E5F5E0 22.2222%, #C7E9C0 22.2222%, #C7E9C0 33.3333%, #A1D99B 33.3333%, #A1D99B 44.4444%, #74C476 44.4444%, #74C476 55.5556%, #41AB5D 55.5556%, #41AB5D 66.6667%, #238B45 66.6667%, #238B45 77.7778%, #006D2C 77.7778%, #006D2C 88.8889%, #00441B 88.8889%, #00441B 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Reds"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Reds"]) {
+    background: linear-gradient(to right, #FFF5F0 0%, #FFF5F0 11.1111%, #FEE0D2 11.1111%, #FEE0D2 22.2222%, #FCBBA1 22.2222%, #FCBBA1 33.3333%, #FC9272 33.3333%, #FC9272 44.4444%, #FB6A4A 44.4444%, #FB6A4A 55.5556%, #EF3B2C 55.5556%, #EF3B2C 66.6667%, #CB181D 66.6667%, #CB181D 77.7778%, #A50F15 77.7778%, #A50F15 88.8889%, #67000D 88.8889%, #67000D 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Purples"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Purples"]) {
+    background: linear-gradient(to right, #FCFBFD 0%, #FCFBFD 11.1111%, #EFEDF5 11.1111%, #EFEDF5 22.2222%, #DADAEB 22.2222%, #DADAEB 33.3333%, #BCBDDC 33.3333%, #BCBDDC 44.4444%, #9E9AC8 44.4444%, #9E9AC8 55.5556%, #807DBA 55.5556%, #807DBA 66.6667%, #6A51A3 66.6667%, #6A51A3 77.7778%, #54278F 77.7778%, #54278F 88.8889%, #3F007D 88.8889%, #3F007D 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Oranges"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Oranges"]) {
+    background: linear-gradient(to right, #FFF5EB 0%, #FFF5EB 11.1111%, #FEE6CE 11.1111%, #FEE6CE 22.2222%, #FDD0A2 22.2222%, #FDD0A2 33.3333%, #FDAE6B 33.3333%, #FDAE6B 44.4444%, #FD8D3C 44.4444%, #FD8D3C 55.5556%, #F16913 55.5556%, #F16913 66.6667%, #D94801 66.6667%, #D94801 77.7778%, #A63603 77.7778%, #A63603 88.8889%, #7F2704 88.8889%, #7F2704 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="Greys"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Greys"]) {
+    background: linear-gradient(to right, #FFFFFF 0%, #FFFFFF 11.1111%, #F0F0F0 11.1111%, #F0F0F0 22.2222%, #D9D9D9 22.2222%, #D9D9D9 33.3333%, #BDBDBD 33.3333%, #BDBDBD 44.4444%, #969696 44.4444%, #969696 55.5556%, #737373 55.5556%, #737373 66.6667%, #525252 66.6667%, #525252 77.7778%, #252525 77.7778%, #252525 88.8889%, #000000 88.8889%, #000000 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="YlGnBu"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="YlGnBu"]) {
+    background: linear-gradient(to right, #FFFFD9 0%, #FFFFD9 11.1111%, #EDF8B1 11.1111%, #EDF8B1 22.2222%, #C7E9B4 22.2222%, #C7E9B4 33.3333%, #7FCDBB 33.3333%, #7FCDBB 44.4444%, #41B6C4 44.4444%, #41B6C4 55.5556%, #1D91C0 55.5556%, #1D91C0 66.6667%, #225EA8 66.6667%, #225EA8 77.7778%, #253494 77.7778%, #253494 88.8889%, #081D58 88.8889%, #081D58 100%) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="viridis"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="viridis"]) {
+    background: linear-gradient(to right, #440154FF, #481568FF, #482677FF, #453781FF, #3F4788FF, #39558CFF, #32648EFF, #2D718EFF, #287D8EFF, #238A8DFF, #1F968BFF, #20A386FF, #29AF7FFF, #3CBC75FF, #56C667FF, #74D055FF, #94D840FF, #B8DE29FF, #DCE318FF, #FDE725FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="magma"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="magma"]) {
+    background: linear-gradient(to right, #000004FF, #07071DFF, #160F3BFF, #29115AFF, #400F73FF, #56147DFF, #6B1D81FF, #802582FF, #952C80FF, #AB337CFF, #C03A76FF, #D6456CFF, #E85362FF, #F4685CFF, #FA815FFF, #FD9A6AFF, #FEB37BFF, #FECC8FFF, #FDE4A6FF, #FCFDBFFF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="plasma"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="plasma"]) {
+    background: linear-gradient(to right, #0D0887FF, #2D0594FF, #44039EFF, #5901A5FF, #6F00A8FF, #8305A7FF, #9512A1FF, #A72197FF, #B6308BFF, #C5407EFF, #D14E72FF, #DD5E66FF, #E76E5BFF, #EF7F4FFF, #F79044FF, #FBA238FF, #FEB72DFF, #FDCB26FF, #F7E225FF, #F0F921FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="inferno"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="inferno"]) {
+    background: linear-gradient(to right, #000004FF, #08051EFF, #190C3EFF, #300A5BFF, #460B6AFF, #5C126EFF, #711A6EFF, #87216BFF, #9C2964FF, #B1325AFF, #C43C4EFF, #D64B40FF, #E55C30FF, #F17020FF, #F8870EFF, #FCA007FF, #FBB91FFF, #F7D340FF, #F1ED6FFF, #FCFFA4FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="cividis"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="cividis"]) {
+    background: linear-gradient(to right, #00204DFF, #002A64FF, #00336FFF, #1F3C6DFF, #35466BFF, #444F6BFF, #53596CFF, #5F636EFF, #6B6C71FF, #777776FF, #838079FF, #908B79FF, #9D9677FF, #ABA074FF, #B9AC70FF, #C7B76BFF, #D7C463FF, #E5D05AFF, #F5DD4DFF, #FFEA46FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="turbo"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="turbo"]) {
+    background: linear-gradient(to right, #30123BFF, #3F3994FF, #455ED2FF, #4681F7FF, #3AA2FCFF, #23C3E4FF, #18DEC1FF, #2CF09EFF, #5BFB72FF, #8EFF49FF, #B5F836FF, #D6E635FF, #EFCD3AFF, #FCB036FF, #FD8A26FF, #F36215FF, #E14209FF, #C82803FF, #A51301FF, #7A0403FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="mako"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="mako"]) {
+    background: linear-gradient(to right, #0B0405FF, #190E19FF, #27182DFF, #312142FF, #3A2C59FF, #3F3770FF, #414388FF, #3C5397FF, #38639DFF, #3573A1FF, #3482A4FF, #3491A8FF, #35A0ABFF, #3AAEADFF, #46BEADFF, #5ACCADFF, #7ED7AFFF, #A4E0BBFF, #C3E9CEFF, #DEF5E5FF) !important;
+    color: white !important;
+}
+
+.viz-scale-select .option[data-value="Spectral"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="Spectral"]) {
+    background: linear-gradient(to right, #9E0142, #D53E4F, #F46D43, #FDAE61, #FEE08B, #FFFFBF, #E6F598, #ABDDA4, #66C2A5, #3288BD, #5E4FA2) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="RdYlGn"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="RdYlGn"]) {
+    background: linear-gradient(to right, #A50026, #D73027, #F46D43, #FDAE61, #FEE08B, #FFFFBF, #D9EF8B, #A6D96A, #66BD63, #1A9850, #006837) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="RdBu"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="RdBu"]) {
+    background: linear-gradient(to right, #67001F, #B2182B, #D6604D, #F4A582, #FDDBC7, #F7F7F7, #D1E5F0, #92C5DE, #4393C3, #2166AC, #053061) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PuOr"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PuOr"]) {
+    background: linear-gradient(to right, #7F3B08, #B35806, #E08214, #FDB863, #FEE0B6, #F7F7F7, #D8DAEB, #B2ABD2, #8073AC, #542788, #2D004B) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PRGn"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PRGn"]) {
+    background: linear-gradient(to right, #40004B, #762A83, #9970AB, #C2A5CF, #E7D4E8, #F7F7F7, #D9F0D3, #A6DBA0, #5AAE61, #1B7837, #00441B) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="PiYG"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="PiYG"]) {
+    background: linear-gradient(to right, #8E0152, #C51B7D, #DE77AE, #F1B6DA, #FDE0EF, #F7F7F7, #E6F5D0, #B8E186, #7FBC41, #4D9221, #276419) !important;
+    color: black !important;
+}
+
+.viz-scale-select .option[data-value="BrBG"],
+.viz-scale-select .selectize-input.full:has(.item[data-value="BrBG"]) {
+    background: linear-gradient(to right, #543005, #8C510A, #BF812D, #DFC27D, #F6E8C3, #F5F5F5, #C7EAE5, #80CDC1, #35978F, #01665E, #003C30) !important;
+    color: black !important;
+}
+
+// The swatch rules above suppress selectize's usual hover/keyboard-active
+// background swap (that's the whole point — otherwise the gradient
+// disappears under it), so the row needs its own hover cue instead of relying
+// on one already lost to !important.
+.viz-scale-select .selectize-dropdown-content .option.active {
+    font-weight: 700;
+}
+
 // Plot preview placeholder shown before a plot is generated.
 .viz-plot-empty {
     display: flex;
@@ -383,14 +919,15 @@ body {
     max-height: none;
 }
 
-// Epi plot stage (see visualization_epi.R). The curve is a ggplot image, so it
-// is presented the way the Tree's is: rendered at panel-width × aspect-ratio by
-// renderPlot(), then scaled down to fit the visible stage without distorting
-// its ratio. Keeps .viz-plot-stage for the shared `.viz-plot-prompt` overlay
-// and the `.viz-plot-stage.is-loading .viz-loading` toggle. The plotOutput div
-// carries an inline height (height="auto"), so the override needs !important to
-// win over it — same reason as .tree-stage.
-.epi-stage .shiny-plot-output {
+// Epi and AMR plot stages (see visualization_epi.R / visualization_amr.R).
+// Both are ggplot images, so they are presented the way the Tree's is: rendered
+// at panel-width × aspect-ratio, then scaled down to fit the visible stage
+// without distorting the ratio. Keeps .viz-plot-stage for the shared
+// `.viz-plot-prompt` overlay and the `.viz-plot-stage.is-loading .viz-loading`
+// toggle. The plotOutput div carries an inline height (height="auto"), so the
+// override needs !important to win over it — same reason as .tree-stage.
+.epi-stage .shiny-plot-output,
+.amr-stage .shiny-plot-output {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -398,7 +935,8 @@ body {
     height: 100% !important;
 }
 
-.epi-stage .shiny-plot-output img {
+.epi-stage .shiny-plot-output img,
+.amr-stage .shiny-plot-output img {
     width: auto !important;
     height: auto !important;
     max-width: 100%;
@@ -406,8 +944,9 @@ body {
     object-fit: contain;
 }
 
-// Guidance under the interval picker: secondary to the control it explains.
-.epi-help {
+// Guidance under a control: secondary to the control it explains.
+.epi-help,
+.amr-help {
     margin-top: -0.25rem;
     margin-bottom: 0.75rem;
     font-size: 0.8rem;
@@ -850,14 +1389,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
-// Shared "frosted glass" backing for anything overlaid on the plot image, so
-// text and controls stay legible over any plot's colors.
-@mixin ad-plot-overlay-glass {
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    background-color: rgba(255, 255, 255, 0.55);
-}
-
 [data-bs-theme="dark"] {
     .ad-plot-overlay-info {
         background-color: rgba(30, 30, 30, 0.55);
@@ -927,13 +1458,13 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.5;
 }
 
-.accordion-body {
+.viz-nav-wrap .accordion-body {
     padding: 0.5rem 0.75rem;
 }
 
 // Name / badge / "Saved: ..." strip, pinned over the bottom of the thumbnail.
 .ad-plot-overlay-info {
-    @include ad-plot-overlay-glass;
+    @include frosted-glass-overlay;
     position: absolute;
     left: -1px;
     right: 0;
@@ -1053,6 +1584,18 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: none !important;
 }
 
+// Prevent long cell values from wrapping into many lines and blowing up row
+// height. table-cell boxes ignore max-height/overflow clamping and
+// -webkit-line-clamp requires display: -webkit-box, which strips the td's
+// required table-cell display and collapses the whole table layout - so
+// instead of clamping lines, cells stay single-line and grow in width;
+// tables that opt into DT's scrollX already have the horizontal scroll
+// container to absorb that width.
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td {
+    white-space: nowrap;
+}
+
 // Database Browser sub-page layout -------------------------------------------
 
 .tab-content>.tab-pane.html-fill-container,
@@ -1080,23 +1623,12 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         flex-direction: column;
     }
 
+    // Takes the height left under the toolbar and scrolls internally. It is
+    // the table's only scrollport - see the shared rules under
+    // "One scrollport per table" below.
     .dataTables_scroll {
         flex: 1 1 auto;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .dataTables_scrollHead {
-        flex-shrink: 0;
-        overflow: hidden !important;
-    }
-
-    .dataTables_scrollBody {
-        flex: 1 1 auto !important;
-        min-height: 0 !important;
-        max-height: none !important;
-        overflow-y: auto !important;
     }
 
     .dataTables_info {
@@ -1106,8 +1638,29 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         color: var(--bs-secondary-color);
     }
 
+    // FixedColumns ships with a hardcoded white background for the pinned
+    // column, gated on a `html.dark` class this app never sets (theming runs
+    // through bslib's `data-bs-theme` attribute instead) - swap in the
+    // bootstrap variable so the pinned column tracks light/dark automatically.
+    table.dataTable thead tr>.dtfc-fixed-left,
+    table.dataTable tbody tr>.dtfc-fixed-left {
+        background-color: var(--bs-body-bg);
+    }
+
+    // FixedColumns only pins the cell DataTables considers each column's
+    // "header" (the sortable title row), so with filter = "top" the search-box
+    // row underneath - a second <tr> of <td>s DT bolts onto <thead> outside
+    // that API - never gets sticky positioning and scrolls out from under its
+    // column.
+    table.dataTable thead tr:nth-child(2)>td:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        background-color: var(--bs-body-bg);
+    }
+
     table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
-        cursor: cell;
+        cursor: copy;
 
         &:hover {
             box-shadow: inset 0 0 0 1px #838383 !important;
@@ -1118,6 +1671,10 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 
 .db-page_body table.dataTable {
     cursor: not-allowed;
+}
+
+#app-database-custom_fields-fields_table td {
+    cursor: pointer;
 }
 
 .db-page_body table.dataTable tbody .col-readonly {
@@ -1249,6 +1806,9 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     .selectize-input,
     .bootstrap-select,
     .bootstrap-select>.dropdown-toggle,
+    .vscomp-ele,
+    .vscomp-wrapper,
+    .vscomp-toggle-button,
     select.shiny-input-select,
     .form-control,
     .form-select,
@@ -1558,16 +2118,19 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // Sticky table headers inside the typing accordion panels.
-// .accordion-body (overflow-y: auto) is the scroll container. Bootstrap gives
-// it padding: 1rem by default. With padding-top > 0 the first tbody rows can
-// scroll into the padding area above the sticky thead before the sticky kicks
-// in — visually they appear above the header. Removing vertical padding
-// eliminates that gap so the table starts flush at top: 0 and nothing can
-// scroll above the header.
+//
+// The panel body cannot be the scroll container: Bootstrap gives it 1rem of
+// padding, and padding is *inside* the scrollport, so rows scrolled up into the
+// strip above the sticky thead stayed visible there — they appeared above the
+// header. Zeroing the body's padding fixes that but takes the panel's gutters
+// with it.
+//
+// So the scrolling moves one level down, onto .typing-scrollpane's table wrapper,
+// which carries the gutters everywhere except the top. The header then pins at
+// top: 0 of a scrollport whose first pixel is the table's own first pixel, and
+// nothing can render above it. Anything that must stay put while the list
+// scrolls (the Exclude / Include toolbar) sits in the pane outside that wrapper.
 .typing-accordion .accordion-body {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-
     table.dataTable {
         border-collapse: separate !important;
         border-spacing: 0;
@@ -1575,13 +2138,39 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 
     thead {
         position: sticky;
-        top: -1px;
+        top: 0;
         z-index: 10;
     }
 
     thead th {
         background-color: var(--bs-body-bg) !important;
         box-shadow: 0 2px 0 var(--bs-border-color);
+    }
+}
+
+// Specificity has to clear `.typing-accordion .accordion-collapse.show
+// .accordion-body` below, which sets overflow-y: auto — hence the :has() rather
+// than a bare class (the :has() argument contributes its own class weight).
+.typing-accordion .accordion-collapse.show .accordion-body:has(> .typing-scrollpane) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+.typing-scrollpane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+
+    // DTOutput's own container — the scrollport the sticky header pins against.
+    >.datatables {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        // No top padding: that is the whole point of the split above.
+        padding: 0 1rem 1rem;
     }
 }
 
@@ -1628,12 +2217,311 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         transition: none !important;
     }
 
+    // Fade the opened body in instead, since height can't be animated here.
+    .accordion-collapse.show .accordion-body {
+        animation: pt-accordion-fade 0.18s ease-out;
+    }
+
     // The header's title div only grows to fit its text by default (it's a
     // flex item alongside the chevron pseudo-element), so the custom title
     // below needs to claim the remaining width itself to push the summary
     // badges to the right, ahead of the chevron.
     .accordion-title {
         flex: 1 1 auto;
+    }
+}
+
+// The panel's own geometry cannot be animated (see transition: none above), so
+// the body slides down into the space instead - the opening reads as motion
+// even though the box itself snaps to its final size.
+@keyframes pt-accordion-fade {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td,
+.isolate-selection-table table.dataTable th,
+.edit-table table.dataTable th {
+    font-size: 0.8em;
+    border-bottom: 1px solid #ddd;
+    border-right: 1px solid #ddd;
+}
+
+// The rule above loses to `table.dataTable thead>tr>th.sorting` further down
+// (four element selectors vs. two here, so it wins the specificity tie on
+// classes) — that's why only the body shrank and the sortable headers stayed
+// at its hard-coded 12px. Match its selector shape to take priority back.
+.isolate-selection-table table.dataTable thead>tr>th.sorting,
+.edit-table table.dataTable thead>tr>th.sorting {
+    font-size: 0.8em;
+}
+
+// Editable metadata tables auto-size columns to their content, so short
+// values ("City") end up too narrow to comfortably show or edit. Enforce a
+// floor on the column.
+//
+// It has to sit on the *body* cells, not the header ones. With scrollX the
+// header and the body are two separate <table>s, and DataTables sizes them by
+// measuring the body and then writing the result as an inline width onto the
+// header cells. A floor on the header alone therefore overrides DT's own
+// arithmetic on one table only: the header column renders at 6rem while the
+// body column keeps the narrower width DT computed, and the error accumulates
+// across the row. Measured from the body instead, DT arrives at a width that
+// already clears the floor and propagates the same number to both tables.
+.edit-table table.dataTable tbody td {
+    min-width: 6rem;
+}
+
+// Date columns need a floor that clears a native <input type="date">'s
+// rendered width (~144px in Chromium, incl. the calendar-icon affordance),
+// not just short text. At the 6rem floor above, opening the editor forces the
+// input past the column's width and DT widens the whole column to fit it,
+// which then reflows every column to its right. Reserving the room up front
+// means the editor never has to grow the column.
+//
+// Applied via a columnDef className rather than nth-child, because which
+// columns are dates is not fixed: besides the schema's sample_collection_date,
+// a user can define any number of date variables (phylotrace_custom_fields.type
+// == "date"). Both tables that render those columns tag them, and both carry
+// .edit-table, so one selector covers Browse Entries and Custom Variables.
+.edit-table table.dataTable tbody td.col-date {
+    min-width: 9rem;
+}
+
+// One scrollport per table -------------------------------------------------
+//
+// With scrollX, DataTables splits the table into two <table>s in two separate
+// scroll containers and keeps them aligned from JavaScript: it copies
+// scrollLeft from the body onto the header on every scroll, and pads the
+// header by the width it believes the body's vertical scrollbar to be, so the
+// two have the same scrollable extent.
+//
+// That padding is only applied while DT believes the body scrolls vertically,
+// and these tables override the body's height (scrollY is a placeholder — 1px
+// for the fill layouts — with the real height coming from CSS). After a
+// resize DT re-measures, concludes there is no scrollbar, drops the padding,
+// and the header can then no longer scroll as far as the body: the columns
+// come apart by a scrollbar's width at the right-hand end of the scroll. It
+// cannot be corrected from CSS either, because DT normalises the header
+// wrapper's border-box width — extra padding or border is subtracted straight
+// back out of its width.
+//
+// So don't keep two scrollports in sync: use one. The header and the body
+// scroll together as a single element and the header is pinned with
+// position: sticky rather than being held outside the scroller. There is then
+// only one scroll offset in play and drift is impossible. DT still runs its
+// scrollLeft sync, which is a no-op once neither child scrolls by itself.
+//
+// DT writes overflow, position and border inline on the header wrapper
+// (jQuery .css()), which is what the !important flags here are for.
+.edit-table,
+.isolate-selection-table {
+
+    .dataTables_scroll {
+        overflow: auto;
+        // These wrappers are flex containers, and a flex item's automatic
+        // minimum size is its content's — the full uncollapsed table. Without
+        // this the scroller is stretched to the table's width and overflows
+        // the pane instead of scrolling inside it.
+        min-width: 0;
+        // FixedColumns draws the table's left edge on the body only; carrying
+        // it on the scroller keeps the body from being offset against the
+        // header by that border.
+        // border-left: 1px solid #ddd;
+    }
+
+    .dataTables_scrollHead {
+        position: sticky !important;
+        top: 0;
+        // Above the body's own sticky (FixedColumns) cells, which sit at 1.
+        z-index: 4;
+        overflow: visible !important;
+    }
+
+    // DT's scrollbar compensation, now that nothing is being compensated for.
+    .dataTables_scrollHeadInner {
+        padding-right: 0 !important;
+    }
+
+    .dataTables_scrollBody {
+        overflow: visible !important;
+        max-height: none !important;
+        height: auto !important;
+        border-left: 0 !important;
+    }
+}
+
+// The isolate pickers cap the table instead of filling a pane, so the cap
+// moves onto the scroller with the scrolling. Mirrors `scrollY = "42vh"` in
+// visualization_plot.R / analysis_dashboard.R.
+.isolate-selection-table .dataTables_scroll {
+    max-height: 42vh;
+}
+
+.pop-comp-wrapper {
+    z-index: 5 !important;
+}
+
+.datatables .dataTables_wrapper div.dataTables_info {
+    padding-top: 1rem;
+}
+
+// Vertical space saving measures for isolate selection tables that are rendered within
+// a modal window
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info,
+.selection-modal .modal-footer {
+    padding-top: 0;
+}
+
+#app-database-menu_custom_fields {
+    .action-label {
+        white-space: nowrap;
+    }
+}
+
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info {
+    align-content: center;
+}
+
+table.dataTable thead>tr>th.sorting {
+    padding-top: 0;
+}
+
+// Typing Results: reserve horizontal space for the columns whose cell content
+// changes while a run is in progress. Their width would otherwise be set by
+// whichever badge is showing at that instant ("Pending" → "Running" → "Added",
+// "Screening …" → "24 hits"), so every column to the right of them jumped on
+// each polling tick. The minimum is applied to the header cell, which in an
+// auto-layout table raises the whole column's width, and is sized to the widest
+// badge the column can hold ("Incompatible", "Partial", "Screening …").
+.typing-accordion table.dataTable thead th {
+    &.pt-col-cgmlst {
+        min-width: 6rem;
+    }
+
+    &.pt-col-mlst {
+        min-width: 6rem;
+    }
+
+    &.pt-col-amr {
+        min-width: 6rem;
+    }
+
+    &.pt-col-time {
+        min-width: 6rem;
+    }
+}
+
+// Strain names are assembly file names and can run long enough to squeeze every
+// other column off the page, so they are clipped to a fixed width. The clip
+// lives on an inline-block inside the cell rather than on the cell itself, so
+// it caps the column without needing a width on the column. `vertical-align`
+// keeps the inline-block off its baseline, which would otherwise add a few
+// pixels of row height. The cell carries the full name as its title attribute.
+.typing-accordion .pt-strain {
+    display: inline-block;
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+// Add Isolates sidebar: the typing pipeline's four steps (genome input, then
+// the three analyses), one accordion panel each. Tightened from the default
+// accordion - the sidebar is only 320px wide, and the pipeline should read as
+// a compact list rather than as full-size cards. Bootstrap's own accordion
+// variables do the work.
+.typing-steps {
+    --bs-accordion-btn-padding-y: 0.5rem;
+    --bs-accordion-btn-padding-x: 0.7rem;
+    --bs-accordion-body-padding-y: 0.75rem;
+    --bs-accordion-body-padding-x: 0.7rem;
+    --bs-accordion-active-bg: var(--bs-tertiary-bg);
+    --bs-accordion-active-color: var(--bs-body-color);
+    --bs-accordion-btn-focus-box-shadow: none;
+
+    .accordion-button {
+        font-weight: 500;
+    }
+
+    // The step number replaces the panel icon: a small muted circle that keeps
+    // its width whether it holds "1" or a wider glyph, so the labels line up.
+    .accordion-icon {
+        display: flex;
+    }
+
+    .typing-step-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.35rem;
+        height: 1.35rem;
+        border-radius: 50%;
+        background: var(--bs-secondary-bg);
+        color: var(--bs-secondary-color);
+        font-size: 0.75rem;
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    // An open step owns its number, so give it the accent treatment.
+    .accordion-button:not(.collapsed) .typing-step-num {
+        background: var(--bs-primary);
+        color: #fff;
+    }
+
+    // The title claims the row so its info icon lands at the far end, just
+    // ahead of the chevron the button draws as its ::after pseudo-element.
+    .accordion-title {
+        flex: 1 1 auto;
+    }
+
+    .typing-step-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        // Keep the info icon off the chevron it would otherwise butt against.
+        padding-right: 0.5rem;
+    }
+
+    // The info icon is a <span> rather than a real button (it lives inside
+    // bslib's toggle button, which cannot nest one), so it needs the
+    // pointer/hover affordances .tooltip-bttn's own rules give a .btn.
+    .typing-step-info {
+        cursor: pointer;
+        opacity: 0.75;
+        line-height: 1;
+
+        &:hover {
+            opacity: 1;
+        }
+    }
+
+    // Inputs inside a step are the step's detail, not headline content.
+    .form-label,
+    .control-label {
+        font-size: 0.85rem;
+        margin-bottom: 0.2rem;
+    }
+
+    .shiny-input-container:last-child {
+        margin-bottom: 0;
+    }
+
+    // The scheme-size line (step 1) reads as a fact about the step, sitting
+    // above its inputs rather than floating with the sidebar's usual spacing.
+    .text-muted.small {
+        margin-bottom: 0.6rem;
     }
 }
 
@@ -1646,6 +2534,16 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+}
+
+// Exclude/Include buttons above the Selected Genomes table. Sits outside the
+// pane's scrolling wrapper (see .typing-scrollpane), so it stays reachable
+// however far down a long selection the user has scrolled.
+.typing-selection-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem 0.5rem;
 }
 
 .typing-accordion-summary {
@@ -2555,6 +3453,18 @@ label {
     padding-bottom: 8px;
 }
 
+.tab-pane[data-value="database_panel"] .sidebar-menu {
+    min-width: max-content;
+    width: 100%;
+}
+
+.tab-pane[data-value="custom_fields"],
+.tab-pane[data-value="visualization_panel"] {
+    .bslib-card .card-header {
+        height: 49px;
+    }
+}
+
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
 
@@ -2562,10 +3472,6 @@ label {
         border-radius: 0;
         border: none;
         box-shadow: unset;
-    }
-
-    .bslib-card .card-header {
-        height: 49px;
     }
 
     // Inner plot navset (see visualization.R's `plot_set`). bslib gives its
@@ -2581,10 +3487,12 @@ label {
     >.bslib-card>.tab-content>.tab-pane.active {
         display: flex;
         flex-direction: column;
+        height: 100%;
 
         >* {
             flex: 1 1 auto;
             min-height: 0;
+            padding: 0.5rem 0 0.5rem 0 !important;
         }
     }
 }
@@ -2695,6 +3603,19 @@ label {
         font-weight: bold;
         font-size: 1.2em;
     }
+}
+
+// Confirm-discard modal for closing an unsaved plot tab: wide enough that its
+// three footer buttons (Cancel / Close anyway / Save and close) stay on one
+// row instead of wrapping at Bootstrap's default 500px modal width.
+.unsaved-plot-modal .modal-dialog {
+    width: auto;
+    max-width: 560px;
+    margin: 1.75rem auto;
+}
+
+.unsaved-plot-modal .modal-footer {
+    flex-wrap: nowrap;
 }
 
 
@@ -2845,14 +3766,35 @@ table.dataTable thead>tr>th.sorting {
 }
 
 .isolate-selection-table {
+
+    // dom = "tip" renders the table, info and paginate as plain sibling
+    // divs (no bootstrap row/col wrapper), so they stack by default. Force
+    // the table onto its own full-width row and let info + paginate share
+    // the row below instead, without hard-coding the table wrapper's class.
+    .dataTables_wrapper {
+        display: flex;
+        flex-wrap: wrap;
+
+        >*:not(.dataTables_info):not(.dataTables_paginate) {
+            flex: 1 1 100%;
+            // Flex items default to `min-width: auto`, which floors their
+            // width at the content's natural size — here the unscrolled
+            // table — and lets it blow past the row instead of scrolling
+            // inside .dataTables_scrollBody. Let it shrink to the row.
+            min-width: 0;
+        }
+    }
+
     .dataTables_info {
         padding-top: 0;
-
+        flex: 1 1 auto;
     }
 
     .dataTables_paginate {
         padding-left: 1rem;
         padding-top: 0rem;
+        flex: 0 0 auto;
+        margin-left: auto;
     }
 }
 
@@ -2869,4 +3811,179 @@ table.dataTable thead>tr>th.sorting {
 // Geocoding feedback shown directly under the "Map mode" picker.
 .map-geocode-status {
     margin-top: 0.5rem;
+}
+
+// virtualSelectInput (Browse Entries' column picker) ---------------------------
+//
+// virtual-select is the only multi-select in the stack that offers a checkbox on
+// each optgroup header, which is what makes "(de)select this whole category"
+// possible. Its stylesheet is injected by its own JS bundle and hard-codes a
+// light palette (#fff boxes, #333 text, a purple tick), so every colour is
+// re-pointed at the Bootstrap variables here — that way the widget tracks the
+// theme in both light and dark mode instead of staying white in one of them.
+
+.vscomp-ele {
+    // Its own default caps the control at 250px; in the toolbar the surrounding
+    // .control-group sizes it instead.
+    max-width: none;
+    min-width: 260px;
+}
+
+.vscomp-wrapper {
+    color: var(--bs-body-color);
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.vscomp-toggle-button {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    color: var(--bs-body-color);
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button {
+    border-color: var(--bs-primary);
+}
+
+// The chevron and the clear "x" are drawn with borders/backgrounds, not glyphs.
+.vscomp-arrow::after {
+    border-bottom-color: var(--bs-secondary-color);
+    border-right-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-icon::before,
+.vscomp-clear-icon::after {
+    background-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-button:hover {
+    background: var(--bs-tertiary-bg);
+}
+
+.vscomp-dropbox {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.175);
+}
+
+.vscomp-option.selected {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.vscomp-option.focused,
+.vscomp-option:hover {
+    background-color: var(--bs-secondary-bg);
+}
+
+// The optgroup header. It carries the group's own checkbox (the whole point of
+// this widget here), so unlike virtual-select's default it must not read as
+// disabled — only as quieter than its options.
+.vscomp-option.group-title {
+    height: 32px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+
+    .vscomp-option-text {
+        opacity: 1;
+    }
+}
+
+.vscomp-search-container {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.vscomp-search-input,
+.vscomp-search-input::placeholder {
+    color: var(--bs-body-color);
+    font-size: inherit;
+}
+
+.vscomp-wrapper .checkbox-icon::after {
+    border-color: var(--bs-secondary-color);
+}
+
+.vscomp-wrapper .checkbox-icon.checked::after {
+    border-color: var(--bs-primary);
+    border-left-color: transparent;
+    border-top-color: transparent;
+}
+
+.vscomp-no-options,
+.vscomp-no-search-results {
+    color: var(--bs-secondary-color);
+}
+
+
+// Custom Variables panel (see database_custom.R) ------------------------------
+//
+// A fixed-height overview of what is defined over an isolate x variable table
+// that fills the rest. The values table reuses .db-page_body, so it inherits the
+// Browse Entries fill/scroll rules verbatim.
+
+// .custom-fields-layout {
+//     display: flex;
+//     flex-direction: column;
+//     height: 100%;
+//     overflow: hidden;
+// }
+
+.edit-table input[type="text"],
+.edit-table input[type="date"] {
+    padding: 0;
+    border: none;
+    outline: none;
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button,
+.vscomp-wrapper:focus .vscomp-toggle-button {
+    box-shadow: unset;
+}
+
+.custom-fields-overview {
+    flex: 0 0 auto;
+    max-height: 38%;
+    overflow-y: auto;
+    padding: 0.5rem 0.5rem 0;
+
+    .card {
+        margin-bottom: 0;
+    }
+}
+
+// Browse Entries excludes its 9th column (the uneditable `organism`) from the
+// editable-cell cursor. Here every column but the isolate is editable.
+.custom-fields-values table.dataTable tbody td:not(:first-child) {
+    cursor: copy;
+}
+
+.custom-fields-hint {
+    max-width: 42rem;
+    margin: 2rem auto;
+
+    h5 {
+        margin-bottom: 1rem;
+    }
+
+    p {
+        color: var(--bs-secondary-color);
+    }
+}
+
+.custom-fields-hint_examples {
+    list-style: none;
+    padding-left: 0;
+    margin-bottom: 1.5rem;
+
+    li {
+        padding: 0.15rem 0;
+    }
+
+    code {
+        font-weight: 600;
+    }
 }

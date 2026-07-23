@@ -17,6 +17,7 @@ box::use(
       classify_isolate_collisions,
       default_resolutions,
       import_preview,
+      importable_custom_fields,
       isolate_profile_hashes,
       list_backups,
       merge_databases,
@@ -47,16 +48,16 @@ pair <- function(dir, local_meta = TRUE, peer_meta = TRUE, ...) {
   list(local = local, peer = peer)
 }
 
-resolve <- function(souche, action, final = souche) {
+resolve <- function(isolate, action, final = isolate) {
   data.frame(
-    ext_souche = souche,
+    ext_isolate = isolate,
     action = action,
-    final_souche = final,
+    final_isolate = final,
     stringsAsFactors = FALSE
   )
 }
 
-test_that("isolate_profile_hashes keys by souche and excludes ref", {
+test_that("isolate_profile_hashes keys by isolate and excludes ref", {
   dir <- local_tempdir()
   p <- pair(dir)
 
@@ -489,4 +490,269 @@ test_that("a removed isolate can be re-imported to a byte-equal profile", {
   expect_identical(after[["B"]], before[["B"]])
   # No allele was duplicated on the way back in.
   expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_seq)
+})
+
+# --- Analysis-result tables (classical_mlst / amr_*) -----------------------
+
+test_that("result tables merge for accepted isolates when requested", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, c("B", "C")) # peer carries classical + AMR results
+
+  res <- quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    include_classical = TRUE,
+    include_amr = TRUE,
+    backup = FALSE
+  ))
+
+  # Tables were created in a local DB that never ran these analyses.
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_true(all(
+    c("classical_mlst", "amr_results", "amr_summary") %in% tbls
+  ))
+
+  # Only C is accepted (B is an identical duplicate -> skipped), so only C's
+  # result rows come across.
+  for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_setequal(
+      q1(p$local, sprintf("SELECT DISTINCT isolate FROM %s", tbl)),
+      "C"
+    )
+  }
+  # 2 classical rows + 1 amr_results + 1 amr_summary for C.
+  expect_equal(res$result_rows, 4L)
+})
+
+test_that("a renamed import remaps result-table isolate to the new name", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, "C")
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "rename", "C_imp"),
+    include_classical = TRUE,
+    include_amr = TRUE,
+    backup = FALSE
+  ))
+
+  expect_setequal(
+    q1(p$local, "SELECT DISTINCT isolate FROM classical_mlst"),
+    "C_imp"
+  )
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'C'"),
+    0L
+  )
+})
+
+test_that("overwrite replaces result rows and re-import is idempotent", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$local, "B", classical = FALSE, amr = TRUE) # local already has B's AMR
+  seed_results(p$peer, "B", classical = FALSE, amr = TRUE)
+
+  merge_once <- function() {
+    quiet(merge_databases(
+      p$local,
+      p$peer,
+      resolve("B", "overwrite"),
+      include_amr = TRUE,
+      backup = FALSE
+    ))
+  }
+
+  merge_once()
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'B'"),
+    1L # replaced, not appended to the pre-existing local row
+  )
+
+  merge_once()
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM amr_results WHERE isolate = 'B'"),
+    1L # a second identical import stays stable
+  )
+})
+
+test_that("result tables are left untouched when the flags are off", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, "C")
+
+  res <- quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    backup = FALSE
+  ))
+
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+  expect_equal(res$result_rows, 0L)
+  # The ordinary merge still happened.
+  expect_setequal(names(isolate_profile_hashes(p$local)), c("A", "B", "C"))
+})
+
+test_that("selected custom variables are merged and mapped onto local ids", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  # The local database already knows `ward`; `outbreak_id` is new to it.
+  seed_custom(p$local, list(ward = list(type = "text", values = c(A = "ICU"))))
+  seed_custom(
+    p$peer,
+    list(
+      ward = list(type = "text", values = c(C = "ER")),
+      outbreak_id = list(type = "text", values = c(C = "OB-1")),
+      withheld = list(type = "text", values = c(C = "secret"))
+    )
+  )
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = c("ward", "outbreak_id"),
+    backup = FALSE
+  ))
+
+  defs <- qdf(p$local, "SELECT id, name FROM phylotrace_custom_fields")
+  # `ward` is merged into the existing definition, not duplicated.
+  expect_setequal(defs$name, c("ward", "outbreak_id"))
+
+  values <- qdf(
+    p$local,
+    "SELECT f.name AS name, v.isolate AS isolate, v.value AS value
+       FROM phylotrace_custom_values v
+       JOIN phylotrace_custom_fields f ON f.id = v.field_id
+      ORDER BY f.name, v.isolate"
+  )
+  # The local value survives, the peer's lands under the local field id.
+  expect_identical(values$value[values$name == "ward" & values$isolate == "A"], "ICU")
+  expect_identical(values$value[values$name == "ward" & values$isolate == "C"], "ER")
+  expect_identical(values$value[values$name == "outbreak_id"], "OB-1")
+})
+
+test_that("unselected custom variables are not adopted", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(p$peer, list(secret = list(type = "text", values = c(C = "s"))))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = character(0),
+    backup = FALSE
+  ))
+
+  tbls <- qdf(p$local, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("phylotrace_custom_fields" %in% tbls)
+})
+
+test_that("a custom variable with a clashing type is never imported", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(p$local, list(ct_value = list(type = "text")))
+  seed_custom(
+    p$peer,
+    list(ct_value = list(type = "numeric", values = c(C = "12.5")))
+  )
+
+  split <- importable_custom_fields(p$local, p$peer)
+  expect_identical(split$importable, character(0))
+  expect_identical(split$conflicts$name, "ct_value")
+  expect_identical(split$conflicts$local_type, "text")
+  expect_identical(split$conflicts$ext_type, "numeric")
+
+  # Even when the caller asks for it anyway, the merge leaves it behind rather
+  # than adopting values canonicalised under another type.
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    custom_fields = "ct_value",
+    backup = FALSE
+  ))
+
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM phylotrace_custom_values"), 0L)
+  expect_identical(
+    q1(p$local, "SELECT type FROM phylotrace_custom_fields WHERE name='ct_value'"),
+    "text"
+  )
+})
+
+test_that("custom values follow a renamed isolate and a rewritten one", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$peer,
+    list(ward = list(type = "text", values = c(B = "peer-B", C = "peer-C")))
+  )
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    rbind(resolve("B", "rename", "B_ext"), resolve("C", "add")),
+    custom_fields = "ward",
+    backup = FALSE
+  ))
+
+  values <- qdf(
+    p$local,
+    "SELECT isolate, value FROM phylotrace_custom_values ORDER BY isolate"
+  )
+  # The renamed isolate carries its value under its new name, never its old one.
+  expect_setequal(values$isolate, c("B_ext", "C"))
+  expect_identical(values$value[values$isolate == "B_ext"], "peer-B")
+})
+
+test_that("overwriting an isolate replaces its custom values", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$local,
+    list(ward = list(type = "text", values = c(B = "stale")))
+  )
+  seed_custom(p$peer, list(ward = list(type = "text", values = c(B = "fresh"))))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("B", "overwrite"),
+    custom_fields = "ward",
+    backup = FALSE
+  ))
+
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM phylotrace_custom_values"), 1L)
+  expect_identical(q1(p$local, "SELECT value FROM phylotrace_custom_values"), "fresh")
+})
+
+test_that("import_preview classifies the peer's custom variables", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_custom(
+    p$local,
+    list(ward = list(type = "text"), ct_value = list(type = "text"))
+  )
+  seed_custom(
+    p$peer,
+    list(
+      ward = list(type = "text"),
+      ct_value = list(type = "numeric"),
+      outbreak_id = list(type = "text")
+    )
+  )
+
+  pv <- quiet(import_preview(p$local, p$peer))
+
+  expect_setequal(pv$custom_importable, c("ward", "outbreak_id"))
+  expect_identical(pv$custom_shared, "ward")
+  expect_identical(pv$custom_only_ext, "outbreak_id")
+  expect_identical(pv$custom_conflicts$name, "ct_value")
 })

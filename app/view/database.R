@@ -1,13 +1,14 @@
 # app/view/database.R
 
 box::use(
-  shiny[NS, moduleServer, observeEvent, reactive],
+  shiny[NS, moduleServer, observeEvent, reactive, reactiveVal],
   bslib[page_sidebar, sidebar, navset_hidden, nav_panel, as_fill_carrier],
   shinyjs[useShinyjs, addClass, removeClass],
 )
 box::use(
   app / logic / functions[sidebar_menu],
-  app / view / database_browse_entries,
+  app / view / database_browser,
+  app / view / database_custom,
   app / view / database_scheme_info,
   app / view / database_loci_info,
   app / view / database_import,
@@ -19,7 +20,12 @@ db_menu <- list(
   list(
     value = "browse_entries",
     label = "Browse Entries",
-    module = database_browse_entries
+    module = database_browser
+  ),
+  list(
+    value = "custom_fields",
+    label = "Custom Variables",
+    module = database_custom
   ),
   list(
     value = "scheme_info",
@@ -52,7 +58,6 @@ ui <- function(id) {
     fillable = TRUE,
     sidebar = sidebar(
       title = "Database Browser",
-      width = 350,
       sidebar_menu(ns, db_menu)
     ),
     # Hidden tabset: one panel per interface, swapped via nav_select(). Each
@@ -99,6 +104,11 @@ server <- function(
       ignoreInit = TRUE
     )
 
+    # Bumped by the Custom Variables panel whenever it changes the store, and
+    # watched by Browse Entries so a new variable shows up in its column picker
+    # without a full database reload.
+    custom_updated <- reactiveVal(0L)
+
     # Start each interface module's server under its own namespace and forward
     # session_reset so each sub-module can reset its own state.
     # db_updated is passed only to browse_entries; its return value (pending)
@@ -108,11 +118,15 @@ server <- function(
     browse_entries_vals <- NULL
     import_vals <- NULL
     for (item in db_menu) {
-      extra <- if (identical(item$value, "browse_entries")) {
-        list(db_updated = db_updated)
-      } else {
+      extra <- switch(
+        item$value,
+        browse_entries = list(
+          db_updated = db_updated,
+          custom_updated = custom_updated
+        ),
+        custom_fields = list(custom_updated = custom_updated),
         list()
-      }
+      )
       result <- do.call(
         item$module$server,
         c(

@@ -23,6 +23,8 @@ box::use(
     icon,
     actionButton,
     selectInput,
+    checkboxInput,
+    updateCheckboxInput,
     uiOutput,
     renderUI,
     showNotification,
@@ -40,7 +42,16 @@ box::use(
 )
 
 box::use(
-  app / logic / db_export[export_preview, export_database, METADATA_FIXED_COLS],
+  app / logic / custom_fields[append_custom, custom_col],
+  app /
+    logic /
+    db_export[
+      export_preview,
+      export_database,
+      available_result_tables,
+      exportable_custom_fields,
+      METADATA_FIXED_COLS
+    ],
   app / logic / database_functions[metadata_columns, make_metadata_table],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_chips, field_labels_for],
@@ -193,6 +204,15 @@ ui <- function(id) {
           # the remaining fields come along.
           control_group("Metadata", uiOutput(ns("meta_picker_ui"))),
 
+          # The user's own fields, offered per variable for the same reason the
+          # metadata fields are: one of them may hold data this export should
+          # not carry. Hidden when the database defines none.
+          shinyjs::hidden(control_group(
+            "Custom variables",
+            id = ns("custom_group"),
+            uiOutput(ns("custom_picker_ui"))
+          )),
+
           # -- 2. How --------------------------------------------------------
           # Only a profile table has an allele encoding or a file format to
           # choose; a `.db` has exactly one representation.
@@ -212,6 +232,24 @@ ui <- function(id) {
               ns("file_format"),
               label = NULL,
               choices = FILE_FORMATS
+            )
+          )),
+
+          # Optional analysis-result tables, carried only for a `.db` export and
+          # only when the loaded database actually holds them (the boxes are
+          # disabled otherwise, driven server-side).
+          shinyjs::hidden(control_group(
+            "Analysis results",
+            id = ns("results_group"),
+            checkboxInput(
+              ns("include_classical"),
+              "Classical MLST results",
+              value = TRUE
+            ),
+            checkboxInput(
+              ns("include_amr"),
+              "AMR results",
+              value = TRUE
             )
           )),
 
@@ -309,8 +347,29 @@ server <- function(
       {
         shinyjs::toggle("content_group", condition = typing())
         shinyjs::toggle("format_group", condition = typing())
+        # Result-table toggles apply only to a `.db` export.
+        shinyjs::toggle("results_group", condition = !typing())
       },
       ignoreInit = FALSE
+    )
+
+    # Enable each result-table toggle only when the loaded database holds that
+    # table; uncheck a box the moment its table is unavailable so the summary
+    # never implies data that will not travel.
+    observeEvent(
+      db_path(),
+      {
+        present <- available_result_tables(db_path())
+        shinyjs::toggleState("include_classical", condition = present$classical)
+        shinyjs::toggleState("include_amr", condition = present$amr)
+        if (!present$classical) {
+          updateCheckboxInput(session, "include_classical", value = FALSE)
+        }
+        if (!present$amr) {
+          updateCheckboxInput(session, "include_amr", value = FALSE)
+        }
+      },
+      ignoreNULL = FALSE
     )
 
     # The file the current selection will land in, named in the toolbar itself so
@@ -357,9 +416,11 @@ server <- function(
     # The metadata the profile export ships, built from the panel's existing
     # column picker so both export types honour the same confidentiality choice.
     typing_metadata <- reactive({
-      # No optional field selected: ship the profile table on its own rather
-      # than forcing an isolate/organism-only metadata sheet nobody asked for.
-      if (!length(input$meta_cols %||% character(0))) {
+      selected_meta <- input$meta_cols %||% character(0)
+      selected_custom <- input$custom_fields %||% character(0)
+      # Nothing optional selected: ship the profile table on its own rather than
+      # forcing an isolate/organism-only metadata sheet nobody asked for.
+      if (!length(selected_meta) && !length(selected_custom)) {
         return(NULL)
       }
 
@@ -373,14 +434,23 @@ server <- function(
 
       keep <- union(
         intersect(METADATA_FIXED_COLS, names(md)),
-        input$meta_cols
+        selected_meta
       )
       md <- md[
         md$isolate %in% input$isolates,
         names(md)[names(md) %in% keep],
         drop = FALSE
       ]
-      if (!nrow(md) || !ncol(md)) NULL else md
+      if (!nrow(md) || !ncol(md)) {
+        return(NULL)
+      }
+
+      # A tabular export has no place to put the custom tables, so the selected
+      # variables ride along as ordinary columns of the metadata sheet.
+      if (length(selected_custom)) {
+        md <- append_custom(md, path, fields = selected_custom)
+      }
+      md
     })
 
     # Where the file will actually land: a bare table when that is all there is,
@@ -435,6 +505,40 @@ server <- function(
       )
     })
 
+    # The custom variables this database defines. Empty for a database that has
+    # never had one, which is what hides the whole control group.
+    custom_choices <- reactive({
+      path <- db_path()
+      if (is.null(path) || is.na(path)) {
+        return(character(0))
+      }
+      exportable_custom_fields(path)
+    })
+
+    observe({
+      shinyjs::toggle("custom_group", condition = length(custom_choices()) > 0)
+    })
+
+    output$custom_picker_ui <- renderUI({
+      cols <- custom_choices()
+      req(length(cols) > 0)
+      pickerInput(
+        ns("custom_fields"),
+        label = NULL,
+        choices = stats::setNames(cols, field_labels_for(cols)),
+        selected = cols,
+        multiple = TRUE,
+        options = pickerOptions(
+          actionsBox = TRUE,
+          title = "Select variables …",
+          selectedTextFormat = "count > 3",
+          countSelectedText = paste0("{0} / ", length(cols), " variables"),
+          liveSearch = TRUE,
+          liveSearchPlaceholder = "Search variables ..."
+        )
+      )
+    })
+
     output$meta_picker_ui <- renderUI({
       cols <- optional_meta()
       pickerInput(
@@ -477,9 +581,11 @@ server <- function(
       full <- export_preview(
         path,
         sel,
-        input$meta_cols %||% character(0)
+        input$meta_cols %||% character(0),
+        custom_fields = input$custom_fields %||% character(0)
       )
       p$columns <- full$columns
+      p$custom_fields <- full$custom_fields
       p
     })
 
@@ -557,6 +663,18 @@ server <- function(
                 tags$p(tagList(
                   strong("No metadata table"),
                   " will be written — only allele data and the scheme."
+                ))
+              },
+              # Named separately from the metadata fields: they are the user's
+              # own definitions, and for a `.db` they travel as their own
+              # tables rather than as metadata columns.
+              if (length(p$custom_fields)) {
+                tags$p(tagList(
+                  strong("Custom variables: "),
+                  div(
+                    class = "species-details_lineage",
+                    field_chips(custom_col(p$custom_fields))
+                  )
                 ))
               },
               if (!is.null(dest_path())) {
@@ -672,6 +790,9 @@ server <- function(
             dest_path = dest,
             isolates = input$isolates,
             metadata_cols = input$meta_cols %||% character(0),
+            include_classical = isTRUE(input$include_classical),
+            include_amr = isTRUE(input$include_amr),
+            custom_fields = input$custom_fields %||% character(0),
             progress = step
           )
         },

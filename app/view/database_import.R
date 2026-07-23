@@ -28,6 +28,7 @@ box::use(
     actionButton,
     selectInput,
     textInput,
+    checkboxInput,
     uiOutput,
     renderUI,
     showNotification,
@@ -58,10 +59,13 @@ box::use(
       default_resolutions,
       suggest_rename,
       merge_databases,
+      importable_custom_fields,
       list_backups,
       restore_backup,
       METADATA_RESERVED
     ],
+  app / logic / custom_fields[CUSTOM_TYPES],
+  app / logic / db_export[available_result_tables],
   app / logic / database_functions[metadata_columns],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_labels_for],
@@ -122,6 +126,28 @@ import_waiter_html <- function() {
     spin_flower(),
     div(class = "db-waiter_text", "Reading database"),
     div(class = "db-waiter_hint", "Hashing alleles and comparing isolates …")
+  )
+}
+
+# Why some of the peer's custom variables are not on offer: it defines one under
+# a name this database already uses for a different type. Stored values are
+# canonicalised for the type they were entered under, so there is no safe way to
+# adopt them — the variable is named here and left behind.
+conflict_note <- function(conflicts) {
+  label <- function(type) {
+    lab <- unname(CUSTOM_TYPES[type])
+    if (is.na(lab)) type else lab
+  }
+  div(
+    class = "text-muted small",
+    lapply(seq_len(nrow(conflicts)), function(i) {
+      div(sprintf(
+        "'%s' is %s here but %s in the external file — not imported.",
+        conflicts$name[[i]],
+        label(conflicts$local_type[[i]]),
+        label(conflicts$ext_type[[i]])
+      ))
+    })
   )
 }
 
@@ -237,6 +263,22 @@ ui <- function(id) {
             class = "control-group",
             div(class = "control-group-label", "Metadata fields"),
             div(class = "control-group-items", uiOutput(ns("meta_picker_ui")))
+          ),
+          div(
+            class = "control-group",
+            div(class = "control-group-label", "Custom variables"),
+            div(
+              class = "control-group-items",
+              uiOutput(ns("custom_picker_ui"))
+            )
+          ),
+          div(
+            class = "control-group",
+            div(class = "control-group-label", "Analysis results"),
+            div(
+              class = "control-group-items",
+              uiOutput(ns("results_picker_ui"))
+            )
           ),
           div(
             class = "control-group",
@@ -454,7 +496,7 @@ server <- function(
       isTRUE(attr(resolved()$checks, "blocked"))
     })
 
-    # Staged isolates must not collide with a local souche or another set.
+    # Staged isolates must not collide with a local isolate or another set.
     typing_clashes <- reactive({
       r <- resolved()
       if (!isTRUE(r$linkable)) {
@@ -512,12 +554,12 @@ server <- function(
     resolutions <- reactive({
       res <- default_resolutions(classification())
       for (i in seq_len(nrow(res))) {
-        if (res$ext_souche[i] %in% clashes()) {
+        if (res$ext_isolate[i] %in% clashes()) {
           action <- input[[paste0("action_", i)]] %||% "skip"
           res$action[i] <- action
           if (identical(action, "rename")) {
             nm <- input[[paste0("rename_", i)]] %||% ""
-            res$final_souche[i] <- trimws(nm)
+            res$final_isolate[i] <- trimws(nm)
           }
         }
       }
@@ -556,6 +598,77 @@ server <- function(
           liveSearch = TRUE,
           liveSearchPlaceholder = "Search fields ..."
         )
+      )
+    })
+
+    # -- Custom variables ----------------------------------------------------
+
+    # What the peer defines, split into what can be merged and what clashes.
+    # A `.db` merge only: a profile file has no custom-variable tables.
+    custom_split <- reactive({
+      staged <- prep()
+      req(!is.null(staged), !typing())
+      importable_custom_fields(db_path(), staged$path)
+    })
+
+    output$custom_picker_ui <- renderUI({
+      split <- tryCatch(custom_split(), error = function(e) NULL)
+      if (is.null(split) || !length(split$importable)) {
+        # A clash is the interesting case: say so rather than reporting nothing
+        # to import and leaving the user to wonder where their variable went.
+        if (!is.null(split) && nrow(split$conflicts)) {
+          return(conflict_note(split$conflicts))
+        }
+        return(div(class = "text-muted small", "No custom variables to import"))
+      }
+
+      cols <- split$importable
+      tagList(
+        pickerInput(
+          ns("custom_fields"),
+          label = NULL,
+          choices = stats::setNames(cols, field_labels_for(cols)),
+          selected = cols,
+          multiple = TRUE,
+          options = pickerOptions(
+            actionsBox = TRUE,
+            title = "Select variables …",
+            selectedTextFormat = "count > 3",
+            countSelectedText = paste0("{0} / ", length(cols), " variables"),
+            liveSearch = TRUE,
+            liveSearchPlaceholder = "Search variables ..."
+          )
+        ),
+        if (nrow(split$conflicts)) conflict_note(split$conflicts)
+      )
+    })
+
+    # Optional analysis-result tables, offered only for a `.db` merge and only
+    # for the tables the external database actually carries. When a checkbox is
+    # not rendered, its input is NULL, so the merge simply does not carry it.
+    output$results_picker_ui <- renderUI({
+      staged <- prep()
+      if (typing() || is.null(staged)) {
+        return(div(class = "text-muted small", "—"))
+      }
+      present <- tryCatch(
+        available_result_tables(staged$path),
+        error = function(e) list(classical = FALSE, amr = FALSE)
+      )
+      if (!present$classical && !present$amr) {
+        return(div(class = "text-muted small", "No analysis results to import"))
+      }
+      tagList(
+        if (present$classical) {
+          checkboxInput(
+            ns("include_classical"),
+            "Classical MLST results",
+            value = TRUE
+          )
+        },
+        if (present$amr) {
+          checkboxInput(ns("include_amr"), "AMR results", value = TRUE)
+        }
       )
     })
 
@@ -1064,6 +1177,9 @@ server <- function(
           ext_path = staged$path,
           resolutions = resolutions(),
           metadata_cols = input$meta_cols %||% character(0),
+          include_classical = isTRUE(input$include_classical),
+          include_amr = isTRUE(input$include_amr),
+          custom_fields = input$custom_fields %||% character(0),
           backup = TRUE,
           progress = step
         ),
