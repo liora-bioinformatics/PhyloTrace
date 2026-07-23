@@ -174,7 +174,10 @@ field_levels <- function(levels_json) {
 }
 
 #' Encode a level vector for storage. NULL for anything empty, so a non-category
-#' variable stores SQL NULL rather than an empty JSON array.
+#' variable stores SQL NULL rather than an empty JSON array. Sorted
+#' alphabetically (locale-independent), so the order the user typed them in
+#' never matters: the fields table, the edit dialog, and the values-table
+#' dropdown all show — and offer — the same order.
 #' @export
 encode_levels <- function(levels) {
   levels <- trimws(as.character(levels %||% character(0)))
@@ -182,6 +185,7 @@ encode_levels <- function(levels) {
   if (!length(levels)) {
     return(NULL)
   }
+  levels <- levels[order(tolower(levels))]
   as.character(toJSON(levels, auto_unbox = FALSE))
 }
 

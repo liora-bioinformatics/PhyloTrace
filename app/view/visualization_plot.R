@@ -440,7 +440,8 @@ server <- function(
           actionsBox = TRUE,
           title = "None",
           selectedTextFormat = "count > 1",
-          countSelectedText = "{0} set(s)"
+          countSelectedText = "{0} set(s)",
+          container = "body"
         )
       )
     })

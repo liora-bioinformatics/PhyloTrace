@@ -1474,7 +1474,8 @@ map_controls <- function(ns) {
           options = pickerOptions(
             actionsBox = TRUE,
             liveSearch = TRUE,
-            selectedTextFormat = "count > 3"
+            selectedTextFormat = "count > 3",
+            container = "body"
           )
         ),
         pickerInput(
@@ -1485,7 +1486,8 @@ map_controls <- function(ns) {
           options = pickerOptions(
             actionsBox = TRUE,
             liveSearch = TRUE,
-            selectedTextFormat = "count > 3"
+            selectedTextFormat = "count > 3",
+            container = "body"
           )
         ),
         input_switch(ns("map_permanent"), "Always show labels", FALSE),

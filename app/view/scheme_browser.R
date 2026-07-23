@@ -241,7 +241,8 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
           liveSearch = TRUE,
           size = 10,
           showSubtext = TRUE,
-          liveSearchPlaceholder = "Search loci ..."
+          liveSearchPlaceholder = "Search loci ...",
+          container = "body"
         )
       )
     })

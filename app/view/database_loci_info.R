@@ -120,7 +120,8 @@ ui <- function(id) {
             options = pickerOptions(
               liveSearch = TRUE,
               size = 10,
-              liveSearchPlaceholder = "Search alleles ..."
+              liveSearchPlaceholder = "Search alleles ...",
+              container = "body"
             )
           ),
           as_fill_carrier(

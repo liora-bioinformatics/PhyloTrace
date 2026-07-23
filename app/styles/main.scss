@@ -1596,6 +1596,10 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     white-space: nowrap;
 }
 
+.app-database-custom_fields-fields_table .dataTables_scrollBody {
+    border-left: none !important;
+}
+
 // Database Browser sub-page layout -------------------------------------------
 
 .tab-content>.tab-pane.html-fill-container,
@@ -1638,6 +1642,26 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         color: var(--bs-secondary-color);
     }
 
+}
+
+// Per-cell "click to copy/edit" affordance for tables with client-side cell
+// editing. Scoped to .edit-table rather than .db-page_body: fields_table is a
+// .db-page_body table too, but its rows (not individual cells) are the click
+// target - see #app-database-custom_fields-fields_table below.
+.edit-table table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
+    cursor: copy;
+
+    &:hover {
+        box-shadow: inset 0 0 0 1px #838383 !important;
+    }
+}
+
+// FixedColumns fixes, scoped to .edit-table (every DT with client-side cell
+// editing) rather than .db-page_body: FixedColumns itself is a property of
+// the table, not of whichever page happens to host it, so any edit-table that
+// turns it on - not just ones inside a .db-page_body pane - gets both fixes.
+.edit-table {
+
     // FixedColumns ships with a hardcoded white background for the pinned
     // column, gated on a `html.dark` class this app never sets (theming runs
     // through bslib's `data-bs-theme` attribute instead) - swap in the
@@ -1658,15 +1682,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         z-index: 3;
         background-color: var(--bs-body-bg);
     }
-
-    table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
-        cursor: copy;
-
-        &:hover {
-            box-shadow: inset 0 0 0 1px #838383 !important;
-        }
-    }
-
 }
 
 .db-page_body table.dataTable {
@@ -1720,6 +1735,29 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     .shiny-label-null {
         display: none;
     }
+}
+
+.sidebar-control {
+    display: flex;
+    gap: 2rem;
+}
+
+.sidebar-control .form-group {
+    margin-bottom: 0;
+}
+
+.sidebar-control>button {
+    width: 100%;
+}
+
+.sidebar-control-group {
+    gap: 0.75rem;
+    display: flex;
+    flex-direction: column;
+}
+
+.btn-group>:not(.btn-check)+.btn {
+    white-space: nowrap;
 }
 
 .control-group {
@@ -2134,6 +2172,16 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     table.dataTable {
         border-collapse: separate !important;
         border-spacing: 0;
+        // DT's own bootstrap5 CSS puts `margin-top/bottom: 6px !important` on
+        // every table.dataTable, as breathing room against the length/search/
+        // pagination controls that surround it in DT's default layout. Left
+        // in place, the table (and the sticky thead inside it) rests 6px
+        // below the scrollport's top edge until scrolled, then snaps up to
+        // top: 0 the moment sticky engages — visible as the header jumping
+        // upward over the first few pixels of scroll. Zeroing it removes
+        // both the jump and the matching gap after the last row.
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
     }
 
     thead {
@@ -2296,6 +2344,13 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     min-width: 9rem;
 }
 
+// The <select> swapped in for a category/boolean cell's edit input (see
+// initComplete in database_custom.R) isn't sized by DT the way its own
+// <input> is, so it shrink-wraps to its selected option's text by default.
+.edit-table table.dataTable tbody td select.dt-category-select {
+    width: 100%;
+}
+
 // One scrollport per table -------------------------------------------------
 //
 // With scrollX, DataTables splits the table into two <table>s in two separate
@@ -2322,8 +2377,15 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 //
 // DT writes overflow, position and border inline on the header wrapper
 // (jQuery .css()), which is what the !important flags here are for.
+//
+// .db-page_body is included alongside .edit-table/.isolate-selection-table
+// because the split-table problem it fixes comes from DT's scrollX/scrollY,
+// not from whether the table is client-side editable — fields_table
+// (read-only; row click opens an edit dialog rather than editing cells
+// in-place) needs it exactly as much as an edit-table does.
 .edit-table,
-.isolate-selection-table {
+.isolate-selection-table,
+.db-page_body {
 
     .dataTables_scroll {
         overflow: auto;
@@ -2344,6 +2406,12 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         // Above the body's own sticky (FixedColumns) cells, which sit at 1.
         z-index: 4;
         overflow: visible !important;
+        // DT never gives the header its own background because the default
+        // two-scrollport layout keeps it out of the body's scroll area, so it
+        // is transparent by default. Sticky now holds it over that area, and
+        // without an opaque background the body's rows show through as they
+        // scroll underneath it.
+        background-color: var(--bs-body-bg);
     }
 
     // DT's scrollbar compensation, now that nothing is being compensated for.
@@ -2357,6 +2425,25 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         height: auto !important;
         border-left: 0 !important;
     }
+}
+
+// DT's own bootstrap5 CSS puts a `margin-top/bottom: 6px !important` on every
+// table.dataTable, as breathing room against the length/search/pagination
+// controls that surround it in the default two-scrollport layout.
+// .dataTables_scrollHead has to stay overflow: visible (above) for the
+// horizontal scroll to reach the header at all, so that top margin is no
+// longer contained — it collapses straight through and shifts the sticky
+// header's resting position down by 6px, which then has to snap back up over
+// the first 6px of scroll. Zeroing it here removes both the shift and the
+// matching gap under the last body row.
+//
+// Scoped to plain .db-page_body tables (fields_table today) only: .edit-table
+// and .isolate-selection-table run their own, separately-tuned scroll setups
+// (FixedColumns, capped-height pickers) that this hasn't been verified
+// against, so they're deliberately excluded rather than assumed safe.
+.db-page_body:not(.edit-table) .dataTables_scroll table.dataTable {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 // The isolate pickers cap the table instead of filling a pane, so the cap
@@ -3465,6 +3552,22 @@ label {
     }
 }
 
+.tab-pane[data-value="database_panel"] .bslib-sidebar-layout>.main {
+    padding: 0;
+}
+
+.tab-pane[data-value="scheme_info"],
+.tab-pane[data-value="loci_info"],
+.tab-pane[data-value="import"],
+.tab-pane[data-value="export"] {
+    padding: 1rem;
+}
+
+#app-database-custom_fields-body .bslib-card {
+    border-radius: 0;
+    border: none;
+}
+
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
 
@@ -3634,6 +3737,70 @@ label {
 
 .bootstrap-select .dropdown-menu {
     box-shadow: 0 0 5px 0 #8a8a8a;
+}
+
+// -- Dropdown overflow ------------------------------------------------------
+// Sidebars and bslib fill containers clip (`overflow: hidden` / `auto`), and a
+// menu listing long values — isolate ids, locus names, field labels — is far
+// wider than the control it hangs off, so it used to be cut off at the sidebar
+// edge. Every picker therefore renders its menu into <body>
+// (`container = "body"` for pickerInput, `dropboxWrapper = "body"` for
+// virtualSelectInput), where Bootstrap's Popper positioning flips and shifts it
+// back into the viewport instead.
+//
+// These rules are the CSS half of that contract: cap the menu against the
+// viewport so it can never itself be the thing that overflows, and let long
+// labels wrap rather than push the box wider. They apply to body-attached and
+// in-place menus alike, so a picker that has not (yet) opted into `container`
+// still degrades gracefully.
+.bootstrap-select .dropdown-menu {
+    max-width: calc(100vw - 1rem);
+}
+
+// bootstrap-select's own sizing (setMenuSize in its bundled JS) only shrinks
+// the menu to fit when the option count exceeds the `size` option; otherwise
+// it inline-sets min-height to "whatever room is left below the toggle down
+// to the viewport/document edge" regardless of how few options there are —
+// for a 4-option list that can mean several hundred px of blank space, or
+// even push the menu's bottom past the viewport. Only `!important` can beat
+// an inline style, so neutralize it here and let the menu (and its scrollable
+// `.inner`) size to their actual content. `max-height` is untouched, so a
+// genuinely long list still caps and scrolls exactly as before.
+.bootstrap-select .dropdown-menu,
+.bootstrap-select .dropdown-menu .inner {
+    min-height: 0 !important;
+}
+
+// Long option labels wrap inside that cap instead of forcing a wider menu.
+// `anywhere` rather than `break-word` because the values are single unbroken
+// tokens (`GCA_024714515.1_ASM2471451v1_genomic`) with no spaces to break at.
+.bootstrap-select .dropdown-menu .dropdown-item,
+.bootstrap-select .dropdown-menu .dropdown-item .text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+// The live-search box tracks the menu rather than the (wider) option list, so
+// it stays inside the box once the cap above has narrowed it.
+.bootstrap-select .dropdown-menu .bs-searchbox .form-control {
+    max-width: 100%;
+}
+
+// virtualSelectInput's dropbox, same contract: `dropboxWrapper = "body"` gets
+// it out of the clipping ancestor, this keeps it inside the viewport.
+.vscomp-dropbox-container {
+    max-width: calc(100vw - 1rem);
+}
+
+.vscomp-option-text {
+    overflow-wrap: anywhere;
+}
+
+// selectize (plain `selectInput`) sizes its dropdown to the control, so it can
+// only overflow vertically — but a long option would otherwise be clipped to
+// one ellipsised line with no way to read it.
+.selectize-dropdown .option {
+    overflow-wrap: anywhere;
 }
 
 [data-bs-theme="dark"] .ad-group-stack .bslib-card {
@@ -3933,10 +4100,15 @@ table.dataTable thead>tr>th.sorting {
 // }
 
 .edit-table input[type="text"],
-.edit-table input[type="date"] {
+.edit-table input[type="date"],
+.dt-category-select {
     padding: 0;
     border: none;
     outline: none;
+}
+
+#custom-variable-modal .shiny-input-container:not(.shiny-input-container-inline) {
+    width: unset;
 }
 
 .vscomp-wrapper.focused .vscomp-toggle-button,

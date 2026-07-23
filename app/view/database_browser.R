@@ -24,7 +24,7 @@ box::use(
     removeModal,
     tagList
   ],
-  bslib[as_fill_carrier],
+  bslib[as_fill_carrier, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable, addClass, removeClass],
   shinyWidgets[pickerInput, pickerOptions, virtualSelectInput],
   waiter[Waiter, spin_flower, useWaiter],
@@ -98,67 +98,62 @@ DATE_COL <- "sample_collection_date"
 ui <- function(id) {
   ns <- NS(id)
 
-  as_fill_carrier(
-    div(
-      id = ns("module-container"),
-      useWaiter(),
-      div(
-        class = "db-page_header help-header",
+  layout_sidebar(
+    padding = 0,
+    border = FALSE,
+    sidebar = sidebar(
+      # id = ns("controls_sidebar"),
+      position = "right",
+      width = 300,
+      open = TRUE,
+      fillable = TRUE,
+      as_fill_carrier(
         div(
-          class = "db-browse-controls",
+          class = "sidebar-control",
           div(
-            class = "control-group",
+            class = "sidebar-control-group",
             div(class = "control-group-label", "Column Selection"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("col_picker_ui"))
-            )
+            uiOutput(ns("col_picker_ui"))
           ),
           div(
-            class = "control-group",
+            class = "sidebar-control-group",
             div(class = "control-group-label", "Edit"),
-            div(
-              class = "control-group-items",
-              disabled(
-                actionButton(
-                  ns("discard"),
-                  "Discard",
-                  icon = icon("rotate-left")
-                )
-              ),
-              disabled(
-                actionButton(
-                  ns("save"),
-                  "Save Changes",
-                  class = "btn-success",
-                  icon = icon("floppy-disk")
-                )
+            disabled(
+              actionButton(
+                ns("discard"),
+                "Discard",
+                icon = icon("rotate-left")
+              )
+            ),
+            disabled(
+              actionButton(
+                ns("save"),
+                "Save Changes",
+                class = "btn-success",
+                icon = icon("floppy-disk")
               )
             )
           ),
           div(
-            class = "control-group",
+            class = "sidebar-control-group",
             div(class = "control-group-label", "Remove isolates"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("remove_picker_ui")),
-              disabled(
-                actionButton(
-                  ns("remove_btn"),
-                  "Remove",
-                  class = "btn-danger",
-                  icon = icon("trash")
-                )
+            uiOutput(ns("remove_picker_ui")),
+            disabled(
+              actionButton(
+                ns("remove_btn"),
+                "Remove",
+                class = "btn-danger",
+                icon = icon("trash")
               )
             )
           )
         )
-      ),
-      as_fill_carrier(
-        div(
-          class = "db-page_body edit-table",
-          DTOutput(ns("metadata_table"), fill = TRUE)
-        )
+      )
+    ),
+    as_fill_carrier(
+      div(
+        class = "db-page_body edit-table",
+        DTOutput(ns("metadata_table"), fill = TRUE)
       )
     )
   )
@@ -380,7 +375,12 @@ server <- function(
           selectedTextFormat = "count > 2",
           countSelectedText = "{0} isolates selected",
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search isolates ..."
+          liveSearchPlaceholder = "Search isolates ...",
+          # Isolate ids are long, so the menu is much wider than the sidebar
+          # that holds it. Rendered into <body> it is positioned by Popper,
+          # which flips/shifts it back into the viewport instead of letting the
+          # sidebar clip it.
+          container = "body"
         )
       )
     })
@@ -437,7 +437,10 @@ server <- function(
       # below are columnDefs (0-based); the editable list is not.
       date_idx <- .dt_idx(cols, date_cols())
       edit_date_idx <- .dt_editable_idx(cols, date_cols())
-      edit_numeric_idx <- .dt_editable_idx(cols, custom_cols_of_type(NUMERIC_TYPES))
+      edit_numeric_idx <- .dt_editable_idx(
+        cols,
+        custom_cols_of_type(NUMERIC_TYPES)
+      )
 
       column_defs <- list(
         list(className = "dt-left", targets = "_all"),
@@ -509,6 +512,11 @@ server <- function(
               // date. Recover it from the cell's own data, which DT has not
               // touched yet, and offer it in the form the input can hold.
               $(tableNode).on('focusin', 'input[type=date]', function() {
+                // Native date inputs have no format option; the displayed
+                // component order/separator follows the browser locale of the
+                // element's `lang`. ja renders yyyy/mm/dd, matching the rest
+                // of the app's date display.
+                this.setAttribute('lang', 'ja');
                 if (this.value) return;
                 var td = $(this).closest('td');
                 if (!td.length) return;
@@ -538,15 +546,40 @@ server <- function(
     # State$custom_dirty for save_custom_values(). Mirrors the same flow in
     # database_custom.R, which is why the rejection and no-op handling below
     # read the same.
+    #
+    # replaceData() is only called when the client actually needs correcting,
+    # not on every edit unconditionally: DT's own blur handler fires cell_edit
+    # for a no-op click on an empty cell too (JS null vs. the editor's blur
+    # value "" never compare equal), so calling it unconditionally sent a
+    # round trip on virtually every click into a not-yet-filled cell. If the
+    # user had already clicked into a *different* cell to start editing it by
+    # the time that round trip's replaceData() landed, its table-wide redraw
+    # tore that cell's still-open editor out from under them — so the first
+    # click on it appeared to do nothing and a second one was needed. See the
+    # same fix in database_custom.R's values_table_cell_edit observer.
     observeEvent(input$metadata_table_cell_edit, {
       req(is.data.frame(State$data))
       info <- input$metadata_table_cell_edit
       col <- names(State$data)[info$col + 1L]
 
       if (!col %in% custom_cols()) {
+        old_value <- State$data[[col]][[info$row]]
         State$data <- editData(State$data, info, rownames = FALSE)
+        new_value <- State$data[[col]][[info$row]]
+
+        unchanged <- if (is.na(old_value) || is.na(new_value)) {
+          is.na(old_value) && is.na(new_value)
+        } else {
+          old_value == new_value
+        }
+        if (isTRUE(unchanged)) {
+          return()
+        }
+
         State$pending <- TRUE
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        if (!identical(as.character(new_value), as.character(info$value))) {
+          replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        }
         return()
       }
 
@@ -596,7 +629,6 @@ server <- function(
         old_value == new_value
       }
       if (isTRUE(unchanged)) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
         return()
       }
 
@@ -621,7 +653,9 @@ server <- function(
       }
       State$custom_dirty <- rbind(keep, entry)
       State$pending <- TRUE
-      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      if (!identical(stored, as.character(info$value))) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      }
     })
 
     # Enable/disable both action buttons together based on pending edits

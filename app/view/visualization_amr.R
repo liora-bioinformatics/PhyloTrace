@@ -192,7 +192,8 @@ amr_controls <- function(ns) {
                   actionsBox = TRUE,
                   title = "None",
                   selectedTextFormat = "count > 2",
-                  countSelectedText = "{0} types"
+                  countSelectedText = "{0} types",
+                  container = "body"
                 )
               ),
               # Rendered server-side: the choices are this database's detected
@@ -238,7 +239,8 @@ amr_controls <- function(ns) {
                   actionsBox = TRUE,
                   title = "None",
                   selectedTextFormat = "count > 2",
-                  countSelectedText = "{0} sections"
+                  countSelectedText = "{0} sections",
+                  container = "body"
                 )
               ),
               shiny$helpText(
@@ -686,7 +688,8 @@ server <- function(
           size = 10,
           title = "None",
           selectedTextFormat = "count > 2",
-          countSelectedText = "{0} of {1} genes"
+          countSelectedText = "{0} of {1} genes",
+          container = "body"
         )
       )
     })
@@ -736,7 +739,8 @@ server <- function(
         options = pickerOptions(
           size = 10,
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+          liveSearchPlaceholder = "Search fields ...",
+          container = "body"
         )
       )
     })

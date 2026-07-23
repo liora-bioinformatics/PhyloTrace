@@ -404,7 +404,8 @@ tree_controls <- function(ns) {
               options = list(
                 liveSearch = TRUE,
                 size = 10,
-                liveSearchPlaceholder = "Search nodes ..."
+                liveSearchPlaceholder = "Search nodes ...",
+                container = "body"
               )
             ),
             viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221"),

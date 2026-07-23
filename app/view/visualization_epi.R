@@ -383,7 +383,8 @@ epi_controls <- function(ns) {
           "Start date",
           value = Sys.Date(),
           startview = "decade",
-          autoclose = TRUE
+          autoclose = TRUE,
+          format = "yyyy/mm/dd"
         ),
         shiny$conditionalPanel(
           condition = "input.epi_anno_type == 'period'",
@@ -393,7 +394,8 @@ epi_controls <- function(ns) {
             "End date",
             value = Sys.Date(),
             startview = "decade",
-            autoclose = TRUE
+            autoclose = TRUE,
+            format = "yyyy/mm/dd"
           )
         ),
         # allow-free-text: an annotation label is display text, so it takes
@@ -741,7 +743,8 @@ server <- function(
         options = pickerOptions(
           size = 10,
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+          liveSearchPlaceholder = "Search fields ...",
+          container = "body"
         )
       )
     })

@@ -596,7 +596,8 @@ server <- function(
           selectedTextFormat = "count > 3",
           countSelectedText = paste0("{0} / ", length(cols), " fields"),
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+          liveSearchPlaceholder = "Search fields ...",
+          container = "body"
         )
       )
     })
@@ -636,7 +637,8 @@ server <- function(
             selectedTextFormat = "count > 3",
             countSelectedText = paste0("{0} / ", length(cols), " variables"),
             liveSearch = TRUE,
-            liveSearchPlaceholder = "Search variables ..."
+            liveSearchPlaceholder = "Search variables ...",
+            container = "body"
           )
         ),
         if (nrow(split$conflicts)) conflict_note(split$conflicts)

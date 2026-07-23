@@ -142,6 +142,11 @@ test_that("levels round-trip through encode_levels / field_levels", {
   expect_identical(custom_fields$field_levels("not json"), character(0))
 })
 
+test_that("encode_levels sorts alphabetically regardless of input order", {
+  json <- custom_fields$encode_levels(c("urine", "Blood", "stool"))
+  expect_identical(custom_fields$field_levels(json), c("Blood", "stool", "urine"))
+})
+
 test_that("save_custom_values upserts and clears", {
   path <- fixture()
   id <- custom_fields$create_custom_field(path, "ward", "text")

@@ -10,7 +10,7 @@
 
 box::use(
   shiny,
-  bslib[as_fill_carrier],
+  bslib[as_fill_carrier, navset_card_tab, nav_panel, layout_sidebar, sidebar],
   jsonlite[toJSON],
   shinyjs[addClass, disable, disabled, enable, hidden, removeClass, toggle],
   shinyWidgets[pickerInput, pickerOptions],
@@ -68,62 +68,6 @@ ui <- function(id) {
   as_fill_carrier(
     shiny$div(
       id = ns("module-container"),
-      shiny$div(
-        class = "db-page_header help-header",
-        shiny$div(
-          class = "db-browse-controls",
-          shiny$div(
-            class = "control-group",
-            shiny$div(class = "control-group-label", "Variables"),
-            shiny$div(
-              class = "control-group-items",
-              shiny$actionButton(
-                ns("add_var"),
-                "New Variable",
-                icon = shiny$icon("plus")
-              )
-            )
-          ),
-          shiny$div(
-            class = "control-group",
-            shiny$div(class = "control-group-label", "Edit"),
-            shiny$div(
-              class = "control-group-items",
-              disabled(
-                shiny$actionButton(
-                  ns("discard"),
-                  "Discard",
-                  icon = shiny$icon("rotate-left")
-                )
-              ),
-              disabled(
-                shiny$actionButton(
-                  ns("save"),
-                  "Save Changes",
-                  class = "btn-success",
-                  icon = shiny$icon("floppy-disk")
-                )
-              )
-            )
-          ),
-          shiny$div(
-            class = "control-group",
-            shiny$div(class = "control-group-label", "Remove variable"),
-            shiny$div(
-              class = "control-group-items",
-              shiny$uiOutput(ns("remove_picker_ui")),
-              disabled(
-                shiny$actionButton(
-                  ns("remove_btn"),
-                  "Remove",
-                  class = "btn-danger",
-                  icon = shiny$icon("trash")
-                )
-              )
-            )
-          )
-        )
-      ),
       as_fill_carrier(shiny$uiOutput(ns("body"), fill = TRUE))
     )
   )
@@ -241,14 +185,94 @@ server <- function(
         )))
       }
 
-      bslib::navset_card_tab(
-        bslib::nav_panel("Variables", DTOutput(ns("fields_table"))),
-        # allow-free-text: a Text value is display text, so it takes spaces and
-        # punctuation, unlike the variable's own (identifier) name.
-        bslib::nav_panel("Values", as_fill_carrier(shiny$div(
-          class = "db-page_body custom-fields-values allow-free-text edit-table",
-          DTOutput(ns("values_table"), fill = TRUE)
-        )))
+      layout_sidebar(
+        padding = 0,
+        border = FALSE,
+        sidebar = sidebar(
+          id = ns("controls_sidebar"),
+          position = "right",
+          width = 300,
+          open = TRUE,
+          fillable = TRUE,
+          as_fill_carrier(
+            shiny$div(
+              class = "sidebar-control",
+              shiny$div(
+                class = "sidebar-control-group",
+                shiny$div(class = "control-group-label", "Variables"),
+                shiny$actionButton(
+                  ns("add_var"),
+                  "New Variable",
+                  icon = shiny$icon("plus"),
+                  width = "100%"
+                )
+              ),
+              shiny$div(
+                class = "sidebar-control-group",
+                shiny$div(class = "control-group-label", "Edit"),
+                disabled(
+                  shiny$actionButton(
+                    ns("discard"),
+                    "Discard",
+                    icon = shiny$icon("rotate-left"),
+                    width = "100%"
+                  )
+                ),
+                disabled(
+                  shiny$actionButton(
+                    ns("save"),
+                    "Save Changes",
+                    class = "btn-success",
+                    icon = shiny$icon("floppy-disk"),
+                    width = "100%"
+                  )
+                )
+              ),
+              shiny$div(
+                class = "sidebar-control-group",
+                shiny$div(class = "control-group-label", "Removal"),
+                shiny$uiOutput(ns("remove_picker_ui")),
+                disabled(
+                  shiny$actionButton(
+                    ns("remove_btn"),
+                    "Remove",
+                    class = "btn-danger",
+                    icon = shiny$icon("trash"),
+                    width = "100%"
+                  )
+                )
+              )
+            )
+          )
+        ),
+        navset_card_tab(
+          id = ns("tabs"),
+          # save()/reload() re-run this renderUI (it reads fields()), which
+          # would otherwise rebuild the navset back to its first panel on
+          # every save. Feeding the last-known tab back as `selected` keeps
+          # whichever one the user was on; isolate() so a tab click alone
+          # (which only sets input$tabs, not fields()) can't retrigger this
+          # block.
+          selected = if (is.null(shiny$isolate(input$tabs))) {
+            "Variables"
+          } else {
+            shiny$isolate(input$tabs)
+          },
+          nav_panel(
+            "Variables",
+            as_fill_carrier(shiny$div(
+              class = "db-page_body",
+              DTOutput(ns("fields_table"))
+            ))
+          ),
+          nav_panel(
+            "Values",
+            as_fill_carrier(shiny$div(
+              class = "db-page_body custom-fields-values allow-free-text edit-table",
+              DTOutput(ns("values_table"), fill = TRUE)
+            ))
+          )
+        )
       )
     })
 
@@ -286,6 +310,11 @@ server <- function(
           dom = "t",
           paging = FALSE,
           scrollX = TRUE,
+          # A placeholder like values_table's: the real height comes from the
+          # .db-page_body / one-scrollport CSS (main.scss), which is also what
+          # keeps the header fixed while the body scrolls.
+          scrollY = "1px",
+          scrollCollapse = TRUE,
           ordering = FALSE
         )
       )
@@ -344,11 +373,10 @@ server <- function(
       editable_date_idx <- date_idx + 1L
       editable_numeric_idx <- numeric_idx + 1L
 
-      # Values drawn from a fixed list are offered as a <datalist> on the cell's
-      # input (see initComplete below): a hint that leaves DT's own editing
-      # machinery — and its blur handler — untouched, unlike swapping the input
-      # for a <select>. coerce_custom_value() stays the authority on what may
-      # actually be stored.
+      # Values drawn from a fixed list get a native <select> swapped in for
+      # DT's own text input the moment it's created (see initComplete below),
+      # instead of a free-text box hinting at the allowed values. coerce_custom_value()
+      # stays the authority on what may actually be stored.
       defs <- fields()
       lists <- list()
       for (i in seq_len(nrow(defs))) {
@@ -375,12 +403,17 @@ server <- function(
           date = editable_date_idx
         ),
         selection = "none",
+        # Pins the isolate column while the variable columns scroll
+        # horizontally, matching Browse Entries' metadata_table — the two
+        # tables edit the same underlying values and should behave alike.
+        extensions = "FixedColumns",
         options = list(
           dom = "ti",
           paging = FALSE,
           scrollX = TRUE,
           scrollY = "1px",
           scrollCollapse = TRUE,
+          fixedColumns = list(leftColumns = 1),
           columnDefs = c(
             list(
               list(className = "dt-left", targets = "_all"),
@@ -398,30 +431,62 @@ server <- function(
               var api = this.api();
               var tableNode = api.table().node();
               var lists = %s;
-              var host = $('<div style=\"display:none\"></div>');
-              $(tableNode).closest('.dataTables_wrapper').append(host);
 
-              var ids = {};
-              Object.keys(lists).forEach(function(col) {
-                var dl = document.createElement('datalist');
-                dl.id = '%s-' + col;
-                lists[col].forEach(function(v) {
-                  var opt = document.createElement('option');
-                  opt.value = v;
-                  dl.appendChild(opt);
-                });
-                host.append(dl);
-                ids[col] = dl.id;
-              });
-
-              // Offer a cell's allowed values as the input's suggestion list.
+              // A category/boolean cell may only ever hold one of a fixed
+              // set of values, so the moment DT creates its plain text input
+              // for such a cell, swap in a native <select> offering exactly
+              // those options — instead of hinting at them on a free-text
+              // box. The original input is kept in the DOM (merely hidden)
+              // so DT's own blur handler, and the Shiny wiring behind it,
+              // keep doing the actual commit: this code only ever writes the
+              // chosen option back into that input and triggers blur.
               $(tableNode).on('focusin', 'input', function() {
-                var cell = $(this).closest('td');
+                var $input = $(this);
+                if ($input.data('categorySwapped')) return;
+                var cell = $input.closest('td');
                 if (!cell.length) return;
                 var idx = api.cell(cell[0]).index();
                 if (!idx) return;
-                var id = ids[idx.column];
-                if (id) this.setAttribute('list', id);
+                var options = lists[idx.column];
+                if (!options || !options.length) return;
+
+                $input.data('categorySwapped', true);
+                var current = $input.val();
+                var $select = $('<select class=\"dt-category-select\"></select>');
+                options.forEach(function(v) {
+                  $select.append($('<option></option>').val(v).text(v));
+                });
+                if (options.indexOf(current) === -1) {
+                  $select.prepend($('<option></option>').val(current).text(current));
+                }
+                $select.val(current);
+
+                // Guarded so the natural change -> blur sequence (selecting
+                // an option fires 'change' without blurring the <select>
+                // first) can't run this twice: the handlers are unbound and
+                // the element removed on first entry. Blur must commit
+                // synchronously, not deferred: a click on a *different* cell
+                // blurs this select before dispatching its own click event
+                // (see index.js's click -> dblclick promotion), and a
+                // deferred commit would still be pending when that other
+                // cell's editor opens — the table.draw() it triggers a tick
+                // later would then wipe out the new editor, so the click
+                // would appear to do nothing and a second one would be
+                // needed.
+                var commit = function() {
+                  var chosen = $select.val();
+                  $select.off().remove();
+                  $input.val(chosen);
+                  $input.trigger('blur');
+                };
+                $select.on('change', commit);
+                $select.on('blur', commit);
+                $select.on('keyup', function(e) {
+                  if (e.key === 'Escape') commit();
+                });
+
+                $input.hide().after($select);
+                $select.trigger('focus');
               });
 
               // A native date input only accepts YYYY-MM-DD, so a value stored
@@ -429,6 +494,11 @@ server <- function(
               // that blank would commit it, wiping the date. Recover it from
               // the cell's own data, which DT has not touched yet.
               $(tableNode).on('focusin', 'input[type=date]', function() {
+                // Native date inputs have no format option; the displayed
+                // component order/separator follows the browser locale of the
+                // element's `lang`. ja renders yyyy/mm/dd, matching the rest
+                // of the app's date display.
+                this.setAttribute('lang', 'ja');
                 if (this.value) return;
                 var td = $(this).closest('td');
                 if (!td.length) return;
@@ -442,9 +512,28 @@ server <- function(
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
               });
+
+              // With scrollX, DT fixes each column's width once (split into
+              // the separate header/body tables the 'One scrollport per
+              // table' CSS then re-unifies) and white-space: nowrap (see
+              // .edit-table in main.scss) keeps a cell from wrapping to fit
+              // inside that width — so a value wider than the column's
+              // initial content (a long category value already stored when
+              // the page loads, or the first long value entered into a
+              // freshly-created, still-empty variable) just overflows its
+              // cell instead of widening the column, leaving the header out
+              // of step with where the body's columns actually render.
+              // Recomputing widths on every future redraw keeps both in sync
+              // with whatever is currently shown — but initComplete itself
+              // runs after the *first* draw has already happened, before
+              // this listener exists to catch it, so that initial render
+              // needs its own adjust() call too.
+              api.on('draw.dt', function() {
+                api.columns.adjust();
+              });
+              api.columns.adjust();
             }",
-            as.character(toJSON(lists, auto_unbox = FALSE)),
-            ns("dl")
+            as.character(toJSON(lists, auto_unbox = FALSE))
           ))
         )
       )
@@ -510,7 +599,16 @@ server <- function(
         old_value == new_value
       }
       if (isTRUE(unchanged)) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        # No replaceData() here: nothing in State$data actually changed, so
+        # there is nothing to correct on the client. Calling it anyway (as
+        # this used to) sends a round trip on *every* no-op blur — and
+        # because the NA/"" mismatch above means a never-yet-filled cell
+        # always takes this branch, that fired on virtually every click in a
+        # freshly-created variable's empty column. If the user had already
+        # clicked into a *different* cell to start editing it by the time
+        # that round trip's replaceData() landed, its table-wide redraw tore
+        # out the new cell's still-open editor out from under them — so the
+        # first click appeared to do nothing and a second one was needed.
         return()
       }
 
@@ -535,7 +633,15 @@ server <- function(
       }
       State$dirty <- rbind(keep, entry)
       State$pending <- TRUE
-      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      # Same reasoning as above: only push a redraw when the canonical stored
+      # form actually differs from what the user typed (trimmed whitespace,
+      # case-folded category, etc.) — the common case (a dropdown pick, or
+      # plain text typed with no stray whitespace) needs no correction, and
+      # skipping the round trip there is what keeps a quick run of edits
+      # across several cells from racing the same way as the no-op case above.
+      if (!identical(stored, as.character(info$value))) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      }
     })
 
     shiny$observeEvent(State$pending, {
@@ -600,65 +706,78 @@ server <- function(
 
       editing_id(if (editing) def$id[[1]] else NULL)
 
-      shiny$showModal(shiny$modalDialog(
-        title = if (editing) "Edit custom variable" else "New custom variable",
-        shiny$textInput(
-          ns("var_name"),
-          "Name",
-          value = if (editing) def$name[[1]] else "",
-          placeholder = "e.g. sampling_site"
-        ),
+      shiny$showModal(
         shiny$div(
-          class = "text-muted small mb-3",
-          "Letters, digits, '_' and '-' only — the name doubles as the column",
-          "name when the variable is exported. It is shown prettified:",
-          "\"sampling_site\" reads as \"Sampling Site\"."
-        ),
-        if (editing) {
-          shiny$div(
-            class = "mb-3",
-            shiny$tags$label(class = "control-label", "Type"),
-            shiny$div(
-              class = "form-control-plaintext",
-              unname(custom_fields$CUSTOM_TYPES[type])
+          id = "custom-variable-modal",
+          shiny$modalDialog(
+            title = if (editing) {
+              "Edit custom variable"
+            } else {
+              "New custom variable"
+            },
+            shiny$textInput(
+              ns("var_name"),
+              "Name",
+              value = if (editing) def$name[[1]] else "",
+              placeholder = "e.g. sampling_site"
             ),
             shiny$div(
-              class = "text-muted small",
-              "The type cannot be changed — create a new variable instead."
+              class = "text-muted small mb-3",
+              "Letters, digits, '_' and '-' only — the name doubles as the column",
+              "name when the variable is exported. It is shown prettified:",
+              "\"sampling_site\" reads as \"Sampling Site\"."
+            ),
+            if (editing) {
+              shiny$div(
+                class = "mb-3",
+                shiny$tags$label(class = "control-label", "Type"),
+                shiny$div(
+                  class = "form-control-plaintext",
+                  unname(custom_fields$CUSTOM_TYPES[type])
+                ),
+                shiny$div(
+                  class = "text-muted small",
+                  "The type cannot be changed — create a new variable instead."
+                )
+              )
+            } else {
+              shiny$selectInput(
+                ns("var_type"),
+                "Type",
+                choices = stats::setNames(
+                  names(custom_fields$CUSTOM_TYPES),
+                  unname(custom_fields$CUSTOM_TYPES)
+                )
+              )
+            },
+            # Hidden up front rather than toggled after showModal, so the field
+            # never flashes into view for a non-category variable.
+            if (identical(type, "category")) {
+              levels_group
+            } else {
+              hidden(levels_group)
+            },
+            shiny$textAreaInput(
+              ns("var_description"),
+              "Description (optional)",
+              value = if (editing && !is.na(def$description[[1]])) {
+                def$description[[1]]
+              } else {
+                ""
+              },
+              placeholder = "What this variable records, and how it is filled in."
+            ),
+            footer = shiny$tagList(
+              shiny$modalButton("Cancel"),
+              shiny$actionButton(
+                ns(if (editing) "confirm_edit" else "confirm_new"),
+                if (editing) "Save" else "Create",
+                class = "btn-success"
+              )
             )
-          )
-        } else {
-          shiny$selectInput(
-            ns("var_type"),
-            "Type",
-            choices = stats::setNames(
-              names(custom_fields$CUSTOM_TYPES),
-              unname(custom_fields$CUSTOM_TYPES)
-            )
-          )
-        },
-        # Hidden up front rather than toggled after showModal, so the field
-        # never flashes into view for a non-category variable.
-        if (identical(type, "category")) levels_group else hidden(levels_group),
-        shiny$textAreaInput(
-          ns("var_description"),
-          "Description (optional)",
-          value = if (editing && !is.na(def$description[[1]])) {
-            def$description[[1]]
-          } else {
-            ""
-          },
-          placeholder = "What this variable records, and how it is filled in."
-        ),
-        footer = shiny$tagList(
-          shiny$modalButton("Cancel"),
-          shiny$actionButton(
-            ns(if (editing) "confirm_edit" else "confirm_new"),
-            if (editing) "Save" else "Create",
-            class = "btn-success"
           )
         )
-      ))
+      )
     }
 
     shiny$observeEvent(input$add_var, {
