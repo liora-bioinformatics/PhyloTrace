@@ -470,6 +470,152 @@ append_amr <- function(meta, db_path) {
   meta
 }
 
+# The call-quality states an AMR gene cell can hold, best first. `min(rank)`
+# picks the state to show when one isolate has several rows for the same gene
+# (two copies found, one exact and one not).
+#' @export
+AMR_CALL_STATES <- c("Match", "Inexact", "Partial")
+
+#' Per-isolate AMR gene-presence matrix, wide, hierarchical, for display only.
+#'
+#' A different pivot of `amr_summary` from `load_amr()`'s: instead of one
+#' comma-joined column per drug class, this holds one column per *individual*
+#' gene, with abritamr's trailing `*`/`^` quality flag stripped off the column's
+#' gene name and moved into the cell *value* instead. The flag is a property of
+#' one isolate's call, not of the gene: abritamr appends `*` when a gene-family
+#' hit came from an inexact BLAST match rather than an exact/allele one (see
+#' Collate.py's `ANNOTATIONS` / `MATCH`), so "mexX" and "mexX*" are the same
+#' gene called with different confidence in different isolates. Keeping them as
+#' two columns would split one gene across the grid and hide that they are
+#' comparable; keeping the distinction in the cell preserves it.
+#'
+#' Every gene column is therefore a factor over `AMR_CALL_STATES`, `NA` where
+#' the isolate has no row for that gene:
+#'   * `"Match"`   - reported by abritamr without a quality flag. For an AMR
+#'                   gene family that means an exact/allele match; point
+#'                   mutations and virulence/stress genes are never flagged at
+#'                   all, so they always land here.
+#'   * `"Inexact"` - flagged `*`/`^`: a BLAST hit close to, but not identical
+#'                   to, a known reference allele.
+#'   * `"Partial"` - from `amr_summary`'s `partials` section: a method outside
+#'                   abritamr's `MATCH` set (e.g. an internal stop codon), so
+#'                   the gene is likely truncated or non-functional. Takes
+#'                   precedence over the `*` flag, which such rows also carry.
+#'
+#' Columns are grouped by drug class / virulence-stress group, first-seen order
+#' in `amr_summary`; genes within a group keep their first-seen order too. The
+#' grouping a caller needs to render a hierarchical header (or to let a picker
+#' show/hide a whole group at once) comes back as two attributes, both named by
+#' gene column and in column order:
+#'   * `"amr_gene_groups"` - the drug class / group label each column belongs to
+#'   * `"amr_gene_labels"` - the bare (canonical) gene symbol, for a leaf header
+#'
+#' Display-only companion, mirroring `load_amr`: never touches `metadata`.
+#' Returns NULL when the database has no `amr_summary` table or it holds no
+#' rows.
+#' @export
+load_amr_matrix <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(NULL)
+  }
+
+  con <- dbConnect(SQLite(), db_path)
+  on.exit(dbDisconnect(con))
+
+  if (!"amr_summary" %in% dbListTables(con)) {
+    return(NULL)
+  }
+
+  as <- dbGetQuery(
+    con,
+    "SELECT isolate, section, drug_class, genes FROM amr_summary ORDER BY id"
+  )
+  if (!nrow(as)) {
+    return(NULL)
+  }
+
+  # Canonical gene key: abritamr's own quality flag, stripped off the name and
+  # kept as the call state below.
+  as$gene <- sub("[*^]+$", "", as$genes)
+  as$state <- ifelse(
+    as$section == "partials",
+    "Partial",
+    ifelse(grepl("[*^]$", as$genes), "Inexact", "Match")
+  )
+
+  isolates <- unique(as$isolate)
+  out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
+  rank <- stats::setNames(seq_along(AMR_CALL_STATES), AMR_CALL_STATES)
+
+  col_group <- character(0)
+  col_gene <- character(0)
+  n <- 0L
+  for (grp in unique(as$drug_class)) {
+    for (gene in unique(as$gene[as$drug_class == grp])) {
+      n <- n + 1L
+      col <- paste0(AMR_COL_PREFIX, "g", n)
+      sub <- as[as$drug_class == grp & as$gene == gene, , drop = FALSE]
+      best <- tapply(unname(rank[sub$state]), sub$isolate, min)
+      out[[col]] <- factor(
+        AMR_CALL_STATES[best[isolates]],
+        levels = AMR_CALL_STATES
+      )
+      col_group[col] <- grp
+      col_gene[col] <- gene
+    }
+  }
+
+  attr(out, "amr_gene_groups") <- col_group
+  attr(out, "amr_gene_labels") <- col_gene
+  out
+}
+
+#' Merge the display-only AMR gene-matrix columns into a metadata frame keyed
+#' on `isolate`. The gene-level analogue of `append_amr()` - see
+#' `load_amr_matrix()` for the column shape. Adds the same `"amr_cols"`
+#' attribute `append_amr()` does (here one column per gene - readonly, hidden
+#' by default, stripped before save, exactly like the per-drug-class columns it
+#' replaces for this consumer), plus `"amr_gene_groups"` / `"amr_gene_labels"`,
+#' subset and reordered to the columns actually added, for a caller that
+#' renders a hierarchical header.
+#' @export
+append_amr_matrix <- function(meta, db_path) {
+  if (
+    !is.data.frame(meta) || !nrow(meta) || isFALSE("isolate" %in% names(meta))
+  ) {
+    return(meta)
+  }
+
+  appended <- character(0)
+  groups <- character(0)
+  labels <- character(0)
+  mat <- load_amr_matrix(db_path)
+  if (!is.null(mat)) {
+    add <- setdiff(names(mat), c("isolate", names(meta)))
+    if (length(add)) {
+      idx <- match(meta$isolate, mat$isolate)
+      for (col in add) {
+        meta[[col]] <- mat[[col]][idx]
+      }
+      appended <- add
+      all_groups <- attr(mat, "amr_gene_groups", exact = TRUE)
+      all_labels <- attr(mat, "amr_gene_labels", exact = TRUE)
+      groups <- all_groups[intersect(add, names(all_groups))]
+      labels <- all_labels[intersect(add, names(all_labels))]
+    }
+  }
+
+  attr(meta, "amr_cols") <- appended
+  attr(meta, "amr_gene_groups") <- groups
+  attr(meta, "amr_gene_labels") <- labels
+  meta
+}
+
 ### Delete isolates and everything that hangs off them
 # One isolate spans the whole schema, and the pieces are joined by *name* rather
 # than by a foreign key, so removal has to visit each table explicitly:

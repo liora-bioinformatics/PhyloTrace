@@ -57,13 +57,13 @@ ui <- function(id) {
     fillable = TRUE,
     sidebar = sidebar(
       title = "Analysis Dashboard",
+      width = "280px",
       actionButton(
         ns("trigger_group_modal"),
         "Add Analysis",
         icon = icon("folder-plus"),
         class = "btn-success w-100 mb-3"
       ),
-      hr(),
       uiOutput(ns("sidebar_navigation"))
     ),
     div(
@@ -236,7 +236,7 @@ server <- function(
               class = "btn-primary"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         ))
       } else {
         # Editing an Analysis that already holds plots: warn up front that the
@@ -303,7 +303,7 @@ server <- function(
                 class = "btn-primary"
               )
             ),
-            easyClose = FALSE
+            easyClose = TRUE
           )
         ))
       }

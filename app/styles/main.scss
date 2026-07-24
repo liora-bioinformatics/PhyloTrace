@@ -1592,7 +1592,9 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 // tables that opt into DT's scrollX already have the horizontal scroll
 // container to absorb that width.
 .isolate-selection-table table.dataTable td,
-.edit-table table.dataTable td {
+.edit-table table.dataTable td,
+.isolate-selection-table table.dataTable th,
+.edit-table table.dataTable th {
     white-space: nowrap;
 }
 
@@ -1608,9 +1610,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     height: 100%;
 }
 
-.db-page_header {
-    flex-shrink: 0;
-    padding: 0.5rem;
+// Column-visibility toggle: showCols()/hideCols() go through the DT proxy,
+// not a renderDT re-render (see database_browser.R's col_picker observer), so
+// there's no Shiny output "recalculating" event to key a spinner off. A wait
+// cursor over the whole module is a cheap stand-in — `* ` because buttons and
+// inputs carry their own cursor and won't inherit it otherwise.
+.col-picker-loading,
+.col-picker-loading * {
+    cursor: wait !important;
 }
 
 .db-page_body {
@@ -1673,10 +1680,15 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 
     // FixedColumns only pins the cell DataTables considers each column's
     // "header" (the sortable title row), so with filter = "top" the search-box
-    // row underneath - a second <tr> of <td>s DT bolts onto <thead> outside
-    // that API - never gets sticky positioning and scrolls out from under its
-    // column.
-    table.dataTable thead tr:nth-child(2)>td:first-child {
+    // row underneath - a <tr> of <td>s DT bolts onto <thead> outside that API -
+    // never gets sticky positioning and scrolls out from under its column.
+    //
+    // Matched on the cell being a <td>, not on the row's position: header rows
+    // are <th> throughout and the filter row is the only <thead> row built from
+    // <td>s, so this holds however many header rows the table has. (It was
+    // `tr:nth-child(2)`, which silently stopped matching when the Browse table
+    // grew a second header row and pushed the filter row to nth-child(3).)
+    table.dataTable thead tr>td:first-child {
         position: sticky;
         left: 0;
         z-index: 3;
@@ -1684,109 +1696,133 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     }
 }
 
-.db-page_body table.dataTable {
-    cursor: not-allowed;
-}
-
 #app-database-custom_fields-fields_table td {
     cursor: pointer;
 }
 
+// Filled ("2 / 15") must never break across the slash - the other columns
+// (Allowed values, Description) wrap intentionally, but this one is short
+// enough that a wrap only ever looks like a rendering bug.
+#app-database-custom_fields-fields_table td:last-child {
+    white-space: nowrap;
+}
+
 .db-page_body table.dataTable tbody .col-readonly {
     pointer-events: none;
+    cursor: not-allowed;
     // Signal that these columns are not client-side editable
     color: #6c7a89;
     font-style: italic;
 }
 
-
-// Toolbar shared by Browse / Import / Export. Each control-group stacks a label
-// over its widget(s); the groups are stretched to a common height so that every
-// label sits on one baseline no matter which widget the group holds.
-.db-browse-controls {
-    // Floor for a group whose widget is shorter than a button (e.g. a bare text
-    // placeholder). The actual height is the tallest widget in the row.
-    --control-h: 2.375rem;
-
-    display: flex;
-    align-items: stretch;
-    flex-wrap: wrap;
-    gap: 1rem;
-    width: 100%;
-
-    .btn {
-        white-space: nowrap;
-    }
-
-    .shiny-input-container {
-        margin-bottom: 0;
-    }
-
-    // conditionalPanel() wraps its groups in a plain div, which would otherwise
-    // break the flex chain and stack the groups it holds vertically.
-    >.shiny-panel-conditional {
-        display: flex;
-        align-items: stretch;
-        column-gap: 1rem;
-    }
-
-    // label = NULL still emits an empty <label> that keeps Bootstrap's label
-    // margin, padding dead space above the widget. Collapse it.
-    .shiny-label-null {
-        display: none;
-    }
+// Row one of the Browse table's two-row header (see .grouped_header_sketch()):
+// the category a run of columns belongs to. Left-aligned over its span and
+// quieter than the column names below it, so the eye reads the columns first
+// and the grouping as context. `.dt-hdr-ungrouped` is the empty cell over the
+// frozen isolate column - it only exists to keep every header row the same
+// number of cells, and must not draw a separator of its own.
+.db-page_body table.dataTable thead th.dt-hdr-group {
+    text-align: left;
+    font-size: 0.72rem;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: #6c7a89;
 }
+
+// The frozen isolate column's header spans both rows (see
+// .grouped_header_sketch()); sit its label on the column names' line rather
+// than centered across the category row above them.
+.db-page_body table.dataTable thead th.dt-hdr-ungrouped {
+    vertical-align: bottom;
+}
+
+// Row two: the column names. `table.dataTable thead>tr>th.sorting` already
+// styles these, but only on the cell DataTables mapped to the column - which
+// for a one-column category is the row-one cell instead (see add_leaf() in
+// .grouped_header_sketch()). Restate it on the leaf itself so a lone gene reads
+// the same as one sitting in a multi-gene category.
+.edit-table table.dataTable thead th.dt-hdr-leaf {
+    text-transform: uppercase;
+    font-size: 0.8em;
+    padding-top: 0.5rem;
+}
+
+[data-bs-theme="dark"] .db-page_body table.dataTable thead th.dt-hdr-group {
+    color: var(--bs-secondary-color);
+}
+
+// AMR gene columns hold one of three call states, rendered as a mark (see the
+// renderer in database_browser.R). Centered: the column is a presence grid, not
+// text, and a centered mark under a gene name scans as a matrix.
+.db-page_body table.dataTable tbody td.amr-gene-cell {
+    text-align: center !important;
+}
+
+.amr-call {
+    font-style: normal;
+    cursor: help;
+}
+
+// A confident call reads at full strength; the two qualified ones are stepped
+// back so a column of plain checkmarks stands out from the flagged calls.
+.amr-call-match {
+    color: var(--bs-success);
+}
+
+.amr-call-inexact {
+    color: var(--bs-success);
+    opacity: 0.65;
+}
+
+.amr-call-partial {
+    color: var(--bs-warning-text-emphasis, #997404);
+    font-weight: 600;
+}
+
 
 .sidebar-control {
     display: flex;
     gap: 2rem;
 }
 
-.sidebar-control .form-group {
+.io-control {
+    display: flex;
+    gap: 1rem;
+}
+
+.sidebar-control .form-group,
+.io-control .form-group {
     margin-bottom: 0;
 }
 
-.sidebar-control>button {
+.sidebar-control>button,
+.io-control>button {
     width: 100%;
+}
+
+.sidebar-control-group,
+.io-control-group {
+    display: flex;
+    flex-direction: column;
 }
 
 .sidebar-control-group {
     gap: 0.75rem;
-    display: flex;
-    flex-direction: column;
+}
+
+.io-control-group {
+    gap: 5px;
 }
 
 .btn-group>:not(.btn-check)+.btn {
     white-space: nowrap;
 }
 
-.control-group {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.2rem;
-}
-
-.import-export-controls {
-
-    .control-group-items .dest-slot,
-    .control-group-items>div,
-    .control-group-items>span,
-    .control-group-items>.btn {
-        min-width: 300px;
-    }
-
-    .control-group-items .btn {
-        width: 100%;
-    }
-
-    .control-group-items .shinySave {
-        width: 100% !important;
-    }
-
-    .control-group-items .btn-group .btn {
-        width: 50% !important;
-    }
+// Export's destination buttons are wrapped one per output extension in a slot
+// div (see DEST_BUTTONS in database_export.R), which absorbs the stretch the
+// column would otherwise pass to the button. Hand it on.
+.io-control-group .dest-slot .btn {
+    width: 100%;
 }
 
 .shiny-input-container .radio-inline input:checked[type="radio"] {
@@ -1821,73 +1857,7 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: unset !important;
 }
 
-.control-group-items {
-    display: flex;
-    align-items: stretch;
-    gap: 1rem;
-    flex: 1 1 auto;
-    min-height: var(--control-h);
-
-    // uiOutput() and conditionalPanel() wrappers are pass-through: hand the flex
-    // context down so the widget inside them still fills the band.
-    >.shiny-html-output,
-    >.shiny-panel-conditional {
-        display: flex;
-        align-items: stretch;
-        gap: 0.35rem;
-    }
-
-    // Whatever the widget and however deeply Shiny wraps it, it fills the band.
-    // selectInput is selectized at runtime, so the box is .selectize-input.
-    .shiny-input-container,
-    .selectize-control,
-    .selectize-input,
-    .bootstrap-select,
-    .bootstrap-select>.dropdown-toggle,
-    .vscomp-ele,
-    .vscomp-wrapper,
-    .vscomp-toggle-button,
-    select.shiny-input-select,
-    .form-control,
-    .form-select,
-    .btn {
-        height: 47px;
-        margin-bottom: 0;
-    }
-
-    // Stretched controls need their content re-centred vertically.
-    .selectize-input,
-    .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    // A checkbox is a box + caption, not a full-height control: keep it at its
-    // natural height and centre it in the band instead of stretching it.
-    .shiny-input-container:has(.checkbox, .form-check) {
-        height: auto;
-        align-self: center;
-    }
-
-    // Same for a switch, which bslib emits outside a .shiny-input-container.
-    // Its own layout depends on Bootstrap's .form-check internals, so centre it
-    // from the outside rather than making it a flex box itself.
-    .bslib-input-switch {
-        align-self: center;
-        margin-bottom: 0;
-        white-space: nowrap;
-    }
-
-    // Placeholders ("No metadata to import", "No backups yet") are copy, not
-    // controls: centre them in the band rather than letting them stretch.
-    .text-muted {
-        display: flex;
-        align-items: center;
-    }
-}
-
-// The chosen file, named in the toolbar next to the button that chose it.
+// The chosen file, named in the sidebar under the button that chose it.
 .dest-label {
     display: inline-flex;
     align-items: center;
@@ -1961,27 +1931,32 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.75;
 }
 
-// Import panel. Compatibility and the import summary are two halves of one
-// answer — "may this come in" and "what does that leave" — so they sit side by
-// side in cards rather than stacked. The row is set clear of the toolbar above
-// it, so the cards read as their own band of the page rather than as a caption
-// hanging off the controls.
+.vscomp-ele {
+    min-width: unset !important;
+}
+
+.vscomp-dropbox-container {
+    max-width: unset !important;
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button,
+.vscomp-wrapper:focus .vscomp-toggle-button {
+    box-shadow: unset !important;
+}
+
+// Import panel. Compatibility and the import summary are read in order, so
+// they stack — the checks first, then the tally of what they leave to
+// import. The row is set clear of the toolbar above it, so the cards read as
+// their own band of the page rather than as a caption hanging off the
+// controls. Layout is otherwise bslib's: transfer_cards()/transfer_row() wrap
+// this in as_fill_carrier() so a fill = TRUE card can grow into it.
 .transfer-cards {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding-top: 1.75rem;
+    padding: 1rem;
 
     // bslib hangs a margin-bottom off the grid and off each card within it. This
     // column already spaces its children with a flex gap, so the two compound.
     .bslib-mb-spacing {
         margin-bottom: 0;
-    }
-
-    // The compatibility list is the taller of the pair. Let both cards fill the
-    // row so it reads as one band rather than two cards of ragged height.
-    .bslib-grid-item>.bslib-card {
-        height: 100%;
     }
 
     // In a card, the closing whitespace of a section is the card's own padding.
@@ -1996,6 +1971,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     .clash-row:last-child {
         border-bottom: none;
     }
+}
+
+// One transfer-cards entry: the compatibility card sized to its own content,
+// the summary card below it filling whatever height is left in the stack
+// (see panel_card()'s `fill` argument). transfer_row() wraps this in
+// as_fill_carrier() for the flex/fill CSS; only the gap is ours to set.
+.transfer-row {
+    gap: 1rem;
 }
 
 // The headline figures of a summary card (bslib value boxes). Half a page is too
@@ -2060,13 +2043,32 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin-bottom: 0;
 }
 
-// Compatibility check table: one row per gate, colour-coded by outcome.
+// Compatibility check list: one item per gate, colour-coded by outcome, set
+// two to a row via a balanced multi-column layout rather than one long single
+// column — a six-check list reads as three rows, not six.
 .compat-check {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.35rem 0.75rem;
-    align-items: baseline;
+    column-count: 2;
+    column-gap: 1.5rem;
     margin-bottom: 1rem;
+}
+
+// break-inside keeps a check's badge and text together rather than splitting
+// across the column break.
+.compat-check_item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    break-inside: avoid;
+    margin-bottom: 0.5rem;
+}
+
+// Name and detail run inline on one line rather than stacked on two.
+.compat-check_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.4rem;
+    min-width: 0;
 }
 
 .compat-check_name {
@@ -2076,6 +2078,11 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .compat-check_detail {
     color: var(--bs-secondary-color);
     font-size: 0.9em;
+
+    &::before {
+        content: "—";
+        margin-right: 0.4rem;
+    }
 }
 
 .compat-badge {
@@ -2301,6 +2308,22 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     font-size: 0.8em;
     border-bottom: 1px solid #ddd;
     border-right: 1px solid #ddd;
+}
+
+.values-table table.dataTable td,
+.values-table table.dataTable th {
+    font-size: 0.8em
+}
+
+.values-table table.dataTable th {
+    text-transform: uppercase;
+}
+
+.tab-pane[data-value="Variables"]>div,
+.tab-pane[data-value="Values"]>div,
+
+.tab-pane[data-value="scheme_browser_panel"] {
+    padding: 0 !important;
 }
 
 // The rule above loses to `table.dataTable thead>tr>th.sorting` further down
@@ -3052,10 +3075,6 @@ table.dataTable thead>tr>th.sorting {
     margin-top: 2px;
 }
 
-.db-browse-controls .shiny-input-container>div {
-    height: 100%;
-}
-
 .db-empty-hint {
     height: 100%;
     align-content: center;
@@ -3536,17 +3555,15 @@ label {
     gap: 2rem;
 }
 
-.tab-pane[data-value="scheme_browser_panel"] .bslib-card .card-header {
-    padding-bottom: 8px;
-}
-
 .tab-pane[data-value="database_panel"] .sidebar-menu {
     min-width: max-content;
     width: 100%;
 }
 
 .tab-pane[data-value="custom_fields"],
-.tab-pane[data-value="visualization_panel"] {
+.tab-pane[data-value="visualization_panel"],
+.tab-pane[data-value="cgmlst_overview"],
+.tab-pane[data-value="scheme_browser_panel"] {
     .bslib-card .card-header {
         height: 49px;
     }
@@ -3556,14 +3573,9 @@ label {
     padding: 0;
 }
 
-.tab-pane[data-value="scheme_info"],
-.tab-pane[data-value="loci_info"],
-.tab-pane[data-value="import"],
-.tab-pane[data-value="export"] {
-    padding: 1rem;
-}
-
-#app-database-custom_fields-body .bslib-card {
+#app-database-custom_fields-body .bslib-card:first-child,
+.tab-pane[data-value="cgmlst_overview"]>div:first-child,
+#app-scheme_browser-scheme-download-container>.bslib-card:first-child {
     border-radius: 0;
     border: none;
 }
@@ -3609,7 +3621,7 @@ label {
     background-color: #ffffffde;
     background-color: rgb(51 62 72 / 71%) !important;
     backdrop-filter: blur(1px);
-    border-radius: 8px;
+    // border-radius: 8px;
 }
 
 
@@ -3990,8 +4002,8 @@ table.dataTable thead>tr>th.sorting {
 // theme in both light and dark mode instead of staying white in one of them.
 
 .vscomp-ele {
-    // Its own default caps the control at 250px; in the toolbar the surrounding
-    // .control-group sizes it instead.
+    // Its own default caps the control at 250px; let the surrounding column
+    // size it instead.
     max-width: none;
     min-width: 260px;
 }
@@ -4026,6 +4038,14 @@ table.dataTable thead>tr>th.sorting {
 
 .vscomp-clear-button:hover {
     background: var(--bs-tertiary-bg);
+}
+
+// The library's bundled stylesheet (shared with its Tooltip component via the
+// generic `.pop-comp-wrapper` class it also puts on this element) hard-codes
+// this to white, which shows through as a light sliver around `.vscomp-dropbox`
+// in dark mode.
+.vscomp-dropbox-container {
+    background-color: var(--bs-body-bg);
 }
 
 .vscomp-dropbox {
@@ -4083,6 +4103,14 @@ table.dataTable thead>tr>th.sorting {
 .vscomp-no-options,
 .vscomp-no-search-results {
     color: var(--bs-secondary-color);
+}
+
+// The close button shown in "popup" mode (see showDropboxAsPopup in
+// database_browser.R) - a circle hard-coded to white in the library's own
+// stylesheet, which would stay white in dark mode.
+.vscomp-dropbox-close-button {
+    background-color: var(--bs-body-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 

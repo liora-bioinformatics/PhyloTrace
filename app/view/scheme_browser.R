@@ -44,7 +44,7 @@ box::use(
     as_fillable_container,
     as_fill_carrier
   ],
-  shinyWidgets[pickerInput, pickerOptions],
+  shinyWidgets[virtualSelectInput],
   DT[DTOutput, renderDT, datatable],
   waiter[autoWaiter, spin_flower, Waiter, transparent],
   fs[path_home],
@@ -102,7 +102,6 @@ ui <- function(id) {
                       fill = TRUE,
                       full_screen = TRUE,
                       card_header(
-                        class = "bg-dark",
                         "Scheme Metadata"
                       ),
                       card_body(as_fill_item(uiOutput(ns("scheme_overview"))))
@@ -115,7 +114,7 @@ ui <- function(id) {
                   card(
                     fill = FALSE,
                     card_header(
-                      class = "bg-dark help-header",
+                      class = "help-header",
                       "Initiate New Database",
                       tooltip(
                         div(
@@ -178,7 +177,6 @@ ui <- function(id) {
                       fill = TRUE,
                       full_screen = TRUE,
                       card_header(
-                        class = "bg-dark",
                         "Details"
                       ),
                       card_body(
@@ -230,20 +228,25 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
     output$scheme_selection <- renderUI({
       render_info("output$scheme_selection")
 
-      pickerInput(
+      # The picker's value is the species name with spaces (not underscores) -
+      # get_scheme_overview() / download_scheme_targets() etc. all re-derive
+      # the underscore form themselves, so label and value stay identical here.
+      virtualSelectInput(
         ns("scheme_selector"),
         "Select Scheme",
         choices = sort(gsub("_", " ", cgmlst_org_schemes$species)),
-        choicesOpt = list(
-          subtext = rep("cgMLST", nrow(cgmlst_org_schemes))
-        ),
-        options = pickerOptions(
-          liveSearch = TRUE,
-          size = 10,
-          showSubtext = TRUE,
-          liveSearchPlaceholder = "Search loci ...",
-          container = "body"
-        )
+        search = TRUE,
+        searchPlaceholderText = "Search scheme ...",
+        optionsCount = 10,
+        # Escapes any clipping ancestor, same contract as every other picker in
+        # the app (see the "Dropdown overflow" rules in main.scss).
+        dropboxWrapper = "body",
+        # Centers the dropbox over the whole viewport with a backdrop instead
+        # of anchoring it under the toggle - same as col_picker / remove_picker
+        # in database_browser.R.
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       )
     })
 

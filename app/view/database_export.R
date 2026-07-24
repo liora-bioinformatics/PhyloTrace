@@ -22,7 +22,6 @@ box::use(
     tags,
     icon,
     actionButton,
-    selectInput,
     checkboxInput,
     updateCheckboxInput,
     uiOutput,
@@ -33,7 +32,7 @@ box::use(
     tagList,
     h5,
   ],
-  bslib[as_fill_carrier, layout_columns, tooltip],
+  bslib[as_fill_carrier, tooltip, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable],
   shinyWidgets[pickerInput, pickerOptions],
   shinyFiles[shinySaveButton, shinyFileSave, parseSavePath],
@@ -55,7 +54,7 @@ box::use(
   app / logic / database_functions[metadata_columns, make_metadata_table],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_chips, field_labels_for],
-  app / logic / functions[panel_card, stat_tile],
+  app / logic / functions[panel_card, stat_tile, transfer_cards],
   app /
     logic /
     profile_io[
@@ -161,13 +160,14 @@ typing_note <- function(sequences) {
   }
 }
 
-# A labelled cluster of controls in the header row.
+# A labelled cluster of controls in the sidebar. The id sits on the group
+# itself, so shinyjs::toggle() takes the label away with the widgets it names.
 control_group <- function(label, ..., id = NULL, class = NULL) {
   div(
     id = id,
-    class = paste("control-group", class),
+    class = paste("io-control-group", class),
     div(class = "control-group-label", label),
-    div(class = "control-group-items", ...)
+    ...
   )
 }
 
@@ -178,120 +178,135 @@ ui <- function(id) {
   as_fill_carrier(
     div(
       id = ns("module-container"),
-      useWaiter(),
-      div(
-        class = "db-page_header help-header",
-        # The flow reads left to right: decide WHAT to export, then HOW it should
-        # be written, then WHERE. Steps that do not apply to the chosen export
-        # type are hidden (server-driven, via shinyjs — this panel is injected
-        # into a navset_hidden after load, where conditionalPanel never binds).
-        div(
-          class = "db-browse-controls import-export-controls",
+      layout_sidebar(
+        padding = 0,
+        border = FALSE,
+        # The choices read top to bottom: decide WHAT to export, then HOW it
+        # should be written, then WHERE. Steps that do not apply to the chosen
+        # export type are hidden (server-driven, via shinyjs — this panel is
+        # injected into a navset_hidden after load, where conditionalPanel
+        # never binds).
+        sidebar = sidebar(
+          id = ns("controls_sidebar"),
+          position = "right",
+          width = 300,
+          open = TRUE,
+          fillable = TRUE,
+          as_fill_carrier(
+            div(
+              class = "io-control",
 
-          # -- 1. What -------------------------------------------------------
-          control_group(
-            "Export type",
-            selectInput(
-              ns("export_type"),
-              label = NULL,
-              choices = EXPORT_TYPES
-            )
-          ),
-          control_group("Isolates", uiOutput(ns("isolate_picker_ui"))),
-
-          # `isolate` and `organism` travel with every export, so the metadata
-          # table is never fully withheld — the field picker alone says which of
-          # the remaining fields come along.
-          control_group("Metadata", uiOutput(ns("meta_picker_ui"))),
-
-          # The user's own fields, offered per variable for the same reason the
-          # metadata fields are: one of them may hold data this export should
-          # not carry. Hidden when the database defines none.
-          shinyjs::hidden(control_group(
-            "Custom variables",
-            id = ns("custom_group"),
-            uiOutput(ns("custom_picker_ui"))
-          )),
-
-          # -- 2. How --------------------------------------------------------
-          # Only a profile table has an allele encoding or a file format to
-          # choose; a `.db` has exactly one representation.
-          shinyjs::hidden(control_group(
-            "Sequence data",
-            id = ns("content_group"),
-            selectInput(
-              ns("sequences"),
-              label = NULL,
-              choices = SEQUENCE_MODES
-            )
-          )),
-          shinyjs::hidden(control_group(
-            "Table format",
-            id = ns("format_group"),
-            selectInput(
-              ns("file_format"),
-              label = NULL,
-              choices = FILE_FORMATS
-            )
-          )),
-
-          # Optional analysis-result tables, carried only for a `.db` export and
-          # only when the loaded database actually holds them (the boxes are
-          # disabled otherwise, driven server-side).
-          shinyjs::hidden(control_group(
-            "Analysis results",
-            id = ns("results_group"),
-            checkboxInput(
-              ns("include_classical"),
-              "Classical MLST results",
-              value = TRUE
-            ),
-            checkboxInput(
-              ns("include_amr"),
-              "AMR results",
-              value = TRUE
-            )
-          )),
-
-          # -- 3. Where ------------------------------------------------------
-          # The closing step, set apart from the choices that feed it: pick a
-          # file, see the file you will get, write it.
-          #
-          # One save button per possible output extension, each mounted once so
-          # shinyFiles binds its dialog exactly once. Exactly one is ever shown:
-          # the one matching the file this selection will actually produce.
-          control_group(
-            "Destination",
-            class = "control-group",
-            lapply(names(DEST_BUTTONS), function(btn) {
-              spec <- DEST_BUTTONS[[btn]]
-              shinyjs::hidden(div(
-                id = ns(paste0("slot_", btn)),
-                class = "dest-slot",
-                shinySaveButton(
-                  ns(btn),
-                  spec$label,
-                  title = spec$title,
-                  filetype = spec$filetype,
-                  icon = icon("folder-open"),
-                  buttonType = "default"
+              # -- 1. What ---------------------------------------------------
+              control_group(
+                "Export type",
+                pickerInput(
+                  ns("export_type"),
+                  label = NULL,
+                  choices = EXPORT_TYPES
                 )
-              ))
-            }),
-            uiOutput(ns("dest_label"), inline = TRUE),
-            disabled(actionButton(
-              ns("export_btn"),
-              "Export",
-              class = "btn-success",
-              icon = icon("share-from-square")
-            ))
+              ),
+              control_group("Isolates", uiOutput(ns("isolate_picker_ui"))),
+
+              # `isolate` and `organism` travel with every export, so the
+              # metadata table is never fully withheld — the field picker alone
+              # says which of the remaining fields come along.
+              control_group("Metadata", uiOutput(ns("meta_picker_ui"))),
+
+              # The user's own fields, offered per variable for the same reason
+              # the metadata fields are: one of them may hold data this export
+              # should not carry. Hidden when the database defines none.
+              shinyjs::hidden(control_group(
+                "Custom variables",
+                id = ns("custom_group"),
+                uiOutput(ns("custom_picker_ui"))
+              )),
+
+              # -- 2. How ----------------------------------------------------
+              # Only a profile table has an allele encoding or a file format to
+              # choose; a `.db` has exactly one representation.
+              shinyjs::hidden(control_group(
+                "Sequence data",
+                id = ns("content_group"),
+                pickerInput(
+                  ns("sequences"),
+                  label = NULL,
+                  choices = SEQUENCE_MODES
+                )
+              )),
+              shinyjs::hidden(control_group(
+                "Table format",
+                id = ns("format_group"),
+                pickerInput(
+                  ns("file_format"),
+                  label = NULL,
+                  choices = FILE_FORMATS
+                )
+              )),
+
+              # Optional analysis-result tables, carried only for a `.db` export
+              # and only when the loaded database actually holds them (the boxes
+              # are disabled otherwise, driven server-side).
+              shinyjs::hidden(control_group(
+                "Analysis results",
+                id = ns("results_group"),
+                checkboxInput(
+                  ns("include_classical"),
+                  "Classical MLST results",
+                  value = TRUE
+                ),
+                checkboxInput(
+                  ns("include_amr"),
+                  "AMR results",
+                  value = TRUE
+                )
+              )),
+
+              # -- 3. Where --------------------------------------------------
+              # The closing step: pick a file, see the file you will get, write
+              # it.
+              #
+              # One save button per possible output extension, each mounted once
+              # so shinyFiles binds its dialog exactly once. Exactly one is ever
+              # shown: the one matching the file this selection will produce.
+              control_group(
+                "Destination",
+                lapply(names(DEST_BUTTONS), function(btn) {
+                  spec <- DEST_BUTTONS[[btn]]
+                  shinyjs::hidden(div(
+                    id = ns(paste0("slot_", btn)),
+                    class = "dest-slot",
+                    shinySaveButton(
+                      ns(btn),
+                      spec$label,
+                      title = spec$title,
+                      filetype = spec$filetype,
+                      icon = icon("folder-open"),
+                      buttonType = "default"
+                    )
+                  ))
+                }),
+                uiOutput(ns("dest_label"), inline = TRUE)
+              ),
+              control_group(
+                "Export",
+                disabled(actionButton(
+                  ns("export_btn"),
+                  "Export",
+                  class = "btn-success",
+                  icon = icon("share-from-square")
+                ))
+              )
+            )
+          )
+        ),
+        as_fill_carrier(
+          div(
+            class = "db-page_body db-transfer-body",
+            useWaiter(),
+            uiOutput(ns("summary"), fill = TRUE)
           )
         )
-      ),
-      as_fill_carrier(div(
-        class = "db-page_body db-transfer-body",
-        uiOutput(ns("summary"))
-      ))
+      )
     )
   )
 }
@@ -300,7 +315,8 @@ ui <- function(id) {
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  session_reset = shiny::reactive(0L),
+  custom_updated = shiny::reactiveVal(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -507,8 +523,13 @@ server <- function(
     })
 
     # The custom variables this database defines. Empty for a database that has
-    # never had one, which is what hides the whole control group.
+    # never had one, which is what hides the whole control group. Re-read
+    # whenever the Custom Variables panel adds, renames or removes a field —
+    # db_path() alone does not change on that edit, and without this dependency
+    # the picker would keep showing whatever was true when the Export panel was
+    # first opened (see database.R's custom_updated).
     custom_choices <- reactive({
+      custom_updated()
       path <- db_path()
       if (is.null(path) || is.na(path)) {
         return(character(0))
@@ -602,12 +623,14 @@ server <- function(
       }
 
       cols <- p$columns
-      div(
-        class = "transfer-cards",
-        # The mirror of the Import panel: the figures on the left describe the
-        # selection, the card on the right what it will be written as.
-        layout_columns(
-          col_widths = c(7, 5),
+      transfer_cards(
+        # The mirror of the Import panel: the figures first describe the
+        # selection, the card under them what it will be written as. A plain
+        # fill carrier, not a `layout_column_wrap()` grid — a grid gives each
+        # row an equal `1fr` share of the fillable height regardless of
+        # content, which padded the shorter card with dead space.
+        as_fill_carrier(div(
+          class = "transfer-row",
           panel_card(
             "Export summary",
             div(
@@ -644,6 +667,7 @@ server <- function(
           ),
           panel_card(
             "Output",
+            fill = TRUE,
             div(
               class = "export-note",
               # What the selection will actually produce — stated *before* a
@@ -699,7 +723,7 @@ server <- function(
               }
             )
           )
-        )
+        ))
       )
     })
 

@@ -13,7 +13,7 @@ box::use(
   bslib[as_fill_carrier, navset_card_tab, nav_panel, layout_sidebar, sidebar],
   jsonlite[toJSON],
   shinyjs[addClass, disable, disabled, enable, hidden, removeClass, toggle],
-  shinyWidgets[pickerInput, pickerOptions],
+  shinyWidgets[virtualSelectInput],
   DT[
     DTOutput,
     JS,
@@ -261,7 +261,7 @@ server <- function(
           nav_panel(
             "Variables",
             as_fill_carrier(shiny$div(
-              class = "db-page_body",
+              class = "db-page_body values-table",
               DTOutput(ns("fields_table"))
             ))
           ),
@@ -307,7 +307,7 @@ server <- function(
         selection = "single",
         class = "row-border hover order-column",
         options = list(
-          dom = "t",
+          dom = "ti",
           paging = FALSE,
           scrollX = TRUE,
           # A placeholder like values_table's: the real height comes from the
@@ -774,7 +774,8 @@ server <- function(
                 if (editing) "Save" else "Create",
                 class = "btn-success"
               )
-            )
+            ),
+            easyClose = TRUE
           )
         )
       )
@@ -864,19 +865,25 @@ server <- function(
       } else {
         character(0)
       }
-      pickerInput(
+      # virtualSelectInput, same as Browse Entries' col_picker / remove_picker
+      # (see database_browser.R): opens centered over the viewport via the
+      # popup config below instead of anchored under this 300px sidebar
+      # control, and dropboxWrapper = "body" still escapes the sidebar's own
+      # clipping ancestor for the (unlikely) non-popup fallback.
+      virtualSelectInput(
         ns("remove_picker"),
         label = NULL,
         choices = choices,
         selected = NULL,
         multiple = TRUE,
-        options = pickerOptions(
-          actionsBox = TRUE,
-          title = "Select variables to remove …",
-          selectedTextFormat = "count > 2",
-          countSelectedText = "{0} variables selected",
-          container = "body"
-        )
+        search = TRUE,
+        searchPlaceholderText = "Search variables ...",
+        placeholder = "Select variables to remove …",
+        noOfDisplayValues = 2,
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       )
     })
 
@@ -915,7 +922,8 @@ server <- function(
             "Remove",
             class = "btn-danger"
           )
-        )
+        ),
+        easyClose = TRUE
       ))
     })
 

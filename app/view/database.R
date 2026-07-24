@@ -9,8 +9,7 @@ box::use(
   app / logic / functions[sidebar_menu],
   app / view / database_browser,
   app / view / database_custom,
-  app / view / database_scheme_info,
-  app / view / database_loci_info,
+  app / view / database_cgmlst,
   app / view / database_import,
   app / view / database_export,
 )
@@ -28,14 +27,9 @@ db_menu <- list(
     module = database_custom
   ),
   list(
-    value = "scheme_info",
-    label = "Scheme Info",
-    module = database_scheme_info
-  ),
-  list(
-    value = "loci_info",
-    label = "Loci Info",
-    module = database_loci_info
+    value = "cgmlst_overview",
+    label = "cgMLST Overview",
+    module = database_cgmlst
   ),
   list(
     value = "import",
@@ -125,6 +119,8 @@ server <- function(
           custom_updated = custom_updated
         ),
         custom_fields = list(custom_updated = custom_updated),
+        import = list(custom_updated = custom_updated),
+        export = list(custom_updated = custom_updated),
         list()
       )
       result <- do.call(

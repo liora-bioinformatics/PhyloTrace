@@ -623,7 +623,7 @@ server <- function(
               class = "btn-primary"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         )
       ))
     })

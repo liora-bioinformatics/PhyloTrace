@@ -551,7 +551,7 @@ server <- function(
               class = "btn-primary"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         )
       ))
     }))
@@ -1017,7 +1017,7 @@ server <- function(
               class = "btn-danger"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         ))
       } else {
         # A new plot in an Analysis is purely additive — nothing to confirm.

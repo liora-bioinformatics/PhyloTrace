@@ -63,7 +63,15 @@ box::use(
     addClass,
     removeClass
   ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, replaceData, selectRows, JS],
+  DT[
+    DTOutput,
+    renderDT,
+    datatable,
+    dataTableProxy,
+    replaceData,
+    selectRows,
+    JS
+  ],
   htmltools[htmlEscape],
   fs[path_home],
 )
@@ -835,7 +843,9 @@ server <- function(
           "skipped."
         ),
         tags$dt("Pipeline"),
-        tags$dd("Every selected genome then runs the three steps below, in order.")
+        tags$dd(
+          "Every selected genome then runs the three steps below, in order."
+        )
       )
     })
 
@@ -883,7 +893,9 @@ server <- function(
           "automatically; if neither has it, the ST is left blank."
         ),
         tags$dt("When it's skipped"),
-        tags$dd("No classical MLST is attempted when the scheme has no resolvable species.")
+        tags$dd(
+          "No classical MLST is attempted when the scheme has no resolvable species."
+        )
       )
     })
 
@@ -908,7 +920,9 @@ server <- function(
           "names rather than raw sequence matches."
         ),
         tags$dt("Storage"),
-        tags$dd("Results are stored in the database (amr_results / amr_summary).")
+        tags$dd(
+          "Results are stored in the database (amr_results / amr_summary)."
+        )
       )
     })
 
@@ -986,7 +1000,10 @@ server <- function(
       picked <- !running && length(input$selection_table_rows_selected) > 0
       toggleState("exclude_selected", condition = picked)
       toggleState("include_selected", condition = picked)
-      toggleState("select_all", condition = !running && length(Typing$strains) > 0)
+      toggleState(
+        "select_all",
+        condition = !running && length(Typing$strains) > 0
+      )
       toggleState("select_none", condition = picked)
     })
 
@@ -1503,7 +1520,9 @@ server <- function(
       if (nrow(same_genome)) {
         showNotification(
           HTML(paste0(
-            "<strong>", nrow(same_genome), " selected assembly/assemblies ",
+            "<strong>",
+            nrow(same_genome),
+            " selected assembly/assemblies ",
             "already in the database under another name:</strong><br>",
             paste0(
               htmlEscape(same_genome$strain),
@@ -1519,11 +1538,17 @@ server <- function(
         )
       }
 
-      name_conflict <- checked[checked$status == "name_conflict", , drop = FALSE]
+      name_conflict <- checked[
+        checked$status == "name_conflict",
+        ,
+        drop = FALSE
+      ]
       if (nrow(name_conflict)) {
         showNotification(
           HTML(paste0(
-            "<strong>", nrow(name_conflict), " selected assembly/assemblies ",
+            "<strong>",
+            nrow(name_conflict),
+            " selected assembly/assemblies ",
             "share a name with a different assembly already typed:</strong><br>",
             paste(htmlEscape(name_conflict$strain), collapse = "<br>"),
             "<br><em>These are skipped as duplicates and will NOT be typed. ",
@@ -1634,7 +1659,9 @@ server <- function(
       # badges (already present vs. manually excluded), so this message never
       # contradicts what the badges just showed.
       n_present <- sum(Typing$strains %in% existing())
-      n_excluded <- length(Typing$strains) - length(Typing$queued_files) - n_present
+      n_excluded <- length(Typing$strains) -
+        length(Typing$queued_files) -
+        n_present
       showNotification(
         paste0(
           length(Typing$queued_strains),

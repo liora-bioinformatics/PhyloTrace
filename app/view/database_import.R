@@ -39,7 +39,7 @@ box::use(
     withProgress,
     tagList
   ],
-  bslib[as_fill_carrier, layout_columns, tooltip],
+  bslib[as_fill_carrier, tooltip, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable],
   shinyWidgets[pickerInput, pickerOptions],
   shinyFiles[shinyFilesButton, shinyFileChoose, parseFilePaths],
@@ -69,7 +69,7 @@ box::use(
   app / logic / database_functions[metadata_columns],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_labels_for],
-  app / logic / functions[panel_card, stat_tile],
+  app / logic / functions[panel_card, stat_tile, transfer_cards],
   app /
     logic /
     profile_io[
@@ -171,135 +171,123 @@ ui <- function(id) {
   as_fill_carrier(
     div(
       id = ns("module-container"),
-      useWaiter(),
-      div(
-        class = "db-page_header help-header",
-        div(
-          class = "db-browse-controls import-export-controls",
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Source"),
+      layout_sidebar(
+        padding = 0,
+        border = FALSE,
+        sidebar = sidebar(
+          id = ns("controls_sidebar"),
+          position = "right",
+          width = 300,
+          open = TRUE,
+          fillable = TRUE,
+          as_fill_carrier(
             div(
-              class = "control-group-items",
-              selectInput(
-                ns("source_type"),
-                label = NULL,
-                choices = SOURCE_TYPES
+              class = "io-control",
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Source"),
+                pickerInput(
+                  ns("source_type"),
+                  label = NULL,
+                  choices = SOURCE_TYPES
+                )
+              ),
+              # --- merge a whole PhyloTrace database ------------------------------
+              div(
+                id = ns("db_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "External database"),
+                shinyFilesButton(
+                  ns("ext_db"),
+                  "Select database …",
+                  title = "Choose a PhyloTrace database to import",
+                  icon = icon("file-import"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                uiOutput(ns("ext_db_label"), inline = TRUE)
+              ),
+              # --- stage a profile table ------------------------------------------
+              shinyjs::hidden(div(
+                id = ns("typing_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Typing results"),
+                shinyFilesButton(
+                  ns("profile_file"),
+                  "Profile table …",
+                  title = "Choose a profile table (.tsv / .csv / .xlsx)",
+                  icon = icon("table"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                shinyFilesButton(
+                  ns("seq_file"),
+                  "Sequences …",
+                  title = "Optional: the matching allele FASTA",
+                  icon = icon("dna"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                shinyFilesButton(
+                  ns("meta_file"),
+                  "Metadata …",
+                  title = "Optional: a metadata table for these isolates",
+                  icon = icon("table-list"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                )
+              )),
+              shinyjs::hidden(div(
+                id = ns("set_name_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Set name"),
+                textInput(
+                  ns("set_name"),
+                  label = NULL,
+                  placeholder = "e.g. partner-lab-2026"
+                )
+              )),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Metadata fields"),
+                uiOutput(ns("meta_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Custom variables"),
+                uiOutput(ns("custom_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Analysis results"),
+                uiOutput(ns("results_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Import"),
+                uiOutput(ns("action_button_ui"), inline = TRUE)
+              ),
+              div(
+                id = ns("rollback_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Rollback"),
+                uiOutput(ns("restore_ui"))
               )
             )
-          ),
-
-          # --- merge a whole PhyloTrace database ------------------------------
+          )
+        ),
+        as_fill_carrier(
           div(
-            id = ns("db_group"),
-            class = "control-group",
-            div(class = "control-group-label", "External database"),
-            div(
-              class = "control-group-items",
-              shinyFilesButton(
-                ns("ext_db"),
-                "Select database …",
-                title = "Choose a PhyloTrace database to import",
-                icon = icon("file-import"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              uiOutput(ns("ext_db_label"), inline = TRUE)
-            )
-          ),
-
-          # --- stage a profile table ------------------------------------------
-          shinyjs::hidden(div(
-            id = ns("typing_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Typing results"),
-            div(
-              class = "control-group-items",
-              shinyFilesButton(
-                ns("profile_file"),
-                "Profile table …",
-                title = "Choose a profile table (.tsv / .csv / .xlsx)",
-                icon = icon("table"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              shinyFilesButton(
-                ns("seq_file"),
-                "Sequences …",
-                title = "Optional: the matching allele FASTA",
-                icon = icon("dna"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              shinyFilesButton(
-                ns("meta_file"),
-                "Metadata …",
-                title = "Optional: a metadata table for these isolates",
-                icon = icon("table-list"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              )
-            )
-          )),
-          shinyjs::hidden(div(
-            id = ns("set_name_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Set name"),
-            div(
-              class = "control-group-items",
-              textInput(
-                ns("set_name"),
-                label = NULL,
-                placeholder = "e.g. partner-lab-2026"
-              )
-            )
-          )),
-
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Metadata fields"),
-            div(class = "control-group-items", uiOutput(ns("meta_picker_ui")))
-          ),
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Custom variables"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("custom_picker_ui"))
-            )
-          ),
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Analysis results"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("results_picker_ui"))
-            )
-          ),
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Import"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("action_button_ui"), inline = TRUE)
-            )
-          ),
-          div(
-            id = ns("rollback_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Rollback"),
-            div(class = "control-group-items", uiOutput(ns("restore_ui")))
+            class = "db-page_body db-transfer-body",
+            useWaiter(),
+            uiOutput(ns("body"), fill = TRUE)
           )
         )
-      ),
-      as_fill_carrier(div(
-        class = "db-page_body db-transfer-body",
-        uiOutput(ns("body"))
-      ))
+      )
     )
   )
 }
@@ -308,7 +296,8 @@ ui <- function(id) {
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  session_reset = shiny::reactive(0L),
+  custom_updated = shiny::reactiveVal(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -607,6 +596,11 @@ server <- function(
     # What the peer defines, split into what can be merged and what clashes.
     # A `.db` merge only: a profile file has no custom-variable tables.
     custom_split <- reactive({
+      # Re-check whenever the Custom Variables panel changes a local
+      # definition — its type governs which of the peer's variables clash
+      # (see importable_custom_fields()), and that can flip while an external
+      # database is already selected.
+      custom_updated()
       staged <- prep()
       req(!is.null(staged), !typing())
       importable_custom_fields(db_path(), staged$path)
@@ -689,21 +683,26 @@ server <- function(
           ns("merge_btn"),
           "Merge into database",
           class = "btn-success",
-          icon = icon("code-merge")
+          icon = icon("code-merge"),
+          width = "100%"
         ))
       }
     })
 
     # -- Body ----------------------------------------------------------------
 
-    # The pass/warn/fail grid, shared by both source types.
+    # The pass/warn/fail grid, shared by both source types. Each check is one
+    # item (badge + inline name/detail), and items run two to a row via a CSS
+    # multi-column layout — a six-check list reads as three rows, not six.
     check_grid <- function(checks) {
       div(
         class = "compat-check",
         lapply(seq_len(nrow(checks)), function(i) {
-          tagList(
+          div(
+            class = "compat-check_item",
             .badge(checks$status[i]),
             div(
+              class = "compat-check_row",
               div(class = "compat-check_name", checks$check[i]),
               div(class = "compat-check_detail", checks$detail[i])
             )
@@ -712,15 +711,20 @@ server <- function(
       )
     }
 
-    # The gate and what it lets through are read against each other, so they sit
-    # side by side rather than stacked: the checks on the left, the tally of what
-    # they leave to import on the right.
+    # The gate and what it lets through are read in order, top to bottom: the
+    # checks first, then the tally of what they leave to import. This is a
+    # flex column, not a grid: a `layout_column_wrap()` grid gives every row an
+    # equal `1fr` share of the fillable height regardless of content, which
+    # stretched the short check list and the tall summary to match and left
+    # the shorter card padded with dead space. A plain fill carrier instead
+    # lets the compatibility card size to its own content and only the
+    # summary card grow into whatever height is left.
     transfer_row <- function(checks, summary_title, ...) {
-      layout_columns(
-        col_widths = c(5, 7),
+      as_fill_carrier(div(
+        class = "transfer-row",
         panel_card("Compatibility", check_grid(checks)),
-        panel_card(summary_title, ...)
-      )
+        panel_card(summary_title, ..., fill = TRUE)
+      ))
     }
 
     # Already-staged sets, with a Remove button each.
@@ -783,8 +787,7 @@ server <- function(
       checks <- compat()
 
       if (blocked()) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           transfer_row(
             checks,
             "Import summary",
@@ -805,8 +808,7 @@ server <- function(
       # resolution dropdown moves — seconds of lag on a real database.
       p <- import_preview(db_path(), prep()$path, resolutions(), cl)
 
-      div(
-        class = "transfer-cards",
+      transfer_cards(
         transfer_row(
           checks,
           "Import summary",
@@ -893,8 +895,7 @@ server <- function(
 
     typing_body <- function() {
       if (is.null(profile_path())) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           div(
             class = "db-empty-hint",
             "Select a profile table (.tsv / .csv / .xlsx) of typing results.",
@@ -913,8 +914,7 @@ server <- function(
       p <- parsed()
 
       if (typing_blocked()) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           transfer_row(
             r$checks,
             "Staging summary",
@@ -933,8 +933,7 @@ server <- function(
 
       clash <- typing_clashes()
 
-      div(
-        class = "transfer-cards",
+      transfer_cards(
         transfer_row(
           r$checks,
           "Staging summary",
@@ -1147,7 +1146,8 @@ server <- function(
         footer = tagList(
           modalButton("Cancel"),
           actionButton(ns("confirm_merge"), "Merge", class = "btn-success")
-        )
+        ),
+        easyClose = TRUE
       ))
     })
 
@@ -1238,7 +1238,7 @@ server <- function(
         return(div(class = "text-muted small", "No backups yet"))
       }
       tagList(
-        selectInput(
+        pickerInput(
           ns("backup_pick"),
           label = NULL,
           choices = stats::setNames(files, basename(files))
@@ -1268,7 +1268,8 @@ server <- function(
         footer = tagList(
           modalButton("Cancel"),
           actionButton(ns("confirm_restore"), "Restore", class = "btn-danger")
-        )
+        ),
+        easyClose = TRUE
       ))
     })
 
