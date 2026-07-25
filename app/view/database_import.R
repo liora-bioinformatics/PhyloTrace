@@ -177,7 +177,7 @@ ui <- function(id) {
         sidebar = sidebar(
           id = ns("controls_sidebar"),
           position = "right",
-          width = 300,
+          width = 350,
           open = TRUE,
           fillable = TRUE,
           as_fill_carrier(

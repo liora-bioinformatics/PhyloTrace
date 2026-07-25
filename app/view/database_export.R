@@ -189,7 +189,7 @@ ui <- function(id) {
         sidebar = sidebar(
           id = ns("controls_sidebar"),
           position = "right",
-          width = 300,
+          width = 350,
           open = TRUE,
           fillable = TRUE,
           as_fill_carrier(
@@ -212,14 +212,13 @@ ui <- function(id) {
               # says which of the remaining fields come along.
               control_group("Metadata", uiOutput(ns("meta_picker_ui"))),
 
-              # The user's own fields, offered per variable for the same reason
-              # the metadata fields are: one of them may hold data this export
-              # should not carry. Hidden when the database defines none.
-              shinyjs::hidden(control_group(
+              # The user's own fields, offered per variable
+              control_group(
                 "Custom variables",
                 id = ns("custom_group"),
+                class = "d-none", # Start hidden so flexbox gap ignores it completely
                 uiOutput(ns("custom_picker_ui"))
-              )),
+              ),
 
               # -- 2. How ----------------------------------------------------
               # Only a profile table has an allele encoding or a file format to
@@ -537,15 +536,10 @@ server <- function(
       exportable_custom_fields(path)
     })
 
-    observe({
-      test <<- custom_choices()
-      shinyjs::toggle("custom_group", condition = length(custom_choices()) > 0)
-      message(length(custom_choices()) > 0)
-    })
-
     output$custom_picker_ui <- renderUI({
       cols <- custom_choices()
       req(length(cols) > 0)
+
       pickerInput(
         ns("custom_fields"),
         label = NULL,
@@ -563,6 +557,22 @@ server <- function(
         )
       )
     })
+
+    observeEvent(
+      list(input$export_type, custom_choices()),
+      {
+        req(input$export_type)
+
+        # Adds 'd-none' (hides + removes flex gap) when no custom choices exist
+        # Removes 'd-none' (shows group) when custom choices exist
+        shinyjs::toggleClass(
+          id = "custom_group",
+          class = "d-none",
+          condition = length(custom_choices()) == 0
+        )
+      },
+      ignoreInit = FALSE
+    )
 
     output$meta_picker_ui <- renderUI({
       cols <- optional_meta()
