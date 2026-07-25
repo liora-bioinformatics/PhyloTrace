@@ -538,7 +538,9 @@ server <- function(
     })
 
     observe({
+      test <<- custom_choices()
       shinyjs::toggle("custom_group", condition = length(custom_choices()) > 0)
+      message(length(custom_choices()) > 0)
     })
 
     output$custom_picker_ui <- renderUI({
@@ -675,7 +677,7 @@ server <- function(
               tags$p(tagList(
                 strong("File: "),
                 tags$code(paste0(".", target_ext())),
-                span(class = "text-muted", " — "),
+                span(class = "dest-label is-empty", " — "),
                 span(deliverable_text())
               )),
               if (length(cols)) {
@@ -717,7 +719,10 @@ server <- function(
                   class = "text-muted mb-0",
                   tagList(
                     strong("Destination: "),
-                    "Choose a destination file to enable Export."
+                    span(
+                      class = "dest-label is-empty",
+                      "Choose a destination file to enable Export."
+                    )
                   )
                 )
               }

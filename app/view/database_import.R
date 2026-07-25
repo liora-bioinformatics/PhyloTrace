@@ -139,7 +139,7 @@ conflict_note <- function(conflicts) {
     if (is.na(lab)) type else lab
   }
   div(
-    class = "text-muted small",
+    class = "dest-label is-empty",
     lapply(seq_len(nrow(conflicts)), function(i) {
       div(sprintf(
         "'%s' is %s here but %s in the external file — not imported.",
@@ -571,7 +571,7 @@ server <- function(
         error = function(e) character(0)
       )
       if (!length(cols)) {
-        return(div(class = "text-muted small", "No metadata to import"))
+        return(div(class = "dest-label is-empty", "No metadata to import"))
       }
       pickerInput(
         ns("meta_cols"),
@@ -614,7 +614,10 @@ server <- function(
         if (!is.null(split) && nrow(split$conflicts)) {
           return(conflict_note(split$conflicts))
         }
-        return(div(class = "text-muted small", "No custom variables to import"))
+        return(div(
+          class = "dest-label is-empty",
+          "No custom variables to import"
+        ))
       }
 
       cols <- split$importable
@@ -645,14 +648,17 @@ server <- function(
     output$results_picker_ui <- renderUI({
       staged <- prep()
       if (typing() || is.null(staged)) {
-        return(div(class = "text-muted small", "—"))
+        return(div(class = "dest-label is-empty", "—"))
       }
       present <- tryCatch(
         available_result_tables(staged$path),
         error = function(e) list(classical = FALSE, amr = FALSE)
       )
       if (!present$classical && !present$amr) {
-        return(div(class = "text-muted small", "No analysis results to import"))
+        return(div(
+          class = "dest-label is-empty",
+          "No analysis results to import"
+        ))
       }
       tagList(
         if (present$classical) {
@@ -736,7 +742,7 @@ server <- function(
       panel_card(
         "Staged typing results",
         div(
-          class = "text-muted small mb-2",
+          class = "dest-label is-empty mb-2",
           "These isolates have allele profiles but no sequences, so they are",
           " available in the Tree and MST views only."
         ),
@@ -830,7 +836,7 @@ server <- function(
           ),
           if (p$n_identical_dupes > 0) {
             div(
-              class = "text-muted small",
+              class = "dest-label is-empty",
               icon("circle-info"),
               sprintf(
                 " %d isolate(s) are already in the database with an identical allele profile and will be skipped.",
@@ -853,7 +859,7 @@ server <- function(
           panel_card(
             "Resolve name conflicts",
             div(
-              class = "text-muted small mb-2",
+              class = "dest-label is-empty mb-2",
               "These isolates already exist locally under the same name but carry a different allele profile."
             ),
             lapply(seq_len(nrow(cl)), function(i) {
@@ -958,7 +964,7 @@ server <- function(
             )
           ),
           div(
-            class = "text-muted small",
+            class = "dest-label is-empty",
             icon("circle-info"),
             " These isolates are staged beside the database, not merged into it:",
             " a profile table carries no sequences, so they can contribute allele",
@@ -1139,7 +1145,7 @@ server <- function(
             )
           },
           tags$p(
-            class = "text-muted small",
+            class = "dest-label is-empty",
             "The current database is saved as a timestamped backup first, so this can be rolled back."
           )
         ),
@@ -1235,7 +1241,7 @@ server <- function(
     output$restore_ui <- renderUI({
       files <- backups()
       if (!length(files)) {
-        return(div(class = "text-muted small", "No backups yet"))
+        return(div(class = "dest-label is-empty", "No backups yet"))
       }
       tagList(
         pickerInput(
@@ -1262,7 +1268,7 @@ server <- function(
           "?"
         )),
         tags$p(
-          class = "text-muted small",
+          class = "dest-label is-empty",
           "The database being replaced is itself backed up first."
         ),
         footer = tagList(

@@ -1610,16 +1610,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     height: 100%;
 }
 
-// Column-visibility toggle: showCols()/hideCols() go through the DT proxy,
-// not a renderDT re-render (see database_browser.R's col_picker observer), so
-// there's no Shiny output "recalculating" event to key a spinner off. A wait
-// cursor over the whole module is a cheap stand-in — `* ` because buttons and
-// inputs carry their own cursor and won't inherit it otherwise.
-.col-picker-loading,
-.col-picker-loading * {
-    cursor: wait !important;
-}
-
 .db-page_body {
     overflow: hidden;
     padding: 0.5rem;
@@ -1708,7 +1698,10 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 .db-page_body table.dataTable tbody .col-readonly {
-    pointer-events: none;
+    // Editing is already blocked server-side via DT's editable$disable$columns
+    // (see database_browser.R / database_custom.R) - pointer-events: none here
+    // would remove the cell from hit-testing, which stops `cursor` from ever
+    // applying on hover.
     cursor: not-allowed;
     // Signal that these columns are not client-side editable
     color: #6c7a89;
@@ -1859,18 +1852,7 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 
 // The chosen file, named in the sidebar under the button that chose it.
 .dest-label {
-    display: inline-flex;
-    align-items: center;
-    gap: .4rem;
-    padding: 0 .7rem;
-    border-radius: 1rem;
-    background: var(--bs-tertiary-bg);
     font-size: .8rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    width: 100%;
-    justify-content: center;
     font-family: monospace;
 }
 

@@ -18,6 +18,7 @@ box::use(
     isolate,
     showNotification,
     removeNotification,
+    selectInput
   ],
   bslib[
     page_sidebar,
@@ -39,6 +40,7 @@ box::use(
   shinyjs[runjs],
   htmltools[tagQuery],
   waiter[useWaiter, waiterShowOnLoad, Waiter, spin_flower],
+  htmltools[attachDependencies, findDependencies],
 )
 box::use(
   app / logic / functions[render_info],
@@ -72,7 +74,7 @@ strip_shinyfiles_assets <- function(ui) {
 ui <- function(id) {
   ns <- NS(id)
 
-  tagList(
+  main_layout <- tagList(
     useWaiter(),
     waiterShowOnLoad(
       html = div(
@@ -128,6 +130,18 @@ ui <- function(id) {
       )
     )
   ) # close tagList
+
+  # Force Shiny to load Selectize JS assets into the initial HTML <head> at
+  # startup. Prevents missing 'selectize-plugin-a11y' errors when dropdowns
+  # load dynamically in modules/modals.
+  attachDependencies(
+    main_layout,
+    findDependencies(selectInput(
+      ns("selectize_deps"),
+      label = NULL,
+      choices = NULL
+    ))
+  )
 }
 
 #' @export

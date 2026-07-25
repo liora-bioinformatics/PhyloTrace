@@ -747,8 +747,7 @@ server <- function(
           fixedColumns = list(leftColumns = 1),
           columnDefs = column_defs,
           initComplete = DT::JS(
-            sprintf(
-              "function(settings) {
+            "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
 
@@ -777,26 +776,10 @@ server <- function(
                 if (!isNaN(d.getTime())) this.value = d.toISOString().split('T')[0];
               });
 
-              // columns.adjust().draw(false) is what actually costs the 3-5s
-              // on a wide FixedColumns table — showCols()/hideCols() on the R
-              // side just queue the visibility change and return immediately,
-              // so a waiter tied to the R call (see col_picker observer) hides
-              // long before this finishes. Notify the server once the redraw
-              // is actually done so it can hide the waiter at the right time.
-              // Debounced because a single col_picker change can call both
-              // showCols() and hideCols(), each toggling visibility and
-              // firing this event — without it the redraw runs twice.
-              var visRedrawTimer = null;
               api.on('column-visibility.dt', function() {
-                if (visRedrawTimer) clearTimeout(visRedrawTimer);
-                visRedrawTimer = setTimeout(function() {
-                  api.columns.adjust().draw(false);
-                  Shiny.setInputValue('%s', Math.random());
-                }, 0);
+                api.columns.adjust().draw(false);
               });
-            }",
-              ns("col_picker_redrawn")
-            )
+            }"
           )
         )
       )
@@ -1068,48 +1051,12 @@ server <- function(
           c(setdiff(optional, selected_cols), setdiff(gene_cols, shown_genes))
         )
 
-        # Only set when there is actually a redraw to wait for — an unchanged
-        # selection would otherwise leave the cursor stuck forever, since
-        # col_picker_redrawn only fires off the back of a real
-        # showCols()/hideCols() call (see the initComplete JS above).
-        if (length(show_idx) || length(hide_idx)) {
-          addClass(id = "module-container", class = "col-picker-loading")
-          # Safety net: the client-side redraw notice (input$col_picker_redrawn,
-          # below) is what normally clears this. If the session drops the
-          # message somehow, don't leave the cursor stuck indefinitely.
-          # later() runs outside the reactive domain, and shinyjs (like waiter)
-          # resolves the session via getDefaultReactiveDomain() internally —
-          # without withReactiveDomain() it errors, which the try() would
-          # otherwise swallow silently, leaving the cursor stuck forever.
-          later::later(
-            function() {
-              shiny::withReactiveDomain(
-                session,
-                try(
-                  removeClass(id = "module-container", class = "col-picker-loading"),
-                  silent = TRUE
-                )
-              )
-            },
-            delay = 10
-          )
-        }
         if (length(show_idx)) {
           showCols(proxy, show_idx, reset = FALSE)
         }
         if (length(hide_idx)) hideCols(proxy, hide_idx, reset = FALSE)
       },
       ignoreNULL = FALSE,
-      ignoreInit = TRUE
-    )
-
-    # Fired by the initComplete JS once the DataTable has actually finished
-    # redrawing after a column-visibility change — the real end of the work
-    # the "loading" cursor is covering (see the observer above and the JS
-    # comment in renderDT's initComplete).
-    observeEvent(
-      input$col_picker_redrawn,
-      removeClass(id = "module-container", class = "col-picker-loading"),
       ignoreInit = TRUE
     )
 
