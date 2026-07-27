@@ -74,10 +74,11 @@ box::use(
 AMR_GROUP_TOKEN_PREFIX <- ".amr_group:"
 
 # Columns the user may never edit: `isolate` is the isolate identity (shared
-# with mlst.souche) and `organism` is fixed by mlst_type.species for the whole
-# database. Located by name, not position — an imported peer database can carry
-# extra metadata columns in any order.
-READONLY_COLS <- c("isolate", "organism")
+# with mlst.souche), `organism` is fixed by mlst_type.species for the whole
+# database, and `called_at` is the app-stamped time the isolate was taken on.
+# Located by name, not position — an imported peer database can carry extra
+# metadata columns in any order.
+READONLY_COLS <- c("isolate", "organism", "called_at")
 
 # The one date-typed field in the fixed GenEpiO metadata schema. User-defined
 # date variables are *not* listed here — they are discovered from
@@ -320,6 +321,34 @@ server <- function(
       attr(df, "amr_gene_labels") <- appended_amr_labels
       attr(df, "custom_cols") <- appended_custom
       df
+    })
+
+    # Isolates already present the first time this database is shown this
+    # session. Anything in the table beyond this set was added since (typed,
+    # then brought in by a reload) and gets a subtle row highlight in renderDT.
+    # Keyed on db_path so the baseline is taken once per database and survives
+    # the reload that introduces the new isolates (a reload keeps db_path); a
+    # different database re-captures. Plain session variables, not reactives:
+    # read/written only inside session_added() below, so there is nothing to
+    # invalidate and no observer-ordering hazard. The baseline is read straight
+    # off the already-loaded df, so probing "what's new" costs no extra query.
+    baseline_key <- NULL
+    baseline_isolates <- character(0)
+
+    session_added <- reactive({
+      df <- metadata_base()
+      path <- db_path()
+      if (is.null(df) || !nrow(df) || is.null(path) || is.na(path)) {
+        return(character(0))
+      }
+      if (!identical(baseline_key, path)) {
+        # First view of this database this session: everything present now is
+        # the baseline, so nothing is new yet.
+        baseline_key <<- path
+        baseline_isolates <<- df$isolate
+        return(character(0))
+      }
+      setdiff(df$isolate, baseline_isolates)
     })
 
     # Names of the appended classical-MLST columns (empty when the database has
@@ -636,7 +665,17 @@ server <- function(
       df <- metadata_base()
       req(df)
 
+      # Isolates typed into this database during the current session; their rows
+      # get the .session-new-row class (styled subtly in main.scss). Serialised
+      # to a JS array literal for the rowCallback below.
+      new_isolates <- session_added()
+      has_new <- length(new_isolates) > 0
+
       cols <- names(df)
+      # Default-sorted on below via options$order: newest isolate first, so a
+      # session's new rows (highlighted via .session-new-row) surface at the
+      # top without needing to scroll or track a "just added" state.
+      called_at_idx <- .dt_idx(cols, "called_at")
       # MLST / AMR columns are derived from typing (classical_mlst / amr_summary)
       # and are never editable here. Custom variables are: their edits are
       # validated and routed to phylotrace_custom_values on save. The derived
@@ -729,7 +768,7 @@ server <- function(
         filter = "top",
         # Drop the default "display" class's zebra striping (keep borders /
         # hover / sortable) so the cells aren't tinted per row.
-        class = "row-border hover order-column",
+        class = "row-border order-column",
         editable = list(
           target = "cell",
           disable = list(columns = readonly_idx),
@@ -752,10 +791,23 @@ server <- function(
           scrollCollapse = TRUE,
           fixedColumns = list(leftColumns = 1),
           columnDefs = column_defs,
-          initComplete = DT::JS(
+          # Tag rows for isolates added this session (data[0] is the isolate,
+          # since rownames = FALSE) so main.scss can tint them.
+          rowCallback = DT::JS(sprintf(
+            "function(row, data) {
+               var newSet = %s;
+               if (newSet.indexOf(String(data[0])) !== -1) {
+                 row.classList.add('session-new-row');
+               }
+             }",
+            jsonlite::toJSON(new_isolates)
+          )),
+          initComplete = DT::JS(sprintf(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
+              var hasNew = %s;
+              var newCount = %d;
 
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
@@ -785,12 +837,34 @@ server <- function(
               api.on('column-visibility.dt', function() {
                 api.columns.adjust().draw(false);
               });
-            }"
-          )
+
+              // Legend explaining the .session-new-row highlight (added by
+              // rowCallback above), placed in the same row as DataTables' own
+              // \"Showing x to y of z entries\" info div (dom: 'ti' - the only
+              // other row this table's wrapper has).
+              var infoDiv = $(tableNode)
+                .closest('.dataTables_wrapper')
+                .children('.dataTables_info');
+              if (hasNew && infoDiv.length) {
+                infoDiv.addClass('session-legend-row').append(
+                  '<span class=\"session-new-legend\">' +
+                    '<span class=\"session-new-swatch\"></span>' +
+                    (newCount === 1 ? '1 isolate' : newCount + ' isolates') +
+                    ' added this session' +
+                  '</span>'
+                );
+              }
+            }",
+            jsonlite::toJSON(has_new, auto_unbox = TRUE),
+            length(new_isolates)
+          ))
         )
       )
       if (!is.null(sketch)) {
         dt_args$container <- sketch
+      }
+      if (length(called_at_idx)) {
+        dt_args$options$order <- list(list(called_at_idx, "desc"))
       }
       do.call(datatable, dt_args)
     })
@@ -988,11 +1062,9 @@ server <- function(
           class = "custom-modal",
           if (length(isolates) == 1) {
             div(
-              paste0(
-                'Permanently remove "',
-                isolates,
-                '" from the database? This cannot be undone.'
-              )
+              div('Permanently remove'),
+              div(class = "dest-label is-empty", isolates),
+              div('from the database? This cannot be undone.')
             )
           } else {
             div(

@@ -84,6 +84,9 @@ box::use(
   openssl[base64_encode, sha256, sha512],
   stats[setNames],
 )
+box::use(
+  app / logic / logging[log_event],
+)
 
 # Bumped only if the construction above changes. Stored per row so a database
 # written by an older build stays interpretable.
@@ -265,6 +268,16 @@ store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
     error = function(e) FALSE
   )
 
+  log_event(
+    "DB",
+    "genome_hashes",
+    sprintf(
+      "isolate=%s | %s",
+      strain,
+      if (isTRUE(ok)) "stored" else "failed"
+    )
+  )
+
   invisible(ok)
 }
 
@@ -314,6 +327,45 @@ genome_hash_map <- function(db_path) {
 # Purely advisory. Nothing here blocks a run: re-typing an assembly under a new
 # name is legitimate (a different scheme, a re-analysis), and only the metadata
 # can settle whether two records are really the same epidemiological isolate.
+# Classify a single assembly against what the database already holds. Split out
+# of check_genomes so callers that need to walk a large selection without
+# blocking (the typing module runs this one genome per reactive tick, so the
+# check stays interruptible and drives the progress bar) can drive the loop
+# themselves. `recorded` is the genome_hash_map() for the target DB and
+# `known_strains` the isolates already on record; both are read once by the
+# caller and passed in so a batch does not re-query the database per file.
+# Returns a one-element list: `digest` (NA when the file could not be read),
+# `status` (see check_genomes for the vocabulary) and `other`.
+#' @export
+classify_genome <- function(strain, file, recorded, known_strains) {
+  digest <- tryCatch(genome_digest(file), error = function(e) NULL)
+  if (is.null(digest)) {
+    # Unreadable / non-FASTA: nothing the digest can say, so it stays "new" -
+    # the run itself will report whatever pyMLST makes of the file.
+    return(list(digest = NA_character_, status = "new", other = NA_character_))
+  }
+  d <- digest$genome_digest
+
+  known <- strain %in% known_strains
+  stored <- if (strain %in% names(recorded)) recorded[[strain]] else NULL
+
+  # A digest already on record under a different isolate is the interesting
+  # case, and outranks the name-based verdict: it is the same assembly.
+  elsewhere <- setdiff(names(recorded)[recorded == d], strain)
+
+  if (length(elsewhere)) {
+    list(digest = d, status = "same_genome", other = elsewhere[1])
+  } else if (!known) {
+    list(digest = d, status = "new", other = NA_character_)
+  } else if (is.null(stored)) {
+    list(digest = d, status = "unknown", other = NA_character_)
+  } else if (identical(stored, d)) {
+    list(digest = d, status = "retype", other = NA_character_)
+  } else {
+    list(digest = d, status = "name_conflict", other = NA_character_)
+  }
+}
+
 #' @export
 check_genomes <- function(
   db_path,
@@ -344,36 +396,10 @@ check_genomes <- function(
     if (is.function(progress)) {
       progress(i / n, basename(out$file[i]))
     }
-    digest <- tryCatch(genome_digest(out$file[i]), error = function(e) NULL)
-    if (is.null(digest)) {
-      next
-    }
-    out$digest[i] <- digest$genome_digest
-
-    known <- out$strain[i] %in% known_strains
-    stored <- if (out$strain[i] %in% names(recorded)) {
-      recorded[[out$strain[i]]]
-    } else {
-      NULL
-    }
-
-    # A digest already on record under a different isolate is the interesting
-    # case, and outranks the name-based verdict: it is the same assembly.
-    elsewhere <- setdiff(names(recorded)[recorded == digest$genome_digest],
-                         out$strain[i])
-
-    out$status[i] <- if (length(elsewhere)) {
-      out$other[i] <- elsewhere[1]
-      "same_genome"
-    } else if (!known) {
-      "new"
-    } else if (is.null(stored)) {
-      "unknown"
-    } else if (identical(stored, digest$genome_digest)) {
-      "retype"
-    } else {
-      "name_conflict"
-    }
+    r <- classify_genome(out$strain[i], out$file[i], recorded, known_strains)
+    out$digest[i] <- r$digest
+    out$status[i] <- r$status
+    out$other[i] <- r$other
   }
 
   out

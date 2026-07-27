@@ -203,6 +203,41 @@ build_place_strings <- function(meta) {
   )
 }
 
+# Parse the free-text `geo_loc_coordinates` field into numeric lat/long. Accepts
+# "latitude, longitude" in decimal degrees (comma-, semicolon- or
+# whitespace-separated); anything that isn't exactly two in-range numbers
+# (|lat| <= 90, |lon| <= 180) yields NA, so a blank or malformed entry simply
+# falls back to geocoding the place string. Vectorised: returns a data.frame
+# with `latitude` and `longitude`, one row per input.
+parse_coordinates <- function(x) {
+  n <- length(x)
+  out <- data.frame(
+    latitude = rep(NA_real_, n),
+    longitude = rep(NA_real_, n),
+    stringsAsFactors = FALSE
+  )
+  if (!n) {
+    return(out)
+  }
+  raw <- trimws(as.character(x))
+  for (i in seq_len(n)) {
+    s <- raw[i]
+    if (is.na(s) || !nzchar(s)) {
+      next
+    }
+    parts <- suppressWarnings(as.numeric(trimws(strsplit(s, "[,;[:space:]]+")[[1]])))
+    parts <- parts[!is.na(parts)]
+    if (length(parts) != 2L) {
+      next
+    }
+    if (abs(parts[1]) <= 90 && abs(parts[2]) <= 180) {
+      out$latitude[i] <- parts[1]
+      out$longitude[i] <- parts[2]
+    }
+  }
+  out
+}
+
 # --- persistent geocode cache -----------------------------------------------
 
 # Cross-session cache of resolved place → coordinates, stored as a CSV alongside
@@ -334,7 +369,17 @@ geocode_pending_count <- function(meta, cache_path = geocode_cache_path()) {
   if (is.null(meta) || !nrow(meta)) {
     return(0L)
   }
-  places <- unique(build_place_strings(meta))
+  # Rows with explicit coordinates never reach Nominatim (see build_map_coords),
+  # so they don't count towards the wait.
+  explicit <- parse_coordinates(
+    if ("geo_loc_coordinates" %in% names(meta)) {
+      meta$geo_loc_coordinates
+    } else {
+      rep(NA_character_, nrow(meta))
+    }
+  )
+  has_explicit <- !is.na(explicit$latitude) & !is.na(explicit$longitude)
+  places <- unique(build_place_strings(meta)[!has_explicit])
   places <- places[nzchar(places)]
   cache <- read_geocode_cache(cache_path)
   length(setdiff(places, cache$place))
@@ -404,22 +449,45 @@ build_map_coords <- function(meta) {
     return(list(coords = NULL, status = empty_geocode_status()))
   }
 
-  place <- build_place_strings(meta)
-
   df <- meta
-  df$place <- place
-  df <- df[nzchar(df$place), , drop = FALSE]
+  df$place <- build_place_strings(meta)
+
+  # Explicit per-isolate coordinates (geo_loc_coordinates) win over geocoding:
+  # they are already point-precise, so those rows are used as-is and never sent
+  # to Nominatim.
+  explicit <- parse_coordinates(
+    if ("geo_loc_coordinates" %in% names(df)) {
+      df$geo_loc_coordinates
+    } else {
+      rep(NA_character_, nrow(df))
+    }
+  )
+  df$latitude <- explicit$latitude
+  df$longitude <- explicit$longitude
+
+  # Mappable = has explicit coordinates, or has a place string to geocode.
+  has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
+  df <- df[has_explicit | nzchar(df$place), , drop = FALSE]
   if (!nrow(df)) {
     return(list(coords = NULL, status = empty_geocode_status()))
   }
+  has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
 
-  geo <- geocode_places_cached(df$place)
+  # Geocode only the rows lacking explicit coordinates (and carrying a place).
+  geo <- geocode_places_cached(df$place[!has_explicit & nzchar(df$place)])
   located <- geo$located
   failed_places <- located$place[
     is.na(located$latitude) | is.na(located$longitude)
   ]
 
-  out <- merge(df, located, by = "place", all.x = TRUE)
+  if (nrow(located)) {
+    hit <- match(df$place, located$place)
+    fill <- !has_explicit & !is.na(hit)
+    df$latitude[fill] <- located$latitude[hit[fill]]
+    df$longitude[fill] <- located$longitude[hit[fill]]
+  }
+
+  out <- df
   n_isolates <- nrow(out)
   out <- out[!is.na(out$longitude) & !is.na(out$latitude), , drop = FALSE]
   status <- list(

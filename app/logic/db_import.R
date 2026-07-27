@@ -46,6 +46,7 @@ box::use(
     ],
   app / logic / pymlst[hash_database],
   app / logic / database_functions[make_metadata_table, load_db_species],
+  app / logic / logging[log_event],
 )
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -59,10 +60,12 @@ box::use(
   if (!length(x) || is.na(x[[1]])) 0L else as.integer(x[[1]])
 }
 
-# Metadata columns the user may never map: `isolate` is the join key and
-# `organism` is dictated by the local mlst_type.species.
+# Metadata columns the user may never map: `isolate` is the join key,
+# `organism` is dictated by the local mlst_type.species, and `called_at` is a
+# provenance timestamp handled automatically by `.write_metadata()` (the peer's
+# own value when it has one, else the merge time) rather than user-mapped.
 #' @export
-METADATA_RESERVED <- c("isolate", "organism")
+METADATA_RESERVED <- c("isolate", "organism", "called_at")
 
 # The user-defined custom variables (see app/logic/custom_fields.R).
 CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
@@ -458,21 +461,41 @@ import_preview <- function(
     )
   }
 
-  for (col in setdiff(selected, dbListFields(con, "metadata"))) {
+  # Both the reserved columns (an older table may predate `called_at`) and every
+  # newly selected external field must exist before the append.
+  for (col in setdiff(c(METADATA_RESERVED, selected), dbListFields(con, "metadata"))) {
     dbExecute(
       con,
       sprintf("ALTER TABLE metadata ADD COLUMN %s TEXT", .quote_ident(col))
     )
   }
 
+  idx <- match(accepted$ext_isolate, ext_meta$isolate)
+
+  # Prefer the peer's own `called_at` (the isolate's original typing time) when
+  # it carried one; fall back to the merge time for isolates the peer never
+  # stamped. `called_at` is reserved only against user *mapping* — the peer's
+  # existing value is still honoured here.
+  peer_called_at <- if (!is.null(ext_meta) && "called_at" %in% names(ext_meta)) {
+    as.character(ext_meta$called_at[idx])
+  } else {
+    rep(NA_character_, nrow(accepted))
+  }
+  import_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  called_at <- ifelse(
+    !is.na(peer_called_at) & nzchar(peer_called_at),
+    peer_called_at,
+    import_time
+  )
+
   rows <- data.frame(
     isolate = accepted$final_isolate,
     organism = organism %||% NA_character_,
+    called_at = called_at,
     stringsAsFactors = FALSE
   )
 
   if (length(selected)) {
-    idx <- match(accepted$ext_isolate, ext_meta$isolate)
     for (col in selected) {
       rows[[col]] <- as.character(ext_meta[[col]][idx])
     }
@@ -1129,6 +1152,19 @@ merge_databases <- function(
   committed <- TRUE
 
   progress(1, "Done")
+
+  log_event(
+    "DB",
+    "merge",
+    sprintf(
+      "from %s | %d added, %d overwritten, %d renamed, %d new allele(s)",
+      ext_path,
+      sum(accepted$action == "add"),
+      sum(accepted$action == "overwrite"),
+      sum(accepted$action == "rename"),
+      as.integer(n_new_alleles)
+    )
+  )
 
   list(
     result_rows = as.integer(result_rows),

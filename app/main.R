@@ -44,6 +44,7 @@ box::use(
 )
 box::use(
   app / logic / functions[render_info],
+  app / logic / logging[log_event, start_session_log],
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database, hashes_pending],
   app / logic / database_functions[migrate_isolate_key],
@@ -274,9 +275,11 @@ server <- function(id) {
       session_reset = data_reset
     )
 
-    # ID of the most-recently shown "new isolates" notification; used to
-    # remove it programmatically when the user clicks Reload or resets.
-    db_notification_id <- NULL
+    # IDs of currently shown "database changed" notifications; used to remove
+    # them programmatically when the user clicks Reload or resets. A vector
+    # because typing/import can fire more than once before either is
+    # acknowledged, stacking multiple notifications.
+    db_notification_ids <- character(0)
 
     DATABASE_vals <- database$server(
       "database",
@@ -293,7 +296,7 @@ server <- function(id) {
     notify_db_changed <- function(db_icon, headline, detail) {
       has_pending <- isTRUE(DATABASE_vals$pending())
 
-      db_notification_id <<- showNotification(
+      db_notification_ids <<- c(db_notification_ids, showNotification(
         ui = tagList(
           icon(db_icon),
           " ",
@@ -323,7 +326,7 @@ server <- function(id) {
         closeButton = TRUE,
         type = if (has_pending) "warning" else "message",
         session = session
-      )
+      ))
     }
 
     observeEvent(
@@ -331,7 +334,7 @@ server <- function(id) {
       {
         notify_db_changed(
           "database",
-          "New isolates added.",
+          "New isolates added",
           "Typing wrote new entries to the database."
         )
       },
@@ -383,6 +386,12 @@ server <- function(id) {
 
     observeEvent(LANDING_PAGE_vals$load_database(), {
       db_path <- LANDING_PAGE_vals$db_path()
+
+      # Open a fresh session log for this database load. Its header names the
+      # database, so every line written afterwards (DB writes, typing, ...) can
+      # omit it. Must run first, so the DB writes triggered further down this
+      # handler land in the new file.
+      start_session_log(if (length(db_path)) db_path else NA_character_)
 
       # Full-page loading overlay. The panel HTML below is built synchronously
       # here; the outputs inside those panels that opt out of suspendWhenHidden
@@ -531,10 +540,10 @@ server <- function(id) {
     }
 
     hide_db_notification <- function() {
-      if (!is.null(db_notification_id)) {
-        removeNotification(db_notification_id, session = session)
-        db_notification_id <<- NULL
+      for (id in db_notification_ids) {
+        removeNotification(id, session = session)
       }
+      db_notification_ids <<- character(0)
     }
 
     # Reload the database: reset all module-internal state (so every module
@@ -544,6 +553,14 @@ server <- function(id) {
     # Database Browser (and everything else) can actually re-query it.
     observeEvent(input$reload_db, {
       hide_db_notification()
+      log_event(
+        "DB",
+        "Database reloaded",
+        {
+          p <- LANDING_PAGE_vals$db_path()
+          if (length(p) && !is.na(p)) p else "(none)"
+        }
+      )
 
       # Step 1 (this flush): switch to the Database Browser and cover its
       # module-container with an overlay, reusing that module's own waiter

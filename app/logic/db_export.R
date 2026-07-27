@@ -31,6 +31,7 @@ box::use(
 
 box::use(
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
+  app / logic / logging[log_event],
 )
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -498,6 +499,18 @@ export_database <- function(
   }
 
   progress(1, "Done")
+
+  log_event(
+    "DB",
+    "export",
+    sprintf(
+      "%s | %d isolate(s), %d allele(s), %d call(s)",
+      dest_path,
+      as.integer(result$isolates),
+      as.integer(result$alleles),
+      as.integer(result$calls)
+    )
+  )
 
   list(
     path = dest_path,

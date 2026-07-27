@@ -19,6 +19,9 @@ box::use(
   tidyr[pivot_wider],
   dplyr[select, left_join],
 )
+box::use(
+  app / logic / logging[log_event],
+)
 
 ### Single conda environment for every external CLI the app shells out to
 # All bioinformatics tooling - cgMLST/classical typing (wgMLST/claMLST + blat +
@@ -809,6 +812,9 @@ store_clamlst_results <- function(
   )
 
   now <- as.character(Sys.time())
+  # Counters for the one-line operation summary logged after the transaction.
+  n_iso <- 0L
+  n_rows <- 0L
   dbBegin(con)
   ok <- tryCatch(
     {
@@ -837,6 +843,8 @@ store_clamlst_results <- function(
           "DELETE FROM classical_mlst WHERE isolate = ?",
           params = list(isolate)
         )
+        n_iso <- n_iso + 1L
+        n_rows <- n_rows + nrow(genes)
 
         for (j in seq_len(nrow(genes))) {
           dbExecute(
@@ -870,6 +878,17 @@ store_clamlst_results <- function(
     error = function(e) FALSE
   )
   if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
+
+  log_event(
+    "DB",
+    "classical_mlst",
+    sprintf(
+      "%d isolate(s), %d allele row(s) %s",
+      n_iso,
+      n_rows,
+      if (isTRUE(ok)) "written" else "failed (rolled back)"
+    )
+  )
 
   invisible(ok)
 }
@@ -1055,6 +1074,11 @@ hash_database <- function(db_path) {
   # already fully-hashed database doesn't touch the .db file's mtime.
   if (updated) {
     dbWriteTable(con, "hashes", hash_table, overwrite = TRUE)
+    log_event(
+      "DB",
+      "hashes",
+      sprintf("rewritten, %d sequence hash(es)", nrow(hash_table))
+    )
   }
 }
 

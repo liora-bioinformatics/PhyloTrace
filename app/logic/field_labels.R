@@ -17,6 +17,8 @@ field_labels <- c(
   geo_loc_name_state_province = "State / Province",
   geo_loc_name_city = "City",
   geo_loc_name_postal_code = "Postcode",
+  geo_loc_coordinates = "Coordinates",
+  called_at = "Added At",
   primary_laboratory_sample_id = "Lab Sample ID",
   specimen_source_id = "Specimen Source",
   sample_collected_by = "Collected By",

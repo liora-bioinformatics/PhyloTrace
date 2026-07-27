@@ -1686,6 +1686,53 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     }
 }
 
+// Rows whose isolate was typed into this database during the current session
+// (added, then brought in by a reload). A subtle success-tinted background that
+// blends into whatever the active theme's body colour is, so it stays quiet in
+// both light and dark mode. color-mix keeps the fill opaque - the pinned first
+// column is position: sticky, and a translucent fill would let other rows show
+// through it while scrolling horizontally.
+$session-new-tint: 20%;
+
+.db-page_body table.dataTable tbody tr.session-new-row>td {
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Repaint the pinned isolate cell with the same tint (it otherwise carries the
+// plain var(--bs-body-bg) fill set on .dtfc-fixed-left above), so the highlight
+// runs unbroken across the frozen first column. Higher specificity than that
+// rule, so it wins.
+.edit-table table.dataTable tbody tr.session-new-row>td.dtfc-fixed-left {
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Legend explaining the .session-new-row highlight above, injected by
+// initComplete (database_browser.R) into DataTables' own "Showing x to y of z
+// entries" info div (dom: "ti") rather than as a separate line, so it reads as
+// one row instead of adding toolbar height.
+.session-legend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.session-new-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+// Same tint as the row highlight it explains, so the swatch reads as a literal
+// preview rather than an unrelated colour.
+.session-new-swatch {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 2px;
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
 #app-database-custom_fields-fields_table td {
     cursor: pointer;
 }
@@ -1706,6 +1753,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     // Signal that these columns are not client-side editable
     color: #6c7a89;
     font-style: italic;
+}
+
+[data-bs-theme="dark"] .db-page_body table.dataTable tbody .col-readonly {
+    color: #b2b8bf;
+}
+
+.edit-table input {
+    background: inherit
 }
 
 // Row one of the Browse table's two-row header (see .grouped_header_sketch()):
@@ -2875,10 +2930,6 @@ table.dataTable thead>tr>th.sorting {
     width: 40%;
     max-width: 340px;
     margin: 0 0 0 1.5rem;
-}
-
-.visNetwork {
-    border: 1px solid black;
 }
 
 // Scheme Info layout: metadata card fills the row, the species aside holds a

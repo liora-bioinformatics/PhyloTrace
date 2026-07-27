@@ -25,6 +25,9 @@ box::use(
   RSQLite[SQLite],
   openssl[rand_bytes],
 )
+box::use(
+  app / logic / logging[log_event],
+)
 
 SCHEMA_VERSION <- "1"
 
@@ -274,6 +277,7 @@ set_analysis_selection <- function(db_path, id, selection_json) {
       as.integer(id)
     )
   )
+  log_event("DB", "analysis", sprintf("id=%s selection updated", id))
   invisible(NULL)
 }
 
@@ -311,7 +315,9 @@ add_analysis <- function(
       if (is.null(isolate_universe)) NA_character_ else isolate_universe
     )
   )
-  .last_id(con)
+  new_id <- .last_id(con)
+  log_event("DB", "analysis", sprintf("created '%s' (id=%s)", name, new_id))
+  new_id
 }
 
 #' @export
@@ -325,6 +331,7 @@ rename_analysis <- function(db_path, id, name) {
     "UPDATE phylotrace_analyses SET name = ?, modified = ? WHERE id = ?",
     params = list(name, .now(), as.integer(id))
   )
+  log_event("DB", "analysis", sprintf("id=%s renamed to '%s'", id, name))
   invisible(NULL)
 }
 
@@ -359,6 +366,7 @@ update_analysis_settings <- function(
       as.integer(id)
     )
   )
+  log_event("DB", "analysis", sprintf("id=%s settings updated", id))
   invisible(NULL)
 }
 
@@ -380,6 +388,7 @@ delete_analysis <- function(db_path, id) {
     "DELETE FROM phylotrace_analyses WHERE id = ?",
     params = list(id)
   )
+  log_event("DB", "analysis", sprintf("id=%s deleted (+ its plots)", id))
   invisible(NULL)
 }
 
@@ -474,7 +483,13 @@ upsert_plot <- function(
         now
       )
     )
-    return(.last_id(con))
+    new_id <- .last_id(con)
+    log_event(
+      "DB",
+      "plot",
+      sprintf("created '%s' (id=%s, analysis=%s)", name, new_id, analysis_id)
+    )
+    return(new_id)
   }
 
   dbExecute(
@@ -492,6 +507,7 @@ upsert_plot <- function(
       as.integer(plot_id)
     )
   )
+  log_event("DB", "plot", sprintf("id=%s updated", plot_id))
   as.integer(plot_id)
 }
 
@@ -554,7 +570,9 @@ duplicate_plot <- function(db_path, id) {
       now
     )
   )
-  .last_id(con)
+  new_id <- .last_id(con)
+  log_event("DB", "plot", sprintf("duplicated id=%s -> id=%s", id, new_id))
+  new_id
 }
 
 #' Update just a Plot's display name (used by the box inline rename).
@@ -569,6 +587,7 @@ rename_plot <- function(db_path, id, name) {
     "UPDATE phylotrace_plots SET name = ?, modified = ? WHERE id = ?",
     params = list(name, .now(), as.integer(id))
   )
+  log_event("DB", "plot", sprintf("id=%s renamed to '%s'", id, name))
   invisible(NULL)
 }
 
@@ -583,5 +602,6 @@ delete_plot <- function(db_path, id) {
     "DELETE FROM phylotrace_plots WHERE id = ?",
     params = list(as.integer(id))
   )
+  log_event("DB", "plot", sprintf("id=%s deleted", id))
   invisible(NULL)
 }

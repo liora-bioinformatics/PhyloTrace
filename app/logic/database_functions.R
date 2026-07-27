@@ -20,6 +20,7 @@ box::use(
   RSQLite[SQLite],
   app / logic / field_labels[MLST_COL_PREFIX, AMR_COL_PREFIX],
   app / logic / db_compat[REF_SOUCHE],
+  app / logic / logging[log_event],
 )
 
 # The scheme's `targets` table stores loci as "FTL_0001" while the `mlst` table
@@ -85,10 +86,14 @@ migrate_isolate_key <- function(db_path) {
   }
 
   if (length(renamed)) {
-    message(paste(
-      "Renamed souche -> isolate in:",
-      paste(renamed, collapse = ", ")
-    ))
+    log_event(
+      "DB",
+      "migrate isolate key",
+      sprintf(
+        "renamed souche -> isolate in: %s",
+        paste(renamed, collapse = ", ")
+      )
+    )
   }
 
   invisible(renamed)
@@ -161,11 +166,43 @@ make_metadata_table <- function(db_path) {
   # Get current organism
   organism <- dbReadTable(con, "mlst_type")$species
 
+  # Timestamp stamped on rows created now: the moment this database first
+  # records the isolate (and its cgMLST profile). Rows migrated onto an existing
+  # table keep NA — their true add time predates the column and is unknowable.
+  now <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+
+  # The authoritative per-isolate typing time is `genome_hashes.hashed_at`,
+  # stamped when the typed assembly was hashed. Prefer it; fall back to `now` for
+  # any isolate without a hash row (hashing skipped, or an imported isolate).
+  # `called_at_for()` maps an isolate vector to its stamp. `hashed_at` itself
+  # carries sub-second precision (as.character(Sys.time())); truncated to whole
+  # seconds here since `called_at` is a human-facing field.
+  hashed_at <- character(0)
+  if ("genome_hashes" %in% tables) {
+    gh <- tryCatch(
+      dbGetQuery(con, "SELECT isolate, hashed_at FROM genome_hashes"),
+      error = function(e) NULL
+    )
+    if (!is.null(gh) && nrow(gh)) {
+      hashed_at <- stats::setNames(substr(as.character(gh$hashed_at), 1, 19), gh$isolate)
+    }
+  }
+  called_at_for <- function(iso) {
+    stamp <- unname(hashed_at[iso])
+    stamp[is.na(stamp) | !nzchar(stamp)] <- now
+    stamp
+  }
+
   # If metadata table exists, only append rows for isolates not yet listed
   if ("metadata" %in% tables) {
     # Migrate metadata tables created before newer columns were added: SQLite
     # appends new columns at the end, matching the build-path column order.
-    added_cols <- c("geo_loc_name_city", "geo_loc_name_postal_code")
+    added_cols <- c(
+      "geo_loc_name_city",
+      "geo_loc_name_postal_code",
+      "called_at",
+      "geo_loc_coordinates"
+    )
     for (col in setdiff(added_cols, dbListFields(con, "metadata"))) {
       dbExecute(con, sprintf('ALTER TABLE metadata ADD COLUMN "%s" TEXT', col))
     }
@@ -188,9 +225,16 @@ make_metadata_table <- function(db_path) {
         purpose_of_sequencing = NA_character_,
         geo_loc_name_city = NA_character_,
         geo_loc_name_postal_code = NA_character_,
+        called_at = called_at_for(new_isolates),
+        geo_loc_coordinates = NA_character_,
         stringsAsFactors = FALSE
       )
       dbWriteTable(con, "metadata", new_rows, append = TRUE)
+      log_event(
+        "DB",
+        "metadata",
+        sprintf("%d new isolate row(s) appended", length(new_isolates))
+      )
     }
 
     return(dbReadTable(con, "metadata"))
@@ -211,11 +255,18 @@ make_metadata_table <- function(db_path) {
     purpose_of_sequencing = NA_character_,
     geo_loc_name_city = NA_character_,
     geo_loc_name_postal_code = NA_character_,
+    called_at = called_at_for(isolates),
+    geo_loc_coordinates = NA_character_,
     stringsAsFactors = FALSE
   )
 
   # Write table to database
   dbWriteTable(con, "metadata", metadata)
+  log_event(
+    "DB",
+    "metadata",
+    sprintf("initialised, %d row(s) written", nrow(metadata))
+  )
 
   return(metadata)
 }
@@ -728,6 +779,17 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
   )
   if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
 
+  log_event(
+    "DB",
+    "remove-isolates",
+    sprintf(
+      "%d isolate(s) removed (keep_alleles=%s) %s",
+      length(isolates),
+      keep_alleles,
+      if (isTRUE(ok)) "" else "failed (rolled back)"
+    )
+  )
+
   invisible(ok)
 }
 
@@ -736,6 +798,11 @@ save_metadata_table <- function(db_path, data) {
   con <- dbConnect(SQLite(), db_path)
   on.exit(dbDisconnect(con))
   dbWriteTable(con, "metadata", data, overwrite = TRUE)
+  log_event(
+    "DB",
+    "metadata",
+    sprintf("saved (overwrite), %d row(s)", nrow(data))
+  )
   invisible(TRUE)
 }
 

@@ -43,6 +43,7 @@ box::use(
 box::use(
   app / logic / database_functions[metadata_columns],
   app / logic / field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, MLST_COL_PREFIX],
+  app / logic / logging[log_event],
 )
 
 #' The variable types a user can choose from, as `slug = "Human label"`.
@@ -345,6 +346,12 @@ create_custom_field <- function(
     )
   )
 
+  log_event(
+    "DB",
+    "custom-field",
+    sprintf("created '%s' (type=%s)", name, type)
+  )
+
   .last_id(con)
 }
 
@@ -419,6 +426,8 @@ update_custom_field <- function(
     params = c(params, list(.now(), as.integer(id)))
   )
 
+  log_event("DB", "custom-field", sprintf("updated id=%s", id))
+
   invisible(TRUE)
 }
 
@@ -464,6 +473,12 @@ delete_custom_field <- function(db_path, id) {
       dbRollback(con)
       stop(e)
     }
+  )
+
+  log_event(
+    "DB",
+    "custom-field",
+    sprintf("deleted id(s)=%s (+ stored values)", paste(ids, collapse = ","))
   )
 
   invisible(TRUE)
@@ -713,6 +728,16 @@ save_custom_values <- function(db_path, edits) {
       dbRollback(con)
       stop(e)
     }
+  )
+
+  log_event(
+    "DB",
+    "phylotrace_custom_values",
+    sprintf(
+      "%d value(s) set, %d cleared",
+      sum(!clear),
+      sum(clear)
+    )
   )
 
   invisible(nrow(edits))

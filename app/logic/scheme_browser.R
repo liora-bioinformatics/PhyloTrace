@@ -15,6 +15,7 @@ box::use(
 
 box::use(
   app / logic / schemes[cgmlst_org_schemes],
+  app / logic / logging[log_event],
 )
 
 # Lazily-loaded, cached species metadata (taxonomy + descriptions).
@@ -100,6 +101,11 @@ download_scheme_overview <- function(scheme_overview, db_path) {
     scheme_overview,
     overwrite = TRUE
   )
+  log_event(
+    "DB",
+    "scheme_overview",
+    sprintf("written, %d row(s)", nrow(scheme_overview))
+  )
   invisible(TRUE)
 }
 
@@ -177,6 +183,7 @@ download_scheme_targets <- function(select_cgmlst, db_path) {
   on.exit(dbDisconnect(con))
 
   dbWriteTable(con, "targets", targets, overwrite = TRUE)
+  log_event("DB", "targets", sprintf("written, %d locus/loci", nrow(targets)))
   invisible(TRUE)
 }
 

@@ -35,6 +35,9 @@ box::use(
   ],
   utils[read.delim],
 )
+box::use(
+  app / logic / logging[log_event],
+)
 
 # abritamr's `--species` accepted values (from `abritamr run --help`). Some are
 # genus-level (Campylobacter, Escherichia, Salmonella): a "Genus species" name
@@ -437,6 +440,18 @@ store_amr_results <- function(
     error = function(e) FALSE
   )
   if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
+
+  log_event(
+    "DB",
+    "amr_results/amr_summary",
+    sprintf(
+      "isolate=%s | %d result(s), %d summary row(s) %s",
+      strain,
+      nrow(hits),
+      nrow(summary),
+      if (isTRUE(ok)) "written" else "failed (rolled back)"
+    )
+  )
 
   invisible(ok)
 }

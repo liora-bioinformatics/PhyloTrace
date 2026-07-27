@@ -31,8 +31,6 @@ box::use(
     showModal,
     modalDialog,
     modalButton,
-    withProgress,
-    setProgress,
     HTML
   ],
   stats[setNames],
@@ -77,6 +75,7 @@ box::use(
 )
 box::use(
   app / logic / functions[render_info],
+  app / logic / logging[typing_log_file, log_event],
   app /
     logic /
     pymlst[
@@ -99,13 +98,27 @@ box::use(
   app /
     logic /
     genome_hash[
-      check_genomes,
+      classify_genome,
+      genome_hash_map,
       store_genome_hash,
     ],
 )
 
 # Accepted assembly extensions, mirroring the glob in loop-pymlst.sh.
 genome_pattern <- "\\.(fasta|fa|fna)$"
+
+# Only drive the progress bar during the pre-run genome check when the selection
+# is large enough that the pass takes visible time; below this the bar just
+# stays at 0% while the status line reads "Checking genomes ...".
+check_progress_min <- 10L
+
+# Logger for the typing module: a thin "TYPING"-tagged wrapper over the central
+# log_event() (app/logic/logging.R), so every line lands in the active session
+# log file as well as the console. `event` is a short phrase naming what
+# happened; `detail` (optional) carries the specifics (counts, paths, params).
+log_typing <- function(event, detail = NULL) {
+  log_event("TYPING", event, detail)
+}
 
 # Bootstrap badge class per typing outcome. Bootstrap 5 (shipped with bslib)
 # provides these `text-bg-*` utilities, so no custom CSS is needed.
@@ -482,7 +495,14 @@ ui <- function(id) {
       disabled(actionButton(
         ns("start"),
         "Start Analysis",
-        icon = icon("play")
+        icon = icon("play"),
+        # pt-no-lock: Start must not arm the global input shield
+        # (busy-shield.js). The checking phase keeps Shiny continuously busy
+        # (one genome per invalidateLater(0) tick), so a shield engaged by this
+        # click would never see an idle gap to release on and would stay up for
+        # the whole pass - covering Terminate. Nothing needs shielding here
+        # anyway: every other control is disabled while a run owns the queue.
+        class = "pt-no-lock"
       )),
       disabled(actionButton(
         ns("terminate"),
@@ -530,25 +550,25 @@ ui <- function(id) {
                 ns("select_all"),
                 "All",
                 icon = icon("check-double"),
-                class = "btn-sm btn-outline-secondary"
+                class = "btn-sm"
               ),
               actionButton(
                 ns("select_none"),
                 "None",
                 icon = icon("xmark"),
-                class = "btn-sm btn-outline-secondary"
+                class = "btn-sm"
               ),
               actionButton(
                 ns("exclude_selected"),
                 "Exclude selected",
                 icon = icon("ban"),
-                class = "btn-sm btn-outline-secondary"
+                class = "btn-sm"
               ),
               actionButton(
                 ns("include_selected"),
                 "Include selected",
                 icon = icon("rotate-left"),
-                class = "btn-sm btn-outline-secondary"
+                class = "btn-sm"
               )
             ),
             DTOutput(ns("selection_table"))
@@ -614,6 +634,13 @@ server <- function(
     )
     log_text <- reactiveVal("")
 
+    # Non-reactive scratch for the pre-run genome check. The checking observe
+    # walks one genome per reactive tick (so the pass stays interruptible and
+    # never blocks the event loop the way the old synchronous withProgress did);
+    # its loop counter and accumulating result table live here, off the reactive
+    # graph, so writing them each tick does not re-trigger the observe itself.
+    chk <- new.env(parent = emptyenv())
+
     # Delete an interim claMLST reference DB (and any SQLite side files). Safe to
     # call with NULL / NA / a non-existent path.
     cleanup_cla_db <- function(path) {
@@ -643,6 +670,7 @@ server <- function(
     live_amr_out <- NULL
     session$onSessionEnded(function() {
       if (!is.null(live_proc) && live_proc$is_alive()) {
+        log_typing("Session ended: killing orphaned typing process")
         tryCatch(live_proc$kill_tree(), error = function(e) NULL)
       }
       cleanup_cla_db(live_cla_db)
@@ -653,7 +681,9 @@ server <- function(
     observeEvent(
       session_reset(),
       {
+        log_typing("Session reset")
         if (!is.null(Typing$proc) && Typing$proc$is_alive()) {
+          log_typing("Killing live process on reset")
           Typing$terminated <- TRUE
           tryCatch(Typing$proc$kill_tree(), error = function(e) NULL)
         }
@@ -679,7 +709,13 @@ server <- function(
         Typing$terminated <- FALSE
         Typing$refresh <- 0L
         log_text("")
-        updateProgressBar(session, "progress", value = 0, total = 1)
+        updateProgressBar(
+          session,
+          "progress",
+          value = 0,
+          total = 1,
+          status = "primary"
+        )
         runjs(sprintf(
           "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
           ns("progress")
@@ -722,14 +758,21 @@ server <- function(
     # produce (strain name = file name without extension, as in loop-pymlst.sh).
     set_selection <- function(path) {
       if (identical(Typing$status, "running")) {
+        log_typing("Selection ignored: run in progress", path)
         return(invisible())
       }
 
-      files <- if (dir.exists(path)) {
+      is_dir <- dir.exists(path)
+      files <- if (is_dir) {
         list.files(path, pattern = genome_pattern, full.names = TRUE)
       } else {
         path
       }
+
+      log_typing(
+        if (is_dir) "Folder selected" else "File selected",
+        sprintf("%d genome(s) | %s", length(files), path)
+      )
 
       Typing$genome_input <- path
       Typing$files <- files
@@ -737,7 +780,13 @@ server <- function(
       Typing$excluded_strains <- character(0)
       Typing$results <- NULL
       log_text("")
-      updateProgressBar(session, "progress", value = 0, total = 1)
+      updateProgressBar(
+        session,
+        "progress",
+        value = 0,
+        total = 1,
+        status = "primary"
+      )
 
       # A fresh pick from either the file or folder chooser goes through here,
       # so open "Selected Genomes" right where the new selection lands instead
@@ -963,7 +1012,10 @@ server <- function(
     # because shinyFiles buttons are not standard inputs) and parameter inputs.
     # Terminate mirrors the running state; Start requires a valid ready state.
     observe({
-      running <- identical(Typing$status, "running")
+      # "checking" is the pre-run hashing phase - it owns the queue just like a
+      # live run, so it locks the same controls and keeps Terminate live.
+      running <- identical(Typing$status, "running") ||
+        identical(Typing$status, "checking")
       ready <- isTRUE(valid_db()) &&
         length(Typing$strains) > 0 &&
         !running
@@ -996,7 +1048,8 @@ server <- function(
     # apart from the observer above so ticking a row does not re-send that whole
     # block of enable/disable messages for the sidebar on every click.
     observe({
-      running <- identical(Typing$status, "running")
+      running <- identical(Typing$status, "running") ||
+        identical(Typing$status, "checking")
       picked <- !running && length(input$selection_table_rows_selected) > 0
       toggleState("exclude_selected", condition = picked)
       toggleState("include_selected", condition = picked)
@@ -1121,6 +1174,7 @@ server <- function(
     observeEvent(input$exclude_selected, {
       rows <- input$selection_table_rows_selected
       req(length(rows))
+      log_typing("Excluding strains", sprintf("%d row(s)", length(rows)))
       Typing$excluded_strains <- union(
         Typing$excluded_strains,
         Typing$strains[rows]
@@ -1131,6 +1185,7 @@ server <- function(
     observeEvent(input$include_selected, {
       rows <- input$selection_table_rows_selected
       req(length(rows))
+      log_typing("Re-including strains", sprintf("%d row(s)", length(rows)))
       Typing$excluded_strains <- setdiff(
         Typing$excluded_strains,
         Typing$strains[rows]
@@ -1176,6 +1231,12 @@ server <- function(
     #   Allele calling  - the section is open and cgMLST is still working
     output$status_line <- renderText({
       results <- Typing$results
+      # Pre-run hashing phase. Static text on purpose: the progress bar already
+      # counts genomes as they are checked, so there is no need to re-render this
+      # line (and re-flush the module) on every genome in the loop.
+      if (identical(Typing$status, "checking")) {
+        return("Checking genomes ...")
+      }
       if (identical(Typing$status, "terminated")) {
         return("Run terminated.")
       }
@@ -1465,7 +1526,17 @@ server <- function(
     # Start typing
     observeEvent(input$start, {
       req(valid_db(), length(Typing$strains) > 0)
-      if (identical(Typing$status, "running")) {
+      log_typing(
+        "Start requested",
+        sprintf("%d strain(s) selected", length(Typing$strains))
+      )
+      # A run is already owning the queue - either still hashing its selection
+      # (checking) or typing it (running); ignore the click.
+      if (
+        identical(Typing$status, "running") ||
+          identical(Typing$status, "checking")
+      ) {
+        log_typing("Start ignored: run already in progress", Typing$status)
         return()
       }
 
@@ -1476,12 +1547,23 @@ server <- function(
         !(Typing$strains %in% Typing$excluded_strains)
       Typing$queued_files <- Typing$files[keep]
       Typing$queued_strains <- Typing$strains[keep]
+      log_typing(
+        "Queue filtered",
+        sprintf(
+          "%d queued, %d already present, %d excluded",
+          length(Typing$queued_strains),
+          sum(Typing$strains %in% existing()),
+          sum(Typing$strains %in% Typing$excluded_strains &
+            !(Typing$strains %in% existing()))
+        )
+      )
 
       # Nothing survives the filter: bail out before the digest pass below, which
       # would otherwise flash its "Checking genomes" progress panel for the
       # instant it takes to walk an empty queue. Reusing one notification id
       # keeps repeated clicks from stacking copies of the same message.
       if (length(Typing$queued_files) == 0) {
+        log_typing("Start aborted: nothing queued after filter")
         showNotification(
           paste(
             "All selected genomes are either already present in the",
@@ -1503,21 +1585,135 @@ server <- function(
       # neither blocks the run - re-typing an assembly under a new name is
       # legitimate, and only the metadata can settle whether two records are
       # really the same epidemiological isolate.
-      checked <- withProgress(
-        message = "Checking genomes",
-        value = 0,
-        check_genomes(
-          db_path(),
-          Typing$queued_strains,
-          Typing$queued_files,
-          known_strains = existing(),
-          progress = function(value, detail) {
-            setProgress(value = value, detail = detail)
-          }
-        )
+      #
+      # Hashing several hundred assemblies takes long enough that doing it inline
+      # would freeze the event loop for the whole pass and could not be
+      # cancelled. So it becomes its own phase: seed the non-reactive check state
+      # here, flip to "checking", and let the checking observe below walk one
+      # genome per tick (filling the progress bar to 100%, interruptible via
+      # Terminate) before handing off to launch_typing().
+      chk$recorded <- genome_hash_map(db_path())
+      chk$known <- existing()
+      chk$out <- data.frame(
+        strain = Typing$queued_strains,
+        file = Typing$queued_files,
+        digest = NA_character_,
+        status = "new",
+        other = NA_character_,
+        stringsAsFactors = FALSE
       )
+      chk$i <- 0L
+      chk$n <- length(Typing$queued_strains)
+      # Small selections check almost instantly, so advancing the bar just makes
+      # it flicker to 100% and back; only drive it for larger batches.
+      chk$show_bar <- chk$n >= check_progress_min
+
+      Typing$terminated <- FALSE
+      Typing$status <- "checking"
+      log_typing(
+        "Checking phase started",
+        sprintf("hashing %d genome(s)", chk$n)
+      )
+      runjs(sprintf(
+        "var el = document.getElementById('%s'); if (el) el.classList.add('is-animating');",
+        ns("progress")
+      ))
+      updateProgressBar(
+        session,
+        "progress",
+        value = 0,
+        total = if (chk$show_bar) chk$n else 1,
+        # A prior terminated run may have left the bar recoloured "warning"
+        # (see the finalize handler below) - shinyWidgets only touches the
+        # bar's class list when `status` is non-NULL, so every fresh start
+        # must restate "primary" itself or the old colour (and its black
+        # text) carries over silently.
+        status = "primary"
+      )
+    })
+
+    # Walk the queued selection one genome per reactive tick, classifying each
+    # against the database (see classify_genome). invalidateLater(0) yields to
+    # the event loop between genomes, so the pass never blocks the UI and a
+    # Terminate click lands within one genome's hashing time. When the queue is
+    # exhausted, hand the classification off to launch_typing(); if Terminate
+    # fired, abandon the pass and reset to idle.
+    observe({
+      if (!identical(Typing$status, "checking")) {
+        return(NULL)
+      }
+
+      if (isTRUE(Typing$terminated)) {
+        log_typing("Checking phase terminated", sprintf("%d/%d done", chk$i, chk$n))
+        Typing$status <- "idle"
+        updateProgressBar(
+          session,
+          "progress",
+          value = 0,
+          total = 1,
+          status = "primary"
+        )
+        runjs(sprintf(
+          "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
+          ns("progress")
+        ))
+        showNotification(
+          "Genome check terminated.",
+          id = ns("check_terminated"),
+          type = "warning",
+          duration = 4
+        )
+        return(NULL)
+      }
+
+      # Whole selection classified: proceed to the typing run.
+      if (chk$i >= chk$n) {
+        log_typing(
+          "Checking phase complete",
+          sprintf(
+            "%d new, %d same-genome, %d name-conflict",
+            sum(chk$out$status == "new"),
+            sum(chk$out$status == "same_genome"),
+            sum(chk$out$status == "name_conflict")
+          )
+        )
+        launch_typing(chk$out)
+        return(NULL)
+      }
+
+      i <- chk$i + 1L
+      r <- classify_genome(
+        chk$out$strain[i],
+        chk$out$file[i],
+        chk$recorded,
+        chk$known
+      )
+      chk$out$digest[i] <- r$digest
+      chk$out$status[i] <- r$status
+      chk$out$other[i] <- r$other
+      chk$i <- i
+
+      # Advance the bar (a targeted widget message, not a reactive write, so it
+      # does not re-flush the module) and queue the next genome. Skipped for
+      # small selections, which stay at 0%. invalidateLater drives the loop.
+      if (chk$show_bar) {
+        updateProgressBar(session, "progress", value = i, total = chk$n)
+      }
+      invalidateLater(0, session)
+    })
+
+    # Kick off the typing run once its selection has been checked. `checked` is
+    # the classification table from the checking phase; its advisory verdicts are
+    # surfaced as notifications here (nothing blocks the run). Split out of the
+    # Start handler so the checking phase can call it asynchronously on
+    # completion rather than everything running in one blocking event.
+    launch_typing <- function(checked) {
       same_genome <- checked[checked$status == "same_genome", , drop = FALSE]
       if (nrow(same_genome)) {
+        log_typing(
+          "Advisory: assemblies already in DB under another name",
+          sprintf("%d", nrow(same_genome))
+        )
         showNotification(
           HTML(paste0(
             "<strong>",
@@ -1544,6 +1740,10 @@ server <- function(
         drop = FALSE
       ]
       if (nrow(name_conflict)) {
+        log_typing(
+          "Advisory: name conflicts skipped as duplicates",
+          sprintf("%d", nrow(name_conflict))
+        )
         showNotification(
           HTML(paste0(
             "<strong>",
@@ -1572,8 +1772,13 @@ server <- function(
         ns("typing_accordion")
       ))
 
-      Typing$log_file <- tempfile(fileext = ".log")
+      # Persistent per-run log under app_local_share_path/logs (see
+      # logging.R). loop-pymlst.sh streams its combined stdout/stderr - the raw
+      # output of every external command in the pipeline - here, and it is kept
+      # after the run rather than discarded like the old tempfile.
+      Typing$log_file <- typing_log_file()
       file.create(Typing$log_file)
+      log_typing("Run log file", Typing$log_file)
       log_text("")
       Typing$terminated <- FALSE
       # Seed an all-Pending table so the queue is visible immediately.
@@ -1610,6 +1815,21 @@ server <- function(
       live_amr_out <<- Typing$amr_out
       Typing$amr_enabled <- run_amr
 
+      log_typing(
+        "Launching typing run",
+        sprintf(
+          "%d genome(s) | species=%s | cgMLST id=%s cov=%s | claMLST=%s (%s) | AMR=%s (%s)",
+          length(Typing$queued_files),
+          if (is.na(species)) "NA" else species,
+          or_default(input$identity, 0.95),
+          or_default(input$coverage, 0.9),
+          if (Typing$cla_enabled) "on" else "off",
+          or_default(input$cla_repo, "pubmlst"),
+          if (run_amr) "on" else "off",
+          if (is.na(amr_sp)) "acquired-only" else amr_sp
+        )
+      )
+
       proc <- tryCatch(
         start_typing(
           db_path = db_path(),
@@ -1633,7 +1853,21 @@ server <- function(
       )
 
       if (inherits(proc, "error")) {
+        log_typing("Typing failed to start", conditionMessage(proc))
         Typing$status <- "failed"
+        # The bar has been animating since the checking phase - stop it and
+        # empty it so a failed start does not leave a striped bar running.
+        runjs(sprintf(
+          "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
+          ns("progress")
+        ))
+        updateProgressBar(
+          session,
+          "progress",
+          value = 0,
+          total = 1,
+          status = "primary"
+        )
         showNotification(
           paste("Could not start typing:", conditionMessage(proc)),
           type = "error",
@@ -1645,6 +1879,10 @@ server <- function(
       Typing$proc <- proc
       live_proc <<- proc
       Typing$status <- "running"
+      log_typing(
+        "Typing process started",
+        sprintf("pid=%s, log=%s", proc$get_pid(), Typing$log_file)
+      )
       runjs(sprintf(
         "var el = document.getElementById('%s'); if (el) el.classList.add('is-animating');",
         ns("progress")
@@ -1653,7 +1891,8 @@ server <- function(
         session,
         "progress",
         value = 0,
-        total = length(Typing$queued_strains)
+        total = length(Typing$queued_strains),
+        status = "primary"
       )
       # Break the skipped count down the same way as the selection_summary
       # badges (already present vs. manually excluded), so this message never
@@ -1673,11 +1912,19 @@ server <- function(
         type = "message",
         duration = 3
       )
-    })
+    }
 
-    # Terminate a running batch
+    # Terminate a running or checking batch. During checking there is no process
+    # yet - the checking observe sees the flag and abandons the pass; during a
+    # run the process tree is killed and the poll loop finalises the results.
     observeEvent(input$terminate, {
+      if (identical(Typing$status, "checking")) {
+        log_typing("Terminate requested during checking phase")
+        Typing$terminated <- TRUE
+        return()
+      }
       req(identical(Typing$status, "running"), !is.null(Typing$proc))
+      log_typing("Terminate requested: killing typing process")
       Typing$terminated <- TRUE
       tryCatch(Typing$proc$kill_tree(), error = function(e) NULL)
     })
@@ -1732,6 +1979,15 @@ server <- function(
 
       # Finished (completed or killed)
       Typing$status <- if (isTRUE(Typing$terminated)) "terminated" else "done"
+      log_typing(
+        "Process exited",
+        sprintf(
+          "status=%s, %d/%d genome(s) finished",
+          Typing$status,
+          done,
+          length(Typing$queued_strains)
+        )
+      )
       runjs(sprintf(
         "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
         ns("progress")
@@ -1759,6 +2015,12 @@ server <- function(
       # never affects cgMLST results. The interim reference DB is deleted straight
       # after - it is a disposable per-run artifact.
       meta <- parse_clamlst_meta(lines)
+      if (Typing$cla_enabled) {
+        log_typing(
+          "Persisting classical MLST results",
+          sprintf("repo=%s scheme=%s", meta$repository, meta$scheme)
+        )
+      }
       tryCatch(
         store_clamlst_results(
           db_path = db_path(),
@@ -1784,6 +2046,10 @@ server <- function(
       added <- sum(results$status == "Added")
       duplicate <- sum(results$status == "Duplicate")
       failed <- sum(results$status %in% c("Incompatible", "Error"))
+      log_typing(
+        "Run outcome",
+        sprintf("%d added, %d duplicate, %d failed", added, duplicate, failed)
+      )
 
       # Record the assembly each isolate was actually typed from, for the
       # strains the mother DB accepted (so genome_hashes never keys a row to an
@@ -1791,6 +2057,9 @@ server <- function(
       # allele calls say nothing about the input they were called from.
       # Best-effort and additive, exactly like the AMR / classical MLST blocks
       # around it - a genome that can no longer be read is simply not recorded.
+      if (added > 0L) {
+        log_typing("Storing genome hashes", sprintf("%d strain(s)", added))
+      }
       for (strain in results$strain[results$status == "Added"]) {
         file <- Typing$queued_files[match(strain, Typing$queued_strains)]
         if (is.na(file)) {
@@ -1843,6 +2112,14 @@ server <- function(
           function(m) if (length(m) > 1) as.integer(m[2]) else 0L,
           integer(1)
         ))
+        log_typing(
+          "AMR results persisted",
+          sprintf(
+            "%d screened, %d element(s) detected",
+            amr_screened,
+            amr_elements
+          )
+        )
         cleanup_amr_out(Typing$amr_out)
         Typing$amr_out <- NULL
         live_amr_out <<- NULL
