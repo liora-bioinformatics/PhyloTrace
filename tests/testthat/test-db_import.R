@@ -459,12 +459,18 @@ test_that("a backup is written and can be restored", {
   expect_equal(length(list_backups(p$local)), 2L)
 })
 
-test_that("remove_isolates prunes orphan hashes along with sequences", {
+test_that("remove_isolates prunes orphan hashes along with sequences when keep_alleles = FALSE", {
   dir <- local_tempdir()
   p <- pair(dir)
 
-  remove_isolates(p$local, "A")
+  # A carries three alleles no other strain references (A1/A2/A3).
+  n_before <- q1(p$local, "SELECT COUNT(*) FROM sequences")
+  remove_isolates(p$local, "A", keep_alleles = FALSE)
 
+  # Its unique alleles are gone...
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_before - 3L)
+
+  # ...and sequences/hashes stay in lockstep: no orphan on either side.
   expect_equal(
     q1(p$local, "SELECT COUNT(*) FROM hashes h LEFT JOIN sequences s ON s.id = h.id WHERE s.id IS NULL"),
     0L
@@ -475,13 +481,34 @@ test_that("remove_isolates prunes orphan hashes along with sequences", {
   )
 })
 
-test_that("a removed isolate can be re-imported to a byte-equal profile", {
+test_that("remove_isolates keeps allele sequences by default", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+
+  n_before <- q1(p$local, "SELECT COUNT(*) FROM sequences")
+  remove_isolates(p$local, "A")
+
+  # The mlst mapping is gone, but the allele DNA - and its hashes - stay behind
+  # so a later hash-match re-uses the same allele identity. Keeping both sides
+  # preserves parity, so there is no orphan to corrupt a future id allocation.
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM mlst WHERE souche = 'A'"), 0L)
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_before)
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM hashes h LEFT JOIN sequences s ON s.id = h.id WHERE s.id IS NULL"),
+    0L
+  )
+})
+
+test_that("a purged isolate can be re-imported to a byte-equal profile", {
+  # The purge path (keep_alleles = FALSE): removal drops B's unique alleles, so
+  # the merge re-adds them fresh and the sequence count returns to where it
+  # started - nothing duplicated.
   dir <- local_tempdir()
   p <- pair(dir)
   before <- isolate_profile_hashes(p$local)
   n_seq <- q1(p$local, "SELECT COUNT(*) FROM sequences")
 
-  remove_isolates(p$local, "B")
+  remove_isolates(p$local, "B", keep_alleles = FALSE)
   expect_false("B" %in% names(isolate_profile_hashes(p$local)))
 
   quiet(merge_databases(p$local, p$peer, resolve("B", "add"), backup = FALSE))
@@ -490,6 +517,39 @@ test_that("a removed isolate can be re-imported to a byte-equal profile", {
   expect_identical(after[["B"]], before[["B"]])
   # No allele was duplicated on the way back in.
   expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_seq)
+})
+
+test_that("re-importing a kept isolate reuses its orphan alleles, no duplicates", {
+  # The keep path (default keep_alleles = TRUE): removal leaves B's alleles as
+  # orphans. The merge's (gene, hash) matcher can't see them (no gene survives),
+  # but the orphan-reuse step matches them by hash and re-points the new mlst
+  # rows at the existing seqids - so the count is unchanged and the orphans go
+  # live again instead of a second hash-sharing copy being inserted.
+  dir <- local_tempdir()
+  p <- pair(dir)
+  before <- isolate_profile_hashes(p$local)
+  n_seq <- q1(p$local, "SELECT COUNT(*) FROM sequences")
+
+  remove_isolates(p$local, "B") # keep_alleles = TRUE
+  expect_false("B" %in% names(isolate_profile_hashes(p$local)))
+  # Orphans linger while B is gone.
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_seq)
+
+  quiet(merge_databases(p$local, p$peer, resolve("B", "add"), backup = FALSE))
+
+  after <- isolate_profile_hashes(p$local)
+  expect_identical(after[["B"]], before[["B"]])
+  # No duplicate sequence and no duplicate hash: the orphans were reused.
+  expect_equal(q1(p$local, "SELECT COUNT(*) FROM sequences"), n_seq)
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM (SELECT hash FROM hashes GROUP BY hash HAVING COUNT(*) > 1)"),
+    0L
+  )
+  # And every allele is referenced again - no orphans left over.
+  expect_equal(
+    q1(p$local, "SELECT COUNT(*) FROM sequences WHERE id NOT IN (SELECT seqid FROM mlst)"),
+    0L
+  )
 })
 
 # --- Analysis-result tables (classical_mlst / amr_*) -----------------------

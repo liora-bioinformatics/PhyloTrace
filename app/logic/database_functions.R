@@ -641,10 +641,20 @@ append_amr_matrix <- function(meta, db_path) {
 # isolate set it was built from, and the dashboard reports the drift ("n isolates
 # removed"). Rewriting the selection would erase exactly that signal.
 #
+# `keep_alleles = TRUE` (the default) removes the isolate's `mlst` mapping but
+# leaves its allele DNA in `sequences`/`hashes`, so imports that later match by
+# sequence hash re-use the same allele identity and nomenclature stays stable.
+# A kept allele with no remaining `mlst` reference is dormant - invisible to the
+# allele counts (which count `DISTINCT seqid FROM mlst`) but live for matching.
+# The one invariant this must never break is keeping `sequences` without their
+# `hashes`: a stale hash whose id a later insert reuses gives one seqid two hash
+# rows (see db_import.R). So the two are always pruned together or kept together,
+# never split.
+#
 # Returns TRUE when a removal was attempted, FALSE when there was nothing to do
 # or the transaction rolled back.
 #' @export
-remove_isolates <- function(db_path, isolates) {
+remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
   isolates <- setdiff(unique(isolates[!is.na(isolates)]), REF_SOUCHE)
   if (!length(isolates)) {
     return(invisible(FALSE))
@@ -665,20 +675,25 @@ remove_isolates <- function(db_path, isolates) {
           sprintf("DELETE FROM mlst WHERE souche IN (%s)", placeholders),
           params = as.list(isolates)
         )
-        # Remove sequences no longer referenced by any strain
-        dbExecute(
-          con,
-          "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
-        )
-        # …and their hashes. Leaving orphans behind is not cosmetic: a later
-        # insert allocating `MAX(sequences.id) + n` can reuse an id that a stale
-        # `hashes` row still holds, giving one seqid two hash rows and silently
-        # corrupting every query that joins mlst to hashes.
-        if ("hashes" %in% tables) {
+        if (isFALSE(keep_alleles)) {
+          # Remove sequences no longer referenced by any strain
           dbExecute(
             con,
-            "DELETE FROM hashes WHERE id NOT IN (SELECT id FROM sequences)"
+            "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
           )
+          # …and their hashes. Leaving orphans behind is not cosmetic: a later
+          # insert allocating `MAX(sequences.id) + n` can reuse an id that a
+          # stale `hashes` row still holds, giving one seqid two hash rows and
+          # silently corrupting every query that joins mlst to hashes. This is
+          # also why keep_alleles never prunes just one of the two: keeping
+          # `sequences` holds `MAX(id)` high, so no id is reused, and keeping
+          # `hashes` alongside them means there is no orphan to reuse against.
+          if ("hashes" %in% tables) {
+            dbExecute(
+              con,
+              "DELETE FROM hashes WHERE id NOT IN (SELECT id FROM sequences)"
+            )
+          }
         }
       }
 

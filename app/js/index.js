@@ -1,5 +1,6 @@
 import "./busy-shield";
 import "./dt-column-sizing";
+import "./virtual-select-popup-confirm";
 
 // Restrict free-text entry to a filesystem-/SQL-safe character set
 // ([a-zA-Z0-9_-]) so anything the user types to *name* an identifier (a

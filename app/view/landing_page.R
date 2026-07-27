@@ -201,6 +201,12 @@ server <- function(
 
     # Render selected database
     output$selected_database <- renderDT({
+      # Depend on db_location_trigger directly so this re-reads file.info()
+      # from disk after a session reset, even when db_location()'s value is
+      # unchanged (e.g. same db path, just modified on disk) and therefore
+      # would not otherwise invalidate this output.
+      db_location_trigger()
+
       render_info("output$selected_database")
 
       # Get database metadata

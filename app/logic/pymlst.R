@@ -970,6 +970,35 @@ strain_gene_counts <- function(db_path, strains) {
   counts
 }
 
+# Whether hash_database() would actually add hashes on this database, mirroring
+# its write condition exactly (no `hashes` table, or a row-count mismatch with
+# `sequences`). Lets a caller decide up front whether to raise a hashing overlay
+# without paying for the full read. Cheap: two COUNTs. Returns FALSE for a
+# database without a `sequences` table, so callers never trigger hash_database()
+# where it would error.
+#' @export
+hashes_pending <- function(db_path) {
+  con <- dbConnect(
+    SQLite(),
+    db_path,
+    synchronous = NULL,
+    busy_timeout = 5000
+  )
+  on.exit(dbDisconnect(con))
+
+  tables <- dbListTables(con)
+  if (!any("sequences" == tables)) {
+    return(FALSE)
+  }
+  if (!any("hashes" == tables)) {
+    return(TRUE)
+  }
+
+  n_seq <- dbGetQuery(con, "SELECT COUNT(*) AS n FROM sequences")$n
+  n_hash <- dbGetQuery(con, "SELECT COUNT(*) AS n FROM hashes")$n
+  n_seq != n_hash
+}
+
 # Checks the database hashing status and fills missing values
 #' @export
 hash_database <- function(db_path) {
@@ -984,6 +1013,7 @@ hash_database <- function(db_path) {
   on.exit(dbDisconnect(con))
 
   sequences <- dbReadTable(con, "sequences")
+  updated <- FALSE
 
   if (any("hashes" == dbListTables(con))) {
     # case 'hash' table is present in database
@@ -1003,6 +1033,7 @@ hash_database <- function(db_path) {
       hash_table <- rbind(hash_table, new[, c("id", "hash")])
 
       message(paste(nrow(new), "sequence hashes added"))
+      updated <- TRUE
     }
   } else {
     # case no 'hash' table present
@@ -1017,9 +1048,14 @@ hash_database <- function(db_path) {
       nrow(hash_table),
       "sequence hashes added"
     ))
+    updated <- TRUE
   }
 
-  dbWriteTable(con, "hashes", hash_table, overwrite = TRUE)
+  # Only write when hashing actually changed the table, so merely loading an
+  # already fully-hashed database doesn't touch the .db file's mtime.
+  if (updated) {
+    dbWriteTable(con, "hashes", hash_table, overwrite = TRUE)
+  }
 }
 
 # TODO

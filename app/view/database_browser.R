@@ -22,7 +22,8 @@ box::use(
     modalButton,
     showModal,
     removeModal,
-    tagList
+    tagList,
+    radioButtons
   ],
   bslib[as_fill_carrier, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable, addClass, removeClass],
@@ -236,7 +237,7 @@ ui <- function(id) {
           div(
             class = "db-page_body edit-table",
             autoWaiter(ns("metadata_table")),
-            DTOutput(ns("metadata_table"), fill = TRUE)
+            uiOutput(ns("table_ui"), fill = TRUE)
           )
         )
       )
@@ -614,21 +615,26 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    output$metadata_table <- renderDT({
+    output$table_ui <- renderUI({
       df <- metadata_base()
 
       if (is.null(df)) {
-        return(datatable(
-          data.frame(
-            " " = "No entries in this database yet.<br>Add isolates by typing them in the <strong>Add Isolates</strong> module.",
-            check.names = FALSE
-          ),
-          rownames = FALSE,
-          escape = FALSE,
-          selection = "none",
-          options = list(dom = "t", ordering = FALSE)
+        return(div(
+          class = "db-empty-hint",
+          "No entries in this database yet.",
+          tags$br(),
+          "Add isolates by typing them in the ",
+          tags$strong("Add Isolates"),
+          " module."
         ))
       }
+
+      DTOutput(ns("metadata_table"), fill = TRUE)
+    })
+
+    output$metadata_table <- renderDT({
+      df <- metadata_base()
+      req(df)
 
       cols <- names(df)
       # MLST / AMR columns are derived from typing (classical_mlst / amr_summary)
@@ -978,19 +984,45 @@ server <- function(
       req(length(isolates) > 0)
       showModal(modalDialog(
         title = "Remove isolates",
-        if (length(isolates) == 1) {
-          paste0(
-            'Permanently remove "',
-            isolates,
-            '" from the database? This cannot be undone.'
+        div(
+          class = "custom-modal",
+          if (length(isolates) == 1) {
+            div(
+              paste0(
+                'Permanently remove "',
+                isolates,
+                '" from the database? This cannot be undone.'
+              )
+            )
+          } else {
+            div(
+              style = "margin-bottom: 1rem;",
+              paste0(
+                "Permanently remove ",
+                length(isolates),
+                " isolates from the database? This cannot be undone."
+              )
+            )
+          },
+          div("Delete also cgMLST allele sequences?"),
+          radioButtons(
+            ns("keep_alleles"),
+            label = NULL,
+            choices = c(
+              "Keep allele sequences" = TRUE,
+              "Delete allele sequences" = FALSE
+            ),
+            selected = TRUE
+          ),
+          tags$small(
+            class = "dest-label is-empty",
+            paste(
+              "Optionally keep removed isolate(s)' allele sequences so newly added or imported",
+              "isolates re-use the same allele identity. Deleting will",
+              "remove the alleles no longer referenced by any remaining isolate."
+            )
           )
-        } else {
-          paste0(
-            "Permanently remove ",
-            length(isolates),
-            " isolates from the database? This cannot be undone."
-          )
-        },
+        ),
         footer = tagList(
           modalButton("Cancel"),
           actionButton(ns("confirm_remove"), "Remove", class = "btn-danger")
@@ -1001,10 +1033,11 @@ server <- function(
 
     observeEvent(input$confirm_remove, {
       isolates <- input$remove_picker
+      keep_alleles <- isTRUE(input$keep_alleles)
       removeModal()
       remove_waiter$show()
       on.exit(remove_waiter$hide())
-      remove_isolates(db_path(), isolates)
+      remove_isolates(db_path(), isolates, keep_alleles = keep_alleles)
       reload_token(reload_token() + 1L)
       showNotification(
         paste0(length(isolates), " isolate(s) removed from the database."),

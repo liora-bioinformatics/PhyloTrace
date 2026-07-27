@@ -960,6 +960,32 @@ merge_databases <- function(
   )
   dbExecute(con, "CREATE INDEX temp.ix_seqid_map ON seqid_map(ext_seqid)")
 
+  # `local_alleles` only carries alleles a strain still references (it joins
+  # `mlst`), so an incoming allele whose sequence lives locally as an *orphan* -
+  # left behind by remove_isolates(keep_alleles = TRUE), whose seqid no `mlst`
+  # row points at anymore - matches nothing above and would be re-inserted as a
+  # second `sequences`/`hashes` row sharing the orphan's hash. Reuse the orphan's
+  # seqid instead: content is identical (equal hash), so the row is correct, no
+  # duplicate hash accumulates, and the orphan becomes live again - which is the
+  # whole point of keeping it. An orphan has no gene (that lived in `mlst`), so
+  # this match is by hash alone, and it is scoped to orphans so a hash still
+  # referenced under another gene is left to the normal new-allele path.
+  dbExecute(
+    con,
+    "UPDATE seqid_map
+        SET local_seqid = (
+              SELECT MIN(h.id) FROM main.hashes h
+               WHERE h.hash = seqid_map.hash
+                 AND h.id NOT IN (SELECT seqid FROM main.mlst)
+            )
+      WHERE local_seqid IS NULL
+        AND EXISTS (
+              SELECT 1 FROM main.hashes h
+               WHERE h.hash = seqid_map.hash
+                 AND h.id NOT IN (SELECT seqid FROM main.mlst)
+            )"
+  )
+
   n_new_alleles <- 0L
   n_calls <- 0L
   result_rows <- 0L

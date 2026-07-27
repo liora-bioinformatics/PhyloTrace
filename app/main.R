@@ -45,7 +45,7 @@ box::use(
 box::use(
   app / logic / functions[render_info],
   app / logic / paths[stat_json, app_local_share_path],
-  app / logic / pymlst[hash_database],
+  app / logic / pymlst[hash_database, hashes_pending],
   app / logic / database_functions[migrate_isolate_key],
   app / view / landing_page,
   app / view / scheme_browser,
@@ -393,7 +393,7 @@ server <- function(id) {
           class = "spinner-custom",
           spin_flower(),
           div(
-            tags$h5("Hashing Database ..."),
+            tags$h5("Loading Database ..."),
             if (length(db_path) && !is.na(db_path)) {
               div(id = "db-load", basename(db_path))
             }
@@ -544,8 +544,63 @@ server <- function(id) {
     # Database Browser (and everything else) can actually re-query it.
     observeEvent(input$reload_db, {
       hide_db_notification()
-      reload_data()
+
+      # Step 1 (this flush): switch to the Database Browser and cover its
+      # module-container with an overlay, reusing that module's own waiter
+      # style. main.R's ns("database-module-container") resolves to the same
+      # DOM id as the module's internal ns("module-container") (Shiny joins
+      # namespaces with "-"), so this targets the right element.
       nav_select(id = "tabs", selected = "database_panel")
+
+      reload_waiter <- Waiter$new(
+        id = "app-database-browse_entries-module-container",
+        html = div(
+          class = "spinner-custom",
+          spin_flower(),
+          tags$h5("Reloading Database ...")
+        )
+      )
+
+      # Read the reactive here (Step 1 runs in a reactive context); the later()
+      # callback below does not, so it must work off this captured plain value.
+      db_path <- LANDING_PAGE_vals$db_path()
+
+      # Step 2 (deferred to a later tick, so the nav switch + overlay actually
+      # paint before the potentially blocking work runs behind it): backfill
+      # allele hashes for anything typed this session, then reload every
+      # module. Isolates typed this session add rows to `sequences` but not to
+      # the per-allele `hashes` table (only hash_database() maintains it), so
+      # backfilling here keeps hash-dependent reads (profile export, db
+      # import/export) correct without a full landing-page reload;
+      # hash_database() is a cheap no-op when nothing new was typed.
+      #
+      # withReactiveDomain() restores the session so waiter/reactiveVal writes
+      # resolve; isolate() supplies the reactive context reload_data() needs to
+      # read/bump data_reset(). finally = guarantees the overlay clears even if
+      # hashing errors.
+      later::later(function() {
+        shiny::withReactiveDomain(session, {
+          shiny::isolate({
+            reload_waiter$show()
+
+            Sys.sleep(2)
+
+            tryCatch(
+              {
+                if (
+                  length(db_path) &&
+                    !is.na(db_path) &&
+                    hashes_pending(db_path)
+                ) {
+                  hash_database(db_path)
+                }
+                reload_data()
+              },
+              finally = reload_waiter$hide()
+            )
+          })
+        })
+      })
     })
 
     observeEvent(input$reset, {
