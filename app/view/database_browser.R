@@ -699,6 +699,43 @@ server <- function(
       # returned for every non-display request, which is what keeps sorting and
       # the column's level dropdown filtering on the state itself.
       gene_idx <- .dt_idx(cols, names(amr_gene_groups()))
+      has_amr <- length(gene_idx) > 0
+
+      # Legend(s) explaining marks this table draws without a visible key of
+      # their own: the AMR call marks above and the .session-new-row highlight
+      # (rowCallback below). Built once, up front, as a plain HTML string -
+      # appended to DataTables' own info text by infoCallback (see dt_args)
+      # rather than injected as a DOM node, because DataTables replaces the
+      # info div's content wholesale on every draw (paging, filtering, and the
+      # column-visibility.dt redraw the picker triggers), which would wipe out
+      # anything appended only once via initComplete.
+      legend_html <- ""
+      if (has_amr || has_new) {
+        parts <- character(0)
+        if (has_amr) {
+          parts <- c(parts, paste0(
+            '<span class="amr-legend">',
+            '<span class="amr-call amr-call-match" title="Match — reported without a quality flag (an exact or allele match for an AMR gene family; point mutations and virulence/stress genes are never flagged)">&#10003;</span> match&ensp;',
+            '<span class="amr-call amr-call-inexact" title="Inexact — flagged * by abritamr: a BLAST hit close to, but not identical to, a known reference allele">&#10003;*</span> inexact&ensp;',
+            '<span class="amr-call amr-call-partial" title="Partial — from abritamr&#39;s partials set (e.g. an internal stop codon): the gene is likely truncated or non-functional">~</span> partial',
+            '</span>'
+          ))
+        }
+        if (has_new) {
+          parts <- c(parts, paste0(
+            '<span class="session-new-legend">',
+            '<span class="session-new-swatch"></span>',
+            if (length(new_isolates) == 1) "1 isolate" else paste0(length(new_isolates), " isolates"),
+            " added this session",
+            '</span>'
+          ))
+        }
+        legend_html <- paste0(
+          '<span class="dt-legend-group">',
+          paste(parts, collapse = ""),
+          '</span>'
+        )
+      }
 
       column_defs <- list(
         list(className = "dt-left", targets = "_all"),
@@ -802,12 +839,10 @@ server <- function(
              }",
             jsonlite::toJSON(new_isolates)
           )),
-          initComplete = DT::JS(sprintf(
+          initComplete = DT::JS(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
-              var hasNew = %s;
-              var newCount = %d;
 
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
@@ -838,25 +873,34 @@ server <- function(
                 api.columns.adjust().draw(false);
               });
 
-              // Legend explaining the .session-new-row highlight (added by
-              // rowCallback above), placed in the same row as DataTables' own
-              // \"Showing x to y of z entries\" info div (dom: 'ti' - the only
-              // other row this table's wrapper has).
-              var infoDiv = $(tableNode)
+              // Flex-align DataTables' own \"Showing x to y of z entries\" info
+              // div (dom: 'ti') against whatever legend infoCallback below adds
+              // to it, so info text stays left and the legend(s) sit on the
+              // right. Added once here rather than per-draw: DataTables
+              // replaces the info div's *content* on every draw (see
+              // infoCallback), but never touches its class list, so this
+              // survives redraws (paging, filtering, column visibility) fine.
+              $(tableNode)
                 .closest('.dataTables_wrapper')
-                .children('.dataTables_info');
-              if (hasNew && infoDiv.length) {
-                infoDiv.addClass('session-legend-row').append(
-                  '<span class=\"session-new-legend\">' +
-                    '<span class=\"session-new-swatch\"></span>' +
-                    (newCount === 1 ? '1 isolate' : newCount + ' isolates') +
-                    ' added this session' +
-                  '</span>'
-                );
-              }
+                .children('.dataTables_info')
+                .addClass('session-legend-row');
+            }"
+          ),
+          # DataTables rebuilds the info div's *content* from scratch on every
+          # draw (paging, filtering, and - critically - the columns.adjust()
+          # redraw the column-visibility.dt handler above triggers when the
+          # picker toggles a column). Appending the legend as a DOM child in
+          # initComplete only survives the first draw; infoCallback is called
+          # on every draw and its return value becomes the div's new content,
+          # so the legend has to be rebuilt here each time to survive column
+          # toggling. The legend markup itself is static (built once, in R,
+          # as legend_html above), not templated with each draw's own
+          # start/end/total shown in `pre`.
+          infoCallback = DT::JS(sprintf(
+            "function(settings, start, end, max, total, pre) {
+              return pre + %s;
             }",
-            jsonlite::toJSON(has_new, auto_unbox = TRUE),
-            length(new_isolates)
+            jsonlite::toJSON(legend_html, auto_unbox = TRUE)
           ))
         )
       )

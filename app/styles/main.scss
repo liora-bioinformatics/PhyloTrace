@@ -1717,10 +1717,31 @@ $session-new-tint: 20%;
     gap: 0.5rem;
 }
 
+// Wraps every legend appended to .dataTables_info (the AMR call legend and/or
+// the session-new-row legend) in a single flex item, so .session-legend-row's
+// space-between keeps them grouped together on the right regardless of how
+// many are present.
+.dt-legend-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+}
+
 .session-new-legend {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
+}
+
+// Legend for the AMR call marks rendered in amr-gene-cell columns (see the
+// gene-column renderer in database_browser.R). Reuses the .amr-call colour
+// classes so each symbol here matches its cell exactly, and carries the same
+// title text so hovering the legend teaches the same thing hovering a cell
+// does.
+.amr-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 
 // Same tint as the row highlight it explains, so the swatch reads as a literal
