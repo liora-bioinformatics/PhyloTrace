@@ -77,6 +77,7 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
+  show_browse = shiny::reactive(0L),
   ui_mounted = shiny::reactive(0L),
   typing_status = shiny::reactive("idle"),
   db_updated = shiny::reactiveVal(0L)
@@ -84,20 +85,26 @@ server <- function(
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # Switch the visible sub-panel back to Browse Entries and move the sidebar
+    # highlight along with it.
+    select_browse <- function() {
+      bslib::nav_select("pages", selected = "browse_entries")
+      for (item in db_menu) {
+        removeClass(paste0("menu_", item$value), "active")
+      }
+      addClass("menu_browse_entries", "active")
+    }
+
     # Reset module state when the user returns to the landing screen.
-    # Switches the visible sub-panel back to Browse Entries and clears the
-    # active highlight from all other sidebar buttons.
-    observeEvent(
-      session_reset(),
-      {
-        bslib::nav_select("pages", selected = "browse_entries")
-        for (item in db_menu) {
-          removeClass(paste0("menu_", item$value), "active")
-        }
-        addClass("menu_browse_entries", "active")
-      },
-      ignoreInit = TRUE
-    )
+    observeEvent(session_reset(), select_browse(), ignoreInit = TRUE)
+
+    # main.R asks for Browse Entries *before* it starts a database reload, so
+    # the reload overlay has a visible element to cover. The reset observer
+    # above would get there eventually (main.R's reload bumps session_reset
+    # too), but only at the very end of the reload - by which time the overlay
+    # has already been hidden again, and the user has been staring at the panel
+    # they started from (Import, say) for the whole reload.
+    observeEvent(show_browse(), select_browse(), ignoreInit = TRUE)
 
     # Bumped by the Custom Variables panel whenever it changes the store, and
     # watched by Browse Entries so a new variable shows up in its column picker

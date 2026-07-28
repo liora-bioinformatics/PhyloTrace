@@ -64,6 +64,7 @@ box::use(
       append_amr_matrix
     ],
   app / logic / field_labels[field_labels_for, grouped_field_choices],
+  app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
 )
 
 # Synthetic picker-choice values for the AMR drug-class / virulence-stress
@@ -75,10 +76,12 @@ AMR_GROUP_TOKEN_PREFIX <- ".amr_group:"
 
 # Columns the user may never edit: `isolate` is the isolate identity (shared
 # with mlst.souche), `organism` is fixed by mlst_type.species for the whole
-# database, and `called_at` is the app-stamped time the isolate was taken on.
+# database, `called_at` is the app-stamped time the isolate was taken on, and
+# `source` is provenance the app writes when the isolate arrives (typed here, or
+# the label of the database a merge brought it in from).
 # Located by name, not position — an imported peer database can carry extra
 # metadata columns in any order.
-READONLY_COLS <- c("isolate", "organism", "called_at")
+READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
 
 # The one date-typed field in the fixed GenEpiO metadata schema. User-defined
 # date variables are *not* listed here — they are discovered from
@@ -328,10 +331,14 @@ server <- function(
     # then brought in by a reload) and gets a subtle row highlight in renderDT.
     # Keyed on db_path so the baseline is taken once per database and survives
     # the reload that introduces the new isolates (a reload keeps db_path); a
-    # different database re-captures. Plain session variables, not reactives:
-    # read/written only inside session_added() below, so there is nothing to
-    # invalidate and no observer-ordering hazard. The baseline is read straight
-    # off the already-loaded df, so probing "what's new" costs no extra query.
+    # different database re-captures. The baseline is read straight off the
+    # already-loaded df, so probing "what's new" costs no extra query.
+    #
+    # Plain session variables rather than reactives: nothing may depend on them.
+    # They are written in exactly two places - the capture in session_added()
+    # below, and the removal handler, which prunes what it deleted so that
+    # re-adding the same isolate this session still counts as an addition. Both
+    # writes happen before the read they affect, so there is no ordering hazard.
     baseline_key <- NULL
     baseline_isolates <- character(0)
 
@@ -349,6 +356,38 @@ server <- function(
         return(character(0))
       }
       setdiff(df$isolate, baseline_isolates)
+    })
+
+    # The same set, split by how each isolate arrived: typing stamps
+    # `metadata.source` with SOURCE_LOCAL, a merge stamps the peer's label (see
+    # app/logic/db_sources.R). Isolates whose row predates provenance tracking
+    # carry NA and count as typed — whatever they are, they are not something
+    # this session imported. `sources` names the peer databases involved, for
+    # the legend's tooltip.
+    session_added_split <- reactive({
+      new <- session_added()
+      df <- metadata_base()
+      empty <- list(
+        typed = character(0),
+        imported = character(0),
+        sources = character(0)
+      )
+      if (!length(new) || is.null(df)) {
+        return(empty)
+      }
+
+      src <- if (SOURCE_COL %in% names(df)) {
+        as.character(df[[SOURCE_COL]])[match(new, df$isolate)]
+      } else {
+        rep(NA_character_, length(new))
+      }
+      is_import <- !is.na(src) & nzchar(src) & src != SOURCE_LOCAL
+
+      list(
+        typed = new[!is_import],
+        imported = new[is_import],
+        sources = sort(unique(src[is_import]))
+      )
     })
 
     # Names of the appended classical-MLST columns (empty when the database has
@@ -665,11 +704,15 @@ server <- function(
       df <- metadata_base()
       req(df)
 
-      # Isolates typed into this database during the current session; their rows
-      # get the .session-new-row class (styled subtly in main.scss). Serialised
-      # to a JS array literal for the rowCallback below.
-      new_isolates <- session_added()
+      # Isolates that entered this database during the current session, split by
+      # provenance: typed ones get the .session-new-row class, merged-in ones
+      # .session-import-row (both styled subtly in main.scss). Serialised to JS
+      # array literals for the rowCallback below.
+      added <- session_added_split()
+      new_isolates <- added$typed
+      imported_isolates <- added$imported
       has_new <- length(new_isolates) > 0
+      has_imported <- length(imported_isolates) > 0
 
       cols <- names(df)
       # Default-sorted on below via options$order: newest isolate first, so a
@@ -710,7 +753,7 @@ server <- function(
       # column-visibility.dt redraw the picker triggers), which would wipe out
       # anything appended only once via initComplete.
       legend_html <- ""
-      if (has_amr || has_new) {
+      if (has_amr || has_new || has_imported) {
         parts <- character(0)
         if (has_amr) {
           parts <- c(parts, paste0(
@@ -721,12 +764,31 @@ server <- function(
             '</span>'
           ))
         }
+        # Two separate entries rather than one "added this session": the two
+        # tints mean different things (typed here vs merged in from a peer), and
+        # a single count would leave the second tint unexplained. The import
+        # entry names its source databases on hover — the same labels the Source
+        # column carries, so the legend and the column agree.
         if (has_new) {
           parts <- c(parts, paste0(
             '<span class="session-new-legend">',
             '<span class="session-new-swatch"></span>',
             if (length(new_isolates) == 1) "1 isolate" else paste0(length(new_isolates), " isolates"),
-            " added this session",
+            " typed this session",
+            '</span>'
+          ))
+        }
+        if (has_imported) {
+          parts <- c(parts, paste0(
+            '<span class="session-new-legend" title="',
+            htmltools::htmlEscape(
+              paste0("From: ", paste(added$sources, collapse = ", ")),
+              attribute = TRUE
+            ),
+            '">',
+            '<span class="session-import-swatch"></span>',
+            if (length(imported_isolates) == 1) "1 isolate" else paste0(length(imported_isolates), " isolates"),
+            " imported this session",
             '</span>'
           ))
         }
@@ -832,12 +894,17 @@ server <- function(
           # since rownames = FALSE) so main.scss can tint them.
           rowCallback = DT::JS(sprintf(
             "function(row, data) {
+               var iso = String(data[0]);
                var newSet = %s;
-               if (newSet.indexOf(String(data[0])) !== -1) {
+               var importedSet = %s;
+               if (newSet.indexOf(iso) !== -1) {
                  row.classList.add('session-new-row');
+               } else if (importedSet.indexOf(iso) !== -1) {
+                 row.classList.add('session-import-row');
                }
              }",
-            jsonlite::toJSON(new_isolates)
+            jsonlite::toJSON(new_isolates),
+            jsonlite::toJSON(imported_isolates)
           )),
           initComplete = DT::JS(
             "function(settings) {
@@ -1162,6 +1229,11 @@ server <- function(
       remove_waiter$show()
       on.exit(remove_waiter$hide())
       remove_isolates(db_path(), isolates, keep_alleles = keep_alleles)
+      # Drop them from the "was already here" baseline too, so bringing the same
+      # isolate back later this session - re-typed or imported - still reads as
+      # an addition. Without this the set-diff in session_added() returns to
+      # exactly the baseline and the row is highlighted as nothing at all.
+      baseline_isolates <<- setdiff(baseline_isolates, isolates)
       reload_token(reload_token() + 1L)
       showNotification(
         paste0(length(isolates), " isolate(s) removed from the database."),

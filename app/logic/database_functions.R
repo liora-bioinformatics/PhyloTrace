@@ -19,6 +19,7 @@ box::use(
   ],
   RSQLite[SQLite],
   app / logic / field_labels[MLST_COL_PREFIX, AMR_COL_PREFIX],
+  app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / db_compat[REF_SOUCHE],
   app / logic / logging[log_event],
 )
@@ -201,7 +202,8 @@ make_metadata_table <- function(db_path) {
       "geo_loc_name_city",
       "geo_loc_name_postal_code",
       "called_at",
-      "geo_loc_coordinates"
+      "geo_loc_coordinates",
+      SOURCE_COL
     )
     for (col in setdiff(added_cols, dbListFields(con, "metadata"))) {
       dbExecute(con, sprintf('ALTER TABLE metadata ADD COLUMN "%s" TEXT', col))
@@ -229,6 +231,13 @@ make_metadata_table <- function(db_path) {
         geo_loc_coordinates = NA_character_,
         stringsAsFactors = FALSE
       )
+      # Rows only ever reach this branch for isolates that appeared in `mlst`
+      # without a metadata row of their own - i.e. typing wrote them, since a
+      # merge writes both together (see .write_metadata in db_import.R). Rows
+      # that predate the column keep NULL: this database has no record of how
+      # they arrived, and calling them local would make a merged-in isolate look
+      # native.
+      new_rows[[SOURCE_COL]] <- SOURCE_LOCAL
       dbWriteTable(con, "metadata", new_rows, append = TRUE)
       log_event(
         "DB",
@@ -259,6 +268,9 @@ make_metadata_table <- function(db_path) {
     geo_loc_coordinates = NA_character_,
     stringsAsFactors = FALSE
   )
+  # A database with no metadata table at all has no import history to lose:
+  # everything in it was typed here.
+  metadata[[SOURCE_COL]] <- SOURCE_LOCAL
 
   # Write table to database
   dbWriteTable(con, "metadata", metadata)

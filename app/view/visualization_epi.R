@@ -44,7 +44,6 @@ box::use(
   app /
     logic /
     viz_helpers[
-      export_panel,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -130,7 +129,7 @@ epi_controls <- function(ns) {
           accordion_panel(
             "Plot Mode",
             icon = shiny$icon("chart-column"),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("epi_plot_mode"),
               "Plot mode",
               choices = PLOT_MODES,
@@ -177,7 +176,7 @@ epi_controls <- function(ns) {
                   step = 1,
                   ticks = FALSE
                 ),
-                shiny$selectInput(
+                shiny$pickerInput(
                   ns("epi_moving_avg_align"),
                   "Window alignment",
                   choices = MOVING_AVG_ALIGNMENTS,
@@ -370,7 +369,7 @@ epi_controls <- function(ns) {
       nav_panel(
         "Annotations",
         icon = shiny$icon("calendar-plus"),
-        shiny$selectInput(
+        shiny$pickerInput(
           ns("epi_anno_type"),
           "Type",
           c(`Milestone (line)` = "milestone", `Time period (shaded)` = "period")
@@ -425,10 +424,7 @@ epi_controls <- function(ns) {
           icon = shiny$icon("trash"),
           width = "100%"
         )
-      ),
-      # ggsave needs no external toolchain, so unlike the plotly build this
-      # replaces — HTML only, for want of kaleido — every format here is real.
-      export_panel(ns, "epi", c("png", "jpeg", "pdf", "svg"))
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -769,7 +765,7 @@ server <- function(
       } else {
         epi_plot$epi_fit_scale(input$epi_col_scale, n_strata)
       }
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         "epi_col_scale",
         choices = choices,
@@ -1492,18 +1488,27 @@ server <- function(
         session,
         vals,
         switches = c(
-          "epi_label_ends", "epi_show_cumulative", "epi_show_moving_avg",
-          "epi_show_x_label", "epi_zoom_axis"
+          "epi_label_ends",
+          "epi_show_cumulative",
+          "epi_show_moving_avg",
+          "epi_show_x_label",
+          "epi_zoom_axis"
         ),
         selects = c(
-          "epi_plot_mode", "epi_moving_avg_align", "epi_anno_type",
+          "epi_plot_mode",
+          "epi_moving_avg_align",
+          "epi_anno_type",
           "epi_col_scale"
         ),
         sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
         texts = "epi_anno_label",
         colors = c(
-          "epi_single_color", "epi_text_color", "epi_anno_color",
-          "epi_cumulative_color", "epi_background_color", "epi_moving_avg_color"
+          "epi_single_color",
+          "epi_text_color",
+          "epi_anno_color",
+          "epi_cumulative_color",
+          "epi_background_color",
+          "epi_moving_avg_color"
         ),
         # Time interval / stratify are server-rendered controls (rebuilt on a
         # counter); best-effort here, corrected by the user's Generate.
@@ -1522,8 +1527,12 @@ server <- function(
     # Thumbnail: server-render the Epi curve to a small PNG.
     save_thumb <- function(file, w, h) {
       epi_plot$render_epi_png(
-        epi_ggplot(), file,
-        width_px = w, height_px = h, res = 96, scale = 1
+        epi_ggplot(),
+        file,
+        width_px = w,
+        height_px = h,
+        res = 96,
+        scale = 1
       )
     }
 

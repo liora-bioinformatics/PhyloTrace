@@ -26,7 +26,6 @@ box::use(
     tags,
     icon,
     actionButton,
-    selectInput,
     textInput,
     checkboxInput,
     uiOutput,
@@ -332,6 +331,23 @@ server <- function(
         }
         prep(staged)
       }
+    }
+
+    # Drop the chosen external database: release its staged copy and put the
+    # panel back into its "no source chosen" state.
+    #
+    # The client-side value has to go too. shinyFiles reports a selection with
+    # Shiny.onInputChange, and Shiny drops an input update whose value equals
+    # the last one it sent - so with the button still holding the old file,
+    # re-choosing that same file would not register as a change and the panel
+    # would sit empty. Setting the input to NULL makes the next selection
+    # differ; the observer above ignores the NULL itself (ignoreNULL).
+    clear_ext_db <- function() {
+      set_source(NULL)
+      shinyjs::runjs(sprintf(
+        "if (window.Shiny) Shiny.setInputValue('%s', null);",
+        ns("ext_db")
+      ))
     }
 
     session$onSessionEnded(function() release_source(shiny::isolate(prep())))
@@ -879,7 +895,7 @@ server <- function(
                 div(class = "clash-row_name", cl$isolate[i]),
                 div(
                   class = "clash-row_action",
-                  selectInput(
+                  pickerInput(
                     ns(paste0("action_", i)),
                     label = NULL,
                     choices = .ACTION_CHOICES,
@@ -1196,7 +1212,10 @@ server <- function(
           include_amr = isTRUE(input$include_amr),
           custom_fields = input$custom_fields %||% character(0),
           backup = TRUE,
-          progress = step
+          progress = step,
+          # `staged$path` can be a temp copy; the label written into
+          # metadata.source has to name the file the user actually picked.
+          source_file = selected()
         ),
         error = function(e) e
       )
@@ -1215,6 +1234,15 @@ server <- function(
         return()
       }
 
+      # Let go of the source before anything recomputes. What the panel was
+      # showing - compatibility, collisions, import summary - described the
+      # database as it was *before* this merge; every accepted isolate is local
+      # now, so recomputing it would re-hash both sides only to arrive at an
+      # empty diff, and it would do so while main.R's reload prompt is already
+      # up. Clearing first means local_token() below only refreshes the backup
+      # list, and the body falls straight through to its empty state.
+      clear_ext_db()
+
       local_token(local_token() + 1L)
       imported(imported() + 1L)
 
@@ -1231,7 +1259,9 @@ server <- function(
             result$renamed,
             result$skipped,
             result$new_alleles
-          )
+          ),
+          tags$br(),
+          sprintf("Recorded under Source “%s”.", result$source)
         ),
         type = "message",
         duration = 10
@@ -1334,9 +1364,7 @@ server <- function(
     observeEvent(
       session_reset(),
       {
-        release_source(prep())
-        prep(NULL)
-        selected(NULL)
+        clear_ext_db()
         profile_path(NULL)
         seq_path(NULL)
         meta_path(NULL)

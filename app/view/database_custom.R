@@ -744,7 +744,7 @@ server <- function(
                 )
               )
             } else {
-              shiny$selectInput(
+              shiny$pickerInput(
                 ns("var_type"),
                 "Type",
                 choices = stats::setNames(

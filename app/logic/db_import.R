@@ -46,6 +46,7 @@ box::use(
     ],
   app / logic / pymlst[hash_database],
   app / logic / database_functions[make_metadata_table, load_db_species],
+  app / logic / db_sources[SOURCE_COL, db_uuid, register_source],
   app / logic / logging[log_event],
 )
 
@@ -61,11 +62,13 @@ box::use(
 }
 
 # Metadata columns the user may never map: `isolate` is the join key,
-# `organism` is dictated by the local mlst_type.species, and `called_at` is a
+# `organism` is dictated by the local mlst_type.species, `called_at` is a
 # provenance timestamp handled automatically by `.write_metadata()` (the peer's
-# own value when it has one, else the merge time) rather than user-mapped.
+# own value when it has one, else the merge time) rather than user-mapped, and
+# `source` records how the isolate entered *this* database - the peer's own
+# source values describe its history, not ours, so they are never carried over.
 #' @export
-METADATA_RESERVED <- c("isolate", "organism", "called_at")
+METADATA_RESERVED <- c("isolate", "organism", "called_at", SOURCE_COL)
 
 # The user-defined custom variables (see app/logic/custom_fields.R).
 CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
@@ -433,7 +436,8 @@ import_preview <- function(
   accepted,
   selected_cols,
   organism,
-  ext_tables
+  ext_tables,
+  source_label
 ) {
   ext_meta <- if ("metadata" %in% ext_tables) {
     dbGetQuery(con, "SELECT * FROM ext.metadata")
@@ -488,12 +492,16 @@ import_preview <- function(
     import_time
   )
 
+  # Every row written here arrived by merge, including the ones replacing an
+  # overwritten local isolate (whose metadata row was deleted just above) - the
+  # replacement is the peer's isolate now, so it carries the peer's label.
   rows <- data.frame(
     isolate = accepted$final_isolate,
     organism = organism %||% NA_character_,
     called_at = called_at,
     stringsAsFactors = FALSE
   )
+  rows[[SOURCE_COL]] <- source_label
 
   if (length(selected)) {
     for (col in selected) {
@@ -878,7 +886,11 @@ merge_databases <- function(
   include_amr = FALSE,
   custom_fields = character(0),
   backup = TRUE,
-  progress = NULL
+  progress = NULL,
+  # The peer's file *as the user chose it*. `ext_path` may be a staged temp copy
+  # (prepare_source), and "phylotrace_import_1a2b3c.db" is not a provenance
+  # label anyone can read. Only ever used for naming.
+  source_file = NULL
 ) {
   progress <- progress %||% .noop_progress
 
@@ -1117,7 +1129,24 @@ merge_databases <- function(
       }
 
       progress(0.85, "Merging metadata …")
-      .write_metadata(con, accepted, metadata_cols, organism, ext_tables)
+      # One label per peer database, reused on every later import of the same
+      # peer (matched on its uuid, so a rename on disk does not mint a second
+      # one). Registered inside the transaction: if the merge rolls back, the
+      # registry entry goes with it rather than reserving a label for isolates
+      # that never arrived.
+      source_label <- register_source(
+        con,
+        uuid = db_uuid(con, "ext"),
+        file_name = source_file %||% ext_path
+      )
+      .write_metadata(
+        con,
+        accepted,
+        metadata_cols,
+        organism,
+        ext_tables,
+        source_label
+      )
 
       if (length(custom_fields)) {
         progress(0.87, "Merging custom variables …")
@@ -1158,8 +1187,9 @@ merge_databases <- function(
     "DB",
     "merge",
     sprintf(
-      "from %s | %d added, %d overwritten, %d renamed, %d new allele(s)",
-      ext_path,
+      "from %s (source '%s') | %d added, %d overwritten, %d renamed, %d new allele(s)",
+      source_file %||% ext_path,
+      source_label,
       sum(accepted$action == "add"),
       sum(accepted$action == "overwrite"),
       sum(accepted$action == "rename"),
@@ -1176,7 +1206,9 @@ merge_databases <- function(
     skipped = sum(resolutions$action == "skip"),
     new_alleles = as.integer(n_new_alleles),
     calls = as.integer(n_calls),
-    backup_path = backup_path
+    backup_path = backup_path,
+    # The label these isolates now carry in `metadata.source`.
+    source = source_label
   )
 }
 

@@ -536,7 +536,7 @@ $viz-tile-row-gap: 0.85rem;
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
-    padding: .75rem 0.5rem;
+    padding-top: 1rem;
 }
 
 // Applied to an .accordion-item when it's the only panel left visible in its
@@ -1458,11 +1458,31 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.5;
 }
 
-.viz-nav-wrap .accordion-body {
+.viz-nav-wrap .accordion-body,
+.plot-setup .accordion-body {
     padding: 0.5rem 0.75rem;
 }
 
-// Name / badge / "Saved: ..." strip, pinned over the bottom of the thumbnail.
+.viz-nav-wrap .accordion-button,
+.plot-setup .accordion-button {
+    padding: 0.5rem 1rem 0.5rem 1rem;
+}
+
+.plot-setup>.sidebar-content,
+.viz-controls-sidebar>.sidebar-content {
+    padding-top: 2.5rem !important;
+    gap: 1rem !important;
+}
+
+.plot-setup .form-group {
+    margin-bottom: 0.5rem;
+}
+
+
+.accordion-button:focus {
+    box-shadow: none !important;
+}
+
 .ad-plot-overlay-info {
     @include frosted-glass-overlay;
     position: absolute;
@@ -1706,6 +1726,17 @@ $session-new-tint: 20%;
     background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
 }
 
+// Same idea for isolates a merge brought in this session, in the info hue - a
+// different provenance, so a different tint, at the same strength so neither
+// reads as more important than the other.
+.db-page_body table.dataTable tbody tr.session-import-row>td {
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+.edit-table table.dataTable tbody tr.session-import-row>td.dtfc-fixed-left {
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
+}
+
 // Legend explaining the .session-new-row highlight above, injected by
 // initComplete (database_browser.R) into DataTables' own "Showing x to y of z
 // entries" info div (dom: "ti") rather than as a separate line, so it reads as
@@ -1725,6 +1756,10 @@ $session-new-tint: 20%;
     display: inline-flex;
     align-items: center;
     gap: 1rem;
+}
+
+#plot-setup .bslib-sidebar-layout>.collapse-toggle {
+    top: unset;
 }
 
 .session-new-legend {
@@ -1752,6 +1787,15 @@ $session-new-tint: 20%;
     height: 1em;
     border-radius: 2px;
     background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Its counterpart for merged-in rows; same rule, .session-import-row's hue.
+.session-import-swatch {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 2px;
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
 }
 
 #app-database-custom_fields-fields_table td {

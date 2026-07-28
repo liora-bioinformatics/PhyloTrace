@@ -85,7 +85,6 @@
 box::use(
   shiny[
     div,
-    selectInput,
     actionButton,
     icon,
     hr,
@@ -93,7 +92,6 @@ box::use(
     HTML,
     singleton,
     reactiveValuesToList,
-    updateSelectInput,
     updateSliderInput,
     updateNumericInput,
     updateTextInput,
@@ -104,6 +102,7 @@ box::use(
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
+    pickerInput
   ],
 )
 
@@ -277,7 +276,7 @@ scale_select <- function(ns, id, categories = names(color_scales)) {
   # dropdown regardless of which tab or instance renders it.
   div(
     class = "viz-scale-select",
-    selectInput(
+    pickerInput(
       ns(id),
       "Color scale",
       choices = color_scales[categories],
@@ -294,17 +293,11 @@ export_panel <- function(ns, prefix, formats) {
     icon = icon("download"),
     div(
       class = "viz-export",
-      selectInput(ns(paste0(prefix, "_filetype")), "File format", formats),
+      pickerInput(ns(paste0(prefix, "_filetype")), "File format", formats),
       actionButton(
         ns(paste0(prefix, "_download")),
         "Save plot",
         icon = icon("download")
-      ),
-      hr(),
-      actionButton(
-        ns(paste0(prefix, "_report")),
-        "Print report",
-        icon = icon("file-lines")
       )
     )
   )
@@ -393,7 +386,7 @@ apply_input_snapshot <- function(
   }
   for (id in selects) {
     v <- get(id)
-    if (!is.null(v)) updateSelectInput(session, id, selected = v)
+    if (!is.null(v)) updatePickerInput(session, id, selected = v)
   }
   for (id in sliders) {
     v <- get(id)

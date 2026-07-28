@@ -89,7 +89,19 @@ function bind(container) {
   container.addEventListener("beforeClose", function () {
     if (confirming.delete(container)) return; // confirmed - keep current value
     var snapshot = openSnapshots.get(container);
-    if (snapshot !== undefined) instance.setValue(snapshot);
+    if (snapshot === undefined) return;
+    // setValue() is the low-level setter: it rewrites `selectedValues` and the
+    // toggle's label but leaves each option's `isSelected` flag - and the
+    // already-rendered `.vscomp-option.selected` rows - exactly as the
+    // cancelled session left them. Reopening does not repaint the list either
+    // (openDropbox only re-renders when showSelectedOptionsFirst is on), so the
+    // ticks would outlive the value they came from. Worse, selectOption() reads
+    // tick-vs-untick off the row's class while pushing onto `selectedValues`,
+    // so a row the revert deselected can be re-ticked into a duplicate value.
+    // setValueMethod() re-derives every `isSelected` from the value it is
+    // given, and renderOptions() repaints the rows from those flags.
+    instance.setValueMethod(snapshot);
+    instance.renderOptions();
   });
 }
 

@@ -160,7 +160,7 @@ server <- function(id) {
     # the bug returning.
     # TO RESTORE THE FIX: delete the mem.maxVSize(14000) line and change
     # `if (FALSE)` to `if (TRUE)`.
-    mem.maxVSize(14000) # [A/B TEST] safety ceiling ONLY — not the fix
+    # mem.maxVSize(14000) # [A/B TEST] safety ceiling ONLY — not the fix
     # ========================================================================
 
     # Bound R's vector heap so its garbage-collection trigger cannot balloon.
@@ -296,10 +296,16 @@ server <- function(id) {
     # acknowledged, stacking multiple notifications.
     db_notification_ids <- character(0)
 
+    # Asks the Database module to bring its Browse Entries sub-panel to the
+    # front. Bumped by the reload handler below, which needs that panel visible
+    # before it covers it with the reload overlay.
+    show_browse <- reactiveVal(0L)
+
     DATABASE_vals <- database$server(
       "database",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = data_reset,
+      show_browse = show_browse,
       ui_mounted = ui_mounted,
       typing_status = TYPING_vals$typing_status,
       db_updated = TYPING_vals$db_updated
@@ -312,37 +318,40 @@ server <- function(id) {
     notify_db_changed <- function(db_icon, headline, detail) {
       has_pending <- isTRUE(DATABASE_vals$pending())
 
-      db_notification_ids <<- c(db_notification_ids, showNotification(
-        ui = tagList(
-          icon(db_icon),
-          " ",
-          tags$strong(headline),
-          tags$br(),
-          detail,
-          if (has_pending) {
+      db_notification_ids <<- c(
+        db_notification_ids,
+        showNotification(
+          ui = tagList(
+            icon(db_icon),
+            " ",
+            tags$strong(headline),
+            tags$br(),
+            detail,
+            if (has_pending) {
+              div(
+                class = "alert alert-warning p-2 mt-2 mb-1 small",
+                icon("triangle-exclamation"),
+                " ",
+                tags$strong("Unsaved metadata edits detected."),
+                " Save or discard them in the Database Browser before reloading, or they will be lost."
+              )
+            },
             div(
-              class = "alert alert-warning p-2 mt-2 mb-1 small",
-              icon("triangle-exclamation"),
-              " ",
-              tags$strong("Unsaved metadata edits detected."),
-              " Save or discard them in the Database Browser before reloading, or they will be lost."
+              class = "mt-1",
+              actionButton(
+                ns("reload_db"),
+                label = "Reload Database",
+                icon = icon("rotate"),
+                class = "btn-sm btn-primary w-100"
+              )
             )
-          },
-          div(
-            class = "mt-1",
-            actionButton(
-              ns("reload_db"),
-              label = "Reload Database",
-              icon = icon("rotate"),
-              class = "btn-sm btn-primary w-100"
-            )
-          )
-        ),
-        duration = NULL,
-        closeButton = TRUE,
-        type = if (has_pending) "warning" else "message",
-        session = session
-      ))
+          ),
+          duration = NULL,
+          closeButton = TRUE,
+          type = if (has_pending) "warning" else "message",
+          session = session
+        )
+      )
     }
 
     observeEvent(
@@ -595,13 +604,24 @@ server <- function(id) {
         }
       )
 
-      # Step 1 (this flush): switch to the Database Browser and cover its
-      # module-container with an overlay, reusing that module's own waiter
-      # style. main.R's ns("database-module-container") resolves to the same
-      # DOM id as the module's internal ns("module-container") (Shiny joins
-      # namespaces with "-"), so this targets the right element.
+      # Step 1 (this flush): bring the Database Browser to the front - both the
+      # top-level tab and, inside it, the Database module's own Browse Entries
+      # sub-panel. Both matter: the reload can be triggered from anywhere, and
+      # the overlay in Step 2 covers an element that lives inside Browse
+      # Entries. Triggered from Typing that panel happens to be frontmost
+      # already; triggered from the Import panel it is not, and covering a
+      # display:none tab-pane paints nothing.
+      #
+      # Both selections are input messages, so they leave R together at the end
+      # of this flush - i.e. before the deferred Step 2 sends the overlay - and
+      # the client applies them in that order.
       nav_select(id = "tabs", selected = "database_panel")
+      show_browse(show_browse() + 1L)
 
+      # The overlay reuses the Database Browser's own waiter style. main.R's
+      # ns("database-browse_entries-module-container") resolves to the same DOM
+      # id as that module's internal ns("module-container") (Shiny joins
+      # namespaces with "-"), so this targets the right element.
       reload_waiter <- Waiter$new(
         id = "app-database-browse_entries-module-container",
         html = div(

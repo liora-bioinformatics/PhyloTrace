@@ -53,7 +53,6 @@ box::use(
   app /
     logic /
     viz_helpers[
-      export_panel,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -147,7 +146,7 @@ amr_controls <- function(ns) {
           accordion_panel(
             "View",
             icon = shiny$icon("chart-simple"),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("amr_mode"),
               "View",
               choices = PLOT_MODES,
@@ -268,20 +267,20 @@ amr_controls <- function(ns) {
               # metadata to group by) — see the amr_mode observer, and the
               # reset checklist's bucket 4 for why the reset path must patch it
               # up on a delay.
-              shiny$selectInput(
+              shiny$pickerInput(
                 ns("amr_column_grouping"),
                 "Group genes by",
                 choices = COLUMN_GROUPINGS,
                 selected = COLUMN_GROUPING_DEFAULT
               ),
               input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
-              shiny$selectInput(
+              shiny$pickerInput(
                 ns("amr_cluster_distance"),
                 "Distance",
                 choices = amr_plot$AMR_CLUSTER_DISTANCES,
                 selected = CLUSTER_DISTANCE_DEFAULT
               ),
-              shiny$selectInput(
+              shiny$pickerInput(
                 ns("amr_cluster_method"),
                 "Linkage",
                 choices = amr_plot$AMR_CLUSTER_METHODS,
@@ -468,10 +467,7 @@ amr_controls <- function(ns) {
             BACKGROUND_DEFAULT
           )
         )
-      ),
-      # ggsave needs no external toolchain, so every format here is real —
-      # the same set the Epi curve offers.
-      export_panel(ns, "amr", c("png", "jpeg", "pdf", "svg"))
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -779,7 +775,7 @@ server <- function(
       } else {
         amr_plot$amr_fit_scale(input[[id]], n)
       }
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         id,
         choices = choices,
@@ -818,7 +814,7 @@ server <- function(
           COLUMN_GROUPINGS
         }
         current <- input$amr_column_grouping
-        shiny$updateSelectInput(
+        updatePickerInput(
           session,
           "amr_column_grouping",
           choices = choices,
@@ -870,7 +866,7 @@ server <- function(
       # past shinyjs::reset()'s own asynchronous, stale restoration, which would
       # otherwise land a moment later and overwrite an immediate correction.
       shinyjs::delay(400, {
-        shiny$updateSelectInput(
+        updatePickerInput(
           session,
           "amr_column_grouping",
           choices = COLUMN_GROUPINGS,

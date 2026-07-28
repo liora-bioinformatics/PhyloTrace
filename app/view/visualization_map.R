@@ -225,7 +225,9 @@ parse_coordinates <- function(x) {
     if (is.na(s) || !nzchar(s)) {
       next
     }
-    parts <- suppressWarnings(as.numeric(trimws(strsplit(s, "[,;[:space:]]+")[[1]])))
+    parts <- suppressWarnings(as.numeric(trimws(strsplit(s, "[,;[:space:]]+")[[
+      1
+    ]])))
     parts <- parts[!is.na(parts)]
     if (length(parts) != 2L) {
       next
@@ -1249,7 +1251,7 @@ map_controls <- function(ns) {
         icon = shiny$icon("layer-group"),
         shiny$div(
           id = ns("wrap_map_tiles"),
-          shiny$selectInput(
+          shiny$pickerInput(
             ns("map_tiles"),
             "Base map",
             choices = map_providers,
@@ -1434,7 +1436,7 @@ map_controls <- function(ns) {
             "Variable Mapping",
             icon = shiny$icon("layer-group"),
             input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            shiny$selectInput(ns("map_col_var"), "Variable", choices = NULL)
+            shiny$pickerInput(ns("map_col_var"), "Variable", choices = NULL)
           ),
           accordion_panel(
             "Scale",
@@ -1478,7 +1480,7 @@ map_controls <- function(ns) {
         value = "legend",
         icon = shiny$icon("list"),
         input_switch(ns("map_legend"), "Show legend", TRUE),
-        shiny$selectInput(
+        shiny$pickerInput(
           ns("map_legend_pos"),
           "Position",
           choices = c(
@@ -1755,12 +1757,12 @@ map_controls <- function(ns) {
         "Charts",
         value = "charts",
         icon = shiny$icon("chart-pie"),
-        shiny$selectInput(
+        shiny$pickerInput(
           ns("map_chart_type"),
           "Chart type",
           choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
         ),
-        shiny$selectInput(ns("map_chart_var"), "Variable", choices = NULL),
+        shiny$pickerInput(ns("map_chart_var"), "Variable", choices = NULL),
         # Each chart shows the composition of a categorical variable (see
         # build_charts()'s max_categories folding below), so — like
         # map_heat_scale above — this is a static restriction rather than a
@@ -1817,7 +1819,7 @@ map_controls <- function(ns) {
         icon = shiny$icon("download"),
         shiny$div(
           class = "viz-export",
-          shiny$selectInput(
+          shiny$pickerInput(
             ns("map_filetype"),
             "File format",
             choices = c("HTML (interactive)" = "html")
@@ -1832,7 +1834,7 @@ map_controls <- function(ns) {
     ),
     shiny$div(
       class = "map-mode-dropup",
-      shiny$selectInput(
+      shiny$pickerInput(
         ns("map_mode"),
         "Map mode",
         choices = c("Markers", "Choropleth", "Heatmap", "Charts")
@@ -2682,7 +2684,7 @@ server <- function(
         mode <- input$map_mode %||% "Markers"
         default_tile <- mode_tile_defaults[[mode]]
         if (!is.null(default_tile)) {
-          shiny$updateSelectInput(session, "map_tiles", selected = default_tile)
+          updatePickerInput(session, "map_tiles", selected = default_tile)
         }
       },
       ignoreInit = TRUE
@@ -2740,7 +2742,7 @@ server <- function(
         } else {
           color_scales[[cats[1]]][1]
         }
-        shiny$updateSelectInput(
+        updatePickerInput(
           session,
           "map_col_scale",
           choices = color_scales[cats],
@@ -2778,7 +2780,7 @@ server <- function(
       }
 
       keep <- function(id, choices, default) {
-        shiny$updateSelectInput(
+        updatePickerInput(
           session,
           id,
           choices = choices,
@@ -3100,27 +3102,54 @@ server <- function(
         session,
         vals,
         switches = c(
-          "map_color_var", "map_coverage", "map_graticule", "map_legend",
-          "map_minimap", "map_permanent", "map_reverse", "map_scalebar",
-          "map_show_controls", "map_spiderfy", "map_chart_cluster",
-          "map_region_fixed_scale", "map_region_label_nonzero",
-          "map_region_permanent", "map_show_time_label", "map_zoom_to_bounds"
+          "map_color_var",
+          "map_coverage",
+          "map_graticule",
+          "map_legend",
+          "map_minimap",
+          "map_permanent",
+          "map_reverse",
+          "map_scalebar",
+          "map_show_controls",
+          "map_spiderfy",
+          "map_chart_cluster",
+          "map_region_fixed_scale",
+          "map_region_label_nonzero",
+          "map_region_permanent",
+          "map_show_time_label",
+          "map_zoom_to_bounds"
         ),
         selects = c(
-          "map_mode", "map_tiles", "map_legend_pos", "map_chart_type",
-          "map_col_scale", "map_chart_scale", "map_heat_scale"
+          "map_mode",
+          "map_tiles",
+          "map_legend_pos",
+          "map_chart_type",
+          "map_col_scale",
+          "map_chart_scale",
+          "map_heat_scale"
         ),
         sliders = c(
-          "map_radius", "map_opacity", "map_weight", "map_bins",
-          "map_legend_opacity", "map_label_size", "map_cluster_radius",
-          "map_cluster_zoom_level", "map_region_opacity", "map_heat_radius",
-          "map_heat_max", "map_chart_size", "map_chart_opacity",
+          "map_radius",
+          "map_opacity",
+          "map_weight",
+          "map_bins",
+          "map_legend_opacity",
+          "map_label_size",
+          "map_cluster_radius",
+          "map_cluster_zoom_level",
+          "map_region_opacity",
+          "map_heat_radius",
+          "map_heat_max",
+          "map_chart_size",
+          "map_chart_opacity",
           "map_chart_cluster_radius"
         ),
         numerics = "map_legend_digits",
         texts = "map_legend_title",
         colors = c(
-          "map_marker_color", "map_stroke_color", "map_na_color",
+          "map_marker_color",
+          "map_stroke_color",
+          "map_na_color",
           "map_region_border"
         ),
         radio_groups = "map_interval"
@@ -3128,17 +3157,26 @@ server <- function(
 
       # Base radioButtons (scale mode / region transform).
       if (!is.null(vals$map_scale_type)) {
-        shiny$updateRadioButtons(session, "map_scale_type",
-          selected = vals$map_scale_type)
+        shiny$updateRadioButtons(
+          session,
+          "map_scale_type",
+          selected = vals$map_scale_type
+        )
       }
       if (!is.null(vals$map_region_transform)) {
-        shiny$updateRadioButtons(session, "map_region_transform",
-          selected = vals$map_region_transform)
+        shiny$updateRadioButtons(
+          session,
+          "map_region_transform",
+          selected = vals$map_region_transform
+        )
       }
 
       # Date-range slider: restore as Dates.
       if (!is.null(vals$map_daterange)) {
-        dr <- tryCatch(as.Date(unlist(vals$map_daterange)), error = function(e) NULL)
+        dr <- tryCatch(
+          as.Date(unlist(vals$map_daterange)),
+          error = function(e) NULL
+        )
         if (!is.null(dr) && length(dr) == 2 && !any(is.na(dr))) {
           shiny$updateSliderInput(session, "map_daterange", value = dr)
         }
@@ -3150,28 +3188,46 @@ server <- function(
         fields <- setdiff(names(meta), "isolate")
         if (length(fields)) {
           if (!is.null(vals$map_col_var)) {
-            shiny$updateSelectInput(session, "map_col_var", choices = fields,
-              selected = vals$map_col_var)
+            updatePickerInput(
+              session,
+              "map_col_var",
+              choices = fields,
+              selected = vals$map_col_var
+            )
           }
           if (!is.null(vals$map_chart_var)) {
-            shiny$updateSelectInput(session, "map_chart_var", choices = fields,
-              selected = vals$map_chart_var)
+            updatePickerInput(
+              session,
+              "map_chart_var",
+              choices = fields,
+              selected = vals$map_chart_var
+            )
           }
           popup_ids <- unique(c("isolate", "place", fields))
           popup_choices <- stats::setNames(
-            popup_ids, vapply(popup_ids, field_label, character(1))
+            popup_ids,
+            vapply(popup_ids, field_label, character(1))
           )
           if (!is.null(vals$map_popup)) {
-            updatePickerInput(session, "map_popup", choices = popup_choices,
-              selected = intersect(unlist(vals$map_popup), popup_ids))
+            updatePickerInput(
+              session,
+              "map_popup",
+              choices = popup_choices,
+              selected = intersect(unlist(vals$map_popup), popup_ids)
+            )
           }
           hover_ids <- unique(c("isolate", fields))
           hover_choices <- stats::setNames(
-            hover_ids, vapply(hover_ids, field_label, character(1))
+            hover_ids,
+            vapply(hover_ids, field_label, character(1))
           )
           if (!is.null(vals$map_hover_field)) {
-            updatePickerInput(session, "map_hover_field", choices = hover_choices,
-              selected = intersect(unlist(vals$map_hover_field), hover_ids))
+            updatePickerInput(
+              session,
+              "map_hover_field",
+              choices = hover_choices,
+              selected = intersect(unlist(vals$map_hover_field), hover_ids)
+            )
           }
         }
       }
@@ -3180,11 +3236,14 @@ server <- function(
     # Thumbnail: capture the Leaflet container in the browser (html2canvas),
     # returned via input$thumb_data.
     request_thumb <- function() {
-      session$sendCustomMessage("phylotrace_capture", list(
-        selector = paste0("#", ns("map")),
-        mode = "html2canvas",
-        inputId = session$ns("thumb_data")
-      ))
+      session$sendCustomMessage(
+        "phylotrace_capture",
+        list(
+          selector = paste0("#", ns("map")),
+          mode = "html2canvas",
+          inputId = session$ns("thumb_data")
+        )
+      )
     }
 
     list(

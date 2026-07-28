@@ -31,8 +31,7 @@ box::use(
     div,
     icon,
     actionButton,
-    selectInput,
-    updateSelectInput,
+    updatePickerInput,
     showNotification,
     tags,
     tagList,
@@ -65,6 +64,7 @@ box::use(
 )
 box::use(
   app / logic / db_staging[imported_metadata_wide],
+  app / logic / viz_helpers[export_panel],
   app / logic / analysis_store,
   app / view / visualization_mst,
   app / view / visualization_tree,
@@ -240,117 +240,133 @@ ui <- function(id, plot_type) {
   spec <- .ENGINES[[plot_type]]
   stopifnot(!is.null(spec))
 
-  layout_sidebar(
-    fillable = TRUE,
-    border_radius = FALSE,
-    padding = 0,
-    sidebar = sidebar(
-      id = ns("sidebar"),
-      title = NULL,
-      width = 320,
-      actionButton(
-        ns("generate"),
-        "Generate",
-        icon = icon("play"),
-        width = "100%"
-      ),
-      accordion(
-        id = ns("setup_accordion"),
-        open = if (spec$distance) c("Selection", "Options") else "Selection",
-        # Isolate preselection. The button opens a modal with the metadata
-        # table where the user picks which isolates feed this plot; the info
-        # line summarises the current selection. See the selection_button /
-        # sel_* handlers below, and how selected_isolates threads into the
-        # engine through viz_metadata_selected*.
-        accordion_panel(
-          "Selection",
-          icon = icon("list-check"),
+  as_fill_carrier(
+    div(
+      id = "plot-setup",
+      layout_sidebar(
+        fillable = TRUE,
+        border_radius = FALSE,
+        padding = 0,
+        sidebar = sidebar(
+          id = ns("sidebar"),
+          class = "plot-setup",
+          title = NULL,
+          width = 340,
           actionButton(
-            ns("selection_button"),
-            "Choose isolates",
-            icon = icon("list-check")
+            ns("generate"),
+            "Generate",
+            icon = icon("chalkboard"),
+            class = "btn-primary",
+            width = "100%"
           ),
-          uiOutput(ns("selection_info"))
-        ),
-        # Only the distance engines have anything to put here. For Map and Epi
-        # the panel is not emitted at all — it used to be rendered empty with a
-        # "Not available" placeholder and hidden with shinyjs, which is
-        # unnecessary now that the tab knows its type up front.
-        if (spec$distance) {
-          accordion_panel(
-            "Options",
-            icon = icon("gear"),
-            selectInput(
-              ns("na_handling"),
-              span(
-                "Missing values ",
-                span(
-                  class = "tooltip-bttn",
-                  actionButton(
-                    ns("na_handling_info"),
-                    label = NULL,
-                    icon = icon("circle-info")
+          accordion(
+            id = ns("setup_accordion"),
+            open = if (spec$distance) {
+              c("Selection", "Options")
+            } else {
+              "Selection"
+            },
+            # Isolate preselection. The button opens a modal with the metadata
+            # table where the user picks which isolates feed this plot; the info
+            # line summarises the current selection. See the selection_button /
+            # sel_* handlers below, and how selected_isolates threads into the
+            # engine through viz_metadata_selected*.
+            accordion_panel(
+              "Selection",
+              icon = icon("list-check"),
+              actionButton(
+                ns("selection_button"),
+                "Choose isolates",
+                icon = icon("list-check")
+              ),
+              uiOutput(ns("selection_info"))
+            ),
+            # Only the distance engines have anything to put here. For Map and Epi
+            # the panel is not emitted at all — it used to be rendered empty with a
+            # "Not available" placeholder and hidden with shinyjs, which is
+            # unnecessary now that the tab knows its type up front.
+            if (spec$distance) {
+              accordion_panel(
+                "Options",
+                icon = icon("gear"),
+                pickerInput(
+                  ns("na_handling"),
+                  span(
+                    "Missing values ",
+                    span(
+                      class = "tooltip-bttn",
+                      actionButton(
+                        ns("na_handling_info"),
+                        label = NULL,
+                        icon = icon("circle-info")
+                      )
+                    )
+                  ),
+                  choices = c(
+                    "Ignore for pairwise comparison" = "ignore_na",
+                    "Omit loci with missing values" = "omit",
+                    "Treat missing as allele variant" = "category"
                   )
+                ),
+                # Typing results imported from a peer (Database > Import). They
+                # carry allele identity but no sequences, so they can join a
+                # distance computation but nothing else.
+                uiOutput(ns("imported_picker_ui")),
+                # Tree-only. `algo` is a computation input (feeds compute_phylo_tree
+                # on Generate, like the missing-value handling above); `zoom_view`
+                # is purely presentational — the engine applies it as a CSS class
+                # with no re-render.
+                if (identical(plot_type, "Tree")) {
+                  tagList(
+                    prettyRadioButtons(
+                      ns("algo"),
+                      "Algorithm",
+                      choices = c("Neighbour-Joining", "UPGMA")
+                    ),
+                    input_switch(ns("zoom_view"), "Zoom view", FALSE)
+                  )
+                }
+              )
+            },
+            accordion_panel(
+              "Export Plot",
+              icon = icon("arrow-up-from-bracket"),
+              export_panel(ns, "test", c("png", "jpeg", "pdf", "svg"))
+            ),
+            # Save the currently displayed plot into an Analysis on the dashboard.
+            # The picker's grouped choices are the Analyses (each with a "New plot"
+            # entry) and the plots already saved in them; picking a plot overwrites
+            # it, picking "New plot" adds one.
+            accordion_panel(
+              "Save Analysis",
+              icon = icon("floppy-disk"),
+              pickerInput(
+                ns("save_target"),
+                "Save in analysis group",
+                choices = list(),
+                options = pickerOptions(
+                  title = "No analysis",
+                  size = 10,
+                  container = "body"
                 )
               ),
-              choices = c(
-                "Ignore for pairwise comparison" = "ignore_na",
-                "Omit loci with missing values" = "omit",
-                "Treat missing as allele variant" = "category"
-              )
-            ),
-            # Typing results imported from a peer (Database > Import). They
-            # carry allele identity but no sequences, so they can join a
-            # distance computation but nothing else.
-            uiOutput(ns("imported_picker_ui")),
-            # Tree-only. `algo` is a computation input (feeds compute_phylo_tree
-            # on Generate, like the missing-value handling above); `zoom_view`
-            # is purely presentational — the engine applies it as a CSS class
-            # with no re-render.
-            if (identical(plot_type, "Tree")) {
-              tagList(
-                prettyRadioButtons(
-                  ns("algo"),
-                  "Algorithm",
-                  choices = c("Neighbour-Joining", "UPGMA")
-                ),
-                input_switch(ns("zoom_view"), "Zoom view", FALSE)
-              )
-            }
-          )
-        },
-        # Save the currently displayed plot into an Analysis on the dashboard.
-        # The picker's grouped choices are the Analyses (each with a "New plot"
-        # entry) and the plots already saved in them; picking a plot overwrites
-        # it, picking "New plot" adds one.
-        accordion_panel(
-          "Save Analysis",
-          icon = icon("floppy-disk"),
-          pickerInput(
-            ns("save_target"),
-            "Save into",
-            choices = list(),
-            options = pickerOptions(
-              title = "No analysis",
-              size = 10,
-              container = "body"
+              actionButton(
+                ns("save_plot"),
+                "Save",
+                icon = icon("floppy-disk"),
+                width = "100%"
+              ),
+              uiOutput(ns("save_status"))
             )
-          ),
-          actionButton(
-            ns("save_plot"),
-            "Save",
-            icon = icon("floppy-disk"),
-            class = "btn-primary w-100"
-          ),
-          uiOutput(ns("save_status"))
+          )
+        ),
+        shinyjs::useShinyjs(),
+        # The engine's whole inner layout. `as_fill_carrier` used to come from the
+        # coordinator wrapping each navset panel; the tab has to supply it now.
+        as_fill_carrier(
+          spec$mod$ui(ns("engine"), generate_id = ns("generate"))
         )
       )
-    ),
-    shinyjs::useShinyjs(),
-    # The engine's whole inner layout. `as_fill_carrier` used to come from the
-    # coordinator wrapping each navset panel; the tab has to supply it now.
-    as_fill_carrier(
-      spec$mod$ui(ns("engine"), generate_id = ns("generate"))
     )
   )
 }
@@ -1076,7 +1092,7 @@ server <- function(
         return(invisible(NULL))
       }
       if (!is.null(snap$na_handling)) {
-        updateSelectInput(session, "na_handling", selected = snap$na_handling)
+        updatePickerInput(session, "na_handling", selected = snap$na_handling)
       }
       updatePickerInput(
         session,

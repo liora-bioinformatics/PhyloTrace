@@ -52,6 +52,7 @@ box::use(
       METADATA_FIXED_COLS
     ],
   app / logic / database_functions[metadata_columns, make_metadata_table],
+  app / logic / db_sources[SOURCE_COL],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_chips, field_labels_for],
   app / logic / functions[panel_card, stat_tile, transfer_cards],
@@ -501,13 +502,16 @@ server <- function(
     })
 
     # `isolate` and `organism` always travel with the table; everything else is
-    # the user's to withhold.
+    # the user's to withhold. `source` is not offered at all: it describes how
+    # an isolate entered *this* database (which peer it was merged from), which
+    # is this lab's own bookkeeping - the receiving side stamps its own label on
+    # import and would ignore ours anyway.
     optional_meta <- reactive({
       path <- db_path()
       if (is.null(path) || is.na(path)) {
         return(character(0))
       }
-      setdiff(metadata_columns(path), METADATA_FIXED_COLS)
+      setdiff(metadata_columns(path), c(METADATA_FIXED_COLS, SOURCE_COL))
     })
 
     output$isolate_picker_ui <- renderUI({

@@ -24,12 +24,21 @@ box::use(
   shinyWidgets[
     radioGroupButtons,
     pickerInput,
-    pickerOptions
+    pickerOptions,
+    updatePickerInput
   ],
+  stats[setNames],
 )
 box::use(
   app / logic / functions[render_info],
-  app / logic / tree_plot[build_tree_ggtree, save_tree_plot],
+  app /
+    logic /
+    tree_plot[
+      build_tree_ggtree,
+      save_tree_plot,
+      tree_auto_layout,
+      TREE_FIT_DEFAULTS
+    ],
   app / logic / phylo[compute_phylo_tree],
   app /
     logic /
@@ -43,7 +52,6 @@ box::use(
       scale_select,
       color_scales,
       suitable_scale_categories,
-      export_panel,
       reset_viz_colors,
       reset_viz_radio_buttons,
       collect_input_snapshot,
@@ -110,6 +118,129 @@ TILE_DEFAULTS <- list(
   if (!length(v)) character(0) else as.character(v)
 }
 
+# --- Plot device geometry ----------------------------------------------------
+
+# The canvas the tree is drawn on: 1056 x (1056 * aspect) pixels at 192 dpi,
+# i.e. 5.5 inches wide. tree_auto_layout works in inches because ggplot2's text
+# sizes do.
+#
+# Fixed, and deliberately *not* the panel's own width. renderPlot re-executes
+# whenever the output's pixel size changes, so sizing the canvas from
+# session$clientData makes every width the browser reports — the first layout
+# pass, a font finishing loading, a scrollbar appearing, bslib settling a fill
+# container, any window drag — redraw a plot that takes a second to build for a
+# few hundred isolates. That is what put three "Rendering tree_plot" lines in
+# the log for a single Generate. Nothing in the render path reads clientData
+# now (renderPlot's own `width = "auto"` default is replaced too, since that is
+# a clientData dependency in disguise), so no report from the browser can
+# trigger a draw: the only things that can are a new tree and a changed
+# control.
+#
+# What the panel width is worth here is presentation, and CSS already does that
+# — the stage scales the finished image to fit, or shows it full size under
+# Zoom view (the .tree-stage rules in app/styles/main.scss). A fixed canvas
+# also makes the export match the preview exactly, and makes a saved Analysis
+# render identically on a different screen.
+PLOT_RES <- 192
+PLOT_WIDTH_PX <- 1056
+# A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
+PLOT_MAX_PX <- 12000
+
+# --- Controls fitted to the data ---------------------------------------------
+
+# Which field of a tree_auto_layout() fit feeds which control.
+FITTED_FIELDS <- c(
+  nj_aspect_ratio = "aspect",
+  nj_tiplab_size = "tiplab_size",
+  nj_branch_size = "branch_size",
+  nj_tippoint_size = "tippoint_size",
+  nj_nodepoint_size = "nodepoint_size",
+  nj_zoom = "zoom",
+  nj_h = "h"
+)
+
+# The values those controls hold before any data is loaded. Taken from the logic
+# module rather than written out again here, because they are also the fit's
+# calibration anchor (tree_auto_layout returns exactly these at ~15 tips) — a
+# slider declared with anything else would quietly move the anchor. Used both to
+# build the sliders and to seed the mirrors below.
+FITTED_DEFAULTS <- setNames(
+  TREE_FIT_DEFAULTS[FITTED_FIELDS],
+  names(FITTED_FIELDS)
+)
+
+# The other half of what the render reads through a mirror: the selects the
+# server resolves rather than the user, from the loaded metadata
+# (populate_metadata_selects) or from the mapped variable's type
+# (filter_scale_choices). They need mirroring for exactly the reason the fitted
+# sliders do — updatePickerInput reaches input$ only once the browser has
+# echoed it back, a flush after the tree it belongs to was drawn, so the plot
+# is drawn once with the stale value and again with the resolved one. The
+# console named "tiplab" as one of those second draws.
+MIRRORED_SELECTS <- c(
+  "nj_tiplab",
+  "nj_root_isolate",
+  "nj_branch_label",
+  "nj_color_mapping",
+  "nj_tipcolor_mapping",
+  "nj_tipshape_mapping",
+  "nj_parentnode",
+  "nj_tiplab_scale",
+  "nj_tippoint_scale"
+)
+
+# Everything mirrored, in one list: the fitted sliders, the tip-label switch the
+# fit can turn off, and those selects.
+MIRRORED_IDS <- c(names(FITTED_DEFAULTS), "nj_tiplab_show", MIRRORED_SELECTS)
+
+# TEMPORARY (2026-07-28) — names what actually changed ahead of each rebuild,
+# so the console says *why* a Generate drew the tree rather than only that it
+# did. Silent unless something really changed, so a well-behaved Generate logs
+# one line. Remove once the count is confirmed settled.
+.log_rebuild <- function(previous, current) {
+  changed <- if (is.null(previous)) {
+    "first plot"
+  } else {
+    fields <- union(names(previous$opts), names(current$opts))
+    paste(
+      c(
+        if (!identical(previous$tree, current$tree)) "tree",
+        if (!identical(previous$metadata, current$metadata)) "metadata",
+        fields[
+          !vapply(
+            fields,
+            function(f) identical(previous$opts[[f]], current$opts[[f]]),
+            logical(1)
+          )
+        ]
+      ),
+      collapse = ", "
+    )
+  }
+  message(
+    format(Sys.time(), digits = 3L),
+    " | ----- tree rebuild: ",
+    changed
+  )
+}
+
+# Longest label the tips will carry, for the width half of the layout fit. The
+# tree's own tip labels are the isolate names (including any folded in from an
+# imported set, which the metadata table does not carry); every other label
+# source is a metadata column.
+.label_chars <- function(tree, meta, field) {
+  vals <- if (
+    !identical(field, "isolate") &&
+      !is.null(meta) &&
+      isTRUE(field %in% names(meta))
+  ) {
+    meta[[field]]
+  } else {
+    tree$tip.label
+  }
+  suppressWarnings(max(nchar(as.character(vals)), 1L))
+}
+
 # --- Tree (NJ / UPGMA) control tabs ------------------------------------------
 
 tree_controls <- function(ns) {
@@ -125,15 +256,18 @@ tree_controls <- function(ns) {
             "Isolate Labels",
             icon = shiny$icon("tag"),
             input_switch(ns("nj_tiplab_show"), "Show isolate labels", TRUE),
-            shiny$selectInput(ns("nj_tiplab"), "Label source", label_vars),
+            shiny$pickerInput(ns("nj_tiplab"), "Label source", label_vars),
             layout_columns(
               col_widths = c(6, 6),
+              # Floor below the 1 this used to stop at: a few hundred tips are
+              # legible only at ~2mm, and the fit (tree_auto_layout) needs room
+              # underneath that for the trees that are larger still.
               shiny$sliderInput(
                 ns("nj_tiplab_size"),
                 "Size",
-                1,
+                0.5,
                 10,
-                4,
+                FITTED_DEFAULTS$nj_tiplab_size,
                 step = 0.1,
                 ticks = FALSE
               ),
@@ -149,7 +283,7 @@ tree_controls <- function(ns) {
             ),
             layout_columns(
               col_widths = c(6, 6),
-              shiny$selectInput(ns("nj_tiplab_fontface"), "Font", fontfaces),
+              shiny$pickerInput(ns("nj_tiplab_fontface"), "Font", fontfaces),
               shiny$sliderInput(
                 ns("nj_tiplab_angle"),
                 "Angle",
@@ -169,16 +303,22 @@ tree_controls <- function(ns) {
               "Show branch labels",
               FALSE
             ),
-            shiny$selectInput(ns("nj_branch_label"), "Label source", branch_vars),
+            shiny$pickerInput(
+              ns("nj_branch_label"),
+              "Label source",
+              branch_vars
+            ),
             layout_columns(
               col_widths = c(6, 6),
+              # Same floor and step as the tip labels: branch labels are fitted
+              # to the same row pitch, so they need the same room to move in.
               shiny$sliderInput(
                 ns("nj_branch_size"),
                 "Size",
-                2,
+                0.5,
                 10,
-                4,
-                step = 0.5,
+                FITTED_DEFAULTS$nj_branch_size,
+                step = 0.1,
                 ticks = FALSE
               ),
               shiny$sliderInput(
@@ -199,7 +339,11 @@ tree_controls <- function(ns) {
             # restriction in app/js/index.js.
             shiny$div(
               class = "allow-free-text",
-              shiny$textInput(ns("nj_title"), "Title", placeholder = "Plot title")
+              shiny$textInput(
+                ns("nj_title"),
+                "Title",
+                placeholder = "Plot title"
+              )
             ),
             shiny$sliderInput(
               ns("nj_title_size"),
@@ -238,7 +382,7 @@ tree_controls <- function(ns) {
             "Tip Label color",
             icon = shiny$icon("font"),
             input_switch(ns("nj_mapping_show"), "Map variable to color", FALSE),
-            shiny$selectInput(ns("nj_color_mapping"), "Variable", meta_vars),
+            shiny$pickerInput(ns("nj_color_mapping"), "Variable", meta_vars),
             scale_select(ns, "nj_tiplab_scale")
           ),
           accordion_panel(
@@ -249,7 +393,7 @@ tree_controls <- function(ns) {
               "Map variable to color",
               FALSE
             ),
-            shiny$selectInput(ns("nj_tipcolor_mapping"), "Variable", meta_vars),
+            shiny$pickerInput(ns("nj_tipcolor_mapping"), "Variable", meta_vars),
             scale_select(ns, "nj_tippoint_scale")
           ),
           accordion_panel(
@@ -260,14 +404,14 @@ tree_controls <- function(ns) {
               "Map variable to shape",
               FALSE
             ),
-            shiny$selectInput(ns("nj_tipshape_mapping"), "Variable", meta_vars)
+            shiny$pickerInput(ns("nj_tipshape_mapping"), "Variable", meta_vars)
           ),
           accordion_panel(
             "Tiles",
             icon = shiny$icon("table-cells"),
-            shiny$selectInput(ns("nj_tile_num"), "Tile", as.character(1:5)),
+            shiny$pickerInput(ns("nj_tile_num"), "Tile", as.character(1:5)),
             input_switch(ns("nj_tiles_show"), "Show tile", FALSE),
-            shiny$selectInput(ns("nj_fruit_variable"), "Variable", meta_vars),
+            shiny$pickerInput(ns("nj_fruit_variable"), "Variable", meta_vars),
             scale_select(ns, "nj_tiles_scale")
           ),
           accordion_panel(
@@ -310,7 +454,7 @@ tree_controls <- function(ns) {
             "Tip Points",
             icon = shiny$icon("circle"),
             input_switch(ns("nj_tippoint_show"), "Show tip points", FALSE),
-            shiny$selectInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
+            shiny$pickerInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
             layout_columns(
               col_widths = c(6, 6),
               shiny$sliderInput(
@@ -325,10 +469,10 @@ tree_controls <- function(ns) {
               shiny$sliderInput(
                 ns("nj_tippoint_size"),
                 "Size",
-                1,
+                0.5,
                 20,
-                4,
-                step = 0.5,
+                FITTED_DEFAULTS$nj_tippoint_size,
+                step = 0.1,
                 ticks = FALSE
               )
             )
@@ -337,7 +481,7 @@ tree_controls <- function(ns) {
             "Node Points",
             icon = shiny$icon("circle-dot"),
             input_switch(ns("nj_nodepoint_show"), "Show node points", FALSE),
-            shiny$selectInput(ns("nj_nodepoint_shape"), "Shape", point_shapes),
+            shiny$pickerInput(ns("nj_nodepoint_shape"), "Shape", point_shapes),
             layout_columns(
               col_widths = c(6, 6),
               shiny$sliderInput(
@@ -352,10 +496,10 @@ tree_controls <- function(ns) {
               shiny$sliderInput(
                 ns("nj_nodepoint_size"),
                 "Size",
-                1,
+                0.5,
                 20,
-                2.5,
-                step = 0.5,
+                FITTED_DEFAULTS$nj_nodepoint_size,
+                step = 0.1,
                 ticks = FALSE
               )
             )
@@ -363,7 +507,7 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Tiles",
             icon = shiny$icon("table-cells"),
-            shiny$selectInput(ns("nj_tile_number"), "Tile", as.character(1:5)),
+            shiny$pickerInput(ns("nj_tile_number"), "Tile", as.character(1:5)),
             shiny$sliderInput(
               ns("nj_fruit_alpha"),
               "Opacity",
@@ -409,7 +553,7 @@ tree_controls <- function(ns) {
               )
             ),
             viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221"),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("nj_clade_type"),
               "Form",
               c(Rounded = "roundrect", Rectangular = "rect")
@@ -426,12 +570,17 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Dimensions",
             icon = shiny$icon("up-right-and-down-left-from-center"),
+            # Ceiling well above the 2 this used to stop at: height per tip is
+            # what makes a tree readable, so a few hundred isolates need a tall,
+            # scrollable plot (Options > Zoom) that the old range could not
+            # express at all. Generate fits this to the data — see
+            # tree_auto_layout.
             shiny$sliderInput(
               ns("nj_aspect_ratio"),
               "Aspect ratio",
-              0.5,
-              2,
-              0.6,
+              0.3,
+              8,
+              FITTED_DEFAULTS$nj_aspect_ratio,
               step = 0.1,
               ticks = FALSE
             ),
@@ -451,7 +600,7 @@ tree_controls <- function(ns) {
                 "Horizontal",
                 -0.5,
                 0.5,
-                -0.05,
+                FITTED_DEFAULTS$nj_h,
                 step = 0.01,
                 ticks = FALSE
               )
@@ -461,7 +610,7 @@ tree_controls <- function(ns) {
               "Zoom",
               0.5,
               1.5,
-              0.95,
+              FITTED_DEFAULTS$nj_zoom,
               step = 0.05,
               ticks = FALSE
             )
@@ -469,12 +618,12 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Tree Rooting",
             icon = shiny$icon("seedling"),
-            shiny$selectInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
+            shiny$pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
           ),
           accordion_panel(
             "Layout",
             icon = shiny$icon("project-diagram"),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("nj_layout"),
               "Layout",
               list(
@@ -500,7 +649,14 @@ tree_controls <- function(ns) {
               c(Vertical = "vertical", Horizontal = "horizontal"),
               justified = TRUE
             ),
-            shiny$sliderInput(ns("nj_legend_size"), "Size", 5, 25, 10, ticks = FALSE),
+            shiny$sliderInput(
+              ns("nj_legend_size"),
+              "Size",
+              5,
+              25,
+              10,
+              ticks = FALSE
+            ),
             layout_columns(
               col_widths = c(6, 6),
               shiny$sliderInput(
@@ -524,8 +680,7 @@ tree_controls <- function(ns) {
             )
           )
         )
-      ),
-      export_panel(ns, "nj", c("png", "jpeg", "bmp", "svg"))
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -556,7 +711,11 @@ ui <- function(id, generate_id) {
       open = TRUE,
       fillable = TRUE,
       as_fill_carrier(
-        shiny$div(id = ns("controls_wrap"), class = "viz-nav-wrap", tree_controls(ns))
+        shiny$div(
+          id = ns("controls_wrap"),
+          class = "viz-nav-wrap",
+          tree_controls(ns)
+        )
       )
     ),
     shinyjs::useShinyjs(),
@@ -625,6 +784,49 @@ server <- function(
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # Width of the canvas, in inches. Everything that has to reason about how
+    # much room the plot has — the layout fit at Generate, the tip-label
+    # reserve, the export canvas — goes through this one constant, which is why
+    # all three agree and why none of them can be invalidated by the browser
+    # (see PLOT_WIDTH_PX).
+    plot_width_in <- function() PLOT_WIDTH_PX / PLOT_RES
+
+    # Mirrors of the fitted controls, and the only thing the render reads for
+    # them — never input$nj_aspect_ratio and friends directly.
+    #
+    # updateSliderInput does not set an input; it sends a message to the browser,
+    # which applies it and echoes the new value back as an input change a flush
+    # later. A plot built from the inputs is therefore drawn once with the stale
+    # values and then again with the fitted ones — and once more per control,
+    # since each slider echoes separately, which is the three renders one
+    # Generate used to log. Writing the fit into these mirrors *before* the tree
+    # is published makes the first draw the correct one; the echo that follows
+    # then assigns a mirror the value it already holds, and shiny does not treat
+    # that as a change, so nothing redraws. No delays and no ordering
+    # assumptions are involved, so there is nothing to race.
+    #
+    # nj_tiplab_show is mirrored for the same reason though it is not a slider:
+    # the fit switches it off when no legible label size exists, and that update
+    # echoes back exactly as a slider's does.
+    fitted <- do.call(
+      shiny$reactiveValues,
+      c(FITTED_DEFAULTS, list(nj_tiplab_show = TRUE))
+    )
+
+    # all.equal, not identical: the browser can echo 0.6 back as 0.6000000000001
+    # and a bit-exact test would read that as a fresh user edit.
+    set_fitted <- function(id, value) {
+      if (!isTRUE(all.equal(shiny$isolate(fitted[[id]]), value))) {
+        fitted[[id]] <- value
+      }
+    }
+
+    # A user drag lands in the same mirror the fit writes to, so the two are
+    # indistinguishable downstream and the last one to happen simply wins.
+    lapply(MIRRORED_IDS, function(id) {
+      shiny$observeEvent(input[[id]], set_fitted(id, input[[id]]))
+    })
+
     # Whether a plot has been generated for this engine. Drives the preview
     # between its prompt and the rendered plot. Retained across plot-type
     # switches (only session reset clears it).
@@ -652,17 +854,24 @@ server <- function(
       }
       fields <- names(meta)
 
+      # The resolved value goes to the mirror as well as to the browser, and
+      # the mirror is what the plot reads. Sending it only to the browser means
+      # it comes back an echo later, after the tree has already been drawn from
+      # the stale value — a second draw for a label source that was decided
+      # before the tree was even computed.
       keep <- function(id, choices, default) {
-        shiny$updateSelectInput(
+        value <- if (!force_default && isTRUE(input[[id]] %in% choices)) {
+          input[[id]]
+        } else {
+          default
+        }
+        updatePickerInput(
           session,
           id,
           choices = choices,
-          selected = if (!force_default && isTRUE(input[[id]] %in% choices)) {
-            input[[id]]
-          } else {
-            default
-          }
+          selected = value
         )
+        set_fitted(id, value)
       }
       keep("nj_tiplab", fields, "isolate")
       keep("nj_color_mapping", fields, fields[1])
@@ -680,18 +889,18 @@ server <- function(
       # the algorithm), keeping this cheap enough to call from Reset too.
       tips <- meta$isolate
       n_tip <- length(tips)
-      shiny$updateSelectInput(
+      root <- if (!force_default && isTRUE(input$nj_root_isolate %in% tips)) {
+        input$nj_root_isolate
+      } else {
+        "Automatic"
+      }
+      updatePickerInput(
         session,
         "nj_root_isolate",
         choices = c("Automatic", tips),
-        selected = if (
-          !force_default && isTRUE(input$nj_root_isolate %in% tips)
-        ) {
-          input$nj_root_isolate
-        } else {
-          "Automatic"
-        }
+        selected = root
       )
+      set_fitted("nj_root_isolate", root)
       if (n_tip >= 3) {
         n_node <- if (identical(algo(), "UPGMA")) {
           n_tip - 1L
@@ -699,16 +908,18 @@ server <- function(
           n_tip - 2L
         }
         nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
+        picked <- if (force_default) {
+          character(0)
+        } else {
+          intersect(input$nj_parentnode, nodes)
+        }
         shinyWidgets::updatePickerInput(
           session,
           "nj_parentnode",
           choices = nodes,
-          selected = if (force_default) {
-            character(0)
-          } else {
-            intersect(input$nj_parentnode, nodes)
-          }
+          selected = picked
         )
+        set_fitted("nj_parentnode", picked)
       }
     }
 
@@ -785,15 +996,15 @@ server <- function(
     tree_opts <- shiny$reactive(
       list(
         # Layout / rooting.
-        root = input$nj_root_isolate,
+        root = fitted$nj_root_isolate,
         layout = input$nj_layout,
         ladderize = input$nj_ladder,
         line_color = input$nj_color,
         bg = input$nj_bg,
         # Tip labels.
-        tiplab_show = input$nj_tiplab_show,
-        tiplab = input$nj_tiplab,
-        tiplab_size = input$nj_tiplab_size,
+        tiplab_show = fitted$nj_tiplab_show,
+        tiplab = fitted$nj_tiplab,
+        tiplab_size = fitted$nj_tiplab_size,
         tiplab_alpha = input$nj_tiplab_alpha,
         tiplab_fontface = input$nj_tiplab_fontface,
         tiplab_position = input$nj_tiplab_position %||% 0,
@@ -802,45 +1013,69 @@ server <- function(
         label_panel = input$nj_geom %||% FALSE,
         tiplab_color = input$nj_tiplab_color,
         tiplab_fill = input$nj_tiplab_fill,
-        # Tip-label color mapping.
+        # Tip-label color mapping. A mapping's variable and palette are read
+        # only when its switch is on, so that switched off they hold a constant
+        # rather than whatever the pickers happen to carry. Generate rewrites
+        # those pickers (populate_metadata_selects, filter_scale_choices) and
+        # every rewrite echoes back; without this the plot would count an echo
+        # about something it is not drawing as a reason to draw again.
         mapping_show = input$nj_mapping_show,
-        color_mapping = input$nj_color_mapping,
-        tiplab_scale = input$nj_tiplab_scale,
+        color_mapping = if (isTRUE(input$nj_mapping_show)) {
+          fitted$nj_color_mapping
+        },
+        tiplab_scale = if (isTRUE(input$nj_mapping_show)) {
+          fitted$nj_tiplab_scale
+        },
         # Branch labels.
         branch_show = input$nj_show_branch_label,
-        branch_label = input$nj_branch_label,
-        branch_size = input$nj_branch_size,
+        branch_label = if (isTRUE(input$nj_show_branch_label)) {
+          fitted$nj_branch_label
+        },
+        branch_size = fitted$nj_branch_size,
         branch_cutoff = input$nj_branchlabel_cutoff,
         branch_color = input$nj_branch_color,
         branch_label_color = input$nj_branch_label_color,
         # Tip / node points.
         tippoint_show = input$nj_tippoint_show,
         tippoint_alpha = input$nj_tippoint_alpha,
-        tippoint_size = input$nj_tippoint_size,
+        tippoint_size = fitted$nj_tippoint_size,
         tippoint_color = input$nj_tippoint_color,
         tippoint_shape = input$nj_tippoint_shape,
         tipcolor_mapping_show = input$nj_tipcolor_mapping_show,
-        tipcolor_mapping = input$nj_tipcolor_mapping,
-        tippoint_scale = input$nj_tippoint_scale,
+        tipcolor_mapping = if (isTRUE(input$nj_tipcolor_mapping_show)) {
+          fitted$nj_tipcolor_mapping
+        },
+        tippoint_scale = if (isTRUE(input$nj_tipcolor_mapping_show)) {
+          fitted$nj_tippoint_scale
+        },
         tipshape_mapping_show = input$nj_tipshape_mapping_show,
-        tipshape_mapping = input$nj_tipshape_mapping,
+        tipshape_mapping = if (isTRUE(input$nj_tipshape_mapping_show)) {
+          fitted$nj_tipshape_mapping
+        },
         nodepoint_show = input$nj_nodepoint_show,
         nodepoint_alpha = input$nj_nodepoint_alpha,
         nodepoint_color = input$nj_nodepoint_color,
         nodepoint_shape = input$nj_nodepoint_shape,
-        nodepoint_size = input$nj_nodepoint_size,
+        nodepoint_size = fitted$nj_nodepoint_size,
         # Clade highlights.
         nodelabel_show = input$nj_nodelabel_show,
-        parentnodes = input$nj_parentnode,
+        parentnodes = fitted$nj_parentnode %||% character(0),
         clade_color = input$nj_clade_scale,
         clade_type = input$nj_clade_type,
-        # Tiles / heatmap.
-        tiles = nj_tiles(),
+        # Tiles / heatmap. Only the strips actually being drawn: Generate
+        # repopulates the tile variable picker whether or not a strip is shown,
+        # and the observer behind it rewrites nj_tiles() in response — which the
+        # console named ("tiles") as a second draw for five hidden strips. The
+        # builder discards hidden strips anyway, so this only moves that filter
+        # to where it can also stop a redraw.
+        tiles = Filter(function(t) isTRUE(t$show), nj_tiles()),
         heatmap_show = input$nj_heatmap_show,
         heatmap_select = nj_heatmap_select(),
         # Elements toggles.
         rootedge_show = input$nj_rootedge_show,
         treescale_show = input$nj_treescale_show,
+        # Panel width, for the tip-label reserve (see .tiplab_frac).
+        width_in = plot_width_in(),
         # Titles.
         title = input$nj_title,
         subtitle = input$nj_subtitle,
@@ -848,8 +1083,8 @@ server <- function(
         title_size = input$nj_title_size,
         subtitle_size = input$nj_subtitle_size,
         # Dimensions / legend.
-        zoom = input$nj_zoom,
-        h = input$nj_h,
+        zoom = fitted$nj_zoom,
+        h = fitted$nj_h,
         v = input$nj_v,
         legend_orientation = input$nj_legend_orientation,
         legend_x = input$nj_legend_x,
@@ -858,11 +1093,47 @@ server <- function(
       )
     )
 
-    # The ggtree plot: rebuilt live as controls change; the phylo itself is
-    # never recomputed here.
+    # Everything the ggtree build consumes, republished only when it actually
+    # differs from what was published last.
+    #
+    # Building straight from tree_opts() makes the redraw *invalidation*-driven:
+    # any control that reports a change redraws the plot, whether or not the
+    # change means anything. A Generate touches a great many of them without
+    # changing what they resolve to — populate_metadata_selects alone
+    # repopulates seven metadata-backed selects and a picker, each echoing back
+    # from the browser in its own flush — and at a few hundred tips every one of
+    # those echoes costs a second of drawing. Comparing the resolved value and
+    # republishing only on a real difference makes it *value*-driven instead,
+    # which no echo can defeat, whichever control it came from.
+    #
+    # priority: the barrier has to settle before outputs are recalculated in the
+    # same flush, or the plot draws once from the stale value and again from the
+    # fresh one — the very thing this exists to stop. Higher priority than the
+    # default 0 that output observers carry guarantees the order.
+    plot_inputs <- shiny$reactiveVal(NULL)
+    shiny$observe(
+      {
+        shiny$req(tree_obj())
+        current <- list(
+          tree = tree_obj(),
+          metadata = viz_metadata(),
+          opts = tree_opts()
+        )
+        previous <- shiny$isolate(plot_inputs())
+        if (!identical(previous, current)) {
+          .log_rebuild(previous, current)
+          plot_inputs(current)
+        }
+      },
+      priority = 100
+    )
+
+    # The ggtree plot: rebuilt when — and only when — one of those inputs
+    # differs; the phylo itself is never recomputed here.
     tree_plot_built <- shiny$reactive({
-      shiny$req(tree_obj())
-      build_tree_ggtree(tree_obj(), viz_metadata(), tree_opts())
+      p <- plot_inputs()
+      shiny$req(p)
+      build_tree_ggtree(p$tree, p$metadata, p$opts)
     })
 
     # Top-level app-reset: clear the computed tree so the stale plot image is
@@ -916,6 +1187,55 @@ server <- function(
         # spinner up until the 45s client-side safety timeout.
         shinyjs::removeClass(id = "plot_stage", class = "is-loading")
       }
+      # Fit the layout controls to the data before publishing the tree, the way
+      # the Map fits its "Max intensity" slider to the busiest place. The coded
+      # defaults (aspect 0.6, tip label size 4) suit roughly fifteen tips and
+      # nothing else — five isolates got a strip with oversized, overlapping
+      # labels and three hundred got an unreadable smear that no hand-tuning
+      # could fix, since the aspect ratio needed is several times what the
+      # slider used to offer. Re-fitted on every Generate, so a manual tweak
+      # lives until the next one.
+      #
+      # Each fitted value goes to two places: the mirror the render reads, so
+      # this Generate draws once and draws right, and the slider, so the sidebar
+      # shows what was chosen and stays the place to adjust it. The slider is
+      # only touched when the value really changed — its echo is harmless (see
+      # `fitted`) but pointless.
+      if (!is.null(tree)) {
+        fit <- tree_auto_layout(
+          length(tree$tip.label),
+          plot_width_in(),
+          input$nj_layout,
+          .label_chars(tree, viz_metadata(), input$nj_tiplab)
+        )
+        for (id in names(FITTED_DEFAULTS)) {
+          value <- fit[[FITTED_FIELDS[[id]]]]
+          if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
+            shiny$updateSliderInput(session, id, value = value)
+          }
+          set_fitted(id, value)
+        }
+        # Past a certain tip count the labels are a grey smudge at any size that
+        # fits, so the fit draws the tree without them — and says so, rather
+        # than silently moving a toggle the user may have set deliberately.
+        if (
+          !fit$labels_legible && isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+        ) {
+          set_fitted("nj_tiplab_show", FALSE)
+          bslib::update_switch("nj_tiplab_show", value = FALSE)
+          shiny$showNotification(
+            paste0(
+              length(tree$tip.label),
+              " isolates leave no room for readable tip labels — they have ",
+              "been switched off. Narrow the isolate selection to bring them ",
+              "back, or re-enable them under Labels > Isolate Labels."
+            ),
+            type = "warning",
+            duration = 12
+          )
+        }
+      }
+
       tree_obj(tree)
 
       generated(TRUE)
@@ -946,12 +1266,15 @@ server <- function(
       } else {
         color_scales[[cats[1]]][1]
       }
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         input_id,
         choices = color_scales[cats],
         selected = sel
       )
+      # Mirrored for the same reason as the metadata selects above — the plot
+      # reads the palette from the mirror, not from the echo.
+      set_fitted(input_id, sel)
     }
 
     shiny$observeEvent(
@@ -1075,26 +1398,32 @@ server <- function(
       ignoreNULL = FALSE
     )
 
-    # The ggtree plot, sized from the panel width and the aspect-ratio control
-    # (circular/inward layouts are square), rendered at print resolution.
+    # The ggtree plot, drawn on the fixed canvas at the aspect ratio the fit
+    # chose (circular/inward layouts are square), at print resolution.
+    #
+    # `width` is given explicitly rather than left at renderPlot's "auto",
+    # which resolves to the panel's clientData width and would re-execute this
+    # — a second of work for a few hundred tips — on every width the browser
+    # reports. Between them these two functions are the plot's whole dependency
+    # on its own size, and neither can be invalidated from the client.
     output$tree_plot <- shiny$renderPlot(
       {
         render_info("visualization_tree tree_plot")
         tree_plot_built()
       },
+      width = function() PLOT_WIDTH_PX,
       height = function() {
-        w <- session$clientData[[paste0("output_", ns("tree_plot"), "_width")]]
         aspect <- if (
           identical(input$nj_layout, "circular") ||
             identical(input$nj_layout, "inward")
         ) {
           1
         } else {
-          input$nj_aspect_ratio %||% 0.6
+          fitted$nj_aspect_ratio
         }
-        if (!is.null(w)) as.integer(w * aspect) else 600L
+        min(PLOT_MAX_PX, as.integer(PLOT_WIDTH_PX * aspect))
       },
-      res = 192
+      res = PLOT_RES
     )
 
     # Fit ⇄ Zoom display mode, driven by the parent's `zoom_view` switch (left
@@ -1147,8 +1476,12 @@ server <- function(
     shiny$observeEvent(input$nj_tile_num, {
       tile <- nj_tiles()[[as.integer(input$nj_tile_num)]]
       bslib::update_switch("nj_tiles_show", value = tile$show)
-      shiny$updateSelectInput(session, "nj_fruit_variable", selected = tile$variable)
-      shiny$updateSelectInput(session, "nj_tiles_scale", selected = tile$scale)
+      updatePickerInput(
+        session,
+        "nj_fruit_variable",
+        selected = tile$variable
+      )
+      updatePickerInput(session, "nj_tiles_scale", selected = tile$scale)
     })
     shiny$observeEvent(input$nj_tile_number, {
       tile <- nj_tiles()[[as.integer(input$nj_tile_number)]]
@@ -1192,9 +1525,17 @@ server <- function(
         ) {
           1
         } else {
-          input$nj_aspect_ratio %||% 0.6
+          fitted$nj_aspect_ratio
         }
-        save_tree_plot(tree_plot_built(), file, input$nj_filetype, aspect)
+        # Exported on the same canvas width as the preview, so the tip labels
+        # keep the proportion they were tuned to (see save_tree_plot).
+        save_tree_plot(
+          tree_plot_built(),
+          file,
+          input$nj_filetype,
+          aspect,
+          width = plot_width_in()
+        )
       }
     )
     shiny$observeEvent(input$nj_download, {
@@ -1224,34 +1565,81 @@ server <- function(
         session,
         vals,
         switches = c(
-          "nj_tiplab_show", "nj_align", "nj_show_branch_label",
-          "nj_mapping_show", "nj_tipcolor_mapping_show",
-          "nj_tipshape_mapping_show", "nj_tiles_show", "nj_heatmap_show",
-          "nj_tippoint_show", "nj_nodepoint_show", "nj_nodelabel_show",
-          "nj_ladder", "nj_rootedge_show", "nj_treescale_show"
+          "nj_tiplab_show",
+          "nj_align",
+          "nj_show_branch_label",
+          "nj_mapping_show",
+          "nj_tipcolor_mapping_show",
+          "nj_tipshape_mapping_show",
+          "nj_tiles_show",
+          "nj_heatmap_show",
+          "nj_tippoint_show",
+          "nj_nodepoint_show",
+          "nj_nodelabel_show",
+          "nj_ladder",
+          "nj_rootedge_show",
+          "nj_treescale_show"
         ),
         selects = c(
-          "nj_tiplab_fontface", "nj_tiplab_scale", "nj_tippoint_scale",
-          "nj_tiles_scale", "nj_heatmap_scale", "nj_tippoint_shape",
-          "nj_nodepoint_shape", "nj_tile_num", "nj_tile_number",
-          "nj_clade_type", "nj_layout"
+          "nj_tiplab_fontface",
+          "nj_tiplab_scale",
+          "nj_tippoint_scale",
+          "nj_tiles_scale",
+          "nj_heatmap_scale",
+          "nj_tippoint_shape",
+          "nj_nodepoint_shape",
+          "nj_tile_num",
+          "nj_tile_number",
+          "nj_clade_type",
+          "nj_layout"
         ),
         sliders = c(
-          "nj_tiplab_size", "nj_tiplab_alpha", "nj_tiplab_angle",
-          "nj_branch_size", "nj_branchlabel_cutoff", "nj_title_size",
-          "nj_subtitle_size", "nj_tippoint_alpha", "nj_tippoint_size",
-          "nj_nodepoint_alpha", "nj_nodepoint_size", "nj_fruit_alpha",
-          "nj_fruit_width", "nj_fruit_offset", "nj_aspect_ratio", "nj_v",
-          "nj_h", "nj_zoom", "nj_legend_size", "nj_legend_x", "nj_legend_y"
+          "nj_tiplab_size",
+          "nj_tiplab_alpha",
+          "nj_tiplab_angle",
+          "nj_branch_size",
+          "nj_branchlabel_cutoff",
+          "nj_title_size",
+          "nj_subtitle_size",
+          "nj_tippoint_alpha",
+          "nj_tippoint_size",
+          "nj_nodepoint_alpha",
+          "nj_nodepoint_size",
+          "nj_fruit_alpha",
+          "nj_fruit_width",
+          "nj_fruit_offset",
+          "nj_aspect_ratio",
+          "nj_v",
+          "nj_h",
+          "nj_zoom",
+          "nj_legend_size",
+          "nj_legend_x",
+          "nj_legend_y"
         ),
         texts = c("nj_title", "nj_subtitle"),
         colors = c(
-          "nj_color", "nj_bg", "nj_title_color", "nj_tiplab_color",
-          "nj_tiplab_fill", "nj_branch_color", "nj_branch_label_color",
-          "nj_tippoint_color", "nj_nodepoint_color", "nj_clade_scale"
+          "nj_color",
+          "nj_bg",
+          "nj_title_color",
+          "nj_tiplab_color",
+          "nj_tiplab_fill",
+          "nj_branch_color",
+          "nj_branch_label_color",
+          "nj_tippoint_color",
+          "nj_nodepoint_color",
+          "nj_clade_scale"
         ),
         radio_groups = "nj_legend_orientation"
       )
+
+      # Put the fitted controls' saved values straight into the mirrors the
+      # render reads, so restoring an Analysis redraws the tree once rather than
+      # once more for each of these echoing back from the browser (see `fitted`).
+      for (id in MIRRORED_IDS) {
+        if (!is.null(vals[[id]])) {
+          set_fitted(id, vals[[id]])
+        }
+      }
 
       # Metadata-/isolate-backed selects: set choices alongside the value so the
       # saved field/isolate/node sticks (mirrors populate_metadata_selects()).
@@ -1260,8 +1648,12 @@ server <- function(
         fields <- names(meta)
         setsel <- function(id, choices) {
           if (!is.null(vals[[id]])) {
-            shiny$updateSelectInput(session, id, choices = choices,
-              selected = vals[[id]])
+            updatePickerInput(
+              session,
+              id,
+              choices = choices,
+              selected = vals[[id]]
+            )
           }
         }
         setsel("nj_tiplab", fields)
@@ -1281,15 +1673,23 @@ server <- function(
           if (!isTRUE(root %in% c("Automatic", tips))) {
             root <- "Automatic"
           }
-          shiny$updateSelectInput(session, "nj_root_isolate",
-            choices = c("Automatic", tips), selected = root)
+          updatePickerInput(
+            session,
+            "nj_root_isolate",
+            choices = c("Automatic", tips),
+            selected = root
+          )
         }
         n_tip <- length(tips)
         if (n_tip >= 3 && !is.null(vals$nj_parentnode)) {
           n_node <- if (identical(algo(), "UPGMA")) n_tip - 1L else n_tip - 2L
           nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
-          shinyWidgets::updatePickerInput(session, "nj_parentnode",
-            choices = nodes, selected = intersect(vals$nj_parentnode, nodes))
+          shinyWidgets::updatePickerInput(
+            session,
+            "nj_parentnode",
+            choices = nodes,
+            selected = intersect(vals$nj_parentnode, nodes)
+          )
         }
       }
 
@@ -1306,8 +1706,9 @@ server <- function(
       }
     }
 
-    # Thumbnail: server-render the ggtree to a small PNG (width fixed at 10in in
-    # save_tree_plot, so dpi sets the pixel width).
+    # Thumbnail: server-render the ggtree to a small PNG on the preview's own
+    # canvas (so it looks like the plot it stands for), with dpi carrying the
+    # requested pixel width.
     save_thumb <- function(file, w, h) {
       aspect <- if (
         identical(input$nj_layout, "circular") ||
@@ -1315,11 +1716,16 @@ server <- function(
       ) {
         1
       } else {
-        input$nj_aspect_ratio %||% 0.6
+        fitted$nj_aspect_ratio
       }
+      width_in <- plot_width_in()
       save_tree_plot(
-        tree_plot_built(), file, "png", aspect,
-        dpi = max(24, round(w / 10))
+        tree_plot_built(),
+        file,
+        "png",
+        aspect,
+        width = width_in,
+        dpi = max(24, round(w / width_in))
       )
     }
 

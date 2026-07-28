@@ -31,7 +31,6 @@ box::use(
     viz_helpers[
       meta_vars,
       viz_color,
-      export_panel,
       reset_viz_colors,
       collect_input_snapshot,
       apply_input_snapshot
@@ -48,7 +47,7 @@ mst_controls <- function(ns) {
         "Labels",
         icon = shiny$icon("tag"),
         input_switch(ns("mst_show_label"), "Show node labels", TRUE),
-        shiny$selectInput(
+        shiny$pickerInput(
           ns("mst_node_label"),
           "Label source",
           c("Assembly Name", "Isolation Date", "Host", "Country", "City")
@@ -59,8 +58,8 @@ mst_controls <- function(ns) {
         "Mapping",
         icon = shiny$icon("palette"),
         input_switch(ns("mst_color_var"), "Map variable to node color", FALSE),
-        shiny$selectInput(ns("mst_col_var"), "Variable", meta_vars),
-        shiny$selectInput(
+        shiny$pickerInput(ns("mst_col_var"), "Variable", meta_vars),
+        shiny$pickerInput(
           ns("mst_col_scale"),
           "color scale",
           c("Viridis", "Rainbow")
@@ -161,7 +160,7 @@ mst_controls <- function(ns) {
             "Node Shapes",
             icon = shiny$icon("shapes"),
             input_switch(ns("mst_shadow"), "Show shadow", TRUE),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("mst_node_shape"),
               "Shape",
               list(
@@ -191,12 +190,12 @@ mst_controls <- function(ns) {
               min = 1,
               max = 99
             ),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("mst_cluster_col_scale"),
               "color scale",
               c("Viridis", "Rainbow")
             ),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("mst_cluster_type"),
               "Type",
               c("Area", "Skeleton")
@@ -213,7 +212,7 @@ mst_controls <- function(ns) {
           accordion_panel(
             "Legend",
             icon = shiny$icon("list"),
-            shiny$selectInput(
+            shiny$pickerInput(
               ns("mst_legend_ori"),
               "Orientation",
               c(Left = "left", Right = "right")
@@ -236,8 +235,7 @@ mst_controls <- function(ns) {
             )
           )
         )
-      ),
-      export_panel(ns, "mst", c("html", "png", "jpeg", "bmp"))
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -366,7 +364,7 @@ server <- function(
       # hold.
       field_choices <- grouped_field_choices(fields)
 
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         "mst_node_label",
         choices = field_choices,
@@ -381,7 +379,7 @@ server <- function(
       # Default the color variable to the first non-isolate field, where one
       # exists, so a freshly enabled mapping is meaningful.
       non_isolate <- setdiff(fields, "isolate")
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         "mst_col_var",
         choices = field_choices,
@@ -411,7 +409,7 @@ server <- function(
     # shinyjs::reset(): mst_node_label/mst_col_var *are* plain <select>s that
     # shinyjs::reset() recognizes and restores — but only asynchronously (it
     # round-trips through the browser to read back each resettable element's
-    # page-load value before calling shiny::updateSelectInput() on the
+    # page-load value before calling shiny::updatePickerInput() on the
     # server). That means a same-tick call right after shinyjs::reset() runs
     # and sends its corrected choices/selection *first*, and shinyjs's own
     # (stale, pre-Generate) restoration lands *after* it and overwrites it —
@@ -663,37 +661,57 @@ server <- function(
         session,
         vals,
         switches = c(
-          "mst_show_label", "mst_color_var", "mst_background_transparent",
-          "mst_scale_nodes", "mst_scale_edges", "mst_shadow",
+          "mst_show_label",
+          "mst_color_var",
+          "mst_background_transparent",
+          "mst_scale_nodes",
+          "mst_scale_edges",
+          "mst_shadow",
           "mst_show_clusters"
         ),
         selects = c(
-          "mst_col_scale", "mst_node_shape", "mst_cluster_col_scale",
-          "mst_cluster_type", "mst_legend_ori"
+          "mst_col_scale",
+          "mst_node_shape",
+          "mst_cluster_col_scale",
+          "mst_cluster_type",
+          "mst_legend_ori"
         ),
         sliders = c(
-          "mst_node_size", "mst_edge_length_scale", "mst_edge_font_size",
-          "mst_node_label_fontsize", "mst_aspect_ratio", "mst_cluster_width",
-          "mst_font_size", "mst_symbol_size"
+          "mst_node_size",
+          "mst_edge_length_scale",
+          "mst_edge_font_size",
+          "mst_node_label_fontsize",
+          "mst_aspect_ratio",
+          "mst_cluster_width",
+          "mst_font_size",
+          "mst_symbol_size"
         ),
         numerics = "mst_cluster_threshold",
         colors = c(
-          "mst_text_color", "mst_color_node", "mst_color_edge",
-          "mst_edge_font_color", "mst_background_color"
+          "mst_text_color",
+          "mst_color_node",
+          "mst_color_edge",
+          "mst_edge_font_color",
+          "mst_background_color"
         )
       )
       meta <- viz_metadata()
       if (!is.null(meta) && length(names(meta))) {
         fc <- grouped_field_choices(names(meta))
         if (!is.null(vals$mst_node_label)) {
-          shiny$updateSelectInput(
-            session, "mst_node_label", choices = fc,
+          updatePickerInput(
+            session,
+            "mst_node_label",
+            choices = fc,
             selected = vals$mst_node_label
           )
         }
         if (!is.null(vals$mst_col_var)) {
-          shiny$updateSelectInput(
-            session, "mst_col_var", choices = fc, selected = vals$mst_col_var
+          updatePickerInput(
+            session,
+            "mst_col_var",
+            choices = fc,
+            selected = vals$mst_col_var
           )
         }
       }
@@ -702,11 +720,14 @@ server <- function(
     # Thumbnail: capture the vis-network <canvas> in the browser and return the
     # PNG data URI through input$thumb_data.
     request_thumb <- function() {
-      session$sendCustomMessage("phylotrace_capture", list(
-        selector = paste0("#", ns("mst_plot"), " canvas"),
-        mode = "canvas",
-        inputId = session$ns("thumb_data")
-      ))
+      session$sendCustomMessage(
+        "phylotrace_capture",
+        list(
+          selector = paste0("#", ns("mst_plot"), " canvas"),
+          mode = "canvas",
+          inputId = session$ns("thumb_data")
+        )
+      )
     }
 
     list(
