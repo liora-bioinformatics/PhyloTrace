@@ -1837,10 +1837,6 @@ $session-new-tint: 20%;
     justify-content: center;
 }
 
-.vscomp-dropbox-close-button {
-    left: 48% !important;
-}
-
 .io-control {
     display: flex;
     gap: 1.5rem;
@@ -4152,13 +4148,21 @@ table.dataTable thead>tr>th.sorting {
 
 // The close button shown in "popup" mode (see showDropboxAsPopup in
 // database_browser.R) - a circle hard-coded to white in the library's own
-// stylesheet, which would stay white in dark mode. Shifted left of center to
-// make room for the confirm button added alongside it (see
-// app/js/virtual-select-popup-confirm.js) - now Cancel, not just Close.
+// stylesheet, which would stay white in dark mode.
 .vscomp-dropbox-close-button {
-    margin-left: -52px;
     background-color: var(--bs-body-bg);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+// Only the multi-select popups get a Confirm button beside the close button,
+// which there means Cancel rather than just Close (see
+// app/js/virtual-select-popup-confirm.js, which sets .pt-has-confirm). Shift
+// the close button left of center so the pair reads as centered together.
+// Single-select popups have nothing to confirm and keep the library's own
+// lone, centered close button.
+.pt-has-confirm .vscomp-dropbox-close-button {
+    left: 48% !important;
+    margin-left: -52px;
 }
 
 .vscomp-dropbox-close-button:hover,

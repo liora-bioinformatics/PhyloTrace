@@ -248,6 +248,21 @@ server <- function(id) {
     # sends the user back to the landing screen to press Load again.
     data_reset <- reactiveVal(0L)
 
+    # Bumped once a freshly built set of app panels is actually in the DOM.
+    #
+    # The panels are rebuilt from scratch on every database load (see the
+    # load_database handler below) while the module servers live for the whole
+    # session. Shiny replays an output's last value into a re-bound element, so
+    # everything rendered through renderUI() comes back on its own - but a
+    # one-shot shinyjs message (toggle(), toggleClass(), toggleState()) has
+    # nothing to replay, and the observer that sent it does not re-fire because
+    # none of the reactives it watches changed. The new markup therefore arrives
+    # in its static state: controls the module had revealed are hidden again.
+    # Modules re-apply that DOM state when this signal advances.
+    #
+    # Deferred through later() on purpose - see the bump site for why.
+    ui_mounted <- reactiveVal(0L)
+
     # Shared change signal for saved Analyses/Plots. Bumped by whichever module
     # writes (the dashboard on add/rename/delete, the Visualization module on
     # Save); both re-read the database when it advances so they stay in sync.
@@ -285,6 +300,7 @@ server <- function(id) {
       "database",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = data_reset,
+      ui_mounted = ui_mounted,
       typing_status = TYPING_vals$typing_status,
       db_updated = TYPING_vals$db_updated
     )
@@ -504,6 +520,23 @@ server <- function(id) {
         auto_unbox = TRUE
       )
 
+      # Tell the modules their UI is (back) in the page, so each can re-apply
+      # the DOM state it drives from the server (see ui_mounted's definition).
+      #
+      # Deferred rather than bumped inline: an inline bump would run those
+      # modules' observers inside this same flush, putting their shinyjs
+      # messages in the same websocket batch as the panel HTML - and the client
+      # dispatches "custom" messages *before* "shiny-insert-tab", so the toggles
+      # would target elements that do not exist yet. A later() bump lands in the
+      # next flush, hence a separate batch, which the client processes only
+      # after this one's insertion has finished.
+      later::later(function() {
+        shiny::withReactiveDomain(
+          session,
+          ui_mounted(shiny::isolate(ui_mounted()) + 1L)
+        )
+      })
+
       # The load is near-instant, so hold the overlay for a short buffer to read
       # as a deliberate loading step. Hide asynchronously via later() so the show
       # and hide land in separate flushes and the overlay is actually painted.
@@ -621,6 +654,7 @@ server <- function(id) {
     })
 
     observeEvent(input$reset, {
+      log_event("APP", "Session reset")
       hide_db_notification()
       nav_show(id = "tabs", target = "landing_page_panel", select = TRUE)
       nav_show(id = "tabs", target = "scheme_browser_panel")

@@ -681,7 +681,6 @@ server <- function(
     observeEvent(
       session_reset(),
       {
-        log_typing("Session reset")
         if (!is.null(Typing$proc) && Typing$proc$is_alive()) {
           log_typing("Killing live process on reset")
           Typing$terminated <- TRUE

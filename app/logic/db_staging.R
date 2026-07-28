@@ -49,6 +49,7 @@ box::use(
 box::use(
   app / logic / db_compat[REF_SOUCHE, connect_ro],
   app / logic / profile_io[norm_locus],
+  app / logic / logging[log_event],
 )
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -530,6 +531,11 @@ stage_profile_set <- function(
       }
 
       dbCommit(con)
+      log_event(
+        "DB",
+        "staged-import",
+        sprintf("'%s' (set_id=%s)", name, set_id)
+      )
       set_id
     },
     error = function(e) {
@@ -607,6 +613,7 @@ delete_imported_set <- function(db_path, set_id) {
       stop(e)
     }
   )
+  log_event("DB", "delete-imported-set", sprintf("set_id=%s", set_id))
   invisible(TRUE)
 }
 

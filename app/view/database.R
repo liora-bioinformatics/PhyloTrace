@@ -77,6 +77,7 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
+  ui_mounted = shiny::reactive(0L),
   typing_status = shiny::reactive("idle"),
   db_updated = shiny::reactiveVal(0L)
 ) {
@@ -119,8 +120,17 @@ server <- function(
           custom_updated = custom_updated
         ),
         custom_fields = list(custom_updated = custom_updated),
-        import = list(custom_updated = custom_updated),
-        export = list(custom_updated = custom_updated),
+        # Import and Export drive part of their sidebar from the server
+        # (shinyjs::toggle on the control groups that only one source/export
+        # type needs), so both need to know when their markup was rebuilt.
+        import = list(
+          custom_updated = custom_updated,
+          ui_mounted = ui_mounted
+        ),
+        export = list(
+          custom_updated = custom_updated,
+          ui_mounted = ui_mounted
+        ),
         list()
       )
       result <- do.call(

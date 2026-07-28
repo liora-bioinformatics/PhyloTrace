@@ -633,15 +633,18 @@ server <- function(
       }
       State$dirty <- rbind(keep, entry)
       State$pending <- TRUE
-      # Same reasoning as above: only push a redraw when the canonical stored
-      # form actually differs from what the user typed (trimmed whitespace,
-      # case-folded category, etc.) — the common case (a dropdown pick, or
-      # plain text typed with no stray whitespace) needs no correction, and
-      # skipping the round trip there is what keeps a quick run of edits
-      # across several cells from racing the same way as the no-op case above.
-      if (!identical(stored, as.character(info$value))) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-      }
+      # Unlike the no-op case above, an *accepted* edit always gets a
+      # replaceData() round trip, even when the canonical stored form is
+      # byte-identical to what the user typed: DT's blur handler updates the
+      # cell's data client-side without ever calling draw(), so the table's
+      # per-row sort/filter caches are never rebuilt for that edit and stay
+      # built from the pre-edit data. Skipping replaceData() here left the
+      # next column-header sort click as the first thing to force a draw -
+      # at which point DataTables rebuilt those stale caches and blanked
+      # every cell edited since the table last rendered, even though the
+      # value was already saved correctly (a full reload always showed it
+      # right, since that goes through a real render).
+      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
     })
 
     shiny$observeEvent(State$pending, {

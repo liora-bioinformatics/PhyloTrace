@@ -838,6 +838,7 @@ restore_backup <- function(db_path, backup_path) {
     unlink(staging)
     stop("Could not restore the backup.")
   }
+  log_event("DB", "restore-backup", sprintf("from %s", backup_path))
   invisible(db_path)
 }
 

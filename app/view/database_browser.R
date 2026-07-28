@@ -880,16 +880,28 @@ server <- function(
     # database_custom.R, which is why the rejection and no-op handling below
     # read the same.
     #
-    # replaceData() is only called when the client actually needs correcting,
-    # not on every edit unconditionally: DT's own blur handler fires cell_edit
-    # for a no-op click on an empty cell too (JS null vs. the editor's blur
-    # value "" never compare equal), so calling it unconditionally sent a
-    # round trip on virtually every click into a not-yet-filled cell. If the
-    # user had already clicked into a *different* cell to start editing it by
-    # the time that round trip's replaceData() landed, its table-wide redraw
-    # tore that cell's still-open editor out from under them — so the first
-    # click on it appeared to do nothing and a second one was needed. See the
-    # same fix in database_custom.R's values_table_cell_edit observer.
+    # replaceData() is skipped for a genuine no-op: DT's own blur handler fires
+    # cell_edit for a no-op click on an empty cell too (JS null vs. the
+    # editor's blur value "" never compare equal), so calling it unconditionally
+    # sent a round trip on virtually every click into a not-yet-filled cell. If
+    # the user had already clicked into a *different* cell to start editing it
+    # by the time that round trip's replaceData() landed, its table-wide
+    # redraw tore that cell's still-open editor out from under them — so the
+    # first click on it appeared to do nothing and a second one was needed.
+    # See the same fix in database_custom.R's values_table_cell_edit observer.
+    #
+    # But for an *accepted* edit, replaceData() always runs, even when the
+    # value R stored is byte-identical to what the client already shows: DT's
+    # blur handler updates its cell's data client-side (cell().data()) without
+    # ever calling draw(), so the table's per-row sort/filter caches are never
+    # rebuilt for that edit. They stay built from the pre-edit (blank) data
+    # until something forces a real draw. Skipping replaceData() here used to
+    # be exactly that shortcut - and its absence meant the *next* column-header
+    # sort click was the first thing to force a draw, at which point DataTables
+    # rebuilt those stale caches and blanked every cell edited since the table
+    # last rendered, even though the save to the database already had the
+    # right values (a full reload always showed them correctly, since that
+    # goes through a real render). See conversation 2026-07-28 for the repro.
     observeEvent(input$metadata_table_cell_edit, {
       req(is.data.frame(State$data))
       info <- input$metadata_table_cell_edit
@@ -910,9 +922,7 @@ server <- function(
         }
 
         State$pending <- TRUE
-        if (!identical(as.character(new_value), as.character(info$value))) {
-          replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-        }
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
         return()
       }
 
@@ -986,9 +996,7 @@ server <- function(
       }
       State$custom_dirty <- rbind(keep, entry)
       State$pending <- TRUE
-      if (!identical(stored, as.character(info$value))) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-      }
+      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
     })
 
     # Enable/disable both action buttons together based on pending edits

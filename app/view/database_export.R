@@ -315,7 +315,14 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  custom_updated = shiny::reactiveVal(0L)
+  custom_updated = shiny::reactiveVal(0L),
+  # Advances every time this panel's markup is (re)inserted into the page —
+  # i.e. on every database load, since the Database panel is rebuilt from
+  # scratch each time while this server keeps running. Every observer below
+  # that puts state into the DOM depends on it, because that state does not
+  # survive the rebuild and nothing else would make them fire again. See
+  # main.R's ui_mounted.
+  ui_mounted = shiny::reactive(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -358,7 +365,7 @@ server <- function(
     # take there — the panels simply stay visible. The rest of this app (see
     # visualization.R) toggles the same way.
     observeEvent(
-      input$export_type,
+      list(input$export_type, ui_mounted()),
       {
         shinyjs::toggle("content_group", condition = typing())
         shinyjs::toggle("format_group", condition = typing())
@@ -370,9 +377,11 @@ server <- function(
 
     # Enable each result-table toggle only when the loaded database holds that
     # table; uncheck a box the moment its table is unavailable so the summary
-    # never implies data that will not travel.
+    # never implies data that will not travel. Re-run on remount as well: the
+    # rebuilt markup brings both boxes back enabled and checked, whatever this
+    # observer had made of them.
     observeEvent(
-      db_path(),
+      list(db_path(), ui_mounted()),
       {
         present <- available_result_tables(db_path())
         shinyjs::toggleState("include_classical", condition = present$classical)
@@ -416,7 +425,7 @@ server <- function(
     })
 
     observeEvent(
-      target_ext(),
+      list(target_ext(), ui_mounted()),
       {
         for (ext in names(DEST_BUTTONS)) {
           shinyjs::toggle(
@@ -559,7 +568,7 @@ server <- function(
     })
 
     observeEvent(
-      list(input$export_type, custom_choices()),
+      list(input$export_type, custom_choices(), ui_mounted()),
       {
         req(input$export_type)
 
@@ -779,6 +788,9 @@ server <- function(
     })
 
     observe({
+      # ui_mounted(): the rebuilt button always comes back disabled, so state it
+      # again rather than leave a ready selection looking blocked.
+      ui_mounted()
       ready <- !is.null(dest_path()) && length(input$isolates) > 0
       if (ready) enable("export_btn") else disable("export_btn")
     })

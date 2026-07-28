@@ -297,7 +297,12 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  custom_updated = shiny::reactiveVal(0L)
+  custom_updated = shiny::reactiveVal(0L),
+  # Advances every time this panel's markup is (re)inserted into the page. The
+  # Database panel is rebuilt on every database load while this server keeps
+  # running, and DOM state applied from here does not survive that rebuild —
+  # see main.R's ui_mounted.
+  ui_mounted = shiny::reactive(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -385,9 +390,11 @@ server <- function(
     # conditionalPanel: the Database panels are injected into a navset_hidden
     # after the database loads, and Shiny's conditional-panel binding does not
     # take there — the panels would simply stay visible. Same pattern as
-    # visualization.R.
+    # visualization.R. Also fires on ui_mounted(), because a rebuilt sidebar
+    # comes back in its static state — the controls for whichever source is
+    # currently selected would otherwise stay hidden.
     observeEvent(
-      input$source_type,
+      list(input$source_type, ui_mounted()),
       {
         shinyjs::toggle("db_group", condition = !typing())
         shinyjs::toggle("rollback_group", condition = !typing())
