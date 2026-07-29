@@ -25,22 +25,39 @@ box::use(
     radioGroupButtons,
     pickerInput,
     pickerOptions,
-    updatePickerInput
+    updatePickerInput,
+    updateVirtualSelect
   ],
   stats[setNames],
 )
 box::use(
   app / logic / field_labels[field_labels_for, grouped_field_choices],
+  app /
+    logic /
+    field_profile[
+      field_levels,
+      mapping_fields,
+      MAX_SHAPE_LEVELS,
+      profile_for,
+      scale_categories_for
+    ],
+  app /
+    logic /
+    mapping_engine[
+      aesthetic_block_reason,
+      AESTHETIC_LABELS,
+      assign_mapping_layer,
+      COLOR_AESTHETICS,
+      eligible_aesthetics,
+      MAX_LAYERS,
+      rebalance_layers
+    ],
   app / logic / functions[render_info],
   app /
     logic /
     tree_plot[
       build_tree_ggtree,
-      field_levels,
-      mapping_fields,
-      MAX_SHAPE_LEVELS,
       save_tree_plot,
-      scale_categories_for,
       tree_auto_layout,
       tree_branch_cutoff,
       TREE_FIT_DEFAULTS
@@ -53,6 +70,8 @@ box::use(
       label_vars,
       point_shapes,
       viz_color,
+      field_select,
+      update_field_select,
       scale_select,
       color_scales,
       suitable_scale_categories,
@@ -63,30 +82,49 @@ box::use(
     ],
 )
 
-# --- Metadata tile strips ----------------------------------------------------
+# --- Variable mapping layers -------------------------------------------------
 
-# Canonical shape of one tile strip's settings. `nj_tiles` holds N_TILES of
-# these in a plain list of lists; the snapshot/restore path must rebuild exactly
-# that shape (see .normalize_tiles).
-N_TILES <- 5L
-TILE_DEFAULTS <- list(
-  show = FALSE,
-  variable = NULL,
-  scale = "viridis",
-  alpha = 1,
-  width = 0.15,
-  offset = 0.05
+# Canonical shape of one mapping layer. The engine fills these in
+# (app/logic/mapping_engine.R); the snapshot/restore path must rebuild exactly
+# this shape (see .normalize_layers).
+LAYER_DEFAULTS <- list(
+  id = NA_character_,
+  field = NA_character_,
+  title = NA_character_,
+  aesthetic = "tiplab_color",
+  palette = "viridis",
+  family = "Gradient",
+  n_levels = 1L,
+  continuous = FALSE,
+  transform = NULL,
+  auto = TRUE
+)
+
+# The heatmap panels, in draw order. Only the appender-built families make a
+# coherent matrix: their columns are the same measurement repeated, which is
+# what one shared fill scale is for. Sample metadata is a bag of unrelated
+# fields, so it is structurally absent here rather than filtered out later.
+HEATMAP_KINDS <- list(
+  amr = list(
+    attr = "amr_cols",
+    title = "AMR screening",
+    palette = "Reds",
+    empty = "No AMR screening results in this database."
+  ),
+  custom = list(
+    attr = "custom_cols",
+    title = "Custom variables",
+    palette = "Blues",
+    empty = "No custom variables defined for this database."
+  )
 )
 
 # jsonlite reads a JSON array of same-shaped objects back as a *data.frame*, so
-# a saved snapshot's `.tiles` does NOT come back as the list-of-lists `nj_tiles`
-# requires. Assigning that straight into the reactiveVal corrupts it, and the
-# tile observers then fail with "replacement has 6 rows, data has 5" (they do
-# `tiles[[i]]$show <- ...`, which on a data.frame column coerces the LHS to a
-# list and grows it). Rebuild the canonical shape from whatever JSON handed us,
-# filling anything absent from the defaults so older/partial snapshots restore
-# cleanly too.
-.normalize_tiles <- function(x) {
+# a saved snapshot's `.layers` does NOT come back as the list-of-lists the
+# reactiveVal holds. Assigning that straight in corrupts it. Rebuild the
+# canonical shape from whatever JSON handed us, filling anything absent from
+# the defaults so older or partial snapshots restore cleanly too.
+.normalize_records <- function(x, defaults) {
   if (is.null(x)) {
     return(NULL)
   }
@@ -98,28 +136,70 @@ TILE_DEFAULTS <- list(
     return(NULL)
   }
 
-  lapply(seq_len(N_TILES), function(i) {
-    tile <- TILE_DEFAULTS
-    row <- if (i <= length(rows)) rows[[i]] else NULL
+  lapply(rows, function(row) {
+    rec <- defaults
     if (is.list(row)) {
-      for (f in names(TILE_DEFAULTS)) {
+      for (f in names(row)) {
         v <- row[[f]]
         # A JSON null arrives as NULL or NA — keep the default for those.
-        if (!is.null(v) && !is.list(v) && length(v) == 1L && !is.na(v)) {
-          tile[[f]] <- unname(v[[1]])
+        if (is.null(v) || (!is.list(v) && length(v) == 1L && is.na(v))) {
+          next
+        }
+        rec[[f]] <- if (is.list(v) && length(v) == 1L) {
+          unname(v[[1]])
+        } else {
+          unname(v)
         }
       }
     }
-    tile
+    rec
   })
 }
 
-# `character(0)` serialises to `[]`, which jsonlite reads back as an empty
-# *list* rather than a character vector — coerce it back so the heatmap column
-# selection stays the type the plot builder expects.
-.normalize_heatmap_select <- function(x) {
-  v <- unlist(x, use.names = FALSE)
-  if (!length(v)) character(0) else as.character(v)
+.normalize_layers <- function(x) {
+  out <- .normalize_records(x, LAYER_DEFAULTS)
+  if (is.null(out)) {
+    return(NULL)
+  }
+  # A layer whose field is gone (the database changed under a saved Analysis)
+  # cannot be drawn and must not reach the builder.
+  Filter(function(l) !is.na(l$field %||% NA), out)
+}
+
+# A row-action button that reports which record it belongs to. The id travels
+# in the value rather than in the button's own input id, so one observer serves
+# every row however many times the list re-renders.
+.layer_btn <- function(ns, input_id, record_id, icon, title) {
+  shiny$tags$button(
+    type = "button",
+    class = "btn btn-sm tree-layer_btn",
+    title = title,
+    `aria-label` = title,
+    onclick = sprintf(
+      "Shiny.setInputValue('%s', '%s', {priority: 'event'})",
+      ns(input_id),
+      record_id
+    ),
+    shiny$icon(icon)
+  )
+}
+
+.normalize_heatmaps <- function(x) {
+  out <- .normalize_records(
+    x,
+    list(kind = NA_character_, cols = character(0), palette = "Reds",
+         title = NA_character_)
+  )
+  if (is.null(out)) {
+    return(NULL)
+  }
+  lapply(out, function(h) {
+    # `character(0)` serialises to `[]`, which jsonlite reads back as an empty
+    # *list* rather than a character vector.
+    v <- unlist(h$cols, use.names = FALSE)
+    h$cols <- if (!length(v)) character(0) else as.character(v)
+    h
+  })
 }
 
 # --- Plot device geometry ----------------------------------------------------
@@ -158,7 +238,6 @@ FITTED_FIELDS <- c(
   nj_tiplab_size = "tiplab_size",
   nj_branch_size = "branch_size",
   nj_tippoint_size = "tippoint_size",
-  nj_nodepoint_size = "nodepoint_size",
   nj_zoom = "zoom",
   nj_h = "h",
   nj_branchlabel_cutoff = "branch_cutoff"
@@ -184,21 +263,19 @@ FITTED_DEFAULTS <- setNames(
 
 # The other half of what the render reads through a mirror: the selects the
 # server resolves rather than the user, from the loaded metadata
-# (populate_metadata_selects) or from the mapped variable's type
-# (filter_scale_choices). They need mirroring for exactly the reason the fitted
-# sliders do — updatePickerInput reaches input$ only once the browser has
-# echoed it back, a flush after the tree it belongs to was drawn, so the plot
-# is drawn once with the stale value and again with the resolved one. The
+# (populate_metadata_selects). They need mirroring for exactly the reason the
+# fitted sliders do — updatePickerInput reaches input$ only once the browser
+# has echoed it back, a flush after the tree it belongs to was drawn, so the
+# plot is drawn once with the stale value and again with the resolved one. The
 # console named "tiplab" as one of those second draws.
+#
+# The variable mappings used to need this too, and no longer do: a layer is
+# written only when the user adds or edits one, so there is no server-sent
+# value for the browser to echo back a flush later.
 MIRRORED_SELECTS <- c(
   "nj_tiplab",
   "nj_root_isolate",
-  "nj_color_mapping",
-  "nj_tipcolor_mapping",
-  "nj_tipshape_mapping",
-  "nj_parentnode",
-  "nj_tiplab_scale",
-  "nj_tippoint_scale"
+  "nj_parentnode"
 )
 
 # Everything mirrored, in one list: the fitted sliders, the tip-label switch the
@@ -326,53 +403,22 @@ tree_controls <- function(ns) {
       nav_panel(
         "Mapping",
         icon = shiny$icon("palette"),
+        # One picker over the *variables*, not one panel per aesthetic. Picking
+        # a variable adds a layer, and app/logic/mapping_engine.R decides which
+        # aesthetic and palette it gets from the variable's own profile and
+        # what the other layers already hold. Every variable is listed — the
+        # ones that cannot group say so in their sub-text rather than being
+        # silently withheld, which is what left the old shape picker missing
+        # entries with no explanation.
+        field_select(ns, "nj_layer_add", "Map a variable"),
+        shiny$uiOutput(ns("nj_layers_ui")),
+        shiny$hr(),
         accordion(
-          open = "Tip Label color",
+          open = FALSE,
           accordion_panel(
-            "Tip Label color",
-            icon = shiny$icon("font"),
-            input_switch(ns("nj_mapping_show"), "Map variable to color", FALSE),
-            pickerInput(ns("nj_color_mapping"), "Variable", meta_vars),
-            scale_select(ns, "nj_tiplab_scale")
-          ),
-          accordion_panel(
-            "Tip Point color",
-            icon = shiny$icon("circle"),
-            input_switch(
-              ns("nj_tipcolor_mapping_show"),
-              "Map variable to color",
-              FALSE
-            ),
-            pickerInput(ns("nj_tipcolor_mapping"), "Variable", meta_vars),
-            scale_select(ns, "nj_tippoint_scale")
-          ),
-          accordion_panel(
-            "Tip Point Shape",
-            icon = shiny$icon("shapes"),
-            input_switch(
-              ns("nj_tipshape_mapping_show"),
-              "Map variable to shape",
-              FALSE
-            ),
-            pickerInput(ns("nj_tipshape_mapping"), "Variable", meta_vars)
-          ),
-          accordion_panel(
-            "Tiles",
-            icon = shiny$icon("table-cells"),
-            pickerInput(ns("nj_tile_num"), "Tile", as.character(1:5)),
-            input_switch(ns("nj_tiles_show"), "Show tile", FALSE),
-            pickerInput(ns("nj_fruit_variable"), "Variable", meta_vars),
-            scale_select(ns, "nj_tiles_scale")
-          ),
-          accordion_panel(
-            "Heatmap",
+            "Heatmaps",
             icon = shiny$icon("border-all"),
-            input_switch(ns("nj_heatmap_show"), "Show heatmap", FALSE),
-            shiny$actionButton(
-              ns("nj_heatmap_button"),
-              "Select variables",
-              icon = shiny$icon("list-check")
-            )
+            shiny$uiOutput(ns("nj_heatmaps_ui"))
           )
         )
       ),
@@ -387,7 +433,6 @@ tree_controls <- function(ns) {
           viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
           viz_color(ns, "nj_branch_color", "Branch Label", "#000000"),
           viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
-          viz_color(ns, "nj_nodepoint_color", "Node Point", "#3A4657")
         )
       ),
       # Elements ---------------------------------------------------------------
@@ -421,68 +466,6 @@ tree_controls <- function(ns) {
                 step = 0.1,
                 ticks = FALSE
               )
-            )
-          ),
-          accordion_panel(
-            "Node Points",
-            icon = shiny$icon("circle-dot"),
-            input_switch(ns("nj_nodepoint_show"), "Show node points", FALSE),
-            pickerInput(ns("nj_nodepoint_shape"), "Shape", point_shapes),
-            layout_columns(
-              col_widths = c(6, 6),
-              shiny$sliderInput(
-                ns("nj_nodepoint_alpha"),
-                "Opacity",
-                0.1,
-                1,
-                1,
-                step = 0.05,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_nodepoint_size"),
-                "Size",
-                0.5,
-                20,
-                FITTED_DEFAULTS$nj_nodepoint_size,
-                step = 0.1,
-                ticks = FALSE
-              )
-            )
-          ),
-          accordion_panel(
-            "Tiles",
-            icon = shiny$icon("table-cells"),
-            pickerInput(ns("nj_tile_number"), "Tile", as.character(1:5)),
-            shiny$sliderInput(
-              ns("nj_fruit_alpha"),
-              "Opacity",
-              0.1,
-              1,
-              1,
-              step = 0.05,
-              ticks = FALSE
-            ),
-            # A multiple of the *tree's* width, so the 2 this shipped with drew
-            # one strip twice as wide as the tree it annotates. One strip gets
-            # the annotation budget; more share it.
-            shiny$sliderInput(
-              ns("nj_fruit_width"),
-              "Width",
-              0.02,
-              1,
-              TILE_DEFAULTS$width,
-              step = 0.01,
-              ticks = FALSE
-            ),
-            shiny$sliderInput(
-              ns("nj_fruit_offset"),
-              "Position",
-              -0.6,
-              0.6,
-              0.05,
-              step = 0.01,
-              ticks = FALSE
             )
           ),
           accordion_panel(
@@ -600,26 +583,13 @@ tree_controls <- function(ns) {
               10,
               ticks = FALSE
             ),
-            layout_columns(
-              col_widths = c(6, 6),
-              shiny$sliderInput(
-                ns("nj_legend_x"),
-                "Horizontal",
-                -0.9,
-                1.9,
-                0.9,
-                step = 0.1,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_legend_y"),
-                "Vertical",
-                -1.5,
-                1.5,
-                0.2,
-                step = 0.1,
-                ticks = FALSE
-              )
+            # No position sliders. The legend gets a reserved column beside the
+            # tree (below it, for circular layouts) that the layout engine
+            # sizes to the widest key — placing it by hand is what let it land
+            # on top of the tips and run off the canvas.
+            shiny$div(
+              class = "text-muted small",
+              "Placed beside the tree automatically, clear of the labels."
             )
           )
         )
@@ -711,6 +681,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   selected_isolates = shiny$reactive(NULL),
   na_handling = shiny$reactive("ignore_na"),
   # Staged peer typing results (Database > Import) folded into the distance
@@ -797,24 +772,6 @@ server <- function(
       }
       fields <- names(meta)
 
-      # The resolved value goes to the mirror as well as to the browser, and
-      # the mirror is what the plot reads. Sending it only to the browser means
-      # it comes back an echo later, after the tree has already been drawn from
-      # the stale value — a second draw for a label source that was decided
-      # before the tree was even computed.
-      # Columns worth offering for a mapping, best first: one that groups the
-      # isolates into a handful of well-populated groups leads, one that groups
-      # them into many follows, and one that cannot group at all — a constant
-      # column, or a different value for every isolate — is not offered. That
-      # matters most for the default, which was `fields[1]`: on this database
-      # that is `isolate`, i.e. 346 groups of one, a mapping that colours every
-      # tip differently and explains nothing. See mapping_fields().
-      mappable <- mapping_fields(meta)
-      # ggplot2 draws at most six shapes, and silently drops the tips of every
-      # level past that, so the shape picker is offered only the columns it can
-      # actually draw.
-      shapeable <- mapping_fields(meta, max_levels = MAX_SHAPE_LEVELS)
-
       # Grouped and labelled exactly as the Database > Browse Entries column
       # picker is, and from the same place — the loaded database's own columns.
       # This engine used to build its pickers from the hardcoded placeholder
@@ -853,30 +810,10 @@ server <- function(
       }
 
       # Every column can name a tip; the isolate name is the one that always can.
+      # The variable mappings are not here: they are layers the user adds, not
+      # pickers holding a resolved default, and their choices come from
+      # field_profiles() rather than from this function.
       keep("nj_tiplab", grouped(fields), "isolate", valid = fields)
-
-      # The mappings offer every column too — the ranking decides the *default*,
-      # not what is on offer, so a deliberate choice of a column the ranking
-      # rates poorly is still one click away. Ranked columns first, so the
-      # useful ones lead within each group.
-      map_choices <- grouped(union(mappable, setdiff(fields, "isolate")))
-      for (id in c(
-        "nj_color_mapping",
-        "nj_tipcolor_mapping",
-        "nj_fruit_variable"
-      )) {
-        keep(id, map_choices, mappable[1], valid = setdiff(fields, "isolate"))
-      }
-      # Shape is the exception, and not by preference: ggplot2 draws six shapes
-      # and gives the levels past that none at all, so those tips disappear from
-      # the plot entirely. Offering a column it cannot draw would be offering a
-      # way to lose data silently.
-      keep(
-        "nj_tipshape_mapping",
-        grouped(shapeable),
-        shapeable[1],
-        valid = shapeable
-      )
 
       # Outgroup + clade node choices are derived from the isolate set without
       # computing the tree (tips = isolates; internal node count follows from
@@ -917,17 +854,18 @@ server <- function(
       }
     }
 
-    # Mapping a variable to the tip points is meaningless while the tip points
-    # are switched off, and the switch that shows them lives in a different tab
-    # (Elements) from the mapping that needs them (Mapping) — so turning the
-    # mapping on appeared to do nothing at all. Turn the points on with it. The
-    # Tiles mapping never had this problem because its own "Show tile" switch
-    # sits beside it; this gives the other two the same behaviour.
+    # A mapping onto the tip points draws nothing while the tip points
+    # themselves are switched off, and that switch lives in a different tab
+    # (Elements) from the mapping that needs it — so adding such a mapping
+    # appeared to do nothing at all. Turn the points on with it.
     shiny$observeEvent(
-      list(input$nj_tipcolor_mapping_show, input$nj_tipshape_mapping_show),
+      nj_layers(),
       {
-        wants_points <- isTRUE(input$nj_tipcolor_mapping_show) ||
-          isTRUE(input$nj_tipshape_mapping_show)
+        wants_points <- any(vapply(
+          nj_layers(),
+          function(l) l$aesthetic %in% c("tippoint_color", "tippoint_shape"),
+          logical(1)
+        ))
         if (wants_points && !isTRUE(shiny$isolate(fitted$nj_tippoint_show))) {
           set_fitted("nj_tippoint_show", TRUE)
           bslib::update_switch("nj_tippoint_show", value = TRUE)
@@ -935,6 +873,39 @@ server <- function(
       },
       ignoreInit = TRUE
     )
+
+    # Grey out a colour swatch whose element is not being drawn, or whose
+    # aesthetic a mapping layer has taken over.
+    #
+    # The `!.layer_on(...)` clauses are the same predicate the renderer already
+    # uses to decide whether to pass a fixed `color` at all (tree_tiplab_layer,
+    # tree_tippoint_layer): a fixed colour parameter *overrides* the mapped
+    # aesthetic in ggplot2 rather than losing to it, so while a colour layer
+    # owns an aesthetic its swatch is genuinely dead. Sharing the predicate is
+    # what keeps the control panel and the plot agreeing by construction.
+    shiny$observe({
+      ls <- nj_layers()
+      layer_on <- function(aesthetic) {
+        any(vapply(ls, function(l) identical(l$aesthetic, aesthetic), logical(1)))
+      }
+      active <- list(
+        nj_color = TRUE,
+        nj_bg = TRUE,
+        nj_tiplab_color = isTRUE(fitted$nj_tiplab_show) &&
+          !layer_on("tiplab_color"),
+        nj_branch_color = isTRUE(input$nj_show_branch_label),
+        nj_tippoint_color = isTRUE(fitted$nj_tippoint_show) &&
+          !layer_on("tippoint_color"),
+        nj_clade_scale = length(fitted$nj_parentnode %||% character(0)) > 0L
+      )
+      for (id in names(active)) {
+        shinyjs::toggleClass(
+          id = paste0(id, "_row"),
+          class = "is-disabled",
+          condition = !isTRUE(active[[id]])
+        )
+      }
+    })
 
     # Fill the pickers as soon as a database is loaded, rather than waiting for
     # a Generate. Until this, every variable picker in this sidebar listed the
@@ -988,7 +959,6 @@ server <- function(
         nj_tiplab_color = "#000000",
         nj_branch_color = "#000000",
         nj_tippoint_color = "#3A4657",
-        nj_nodepoint_color = "#3A4657",
         nj_clade_scale = "#D0F221"
       )
       reset_viz_radio_buttons(
@@ -1006,16 +976,28 @@ server <- function(
     # the guarded Generate observer below when Tree is the active engine.
     tree_obj <- shiny$reactiveVal(NULL)
 
-    # Settings for the metadata tile strips. The Mapping and Elements tabs each
-    # edit one strip (selected by nj_tile_num / nj_tile_number). Shape is
-    # TILE_DEFAULTS x N_TILES — see .normalize_tiles(), which the restore path
-    # uses to rebuild exactly this from a snapshot.
-    nj_tiles <- shiny$reactiveVal(
-      replicate(N_TILES, TILE_DEFAULTS, simplify = FALSE)
-    )
+    # The variable mappings, in draw order. Written only by explicit user
+    # actions — never echoed back from the browser the way a picker's value is
+    # — which is why they need none of the `fitted` mirroring the rest of the
+    # resolved controls do.
+    nj_layers <- shiny$reactiveVal(list())
+    # Ids are minted monotonically and never reused, so a delete cannot hand a
+    # stale button's id to the layer that replaced it.
+    nj_layer_seq <- shiny$reactiveVal(0L)
 
-    # Metadata columns selected for the heatmap annotation (via its modal).
-    nj_heatmap_select <- shiny$reactiveVal(character(0))
+    # The heatmap panels, keyed by HEATMAP_KINDS name.
+    nj_heatmaps <- shiny$reactiveVal(list())
+
+    next_layer_id <- function() {
+      n <- nj_layer_seq() + 1L
+      nj_layer_seq(n)
+      paste0("L", n)
+    }
+
+    profiles <- shiny$reactive({
+      p <- field_profiles()
+      if (is.null(p) || !nrow(p)) NULL else p
+    })
 
     # Resolved Tree control values, shared by the live render and the export.
     tree_opts <- shiny$reactive(
@@ -1031,19 +1013,12 @@ server <- function(
         tiplab_size = fitted$nj_tiplab_size,
         align = input$nj_align,
         tiplab_color = input$nj_tiplab_color,
-        # Tip-label color mapping. A mapping's variable and palette are read
-        # only when its switch is on, so that switched off they hold a constant
-        # rather than whatever the pickers happen to carry. Generate rewrites
-        # those pickers (populate_metadata_selects, filter_scale_choices) and
-        # every rewrite echoes back; without this the plot would count an echo
-        # about something it is not drawing as a reason to draw again.
-        mapping_show = input$nj_mapping_show,
-        color_mapping = if (isTRUE(input$nj_mapping_show)) {
-          fitted$nj_color_mapping
-        },
-        tiplab_scale = if (isTRUE(input$nj_mapping_show)) {
-          fitted$nj_tiplab_scale
-        },
+        # Every variable mapping, in draw order. One key replaces the eight the
+        # five per-aesthetic panels used to contribute, and it needs none of
+        # their "only read this while its switch is on" guarding: a layer exists
+        # only because the user added it, so there is no picker sitting on a
+        # stale value for the plot to mistake for a change.
+        layers = nj_layers(),
         # Branch labels. Allelic distance is the only thing they ever carry, so
         # there is no source to resolve — the picker that used to choose one was
         # removed along with the rest of this section's controls.
@@ -1051,41 +1026,18 @@ server <- function(
         branch_size = fitted$nj_branch_size,
         branch_cutoff = fitted$nj_branchlabel_cutoff,
         branch_color = input$nj_branch_color,
-        # Tip / node points.
+        # Tip points.
         tippoint_show = fitted$nj_tippoint_show,
         tippoint_alpha = input$nj_tippoint_alpha,
         tippoint_size = fitted$nj_tippoint_size,
         tippoint_color = input$nj_tippoint_color,
         tippoint_shape = input$nj_tippoint_shape,
-        tipcolor_mapping_show = input$nj_tipcolor_mapping_show,
-        tipcolor_mapping = if (isTRUE(input$nj_tipcolor_mapping_show)) {
-          fitted$nj_tipcolor_mapping
-        },
-        tippoint_scale = if (isTRUE(input$nj_tipcolor_mapping_show)) {
-          fitted$nj_tippoint_scale
-        },
-        tipshape_mapping_show = input$nj_tipshape_mapping_show,
-        tipshape_mapping = if (isTRUE(input$nj_tipshape_mapping_show)) {
-          fitted$nj_tipshape_mapping
-        },
-        nodepoint_show = input$nj_nodepoint_show,
-        nodepoint_alpha = input$nj_nodepoint_alpha,
-        nodepoint_color = input$nj_nodepoint_color,
-        nodepoint_shape = input$nj_nodepoint_shape,
-        nodepoint_size = fitted$nj_nodepoint_size,
         # Clade highlights.
         nodelabel_show = input$nj_nodelabel_show,
         parentnodes = fitted$nj_parentnode %||% character(0),
         clade_color = input$nj_clade_scale,
-        # Tiles / heatmap. Only the strips actually being drawn: Generate
-        # repopulates the tile variable picker whether or not a strip is shown,
-        # and the observer behind it rewrites nj_tiles() in response — which the
-        # console named ("tiles") as a second draw for five hidden strips. The
-        # builder discards hidden strips anyway, so this only moves that filter
-        # to where it can also stop a redraw.
-        tiles = Filter(function(t) isTRUE(t$show), nj_tiles()),
-        heatmap_show = input$nj_heatmap_show,
-        heatmap_select = nj_heatmap_select(),
+        # Heatmap panels, in draw order.
+        heatmaps = nj_heatmaps(),
         # Elements toggles.
         rootedge_show = input$nj_rootedge_show,
         treescale_show = input$nj_treescale_show,
@@ -1096,8 +1048,6 @@ server <- function(
         h = fitted$nj_h,
         v = input$nj_v,
         legend_orientation = input$nj_legend_orientation,
-        legend_x = input$nj_legend_x,
-        legend_y = input$nj_legend_y,
         legend_size = input$nj_legend_size
       )
     )
@@ -1304,60 +1254,203 @@ server <- function(
       set_fitted(input_id, sel)
     }
 
-    shiny$observeEvent(
-      list(input$nj_mapping_show, input$nj_color_mapping, viz_metadata()),
-      {
-        meta <- viz_metadata()
-        vals <- if (
-          isTRUE(input$nj_mapping_show) &&
-            isTRUE(input$nj_color_mapping %in% names(meta))
-        ) {
-          meta[[input$nj_color_mapping]]
-        } else {
-          character(0)
-        }
-        filter_scale_choices("nj_tiplab_scale", vals)
-      },
-      ignoreInit = TRUE
-    )
+    # --- Variable mapping layers -------------------------------------------
 
-    shiny$observeEvent(
-      list(
-        input$nj_tipcolor_mapping_show,
-        input$nj_tipcolor_mapping,
-        viz_metadata()
-      ),
-      {
-        meta <- viz_metadata()
-        vals <- if (
-          isTRUE(input$nj_tipcolor_mapping_show) &&
-            isTRUE(input$nj_tipcolor_mapping %in% names(meta))
-        ) {
-          meta[[input$nj_tipcolor_mapping]]
-        } else {
-          character(0)
-        }
-        filter_scale_choices("nj_tippoint_scale", vals)
-      },
-      ignoreInit = TRUE
-    )
+    # Every variable in the database, each carrying its own value count and
+    # type as the option's second line. Rendered once in the UI and refilled
+    # here, because updateVirtualSelect() has no `...` and so cannot re-set
+    # hasOptionDescription.
+    #
+    # Through the shared helper rather than calling shinyWidgets directly: an
+    # error raised in here is logged and swallowed by Shiny, so a broken call
+    # leaves the picker silently empty with nothing failing. The helper is
+    # covered by tests that call it outside an observer, where an error is an
+    # error. Columns that cannot group stay listed but disabled, with the
+    # reason in their sub-text — the old shape picker dropped them entirely,
+    # which is what left users hunting for a variable that was never there.
+    shiny$observe({
+      prof <- profiles()
+      shiny$req(prof)
+      # `isolate` names every tip uniquely; it is a label, never a mapping.
+      prof <- prof[prof$field != "isolate", , drop = FALSE]
+      shiny$req(nrow(prof))
+      update_field_select(session, "nj_layer_add", prof)
+    })
 
-    shiny$observeEvent(
-      list(input$nj_tiles_show, input$nj_fruit_variable, viz_metadata()),
-      {
-        meta <- viz_metadata()
-        vals <- if (
-          isTRUE(input$nj_tiles_show) &&
-            isTRUE(input$nj_fruit_variable %in% names(meta))
-        ) {
-          meta[[input$nj_fruit_variable]]
-        } else {
-          character(0)
+    shiny$observeEvent(input$nj_layer_add, {
+      field <- input$nj_layer_add
+      shiny$req(nzchar(field %||% ""))
+      # Clear the picker straight away so the same variable can be re-picked
+      # after a delete, and so the selection cannot re-fire on a later flush.
+      updateVirtualSelect(
+        inputId = "nj_layer_add",
+        session = session,
+        selected = character(0)
+      )
+
+      layers <- nj_layers()
+      if (any(vapply(layers, function(l) identical(l$field, field), logical(1)))) {
+        return()
+      }
+      if (length(layers) >= MAX_LAYERS) {
+        shiny$showNotification(
+          sprintf(
+            "%d mappings is the most the tree can show at once. Remove one first.",
+            MAX_LAYERS
+          ),
+          type = "warning"
+        )
+        return()
+      }
+      prof <- profile_for(profiles(), field)
+      layer <- assign_mapping_layer(prof, layers, id = next_layer_id())
+      if (is.null(layer)) {
+        shiny$showNotification(
+          aesthetic_block_reason(prof, NULL) %||%
+            "That variable cannot be mapped.",
+          type = "warning"
+        )
+        return()
+      }
+      nj_layers(c(layers, list(layer)))
+    })
+
+    # One delegated handler per action rather than one observer per row: an
+    # observeEvent created inside renderUI is re-registered on every render,
+    # so the ids push their own value into a single input instead.
+    shiny$observeEvent(input$nj_layer_delete, {
+      keep <- Filter(
+        function(l) !identical(l$id, input$nj_layer_delete),
+        nj_layers()
+      )
+      nj_layers(rebalance_layers(keep, profiles()))
+    })
+
+    output$nj_layers_ui <- shiny$renderUI({
+      layers <- nj_layers()
+      if (!length(layers)) {
+        return(shiny$div(
+          class = "text-muted fst-italic mb-2 tree-layer-empty",
+          "No mappings yet."
+        ))
+      }
+      shiny$div(
+        class = "tree-layer-list",
+        lapply(layers, function(l) {
+          shiny$div(
+            class = "tree-layer-card",
+            shiny$div(
+              class = "tree-layer_body",
+              shiny$div(class = "tree-layer_title", title = l$title, l$title),
+              shiny$div(
+                class = "tree-layer_meta",
+                paste(
+                  AESTHETIC_LABELS[[l$aesthetic]],
+                  "·",
+                  sprintf("%d values", l$n_levels),
+                  if (!is.null(l$palette)) paste("·", l$palette)
+                )
+              )
+            ),
+            .layer_btn(ns, "nj_layer_edit", l$id, "pen", "Edit mapping"),
+            .layer_btn(ns, "nj_layer_delete", l$id, "xmark", "Remove mapping")
+          )
+        })
+      )
+    })
+
+    # --- Editing one layer --------------------------------------------------
+
+    editing <- shiny$reactiveVal(NULL)
+
+    shiny$observeEvent(input$nj_layer_edit, {
+      layers <- nj_layers()
+      hit <- Filter(function(l) identical(l$id, input$nj_layer_edit), layers)
+      shiny$req(length(hit))
+      l <- hit[[1]]
+      prof <- profile_for(profiles(), l$field)
+      shiny$req(!is.null(prof))
+      editing(l$id)
+
+      taken <- vapply(
+        Filter(function(x) !identical(x$id, l$id), layers),
+        function(x) x$aesthetic,
+        character(1)
+      )
+      free <- union(l$aesthetic, eligible_aesthetics(prof, taken))
+      blocked <- setdiff(names(AESTHETIC_LABELS), free)
+      reasons <- Filter(
+        Negate(is.null),
+        lapply(blocked, function(a) aesthetic_block_reason(prof, a))
+      )
+
+      cats <- scale_categories_for(
+        viz_metadata()[[l$field]],
+        suitable_scale_categories(
+          if (isTRUE(prof$continuous)) "Numeric" else "Factor",
+          viz_metadata()[[l$field]]
+        )
+      )
+
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Mapping:", l$title),
+        size = "s",
+        easyClose = TRUE,
+        pickerInput(
+          ns("nj_layer_aesthetic"),
+          "Show as",
+          choices = setNames(free, unname(AESTHETIC_LABELS[free])),
+          selected = l$aesthetic
+        ),
+        if (length(reasons)) {
+          shiny$div(
+            class = "small text-muted mb-2",
+            # Saying why an option is missing is the whole point: the old
+            # picker just left it out.
+            lapply(reasons, shiny$tags$div)
+          )
+        },
+        if (l$aesthetic %in% COLOR_AESTHETICS) {
+          shiny$div(
+            class = "viz-scale-select",
+            pickerInput(
+              ns("nj_layer_palette"),
+              "Color scale",
+              choices = color_scales[cats],
+              selected = l$palette
+            )
+          )
+        },
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("nj_layer_apply"), "Apply")
+        )
+      ))
+    })
+
+    shiny$observeEvent(input$nj_layer_apply, {
+      id <- editing()
+      shiny$req(!is.null(id))
+      layers <- lapply(nj_layers(), function(l) {
+        if (!identical(l$id, id)) {
+          return(l)
         }
-        filter_scale_choices("nj_tiles_scale", vals)
-      },
-      ignoreInit = TRUE
-    )
+        l$aesthetic <- input$nj_layer_aesthetic %||% l$aesthetic
+        if (l$aesthetic %in% COLOR_AESTHETICS) {
+          l$palette <- input$nj_layer_palette %||% l$palette
+        } else {
+          l$palette <- NULL
+        }
+        # Pinned: rebalance_layers() must not undo a deliberate choice.
+        l$auto <- FALSE
+        l
+      })
+      # A pinned layer may now hold an aesthetic an automatic one had, so the
+      # automatic ones move out of its way.
+      nj_layers(rebalance_layers(layers, profiles()))
+      editing(NULL)
+      shiny$removeModal()
+    })
 
     # The plot output element is kept mounted so that each Generate re-renders
     # the *same* output — that is what fires the recalculating event the waiter
@@ -1471,104 +1564,151 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    # --- Tiles, heatmap, and export ------------------------------------------
+    # --- Heatmap panels ------------------------------------------------------
 
-    # Persist edits to the currently selected tile (Mapping tab → nj_tile_num).
-    shiny$observeEvent(
-      list(input$nj_tiles_show, input$nj_fruit_variable, input$nj_tiles_scale),
-      {
-        i <- as.integer(input$nj_tile_num)
-        tiles <- nj_tiles()
-        tiles[[i]]$show <- input$nj_tiles_show
-        tiles[[i]]$variable <- input$nj_fruit_variable
-        tiles[[i]]$scale <- input$nj_tiles_scale
-        nj_tiles(tiles)
-      },
-      ignoreInit = TRUE
-    )
-    # Persist edits to the currently selected tile (Elements tab → nj_tile_number).
-    shiny$observeEvent(
-      list(input$nj_fruit_alpha, input$nj_fruit_width, input$nj_fruit_offset),
-      {
-        i <- as.integer(input$nj_tile_number)
-        tiles <- nj_tiles()
-        tiles[[i]]$alpha <- input$nj_fruit_alpha
-        tiles[[i]]$width <- input$nj_fruit_width
-        tiles[[i]]$offset <- input$nj_fruit_offset
-        nj_tiles(tiles)
-      },
-      ignoreInit = TRUE
-    )
-    # Restore the stored settings into the controls when the tile selector moves.
-    shiny$observeEvent(input$nj_tile_num, {
-      tile <- nj_tiles()[[as.integer(input$nj_tile_num)]]
-      bslib::update_switch("nj_tiles_show", value = tile$show)
-      updatePickerInput(
-        session,
-        "nj_fruit_variable",
-        selected = tile$variable
-      )
-      updatePickerInput(session, "nj_tiles_scale", selected = tile$scale)
-    })
-    shiny$observeEvent(input$nj_tile_number, {
-      tile <- nj_tiles()[[as.integer(input$nj_tile_number)]]
-      shiny$updateSliderInput(session, "nj_fruit_alpha", value = tile$alpha)
-      shiny$updateSliderInput(session, "nj_fruit_width", value = tile$width)
-      shiny$updateSliderInput(session, "nj_fruit_offset", value = tile$offset)
-    })
-
-    # Heatmap column picker modal.
-    shiny$observeEvent(input$nj_heatmap_button, {
-      # The same ranking the mapping pickers use: a heatmap column has to group
-      # the isolates to say anything, and one with a value per isolate paints
-      # 346 shades of noise. Ordered best first, labelled with the number of
-      # groups. Anything already selected stays offered even if it would not be
-      # recommended, so a saved Analysis's columns cannot silently vanish.
+    # Columns available to one heatmap kind: exactly the set its appender
+    # added, recorded on viz_metadata() as an attribute. Sample metadata is in
+    # none of them, so "not selectable for a heatmap" is a property of the data
+    # model rather than a filter someone has to remember to apply.
+    heatmap_cols <- function(kind) {
       meta <- viz_metadata()
-      fields <- union(mapping_fields(meta), nj_heatmap_select())
-      choices <- if (length(fields)) {
-        setNames(
-          fields,
-          sprintf(
-            "%s (%d)",
-            field_labels_for(fields),
-            vapply(fields, function(f) field_levels(meta[[f]]), integer(1))
-          )
-        )
-      } else {
-        character(0)
+      if (is.null(meta)) {
+        return(character(0))
       }
-      shiny$showModal(shiny$modalDialog(
-        title = "Heatmap variables",
-        # The matrix shares one colour scale across every column it draws, so
-        # columns that measure the same kind of thing (a resistance profile, a
-        # set of yes/no calls) read as a block, while unrelated ones pool into a
-        # single legend that explains none of them. Worth saying here, because
-        # nothing in the picker itself hints at it.
-        shiny$p(
-          class = "text-muted small",
-          "All columns share one colour scale, so pick columns of the same",
-          "kind — a resistance profile, say. For unrelated variables use a",
-          shiny$tags$strong("tile strip"),
-          "each (Mapping › Tiles), which gives every variable its own."
-        ),
-        shiny$checkboxGroupInput(
-          ns("nj_heatmap_cols"),
-          NULL,
-          choices = choices,
-          selected = nj_heatmap_select()
-        ),
-        footer = shiny$tagList(
-          shiny$modalButton("Cancel"),
-          shiny$actionButton(ns("nj_heatmap_apply"), "Apply")
-        ),
-        easyClose = TRUE
-      ))
+      intersect(names(meta), attr(meta, HEATMAP_KINDS[[kind]]$attr) %||% character(0))
+    }
+
+    heatmap_of <- function(kind) {
+      hit <- Filter(function(h) identical(h$kind, kind), nj_heatmaps())
+      if (length(hit)) hit[[1]] else NULL
+    }
+
+    output$nj_heatmaps_ui <- shiny$renderUI({
+      active <- nj_heatmaps()
+      shiny$div(
+        class = "tree-heatmap-list",
+        lapply(names(HEATMAP_KINDS), function(kind) {
+          spec <- HEATMAP_KINDS[[kind]]
+          cols <- heatmap_cols(kind)
+          on <- !is.null(heatmap_of(kind))
+          if (!length(cols)) {
+            return(shiny$div(
+              class = "tree-heatmap-card is-empty",
+              shiny$div(class = "tree-layer_title", spec$title),
+              shiny$div(class = "text-muted small", spec$empty)
+            ))
+          }
+          n_sel <- length(heatmap_of(kind)$cols %||% character(0))
+          shiny$div(
+            class = "tree-heatmap-card",
+            input_switch(ns(paste0("nj_heatmap_", kind)), spec$title, on),
+            shiny$div(
+              class = "tree-layer_meta",
+              if (on) {
+                sprintf("%d of %d columns", n_sel, length(cols))
+              } else {
+                sprintf("%d columns available", length(cols))
+              }
+            ),
+            shiny$actionButton(
+              ns(paste0("nj_heatcols_", kind)),
+              "Choose columns",
+              icon = shiny$icon("list-check"),
+              class = "btn-sm"
+            )
+          )
+        })
+      )
     })
-    shiny$observeEvent(input$nj_heatmap_apply, {
-      nj_heatmap_select(input$nj_heatmap_cols %||% character(0))
-      shiny$removeModal()
-    })
+
+    # One observer per kind, created once at startup — the kinds are a fixed
+    # list, so this is not the renderUI re-registration trap the layer buttons
+    # avoid.
+    for (kind in names(HEATMAP_KINDS)) {
+      local({
+        k <- kind
+        spec <- HEATMAP_KINDS[[k]]
+
+        shiny$observeEvent(input[[paste0("nj_heatmap_", k)]], {
+          on <- isTRUE(input[[paste0("nj_heatmap_", k)]])
+          others <- Filter(function(h) !identical(h$kind, k), nj_heatmaps())
+          if (!on) {
+            nj_heatmaps(others)
+            return()
+          }
+          existing <- heatmap_of(k)
+          cols <- existing$cols %||% heatmap_cols(k)
+          if (!length(cols)) {
+            return()
+          }
+          # Order follows HEATMAP_KINDS so the panels always draw left to right
+          # in the same sequence, whichever was switched on first.
+          fresh <- c(others, list(list(
+            kind = k, cols = cols, palette = spec$palette, title = spec$title
+          )))
+          nj_heatmaps(fresh[order(match(
+            vapply(fresh, function(h) h$kind, character(1)),
+            names(HEATMAP_KINDS)
+          ))])
+        }, ignoreInit = TRUE)
+
+        shiny$observeEvent(input[[paste0("nj_heatcols_", k)]], {
+          cols <- heatmap_cols(k)
+          shiny$req(length(cols))
+          meta <- viz_metadata()
+          shiny$showModal(shiny$modalDialog(
+            title = paste(spec$title, "columns"),
+            size = "m",
+            easyClose = TRUE,
+            shiny$p(
+              class = "text-muted small",
+              "These columns share one colour scale, which is what makes the",
+              "matrix readable as a block."
+            ),
+            shiny$checkboxGroupInput(
+              ns(paste0("nj_heatcolsel_", k)),
+              NULL,
+              choices = setNames(
+                cols,
+                sprintf(
+                  "%s (%d)",
+                  field_labels_for(cols),
+                  vapply(cols, function(f) field_levels(meta[[f]]), integer(1))
+                )
+              ),
+              selected = heatmap_of(k)$cols %||% cols
+            ),
+            footer = shiny$tagList(
+              shiny$modalButton("Cancel"),
+              shiny$actionButton(ns(paste0("nj_heatapply_", k)), "Apply")
+            )
+          ))
+        })
+
+        shiny$observeEvent(input[[paste0("nj_heatapply_", k)]], {
+          chosen <- input[[paste0("nj_heatcolsel_", k)]] %||% character(0)
+          others <- Filter(function(h) !identical(h$kind, k), nj_heatmaps())
+          if (!length(chosen)) {
+            # An empty panel draws nothing, so switching it off is the honest
+            # reading of "apply no columns".
+            nj_heatmaps(others)
+            bslib::update_switch(paste0("nj_heatmap_", k), value = FALSE)
+          } else {
+            fresh <- c(others, list(list(
+              kind = k, cols = chosen, palette = spec$palette,
+              title = spec$title
+            )))
+            nj_heatmaps(fresh[order(match(
+              vapply(fresh, function(h) h$kind, character(1)),
+              names(HEATMAP_KINDS)
+            ))])
+            bslib::update_switch(paste0("nj_heatmap_", k), value = TRUE)
+          }
+          shiny$removeModal()
+        })
+      })
+    }
+
 
     # Render the current tree to a file at the configured aspect ratio.
     output$download_nj <- shiny$downloadHandler(
@@ -1611,10 +1751,10 @@ server <- function(
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
     # Snapshot the nj_* controls plus the two pieces of state held in
-    # reactiveVals rather than inputs (per-tile config and the heatmap columns).
+    # reactiveVals rather than inputs (the mapping layers and the heatmaps).
     snapshot <- shiny$reactive(c(
       collect_input_snapshot(input, "nj_"),
-      list(.tiles = nj_tiles(), .heatmap_select = nj_heatmap_select())
+      list(.layers = nj_layers(), .heatmaps = nj_heatmaps())
     ))
 
     restore <- function(vals) {
@@ -1625,25 +1765,14 @@ server <- function(
           "nj_tiplab_show",
           "nj_align",
           "nj_show_branch_label",
-          "nj_mapping_show",
-          "nj_tipcolor_mapping_show",
-          "nj_tipshape_mapping_show",
-          "nj_tiles_show",
-          "nj_heatmap_show",
           "nj_tippoint_show",
-          "nj_nodepoint_show",
           "nj_nodelabel_show",
           "nj_rootedge_show",
-          "nj_treescale_show"
+          "nj_treescale_show",
+          paste0("nj_heatmap_", names(HEATMAP_KINDS))
         ),
         selects = c(
-          "nj_tiplab_scale",
-          "nj_tippoint_scale",
-          "nj_tiles_scale",
           "nj_tippoint_shape",
-          "nj_nodepoint_shape",
-          "nj_tile_num",
-          "nj_tile_number",
           "nj_layout"
         ),
         sliders = c(
@@ -1652,18 +1781,11 @@ server <- function(
           "nj_branchlabel_cutoff",
           "nj_tippoint_alpha",
           "nj_tippoint_size",
-          "nj_nodepoint_alpha",
-          "nj_nodepoint_size",
-          "nj_fruit_alpha",
-          "nj_fruit_width",
-          "nj_fruit_offset",
           "nj_aspect_ratio",
           "nj_v",
           "nj_h",
           "nj_zoom",
-          "nj_legend_size",
-          "nj_legend_x",
-          "nj_legend_y"
+          "nj_legend_size"
         ),
         colors = c(
           "nj_color",
@@ -1671,7 +1793,6 @@ server <- function(
           "nj_tiplab_color",
           "nj_branch_color",
           "nj_tippoint_color",
-          "nj_nodepoint_color",
           "nj_clade_scale"
         ),
         radio_groups = "nj_legend_orientation"
@@ -1702,10 +1823,6 @@ server <- function(
           }
         }
         setsel("nj_tiplab", fields)
-        setsel("nj_color_mapping", fields)
-        setsel("nj_tipcolor_mapping", fields)
-        setsel("nj_tipshape_mapping", fields)
-        setsel("nj_fruit_variable", fields)
 
         tips <- meta$isolate
         if (!is.null(vals$nj_root_isolate)) {
@@ -1737,17 +1854,75 @@ server <- function(
         }
       }
 
-      # Both come back from JSON in the wrong container type — normalise before
-      # storing, or the tile observers crash on the next control change.
-      if (!is.null(vals$.tiles)) {
-        tiles <- .normalize_tiles(vals$.tiles)
-        if (!is.null(tiles)) {
-          nj_tiles(tiles)
+      # Both come back from JSON as data.frames rather than lists of lists —
+      # normalise before storing.
+      layers <- .normalize_layers(vals$.layers)
+      if (is.null(layers)) {
+        # An Analysis saved before the layer rewrite carries the old
+        # per-aesthetic keys instead. Rebuilding layers from them is what stops
+        # every saved tree silently losing its mappings on first reopen.
+        layers <- .migrate_legacy_mapping(vals)
+      }
+      if (!is.null(layers)) {
+        nj_layers(layers)
+        nj_layer_seq(length(layers))
+      }
+      heatmaps <- .normalize_heatmaps(vals$.heatmaps)
+      if (!is.null(heatmaps)) {
+        nj_heatmaps(heatmaps)
+      }
+    }
+
+    # Rebuild mapping layers from a pre-rewrite snapshot's flat keys. Each of
+    # the three old switch/variable/scale triples becomes one layer on the
+    # aesthetic it used to drive, and the tile strips become tile layers, so a
+    # reopened Analysis draws what it drew when it was saved.
+    .migrate_legacy_mapping <- function(vals) {
+      legacy <- list(
+        list(show = "nj_mapping_show", field = "nj_color_mapping",
+             palette = "nj_tiplab_scale", aesthetic = "tiplab_color"),
+        list(show = "nj_tipcolor_mapping_show", field = "nj_tipcolor_mapping",
+             palette = "nj_tippoint_scale", aesthetic = "tippoint_color"),
+        list(show = "nj_tipshape_mapping_show", field = "nj_tipshape_mapping",
+             palette = NULL, aesthetic = "tippoint_shape")
+      )
+      out <- list()
+      prof <- profiles()
+      add <- function(field, aesthetic, palette) {
+        row <- profile_for(prof, field)
+        if (is.null(row) || !isTRUE(row$groupable)) {
+          return()
+        }
+        layer <- assign_mapping_layer(row, out, id = paste0("L", length(out) + 1L))
+        if (is.null(layer)) {
+          return()
+        }
+        # Keep what the saved plot actually drew, not what the engine would
+        # pick today — restoring an Analysis must reproduce it, not improve it.
+        layer$aesthetic <- aesthetic
+        layer$palette <- if (aesthetic %in% COLOR_AESTHETICS) palette else NULL
+        layer$auto <- FALSE
+        out[[length(out) + 1L]] <<- layer
+      }
+
+      for (spec in legacy) {
+        if (!isTRUE(vals[[spec$show]])) {
+          next
+        }
+        add(
+          vals[[spec$field]],
+          spec$aesthetic,
+          if (is.null(spec$palette)) NULL else vals[[spec$palette]]
+        )
+      }
+      for (tile in .normalize_records(vals$.tiles, list(
+        show = FALSE, variable = NA_character_, scale = "viridis"
+      )) %||% list()) {
+        if (isTRUE(tile$show) && !is.na(tile$variable %||% NA)) {
+          add(tile$variable, "tile", tile$scale)
         }
       }
-      if (!is.null(vals$.heatmap_select)) {
-        nj_heatmap_select(.normalize_heatmap_select(vals$.heatmap_select))
-      }
+      if (!length(out)) NULL else out
     }
 
     # Thumbnail: server-render the ggtree to a small PNG on the preview's own

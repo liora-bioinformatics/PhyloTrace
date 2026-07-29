@@ -20,11 +20,18 @@ box::use(
   bslib[nav_panel, update_switch],
   shinyWidgets[
     colorPickr,
+    prepare_choices,
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
-    pickerInput
+    updateVirtualSelect,
+    pickerInput,
+    virtualSelectInput
   ],
+)
+
+box::use(
+  app / logic / field_profile[profile_description],
 )
 
 # --- Control Reset Handling Reference ----------------------------------------
@@ -161,6 +168,11 @@ viz_color_reset_script <- singleton(tags$script(HTML(
 viz_color <- function(ns, id, label, value) {
   div(
     class = "viz-color-row",
+    # The row carries an id so a module can grey out a swatch whose element is
+    # switched off. It has to be the *row*: colorPickr puts `id` on a hidden
+    # input and renders the swatch as a sibling, so shinyjs::toggleState() on
+    # the input disables nothing the user can see or click.
+    id = ns(paste0(id, "_row")),
     tags$label(label, class = "viz-color-label"),
     div(
       class = "viz-color-pick",
@@ -175,6 +187,129 @@ viz_color <- function(ns, id, label, value) {
       )
     ),
     viz_color_reset_script
+  )
+}
+
+# --- Metadata field pickers ---------------------------------------------------
+
+# Turn a profile frame into virtual-select choices, optionally prefixed with a
+# sentinel entry ("No stratification", "No annotation") that is not a field.
+#
+# prepare_choices() captures its arguments as bare expressions and evaluates
+# them against the frame alone, so anything computed has to be a column of the
+# frame before it gets there — a call would be looked up inside shinyWidgets
+# and not found.
+.field_choices <- function(profiles, extra = NULL) {
+  rows <- data.frame(
+    label = profiles$label,
+    value = profiles$field,
+    group = profiles$group,
+    description = profile_description(profiles),
+    stringsAsFactors = FALSE
+  )
+  if (length(extra)) {
+    rows <- rbind(
+      data.frame(
+        label = names(extra),
+        value = unname(extra),
+        # Its own group, so it does not read as one of the database's fields.
+        group = " ",
+        description = "",
+        stringsAsFactors = FALSE
+      ),
+      rows
+    )
+  }
+  prepare_choices(
+    rows,
+    label = label,
+    value = value,
+    group_by = group,
+    description = description
+  )
+}
+
+#' Metadata Field Picker
+#'
+#' A grouped, searchable single-select over the database's own columns, each
+#' option carrying its distinct-value count and declared type as a second line
+#' ("46 values · Text"). Shared by every visualization engine so a variable
+#' describes itself identically wherever it is offered.
+#'
+#' Columns that cannot group the isolates are listed but disabled, with the
+#' reason in their sub-text — hiding them is what left users hunting for a
+#' variable that was simply absent.
+#'
+#' @param ns Function. Module namespace function.
+#' @param id Character. Input ID.
+#' @param label Character. Control label.
+#' @param profiles Data frame from `field_profile$field_profiles()`, or NULL.
+#' @param selected Character. Initially selected value.
+#' @param extra Named character vector of sentinel entries (name = label).
+#' @param placeholder Character. Empty-state text.
+#' @return A `virtualSelectInput`.
+#' @export
+field_select <- function(
+  ns,
+  id,
+  label,
+  profiles = NULL,
+  selected = NULL,
+  extra = NULL,
+  placeholder = "Pick a variable ..."
+) {
+  has <- !is.null(profiles) && nrow(profiles) > 0L
+  virtualSelectInput(
+    ns(id),
+    label,
+    choices = if (has) .field_choices(profiles, extra) else as.list(extra),
+    selected = selected %||% character(0),
+    multiple = FALSE,
+    search = TRUE,
+    searchPlaceholderText = "Search variables ...",
+    placeholder = placeholder,
+    # Not a formal — reaches the widget config through `...`. Turns on the
+    # second line of each option.
+    hasOptionDescription = TRUE,
+    # Defaults to TRUE for a single select, which would silently pick whatever
+    # sorts first the moment the choices land.
+    autoSelectFirstOption = FALSE,
+    optionsCount = 5,
+    dropboxWrapper = "body",
+    showDropboxAsPopup = TRUE,
+    popupDropboxBreakpoint = "10000px",
+    width = "100%"
+  )
+}
+
+#' Refill a `field_select()` from a profile frame.
+#'
+#' @param session Shiny session object.
+#' @param id Character. Input ID (unnamespaced).
+#' @param profiles Data frame from `field_profile$field_profiles()`.
+#' @param selected Character. Value to select.
+#' @param extra Named character vector of sentinel entries.
+#' @export
+update_field_select <- function(
+  session,
+  id,
+  profiles,
+  selected = NULL,
+  extra = NULL
+) {
+  if (is.null(profiles) || !nrow(profiles)) {
+    return(invisible(NULL))
+  }
+  # Note the argument order: updateVirtualSelect() takes `inputId` first and
+  # `session` last, the opposite of updatePickerInput(). Naming both is what
+  # keeps a copy-paste from the picker version from silently passing the
+  # session in as an id.
+  updateVirtualSelect(
+    inputId = id,
+    session = session,
+    choices = .field_choices(profiles, extra),
+    selected = selected %||% character(0),
+    disabledChoices = profiles$field[!profiles$groupable]
   )
 }
 

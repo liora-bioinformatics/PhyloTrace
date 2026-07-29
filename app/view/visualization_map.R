@@ -80,6 +80,8 @@ box::use(
   app /
     logic /
     viz_helpers[
+      field_select,
+      update_field_select,
       scale_select,
       color_scales,
       suitable_scale_categories,
@@ -92,6 +94,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
   app / logic / field_labels[field_label],
+  app / logic / field_profile[field_profiles_of = field_profiles],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
@@ -1436,7 +1439,7 @@ map_controls <- function(ns) {
             "Variable Mapping",
             icon = shiny$icon("layer-group"),
             input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            pickerInput(ns("map_col_var"), "Variable", choices = NULL)
+            field_select(ns, "map_col_var", "Variable")
           ),
           accordion_panel(
             "Scale",
@@ -1762,7 +1765,7 @@ map_controls <- function(ns) {
           "Chart type",
           choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
         ),
-        pickerInput(ns("map_chart_var"), "Variable", choices = NULL),
+        field_select(ns, "map_chart_var", "Variable"),
         # Each chart shows the composition of a categorical variable (see
         # build_charts()'s max_categories folding below), so — like
         # map_heat_scale above — this is a static restriction rather than a
@@ -2046,6 +2049,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   # Accepted for a uniform `shared` bundle from the coordinator; the Map subsets
   # straight from the filtered viz_metadata(), so it needs no separate handling.
   selected_isolates = shiny$reactive(NULL),
@@ -2760,22 +2768,34 @@ server <- function(
         return(invisible(NULL))
       }
 
-      keep <- function(id, choices, default) {
-        updatePickerInput(
+      # Profiles carry each column's value count and declared type, which the
+      # picker shows as the option's second line. Until this, Map's variable
+      # pickers were the only ones in the app offering raw, unlabelled and
+      # ungrouped column names.
+      prof <- field_profiles() %||%
+        field_profiles_of(
+          meta,
+          mlst_cols = attr(meta, "mlst_cols"),
+          amr_cols = attr(meta, "amr_cols"),
+          custom_cols = attr(meta, "custom_cols")
+        )
+      prof <- prof[prof$field %in% fields, , drop = FALSE]
+
+      keep <- function(id, default) {
+        update_field_select(
           session,
           id,
-          choices = choices,
-          selected = if (!force_default && isTRUE(input[[id]] %in% choices)) {
+          prof,
+          selected = if (!force_default && isTRUE(input[[id]] %in% fields)) {
             input[[id]]
           } else {
             default
           }
         )
       }
-      keep("map_col_var", fields, fields[1])
+      keep("map_col_var", fields[1])
       keep(
         "map_chart_var",
-        fields,
         if ("specimen_source_id" %in% fields) {
           "specimen_source_id"
         } else {
@@ -3177,21 +3197,18 @@ server <- function(
       if (!is.null(meta) && nrow(meta)) {
         fields <- setdiff(names(meta), "isolate")
         if (length(fields)) {
-          if (!is.null(vals$map_col_var)) {
-            updatePickerInput(
-              session,
-              "map_col_var",
-              choices = fields,
-              selected = vals$map_col_var
+          prof <- field_profiles() %||%
+            field_profiles_of(
+              meta,
+              mlst_cols = attr(meta, "mlst_cols"),
+              amr_cols = attr(meta, "amr_cols"),
+              custom_cols = attr(meta, "custom_cols")
             )
-          }
-          if (!is.null(vals$map_chart_var)) {
-            updatePickerInput(
-              session,
-              "map_chart_var",
-              choices = fields,
-              selected = vals$map_chart_var
-            )
+          prof <- prof[prof$field %in% fields, , drop = FALSE]
+          for (id in c("map_col_var", "map_chart_var")) {
+            if (!is.null(vals[[id]])) {
+              update_field_select(session, id, prof, selected = vals[[id]])
+            }
           }
           popup_ids <- unique(c("isolate", "place", fields))
           popup_choices <- stats::setNames(

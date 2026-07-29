@@ -60,6 +60,8 @@ box::use(
     logic /
     database_functions[append_amr, append_classical_mlst, make_metadata_table],
   app / logic / db_staging[list_imported_sets],
+  app / logic / field_profile[field_profiles],
+  app / logic / field_types[field_types],
   app / logic / analysis_store,
   app / view / visualization_plot,
   jsonlite[fromJSON],
@@ -303,6 +305,26 @@ server <- function(
       )
     })
 
+    # What each of those columns *is* — its declared type, its distinct-value
+    # count, its coverage and which group it belongs to — as one frame every
+    # engine reads instead of working half of it out again.
+    #
+    # Computed here for the same reason viz_metadata is: field_types() reads the
+    # custom-variable table, so doing this per engine would multiply one small
+    # query by the number of open plots on every invalidation. The counts come
+    # off the full metadata table, not a tab's isolate selection, so a variable
+    # describes itself the same way in every tab.
+    viz_field_profiles <- reactive({
+      meta <- viz_metadata()
+      field_profiles(
+        meta,
+        types = field_types(db_path(), names(meta)),
+        mlst_cols = attr(meta, "mlst_cols"),
+        amr_cols = attr(meta, "amr_cols"),
+        custom_cols = attr(meta, "custom_cols")
+      )
+    })
+
     staged_sets <- reactive({
       req(db_path())
       list_imported_sets(db_path())
@@ -428,6 +450,7 @@ server <- function(
         db_path = db_path,
         session_reset = session_reset,
         viz_metadata = viz_metadata,
+        viz_field_profiles = viz_field_profiles,
         staged_sets = staged_sets,
         picker_choices = picker_choices,
         plots_changed = plots_changed,

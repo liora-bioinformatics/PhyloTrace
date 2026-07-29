@@ -10,6 +10,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / field_profile[field_profiles],
   app / view / visualization_tree,
 )
 
@@ -58,11 +59,6 @@ set_tree_inputs <- function(session) {
     nj_tippoint_shape = 16,
     nj_tipcolor_mapping_show = FALSE,
     nj_tipshape_mapping_show = FALSE,
-    nj_nodepoint_show = FALSE,
-    nj_nodepoint_alpha = 1,
-    nj_nodepoint_color = "#3A4657",
-    nj_nodepoint_shape = 16,
-    nj_nodepoint_size = 2.5,
     nj_nodelabel_show = FALSE,
     nj_clade_scale = "#D0F221",
     nj_heatmap_show = FALSE,
@@ -73,8 +69,6 @@ set_tree_inputs <- function(session) {
     nj_h = -0.05,
     nj_v = 0,
     nj_legend_orientation = "vertical",
-    nj_legend_x = 0.9,
-    nj_legend_y = 0.2,
     nj_legend_size = 10
   )
 }
@@ -136,34 +130,85 @@ test_that("the browser echoing a fitted value back does not redraw", {
   )
 })
 
-test_that("a control the plot is not drawing cannot cause a rebuild", {
+test_that("adding a mapping layer redraws once, and only when it changes", {
+  # The old per-aesthetic pickers were rewritten on every Generate whether or
+  # not their switch was on, and each rewrite echoed back from the browser a
+  # flush later — a second draw for a mapping the plot was not drawing. Layers
+  # are written only by a user action, so there is no server-sent value left to
+  # echo; this test pins that property to the new shape.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    organism = rep("P. aeruginosa", 8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    stringsAsFactors = FALSE
+  )
+
   testServer(
     visualization_tree$server,
-    args = list(plot_type = reactiveVal("Tree")),
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
     {
       set_tree_inputs(session)
       session$flushReact()
-      before <- tree_opts()
 
-      # Generate repopulates these pickers from the loaded metadata whether or
-      # not their switch is on (populate_metadata_selects / filter_scale_choices),
-      # and each rewrite echoes back from the browser. With every switch off,
-      # none of it is being drawn, so none of it may count as a change.
-      session$setInputs(
-        nj_color_mapping = "organism",
-        nj_tiplab_scale = "magma",
-        nj_tipcolor_mapping = "organism",
-        nj_tippoint_scale = "magma",
-        nj_tipshape_mapping = "organism"
-      )
+      draws <- 0L
+      observe({
+        tree_opts()
+        draws <<- draws + 1L
+      })
       session$flushReact()
-      expect_identical(tree_opts(), before)
+      draws <- 0L
 
-      # Switched on, the same variable is suddenly load-bearing.
-      session$setInputs(nj_mapping_show = TRUE)
+      session$setInputs(nj_layer_add = "purpose")
       session$flushReact()
-      expect_false(identical(tree_opts(), before))
-      expect_equal(tree_opts()$color_mapping, "organism")
+      expect_identical(draws, 1L)
+      expect_identical(length(tree_opts()$layers), 1L)
+      expect_equal(tree_opts()$layers[[1]]$field, "purpose")
+
+      # Re-picking the same variable is not a second mapping, and so not a
+      # second draw.
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      expect_identical(draws, 1L)
+
+      # A column that groups nothing has no aesthetic to take, so it adds no
+      # layer — and still must not redraw.
+      session$setInputs(nj_layer_add = "organism")
+      session$flushReact()
+      expect_identical(draws, 1L)
+      expect_identical(length(tree_opts()$layers), 1L)
+    }
+  )
+})
+
+test_that("a mapping layer can be removed again", {
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$flushReact()
+
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      id <- tree_opts()$layers[[1]]$id
+
+      session$setInputs(nj_layer_delete = id)
+      session$flushReact()
+      expect_identical(length(tree_opts()$layers), 0L)
     }
   )
 })
@@ -208,13 +253,13 @@ test_that("Generate resolving a select costs no extra draw", {
 
       expect_identical(draws, 1L)
       expect_equal(tree_opts()$tiplab, "isolate")
-      # Five hidden tile strips cannot contribute a draw between them.
-      expect_identical(length(tree_opts()$tiles), 0L)
+      # Nothing is mapped, so there is nothing for the mappings to contribute.
+      expect_identical(length(tree_opts()$layers), 0L)
     }
   )
 })
 
-test_that("the pickers carry the database's own fields before any Generate", {
+test_that("the label source carries the database's own fields before Generate", {
   # The reported bug: every variable picker listed the placeholder names
   # viz_helpers declares them with — "Isolation Date", "Host", "Country" — which
   # are columns of no real database, and only a Generate replaced them.
@@ -229,6 +274,7 @@ test_that("the pickers carry the database's own fields before any Generate", {
     visualization_tree$server,
     args = list(
       viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
       plot_type = reactiveVal("Tree")
     ),
     {
@@ -237,16 +283,50 @@ test_that("the pickers carry the database's own fields before any Generate", {
 
       # No generate() at all.
       expect_equal(isolate(fitted$nj_tiplab), "isolate")
-      for (id in c(
-        "nj_color_mapping",
-        "nj_tipcolor_mapping",
-        "nj_tipshape_mapping"
-      )) {
-        expect_true(isolate(fitted[[id]]) %in% names(meta))
-      }
-      # `organism` is one group for every isolate, so it is a column the plot
-      # can offer but never the one it starts on.
-      expect_equal(isolate(fitted$nj_color_mapping), "purpose")
+    }
+  )
+})
+
+test_that("a mapping is offered every column, and picks the aesthetic itself", {
+  # The behaviour the rewrite is for: the shape picker used to *hide* any
+  # column with more than six levels, so a user looking for `country` found
+  # nothing and no reason why. Now every column is profiled and offered, and
+  # the engine — not the user — decides what a column can drive.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:40),
+    organism = rep("P. aeruginosa", 40),
+    purpose = rep(c("outbreak", "surveillance", "screening", "referral"), 10),
+    country = sprintf("C%02d", seq_len(40) %% 20),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$flushReact()
+
+      # Four levels fits the six-shape ceiling, so it takes the scarce
+      # aesthetic and leaves the colours free.
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      expect_equal(tree_opts()$layers[[1]]$aesthetic, "tippoint_shape")
+
+      # Twenty levels cannot be shapes and would be noise as text colour, so it
+      # goes to a strip with a generated palette — no ColorBrewer overflow.
+      session$setInputs(nj_layer_add = "country")
+      session$flushReact()
+      expect_equal(tree_opts()$layers[[2]]$aesthetic, "tile")
+      expect_equal(tree_opts()$layers[[2]]$palette, "viridis")
+
+      # A mapping onto the tip points is meaningless while they are hidden, and
+      # that switch lives in another tab — so it comes on with the mapping.
+      expect_true(isolate(fitted$nj_tippoint_show))
     }
   )
 })
@@ -321,7 +401,6 @@ test_that("Generate draws the tree exactly once, already fitted", {
         nj_tiplab_size = isolate(fitted$nj_tiplab_size),
         nj_aspect_ratio = isolate(fitted$nj_aspect_ratio),
         nj_tippoint_size = isolate(fitted$nj_tippoint_size),
-        nj_nodepoint_size = isolate(fitted$nj_nodepoint_size),
         nj_branch_size = isolate(fitted$nj_branch_size)
       )
       session$flushReact()

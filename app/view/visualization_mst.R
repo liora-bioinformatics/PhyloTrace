@@ -26,11 +26,12 @@ box::use(
 box::use(
   app / logic / functions[render_info],
   app / logic / phylo[compute_mst, build_mst_visnetwork, save_mst_html],
-  app / logic / field_labels[grouped_field_choices],
+  app / logic / field_profile[field_profiles_of = field_profiles],
   app /
     logic /
     viz_helpers[
-      meta_vars,
+      field_select,
+      update_field_select,
       viz_color,
       reset_viz_colors,
       collect_input_snapshot,
@@ -48,18 +49,14 @@ mst_controls <- function(ns) {
         "Labels",
         icon = shiny$icon("tag"),
         input_switch(ns("mst_show_label"), "Show node labels", TRUE),
-        pickerInput(
-          ns("mst_node_label"),
-          "Label source",
-          c("Assembly Name", "Isolation Date", "Host", "Country", "City")
-        )
+        field_select(ns, "mst_node_label", "Label source")
       ),
       # Variable mapping -------------------------------------------------------
       nav_panel(
         "Mapping",
         icon = shiny$icon("palette"),
         input_switch(ns("mst_color_var"), "Map variable to node color", FALSE),
-        pickerInput(ns("mst_col_var"), "Variable", meta_vars),
+        field_select(ns, "mst_col_var", "Variable"),
         pickerInput(
           ns("mst_col_scale"),
           "color scale",
@@ -324,6 +321,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   selected_isolates = shiny$reactive(NULL),
   na_handling = shiny$reactive("ignore_na"),
   generate = shiny$reactive(0L),
@@ -363,12 +365,15 @@ server <- function(
       # derived ST + locus columns); the selected value stays the raw column
       # name the plot builder keys on, so the `%in% fields` checks below still
       # hold.
-      field_choices <- grouped_field_choices(fields)
+      # Profiles carry each column's value count and declared type, which the
+      # picker shows as the option's second line. Built here when the
+      # coordinator has not supplied them (a bare testServer, say).
+      prof <- field_profiles() %||% field_profiles_of(meta)
 
-      updatePickerInput(
+      update_field_select(
         session,
         "mst_node_label",
-        choices = field_choices,
+        prof,
         selected = if (
           !force_default && isTRUE(input$mst_node_label %in% fields)
         ) {
@@ -380,10 +385,10 @@ server <- function(
       # Default the color variable to the first non-isolate field, where one
       # exists, so a freshly enabled mapping is meaningful.
       non_isolate <- setdiff(fields, "isolate")
-      updatePickerInput(
+      update_field_select(
         session,
         "mst_col_var",
-        choices = field_choices,
+        prof,
         selected = if (
           !force_default && isTRUE(input$mst_col_var %in% fields)
         ) {
@@ -698,22 +703,11 @@ server <- function(
       )
       meta <- viz_metadata()
       if (!is.null(meta) && length(names(meta))) {
-        fc <- grouped_field_choices(names(meta))
-        if (!is.null(vals$mst_node_label)) {
-          updatePickerInput(
-            session,
-            "mst_node_label",
-            choices = fc,
-            selected = vals$mst_node_label
-          )
-        }
-        if (!is.null(vals$mst_col_var)) {
-          updatePickerInput(
-            session,
-            "mst_col_var",
-            choices = fc,
-            selected = vals$mst_col_var
-          )
+        prof <- field_profiles() %||% field_profiles_of(meta)
+        for (id in c("mst_node_label", "mst_col_var")) {
+          if (!is.null(vals[[id]])) {
+            update_field_select(session, id, prof, selected = vals[[id]])
+          }
         }
       }
     }

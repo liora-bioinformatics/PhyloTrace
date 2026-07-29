@@ -53,11 +53,13 @@ box::use(
 )
 box::use(
   app / logic / amr_plot,
-  app / logic / field_labels[field_label, grouped_field_choices],
+  app / logic / field_labels[field_label],
+  app / logic / field_profile[field_profiles_of = field_profiles],
   app / logic / functions[render_info],
   app /
     logic /
     viz_helpers[
+      field_select,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -558,6 +560,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   # Accepted for a uniform argument bundle from the plot tab; the AMR views plot
   # straight from the already-filtered viz_metadata(), so they need no separate
   # handling.
@@ -719,30 +726,27 @@ server <- function(
       }
       meta <- viz_metadata()
       # Categorised, human-readable labels (the derived classical-MLST and AMR
-      # columns get their own groups); the value stays the raw column name.
-      pickerInput(
-        ns("amr_anno_field"),
+      # columns get their own groups), each carrying its own value count and
+      # declared type; the value stays the raw column name.
+      prof <- field_profiles() %||%
+        field_profiles_of(
+          meta,
+          mlst_cols = attr(meta, "mlst_cols"),
+          amr_cols = attr(meta, "amr_cols"),
+          custom_cols = attr(meta, "custom_cols")
+        )
+      field_select(
+        ns,
+        "amr_anno_field",
         "Colour isolates by",
-        choices = c(
-          list(`No annotation` = NO_ANNOTATION),
-          grouped_field_choices(
-            fields,
-            attr(meta, "mlst_cols"),
-            attr(meta, "amr_cols")
-          )
-        ),
+        profiles = prof[prof$field %in% fields, , drop = FALSE],
         selected = if (!force_default && isTRUE(prev %in% fields)) {
           prev
         } else {
           NO_ANNOTATION
         },
-        width = "100%",
-        options = pickerOptions(
-          size = 10,
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ...",
-          container = "body"
-        )
+        extra = stats::setNames(NO_ANNOTATION, "No annotation"),
+        placeholder = "No annotation"
       )
     })
 

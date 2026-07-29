@@ -1006,6 +1006,100 @@ $viz-tile-row-gap: 0.85rem;
     color: var(--bs-danger-text-emphasis);
 }
 
+// Mapping layers in the Tree sidebar's "Mapping" tab: one card per mapped
+// variable, showing which aesthetic and palette the engine gave it, with edit
+// and remove buttons. Deliberately the same shape as the Epi annotation list
+// above — both are "a list of removable things configured in a sidebar".
+.tree-layer-empty {
+    font-size: 0.9rem;
+}
+
+.tree-layer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+}
+
+.tree-layer-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    background-color: var(--bs-tertiary-bg);
+}
+
+// The title/meta column, kept clear of the two round buttons on its right.
+.tree-layer_body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tree-layer_title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-layer_meta {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-layer_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+.tree-layer_btn:hover {
+    background-color: var(--bs-border-color);
+    color: var(--bs-body-color);
+}
+
+// The heatmap kinds, one card each.
+.tree-heatmap-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.tree-heatmap-card.is-empty {
+    opacity: 0.6;
+}
+
+// A colour swatch whose element is switched off, or whose aesthetic a mapping
+// layer has taken over — a fixed colour loses to a mapped one in ggplot2, so
+// the control is genuinely dead. Left inert rather than hidden, so the tab
+// keeps its shape and the user can see that the control exists.
+.viz-color-row.is-disabled {
+    opacity: 0.45;
+
+    .viz-color-pick {
+        pointer-events: none;
+    }
+
+    .viz-color-label {
+        cursor: not-allowed;
+    }
+}
+
 // Map plot stage: unlike .viz-plot-stage (which centers a fixed-size plot
 // image), the leaflet map is full-bleed and must keep filling 100% of its
 // html-fill-item box, so this only adds the positioning context .viz-plot-prompt
@@ -1683,10 +1777,13 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // FixedColumns fixes, scoped to .edit-table (every DT with client-side cell
-// editing) rather than .db-page_body: FixedColumns itself is a property of
-// the table, not of whichever page happens to host it, so any edit-table that
-// turns it on - not just ones inside a .db-page_body pane - gets both fixes.
-.edit-table {
+// editing) and .isolate-selection-table (the isolate-picker modals, which pin
+// isolate and — when a time filter is active — a date column too) rather than
+// .db-page_body: FixedColumns itself is a property of the table, not of
+// whichever page happens to host it, so any table that turns it on - not just
+// ones inside a .db-page_body pane - gets both fixes.
+.edit-table,
+.isolate-selection-table {
 
     // FixedColumns ships with a hardcoded white background for the pinned
     // column, gated on a `html.dark` class this app never sets (theming runs
@@ -1696,23 +1793,31 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     table.dataTable tbody tr>.dtfc-fixed-left {
         background-color: var(--bs-body-bg);
     }
+}
 
-    // FixedColumns only pins the cell DataTables considers each column's
-    // "header" (the sortable title row), so with filter = "top" the search-box
-    // row underneath - a <tr> of <td>s DT bolts onto <thead> outside that API -
-    // never gets sticky positioning and scrolls out from under its column.
-    //
-    // Matched on the cell being a <td>, not on the row's position: header rows
-    // are <th> throughout and the filter row is the only <thead> row built from
-    // <td>s, so this holds however many header rows the table has. (It was
-    // `tr:nth-child(2)`, which silently stopped matching when the Browse table
-    // grew a second header row and pushed the filter row to nth-child(3).)
-    table.dataTable thead tr>td:first-child {
-        position: sticky;
-        left: 0;
-        z-index: 3;
-        background-color: var(--bs-body-bg);
-    }
+// FixedColumns only pins the cell DataTables considers each column's
+// "header" (the sortable title row), so with filter = "top" the search-box
+// row underneath - a <tr> of <td>s DT bolts onto <thead> outside that API -
+// never gets sticky positioning and scrolls out from under its column.
+//
+// Matched on the cell being a <td>, not on the row's position: header rows
+// are <th> throughout and the filter row is the only <thead> row built from
+// <td>s, so this holds however many header rows the table has. (It was
+// `tr:nth-child(2)`, which silently stopped matching when the Browse table
+// grew a second header row and pushed the filter row to nth-child(3).)
+//
+// .edit-table only ever pins one column (`isolate`), so hardcoding `left: 0`
+// here is exact. .isolate-selection-table is excluded: its time filter can
+// pin a second column (a date field, picked by the user) whose width isn't
+// knowable in advance, so its `left` offset can't be a CSS constant — that
+// case is instead handled per-render by the `initComplete` JS in
+// visualization_plot.R, which reads the offset FixedColumns already worked
+// out for the matching header cell.
+.edit-table table.dataTable thead tr>td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background-color: var(--bs-body-bg);
 }
 
 // Rows whose isolate was typed into this database during the current session
@@ -4261,6 +4366,27 @@ table.dataTable thead>tr>th.sorting {
     .vscomp-option-text {
         opacity: 1;
     }
+}
+
+// The per-option sub-text ("46 values · Text"), enabled by hasOptionDescription
+// on the field pickers. virtual-select hard-codes its colour the same way it
+// hard-codes the rest of this widget's palette, so it is invisible in dark mode
+// until it is pointed at a theme variable like everything else here.
+.vscomp-option-description {
+    color: var(--bs-secondary-color);
+    font-size: 0.78rem;
+    line-height: 1.2;
+}
+
+// A two-line option needs its label line tightened to match.
+.vscomp-option:has(.vscomp-option-description) .vscomp-option-text {
+    line-height: 1.3;
+}
+
+// A variable that cannot group is listed rather than withheld — its sub-text
+// says why — so it has to read as unavailable without disappearing.
+.vscomp-option.disabled {
+    opacity: 0.55;
 }
 
 .vscomp-search-container {

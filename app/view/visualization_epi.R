@@ -44,11 +44,13 @@ box::use(
 )
 box::use(
   app / logic / epi_plot,
-  app / logic / field_labels[field_label, grouped_field_choices],
+  app / logic / field_labels[field_label],
+  app / logic / field_profile[field_profiles_of = field_profiles],
   app / logic / functions[render_info],
   app /
     logic /
     viz_helpers[
+      field_select,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -515,6 +517,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   # Accepted for a uniform `shared` bundle from the coordinator; the Epi curve
   # plots straight from the already-filtered viz_metadata(), so it needs no
   # separate handling.
@@ -728,25 +735,29 @@ server <- function(
       if (force_default) {
         stratify_force_default(FALSE)
       }
-      # Categorised, human-readable labels (a "Classical MLST" group holding the
-      # derived ST + locus columns); the selected value stays the raw column
-      # name the plot builder keys on. "" is the sentinel for no stratification
-      # — see stratify_selected().
-      pickerInput(
-        ns("epi_stratify"),
-        "Stratify by",
-        choices = c(
-          list(`No stratification` = ""),
-          grouped_field_choices(fields, attr(viz_metadata(), "mlst_cols"))
-        ),
-        selected = if (!force_default && isTRUE(prev %in% fields)) prev else "",
-        width = "100%",
-        options = pickerOptions(
-          size = 10,
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ...",
-          container = "body"
+      # Categorised, human-readable labels, each carrying its own value count
+      # and declared type; the selected value stays the raw column name the
+      # plot builder keys on. "" is the sentinel for no stratification — see
+      # stratify_selected().
+      meta <- viz_metadata()
+      prof <- field_profiles() %||%
+        field_profiles_of(
+          meta,
+          mlst_cols = attr(meta, "mlst_cols"),
+          amr_cols = attr(meta, "amr_cols"),
+          custom_cols = attr(meta, "custom_cols")
         )
+      # `fields` already excludes the plotted date and the isolate id — the
+      # profile frame covers every column, so it has to be narrowed to what
+      # this control is allowed to offer.
+      field_select(
+        ns,
+        "epi_stratify",
+        "Stratify by",
+        profiles = prof[prof$field %in% fields, , drop = FALSE],
+        selected = if (!force_default && isTRUE(prev %in% fields)) prev else "",
+        extra = c(`No stratification` = ""),
+        placeholder = "No stratification"
       )
     })
 

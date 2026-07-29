@@ -21,14 +21,11 @@ test_that("every fitted size keeps the shipped proportions at ~15 tips", {
   # the values the sidebar shipped with.
   expect_equal(fit$branch_size, 4)
   expect_equal(fit$tippoint_size, 4)
-  expect_equal(fit$nodepoint_size, 2.5)
 })
 
 test_that("the sizes stay in proportion at every tree size", {
   for (n in c(5, 50, 346)) {
     fit <- tree_plot$tree_auto_layout(n, width_in = 5.7, label_chars = 36)
-    # Node points stay the junior partner of tip points, whatever the scale.
-    expect_true(fit$nodepoint_size < fit$tippoint_size)
     # Only the tip labels answer to label width, so they are the first to be
     # squeezed below what the row alone would allow.
     expect_true(fit$tiplab_size <= fit$branch_size)
@@ -71,7 +68,7 @@ test_that("a wider panel earns a squatter plot and larger labels", {
 })
 
 test_that("every fitted value stays within its bounds at any tree size", {
-  sizes <- c("tiplab_size", "branch_size", "tippoint_size", "nodepoint_size")
+  sizes <- c("tiplab_size", "branch_size", "tippoint_size")
   for (n in c(1, 3, 344, 5000)) {
     fit <- tree_plot$tree_auto_layout(n, width_in = 5.7, label_chars = 36)
     expect_gte(fit$aspect, impl$TIP_ASPECT_MIN)
@@ -206,86 +203,6 @@ test_that("the x limit hands the labels their share of the whole panel", {
   expect_gt(lim, max_x / (1 - frac))
 })
 
-# --- Fitting the variable mappings -------------------------------------------
-
-# A metadata table shaped like a real one: a column that cannot group (one
-# value), one that groups perfectly (a handful of well-filled groups), one with
-# more groups than a ColorBrewer palette has colours, one that is nearly all
-# empty, and one with a different value per isolate.
-meta_fixture <- function(n = 40) {
-  data.frame(
-    isolate = sprintf("ISO-%03d", seq_len(n)),
-    organism = rep("P. aeruginosa", n),
-    purpose = rep(c("surveillance", "outbreak", "screening", "referral"),
-      length.out = n),
-    country = sprintf("C%02d", seq_len(n) %% 20),
-    source = c(rep(NA_character_, n - 3), "blood", "urine", "wound"),
-    collected_by = sprintf("lab-%03d", seq_len(n)),
-    stringsAsFactors = FALSE
-  )
-}
-
-test_that("only columns that can group are offered for a mapping", {
-  fields <- tree_plot$mapping_fields(meta_fixture())
-
-  # A constant column and a per-isolate one group nothing, and `isolate` is
-  # never a mapping.
-  expect_false("organism" %in% fields)
-  expect_false("collected_by" %in% fields)
-  expect_false("isolate" %in% fields)
-  expect_true(all(c("purpose", "country", "source") %in% fields))
-})
-
-test_that("the best mapping column leads, so the default is the best one", {
-  fields <- tree_plot$mapping_fields(meta_fixture())
-
-  # Four well-filled groups beats twenty, which beats a column filled for three
-  # isolates out of forty.
-  expect_identical(fields[1], "purpose")
-  expect_lt(match("country", fields), match("source", fields))
-})
-
-test_that("the shape picker is offered only what ggplot2 can draw", {
-  fields <- tree_plot$mapping_fields(
-    meta_fixture(),
-    max_levels = tree_plot$MAX_SHAPE_LEVELS
-  )
-  # Twenty countries would silently drop fourteen levels' worth of tips.
-  expect_false("country" %in% fields)
-  expect_true("purpose" %in% fields)
-})
-
-test_that("an empty or unusable metadata table yields no mapping", {
-  expect_identical(tree_plot$mapping_fields(NULL), character(0))
-  expect_identical(
-    tree_plot$mapping_fields(data.frame(isolate = c("A", "B"))),
-    character(0)
-  )
-})
-
-test_that("the palette family follows the number of groups", {
-  # Inside the smallest brewer palette, a qualitative scale reads best.
-  expect_identical(
-    tree_plot$scale_categories_for(rep(letters[1:4], 5), "Sequential")[1],
-    "Qualitative"
-  )
-  # Past it, brewer runs out of colours and draws the rest grey, so a generated
-  # scale leads instead.
-  expect_identical(
-    tree_plot$scale_categories_for(as.character(1:40), "Sequential")[1],
-    "Gradient"
-  )
-  # Numbers keep the numeric families entirely.
-  expect_identical(
-    tree_plot$scale_categories_for(1:40, c("Sequential", "Gradient")),
-    c("Sequential", "Gradient")
-  )
-})
-
-test_that("empty strings do not count as a group", {
-  expect_identical(tree_plot$field_levels(c("a", "b", "", NA, "  ")), 2L)
-})
-
 # --- Annotations, legend and scale bar ---------------------------------------
 
 test_that("the legend wraps once it is taller than the plot", {
@@ -330,4 +247,214 @@ test_that("the branch-label cutoff leaves a readable number of labels", {
   # than the target.
   expect_equal(tree_plot$tree_branch_cutoff(3), 0)
   expect_true(tree_plot$tree_branch_cutoff(100000) <= 99)
+})
+
+# --- The legend's reserved column --------------------------------------------
+
+test_that("nothing mapped costs the legend no width", {
+  md <- data.frame(country = rep("Germany", 5), stringsAsFactors = FALSE)
+  expect_equal(tree_plot$tree_legend_width_in(list(), md, 10, 5.5), 0)
+})
+
+test_that("the legend reserve grows with the labels it has to hold", {
+  short <- data.frame(v = rep(c("a", "b"), 10), stringsAsFactors = FALSE)
+  long <- data.frame(
+    v = rep(c("a very long category name indeed", "b"), 10),
+    stringsAsFactors = FALSE
+  )
+  layer <- list(field = "v", title = "V", n_levels = 2L)
+
+  narrow <- tree_plot$tree_legend_width_in(list(layer), short, 10, 5.5)
+  wide <- tree_plot$tree_legend_width_in(list(layer), long, 10, 5.5)
+
+  expect_gt(narrow, 0)
+  expect_gt(wide, narrow)
+})
+
+test_that("the legend can never take more than its share of the canvas", {
+  # A 46-level mapping with long labels must not squeeze the tree to nothing —
+  # which is what an unbounded guide box beside a fixed canvas would do.
+  md <- data.frame(
+    v = sprintf("an extremely long label number %02d", 1:46),
+    stringsAsFactors = FALSE
+  )
+  layer <- list(field = "v", title = "V", n_levels = 46L)
+  w <- tree_plot$tree_legend_width_in(list(layer), md, 10, 5.5)
+  expect_lte(w, 0.35 * 5.5)
+})
+
+# --- Branch labels -----------------------------------------------------------
+
+test_that("branch numbers are text above the line, not a box on it", {
+  # They used to be geom_label2 centred on the branch, which hid the very line
+  # the number describes behind an opaque panel. Guards the revert.
+  layer <- impl$tree_branch_layer(
+    list(branch_show = TRUE, branch_cutoff = 10, branch_size = 4,
+      branch_color = "#000000"),
+    c(0.1, 0.2, 0.3)
+  )
+  expect_true(inherits(layer$geom, "GeomText"))
+  expect_false(inherits(layer$geom, "GeomLabel"))
+  # Lifted clear of the line rather than centred on it.
+  expect_lt(layer$aes_params$vjust, 0)
+})
+
+test_that("branch labels switched off draw nothing", {
+  expect_null(impl$tree_branch_layer(list(branch_show = FALSE), c(0.1, 0.2)))
+})
+
+# --- Annotation geometry -----------------------------------------------------
+
+test_that("the axis solve accounts for every annotation drawn beside the tree", {
+  # Leaving the tile strips out of this is what drew a mapped strip outside the
+  # panel, where it silently disappeared.
+  bare <- list(layers = list(), heatmaps = list())
+  tiled <- list(
+    layers = list(list(aesthetic = "tile", field = "v")),
+    heatmaps = list()
+  )
+  heated <- list(
+    layers = list(),
+    heatmaps = list(list(kind = "amr", cols = c("a", "b")))
+  )
+
+  expect_equal(tree_plot$annotation_total(bare), 0)
+  expect_gt(tree_plot$annotation_total(tiled), 0)
+  expect_gt(tree_plot$annotation_total(heated), 0)
+})
+
+test_that("stacked heatmap panels are laid out end to end, never overlapping", {
+  opts <- list(
+    layers = list(),
+    heatmaps = list(
+      list(kind = "amr", cols = c("a", "b"), title = "AMR"),
+      list(kind = "custom", cols = "c", title = "Custom")
+    )
+  )
+  panels <- tree_plot$heatmap_panels(opts, tree_span = 1, label_reserve = 0.5)$panels
+
+  expect_identical(length(panels), 2L)
+  # The second starts past the end of the first.
+  expect_gte(panels[[2]]$offset, panels[[1]]$offset + panels[[1]]$width)
+  # Both clear the tip labels.
+  expect_gte(panels[[1]]$offset, 0.5)
+  # Width follows column count: two columns get more room than one.
+  expect_gt(panels[[1]]$width, panels[[2]]$width)
+})
+
+test_that("the heatmap header reserve follows the longest column name", {
+  short <- list(heatmaps = list(list(kind = "custom", cols = "a")))
+  long <- list(heatmaps = list(list(
+    kind = "amr",
+    cols = "amr_Beta-lactam-and-then-some-more"
+  )))
+  expect_lt(
+    tree_plot$heatmap_header_frac(short, 40),
+    tree_plot$heatmap_header_frac(long, 40)
+  )
+  # No heatmaps, no reserve worth taking from the tree.
+  expect_lt(tree_plot$heatmap_header_frac(list(heatmaps = list()), 40), 0.05)
+})
+
+test_that("two heatmap panels build as two independent fill scales", {
+  # gheatmap chaining is not a documented use, and a shared fill scale across
+  # panels would collapse AMR's two-colour key and a custom panel's categories
+  # into one legend that explains neither. This is the guard.
+  set.seed(11)
+  n <- 12
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(
+    isolate = tree$tip.label,
+    `amr_Beta-lactam` = rep(c("blaOXA", ""), length.out = n),
+    custom_ward = rep(c("ICU", "ER"), length.out = n),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    align = TRUE, tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
+    tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
+    nodelabel_show = FALSE, parentnodes = character(0),
+    clade_color = "#D0F221",
+    heatmaps = list(
+      list(kind = "amr", cols = "amr_Beta-lactam", palette = "Reds",
+        title = "AMR screening"),
+      list(kind = "custom", cols = "custom_ward", palette = "Blues",
+        title = "Custom variables")
+    ),
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  # Capture the plot before build_tree_ggtree wraps it into a fixed-size grob,
+  # so the tile layers can be inspected as data.
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+
+  msgs <- character(0)
+  p <- withCallingHandlers(
+    suppressWarnings(build(tree, meta, opts)),
+    message = function(m) {
+      msgs <<- c(msgs, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }
+  )
+
+  expect_true(inherits(p, "ggplot"))
+  # The message ggplot2 emits when a second scale replaces the first — exactly
+  # what would mean the two panels had collapsed into one key.
+  expect_false(any(grepl("Scale for fill is already present", msgs)))
+
+  # gheatmap warns about "removed rows" while sizing an intermediate plot; the
+  # finished one must still carry every isolate in both panels. This is the
+  # assertion .muffled_tree_warnings leans on.
+  built <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(inner)))
+  tiles <- which(vapply(
+    inner$layers,
+    function(l) grepl("Tile", class(l$geom)[1]),
+    logical(1)
+  ))
+  expect_identical(length(tiles), 2L)
+  for (i in tiles) {
+    expect_identical(nrow(built$data[[i]]), as.integer(n))
+    expect_false(any(is.na(built$data[[i]]$fill)))
+  }
+})
+
+test_that("a layer naming a column the database no longer has is dropped", {
+  # A saved Analysis can outlive the column it mapped; reaching aes() with it
+  # would error rather than degrade.
+  set.seed(12)
+  tree <- ape::rtree(6)
+  tree$tip.label <- sprintf("iso%02d", 1:6)
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    align = TRUE, tiplab_color = "#000000",
+    layers = list(list(id = "L1", field = "gone_away", title = "Gone",
+      aesthetic = "tiplab_color", palette = "Set1", n_levels = 3L,
+      continuous = FALSE, transform = NULL, auto = TRUE)),
+    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
+    tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
+    nodelabel_show = FALSE, parentnodes = character(0),
+    clade_color = "#D0F221", heatmaps = list(),
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  expect_true(inherits(tree_plot$build_tree_ggtree(tree, meta, opts), "ggplot"))
 })

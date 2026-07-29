@@ -61,7 +61,7 @@ box::use(
     updatePickerInput,
     pickerOptions,
   ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
 )
 box::use(
   app / logic / db_staging[imported_metadata_wide],
@@ -387,6 +387,11 @@ server <- function(
   session_reset = shiny::reactive(0L),
   # Local per-isolate metadata, read and cached once by the coordinator.
   viz_metadata = shiny::reactive(NULL),
+  # One row per metadata column: its declared type, distinct-value count,
+  # coverage and group. Built once by the coordinator and threaded to every
+  # engine, which is what lets their field pickers agree on what a variable is
+  # without each recomputing it. See app/logic/field_profile.R.
+  viz_field_profiles = shiny::reactive(NULL),
   # Staged peer typing-result sets available for import into a distance plot.
   staged_sets = shiny::reactive(NULL),
   # Grouped Save-target choices, kept current by the coordinator.
@@ -710,6 +715,25 @@ server <- function(
         # non-reactively: the checked set is an *output* of this table, and
         # depending on it would re-render on every click.
         keep <- match(isolate(sel_checked()), tbl$isolate)
+
+        # Pinned (FixedColumns) columns: `isolate` always, plus whatever date
+        # column the time filter is currently set to — moved to sit right
+        # after it, so both stay in view together while the rest of the wide
+        # metadata table scrolls underneath. Isolate alone when there is no
+        # time filter (or it names a column this frame doesn't have, e.g. the
+        # instant the picker's own choices are still catching up to a new
+        # database).
+        date_col <- input$sel_date_field
+        pin_cols <- if (
+          !is.null(date_col) && nzchar(date_col) &&
+            !identical(date_col, "isolate") && date_col %in% names(tbl)
+        ) {
+          c("isolate", date_col)
+        } else {
+          "isolate"
+        }
+        tbl <- tbl[, c(pin_cols, setdiff(names(tbl), pin_cols)), drop = FALSE]
+
         datatable(
           tbl,
           rownames = FALSE,
@@ -724,6 +748,7 @@ server <- function(
             mode = "multiple",
             selected = keep[!is.na(keep)]
           ),
+          extensions = "FixedColumns",
           options = list(
             dom = "tip",
             pageLength = 20,
@@ -736,7 +761,36 @@ server <- function(
             # `.isolate-selection-table .dataTables_scroll`'s max-height), the
             # same convention `database_browser.R`'s metadata_table uses.
             scrollY = "1px",
-            scrollCollapse = TRUE
+            scrollCollapse = TRUE,
+            fixedColumns = list(leftColumns = length(pin_cols)),
+            # FixedColumns pins each pinned column's own header cell (adding
+            # `dtfc-fixed-left` + a computed `left` offset it works out from
+            # the actual rendered column widths) but has no notion of the
+            # filter = "top" row underneath — that is a plain <td> row DT
+            # bolts onto <thead> outside the header API, so FixedColumns never
+            # touches it and it scrolls out from under its own column instead
+            # of staying put. `database_browser.R`'s metadata_table hits the
+            # same gap, but only ever pins one column, so a CSS rule hardcoded
+            # to `left: 0` (see the `.edit-table` rules in main.scss) is
+            # enough there; the second pinned column here is a date field
+            # whose width isn't knowable in advance, so its offset has to be
+            # read from the header cell FixedColumns already positioned,
+            # rather than guessed at in CSS.
+            initComplete = JS(sprintf(
+              "function(settings) {
+                 var rows = $(this.api().table().header()).find('tr');
+                 var headerCells = rows.eq(0).find('th');
+                 var filterCells = rows.eq(1).find('td');
+                 for (var i = 0; i < %d; i++) {
+                   filterCells.eq(i).addClass('dtfc-fixed-left').css({
+                     position: 'sticky',
+                     left: headerCells.eq(i).css('left') || '0px',
+                     zIndex: 3
+                   });
+                 }
+               }",
+              length(pin_cols)
+            ))
           )
         )
       },
@@ -881,7 +935,8 @@ server <- function(
         selected_isolates = gate(selected_isolates),
         na_handling = gate(reactive(input$na_handling %||% "ignore_na")),
         generate = gate(reactive(input$generate)),
-        plot_type = gate(reactive(plot_type))
+        plot_type = gate(reactive(plot_type)),
+        field_profiles = gate(viz_field_profiles)
       )
     )
     engine_args <- c(

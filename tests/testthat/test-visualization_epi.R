@@ -410,6 +410,9 @@ test_that("the stratify picker offers the metadata fields but not the date", {
     ),
     {
       set_default_inputs(session)
+      # virtualSelectInput carries its options as JSON in a data attribute
+      # rather than as <option> tags, so the assertions look for the field
+      # names and the sentinel's value in that payload.
       html <- as.character(output$stratify_ui$html)
 
       expect_true(grepl("organism", html, fixed = TRUE))
@@ -418,7 +421,10 @@ test_that("the stratify picker offers the metadata fields but not the date", {
       expect_false(grepl("sample_collection_date", html, fixed = TRUE))
       # The "No stratification" sentinel is always offered, and is what an
       # empty selection actually means to stratify_selected().
-      expect_true(grepl('value=""', html, fixed = TRUE))
+      expect_true(grepl("No stratification", html, fixed = TRUE))
+      # And each option carries its distinct-value count and declared type.
+      expect_true(grepl("values &middot;", html, fixed = TRUE) ||
+        grepl("values ·", html, fixed = TRUE))
     }
   )
 })

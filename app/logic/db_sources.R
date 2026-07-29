@@ -23,7 +23,7 @@
 # labels remain static to maintain historical consistency across existing rows.
 
 box::use(
-  DBI[dbExecute, dbGetQuery, dbListListTables],
+  DBI[dbExecute, dbGetQuery, dbListTables],
 )
 
 # Metadata field reserved for tracking provenance source labels.
