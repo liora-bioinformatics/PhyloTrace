@@ -186,17 +186,148 @@ test_that("the x limit hands the labels their share of the whole panel", {
   max_x <- 1
   tree_data <- data.frame(x = c(0, 0.5, max_x))
 
-  lim <- impl$.tiplab_xlim(opts, md, tree_data, max_x)
+  solved <- impl$.tiplab_xlim(opts, md, tree_data, max_x)
+  lim <- solved$limit
   frac <- impl$.tiplab_frac(opts, md)
   x_min <- -max_x * 0.05 # the root edge
 
-  # What the labels actually get, once the root edge and ggplot's expansion are
-  # counted in the panel, is what was asked for.
+  # What the labels actually get, once the root edge, ggplot's expansion and the
+  # clearance the annotation matrix needs are counted in, is what was asked for.
   expect_equal(
-    (lim - max_x) / ((lim - x_min) * impl$X_EXPANSION),
+    (lim - max_x) / ((lim - x_min) * impl$X_EXPANSION * impl$HEATMAP_CLEARANCE),
     frac
   )
+  # The reserve is where the labels end, so an annotation matrix starting there
+  # begins past them and still inside the axis.
+  expect_true(solved$reserve > 0)
+  expect_lt(max_x + solved$reserve, lim * 1.001)
   # The naive max_x/(1 - frac) is the version that under-reserved and clipped
   # long isolate names at the panel edge.
   expect_gt(lim, max_x / (1 - frac))
+})
+
+# --- Fitting the variable mappings -------------------------------------------
+
+# A metadata table shaped like a real one: a column that cannot group (one
+# value), one that groups perfectly (a handful of well-filled groups), one with
+# more groups than a ColorBrewer palette has colours, one that is nearly all
+# empty, and one with a different value per isolate.
+meta_fixture <- function(n = 40) {
+  data.frame(
+    isolate = sprintf("ISO-%03d", seq_len(n)),
+    organism = rep("P. aeruginosa", n),
+    purpose = rep(c("surveillance", "outbreak", "screening", "referral"),
+      length.out = n),
+    country = sprintf("C%02d", seq_len(n) %% 20),
+    source = c(rep(NA_character_, n - 3), "blood", "urine", "wound"),
+    collected_by = sprintf("lab-%03d", seq_len(n)),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("only columns that can group are offered for a mapping", {
+  fields <- tree_plot$mapping_fields(meta_fixture())
+
+  # A constant column and a per-isolate one group nothing, and `isolate` is
+  # never a mapping.
+  expect_false("organism" %in% fields)
+  expect_false("collected_by" %in% fields)
+  expect_false("isolate" %in% fields)
+  expect_true(all(c("purpose", "country", "source") %in% fields))
+})
+
+test_that("the best mapping column leads, so the default is the best one", {
+  fields <- tree_plot$mapping_fields(meta_fixture())
+
+  # Four well-filled groups beats twenty, which beats a column filled for three
+  # isolates out of forty.
+  expect_identical(fields[1], "purpose")
+  expect_lt(match("country", fields), match("source", fields))
+})
+
+test_that("the shape picker is offered only what ggplot2 can draw", {
+  fields <- tree_plot$mapping_fields(
+    meta_fixture(),
+    max_levels = tree_plot$MAX_SHAPE_LEVELS
+  )
+  # Twenty countries would silently drop fourteen levels' worth of tips.
+  expect_false("country" %in% fields)
+  expect_true("purpose" %in% fields)
+})
+
+test_that("an empty or unusable metadata table yields no mapping", {
+  expect_identical(tree_plot$mapping_fields(NULL), character(0))
+  expect_identical(
+    tree_plot$mapping_fields(data.frame(isolate = c("A", "B"))),
+    character(0)
+  )
+})
+
+test_that("the palette family follows the number of groups", {
+  # Inside the smallest brewer palette, a qualitative scale reads best.
+  expect_identical(
+    tree_plot$scale_categories_for(rep(letters[1:4], 5), "Sequential")[1],
+    "Qualitative"
+  )
+  # Past it, brewer runs out of colours and draws the rest grey, so a generated
+  # scale leads instead.
+  expect_identical(
+    tree_plot$scale_categories_for(as.character(1:40), "Sequential")[1],
+    "Gradient"
+  )
+  # Numbers keep the numeric families entirely.
+  expect_identical(
+    tree_plot$scale_categories_for(1:40, c("Sequential", "Gradient")),
+    c("Sequential", "Gradient")
+  )
+})
+
+test_that("empty strings do not count as a group", {
+  expect_identical(tree_plot$field_levels(c("a", "b", "", NA, "  ")), 2L)
+})
+
+# --- Annotations, legend and scale bar ---------------------------------------
+
+test_that("the legend wraps once it is taller than the plot", {
+  expect_identical(tree_plot$tree_legend_ncol(6), 1L)
+  expect_identical(tree_plot$tree_legend_ncol(18), 1L)
+  expect_true(tree_plot$tree_legend_ncol(46) > 1L)
+  # Never so many columns that the legend crowds out the tree.
+  expect_true(tree_plot$tree_legend_ncol(400) <= 4L)
+})
+
+test_that("the scale bar carries a round number", {
+  expect_equal(tree_plot$tree_nice_width(1.36116098546807), 1)
+  expect_equal(tree_plot$tree_nice_width(137.4), 100)
+  expect_equal(tree_plot$tree_nice_width(268), 200)
+  expect_equal(tree_plot$tree_nice_width(0.084), 0.05)
+  # Degenerate trees (a single distance of zero) must not produce Inf or NaN.
+  expect_true(is.finite(tree_plot$tree_nice_width(0)))
+})
+
+test_that("annotation strips share a budget instead of each taking the tree", {
+  one <- tree_plot$tree_annotation_width(1)
+  four <- tree_plot$tree_annotation_width(4)
+
+  # pwidth is a multiple of the tree's own width; the 2 this shipped with drew a
+  # strip twice as wide as the tree.
+  expect_lt(one, 1)
+  expect_lt(four, one)
+  expect_equal(four * 4, one, tolerance = 0.02)
+})
+
+test_that("the branch-label cutoff leaves a readable number of labels", {
+  # ~690 branches for the 346-isolate database: labelling 90% of them (the
+  # shipped cutoff of 10) is a band of text over the tree.
+  big <- tree_plot$tree_branch_cutoff(690)
+  expect_true(big > 90 && big < 100)
+
+  # At ~15 tips (27 branches) the fit lands near the 10 the control shipped
+  # with, which is where that default was reasonable.
+  expect_true(abs(tree_plot$tree_branch_cutoff(27) - 10) < 10)
+
+  # Never past the slider, and never negative on a tree with fewer branches
+  # than the target.
+  expect_equal(tree_plot$tree_branch_cutoff(3), 0)
+  expect_true(tree_plot$tree_branch_cutoff(100000) <= 99)
 })

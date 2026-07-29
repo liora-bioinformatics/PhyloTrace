@@ -35,7 +35,12 @@ box::use(
     sidebar,
   ],
   shiny,
-  shinyWidgets[radioGroupButtons, pickerInput, pickerOptions],
+  shinyWidgets[
+    radioGroupButtons,
+    pickerInput,
+    pickerOptions,
+    updatePickerInput
+  ],
 )
 box::use(
   app / logic / epi_plot,
@@ -129,7 +134,7 @@ epi_controls <- function(ns) {
           accordion_panel(
             "Plot Mode",
             icon = shiny$icon("chart-column"),
-            shiny$pickerInput(
+            pickerInput(
               ns("epi_plot_mode"),
               "Plot mode",
               choices = PLOT_MODES,
@@ -176,7 +181,7 @@ epi_controls <- function(ns) {
                   step = 1,
                   ticks = FALSE
                 ),
-                shiny$pickerInput(
+                pickerInput(
                   ns("epi_moving_avg_align"),
                   "Window alignment",
                   choices = MOVING_AVG_ALIGNMENTS,
@@ -369,7 +374,7 @@ epi_controls <- function(ns) {
       nav_panel(
         "Annotations",
         icon = shiny$icon("calendar-plus"),
-        shiny$pickerInput(
+        pickerInput(
           ns("epi_anno_type"),
           "Type",
           c(`Milestone (line)` = "milestone", `Time period (shaded)` = "period")

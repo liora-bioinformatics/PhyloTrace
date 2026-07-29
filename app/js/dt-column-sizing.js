@@ -30,11 +30,33 @@ var DEBOUNCE_MS = 100;
 // one we have already handled.
 var tracked = new WeakMap();
 
+// True while an adjust of our own is settling. columns.adjust() writes column
+// widths, which moves the scrollport's own width, which comes straight back
+// through the observer below — the callback that would schedule the next
+// adjust. Reacting to that is at best redundant work and at worst endless:
+// convergence is DT's behaviour, not a guarantee, and every extra pass on a
+// wide unpaged table costs seconds of blocked main thread. Only widths that
+// something *else* changed are worth reacting to.
+var settling = false;
+
 function adjustColumns(wrapper) {
   var table = wrapper.querySelector("table.dataTable");
   if (!table || !window.$ || !$.fn.dataTable) return;
   if (!$.fn.dataTable.isDataTable(table)) return;
-  $(table).DataTable().columns.adjust();
+
+  settling = true;
+  try {
+    $(table).DataTable().columns.adjust();
+  } finally {
+    // Two frames: one for the layout the adjust dirtied, one for the observer
+    // callback it delivers. Whatever widths have settled by then become the
+    // new baseline, so the next real change is still measured against them.
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        settling = false;
+      });
+    });
+  }
 }
 
 var observer = new ResizeObserver(function (entries) {
@@ -50,6 +72,10 @@ var observer = new ResizeObserver(function (entries) {
     // what corrects the initial draw.
     if (state.width === width) return;
     state.width = width;
+
+    // Recorded above rather than below the guard: the width an adjust of ours
+    // produced is the baseline the next genuine resize has to differ from.
+    if (settling) return;
 
     var wrapper = state.wrapper;
     var wrapperState = tracked.get(wrapper);

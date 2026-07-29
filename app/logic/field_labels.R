@@ -104,6 +104,53 @@ field_chips <- function(x) {
   })
 }
 
+#' The four field categories, in the order every picker lists them.
+#'
+#' Exported because two producers have to agree on it: `grouped_field_choices()`
+#' builds optgroups in this order, and `field_profile$field_profiles()` sorts
+#' its rows by it so `shinyWidgets::prepare_choices()` — which derives optgroups
+#' from the order the rows arrive in — lands on the same sequence. One list, so
+#' the two cannot drift.
+#' @export
+GROUP_ORDER <- c(
+  "Sample metadata",
+  "Classical MLST",
+  "AMR screening",
+  "Custom variables"
+)
+
+#' Which of `GROUP_ORDER` each of `fields` belongs to, in `fields` order.
+#'
+#' An explicitly named `*_cols` set wins over prefix detection, for the reason
+#' spelled out in `grouped_field_choices()`: a column a caller has declared for
+#' one group must not also be claimed by another group's prefix.
+#' @export
+group_of <- function(
+  fields,
+  mlst_cols = NULL,
+  amr_cols = NULL,
+  custom_cols = NULL
+) {
+  claimed <- unlist(lapply(
+    list(mlst_cols, amr_cols, custom_cols),
+    function(cols) if (is.null(cols)) NULL else intersect(fields, cols)
+  ))
+
+  member <- function(cols, prefix) {
+    if (is.null(cols)) {
+      startsWith(fields, prefix) & !(fields %in% claimed)
+    } else {
+      fields %in% cols
+    }
+  }
+
+  out <- rep(GROUP_ORDER[[1]], length(fields))
+  out[member(mlst_cols, MLST_COL_PREFIX)] <- GROUP_ORDER[[2]]
+  out[member(amr_cols, AMR_COL_PREFIX)] <- GROUP_ORDER[[3]]
+  out[member(custom_cols, CUSTOM_COL_PREFIX)] <- GROUP_ORDER[[4]]
+  out
+}
+
 #' Build a select / picker `choices` structure that groups metadata fields into
 #' a "Sample metadata" optgroup and, when present, a "Classical MLST" optgroup
 #' for the derived MLST columns (see `MLST_COL_PREFIX`), an "AMR screening" one,
@@ -129,27 +176,16 @@ grouped_field_choices <- function(
   amr_cols = NULL,
   custom_cols = NULL
 ) {
-  # An explicitly named set wins over prefix detection: a caller that declares a
-  # column for one group must not see it claimed by another group's prefix too.
-  claimed <- unlist(lapply(
-    list(mlst_cols, amr_cols, custom_cols),
-    function(cols) if (is.null(cols)) NULL else intersect(fields, cols)
-  ))
+  # One classifier, shared with field_profile$field_profiles(), so a column can
+  # never land in one group here and another there.
+  group <- group_of(fields, mlst_cols, amr_cols, custom_cols)
+  in_group <- function(name) fields[group == name]
 
-  by_prefix <- function(cols, prefix) {
-    if (is.null(cols)) {
-      setdiff(fields[startsWith(fields, prefix)], claimed)
-    } else {
-      intersect(fields, cols)
-    }
-  }
-
-  mlst_cols <- by_prefix(mlst_cols, MLST_COL_PREFIX)
-  amr_cols <- by_prefix(amr_cols, AMR_COL_PREFIX)
-  custom_cols <- by_prefix(custom_cols, CUSTOM_COL_PREFIX)
-
+  mlst_cols <- in_group(GROUP_ORDER[[2]])
+  amr_cols <- in_group(GROUP_ORDER[[3]])
+  custom_cols <- in_group(GROUP_ORDER[[4]])
+  base_cols <- in_group(GROUP_ORDER[[1]])
   grouped <- c(mlst_cols, amr_cols, custom_cols)
-  base_cols <- setdiff(fields, grouped)
   base_choices <- stats::setNames(base_cols, field_labels_for(base_cols))
 
   # No grouped columns at all: stay flat, exactly as a plain metadata select.
@@ -157,21 +193,22 @@ grouped_field_choices <- function(
     return(base_choices)
   }
 
-  out <- list("Sample metadata" = base_choices)
+  out <- list()
+  out[[GROUP_ORDER[[1]]]] <- base_choices
   if (length(mlst_cols)) {
-    out[["Classical MLST"]] <- stats::setNames(
+    out[[GROUP_ORDER[[2]]]] <- stats::setNames(
       mlst_cols,
       field_labels_for(mlst_cols)
     )
   }
   if (length(amr_cols)) {
-    out[["AMR screening"]] <- stats::setNames(
+    out[[GROUP_ORDER[[3]]]] <- stats::setNames(
       amr_cols,
       field_labels_for(amr_cols)
     )
   }
   if (length(custom_cols)) {
-    out[["Custom variables"]] <- stats::setNames(
+    out[[GROUP_ORDER[[4]]]] <- stats::setNames(
       custom_cols,
       field_labels_for(custom_cols)
     )

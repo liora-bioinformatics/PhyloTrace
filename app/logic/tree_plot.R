@@ -15,7 +15,7 @@ box::use(
     geom_rootedge,
     geom_hilight,
     geom_nodelab,
-    geom_label2,
+    geom_text2,
     gheatmap,
     theme_tree,
   ],
@@ -28,8 +28,8 @@ box::use(
     geom_text,
     geom_label,
     geom_tile,
-    ggtitle,
     ggsave,
+    guide_legend,
     theme,
     element_text,
     element_rect,
@@ -230,6 +230,180 @@ tree_auto_layout <- function(
   )
 }
 
+# --- Fitting the variable mappings -------------------------------------------
+#
+# A metadata column is only worth mapping to colour, shape or a tile strip if
+# its values actually separate the isolates into groups a reader can tell
+# apart. Three ways a column fails that, all of them present in a real
+# database: one distinct value (every tip identical — `organism` in a
+# single-species scheme), one distinct value *per isolate* (`isolate` itself,
+# 346 colours, which is what this shipped as the default mapping), and mostly
+# empty (`source`, filled for 11 of 346).
+
+# Largest ColorBrewer qualitative palette that is safe: Set1 and Pastel1 carry 9
+# colours, Set2/Dark2/Accent only 8. Ask any of them for more and brewer warns
+# ("Returning the palette you asked for with that many colors") and hands back
+# short — every level past the end draws grey. Above this, a viridis scale,
+# which is generated rather than tabulated and so has no ceiling.
+MAX_QUAL_LEVELS <- 9L
+
+# ggplot2's shape palette stops at six: "more than 6 becomes difficult to
+# discriminate". Past it the extra levels get no shape at all, so those tips
+# simply vanish from the plot rather than looking wrong.
+#' @export
+MAX_SHAPE_LEVELS <- 6L
+
+# A column needs values for at least this share of the isolates to be offered as
+# a default mapping; below it the plot is mostly "NA".
+MIN_COVERAGE <- 0.5
+
+# Distinct non-empty values in a metadata column.
+#' @export
+field_levels <- function(values) {
+  v <- values[!is.na(values)]
+  if (is.character(v)) {
+    v <- v[nzchar(trimws(v))]
+  }
+  length(unique(v))
+}
+
+# Share of isolates the column actually has a value for.
+.field_coverage <- function(values) {
+  if (!length(values)) {
+    return(0)
+  }
+  v <- values[!is.na(values)]
+  if (is.character(v)) {
+    v <- v[nzchar(trimws(v))]
+  }
+  length(v) / length(values)
+}
+
+# The metadata columns worth offering for a mapping, best first.
+#
+# Ordering the picker *is* the recommendation: the first entry becomes the
+# default, and a user scanning the list meets the usable columns before the
+# hopeless ones. Ranked by how well the column groups the data — a handful of
+# well-populated groups first, then larger ones, then poorly covered ones —
+# and columns that cannot group at all are dropped.
+#' @export
+mapping_fields <- function(metadata, max_levels = Inf) {
+  fields <- setdiff(names(metadata), "isolate")
+  n <- nrow(metadata)
+  if (!length(fields) || !n) {
+    return(character(0))
+  }
+
+  info <- lapply(fields, function(f) {
+    list(
+      field = f,
+      levels = field_levels(metadata[[f]]),
+      coverage = .field_coverage(metadata[[f]])
+    )
+  })
+  # One value for everyone, or a different value for everyone: neither groups.
+  info <- Filter(
+    function(i) i$levels > 1 && i$levels < n && i$levels <= max_levels,
+    info
+  )
+  if (!length(info)) {
+    return(character(0))
+  }
+
+  rank <- vapply(
+    info,
+    function(i) {
+      # Rank before order so the sort is a plain numeric one: well-covered
+      # columns of a handful of groups first, then wider ones, then the sparse.
+      band <- if (i$coverage < MIN_COVERAGE) {
+        3L
+      } else if (i$levels <= MAX_QUAL_LEVELS) {
+        1L
+      } else {
+        2L
+      }
+      band + i$levels / (100 * max(i$levels, 1) + 1)
+    },
+    numeric(1)
+  )
+  vapply(info[order(rank)], function(i) i$field, character(1))
+}
+
+# Which palette family suits a column: a qualitative one while the levels stay
+# inside the smallest brewer palette, a generated (viridis) one past that, and
+# the numeric families for numbers. Returns names of `color_scales` groups in
+# viz_helpers.R, best first.
+#' @export
+scale_categories_for <- function(values, numeric_categories) {
+  if (is.numeric(values)) {
+    return(numeric_categories)
+  }
+  if (field_levels(values) <= MAX_QUAL_LEVELS) {
+    c("Qualitative", "Gradient")
+  } else {
+    c("Gradient", "Qualitative")
+  }
+}
+
+# Entries per legend column. A mapping with forty levels draws a legend taller
+# than the plot it explains, and ggplot will happily let it run off the canvas;
+# wrapping into columns is what keeps it inside. Mirrors epi_legend_ncol in
+# epi_plot.R, which does the same for the epidemic curve's strata.
+#' @export
+tree_legend_ncol <- function(n_levels, max_rows = 18L) {
+  if (n_levels <= max_rows) {
+    return(1L)
+  }
+  as.integer(min(4L, ceiling(n_levels / max_rows)))
+}
+
+# A round number at or just below `x`, in the 1 / 2 / 5 sequence.
+#
+# For the tree's scale bar, whose width ggtree prints verbatim: a tenth of the
+# tree depth is a number like 1.36116098546807, and that is exactly what ended
+# up under the plot. Scale bars carry round numbers.
+#' @export
+tree_nice_width <- function(x) {
+  if (!is.finite(x) || x <= 0) {
+    return(1)
+  }
+  mag <- 10^floor(log10(x))
+  step <- c(1, 2, 5, 10)
+  step[max(which(step * mag <= x))] * mag
+}
+
+# The percentile of branch length above which a branch gets a label, chosen so
+# roughly `target` of them do. A tree of a few hundred isolates has as many
+# branches again, and the shipped cutoff of 10 labelled 90% of them — a solid
+# band of text over the tree. At ~15 tips this returns ~7, near the 10 the
+# control shipped with, so the fit lands where the old default was reasonable.
+# Branch numbers are drawn as plain text standing above the branch line. Both
+# constants are in the geom's own units: `size` is ggplot2's mm-ish text size,
+# `vjust` is a multiple of the text's height, so -0.35 lifts the baseline just
+# over a third of a line above the branch — clear of it without floating.
+BRANCH_ABOVE_SHRINK <- 0.72
+BRANCH_VJUST <- -0.35
+
+BRANCH_LABEL_TARGET <- 25L
+#' @export
+tree_branch_cutoff <- function(n_branches, target = BRANCH_LABEL_TARGET) {
+  n <- max(as.integer(n_branches %||% 0L), 1L)
+  round(.clamp(100 * (1 - target / n), 0, 99))
+}
+
+# Fraction of the tree's width one annotation strip may take.
+#
+# geom_fruit's `pwidth` and gheatmap's `width` are both multiples of the tree
+# width, so the shipped 2 meant a single tile strip twice as wide as the tree
+# it annotates. The annotations share a fixed budget instead, so the tree stays
+# the thing the plot is of however many are switched on.
+ANNOTATION_BUDGET <- 0.45
+#' @export
+tree_annotation_width <- function(n_strips) {
+  n <- max(as.integer(n_strips %||% 1L), 1L)
+  round(ANNOTATION_BUDGET / n, 2)
+}
+
 # Fraction of the panel width to keep clear to the right of the tips for their
 # labels. Derived from the labels actually being drawn (the longest one, at the
 # current font size) rather than the flat 0.375 this used to reserve
@@ -255,19 +429,39 @@ tree_auto_layout <- function(
 # ggplot pads a continuous scale by 5% of the range at each end.
 X_EXPANSION <- 1.1
 
-# The x upper limit that leaves .tiplab_frac of the panel to the tip labels.
+# How far past the estimated end of the tip labels the annotation matrix starts.
+HEATMAP_CLEARANCE <- 1.3
+
+# Width of the heatmap matrix, as gheatmap wants it: a multiple of the tree's
+# own width, shared across the selected columns.
+.heatmap_width <- function(opts) {
+  n <- length(opts$heatmap_select)
+  if (!n) {
+    return(0)
+  }
+  tree_annotation_width(1) * min(n, 6L) / 6L
+}
+
+# Where to end the x axis, and how much of it the tip labels take.
 #
 # Not simply max_x/(1 - frac): the panel does not start at the tips' origin. It
 # spans from the root — pushed further left again by the root edge — out to this
-# limit, and then ggplot expands both ends. The labels have to be reserved out
-# of the whole of that, so under-reserving by exactly the width of the root edge
-# and the expansion is what still clipped long names. Solving
+# limit, and then ggplot expands both ends. Writing that out, with `heat` the
+# annotation matrix's width as a multiple of the tree's own,
 #
-#   (limit - max_x) = frac * X_EXPANSION * (limit - x_min)
+#   (max_x - x_min) * (1 + heat) + X_EXPANSION * range * frac = range
 #
-# for `limit` is what actually holds the labels inside the panel.
-.tiplab_xlim <- function(opts, md, tree_data, max_x) {
-  frac <- .tiplab_frac(opts, md) * X_EXPANSION
+# and the reserve the labels get is the second term. Solving the two together
+# is what keeps them apart at any axis width.
+.tiplab_xlim <- function(opts, md, tree_data, max_x, heat = 0) {
+  # The clearance is part of the fraction, not applied to the reserve
+  # afterwards: inflating only the offset pushes the matrix past the limit
+  # computed from the smaller fraction, and it is clipped away entirely.
+  frac <- .clamp(
+    .tiplab_frac(opts, md) * X_EXPANSION * HEATMAP_CLEARANCE,
+    0,
+    0.8
+  )
   x_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
   if (!is.finite(x_min)) {
     x_min <- 0
@@ -275,7 +469,14 @@ X_EXPANSION <- 1.1
   if (isTRUE(opts$rootedge_show)) {
     x_min <- x_min - max_x * 0.05
   }
-  (max_x - frac * x_min) / (1 - frac)
+  span <- (max_x - x_min) * (1 + heat)
+  range <- span / (1 - frac)
+  list(
+    limit = x_min + range,
+    # Exactly the room the labels were given, so the matrix starts where they
+    # end and the pair fill the axis they were solved for.
+    reserve = range * frac
+  )
 }
 
 # Per-tip metadata keyed by tip label, for `%<+%`. The tree's tip labels are the
@@ -297,6 +498,13 @@ tree_scale <- function(values, palette, aesthetic) {
   numeric <- is.numeric(values)
   viridis <- is.null(palette) || palette %in% .viridis_scales
   opt <- if (is.null(palette) || !viridis) "viridis" else palette
+  # Discrete scales carry a legend with one entry per level, which is what runs
+  # off the canvas when a column has dozens of them.
+  guide <- if (numeric) {
+    "colourbar"
+  } else {
+    guide_legend(ncol = tree_legend_ncol(field_levels(values)))
+  }
 
   if (identical(aesthetic, "fill")) {
     if (numeric && viridis) {
@@ -304,9 +512,9 @@ tree_scale <- function(values, palette, aesthetic) {
     } else if (numeric) {
       scale_fill_distiller(palette = palette)
     } else if (viridis) {
-      scale_fill_viridis_d(option = opt)
+      scale_fill_viridis_d(option = opt, guide = guide)
     } else {
-      scale_fill_brewer(palette = palette)
+      scale_fill_brewer(palette = palette, guide = guide)
     }
   } else {
     if (numeric && viridis) {
@@ -314,20 +522,21 @@ tree_scale <- function(values, palette, aesthetic) {
     } else if (numeric) {
       scale_color_distiller(palette = palette)
     } else if (viridis) {
-      scale_color_viridis_d(option = opt)
+      scale_color_viridis_d(option = opt, guide = guide)
     } else {
-      scale_color_brewer(palette = palette)
+      scale_color_brewer(palette = palette, guide = guide)
     }
   }
 }
 
 # Tip-label layer (text or boxed label), with optional color mapping.
-tree_tiplab_layer <- function(opts, circular) {
+tree_tiplab_layer <- function(opts) {
   if (!isTRUE(opts$tiplab_show)) {
     return(NULL)
   }
 
-  mapping <- if (isTRUE(opts$mapping_show) && !is.null(opts$color_mapping)) {
+  mapped <- isTRUE(opts$mapping_show) && !is.null(opts$color_mapping)
+  mapping <- if (mapped) {
     aes(label = .data[[opts$tiplab]], color = .data[[opts$color_mapping]])
   } else {
     aes(label = .data[[opts$tiplab]])
@@ -336,26 +545,16 @@ tree_tiplab_layer <- function(opts, circular) {
   params <- list(
     mapping = mapping,
     size = opts$tiplab_size,
-    alpha = opts$tiplab_alpha,
-    fontface = opts$tiplab_fontface,
     align = isTRUE(opts$align),
-    geom = if (isTRUE(opts$label_panel)) "label" else "text"
+    geom = "text"
   )
 
-  # Linear layouts nudge labels along x and may angle them; circular layouts use
-  # hjust for inward/outward placement instead.
-  if (circular) {
-    params$hjust <- opts$tiplab_position
-  } else {
-    params$nudge_x <- opts$tiplab_position
-    params$angle <- opts$tiplab_angle
-  }
-
-  if (isTRUE(opts$label_panel)) {
-    params$label.padding <- unit(0.25, "lines")
-    params$label.r <- unit(0.2, "lines")
-    params$fill <- opts$tiplab_fill
-  } else {
+  # Only when nothing is mapped to colour. A fixed `color` parameter overrides
+  # the aesthetic in ggplot2 rather than losing to it, so setting it
+  # unconditionally meant "Map variable to color" drew every label in the fixed
+  # colour and the mapping did nothing at all. Same rule the tip-point layer
+  # below already followed.
+  if (!mapped) {
     params$color <- opts$tiplab_color
   }
 
@@ -368,32 +567,35 @@ tree_branch_layer <- function(opts, branch_lengths) {
     return(NULL)
   }
 
-  if (identical(opts$branch_label, "Allelic Distance")) {
-    mapping <- aes(
+  # The cutoff is a percentile of branch length. It used to be an absolute
+  # allelic distance, which the 0-100 slider carrying it cannot express: cgMLST
+  # distances on this scheme run into the thousands, so every branch cleared a
+  # cutoff of 10 and switching branch labels on drew a label on all ~690 of
+  # them. A percentile also makes the control fittable — see
+  # tree_branch_cutoff().
+  cut <- quantile(branch_lengths, probs = opts$branch_cutoff / 100, na.rm = TRUE)
+
+  # Text standing above the branch, not a filled box centred on it. `x = branch`
+  # is ggtree's branch midpoint and y is the branch's own row, so the default
+  # vjust would centre the number *on* the horizontal line it describes, hiding
+  # the line behind an opaque panel — which is why this needed a fill colour at
+  # all. Lifting the baseline clear of the line instead means the branch stays
+  # visible under its own number, and there is no panel left to colour.
+  #
+  # geom_text2 (ggtree) honours the `subset` aesthetic for cutoff filtering.
+  geom_text2(
+    mapping = aes(
       x = .data[["branch"]],
       label = round(.data[["branch.length"]], 2),
-      subset = .data[["branch.length"]] > opts$branch_cutoff
-    )
-  } else {
-    cut <- quantile(
-      branch_lengths,
-      probs = opts$branch_cutoff / 100,
-      na.rm = TRUE
-    )
-    mapping <- aes(
-      x = .data[["branch"]],
-      label = .data[[opts$branch_label]],
       subset = .data[["branch.length"]] > cut
-    )
-  }
-
-  # geom_label2 (ggtree) honours the `subset` aesthetic for cutoff filtering.
-  geom_label2(
-    mapping = mapping,
-    size = opts$branch_size,
-    alpha = 0.65,
-    color = opts$branch_color,
-    fill = opts$branch_label_color
+    ),
+    # Plain text on the background reads at a smaller size than the same number
+    # boxed, and every pixel given back here is a pixel the tree keeps. Applied
+    # to the fit's result rather than inside tree_auto_layout(), which is the
+    # calibration anchor the layout tests pin.
+    size = opts$branch_size * BRANCH_ABOVE_SHRINK,
+    vjust = BRANCH_VJUST,
+    color = opts$branch_color
   )
 }
 
@@ -449,7 +651,7 @@ tree_clade_layers <- function(opts) {
     return(NULL)
   }
   lapply(nodes, function(n) {
-    geom_hilight(node = n, fill = opts$clade_color, type = opts$clade_type)
+    geom_hilight(node = n, fill = opts$clade_color, type = "roundrect")
   })
 }
 
@@ -530,13 +732,6 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     valid(opts$tipcolor_mapping)
   opts$tipshape_mapping_show <- isTRUE(opts$tipshape_mapping_show) &&
     valid(opts$tipshape_mapping)
-  if (
-    isTRUE(opts$branch_show) &&
-      !identical(opts$branch_label, "Allelic Distance") &&
-      !valid(opts$branch_label)
-  ) {
-    opts$branch_label <- "Allelic Distance"
-  }
   opts$heatmap_select <- intersect(opts$heatmap_select, cols)
   opts$tiles <- Filter(
     function(t) isTRUE(t$show) && !is.null(t$variable) && t$variable %in% cols,
@@ -544,13 +739,17 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   )
 
   circular <- opts$layout %in% .circular_layouts
+  label_reserve <- 0
   layout <- if (identical(opts$layout, "inward")) "circular" else opts$layout
 
+  # Always ladderized. An unladderized tree of any size is a tangle no reader
+  # gains anything from, so this was a control whose other setting was never the
+  # right answer.
   base <- ggtree(
     tree,
     color = opts$line_color,
     layout = layout,
-    ladderize = isTRUE(opts$ladderize)
+    ladderize = TRUE
   )
   # Node-label view dims the tree and overlays internal node numbers, helping
   # the user pick clades to highlight.
@@ -559,7 +758,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       tree,
       color = opts$line_color,
       layout = layout,
-      ladderize = isTRUE(opts$ladderize),
+      ladderize = TRUE,
       alpha = 0.2
     )
   }
@@ -574,7 +773,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # off with new_scale_color() so the next mapping starts a fresh scale.
   layers <- c(
     tree_clade_layers(opts),
-    list(tree_tiplab_layer(opts, circular)),
+    list(tree_tiplab_layer(opts)),
     if (isTRUE(opts$mapping_show)) {
       list(
         tree_scale(md[[opts$color_mapping]], opts$tiplab_scale, "color"),
@@ -611,7 +810,9 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       geom_treescale(
         x = max_x * 0.5,
         y = -1,
-        width = max_x * 0.1,
+        # ggtree prints this width as the bar's label, so it has to be a number
+        # worth reading: a tenth of the tree depth is 1.36116098546807.
+        width = tree_nice_width(max_x * 0.1),
         color = opts$line_color,
         fontsize = 4
       )
@@ -620,29 +821,23 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # Room to the right of the tips for labels (linear layouts only), sized to the
   # labels this plot is actually drawing — see .tiplab_frac.
   if (!circular) {
-    p <- p + xlim(NA, .tiplab_xlim(opts, md, tree_data, max_x))
+    # The labels' share of the panel, plus room for the heatmap matrix when one
+    # is drawn — the limit is fixed here, so anything gheatmap adds afterwards
+    # has to already fit inside it or it is simply clipped.
+    # Labels and any annotation matrix are solved for together. Sizing the
+    # label reserve first and *then* widening the axis for the matrix is what
+    # put the matrix over the labels: labels are drawn at a fixed physical size,
+    # so stretching the axis afterwards leaves them spanning more data units
+    # than were set aside for them.
+    fit <- .tiplab_xlim(opts, md, tree_data, max_x, .heatmap_width(opts))
+    label_reserve <- fit$reserve
+    p <- p + xlim(NA, fit$limit)
   }
 
   p <- p +
-    # NULL rather than "" for an unset title: an empty string still reserves a
-    # line at the configured size, and at the default 30pt that is most of an
-    # inch of blank header — a fifth of a small tree's canvas, and enough to
-    # make the height the aspect-ratio fit reasons about (TIP_USABLE) a lie.
-    ggtitle(
-      label = if (nzchar(opts$title %||% "")) opts$title else NULL,
-      subtitle = if (nzchar(opts$subtitle %||% "")) opts$subtitle else NULL
-    ) +
     theme_tree(bgcolor = opts$bg) +
     theme(
       plot.margin = if (circular) margin(0, 0, 0, 0) else margin(6, 6, 6, 6),
-      plot.title = element_text(
-        color = opts$title_color,
-        size = opts$title_size
-      ),
-      plot.subtitle = element_text(
-        color = opts$title_color,
-        size = opts$subtitle_size
-      ),
       legend.direction = opts$legend_orientation,
       legend.position = c(opts$legend_x, opts$legend_y),
       legend.title = element_text(
@@ -657,14 +852,33 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       plot.background = element_rect(fill = opts$bg, color = opts$bg)
     )
 
-  # Heatmap annotation matrix to the right of the tips.
+  # Heatmap annotation matrix, to the right of the tip labels.
   if (isTRUE(opts$heatmap_show) && length(opts$heatmap_select)) {
+    heat <- md[, opts$heatmap_select, drop = FALSE]
+    # gheatmap matches its rows to the tree by *row name*, and this data frame
+    # is built by tree_tip_metadata() with the default 1..n row names. Without
+    # this every cell came out unmatched, which is why the heatmap drew nothing
+    # and its legend read "NA".
+    rownames(heat) <- md$label
+    # A fresh fill scale for the matrix. The tile strips above map fill too, and
+    # without this gheatmap's scale replaced theirs ("Scale for fill is already
+    # present"), leaving every heatmap value outside the surviving scale — which
+    # is what dropped all of them ("Removed 346 rows containing missing values").
     p <- gheatmap(
-      p,
-      data = md[, opts$heatmap_select, drop = FALSE],
-      offset = 0,
-      width = 0.2 * length(opts$heatmap_select),
+      p + new_scale_fill(),
+      data = heat,
+      # Starts past the tip labels rather than on top of them: `offset` is in
+      # x-axis units from the tips, and at 0 the matrix was drawn over the
+      # labels, column names and all.
+      offset = if (circular) 0 else label_reserve,
+      # Shares the annotation budget across the selected columns instead of
+      # taking a fifth of the tree's width for each, which put a ten-column
+      # heatmap at twice the width of the tree.
+      width = .heatmap_width(opts),
       legend_title = "Heatmap",
+      # Under the matrix, which is now clear of the tip labels — the collision
+      # was the missing offset above, not where the names sit. Above the plot
+      # they have no headroom to be drawn in and are clipped instead.
       colnames_angle = -90,
       colnames_offset_y = -1
     )

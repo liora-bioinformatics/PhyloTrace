@@ -30,13 +30,19 @@ box::use(
   stats[setNames],
 )
 box::use(
+  app / logic / field_labels[field_labels_for, grouped_field_choices],
   app / logic / functions[render_info],
   app /
     logic /
     tree_plot[
       build_tree_ggtree,
+      field_levels,
+      mapping_fields,
+      MAX_SHAPE_LEVELS,
       save_tree_plot,
+      scale_categories_for,
       tree_auto_layout,
+      tree_branch_cutoff,
       TREE_FIT_DEFAULTS
     ],
   app / logic / phylo[compute_phylo_tree],
@@ -45,8 +51,6 @@ box::use(
     viz_helpers[
       meta_vars,
       label_vars,
-      branch_vars,
-      fontfaces,
       point_shapes,
       viz_color,
       scale_select,
@@ -70,7 +74,7 @@ TILE_DEFAULTS <- list(
   variable = NULL,
   scale = "viridis",
   alpha = 1,
-  width = 2,
+  width = 0.15,
   offset = 0.05
 )
 
@@ -156,18 +160,27 @@ FITTED_FIELDS <- c(
   nj_tippoint_size = "tippoint_size",
   nj_nodepoint_size = "nodepoint_size",
   nj_zoom = "zoom",
-  nj_h = "h"
+  nj_h = "h",
+  nj_branchlabel_cutoff = "branch_cutoff"
 )
 
 # The values those controls hold before any data is loaded. Taken from the logic
 # module rather than written out again here, because they are also the fit's
 # calibration anchor (tree_auto_layout returns exactly these at ~15 tips) — a
-# slider declared with anything else would quietly move the anchor. Used both to
-# build the sliders and to seed the mirrors below.
+# slider declared with anything else would quietly move the anchor.
+#
+# nj_branchlabel_cutoff is fitted but not part of the geometry anchor, so it is
+# not in TREE_FIT_DEFAULTS and has no seed value here.
+FITTED_SEED_IDS <- setdiff(names(FITTED_FIELDS), "nj_branchlabel_cutoff")
 FITTED_DEFAULTS <- setNames(
-  TREE_FIT_DEFAULTS[FITTED_FIELDS],
-  names(FITTED_FIELDS)
+  TREE_FIT_DEFAULTS[FITTED_FIELDS[FITTED_SEED_IDS]],
+  FITTED_SEED_IDS
 )
+
+# Not every id here still renders a slider — nj_branch_size is fitted from the
+# tip count and the branch-label section is a bare switch now. It keeps its
+# entry regardless, because this list seeds the *mirrors* the render reads
+# (MIRRORED_IDS below), and dropping a control must never drop its mirror.
 
 # The other half of what the render reads through a mirror: the selects the
 # server resolves rather than the user, from the loaded metadata
@@ -180,7 +193,6 @@ FITTED_DEFAULTS <- setNames(
 MIRRORED_SELECTS <- c(
   "nj_tiplab",
   "nj_root_isolate",
-  "nj_branch_label",
   "nj_color_mapping",
   "nj_tipcolor_mapping",
   "nj_tipshape_mapping",
@@ -191,38 +203,55 @@ MIRRORED_SELECTS <- c(
 
 # Everything mirrored, in one list: the fitted sliders, the tip-label switch the
 # fit can turn off, and those selects.
-MIRRORED_IDS <- c(names(FITTED_DEFAULTS), "nj_tiplab_show", MIRRORED_SELECTS)
+MIRRORED_IDS <- c(
+  names(FITTED_DEFAULTS),
+  "nj_tiplab_show",
+  "nj_tippoint_show",
+  "nj_branchlabel_cutoff",
+  MIRRORED_SELECTS
+)
 
-# TEMPORARY (2026-07-28) — names what actually changed ahead of each rebuild,
-# so the console says *why* a Generate drew the tree rather than only that it
-# did. Silent unless something really changed, so a well-behaved Generate logs
-# one line. Remove once the count is confirmed settled.
-.log_rebuild <- function(previous, current) {
-  changed <- if (is.null(previous)) {
-    "first plot"
-  } else {
-    fields <- union(names(previous$opts), names(current$opts))
-    paste(
-      c(
-        if (!identical(previous$tree, current$tree)) "tree",
-        if (!identical(previous$metadata, current$metadata)) "metadata",
-        fields[
-          !vapply(
-            fields,
-            function(f) identical(previous$opts[[f]], current$opts[[f]]),
-            logical(1)
-          )
-        ]
-      ),
-      collapse = ", "
-    )
-  }
-  message(
-    format(Sys.time(), digits = 3L),
-    " | ----- tree rebuild: ",
-    changed
-  )
-}
+# Diagnostic for "why did the tree just redraw?", kept commented rather than
+# deleted because it is the thing that answered that question and the answer was
+# not guessable.
+#
+# render_info() reports *that* the plot drew, which is no help when one Generate
+# draws three times: two of those were controls the server had resolved
+# (populate_metadata_selects settling the label source, the tile observer
+# rewriting five hidden strips) reaching input$ an echo later, after the tree had
+# already been drawn from the stale value. Naming the changed fields is what
+# identified them, where reasoning about the reactive graph twice did not.
+#
+# To use it: uncomment this and its call in the plot_inputs barrier below. It
+# only prints when something really changed, so a healthy Generate logs one
+# line — "first plot" — and anything more names the field responsible.
+#
+# .log_rebuild <- function(previous, current) {
+#   changed <- if (is.null(previous)) {
+#     "first plot"
+#   } else {
+#     fields <- union(names(previous$opts), names(current$opts))
+#     paste(
+#       c(
+#         if (!identical(previous$tree, current$tree)) "tree",
+#         if (!identical(previous$metadata, current$metadata)) "metadata",
+#         fields[
+#           !vapply(
+#             fields,
+#             function(f) identical(previous$opts[[f]], current$opts[[f]]),
+#             logical(1)
+#           )
+#         ]
+#       ),
+#       collapse = ", "
+#     )
+#   }
+#   message(
+#     format(Sys.time(), digits = 3L),
+#     " | ----- tree rebuild: ",
+#     changed
+#   )
+# }
 
 # Longest label the tips will carry, for the width half of the layout fit. The
 # tree's own tip labels are the isolate names (including any folded in from an
@@ -256,118 +285,39 @@ tree_controls <- function(ns) {
             "Isolate Labels",
             icon = shiny$icon("tag"),
             input_switch(ns("nj_tiplab_show"), "Show isolate labels", TRUE),
-            shiny$pickerInput(ns("nj_tiplab"), "Label source", label_vars),
-            layout_columns(
-              col_widths = c(6, 6),
-              # Floor below the 1 this used to stop at: a few hundred tips are
-              # legible only at ~2mm, and the fit (tree_auto_layout) needs room
-              # underneath that for the trees that are larger still.
-              shiny$sliderInput(
-                ns("nj_tiplab_size"),
-                "Size",
-                0.5,
-                10,
-                FITTED_DEFAULTS$nj_tiplab_size,
-                step = 0.1,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_tiplab_alpha"),
-                "Opacity",
-                0.1,
-                1,
-                1,
-                step = 0.05,
-                ticks = FALSE
-              )
-            ),
-            layout_columns(
-              col_widths = c(6, 6),
-              shiny$pickerInput(ns("nj_tiplab_fontface"), "Font", fontfaces),
-              shiny$sliderInput(
-                ns("nj_tiplab_angle"),
-                "Angle",
-                -90,
-                90,
-                0,
-                ticks = FALSE
-              )
+            pickerInput(ns("nj_tiplab"), "Label source", label_vars),
+            # Floor below the 1 this used to stop at: a few hundred tips are
+            # legible only at ~2mm, and the fit (tree_auto_layout) needs room
+            # underneath that for the trees that are larger still.
+            shiny$sliderInput(
+              ns("nj_tiplab_size"),
+              "Size",
+              0.5,
+              10,
+              FITTED_DEFAULTS$nj_tiplab_size,
+              step = 0.1,
+              ticks = FALSE
             ),
             input_switch(ns("nj_align"), "Align labels", TRUE)
           ),
           accordion_panel(
             "Branch Labels",
             icon = shiny$icon("code-branch"),
+            # One switch, and nothing else. Allelic distance is the only value
+            # worth writing on a branch, and both of the numbers that used to be
+            # exposed here — the text size and the percentile cutoff above which
+            # a branch earns a label — are fitted from the tree itself
+            # (tree_auto_layout, tree_branch_cutoff). They stay as mirrors the
+            # render reads; they are just no longer anyone's decision to make.
             input_switch(
               ns("nj_show_branch_label"),
               "Show branch labels",
               FALSE
             ),
-            shiny$pickerInput(
-              ns("nj_branch_label"),
-              "Label source",
-              branch_vars
-            ),
-            layout_columns(
-              col_widths = c(6, 6),
-              # Same floor and step as the tip labels: branch labels are fitted
-              # to the same row pitch, so they need the same room to move in.
-              shiny$sliderInput(
-                ns("nj_branch_size"),
-                "Size",
-                0.5,
-                10,
-                FITTED_DEFAULTS$nj_branch_size,
-                step = 0.1,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_branchlabel_cutoff"),
-                "Cutoff",
-                0,
-                100,
-                10,
-                ticks = FALSE
-              )
-            )
-          ),
-          accordion_panel(
-            "Title & Subtitle",
-            icon = shiny$icon("heading"),
-            # allow-free-text: title/subtitle are display text, so they take
-            # spaces and punctuation — they opt out of the identifier charset
-            # restriction in app/js/index.js.
             shiny$div(
-              class = "allow-free-text",
-              shiny$textInput(
-                ns("nj_title"),
-                "Title",
-                placeholder = "Plot title"
-              )
-            ),
-            shiny$sliderInput(
-              ns("nj_title_size"),
-              "Title size",
-              15,
-              40,
-              30,
-              ticks = FALSE
-            ),
-            shiny$div(
-              class = "allow-free-text",
-              shiny$textInput(
-                ns("nj_subtitle"),
-                "Subtitle",
-                placeholder = "Plot subtitle"
-              )
-            ),
-            shiny$sliderInput(
-              ns("nj_subtitle_size"),
-              "Subtitle size",
-              15,
-              40,
-              30,
-              ticks = FALSE
+              class = "text-muted small",
+              "Allelic distance, on the longest branches. Size and density are",
+              "fitted to the number of isolates."
             )
           )
         )
@@ -382,7 +332,7 @@ tree_controls <- function(ns) {
             "Tip Label color",
             icon = shiny$icon("font"),
             input_switch(ns("nj_mapping_show"), "Map variable to color", FALSE),
-            shiny$pickerInput(ns("nj_color_mapping"), "Variable", meta_vars),
+            pickerInput(ns("nj_color_mapping"), "Variable", meta_vars),
             scale_select(ns, "nj_tiplab_scale")
           ),
           accordion_panel(
@@ -393,7 +343,7 @@ tree_controls <- function(ns) {
               "Map variable to color",
               FALSE
             ),
-            shiny$pickerInput(ns("nj_tipcolor_mapping"), "Variable", meta_vars),
+            pickerInput(ns("nj_tipcolor_mapping"), "Variable", meta_vars),
             scale_select(ns, "nj_tippoint_scale")
           ),
           accordion_panel(
@@ -404,14 +354,14 @@ tree_controls <- function(ns) {
               "Map variable to shape",
               FALSE
             ),
-            shiny$pickerInput(ns("nj_tipshape_mapping"), "Variable", meta_vars)
+            pickerInput(ns("nj_tipshape_mapping"), "Variable", meta_vars)
           ),
           accordion_panel(
             "Tiles",
             icon = shiny$icon("table-cells"),
-            shiny$pickerInput(ns("nj_tile_num"), "Tile", as.character(1:5)),
+            pickerInput(ns("nj_tile_num"), "Tile", as.character(1:5)),
             input_switch(ns("nj_tiles_show"), "Show tile", FALSE),
-            shiny$pickerInput(ns("nj_fruit_variable"), "Variable", meta_vars),
+            pickerInput(ns("nj_fruit_variable"), "Variable", meta_vars),
             scale_select(ns, "nj_tiles_scale")
           ),
           accordion_panel(
@@ -422,24 +372,20 @@ tree_controls <- function(ns) {
               ns("nj_heatmap_button"),
               "Select variables",
               icon = shiny$icon("list-check")
-            ),
-            scale_select(ns, "nj_heatmap_scale")
+            )
           )
         )
       ),
-      # colors ----------------------------------------------------------------
+      # Colors -----------------------------------------------------------------
       nav_panel(
-        "colors",
+        "Colors",
         icon = shiny$icon("fill-drip"),
         shiny$div(
           class = "viz-color-grid",
           viz_color(ns, "nj_color", "Lines / Text", "#000000"),
           viz_color(ns, "nj_bg", "Background", "#ffffff"),
-          viz_color(ns, "nj_title_color", "Title", "#000000"),
           viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
-          viz_color(ns, "nj_tiplab_fill", "Label Panel", "#84D9A0"),
           viz_color(ns, "nj_branch_color", "Branch Label", "#000000"),
-          viz_color(ns, "nj_branch_label_color", "Branch Panel", "#FFB7B7"),
           viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
           viz_color(ns, "nj_nodepoint_color", "Node Point", "#3A4657")
         )
@@ -454,7 +400,7 @@ tree_controls <- function(ns) {
             "Tip Points",
             icon = shiny$icon("circle"),
             input_switch(ns("nj_tippoint_show"), "Show tip points", FALSE),
-            shiny$pickerInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
+            pickerInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
             layout_columns(
               col_widths = c(6, 6),
               shiny$sliderInput(
@@ -481,7 +427,7 @@ tree_controls <- function(ns) {
             "Node Points",
             icon = shiny$icon("circle-dot"),
             input_switch(ns("nj_nodepoint_show"), "Show node points", FALSE),
-            shiny$pickerInput(ns("nj_nodepoint_shape"), "Shape", point_shapes),
+            pickerInput(ns("nj_nodepoint_shape"), "Shape", point_shapes),
             layout_columns(
               col_widths = c(6, 6),
               shiny$sliderInput(
@@ -507,7 +453,7 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Tiles",
             icon = shiny$icon("table-cells"),
-            shiny$pickerInput(ns("nj_tile_number"), "Tile", as.character(1:5)),
+            pickerInput(ns("nj_tile_number"), "Tile", as.character(1:5)),
             shiny$sliderInput(
               ns("nj_fruit_alpha"),
               "Opacity",
@@ -517,13 +463,16 @@ tree_controls <- function(ns) {
               step = 0.05,
               ticks = FALSE
             ),
+            # A multiple of the *tree's* width, so the 2 this shipped with drew
+            # one strip twice as wide as the tree it annotates. One strip gets
+            # the annotation budget; more share it.
             shiny$sliderInput(
               ns("nj_fruit_width"),
               "Width",
-              0.1,
-              10,
-              2,
-              step = 0.1,
+              0.02,
+              1,
+              TILE_DEFAULTS$width,
+              step = 0.01,
               ticks = FALSE
             ),
             shiny$sliderInput(
@@ -552,12 +501,7 @@ tree_controls <- function(ns) {
                 container = "body"
               )
             ),
-            viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221"),
-            shiny$pickerInput(
-              ns("nj_clade_type"),
-              "Form",
-              c(Rounded = "roundrect", Rectangular = "rect")
-            )
+            viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221")
           )
         )
       ),
@@ -618,12 +562,12 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Tree Rooting",
             icon = shiny$icon("seedling"),
-            shiny$pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
+            pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
           ),
           accordion_panel(
             "Layout",
             icon = shiny$icon("project-diagram"),
-            shiny$pickerInput(
+            pickerInput(
               ns("nj_layout"),
               "Layout",
               list(
@@ -636,7 +580,6 @@ tree_controls <- function(ns) {
                 Circular = c(Circular = "circular", Inward = "inward")
               )
             ),
-            input_switch(ns("nj_ladder"), "Ladderize", TRUE),
             input_switch(ns("nj_rootedge_show"), "Root edge", TRUE),
             input_switch(ns("nj_treescale_show"), "Tree scale", TRUE)
           ),
@@ -833,7 +776,7 @@ server <- function(
     generated <- shiny$reactiveVal(FALSE)
 
     # nj_tiplab/nj_color_mapping/nj_tipcolor_mapping/nj_tipshape_mapping/
-    # nj_fruit_variable/nj_branch_label/nj_root_isolate/nj_parentnode's
+    # nj_fruit_variable/nj_root_isolate/nj_parentnode's
     # *choices* are all swapped out at Generate time for the loaded
     # database's actual metadata columns / isolate names (see the generate()
     # observer below) — the UI-declared choices are just placeholders shown
@@ -859,29 +802,80 @@ server <- function(
       # it comes back an echo later, after the tree has already been drawn from
       # the stale value — a second draw for a label source that was decided
       # before the tree was even computed.
-      keep <- function(id, choices, default) {
-        value <- if (!force_default && isTRUE(input[[id]] %in% choices)) {
+      # Columns worth offering for a mapping, best first: one that groups the
+      # isolates into a handful of well-populated groups leads, one that groups
+      # them into many follows, and one that cannot group at all — a constant
+      # column, or a different value for every isolate — is not offered. That
+      # matters most for the default, which was `fields[1]`: on this database
+      # that is `isolate`, i.e. 346 groups of one, a mapping that colours every
+      # tip differently and explains nothing. See mapping_fields().
+      mappable <- mapping_fields(meta)
+      # ggplot2 draws at most six shapes, and silently drops the tips of every
+      # level past that, so the shape picker is offered only the columns it can
+      # actually draw.
+      shapeable <- mapping_fields(meta, max_levels = MAX_SHAPE_LEVELS)
+
+      # Grouped and labelled exactly as the Database > Browse Entries column
+      # picker is, and from the same place — the loaded database's own columns.
+      # This engine used to build its pickers from the hardcoded placeholder
+      # names in viz_helpers ("Isolation Date", "Host", "Country"), which name
+      # nothing in any real database; the sibling engines all went through
+      # grouped_field_choices() already.
+      grouped <- function(cols) {
+        if (!length(cols)) {
+          return(character(0))
+        }
+        grouped_field_choices(
+          cols,
+          attr(meta, "mlst_cols"),
+          attr(meta, "amr_cols"),
+          attr(meta, "custom_cols")
+        )
+      }
+
+      # The resolved value goes to the mirror as well as to the browser, and
+      # the mirror is what the plot reads. Sending it only to the browser means
+      # it comes back an echo later, after the tree has already been drawn from
+      # the stale value — a second draw for a label source that was decided
+      # before the tree was even computed.
+      keep <- function(id, choices, default, valid = choices) {
+        value <- if (!force_default && isTRUE(input[[id]] %in% valid)) {
           input[[id]]
         } else {
           default
         }
-        updatePickerInput(
-          session,
-          id,
-          choices = choices,
-          selected = value
-        )
+        # updatePickerInput, not updateSelectInput: these are bootstrap-select
+        # widgets, and they ignore a plain select's update message entirely —
+        # the choices stayed on the placeholder names the UI declares and the
+        # control read "Nothing selected".
+        updatePickerInput(session, id, choices = choices, selected = value)
         set_fitted(id, value)
       }
-      keep("nj_tiplab", fields, "isolate")
-      keep("nj_color_mapping", fields, fields[1])
-      keep("nj_tipcolor_mapping", fields, fields[1])
-      keep("nj_tipshape_mapping", fields, fields[1])
-      keep("nj_fruit_variable", fields, fields[1])
+
+      # Every column can name a tip; the isolate name is the one that always can.
+      keep("nj_tiplab", grouped(fields), "isolate", valid = fields)
+
+      # The mappings offer every column too — the ranking decides the *default*,
+      # not what is on offer, so a deliberate choice of a column the ranking
+      # rates poorly is still one click away. Ranked columns first, so the
+      # useful ones lead within each group.
+      map_choices <- grouped(union(mappable, setdiff(fields, "isolate")))
+      for (id in c(
+        "nj_color_mapping",
+        "nj_tipcolor_mapping",
+        "nj_fruit_variable"
+      )) {
+        keep(id, map_choices, mappable[1], valid = setdiff(fields, "isolate"))
+      }
+      # Shape is the exception, and not by preference: ggplot2 draws six shapes
+      # and gives the levels past that none at all, so those tips disappear from
+      # the plot entirely. Offering a column it cannot draw would be offering a
+      # way to lose data silently.
       keep(
-        "nj_branch_label",
-        c("Allelic Distance", fields),
-        "Allelic Distance"
+        "nj_tipshape_mapping",
+        grouped(shapeable),
+        shapeable[1],
+        valid = shapeable
       )
 
       # Outgroup + clade node choices are derived from the isolate set without
@@ -923,6 +917,40 @@ server <- function(
       }
     }
 
+    # Mapping a variable to the tip points is meaningless while the tip points
+    # are switched off, and the switch that shows them lives in a different tab
+    # (Elements) from the mapping that needs them (Mapping) — so turning the
+    # mapping on appeared to do nothing at all. Turn the points on with it. The
+    # Tiles mapping never had this problem because its own "Show tile" switch
+    # sits beside it; this gives the other two the same behaviour.
+    shiny$observeEvent(
+      list(input$nj_tipcolor_mapping_show, input$nj_tipshape_mapping_show),
+      {
+        wants_points <- isTRUE(input$nj_tipcolor_mapping_show) ||
+          isTRUE(input$nj_tipshape_mapping_show)
+        if (wants_points && !isTRUE(shiny$isolate(fitted$nj_tippoint_show))) {
+          set_fitted("nj_tippoint_show", TRUE)
+          bslib::update_switch("nj_tippoint_show", value = TRUE)
+        }
+      },
+      ignoreInit = TRUE
+    )
+
+    # Fill the pickers as soon as a database is loaded, rather than waiting for
+    # a Generate. Until this, every variable picker in this sidebar listed the
+    # placeholder names viz_helpers declares them with — "Isolation Date",
+    # "Host", "Country" — which are not columns of any real database, so the
+    # whole Mapping tab read as nonsense to anyone who opened it before pressing
+    # Generate. Keeps a selection that is still valid, so it cannot disturb a
+    # configured plot; Generate still calls it too, for the isolate-derived
+    # choices (outgroup, clade nodes) that depend on the selection rather than
+    # on the database.
+    shiny$observeEvent(
+      viz_metadata(),
+      populate_metadata_selects(force_default = FALSE),
+      ignoreNULL = TRUE
+    )
+
     # Reset settings: restore every control in this engine's own sidebar to
     # its coded default. Local to this module (see the "Reset settings"
     # button in tree_controls()) — no confirmation modal, mirroring the
@@ -957,11 +985,8 @@ server <- function(
         session,
         nj_color = "#000000",
         nj_bg = "#ffffff",
-        nj_title_color = "#000000",
         nj_tiplab_color = "#000000",
-        nj_tiplab_fill = "#84D9A0",
         nj_branch_color = "#000000",
-        nj_branch_label_color = "#FFB7B7",
         nj_tippoint_color = "#3A4657",
         nj_nodepoint_color = "#3A4657",
         nj_clade_scale = "#D0F221"
@@ -998,21 +1023,14 @@ server <- function(
         # Layout / rooting.
         root = fitted$nj_root_isolate,
         layout = input$nj_layout,
-        ladderize = input$nj_ladder,
         line_color = input$nj_color,
         bg = input$nj_bg,
         # Tip labels.
         tiplab_show = fitted$nj_tiplab_show,
         tiplab = fitted$nj_tiplab,
         tiplab_size = fitted$nj_tiplab_size,
-        tiplab_alpha = input$nj_tiplab_alpha,
-        tiplab_fontface = input$nj_tiplab_fontface,
-        tiplab_position = input$nj_tiplab_position %||% 0,
-        tiplab_angle = input$nj_tiplab_angle,
         align = input$nj_align,
-        label_panel = input$nj_geom %||% FALSE,
         tiplab_color = input$nj_tiplab_color,
-        tiplab_fill = input$nj_tiplab_fill,
         # Tip-label color mapping. A mapping's variable and palette are read
         # only when its switch is on, so that switched off they hold a constant
         # rather than whatever the pickers happen to carry. Generate rewrites
@@ -1026,17 +1044,15 @@ server <- function(
         tiplab_scale = if (isTRUE(input$nj_mapping_show)) {
           fitted$nj_tiplab_scale
         },
-        # Branch labels.
+        # Branch labels. Allelic distance is the only thing they ever carry, so
+        # there is no source to resolve — the picker that used to choose one was
+        # removed along with the rest of this section's controls.
         branch_show = input$nj_show_branch_label,
-        branch_label = if (isTRUE(input$nj_show_branch_label)) {
-          fitted$nj_branch_label
-        },
         branch_size = fitted$nj_branch_size,
-        branch_cutoff = input$nj_branchlabel_cutoff,
+        branch_cutoff = fitted$nj_branchlabel_cutoff,
         branch_color = input$nj_branch_color,
-        branch_label_color = input$nj_branch_label_color,
         # Tip / node points.
-        tippoint_show = input$nj_tippoint_show,
+        tippoint_show = fitted$nj_tippoint_show,
         tippoint_alpha = input$nj_tippoint_alpha,
         tippoint_size = fitted$nj_tippoint_size,
         tippoint_color = input$nj_tippoint_color,
@@ -1061,7 +1077,6 @@ server <- function(
         nodelabel_show = input$nj_nodelabel_show,
         parentnodes = fitted$nj_parentnode %||% character(0),
         clade_color = input$nj_clade_scale,
-        clade_type = input$nj_clade_type,
         # Tiles / heatmap. Only the strips actually being drawn: Generate
         # repopulates the tile variable picker whether or not a strip is shown,
         # and the observer behind it rewrites nj_tiles() in response — which the
@@ -1076,12 +1091,6 @@ server <- function(
         treescale_show = input$nj_treescale_show,
         # Panel width, for the tip-label reserve (see .tiplab_frac).
         width_in = plot_width_in(),
-        # Titles.
-        title = input$nj_title,
-        subtitle = input$nj_subtitle,
-        title_color = input$nj_title_color,
-        title_size = input$nj_title_size,
-        subtitle_size = input$nj_subtitle_size,
         # Dimensions / legend.
         zoom = fitted$nj_zoom,
         h = fitted$nj_h,
@@ -1121,7 +1130,11 @@ server <- function(
         )
         previous <- shiny$isolate(plot_inputs())
         if (!identical(previous, current)) {
-          .log_rebuild(previous, current)
+          # Uncomment, with the helper it belongs to, to have the console name
+          # which field caused each redraw rather than only report that one
+          # happened. Both are already comparing the same two values, so it
+          # costs nothing to switch on. See .log_rebuild above.
+          # .log_rebuild(previous, current)
           plot_inputs(current)
         }
       },
@@ -1208,7 +1221,12 @@ server <- function(
           input$nj_layout,
           .label_chars(tree, viz_metadata(), input$nj_tiplab)
         )
-        for (id in names(FITTED_DEFAULTS)) {
+        # The branch-label cutoff is fitted from the branches themselves rather
+        # than from the tip count, so it goes alongside the geometry rather than
+        # inside it.
+        fit$branch_cutoff <- tree_branch_cutoff(length(tree$edge.length))
+
+        for (id in c(names(FITTED_DEFAULTS), "nj_branchlabel_cutoff")) {
           value <- fit[[FITTED_FIELDS[[id]]]]
           if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
             shiny$updateSliderInput(session, id, value = value)
@@ -1252,9 +1270,18 @@ server <- function(
       cats <- if (!length(vals)) {
         names(color_scales)
       } else {
-        suitable_scale_categories(
-          if (is.numeric(vals)) "Numeric" else "Factor",
-          vals
+        # Ordered by how well the family suits *this* column, so the first entry
+        # — which is what an unset picker lands on — is the one to use. The
+        # count matters as much as the type: ColorBrewer's qualitative palettes
+        # are tabulated, and asking Set1 for the 46 countries in this database
+        # returns nine colours and draws the other 37 grey. See
+        # scale_categories_for().
+        scale_categories_for(
+          vals,
+          suitable_scale_categories(
+            if (is.numeric(vals)) "Numeric" else "Factor",
+            vals
+          )
         )
       }
       sel <- if (
@@ -1492,13 +1519,43 @@ server <- function(
 
     # Heatmap column picker modal.
     shiny$observeEvent(input$nj_heatmap_button, {
-      fields <- setdiff(names(viz_metadata()), "isolate")
+      # The same ranking the mapping pickers use: a heatmap column has to group
+      # the isolates to say anything, and one with a value per isolate paints
+      # 346 shades of noise. Ordered best first, labelled with the number of
+      # groups. Anything already selected stays offered even if it would not be
+      # recommended, so a saved Analysis's columns cannot silently vanish.
+      meta <- viz_metadata()
+      fields <- union(mapping_fields(meta), nj_heatmap_select())
+      choices <- if (length(fields)) {
+        setNames(
+          fields,
+          sprintf(
+            "%s (%d)",
+            field_labels_for(fields),
+            vapply(fields, function(f) field_levels(meta[[f]]), integer(1))
+          )
+        )
+      } else {
+        character(0)
+      }
       shiny$showModal(shiny$modalDialog(
         title = "Heatmap variables",
+        # The matrix shares one colour scale across every column it draws, so
+        # columns that measure the same kind of thing (a resistance profile, a
+        # set of yes/no calls) read as a block, while unrelated ones pool into a
+        # single legend that explains none of them. Worth saying here, because
+        # nothing in the picker itself hints at it.
+        shiny$p(
+          class = "text-muted small",
+          "All columns share one colour scale, so pick columns of the same",
+          "kind — a resistance profile, say. For unrelated variables use a",
+          shiny$tags$strong("tile strip"),
+          "each (Mapping › Tiles), which gives every variable its own."
+        ),
         shiny$checkboxGroupInput(
           ns("nj_heatmap_cols"),
           NULL,
-          choices = fields,
+          choices = choices,
           selected = nj_heatmap_select()
         ),
         footer = shiny$tagList(
@@ -1576,31 +1633,23 @@ server <- function(
           "nj_tippoint_show",
           "nj_nodepoint_show",
           "nj_nodelabel_show",
-          "nj_ladder",
           "nj_rootedge_show",
           "nj_treescale_show"
         ),
         selects = c(
-          "nj_tiplab_fontface",
           "nj_tiplab_scale",
           "nj_tippoint_scale",
           "nj_tiles_scale",
-          "nj_heatmap_scale",
           "nj_tippoint_shape",
           "nj_nodepoint_shape",
           "nj_tile_num",
           "nj_tile_number",
-          "nj_clade_type",
           "nj_layout"
         ),
         sliders = c(
           "nj_tiplab_size",
-          "nj_tiplab_alpha",
-          "nj_tiplab_angle",
           "nj_branch_size",
           "nj_branchlabel_cutoff",
-          "nj_title_size",
-          "nj_subtitle_size",
           "nj_tippoint_alpha",
           "nj_tippoint_size",
           "nj_nodepoint_alpha",
@@ -1616,15 +1665,11 @@ server <- function(
           "nj_legend_x",
           "nj_legend_y"
         ),
-        texts = c("nj_title", "nj_subtitle"),
         colors = c(
           "nj_color",
           "nj_bg",
-          "nj_title_color",
           "nj_tiplab_color",
-          "nj_tiplab_fill",
           "nj_branch_color",
-          "nj_branch_label_color",
           "nj_tippoint_color",
           "nj_nodepoint_color",
           "nj_clade_scale"
@@ -1661,7 +1706,6 @@ server <- function(
         setsel("nj_tipcolor_mapping", fields)
         setsel("nj_tipshape_mapping", fields)
         setsel("nj_fruit_variable", fields)
-        setsel("nj_branch_label", c("Allelic Distance", fields))
 
         tips <- meta$isolate
         if (!is.null(vals$nj_root_isolate)) {

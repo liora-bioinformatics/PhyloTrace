@@ -31,7 +31,6 @@ box::use(
     div,
     icon,
     actionButton,
-    updatePickerInput,
     showNotification,
     tags,
     tagList,
@@ -40,6 +39,8 @@ box::use(
     modalDialog,
     modalButton,
     removeModal,
+    dateRangeInput,
+    updateDateRangeInput,
     uiOutput,
     renderUI,
     outputOptions,
@@ -64,6 +65,8 @@ box::use(
 )
 box::use(
   app / logic / db_staging[imported_metadata_wide],
+  app / logic / field_labels[field_labels_for],
+  app / logic / field_types[as_date_safe, date_fields],
   app / logic / viz_helpers[export_panel],
   app / logic / analysis_store,
   app / view / visualization_mst,
@@ -534,9 +537,102 @@ server <- function(
       .subset_meta(viz_metadata_all(), selected_isolates())
     })
 
+    # ------------------------------------------------------ time filter ---
+    # The date-typed columns the modal's time filter can work along: the fixed
+    # schema's collection date, the app-stamped add time, and every user-defined
+    # `date` variable. None of them is named here — they come from the shared
+    # type map (app/logic/field_types.R), which reads `phylotrace_custom_fields`
+    # for the custom ones, so a date variable the user defines in Database >
+    # Custom fields becomes a filterable time axis with no change here.
+    sel_date_choices <- reactive({
+      meta <- viz_metadata_all()
+      if (is.null(meta)) {
+        return(character(0))
+      }
+      cols <- date_fields(db_path(), names(meta))
+      stats::setNames(cols, field_labels_for(cols))
+    })
+
+    # The chosen column parsed to Date, NA where the cell is empty or (for the
+    # free-text collection date) unreadable. NULL when no column is chosen.
+    sel_dates <- reactive({
+      meta <- viz_metadata_all()
+      col <- input$sel_date_field
+      if (is.null(meta) || is.null(col) || !nzchar(col)) {
+        return(NULL)
+      }
+      if (!col %in% names(meta)) {
+        return(NULL)
+      }
+      as_date_safe(meta[[col]])
+    })
+
+    # The rows the table shows. Without a chosen column, or before the range
+    # input has reported a complete window, that is every isolate. Rows whose
+    # date is missing or unreadable drop out while a filter is active — a row
+    # with no date cannot be shown to fall inside a window, and silently keeping
+    # them would make the window mean nothing.
+    sel_filtered <- reactive({
+      meta <- viz_metadata_all()
+      req(meta)
+      d <- sel_dates()
+      rng <- input$sel_date_range
+      if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
+        return(meta)
+      }
+      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      meta[keep, , drop = FALSE]
+    })
+
+    # Isolates ticked in the table, held by name rather than by row index so
+    # that changing the window — which re-renders the table and renumbers its
+    # rows — does not silently discard them. Only names still in the window
+    # survive: the window defines the pool the selection is drawn from.
+    sel_checked <- reactiveVal(character(0))
+
+    reg(observeEvent(
+      input$sel_table_rows_selected,
+      {
+        rows <- input$sel_table_rows_selected
+        tbl <- sel_filtered()
+        sel_checked(if (length(rows)) tbl$isolate[rows] else character(0))
+      },
+      ignoreNULL = FALSE
+    ))
+
+    # Switching the time axis re-bases the window on the new column's own span,
+    # since a window that made sense for the collection date is meaningless on,
+    # say, the date an isolate entered the database.
+    reg(observeEvent(input$sel_date_field, {
+      d <- sel_dates()
+      shinyjs::toggleState("sel_date_range", condition = !is.null(d))
+      if (is.null(d) || all(is.na(d))) {
+        return()
+      }
+      updateDateRangeInput(
+        session,
+        "sel_date_range",
+        start = min(d, na.rm = TRUE),
+        end = max(d, na.rm = TRUE),
+        min = min(d, na.rm = TRUE),
+        max = max(d, na.rm = TRUE)
+      )
+    }))
+
     reg(observeEvent(input$selection_button, {
       meta <- viz_metadata_all()
       req(meta)
+      # Fresh table, but a sticky time filter: the controls are recreated on
+      # every open carrying the values they had when the modal was last closed,
+      # so what the table shows always matches what the footer says. Re-creating
+      # them with defaults instead would leave the inputs' retained values
+      # briefly disagreeing with the visible controls.
+      dates <- sel_date_choices()
+      field <- isolate(input$sel_date_field) %||% ""
+      rng <- isolate(input$sel_date_range)
+      # Opens with nothing ticked, as it always has; the sticky part is the
+      # window, not the selection.
+      sel_checked(character(0))
       showModal(div(
         class = "selection-modal",
         modalDialog(
@@ -560,6 +656,32 @@ server <- function(
             DTOutput(ns("sel_table"), fill = FALSE)
           ),
           footer = tagList(
+            # Shares the footer row with the buttons (pushed to the left of
+            # them by .selection-modal-filter). Omitted entirely when the
+            # database has no date-typed column to filter along.
+            if (length(dates)) {
+              div(
+                class = "selection-modal-filter",
+                pickerInput(
+                  ns("sel_date_field"),
+                  label = NULL,
+                  choices = c("No time filter" = "", dates),
+                  selected = if (field %in% dates) field else "",
+                  width = "fit"
+                ),
+                div(
+                  id = ns("sel_date_range_wrap"),
+                  dateRangeInput(
+                    ns("sel_date_range"),
+                    label = NULL,
+                    start = rng[1],
+                    end = rng[2],
+                    separator = "–",
+                    width = "17rem"
+                  )
+                )
+              )
+            },
             modalButton("Cancel"),
             actionButton(
               ns("sel_confirm"),
@@ -570,27 +692,50 @@ server <- function(
           easyClose = TRUE
         )
       ))
+      # The range input is created enabled; disable it right away when the
+      # modal opens with no column chosen (the observer above owns it from
+      # then on).
+      shinyjs::toggleState(
+        "sel_date_range",
+        condition = nzchar(field) && field %in% dates
+      )
     }))
 
     output$sel_table <- renderDT(
       {
-        meta <- viz_metadata_all()
-        req(meta)
+        tbl <- sel_filtered()
+        req(tbl)
+        # Row indices of the isolates that were ticked before the window
+        # changed, so the re-render restores rather than clears them. Read
+        # non-reactively: the checked set is an *output* of this table, and
+        # depending on it would re-render on every click.
+        keep <- match(isolate(sel_checked()), tbl$isolate)
         datatable(
-          meta,
+          tbl,
           rownames = FALSE,
           filter = "top",
           # Drop the default "display" class's zebra striping (keep borders /
           # hover / sortable) so the cells aren't tinted per row.
           class = "row-border hover order-column",
-          # Open with nothing selected ("0 of N"); confirming an empty
-          # selection is treated as "all" (see the sel_confirm handler).
-          selection = list(mode = "multiple", selected = NULL),
+          # Opens with nothing selected ("0 of N"); confirming an empty
+          # selection is treated as "all rows in the window" (see the
+          # sel_confirm handler).
+          selection = list(
+            mode = "multiple",
+            selected = keep[!is.na(keep)]
+          ),
           options = list(
             dom = "tip",
-            pageLength = 10,
+            pageLength = 20,
             scrollX = TRUE,
-            scrollY = "42vh",
+            # `scrollY` only has to be a non-empty value: it is what tells
+            # DataTables to build the header/body scroll structure at all —
+            # main.scss then takes over sizing entirely (single scroller, the
+            # header pinned inside it with position: sticky; see the
+            # `.edit-table, .isolate-selection-table, .db-page_body` rules and
+            # `.isolate-selection-table .dataTables_scroll`'s max-height), the
+            # same convention `database_browser.R`'s metadata_table uses.
+            scrollY = "1px",
             scrollCollapse = TRUE
           )
         )
@@ -601,8 +746,32 @@ server <- function(
     output$sel_count <- renderUI({
       meta <- viz_metadata_all()
       req(meta)
+      shown <- nrow(sel_filtered())
       n <- length(input$sel_table_rows_selected)
-      span(sprintf("%d of %d selected", n, nrow(meta)))
+      if (shown == nrow(meta)) {
+        return(span(sprintf("%d of %d selected", n, shown)))
+      }
+      # A row leaves the table for one of two different reasons — its date
+      # falls outside the chosen window, or it has no usable date at all (blank
+      # cell, or free text that didn't parse) — and lumping both into one
+      # "outside window" figure would read as "the window excludes N" when some
+      # of those N were never judgeable against the window in the first place.
+      # Reporting them apart is what keeps a database with sparse date entry
+      # from looking like a window drawn too narrow.
+      d <- sel_dates()
+      missing <- if (is.null(d)) 0L else sum(is.na(d))
+      outside <- nrow(meta) - shown - missing
+      detail <- if (missing > 0 && outside > 0) {
+        sprintf(" · %d outside window, %d missing date", outside, missing)
+      } else if (missing > 0) {
+        sprintf(" · %d missing date", missing)
+      } else {
+        sprintf(" · %d outside window", outside)
+      }
+      span(
+        sprintf("%d of %d selected", n, shown),
+        span(class = "selection-modal-count-total", detail)
+      )
     })
 
     # Select all / none act on the currently *filtered* rows, so "Select all"
@@ -616,11 +785,23 @@ server <- function(
 
     reg(observeEvent(input$sel_confirm, {
       meta <- viz_metadata_all()
-      req(meta)
+      tbl <- sel_filtered()
+      req(meta, tbl)
       rows <- input$sel_table_rows_selected
-      # An empty confirmation means "no filter" — fall back to all isolates
-      # (NULL), so the plot uses the full set rather than nothing.
-      selected_isolates(if (length(rows)) meta$isolate[rows] else NULL)
+      # An empty confirmation means "everything the window leaves" — with no
+      # window that is every isolate, which is how confirming without ticking
+      # anything has always behaved.
+      picked <- if (length(rows)) tbl$isolate[rows] else tbl$isolate
+      if (!length(picked)) {
+        showNotification(
+          "No isolates left to select — widen the time filter.",
+          type = "warning"
+        )
+        return()
+      }
+      # Collapse "all of them" back to NULL (no filter), so a window that
+      # happens to cover the whole database costs the engines nothing.
+      selected_isolates(if (setequal(picked, meta$isolate)) NULL else picked)
       removeModal()
     }))
 

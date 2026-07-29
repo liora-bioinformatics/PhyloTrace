@@ -21,6 +21,7 @@ box::use(
     as_fill_carrier,
   ],
   visNetwork[visNetworkOutput, renderVisNetwork],
+  shinyWidgets[pickerInput, updatePickerInput]
 )
 box::use(
   app / logic / functions[render_info],
@@ -47,7 +48,7 @@ mst_controls <- function(ns) {
         "Labels",
         icon = shiny$icon("tag"),
         input_switch(ns("mst_show_label"), "Show node labels", TRUE),
-        shiny$pickerInput(
+        pickerInput(
           ns("mst_node_label"),
           "Label source",
           c("Assembly Name", "Isolation Date", "Host", "Country", "City")
@@ -58,8 +59,8 @@ mst_controls <- function(ns) {
         "Mapping",
         icon = shiny$icon("palette"),
         input_switch(ns("mst_color_var"), "Map variable to node color", FALSE),
-        shiny$pickerInput(ns("mst_col_var"), "Variable", meta_vars),
-        shiny$pickerInput(
+        pickerInput(ns("mst_col_var"), "Variable", meta_vars),
+        pickerInput(
           ns("mst_col_scale"),
           "color scale",
           c("Viridis", "Rainbow")
@@ -160,7 +161,7 @@ mst_controls <- function(ns) {
             "Node Shapes",
             icon = shiny$icon("shapes"),
             input_switch(ns("mst_shadow"), "Show shadow", TRUE),
-            shiny$pickerInput(
+            pickerInput(
               ns("mst_node_shape"),
               "Shape",
               list(
@@ -190,12 +191,12 @@ mst_controls <- function(ns) {
               min = 1,
               max = 99
             ),
-            shiny$pickerInput(
+            pickerInput(
               ns("mst_cluster_col_scale"),
               "color scale",
               c("Viridis", "Rainbow")
             ),
-            shiny$pickerInput(
+            pickerInput(
               ns("mst_cluster_type"),
               "Type",
               c("Area", "Skeleton")
@@ -212,7 +213,7 @@ mst_controls <- function(ns) {
           accordion_panel(
             "Legend",
             icon = shiny$icon("list"),
-            shiny$pickerInput(
+            pickerInput(
               ns("mst_legend_ori"),
               "Orientation",
               c(Left = "left", Right = "right")

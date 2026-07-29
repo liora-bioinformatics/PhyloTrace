@@ -1251,7 +1251,7 @@ map_controls <- function(ns) {
         icon = shiny$icon("layer-group"),
         shiny$div(
           id = ns("wrap_map_tiles"),
-          shiny$pickerInput(
+          pickerInput(
             ns("map_tiles"),
             "Base map",
             choices = map_providers,
@@ -1436,7 +1436,7 @@ map_controls <- function(ns) {
             "Variable Mapping",
             icon = shiny$icon("layer-group"),
             input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            shiny$pickerInput(ns("map_col_var"), "Variable", choices = NULL)
+            pickerInput(ns("map_col_var"), "Variable", choices = NULL)
           ),
           accordion_panel(
             "Scale",
@@ -1480,7 +1480,7 @@ map_controls <- function(ns) {
         value = "legend",
         icon = shiny$icon("list"),
         input_switch(ns("map_legend"), "Show legend", TRUE),
-        shiny$pickerInput(
+        pickerInput(
           ns("map_legend_pos"),
           "Position",
           choices = c(
@@ -1757,12 +1757,12 @@ map_controls <- function(ns) {
         "Charts",
         value = "charts",
         icon = shiny$icon("chart-pie"),
-        shiny$pickerInput(
+        pickerInput(
           ns("map_chart_type"),
           "Chart type",
           choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
         ),
-        shiny$pickerInput(ns("map_chart_var"), "Variable", choices = NULL),
+        pickerInput(ns("map_chart_var"), "Variable", choices = NULL),
         # Each chart shows the composition of a categorical variable (see
         # build_charts()'s max_categories folding below), so — like
         # map_heat_scale above — this is a static restriction rather than a
@@ -1811,30 +1811,11 @@ map_controls <- function(ns) {
             step = 10
           )
         )
-      ),
-      # Export -------------------------------------------------------------------
-      nav_panel(
-        "Export",
-        value = "export",
-        icon = shiny$icon("download"),
-        shiny$div(
-          class = "viz-export",
-          shiny$pickerInput(
-            ns("map_filetype"),
-            "File format",
-            choices = c("HTML (interactive)" = "html")
-          ),
-          shiny$downloadButton(
-            ns("map_html"),
-            "Save map",
-            icon = shiny$icon("download")
-          )
-        )
       )
     ),
     shiny$div(
       class = "map-mode-dropup",
-      shiny$pickerInput(
+      pickerInput(
         ns("map_mode"),
         "Map mode",
         choices = c("Markers", "Choropleth", "Heatmap", "Charts")
@@ -2907,8 +2888,17 @@ server <- function(
         # time-of-day component — filter_coords() floors to whole days, so an
         # Hour animation over date-only data would silently collapse back to
         # Day granularity and look broken rather than just under-precise.
-        ts <- suppressWarnings(
-          as.POSIXct(coords$sample_collection_date, tz = "UTC")
+        # `sample_collection_date` is free text (see field_types.R), so
+        # as.POSIXct's format guessing can throw a hard error (not just a
+        # warning) when it can't find one format that fits every value —
+        # suppressWarnings() doesn't catch that. Fall back to "no time
+        # component" rather than crashing this observer.
+        ts <- tryCatch(
+          suppressWarnings(as.POSIXct(
+            coords$sample_collection_date,
+            tz = "UTC"
+          )),
+          error = function(e) as.POSIXct(character(0), tz = "UTC")
         )
         has_time <- any(!is.na(ts) & format(ts, "%H:%M:%S") != "00:00:00")
         day_choices <- c("Day", "Week", "Month", "Year")

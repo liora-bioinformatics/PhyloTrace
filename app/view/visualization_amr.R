@@ -43,7 +43,12 @@ box::use(
     sidebar,
   ],
   shiny,
-  shinyWidgets[pickerInput, pickerOptions, radioGroupButtons],
+  shinyWidgets[
+    pickerInput,
+    pickerOptions,
+    radioGroupButtons,
+    updatePickerInput
+  ],
   stats[setNames],
 )
 box::use(
@@ -146,7 +151,7 @@ amr_controls <- function(ns) {
           accordion_panel(
             "View",
             icon = shiny$icon("chart-simple"),
-            shiny$pickerInput(
+            pickerInput(
               ns("amr_mode"),
               "View",
               choices = PLOT_MODES,
@@ -267,20 +272,20 @@ amr_controls <- function(ns) {
               # metadata to group by) — see the amr_mode observer, and the
               # reset checklist's bucket 4 for why the reset path must patch it
               # up on a delay.
-              shiny$pickerInput(
+              pickerInput(
                 ns("amr_column_grouping"),
                 "Group genes by",
                 choices = COLUMN_GROUPINGS,
                 selected = COLUMN_GROUPING_DEFAULT
               ),
               input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
-              shiny$pickerInput(
+              pickerInput(
                 ns("amr_cluster_distance"),
                 "Distance",
                 choices = amr_plot$AMR_CLUSTER_DISTANCES,
                 selected = CLUSTER_DISTANCE_DEFAULT
               ),
-              shiny$pickerInput(
+              pickerInput(
                 ns("amr_cluster_method"),
                 "Linkage",
                 choices = amr_plot$AMR_CLUSTER_METHODS,

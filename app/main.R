@@ -409,6 +409,34 @@ server <- function(id) {
       nav_select(id = "tabs", selected = "scheme_browser_panel")
     })
 
+    # Clear the two navbar items the load handler inserts (the reset button and
+    # the db-path display), by their known element ids.
+    #
+    # Called from both ends — before inserting and on reset — because the two
+    # nav_insert() calls are the only writers of the `app-reset` element id and
+    # nothing else keeps count of them. Sweeping first makes the insertion
+    # idempotent: however many times load_database() fires (the landing page
+    # fires it from the Load button *and* from its external-db observer), the
+    # navbar ends up with exactly one of each rather than a second element
+    # quietly sharing a Shiny input id with the first.
+    remove_navbar_items <- function() {
+      # querySelectorAll rather than getElementById: it takes every copy, so a
+      # session that already accumulated some is repaired rather than merely
+      # kept from growing. The fallback to the element itself keeps this
+      # correct if bslib's wrapper markup ever changes — the id is the part
+      # that has to go.
+      runjs(sprintf(
+        "['%s','loaded-db-path'].forEach(function(id){
+           document.querySelectorAll('[id=\"' + id + '\"]').forEach(function(el){
+             var item = el.closest('li.nav-item') || el;
+             if (window.Shiny && Shiny.unbindAll) { Shiny.unbindAll(item); }
+             item.remove();
+           });
+         });",
+        ns("reset")
+      ))
+    }
+
     observeEvent(LANDING_PAGE_vals$load_database(), {
       db_path <- LANDING_PAGE_vals$db_path()
 
@@ -483,6 +511,10 @@ server <- function(id) {
           select = i == 1L
         )
       }
+
+      # Both items below carry fixed element ids, so any copy left over from an
+      # earlier load has to go before another is inserted beside it.
+      remove_navbar_items()
 
       nav_insert(
         id = "tabs",
@@ -688,16 +720,7 @@ server <- function(id) {
         nav_remove(id = "tabs", target = panel)
       }
 
-      # Remove the two dynamically inserted navbar items (reset button and
-      # db-path display) by finding their known HTML element ids and walking
-      # up to the enclosing <li class="nav-item"> Bootstrap generates.
-      runjs(sprintf(
-        "['%s','loaded-db-path'].forEach(function(id){
-           var el=document.getElementById(id);
-           if(el){var li=el.closest('li.nav-item');if(li)li.remove();}
-         });",
-        ns("reset")
-      ))
+      remove_navbar_items()
 
       reset_session()
     })

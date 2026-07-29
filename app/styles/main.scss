@@ -1478,6 +1478,15 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin-bottom: 0.5rem;
 }
 
+.selection-modal-filter .input-daterange .input-group-addon.input-group-prepend.input-group-append .input-group-text,
+.selection-modal-filter .input-daterange,
+.selection-modal-filter .shiny-date-range-input {
+    height: 100%;
+}
+
+.selection-modal-filter>div:nth-child(2) {
+    height: 47px;
+}
 
 .accordion-button:focus {
     box-shadow: none !important;
@@ -2580,10 +2589,18 @@ $session-new-tint: 20%;
 }
 
 // The isolate pickers cap the table instead of filling a pane, so the cap
-// moves onto the scroller with the scrolling. Mirrors `scrollY = "42vh"` in
-// visualization_plot.R / analysis_dashboard.R.
+// moves onto the scroller with the scrolling — a plain `max-height` on
+// `.dataTables_scroll` (which is `max-height`, not `height`: shorter content
+// still shrinks to fit rather than leaving blank space under it). calc()
+// rather than a flat vh fraction so it tracks the dialog's own size (see
+// .selection-modal .modal-content, now sized to most of the viewport rather
+// than a fixed modest width): the reservation is everything else sharing the
+// dialog with the table — its toolbar, the "Showing X of Y" / pagination
+// line, the footer, and the dialog's own margins — generously rounded up
+// rather than tightly measured, since modal-body's own overflow-y: auto (see
+// above) absorbs it if this runs a little short.
 .isolate-selection-table .dataTables_scroll {
-    max-height: 42vh;
+    max-height: calc(100vh - 300px);
 }
 
 .pop-comp-wrapper {
@@ -3771,20 +3788,28 @@ label {
     color: var(--bs-secondary-color);
 }
 
-// Isolate-preselection modal: wide enough to host the metadata DT but kept
-// clear of the viewport edges so it never overflows the page (the table itself
-// scrolls internally rather than stretching the dialog).
+// Isolate-preselection modal: sized to use most of the viewport (the metadata
+// table can carry a lot of columns, and a time filter benefits from showing
+// many rows at once) but still clamped to it by `min()`, so on a small display
+// it shrinks with the window rather than overflowing it.
 .selection-modal .modal-dialog {
     width: auto;
-    max-width: min(860px, 90vw);
-    margin: 1.75rem auto;
+    max-width: min(1400px, 95vw);
+    margin: 1rem auto;
 }
 
-// Cap the whole dialog to the viewport height on short screens and let the
-// body scroll internally, so a tall table never pushes the page itself into
-// an overflow scroll.
+// `height`, not just `max-height`: a max only caps growth, it does not make a
+// flex column's un-stretched children (modal-body, sized to *its own*
+// content) actually claim the leftover space — which is why a bigger DT
+// `scrollY` used to just make the table ask for more content instead of the
+// dialog getting any taller. Forcing the real height here is what makes
+// modal-body's `flex: 1 1 auto` below have something to grow into, so the
+// dialog genuinely tracks the viewport rather than shrink-wrapping its
+// content. `min()` still keeps a short screen safe: no fixed cap on the raw
+// value here means an unusually short modal-body can only ever be *this*
+// height, never taller than what the screen already has room for.
 .selection-modal .modal-content {
-    max-height: calc(100vh - 3.5rem);
+    height: min(calc(100vh - 2rem), 1100px);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -3824,6 +3849,58 @@ label {
         font-weight: bold;
         font-size: 1.2em;
     }
+
+    // The "N outside window" tail is context for the count, not part of it —
+    // dropped back to body text so the selected/selectable numbers stay the
+    // thing the eye lands on. The font-family has to be named rather than
+    // inherited: the rule above already made the parent span monospace.
+    .selection-modal-count-total {
+        font-family: var(--bs-body-font-family);
+        font-weight: normal;
+        font-size: 0.85em;
+        opacity: 0.75;
+    }
+}
+
+// Time filter in the footer row, to the left of Cancel / Confirm: the picker
+// choosing which date-typed column is the time axis, then the window itself.
+// `margin-right: auto` is what splits the row - the footer is a flex container
+// that ends its children, so claiming the leftover space pushes the buttons
+// back to the right edge where they belong.
+.selection-modal-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: auto;
+
+    // Both inputs ship as block-level form groups sized for a stacked layout:
+    // full width, with a bottom margin under the label they do not have here.
+    // Left alone, the width is what stretches this whole block across the
+    // footer and pushes the buttons onto a second row.
+    .form-group,
+    .shiny-input-container {
+        flex: 0 0 auto;
+        width: auto;
+        margin-bottom: 0;
+    }
+
+    // Keep the two halves of the range input on one line at the modal's width,
+    // and let the date fields shrink rather than push the buttons off the row.
+    .input-daterange {
+        flex-wrap: nowrap;
+
+        .form-control {
+            min-width: 0;
+        }
+    }
+}
+
+// The footer is the one row the whole time filter has to share with Cancel /
+// Confirm, so it may not wrap: a filter that grew (a long column label in the
+// picker) has to compress rather than drop the buttons onto a line of their
+// own.
+.selection-modal .modal-footer {
+    flex-wrap: nowrap;
 }
 
 // Confirm-discard modal for closing an unsaved plot tab: wide enough that its

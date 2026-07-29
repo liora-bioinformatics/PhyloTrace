@@ -39,25 +39,18 @@ set_tree_inputs <- function(session) {
   session$setInputs(
     nj_root_isolate = "Automatic",
     nj_layout = "rectangular",
-    nj_ladder = TRUE,
     nj_color = "#000000",
     nj_bg = "#ffffff",
     nj_tiplab_show = TRUE,
     nj_tiplab = "isolate",
     nj_tiplab_size = 4,
-    nj_tiplab_alpha = 1,
-    nj_tiplab_fontface = "plain",
-    nj_tiplab_angle = 0,
     nj_align = TRUE,
     nj_tiplab_color = "#000000",
-    nj_tiplab_fill = "#84D9A0",
     nj_mapping_show = FALSE,
     nj_show_branch_label = FALSE,
-    nj_branch_label = "Allelic Distance",
     nj_branch_size = 4,
     nj_branchlabel_cutoff = 10,
     nj_branch_color = "#000000",
-    nj_branch_label_color = "#FFB7B7",
     nj_tippoint_show = FALSE,
     nj_tippoint_alpha = 0.5,
     nj_tippoint_size = 4,
@@ -72,15 +65,9 @@ set_tree_inputs <- function(session) {
     nj_nodepoint_size = 2.5,
     nj_nodelabel_show = FALSE,
     nj_clade_scale = "#D0F221",
-    nj_clade_type = "roundrect",
     nj_heatmap_show = FALSE,
     nj_rootedge_show = TRUE,
     nj_treescale_show = TRUE,
-    nj_title = "",
-    nj_subtitle = "",
-    nj_title_color = "#000000",
-    nj_title_size = 30,
-    nj_subtitle_size = 30,
     nj_aspect_ratio = 0.6,
     nj_zoom = 0.95,
     nj_h = -0.05,
@@ -167,8 +154,7 @@ test_that("a control the plot is not drawing cannot cause a rebuild", {
         nj_tiplab_scale = "magma",
         nj_tipcolor_mapping = "organism",
         nj_tippoint_scale = "magma",
-        nj_tipshape_mapping = "organism",
-        nj_branch_label = "organism"
+        nj_tipshape_mapping = "organism"
       )
       session$flushReact()
       expect_identical(tree_opts(), before)
@@ -224,6 +210,43 @@ test_that("Generate resolving a select costs no extra draw", {
       expect_equal(tree_opts()$tiplab, "isolate")
       # Five hidden tile strips cannot contribute a draw between them.
       expect_identical(length(tree_opts()$tiles), 0L)
+    }
+  )
+})
+
+test_that("the pickers carry the database's own fields before any Generate", {
+  # The reported bug: every variable picker listed the placeholder names
+  # viz_helpers declares them with — "Isolation Date", "Host", "Country" — which
+  # are columns of no real database, and only a Generate replaced them.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    organism = rep("P. aeruginosa", 8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$flushReact()
+
+      # No generate() at all.
+      expect_equal(isolate(fitted$nj_tiplab), "isolate")
+      for (id in c(
+        "nj_color_mapping",
+        "nj_tipcolor_mapping",
+        "nj_tipshape_mapping"
+      )) {
+        expect_true(isolate(fitted[[id]]) %in% names(meta))
+      }
+      # `organism` is one group for every isolate, so it is a column the plot
+      # can offer but never the one it starts on.
+      expect_equal(isolate(fitted$nj_color_mapping), "purpose")
     }
   )
 })

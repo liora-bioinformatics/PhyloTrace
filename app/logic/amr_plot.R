@@ -242,7 +242,8 @@ load_amr_sections <- function(db_path) {
   }
   sections$drug_class <- as.character(sections$drug_class)
   sections[
-    !is.na(sections$drug_class) & nzchar(sections$drug_class), ,
+    !is.na(sections$drug_class) & nzchar(sections$drug_class),
+    ,
     drop = FALSE
   ]
 }
@@ -271,10 +272,12 @@ filter_amr_hits <- function(
     keep <- keep & hits$element_type %in% toupper(element_types)
   }
   if (isTRUE(min_identity > 0)) {
-    keep <- keep & (is.na(hits$pct_identity) | hits$pct_identity >= min_identity)
+    keep <- keep &
+      (is.na(hits$pct_identity) | hits$pct_identity >= min_identity)
   }
   if (isTRUE(min_coverage > 0)) {
-    keep <- keep & (is.na(hits$pct_coverage) | hits$pct_coverage >= min_coverage)
+    keep <- keep &
+      (is.na(hits$pct_coverage) | hits$pct_coverage >= min_coverage)
   }
   hits[keep, , drop = FALSE]
 }

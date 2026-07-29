@@ -1,5 +1,6 @@
 import "./busy-shield";
 import "./dt-column-sizing";
+import "./dt-column-visibility";
 import "./virtual-select-popup-confirm";
 
 // Restrict free-text entry to a filesystem-/SQL-safe character set

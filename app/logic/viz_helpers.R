@@ -116,17 +116,6 @@ meta_vars <- c("Isolation Date", "Host", "Country", "City", "Database")
 #' @export
 label_vars <- c("Assembly Name", "Assembly ID", meta_vars)
 
-# Sources for branch labels (allelic distance is the numeric default).
-#' @export
-branch_vars <- c("Allelic Distance", meta_vars)
-
-#' @export
-fontfaces <- c(
-  Plain = "plain",
-  Bold = "bold",
-  Italic = "italic",
-  `Bold Italic` = "bold.italic"
-)
 
 #' @export
 point_shapes <- c(

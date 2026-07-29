@@ -36,9 +36,7 @@ box::use(
     datatable,
     editData,
     dataTableProxy,
-    replaceData,
-    showCols,
-    hideCols
+    replaceData
   ],
 )
 
@@ -64,6 +62,7 @@ box::use(
       append_amr_matrix
     ],
   app / logic / field_labels[field_labels_for, grouped_field_choices],
+  app / logic / field_types[date_fields],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
 )
 
@@ -82,12 +81,6 @@ AMR_GROUP_TOKEN_PREFIX <- ".amr_group:"
 # Located by name, not position — an imported peer database can carry extra
 # metadata columns in any order.
 READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
-
-# The one date-typed field in the fixed GenEpiO metadata schema. User-defined
-# date variables are *not* listed here — they are discovered from
-# `phylotrace_custom_fields.type`, so this stays the schema's own constant
-# rather than a hardcoded list of every date column on screen.
-DATE_COL <- "sample_collection_date"
 
 # 0-based DT column indices for `cols` within `all_cols`; NAs dropped.
 .dt_idx <- function(all_cols, cols) {
@@ -531,11 +524,14 @@ server <- function(
     }
 
     # Every date-typed column on screen: the fixed schema's collection date plus
-    # any user-defined date variable. Drives both the native date editor and the
-    # `col-date` width floor, so a custom date column behaves exactly like the
-    # built-in one.
+    # any user-defined date variable, both answered by the shared type map (see
+    # app/logic/field_types.R). Drives the native date editor and the `col-date`
+    # width floor, so a custom date column behaves exactly like the built-in
+    # one. Plain `"date"` only — `called_at` is a timestamp, and a date picker
+    # on it would drop its time of day.
     date_cols <- reactive({
-      c(DATE_COL, custom_cols_of_type("date"))
+      df <- metadata_base()
+      date_fields(db_path(), names(df), types = "date")
     })
 
     observeEvent(metadata_base(), {
@@ -936,8 +932,30 @@ server <- function(
                 if (!isNaN(d.getTime())) this.value = d.toISOString().split('T')[0];
               });
 
+              // Re-measure once the picker has finished changing columns.
+              //
+              // DataTables fires column-visibility.dt once *per column*, not
+              // once per change, so toggling a whole category announces 33 of
+              // them. Running the pass below on each one is quadratic in the
+              // worst way: columns.adjust() re-measures every column against a
+              // table that (paging = FALSE) has every row in the DOM, and each
+              // adjust in turn fires column-sizing.dt, which is what
+              // FixedColumns rebuilds its pinned column from - walking every
+              // cell. Toggling the AMR category that way blocked the main
+              // thread for ~45 seconds and had Chrome offering \"Page
+              // Unresponsive\".
+              //
+              // The whole burst is synchronous, so a zero-delay timer coalesces
+              // it into the single pass this always meant to be: the first
+              // event schedules, the rest are absorbed, and the measure runs
+              // once with every column already in its final state.
+              var visibilityRedraw = null;
               api.on('column-visibility.dt', function() {
-                api.columns.adjust().draw(false);
+                if (visibilityRedraw) return;
+                visibilityRedraw = setTimeout(function() {
+                  visibilityRedraw = null;
+                  api.columns.adjust().draw(false);
+                }, 0);
               });
 
               // Flex-align DataTables' own \"Showing x to y of z entries\" info
@@ -1280,10 +1298,19 @@ server <- function(
           c(setdiff(optional, selected_cols), setdiff(gene_cols, shown_genes))
         )
 
-        if (length(show_idx)) {
-          showCols(proxy, show_idx, reset = FALSE)
-        }
-        if (length(hide_idx)) hideCols(proxy, hide_idx, reset = FALSE)
+        # Deliberately not showCols()/hideCols(): each ends in its own
+        # columns.adjust(), and that re-measure is the expensive part of a
+        # visibility change on a table this wide with every row in the DOM
+        # (paging = FALSE). Sending both sets together lets the client make the
+        # DOM changes first and measure once — see app/js/dt-column-visibility.js.
+        session$sendCustomMessage(
+          "pt-dt-column-visibility",
+          list(
+            id = session$ns("metadata_table"),
+            show = show_idx,
+            hide = hide_idx
+          )
+        )
       },
       ignoreNULL = FALSE,
       ignoreInit = TRUE
