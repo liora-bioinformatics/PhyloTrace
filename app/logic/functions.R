@@ -1,4 +1,6 @@
 # app/logic/functions.R
+#
+# Shared UI component generators and helper utilities for Shiny modules.
 
 box::use(
   shiny[div, actionButton, icon, tagList],
@@ -12,19 +14,18 @@ box::use(
   ],
 )
 
-#' Build a vertical sidebar menu of action buttons.
+#' Build a Vertical Sidebar Menu of Action Buttons
 #'
 #' Turns a menu definition into the clickable button list used in module
 #' sidebars (e.g. the Database menu). Each button id is `menu_<value>`,
 #' namespaced through `ns`, so the calling module observes
 #' `input[["menu_<value>"]]`. The first entry is marked `active` so the default
-#' panel is highlighted on load. The icon is fixed for every item.
+#' panel is highlighted on load.
 #'
 #' @param ns Namespace function of the calling module (`session$ns` or `NS(id)`).
 #' @param items List of menu entries, each a list with at least `value` (button
 #'   id suffix / panel id) and `label` (visible text).
 #' @return A `div.sidebar-menu` containing one action button per entry.
-#'
 #' @export
 sidebar_menu <- function(ns, items) {
   div(
@@ -35,23 +36,21 @@ sidebar_menu <- function(ns, items) {
         ns(paste0("menu_", item$value)),
         label = item$label,
         icon = icon("caret-right"),
-        # The first item is the default panel, so mark it active on load.
         class = paste("db-menu-item", if (i == 1L) "active")
       )
     })
   )
 }
 
-#' A titled card, as used for the stacked sections of the database Import and
-#' Export panels.
+#' Create Titled Container Card
 #'
-#' @param title Card header text.
+#' Used for stacked UI sections such as the database Import and Export panels.
+#'
+#' @param title Card header text string.
 #' @param ... Card body contents.
-#' @param fill Passed on to `bslib::card()`. Defaults to `FALSE` so the card
-#'   sizes to its content; pass `TRUE` for a card that should grow to fill the
-#'   rest of a fillable stack (e.g. the summary card below a short
-#'   compatibility list).
-#' @return A `bslib::card()`.
+#' @param fill Logical indicating if the card should grow to fill vertical space.
+#'   Defaults to `FALSE` to fit content dimensions.
+#' @return A `bslib::card()` UI element.
 #' @export
 panel_card <- function(title, ..., fill = FALSE) {
   card(
@@ -61,37 +60,27 @@ panel_card <- function(title, ..., fill = FALSE) {
   )
 }
 
-#' The fillable column of cards used by the database Import and Export
-#' panels' summary body.
+#' Create Fillable Layout Container for Transfer Cards
 #'
-#' Wrapping in `as_fill_carrier()` matters, not just cosmetic: bslib's fill
-#' CSS (`.html-fill-container > .html-fill-item`) is a child-combinator rule,
-#' so a `fill = TRUE` card several levels down (e.g. inside a `panel_card()`
-#' stacked by `transfer_row()`) only actually grows if every element in
-#' between literally carries the fill classes — a plain `div()` in the chain
-#' breaks it silently, with the fillable card just sizing to its own content.
+#' Wraps elements in `bslib::as_fill_carrier()` to maintain vertical fill CSS
+#' inheritance down the DOM tree in Import and Export summary views.
 #'
-#' @param ... Content, typically a `transfer_row()` call plus any extra cards.
-#' @return A `div.transfer-cards`.
+#' @param ... Content elements, typically `transfer_row()` calls and panel cards.
+#' @return A `div.transfer-cards` fill carrier element.
 #' @export
 transfer_cards <- function(...) {
   as_fill_carrier(div(class = "transfer-cards", ...))
 }
 
-#' A single headline figure, as used in the summary rows of the database Import
-#' and Export panels.
+#' Build Headline Metric Value Box
 #'
-#' The icon rides in the box's title rather than in its `showcase`: a showcase is
-#' laid out by bslib for a box that owns a whole column, and below 300px it stops
-#' sitting beside the value and drops onto its own line. These boxes are ~150px by
-#' design — five to a card — so the showcase slot is the wrong tool for them.
+#' Renders a compact summary tile for key metrics. Icons are embedded in the header
+#' label rather than the showcase slot to prevent line breaks at small widths.
 #'
-#' @param label Caption for the figure (e.g. "Novel alleles").
-#' @param value The figure itself, pre-formatted by the caller.
-#' @param icon_name Name of a Font Awesome icon to set before the caption.
-#' @return A `bslib::value_box()`. `fill = FALSE` keeps the box at its content
-#'   height: the summary row lays the boxes out on a grid, and a filling box
-#'   would stretch to the tallest cell in its row.
+#' @param label Display title for the metric.
+#' @param value Pre-formatted character or numeric value.
+#' @param icon_name Optional Font Awesome icon name.
+#' @return A `bslib::value_box()` UI element with fixed height (`fill = FALSE`).
 #' @export
 stat_tile <- function(label, value, icon_name = NULL) {
   value_box(
@@ -110,6 +99,11 @@ stat_tile <- function(label, value, icon_name = NULL) {
   )
 }
 
+#' Log UI Rendering Execution
+#'
+#' Prints a formatted timestamped log message to the console when rendering outputs.
+#'
+#' @param output String identifier of the UI output being rendered.
 #' @export
 render_info <- function(output) {
   message(

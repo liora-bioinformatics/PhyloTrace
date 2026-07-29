@@ -1,29 +1,8 @@
 # app/logic/custom_fields.R
 #
-# User-defined custom variables ("custom fields") for the isolates of a
-# PhyloTrace database.
-#
-# The `metadata` table is a fixed, GenEpiO-aligned field set. Labs routinely
-# need one more field it does not have — a ward, a sampling site, an outbreak
-# id, a CT value — so this module lets the user define their own, typed fields
-# and fill them in per isolate.
-#
-# Two tables, both living inside the loaded `.db` (prefixed `phylotrace_`, like
-# the Analysis Dashboard's store), so custom variables are automatically scoped
-# to their database and travel with the file:
-#
-#   phylotrace_custom_fields   one row per variable  (name, type, description)
-#   phylotrace_custom_values   one row per filled cell (field_id, isolate, value)
-#
-# The values are stored long rather than as one column per variable: renaming a
-# variable is then a single UPDATE with no DDL, and pivoting long -> wide at
-# display time is the pattern `load_classical_mlst()` and `load_amr()` already
-# use. Every value is TEXT in a canonical form (ISO date, "yes"/"no", the number
-# as written) — consistent with every other table in the file. Type integrity is
-# enforced on write by `coerce_custom_value()`, not by column affinity.
-#
-# All access follows the app's standard idiom: open a private connection, close
-# it on exit, and use parameterised statements.
+# Management and storage for user-defined custom fields and isolate values within
+# a PhyloTrace database. Persists user schema metadata and long-format custom values
+# inside `phylotrace_custom_fields` and `phylotrace_custom_values` SQLite tables.
 
 box::use(
   DBI[
@@ -42,14 +21,15 @@ box::use(
 
 box::use(
   app / logic / database_functions[metadata_columns],
-  app / logic / field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, MLST_COL_PREFIX],
+  app /
+    logic /
+    field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, MLST_COL_PREFIX],
   app / logic / logging[log_event],
 )
 
-#' The variable types a user can choose from, as `slug = "Human label"`.
+#' Mapping of Allowed Custom Variable Types
 #'
-#' The slug is what `phylotrace_custom_fields.type` stores and what
-#' `coerce_custom_value()` switches on; the label is what every selector shows.
+#' Named character vector mapping type slug keys to display labels shown in the UI.
 #' @export
 CUSTOM_TYPES <- c(
   text = "Text",
@@ -60,18 +40,18 @@ CUSTOM_TYPES <- c(
   category = "Category"
 )
 
-# Types whose cells take a `<input type="number">` in an editable DT.
+#' Custom Field Types Requiring Numeric Inputs
 #' @export
 NUMERIC_TYPES <- c("integer", "numeric")
 
-# Types whose values are drawn from a fixed list (offered as a <datalist>).
+#' Custom Field Types Using Selection Lists
 #' @export
 LISTED_TYPES <- c("boolean", "category")
 
-# ISO-ish local timestamp, matching analysis_store.R.
+# Helper: returns formatted local timestamp for record creation/modification columns.
 .now <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
-# A usable single-file path pointing at an existing database.
+# Helper: validates that a database path argument is non-empty and exists.
 .usable <- function(db_path) {
   !is.null(db_path) &&
     length(db_path) == 1 &&
@@ -82,6 +62,7 @@ LISTED_TYPES <- c("boolean", "category")
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+# Helper: returns empty data frame structure matching custom fields query output.
 .empty_fields <- function() {
   data.frame(
     id = integer(0),
@@ -97,10 +78,10 @@ LISTED_TYPES <- c("boolean", "category")
   )
 }
 
-#' The two tables' DDL, as idempotent statements.
+#' DDL Statements for Custom Field Schema
 #'
-#' Exported because the importer has to create them on a connection it already
-#' holds, mid-transaction, and cannot open a second one to the same file.
+#' Character vector of idempotent SQL statements used to construct custom field tables.
+#' Exposes schema DDL for direct use during complex multi-step database transactions.
 #' @export
 CUSTOM_SCHEMA_DDL <- c(
   "CREATE TABLE IF NOT EXISTS phylotrace_custom_fields (
@@ -121,8 +102,7 @@ CUSTOM_SCHEMA_DDL <- c(
    )"
 )
 
-# Cheap and idempotent, so every write path calls it — a write can never fail on
-# a missing table.
+# Ensures schema tables exist in the target database connection.
 .ensure_tables <- function(con) {
   for (sql in CUSTOM_SCHEMA_DDL) {
     dbExecute(con, sql)
@@ -130,14 +110,17 @@ CUSTOM_SCHEMA_DDL <- c(
   invisible(NULL)
 }
 
+# Helper: fetches the integer primary key of the last inserted row.
 .last_id <- function(con) {
   as.integer(dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]])
 }
 
-#' Create the two custom-variable tables if they do not exist yet.
+#' Ensure Custom Field Schema Exists
 #'
-#' Safe to call on every database load; returns TRUE when the schema is in
-#' place, FALSE when `db_path` is not a usable database file.
+#' Idempotently creates custom field schema tables within the target SQLite file.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Invisible logical `TRUE` if successful, or `FALSE` if database path invalid.
 #' @export
 ensure_custom_schema <- function(db_path) {
   if (!.usable(db_path)) {
@@ -151,12 +134,19 @@ ensure_custom_schema <- function(db_path) {
   invisible(TRUE)
 }
 
-#' The metadata column name a custom variable is surfaced as (`custom_<name>`).
+#' Format Name with Custom Column Prefix
+#'
+#' @param name Base name of the custom variable field.
+#' @return Character column name prefixed for display/query consistency.
 #' @export
 custom_col <- function(name) paste0(CUSTOM_COL_PREFIX, name)
 
-#' The allowed values of a `category` variable, decoded from its stored JSON.
-#' Returns `character(0)` for every other type (and for malformed JSON).
+#' Decode JSON Categorical Field Levels
+#'
+#' Unpacks stored JSON level strings into a character vector for categorical variables.
+#'
+#' @param levels_json JSON character scalar representing categorical options.
+#' @return Character vector of distinct levels, or `character(0)` for non-categories.
 #' @export
 field_levels <- function(levels_json) {
   if (
@@ -174,11 +164,12 @@ field_levels <- function(levels_json) {
   out[!is.na(out) & nzchar(out)]
 }
 
-#' Encode a level vector for storage. NULL for anything empty, so a non-category
-#' variable stores SQL NULL rather than an empty JSON array. Sorted
-#' alphabetically (locale-independent), so the order the user typed them in
-#' never matters: the fields table, the edit dialog, and the values-table
-#' dropdown all show — and offer — the same order.
+#' Encode Categorical Levels for Storage
+#'
+#' Cleans, sorts, and serializes custom level strings into a JSON array scalar.
+#'
+#' @param levels Character vector of user-defined categorical values.
+#' @return Formatted JSON array character scalar, or `NULL` if empty.
 #' @export
 encode_levels <- function(levels) {
   levels <- trimws(as.character(levels %||% character(0)))
@@ -190,13 +181,12 @@ encode_levels <- function(levels) {
   as.character(toJSON(levels, auto_unbox = FALSE))
 }
 
-#' Every custom variable defined in the database, in display order.
+#' List All Defined Custom Fields
 #'
-#' Returns a data frame with one row per variable — `id`, `name`, `type`,
-#' `description`, `levels` (raw JSON), `position`, `created`, `modified` — plus
-#' `n_filled`, the number of isolates that carry a value for it. Empty (but
-#' correctly shaped) when the database is unusable or has no custom tables, so
-#' callers can always index the result.
+#' Retrieves field definition metadata and non-empty entry counts for all custom variables.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame listing custom variable schema definitions and `n_filled` counts.
 #' @export
 list_custom_fields <- function(db_path) {
   if (!.usable(db_path)) {
@@ -238,10 +228,15 @@ list_custom_fields <- function(db_path) {
   fields
 }
 
-#' Why `name` cannot be used for a custom variable, or NULL when it can.
+#' Validate Proposed Custom Field Name
 #'
-#' Exported so the New-Variable dialog can validate as the user types. `id` is
-#' the variable being renamed, whose own name is not a collision with itself.
+#' Checks candidate field names for syntax validity, reserved prefixes, and collisions
+#' with standard metadata columns or existing custom variables.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param name Candidate string for the field name.
+#' @param id Optional integer ID of an existing variable being renamed.
+#' @return Character error message if validation fails, or `NULL` if valid.
 #' @export
 validate_custom_name <- function(db_path, name, id = NULL) {
   name <- trimws(as.character(name %||% ""))
@@ -279,11 +274,16 @@ validate_custom_name <- function(db_path, name, id = NULL) {
   NULL
 }
 
-#' Define a new custom variable. Returns its new id.
+#' Create a Custom Variable Field
 #'
-#' Stops with a user-facing message when the name is unusable (see
-#' `validate_custom_name()`), the type is unknown, or a `category` variable is
-#' given no levels — callers show that message as-is.
+#' Validates and inserts a new custom variable metadata record into the database.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param name Unique display name string.
+#' @param type Field data type key matching `CUSTOM_TYPES`.
+#' @param description Optional detailed text description.
+#' @param levels Optional character vector of allowed values for categorical fields.
+#' @return Integer ID of the created custom field.
 #' @export
 create_custom_field <- function(
   db_path,
@@ -355,11 +355,16 @@ create_custom_field <- function(
   .last_id(con)
 }
 
-#' Rename a variable or change its description / levels.
+#' Update Custom Variable Metadata
 #'
-#' The *type* is deliberately not editable: stored values are canonicalised for
-#' the type they were entered under, so switching it would silently invalidate
-#' them. Arguments left NULL are kept as they are.
+#' Modifies the display name, description, or categorical options of an existing custom field.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer identifier of the field to modify.
+#' @param name Optional new field name string.
+#' @param description Optional new description string.
+#' @param levels Optional character vector of updated categorical values.
+#' @return Invisible logical `TRUE` if records updated, or `FALSE` if no changes specified.
 #' @export
 update_custom_field <- function(
   db_path,
@@ -394,11 +399,16 @@ update_custom_field <- function(
   if (!is.null(description)) {
     description <- trimws(as.character(description))
     sets <- c(sets, "description = ?")
-    params <- c(params, list(if (nzchar(description)) {
-      description
-    } else {
-      NA_character_
-    }))
+    params <- c(
+      params,
+      list(
+        if (nzchar(description)) {
+          description
+        } else {
+          NA_character_
+        }
+      )
+    )
   }
 
   if (!is.null(levels) && identical(current$type[[1]], "category")) {
@@ -431,7 +441,13 @@ update_custom_field <- function(
   invisible(TRUE)
 }
 
-#' Delete a variable and every value stored for it, in one transaction.
+#' Delete Custom Variable Fields
+#'
+#' Deletes specified custom fields and all associated isolate value entries in a single transaction.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer vector of custom field identifiers to remove.
+#' @return Invisible logical `TRUE` if process completed, or `FALSE` if database invalid.
 #' @export
 delete_custom_field <- function(db_path, id) {
   if (!.usable(db_path) || !length(id)) {
@@ -484,8 +500,7 @@ delete_custom_field <- function(db_path, id) {
   invisible(TRUE)
 }
 
-# Levels as a plain character vector, from either representation: the stored
-# JSON scalar, an already-decoded vector, or a single bare level.
+# Helper: normalizes inputs (JSON, list, or scalar) into a simple character vector of levels.
 .as_levels <- function(x) {
   if (is.null(x) || !length(x)) {
     return(character(0))
@@ -497,19 +512,19 @@ delete_custom_field <- function(db_path, id) {
   if (length(decoded)) decoded else as.character(x)
 }
 
-# Canonical "yes"/"no" for the strings a user might plausibly type.
+# String match constants for standard boolean inputs.
 .BOOL_TRUE <- c("yes", "y", "true", "t", "1")
 .BOOL_FALSE <- c("no", "n", "false", "f", "0")
 
-#' Validate and canonicalise one entered value against its variable's type.
+#' Coerce and Validate Custom Field Inputs
 #'
-#' Returns `list(ok, value, reason)`. `ok = TRUE` with an `NA_character_` value
-#' means "cleared" — an empty cell is always allowed and deletes the stored row.
-#' `ok = FALSE` carries a `reason` short enough to show in a notification.
+#' Canonicalizes input values based on target custom variable types and level definitions.
 #'
-#' This is the single authority on what may be stored: the DT input types are
-#' only a hint (a user can paste anything into a text cell), so every write path
-#' goes through here.
+#' @param value Raw input scalar value.
+#' @param type Target field variable type slug.
+#' @param levels Optional JSON or character vector defining allowed levels.
+#' @return Named list with components `ok` (logical), `value` (canonical string or `NA`),
+#'   and `reason` (validation error message if failed).
 #' @export
 coerce_custom_value <- function(value, type, levels = NULL) {
   ok <- function(v) list(ok = TRUE, value = v, reason = "")
@@ -576,24 +591,20 @@ coerce_custom_value <- function(value, type, levels = NULL) {
   )
 }
 
-#' Cast a column of canonical stored values to the R type its variable implies.
-#'
-#' `integer` and `numeric` both become R numeric so a DataTable sorts them as
-#' numbers rather than as strings; every other type stays character (dates as
-#' ISO strings, exactly like `metadata.sample_collection_date`).
+# Helper: casts canonical text database values into appropriate R vector types.
 .cast_values <- function(v, type) {
   if (type %in% NUMERIC_TYPES) suppressWarnings(as.numeric(v)) else v
 }
 
-#' Per-isolate custom-variable values, wide.
+#' Load Pivot Wide Custom Isolate Values
 #'
-#' Pivots `phylotrace_custom_values` to one row per isolate: an `isolate` column
-#' plus one `custom_<name>` column per defined variable, typed by its definition
-#' (see `.cast_values()`). Variables keep their display order, and a variable
-#' with no values yet still yields an (all-empty) column so it can be picked.
+#' Fetches custom variable values and pivots long storage format into a wide data frame
+#' keyed by isolate.
 #'
-#' `fields` optionally restricts the result to those variable *names*. Returns
-#' NULL when the database has no custom variables at all.
+#' @param db_path Character path to the SQLite database file.
+#' @param fields Optional character vector restricting loaded custom variable names.
+#' @return Wide data frame with an `isolate` column and typed `custom_<name>` columns,
+#'   or `NULL` if no variables exist.
 #' @export
 load_custom_values <- function(db_path, fields = NULL) {
   defs <- list_custom_fields(db_path)
@@ -638,18 +649,15 @@ load_custom_values <- function(db_path, fields = NULL) {
   out
 }
 
-#' Merge the custom-variable columns into a metadata frame keyed on `isolate`,
-#' recording the added names in the result's `"custom_cols"` attribute.
+#' Merge Custom Variable Columns into Metadata Frame
 #'
-#' The custom-variable analogue of `append_classical_mlst()` / `append_amr()`:
-#' reusable across views, columns that would shadow an existing metadata field
-#' are skipped, and `meta` is returned unchanged (empty `"custom_cols"`) when it
-#' is not a non-empty isolate-keyed frame or the database has no custom
-#' variables. `fields` optionally restricts the merge to those variable names.
+#' Appends custom field values as columns to an existing isolate-keyed metadata frame.
 #'
-#' Unlike the derived MLST/AMR columns these are *user data*, not results — but
-#' they are still merged for display only. `phylotrace_custom_values` is the one
-#' place they are written, from the Custom Variables panel.
+#' @param meta Data frame containing metadata and an `isolate` identifier column.
+#' @param db_path Character path to the SQLite database file.
+#' @param fields Optional character vector restricting merged field names.
+#' @return Input data frame with added `custom_<name>` columns and a populated
+#'   `"custom_cols"` attribute listing added column names.
 #' @export
 append_custom <- function(meta, db_path, fields = NULL) {
   if (
@@ -675,12 +683,14 @@ append_custom <- function(meta, db_path, fields = NULL) {
   meta
 }
 
-#' Write edited cells back.
+#' Save Custom Field Isolate Values
 #'
-#' `edits` is a data frame of `field_id` / `isolate` / `value`, where `value` is
-#' already canonical (i.e. it came out of `coerce_custom_value()`). An NA or
-#' empty value deletes the row rather than storing a blank, so `n_filled` and
-#' the export filters stay meaningful. The whole batch is one transaction.
+#' Writes a batch of edited custom field values back to long database storage within a single transaction.
+#' Clears rows with NA or empty string values.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param edits Data frame containing `field_id`, `isolate`, and canonical `value` columns.
+#' @return Invisible integer count of total input edit rows processed.
 #' @export
 save_custom_values <- function(db_path, edits) {
   if (!.usable(db_path) || !is.data.frame(edits) || !nrow(edits)) {
@@ -709,8 +719,6 @@ save_custom_values <- function(db_path, edits) {
         )
       }
       if (any(!clear)) {
-        # INSERT OR REPLACE, not an UPSERT: the primary key is the whole
-        # identity of a row here, so replacing it is exactly the intent.
         dbExecute(
           con,
           "INSERT OR REPLACE INTO phylotrace_custom_values

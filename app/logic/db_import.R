@@ -1,20 +1,22 @@
 # app/logic/db_import.R
 #
-# Merge a peer PhyloTrace database into the loaded one.
+# Merges a peer PhyloTrace database into the primary loaded database.
 #
-# The whole design rests on one property of the schema: `seqid` is meaningful
-# only inside the database that assigned it, but `(gene, sha256(sequence))`
-# identifies an allele anywhere. (In a PhyloTrace database each `seqid` belongs
-# to exactly one `gene`, and the `hashes` table stores exactly
-# `sha256(sequences.sequence)`, so the pair is a bijection with `seqid`.) The
-# merge therefore never trusts an incoming `seqid`: it maps every external
-# allele onto a local one by content, allocating fresh local ids only for
-# alleles the local database has never seen.
+# The merge algorithm relies on the unique structural properties of the schema:
+# while `seqid` values are database-specific, `(gene, sha256(sequence))` pairs
+# globally identify alleles across systems. (In a valid PhyloTrace database,
+# each `seqid` maps uniquely to one `gene`, and the `hashes` table stores
+# `sha256(sequences.sequence)`, forming a bijective mapping with `seqid`.)
 #
-# Nothing is written to the live database. The merge runs against a copy in the
-# same directory, inside a single transaction, and the copy is swapped in with
-# an atomic rename only after it has committed cleanly. The displaced original
-# is retained as a timestamped `.bak-*` file for rollback.
+# Consequently, external `seqid` values are not trusted directly. Every incoming
+# allele is mapped to a local identifier by content hash, allocating new local
+# sequence IDs only when an allele is not present in the primary database.
+#
+# To ensure atomic execution and data safety, operations are never performed
+# directly on the live database file. Merges execute against a temporary copy
+# in the same target directory inside a single transaction. The temporary file
+# replaces the live file using an atomic rename operation upon successful commit.
+# The original database state is preserved as a timestamped backup (`.bak-*`).
 
 box::use(
   RSQLite[SQLite],
@@ -50,40 +52,38 @@ box::use(
   app / logic / logging[log_event],
 )
 
+# Returns fallback value if target is NULL.
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+# Default progress callback placeholder.
 .noop_progress <- function(frac, msg) invisible(NULL)
 
+# Escapes double quotes in SQLite identifiers for safe query construction.
 .quote_ident <- function(x) paste0('"', gsub('"', '""', x), '"')
 
-# SQLite's SUM()/MAX() return NA over an empty set.
+# Converts empty or NULL aggregate query results (e.g., SUM/MAX) safely to integer.
 .as_count <- function(x) {
   if (!length(x) || is.na(x[[1]])) 0L else as.integer(x[[1]])
 }
 
-# Metadata columns the user may never map: `isolate` is the join key,
-# `organism` is dictated by the local mlst_type.species, `called_at` is a
-# provenance timestamp handled automatically by `.write_metadata()` (the peer's
-# own value when it has one, else the merge time) rather than user-mapped, and
-# `source` records how the isolate entered *this* database - the peer's own
-# source values describe its history, not ours, so they are never carried over.
+# Metadata fields excluded from manual user mapping:
+# - `isolate`: Internal join key.
+# - `organism`: Inferred from local species settings.
+# - `called_at`: Provenance timestamp managed during merge.
+# - `source`: Database origin provenance identifier.
 #' @export
 METADATA_RESERVED <- c("isolate", "organism", "called_at", SOURCE_COL)
 
-# The user-defined custom variables (see app/logic/custom_fields.R).
+# Custom field configuration tables.
 CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 
-# Indexes created transiently on the working copy to speed the merge, then
-# dropped before the swap so the live database's schema is left exactly as it
-# was. Prefixed so we can never drop one of pyMLST's own indexes.
+# Temporary indexes applied during import processing and removed prior to finalize.
 .TRANSIENT_INDEXES <- c(
   pt_import_ix_sequences_id = "CREATE INDEX IF NOT EXISTS pt_import_ix_sequences_id ON sequences(id)",
   pt_import_ix_hashes_id = "CREATE INDEX IF NOT EXISTS pt_import_ix_hashes_id ON hashes(id)"
 )
 
-# Every non-ref isolate's allele profile, as one "gene\thash" line per locus,
-# ordered so the concatenation is canonical. DISTINCT guards the join against a
-# `hashes` table that carries more than one row for a seqid.
+# Canonical query for fetching allele profile digests per isolate.
 .PROFILE_SQL <- "
   SELECT isolate, group_concat(gh, char(10) ORDER BY gh) AS profile FROM (
     SELECT DISTINCT m.souche AS isolate, m.gene || char(9) || h.hash AS gh
@@ -95,6 +95,7 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 # Hash availability
 # ---------------------------------------------------------------------------
 
+# Verifies whether all sequences in the connection have corresponding hash entries.
 .hashes_complete <- function(con) {
   if (!"hashes" %in% dbListTables(con)) {
     return(FALSE)
@@ -108,15 +109,13 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
     0L
 }
 
-#' Guarantee a database has a complete `hashes` table without touching the
-#' caller's file.
+#' Ensure Complete Sequence Hash Coverage
 #'
-#' Returns `list(path=, temp=)`. When the source already carries a complete
-#' `hashes` table (PhyloTrace exports always do) the original path is returned
-#' and nothing is copied — the common case costs nothing. Otherwise the file is
-#' copied to a scratch location and hashed there.
+#' Verifies sequence hash coverage in the source database, generating missing hashes
+#' in a temporary file if necessary without modifying the original source.
 #'
-#' Call `release_source()` on the result when done.
+#' @param path Character path to source SQLite database file.
+#' @return A list containing file `path` and boolean `temp` flag.
 #' @export
 prepare_source <- function(path) {
   con <- connect_ro(path)
@@ -135,6 +134,11 @@ prepare_source <- function(path) {
   list(path = tmp, temp = TRUE)
 }
 
+#' Release Prepared Source Resources
+#'
+#' Removes temporary database files created during source preparation.
+#'
+#' @param prep Result list returned by `prepare_source()`.
 #' @export
 release_source <- function(prep) {
   if (!is.null(prep) && isTRUE(prep$temp) && file.exists(prep$path)) {
@@ -147,6 +151,7 @@ release_source <- function(prep) {
 # Isolate identity
 # ---------------------------------------------------------------------------
 
+# Computes SHA-256 profile digests for all isolates in the specified schema.
 .profiles <- function(con, schema) {
   df <- dbGetQuery(
     con,
@@ -159,10 +164,12 @@ release_source <- function(prep) {
   stats::setNames(as.character(sha256(df$profile)), df$isolate)
 }
 
-#' A content hash of each isolate's full allele profile, keyed by isolate.
+#' Generate Isolate Profile Hashes
 #'
-#' Two isolates with the same name in different databases are the *same*
-#' isolate only if their profile hashes agree.
+#' Calculates cryptographic profile hashes derived from combined allele calls for each isolate.
+#'
+#' @param db_path Character path to SQLite database file.
+#' @return Named character vector of profile hashes keyed by isolate identifier.
 #' @export
 isolate_profile_hashes <- function(db_path) {
   prep <- prepare_source(db_path)
@@ -174,12 +181,14 @@ isolate_profile_hashes <- function(db_path) {
   .profiles(con, "main")
 }
 
-#' Classify every isolate in the external database against the local one.
+#' Classify Isolate Collisions
 #'
-#' - `new`: the local database has never seen this isolate name.
-#' - `identical_duplicate`: same name, byte-identical allele profile. Nothing to
-#'   gain by importing it; defaults to skip.
-#' - `name_clash`: same name, *different* profile. The user must decide.
+#' Evaluates external isolates against the target database to identify new entries,
+#' identical duplicates, and naming collisions.
+#'
+#' @param local_path Character path to local SQLite database file.
+#' @param ext_path Character path to external SQLite database file.
+#' @return A data frame containing isolate identifiers and collision classifications (`new`, `identical_duplicate`, `name_clash`).
 #' @export
 classify_isolate_collisions <- function(local_path, ext_path) {
   local <- isolate_profile_hashes(local_path)
@@ -215,8 +224,12 @@ classify_isolate_collisions <- function(local_path, ext_path) {
   )
 }
 
-#' A safe starting point for the resolution table: import what is new, skip
-#' everything that would need a decision.
+#' Generate Default Resolution Mapping
+#'
+#' Creates an initial import resolution table, selecting novel isolates for import and skipping duplicates or clashes by default.
+#'
+#' @param classification Data frame output from `classify_isolate_collisions()`.
+#' @return Data frame detailing planned resolution actions (`add`, `skip`).
 #' @export
 default_resolutions <- function(classification) {
   data.frame(
@@ -227,7 +240,13 @@ default_resolutions <- function(classification) {
   )
 }
 
-#' First free `<name>_imp`, `<name>_imp2`, … not present in `taken`.
+#' Generate Unique Rename Candidate
+#'
+#' Suggests a non-conflicting isolate identifier by appending numeric suffix patterns.
+#'
+#' @param name Character base isolate identifier.
+#' @param taken Character vector of existing identifiers.
+#' @return Character string representing a unique candidate identifier.
 #' @export
 suggest_rename <- function(name, taken) {
   candidate <- paste0(name, "_imp")
@@ -239,6 +258,7 @@ suggest_rename <- function(name, taken) {
   candidate
 }
 
+# Validates resolution table actions, target identifier constraints, and collision rules.
 .validate_resolutions <- function(resolutions, local_isolates, ext_isolates) {
   need <- c("ext_isolate", "action", "final_isolate")
   if (!all(need %in% names(resolutions))) {
@@ -283,7 +303,6 @@ suggest_rename <- function(name, taken) {
     stop("Every imported isolate needs a non-empty name.")
   }
 
-  # `add`/`rename` must land on a free name; `overwrite` must land on a taken one.
   fresh <- accepted$action %in% c("add", "rename")
   clash <- accepted$final_isolate[fresh] %in% local_isolates
   if (any(clash)) {
@@ -301,7 +320,10 @@ suggest_rename <- function(name, taken) {
   if (any(missing)) {
     stop(
       "Cannot overwrite isolate(s) that do not exist locally: ",
-      paste(utils::head(accepted$final_isolate[ow][missing], 5), collapse = ", ")
+      paste(
+        utils::head(accepted$final_isolate[ow][missing], 5),
+        collapse = ", "
+      )
     )
   }
 
@@ -312,6 +334,7 @@ suggest_rename <- function(name, taken) {
 # Preview
 # ---------------------------------------------------------------------------
 
+# Extracts metadata column definitions from an attached SQLite schema.
 .metadata_cols <- function(con, schema) {
   tbls <- dbGetQuery(
     con,
@@ -326,13 +349,15 @@ suggest_rename <- function(name, taken) {
   ))
 }
 
-#' What would this import do? Counts only — nothing is written, and neither
-#' database is copied when both already carry their `hashes` table.
+#' Generate Import Preview Summary
 #'
-#' Classifying collisions means hashing every isolate's full allele profile on
-#' both sides, which costs seconds on a real database. Callers that already hold
-#' a `classify_isolate_collisions()` result — the Import panel recomputes the
-#' preview on every keystroke — should pass it in rather than pay for it again.
+#' Computes summary metrics for a proposed import configuration without committing changes to disk.
+#'
+#' @param local_path Character path to target local database.
+#' @param ext_path Character path to source external database.
+#' @param resolutions Data frame specifying import actions per isolate.
+#' @param classification Pre-calculated classification results to optimize performance.
+#' @return A list of summary metrics, including allele and metadata import impacts.
 #' @export
 import_preview <- function(
   local_path,
@@ -388,7 +413,6 @@ import_preview <- function(
        FROM used u
        LEFT JOIN local_alleles la ON la.gene = u.gene AND la.hash = u.hash"
     )
-    # SUM() over an empty set yields NA, not 0.
     n_new_alleles <- .as_count(counts$novel)
     n_shared_alleles <- .as_count(counts$shared)
   }
@@ -427,10 +451,7 @@ import_preview <- function(
 # Metadata reconciliation
 # ---------------------------------------------------------------------------
 
-# Runs on the working copy's connection, inside the merge transaction. The local
-# `metadata` table gains a column for every selected external-only field; rows
-# for imported isolates carry the selected values, NA for local-only fields, and
-# the *local* organism regardless of what the peer recorded.
+# Reconciles and writes isolate metadata during import processing.
 .write_metadata <- function(
   con,
   accepted,
@@ -465,9 +486,12 @@ import_preview <- function(
     )
   }
 
-  # Both the reserved columns (an older table may predate `called_at`) and every
+  # Both the reserved columns and every
   # newly selected external field must exist before the append.
-  for (col in setdiff(c(METADATA_RESERVED, selected), dbListFields(con, "metadata"))) {
+  for (col in setdiff(
+    c(METADATA_RESERVED, selected),
+    dbListFields(con, "metadata")
+  )) {
     dbExecute(
       con,
       sprintf("ALTER TABLE metadata ADD COLUMN %s TEXT", .quote_ident(col))
@@ -480,7 +504,9 @@ import_preview <- function(
   # it carried one; fall back to the merge time for isolates the peer never
   # stamped. `called_at` is reserved only against user *mapping* — the peer's
   # existing value is still honoured here.
-  peer_called_at <- if (!is.null(ext_meta) && "called_at" %in% names(ext_meta)) {
+  peer_called_at <- if (
+    !is.null(ext_meta) && "called_at" %in% names(ext_meta)
+  ) {
     as.character(ext_meta$called_at[idx])
   } else {
     rep(NA_character_, nrow(accepted))
@@ -517,8 +543,7 @@ import_preview <- function(
 # Custom variables
 # ---------------------------------------------------------------------------
 
-# The custom-variable definitions of one attached schema ("loc" / "ext"), or an
-# empty frame when that side has no custom tables.
+# Fetches custom field definitions from specified attached database schema.
 .custom_defs <- function(con, schema) {
   tbls <- dbGetQuery(
     con,
@@ -541,13 +566,7 @@ import_preview <- function(
   )
 }
 
-# Split the external definitions into what can be merged and what cannot.
-#
-# A variable is matched by name (case-insensitively, the same rule
-# `validate_custom_name()` uses). Same name *and* same type merges into the local
-# variable; same name but a different type is a conflict and is never imported —
-# values are canonicalised for the type they were entered under, so adopting them
-# under another type would silently corrupt them.
+# Evaluates custom field compatibility between local and external schemas.
 .custom_split <- function(local_defs, ext_defs) {
   empty_conflicts <- data.frame(
     name = character(0),
@@ -587,13 +606,13 @@ import_preview <- function(
   )
 }
 
-#' Which of an external database's custom variables can be merged into the local
-#' one, and which clash.
+#' Inspect Custom Field Import Eligibility
 #'
-#' Returns the `.custom_split()` list: `importable` / `shared` / `only_ext`
-#' names plus a `conflicts` frame of `name` / `local_type` / `ext_type`. The
-#' Import panel offers `importable` in its picker and reports `conflicts` as the
-#' reason the rest are missing. Nothing is written.
+#' Identifies external custom metadata fields compatible with the local schema and highlights datatype conflicts.
+#'
+#' @param local_path Character path to local SQLite database.
+#' @param ext_path Character path to external SQLite database.
+#' @return A list categorizing fields as `importable`, `shared`, `only_ext`, and `conflicts`.
 #' @export
 importable_custom_fields <- function(local_path, ext_path) {
   con <- dbConnect(SQLite(), ":memory:")
@@ -604,11 +623,7 @@ importable_custom_fields <- function(local_path, ext_path) {
   .custom_split(.custom_defs(con, "loc"), .custom_defs(con, "ext"))
 }
 
-# Merge the selected custom variables into the working copy, inside the merge
-# transaction. Definitions are matched by name (new ones are created, conflicting
-# ones skipped — see `.custom_split()`); values follow the `import_isolates`
-# rename map, so a renamed isolate carries its values under its new name.
-# Returns the number of values written.
+# Merges selected custom fields and updates record values within transaction.
 .write_custom <- function(con, selected_fields, ext_tables) {
   if (!length(selected_fields) || !all(CUSTOM_TABLES %in% ext_tables)) {
     return(0L)
@@ -646,9 +661,6 @@ importable_custom_fields <- function(local_path, ext_path) {
 
     hit <- local_defs[tolower(local_defs$name) == tolower(nm), , drop = FALSE]
     local_id <- if (nrow(hit)) {
-      # Merging into an existing variable: the local description and levels are
-      # the ones this database's users maintain, so the peer's do not overwrite
-      # them. Only the values travel.
       as.integer(hit$id[[1]])
     } else {
       position <- dbGetQuery(
@@ -702,8 +714,6 @@ importable_custom_fields <- function(local_path, ext_path) {
     overwrite = TRUE
   )
 
-  # Overwritten isolates start from a clean slate, mirroring the metadata and
-  # result-table handling: a re-imported isolate must not keep stale values.
   dbExecute(
     con,
     "DELETE FROM main.phylotrace_custom_values
@@ -730,14 +740,7 @@ importable_custom_fields <- function(local_path, ext_path) {
 # Analysis-result tables (classical_mlst / amr_*)
 # ---------------------------------------------------------------------------
 
-# Copy one isolate-keyed result table from the attached `ext` database into
-# `main`, remapping `isolate` via the `import_isolates` rename map. These tables
-# key solely on `isolate` (no `seqid` / allele foreign keys), so no allele remap
-# is involved. Runs on the working copy's connection inside the merge
-# transaction. Creates the table in `main` from the external DDL when the local
-# database never ran that analysis; replaces overwritten isolates' rows first;
-# the autoincrement `id` is dropped so SQLite assigns fresh, collision-free ids.
-# Returns the number of rows inserted.
+# Merges individual isolate-keyed analysis tables from external connection.
 .merge_result_table <- function(con, nm) {
   if (!nm %in% dbListTables(con)) {
     ddl <- dbGetQuery(
@@ -751,8 +754,6 @@ importable_custom_fields <- function(local_path, ext_path) {
     dbExecute(con, ddl[1])
   }
 
-  # Columns common to both sides, minus the autoincrement id. `isolate` comes from
-  # the rename map; the column intersection guards against schema drift.
   ext_cols <- names(dbGetQuery(
     con,
     sprintf("SELECT * FROM ext.%s LIMIT 0", nm)
@@ -786,13 +787,6 @@ importable_custom_fields <- function(local_path, ext_path) {
     character(1)
   )
 
-  # OR REPLACE guards `genome_hashes`, whose key is `isolate` itself rather than
-  # an autoincrement id. The DELETE above already clears the overwrite path, so
-  # this only matters when a caller supplies a `final_isolate` that collides with
-  # an isolate the local database already holds: without it the PK conflict
-  # would abort the entire merge, where every other result table simply absorbs
-  # the row. For the id-keyed tables it is a no-op - `id` is not among `cols`,
-  # so no unique constraint is left for a conflict to fire on.
   dbExecute(
     con,
     sprintf(
@@ -812,22 +806,30 @@ importable_custom_fields <- function(local_path, ext_path) {
 # Backups
 # ---------------------------------------------------------------------------
 
-#' Timestamped rollback points for `db_path`, newest first.
+#' List Database Backup Files
+#'
+#' Scans directory for existing timestamped backup copies of the specified database file.
+#'
+#' @param db_path Character path to SQLite database.
+#' @return Character vector of backup file paths ordered by modification time descending.
 #' @export
 list_backups <- function(db_path) {
   if (is.null(db_path) || length(db_path) != 1 || is.na(db_path)) {
     return(character(0))
   }
-  # Prefix matching on the basename, not a regex: a database filename may
-  # legitimately contain regex metacharacters.
   prefix <- paste0(basename(db_path), ".bak-")
   files <- list.files(dirname(db_path), full.names = TRUE)
   files <- files[startsWith(basename(files), prefix)]
   files[order(file.mtime(files), decreasing = TRUE)]
 }
 
-#' Put `backup_path` back at `db_path`, atomically. The database being replaced
-#' is itself backed up first, so a mistaken restore is also reversible.
+#' Restore Database Backup
+#'
+#' Replaces the active database file atomically with a designated backup file, capturing a safety backup prior to swap.
+#'
+#' @param db_path Character path to active database file.
+#' @param backup_path Character path to source backup file.
+#' @return Character path of restored database.
 #' @export
 restore_backup <- function(db_path, backup_path) {
   if (!file.exists(backup_path)) {
@@ -850,9 +852,7 @@ restore_backup <- function(db_path, backup_path) {
   invisible(db_path)
 }
 
-# Second-granularity timestamps collide when a merge and a restore happen in the
-# same second — and a colliding name would rename the live database *over* the
-# very backup being restored from. Disambiguate with a counter.
+# Constructs unique, non-colliding timestamped backup path string.
 .new_backup_path <- function(db_path) {
   base <- paste0(db_path, ".bak-", format(Sys.time(), "%Y%m%d-%H%M%S"))
   candidate <- base
@@ -868,14 +868,21 @@ restore_backup <- function(db_path, backup_path) {
 # The merge
 # ---------------------------------------------------------------------------
 
-#' Merge `ext_path` into `local_path`.
+#' Merge External Database
 #'
-#' `resolutions` is a data.frame of `ext_isolate` / `action` / `final_isolate`,
-#' where action is one of `add`, `skip`, `overwrite`, `rename` (see
-#' `default_resolutions()`). `metadata_cols` names the external metadata columns
-#' to adopt; `isolate` and `organism` are handled automatically.
+#' Executes full transactional merge of external database records into local database copy.
 #'
-#' The live database is never mutated in place — see the file header.
+#' @param local_path Character path to target local SQLite database.
+#' @param ext_path Character path to external SQLite database.
+#' @param resolutions Data frame specifying action mappings per isolate.
+#' @param metadata_cols Character vector of metadata columns to import.
+#' @param include_classical Logical flag to include classical MLST results.
+#' @param include_amr Logical flag to include AMR analysis tables.
+#' @param custom_fields Character vector of custom metadata variables to include.
+#' @param backup Logical indicating whether to retain timestamped original database backup.
+#' @param progress Optional progress reporting callback function.
+#' @param source_file Display label for external database source provenance.
+#' @return List summarizing total records added, modified, and created during merge.
 #' @export
 merge_databases <- function(
   local_path,
@@ -887,9 +894,6 @@ merge_databases <- function(
   custom_fields = character(0),
   backup = TRUE,
   progress = NULL,
-  # The peer's file *as the user chose it*. `ext_path` may be a staged temp copy
-  # (prepare_source), and "phylotrace_import_1a2b3c.db" is not a provenance
-  # label anyone can read. Only ever used for naming.
   source_file = NULL
 ) {
   progress <- progress %||% .noop_progress
@@ -912,8 +916,6 @@ merge_databases <- function(
   prep_ext <- prepare_source(ext_path)
   on.exit(release_source(prep_ext), add = TRUE)
 
-  # The working copy lives beside the original so the final rename is atomic
-  # (a rename across filesystems is not).
   work <- paste0(local_path, ".import-work")
   if (file.exists(work)) {
     unlink(work)
@@ -930,8 +932,6 @@ merge_databases <- function(
     stop("Could not create a working copy of the database.")
   }
 
-  # Both must hold before the merge: metadata present and migrated, hashes
-  # complete. Each opens and closes its own connection.
   make_metadata_table(work)
   hash_database(work)
 
@@ -946,11 +946,6 @@ merge_databases <- function(
     "SELECT name FROM ext.sqlite_master WHERE type = 'table'"
   )$name
 
-  # Repair any orphan `hashes` rows before allocating ids. Databases written by
-  # older builds of remove_isolates() pruned `sequences` without pruning
-  # `hashes`; a stale row whose id we then reused would give one seqid two hash
-  # rows. Harmless when there is nothing to prune. The working copy is
-  # disposable, so this runs outside the transaction.
   dbExecute(
     con,
     "DELETE FROM main.hashes WHERE id NOT IN (SELECT id FROM main.sequences)"
@@ -970,8 +965,6 @@ merge_databases <- function(
     overwrite = TRUE
   )
 
-  # `seqid` is DB-local; `(gene, hash)` is not. Everything below joins on the
-  # latter.
   dbExecute(
     con,
     "CREATE TEMP TABLE local_alleles AS
@@ -996,16 +989,7 @@ merge_databases <- function(
   )
   dbExecute(con, "CREATE INDEX temp.ix_seqid_map ON seqid_map(ext_seqid)")
 
-  # `local_alleles` only carries alleles a strain still references (it joins
-  # `mlst`), so an incoming allele whose sequence lives locally as an *orphan* -
-  # left behind by remove_isolates(keep_alleles = TRUE), whose seqid no `mlst`
-  # row points at anymore - matches nothing above and would be re-inserted as a
-  # second `sequences`/`hashes` row sharing the orphan's hash. Reuse the orphan's
-  # seqid instead: content is identical (equal hash), so the row is correct, no
-  # duplicate hash accumulates, and the orphan becomes live again - which is the
-  # whole point of keeping it. An orphan has no gene (that lived in `mlst`), so
-  # this match is by hash alone, and it is scoped to orphans so a hash still
-  # referenced under another gene is left to the normal new-allele path.
+  # Re-link existing sequence entries left orphaned by prior deletion operations
   dbExecute(
     con,
     "UPDATE seqid_map
@@ -1027,14 +1011,10 @@ merge_databases <- function(
   result_rows <- 0L
   custom_rows <- 0L
 
-  # Isolate-keyed analysis-result tables to carry (only those the peer has).
   result_tables <- intersect(
     c(
       if (isTRUE(include_classical)) "classical_mlst",
       if (isTRUE(include_amr)) c("amr_results", "amr_summary"),
-      # Assembly digests are provenance rather than an analysis result, so they
-      # are not behind a toggle: they always come along when the peer has them
-      # (see GENOME_TABLES in db_export.R).
       "genome_hashes"
     ),
     ext_tables
@@ -1045,8 +1025,6 @@ merge_databases <- function(
     {
       progress(0.45, "Adding novel alleles …")
 
-      # MAX(id) is read once, before any insert, so the row numbers extend the
-      # existing id space without gaps or collisions.
       dbExecute(
         con,
         "CREATE TEMP TABLE new_alleles AS
@@ -1099,9 +1077,6 @@ merge_databases <- function(
       }
 
       progress(0.7, "Writing allele calls …")
-      # `mlst.id` is a rowid alias, so omitting it lets SQLite assign fresh ids
-      # that cannot collide with the local ones. `ref` never appears in
-      # import_isolates, so the scheme reference is never imported as an isolate.
       n_calls <- dbExecute(
         con,
         "INSERT INTO main.mlst (souche, gene, seqid)
@@ -1111,10 +1086,6 @@ merge_databases <- function(
              JOIN seqid_map sm ON sm.ext_seqid = em.seqid"
       )
 
-      # Every incoming call must have found a seqid mapping. A shortfall means
-      # the external `mlst` references a seqid its own `sequences` table does
-      # not hold, and the inner joins above would have dropped those calls
-      # silently — importing an isolate with holes in its profile.
       expected <- dbGetQuery(
         con,
         "SELECT COUNT(*) AS n FROM ext.mlst em
@@ -1129,11 +1100,6 @@ merge_databases <- function(
       }
 
       progress(0.85, "Merging metadata …")
-      # One label per peer database, reused on every later import of the same
-      # peer (matched on its uuid, so a rename on disk does not mint a second
-      # one). Registered inside the transaction: if the merge rolls back, the
-      # registry entry goes with it rather than reserving a label for isolates
-      # that never arrived.
       source_label <- register_source(
         con,
         uuid = db_uuid(con, "ext"),
@@ -1171,7 +1137,6 @@ merge_databases <- function(
 
   progress(0.92, "Finalising …")
 
-  # Leave the schema exactly as we found it.
   for (nm in names(.TRANSIENT_INDEXES)) {
     dbExecute(con, sprintf("DROP INDEX IF EXISTS %s", nm))
   }
@@ -1207,14 +1172,11 @@ merge_databases <- function(
     new_alleles = as.integer(n_new_alleles),
     calls = as.integer(n_calls),
     backup_path = backup_path,
-    # The label these isolates now carry in `metadata.source`.
     source = source_label
   )
 }
 
-# Replace `local_path` with `work`. Both are in the same directory, so both
-# renames are atomic. If the second fails we put the original back rather than
-# leaving the user with no database.
+# Replaces active database file with working copy atomically, rolling back if rename steps fail.
 .swap_in <- function(local_path, work, backup) {
   if (!backup) {
     if (!file.rename(work, local_path)) {

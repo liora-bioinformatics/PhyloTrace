@@ -1,36 +1,7 @@
 # app/logic/amr_plot.R
 #
-# AMR-screening data reshaping and plot building for app/view/visualization_amr.R.
-# Follows the split every other engine uses (app/logic/phylo.R for the MST,
-# app/logic/tree_plot.R for the Tree, app/logic/epi_plot.R for the Epi curve):
-# the database reads, the matrix reshaping and the plot construction live here so
-# the view module only wires reactives to them, and the pure parts stay
-# unit-testable without Shiny.
-#
-# Two tables feed this, both written by app/logic/amr.R at typing time and both
-# keyed on `isolate` (the same key as `metadata`; pyMLST's `mlst` spells it `souche`):
-#
-#   * amr_results  - one row per detected element. The granular source: gene
-#                    symbol, element type (AMR / VIRULENCE / STRESS), AMRFinder's
-#                    drug class and subclass, and the % identity / coverage of
-#                    the hit. Drives the gene heatmap and the gene-level
-#                    prevalence bars.
-#   * amr_summary  - abritamr's curated per-isolate rollup, tidy (isolate,
-#                    section, drug_class, genes) with section in
-#                    matches / partials / virulence. Drives the drug-class matrix
-#                    and the class-level prevalence bars. `matches` is a
-#                    confident call, `partials` a partial one - that distinction
-#                    is the whole reason the class view is worth having next to
-#                    the gene heatmap.
-#
-# Both tables are created lazily (a database typed before AMR screening existed,
-# or with screening unavailable for its species, simply has neither), so every
-# reader here returns a correctly-shaped empty frame rather than failing.
-#
-# The two matrix views are ComplexHeatmap heatmaps and the prevalence view is a
-# plain ggplot2 bar chart, but all three reach the view module as *ggplot*
-# objects (see `amr_as_ggplot`), so there is one on-screen render path, one
-# export path and one thumbnail path - exactly the arrangement epi_plot.R has.
+# Data transformation and plot construction for AMR screening outputs.
+# Generates ggplot2-compatible objects for heatmap and prevalence visualizations.
 
 box::use(
   ComplexHeatmap,
@@ -59,21 +30,13 @@ box::use(
   stats[dist, hclust, setNames],
 )
 box::use(
-  # The palette resolver and the cardinality-aware scale filter are not epi
-  # curve specific - they map any set of category levels onto a ColorBrewer /
-  # viridis scale and drop the palettes too narrow to carry them. Reused rather
-  # than re-implemented; see their comments in epi_plot.R for the reasoning.
   app / logic / epi_plot[epi_fit_scale, epi_palette, epi_scale_choices],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
-# --- vocabulary --------------------------------------------------------------
+# --- Constants & Vocabulary --------------------------------------------------
 
-# AMRFinderPlus element types, in the order they should read on a plot:
-# acquired resistance first, then virulence, then the stress/metal/biocide
-# elements `--plus` adds. Exported so the view's filter offers exactly these
-# rather than whatever the loaded database happens to contain.
 #' @export
 AMR_ELEMENT_TYPES <- c(
   Resistance = "AMR",
@@ -81,8 +44,6 @@ AMR_ELEMENT_TYPES <- c(
   Stress = "STRESS"
 )
 
-# abritamr's three summary sections. `matches` is a confident call, `partials` a
-# partial one; `virulence` is a separate axis rather than a confidence level.
 #' @export
 AMR_SECTIONS <- c(
   Matches = "matches",
@@ -90,21 +51,15 @@ AMR_SECTIONS <- c(
   Virulence = "virulence"
 )
 
-# Cell states of the drug-class matrix, ordered by increasing confidence. The
-# matrix stores the rank; these are what the heatmap draws and legends.
 #' @export
 AMR_CLASS_STATES <- c("Absent", "Partial", "Match")
 
-# Cell states of the gene heatmap.
 #' @export
 AMR_PRESENCE_STATES <- c("Absent", "Present")
 
-# Group label for genes AMRFinderPlus reported without a drug class.
 #' @export
 AMR_UNCLASSIFIED <- "Unclassified"
 
-# Linkage methods offered for the dendrograms. "average" is master's default and
-# stays the default here.
 #' @export
 AMR_CLUSTER_METHODS <- c(
   Average = "average",
@@ -114,8 +69,6 @@ AMR_CLUSTER_METHODS <- c(
   Centroid = "centroid"
 )
 
-# Distance measures. Binary (Jaccard) is the right default for presence/absence
-# and is what master clustered on.
 #' @export
 AMR_CLUSTER_DISTANCES <- c(
   Binary = "binary",
@@ -123,9 +76,6 @@ AMR_CLUSTER_DISTANCES <- c(
   Manhattan = "manhattan"
 )
 
-# Re-exported so the view can restrict a colour-scale picker to the palettes
-# that can actually carry the number of categories currently mapped, without
-# importing epi_plot itself.
 #' @export
 amr_scale_choices <- function(n) epi_scale_choices(n)
 
@@ -135,7 +85,7 @@ amr_fit_scale <- function(scale, n) epi_fit_scale(scale, n)
 #' @export
 amr_palette <- function(cats, scale) epi_palette(cats, scale)
 
-# --- database reads ----------------------------------------------------------
+# --- Database Interface ------------------------------------------------------
 
 .EMPTY_HITS <- data.frame(
   isolate = character(0),
@@ -158,8 +108,6 @@ amr_palette <- function(cats, scale) epi_palette(cats, scale)
   stringsAsFactors = FALSE
 )
 
-# A readable database path, or FALSE. Every reader below opens its own
-# connection, so this is the one place the argument is validated.
 .usable_path <- function(db_path) {
   !is.null(db_path) &&
     length(db_path) == 1 &&
@@ -168,8 +116,7 @@ amr_palette <- function(cats, scale) epi_palette(cats, scale)
     file.exists(db_path)
 }
 
-#' Whether this database holds any AMR screening at all. Cheap (a table listing,
-#' no row read), so the view can gate its empty state on it before doing work.
+#' Checks if the target SQLite database contains AMR screening data.
 #' @export
 has_amr_data <- function(db_path) {
   if (!.usable_path(db_path)) {
@@ -184,12 +131,8 @@ has_amr_data <- function(db_path) {
   nrow(dbGetQuery(con, "SELECT 1 FROM amr_results LIMIT 1")) > 0
 }
 
-#' Every detected AMR / virulence / stress element, one row each.
-#'
-#' The granular half of the screen, straight out of `amr_results`. Returns an
-#' empty frame of the right shape when the database has no such table or it
-#' holds no rows, so callers never have to special-case a database that was
-#' typed without screening.
+#' Reads raw AMR/virulence/stress gene hits from the database.
+#' Returns an empty schema frame if data is missing.
 #' @export
 load_amr_hits <- function(db_path) {
   if (!.usable_path(db_path)) {
@@ -216,12 +159,8 @@ load_amr_hits <- function(db_path) {
   hits[!is.na(hits$gene_symbol) & nzchar(hits$gene_symbol), , drop = FALSE]
 }
 
-#' abritamr's curated per-isolate rollup, long.
-#'
-#' `load_amr()` in database_functions.R pivots this same table wide (one column
-#' per drug class, genes comma-joined) for the browse table. The plots need the
-#' tidy shape it was stored in, so this reads the table directly rather than
-#' un-pivoting that result.
+#' Reads curated drug-class and virulence summary sections (tidy format).
+#' Returns an empty schema frame if data is missing.
 #' @export
 load_amr_sections <- function(db_path) {
   if (!.usable_path(db_path)) {
@@ -248,15 +187,10 @@ load_amr_sections <- function(db_path) {
   ]
 }
 
-# --- filtering ---------------------------------------------------------------
+# --- Data Transformation & Filtering ----------------------------------------
 
-#' Restrict hits to the element types kept and to hits that clear the identity
-#' and coverage floors.
-#'
-#' AMRFinderPlus reports partial and low-identity hits alongside confident ones;
-#' `amr_results` keeps the percentages so the reader can decide. Rows whose
-#' percentages are NA (point mutations report neither) are kept - a floor is a
-#' filter on what was measured, not a demand that everything be measured.
+#' Filters gene hits based on element types and threshold limits (identity/coverage).
+#' Retains NA metrics (e.g., point mutations).
 #' @export
 filter_amr_hits <- function(
   hits,
@@ -282,9 +216,6 @@ filter_amr_hits <- function(
   hits[keep, , drop = FALSE]
 }
 
-# The drug class a gene belongs to, as one readable label. AMRFinderPlus leaves
-# `class` empty for virulence and for some stress elements, which is not an
-# error - those genes group under their element type instead.
 .gene_group <- function(element_type, class) {
   cls <- trimws(as.character(class %||% NA))
   if (!is.na(cls) && nzchar(cls)) {
@@ -298,12 +229,7 @@ filter_amr_hits <- function(
   AMR_UNCLASSIFIED
 }
 
-#' Per-gene metadata: element type and drug-class group, one row per gene, in
-#' the order given.
-#'
-#' This is the replacement for master's `get.gsMeta()`, which rebuilt the same
-#' gene -> class map out of a separate `AMR_Profile.rds` sidecar. Here it comes
-#' straight off the rows the genes were detected in.
+#' Generates a gene metadata mapping table containing element types and functional groups.
 #' @export
 amr_gene_meta <- function(hits, genes) {
   genes <- as.character(genes)
@@ -330,12 +256,7 @@ amr_gene_meta <- function(hits, genes) {
   )
 }
 
-#' Gene picker choices, grouped by drug class within element type.
-#'
-#' The same structure master built by hand as `choices_amr` / `choices_vir` /
-#' `choices_noclass`, except the grouping comes from `amr_results` rather than
-#' from the classification frames of an RDS sidecar. Groups and the genes inside
-#' them are sorted; understood by both `selectInput()` and `pickerInput()`.
+#' Formats gene list into grouped select input choices structured by element type and drug class.
 #' @export
 amr_gene_choices <- function(hits) {
   if (is.null(hits) || !nrow(hits)) {
@@ -344,9 +265,6 @@ amr_gene_choices <- function(hits) {
   genes <- sort(unique(hits$gene_symbol))
   meta <- amr_gene_meta(hits, genes)
 
-  # Element type leads the group label so the picker keeps resistance,
-  # virulence and stress genes visually apart even when two of them happen to
-  # carry the same class name.
   type_label <- vapply(
     meta$element_type,
     function(et) names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)] %||% et,
@@ -362,25 +280,10 @@ amr_gene_choices <- function(hits) {
   split(meta$gene, factor(label, levels = sort(unique(label))))
 }
 
-# --- matrices ----------------------------------------------------------------
+# --- Matrix Generators --------------------------------------------------------
 
-#' Isolates x genes presence/absence, as a 0/1 integer matrix.
-#'
-#' Rows are exactly `isolates`, in the order given, so an isolate that was
-#' screened and had no hits keeps its (all-zero) row - "we looked and found
-#' nothing" is a result, and dropping it would silently shrink the plot.
-#'
-#' Columns default to every gene these isolates carry, so leaving `genes` unset
-#' already excludes anything only ever detected elsewhere. `drop_empty` (TRUE by
-#' default) is what matters when the caller *does* pass a gene list - the view's
-#' picker offers every gene in the database, so narrowing the isolate selection
-#' would otherwise leave all-zero columns behind. Those carry no information,
-#' and - because binary distance between two all-zero vectors is 0/0 - they are
-#' also what would put NaNs into the column dendrogram.
-#'
-#' The per-gene metadata (element type, drug-class group) rides along in the
-#' `"genes"` attribute, in column order, for the heatmap's column split and its
-#' class annotation.
+#' Constructs a binary (0/1) presence/absence matrix (isolates x genes).
+#' Attaches gene metadata attributes to support heatmap annotations.
 #' @export
 amr_presence_matrix <- function(
   hits,
@@ -430,23 +333,12 @@ amr_presence_matrix <- function(
   mat
 }
 
-# Confidence rank of an abritamr section. Virulence is not a weaker call than a
-# match, it is a different question - so it ranks as a detection, and the
-# virulence groups are told apart by the column flag instead.
 .section_rank <- function(section) {
   ifelse(section == "partials", 1L, ifelse(is.na(section), 0L, 2L))
 }
 
-#' Isolates x drug-class matrix, cells ranked by call confidence.
-#'
-#' 0 = nothing reported, 1 = a partial hit only, 2 = a confident (`matches`) hit
-#' or a virulence group. Where an isolate has both a partial and a confident hit
-#' for the same class, the confident one wins - the cell answers "what is the
-#' best evidence here", and a partial alongside a match adds nothing.
-#'
-#' The `"virulence"` attribute flags the columns that only ever came from the
-#' virulence section, so the heatmap can split them off from the resistance
-#' classes.
+#' Constructs a ranked confidence matrix (0 = Absent, 1 = Partial, 2 = Match/Virulence).
+#' Takes the highest confidence rank when duplicate hits exist per cell.
 #' @export
 amr_class_matrix <- function(
   sections,
@@ -477,8 +369,6 @@ amr_class_matrix <- function(
     ri <- match(rows$isolate, isolates)
     ci <- match(rows$drug_class, classes)
     rank <- .section_rank(rows$section)
-    # pmax against what is already there: an isolate can appear in several
-    # sections for one class, and the strongest call is the one that shows.
     for (i in seq_along(ri)) {
       mat[ri[i], ci[i]] <- max(mat[ri[i], ci[i]], rank[i])
     }
@@ -503,15 +393,10 @@ amr_class_matrix <- function(
   mat
 }
 
-# --- prevalence --------------------------------------------------------------
+# --- Prevalence Calculations --------------------------------------------------
 
-#' How many of the selected isolates carry each gene (or each drug class).
-#'
-#' `level = "gene"` counts distinct isolates per gene symbol from `hits`, grouped
-#' by element type. `level = "class"` counts distinct isolates per drug class
-#' from `sections`, grouped by the strongest section that class was called in.
-#' Ranked by count and truncated to `top_n`, because a full screen easily
-#' reports several hundred genes and a bar chart of all of them is unreadable.
+#' Computes gene or drug-class occurrence counts across selected isolates.
+#' Returns top `top_n` items ordered by prevalence.
 #' @export
 amr_prevalence <- function(
   hits,
@@ -540,8 +425,6 @@ amr_prevalence <- function(
       return(empty)
     }
     item <- rows$drug_class
-    # The strongest section a class was called in labels its bar, so a class
-    # only ever seen as a partial does not read as a confident finding.
     group <- vapply(
       unique(item),
       function(cl) {
@@ -606,13 +489,9 @@ amr_prevalence <- function(
   out
 }
 
-# --- sizing ------------------------------------------------------------------
+# --- Plot Helpers & Annotations ----------------------------------------------
 
-#' Label size that keeps `n` row or column labels legible without overlapping.
-#'
-#' Master's step function, kept as the default. Unlike master, the view offers an
-#' override - the steps stop helping somewhere past a couple of hundred labels,
-#' and at that point the reader wants to make the call themselves.
+#' Calculates scalable font size dynamically based on label count.
 #' @export
 amr_fit_fontsize <- function(n) {
   breaks <- c(10, 20, 30, 50, 80, 120, 160, 200)
@@ -620,16 +499,8 @@ amr_fit_fontsize <- function(n) {
   sizes[[sum(n >= breaks) + 1L]]
 }
 
-# --- heatmaps ----------------------------------------------------------------
-
-# A dendrogram for one margin, or FALSE when clustering is off or impossible.
-#
-# The dendrograms are computed here rather than left to ComplexHeatmap because
-# both heatmaps hand it a *character* matrix (so the legend is a discrete
-# Present/Absent or Absent/Partial/Match key rather than a meaningless 0-1
-# ramp), and ComplexHeatmap can only cluster a numeric one. Binary distance
-# between two all-zero rows is 0/0 = NaN, which hclust refuses; two isolates
-# with nothing detected are identical, so those become 0.
+# Pre-computes explicit dendrogram objects for character matrices.
+# Replaces NaN distances (e.g., all-zero profiles) with 0 to prevent hclust errors.
 .dendrogram <- function(mat, enable, distance, method) {
   if (!isTRUE(enable) || nrow(mat) < 3) {
     return(FALSE)
@@ -639,7 +510,6 @@ amr_fit_fontsize <- function(n) {
   tryCatch(hclust(d, method = method), error = function(e) FALSE)
 }
 
-# Column-side dendrogram; same guard, transposed.
 .column_dendrogram <- function(mat, enable, distance, method) {
   if (!isTRUE(enable) || ncol(mat) < 3) {
     return(FALSE)
@@ -647,10 +517,6 @@ amr_fit_fontsize <- function(n) {
   .dendrogram(t(mat), TRUE, distance, method)
 }
 
-# The row colour strip: an isolate-level metadata field drawn beside the
-# heatmap. `values` is a named vector keyed by isolate (the view resolves it
-# from viz_metadata); isolates the field has nothing for read as "NA" rather
-# than being dropped.
 .row_annotation <- function(mat, values, label, scale, text_color, legend_gp) {
   if (is.null(values) || !length(values) || !nzchar(label %||% "")) {
     return(NULL)
@@ -676,7 +542,6 @@ amr_fit_fontsize <- function(n) {
   do.call(ComplexHeatmap$rowAnnotation, args)
 }
 
-# The drug-class colour strip above the heatmap's columns.
 .class_annotation <- function(groups, scale, text_color, legend_gp) {
   cats <- sort(unique(groups))
   cols <- amr_palette(cats, amr_fit_scale(scale, length(cats)))
@@ -692,7 +557,6 @@ amr_fit_fontsize <- function(n) {
   )
 }
 
-# Font gpars shared by every legend and title on a heatmap.
 .legend_gp <- function(text_color, size) {
   list(
     labels = gpar(col = text_color, fontsize = size),
@@ -700,12 +564,6 @@ amr_fit_fontsize <- function(n) {
   )
 }
 
-# How the columns are arranged. Splitting and clustering are mutually exclusive
-# on the column axis: ComplexHeatmap refuses a supplied dendrogram alongside a
-# categorical split (it has no way to reconcile one tree with several slices),
-# so the view offers this as a single "Group columns by" choice rather than two
-# controls that would silently fight. Returns the split factor (or NULL) and the
-# cluster argument.
 .column_layout <- function(mat, grouping, meta, distance, method) {
   none <- list(split = NULL, cluster = FALSE)
   if (!ncol(mat)) {
@@ -735,16 +593,9 @@ amr_fit_fontsize <- function(n) {
   )
 }
 
-#' The gene heatmap: isolates x genes, presence/absence.
-#'
-#' The direct successor to master's `gs_plot`. Returns a ComplexHeatmap object;
-#' pass it through `amr_as_ggplot()` to render or export it.
-#'
-#' `opts` (all optional): present_color, absent_color, text_color, grid_color,
-#' grid_width, column_grouping (element / class / cluster / none), cluster_rows,
-#' cluster_distance, cluster_method, dend_row, dend_col (cm), fontsize_row,
-#' fontsize_col, fontsize_title, fontsize_legend, show_row_names, dend_color,
-#' show_class_anno, class_scale, anno_values, anno_label, anno_scale.
+# --- Heatmap Builders --------------------------------------------------------
+
+#' Builds a ComplexHeatmap instance for gene presence/absence profiles.
 #' @export
 build_amr_heatmap <- function(mat, opts = list()) {
   meta <- attr(mat, "genes")
@@ -822,13 +673,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
   )
 }
 
-#' The drug-class matrix: isolates x drug class, cells by call confidence.
-#'
-#' Coarser than the gene heatmap and readable with far more isolates, and it is
-#' the only view that shows abritamr's partial/confident distinction. Same
-#' `opts` as `build_amr_heatmap()`, plus partial_color; the class columns carry
-#' no per-gene metadata, so column_grouping only offers cluster / none here (a
-#' virulence split is applied automatically when both kinds of column exist).
+#' Builds a ComplexHeatmap instance for drug-class call confidence matrices.
 #' @export
 build_amr_class_heatmap <- function(mat, opts = list()) {
   text_color <- opts$text_color %||% "#000000"
@@ -843,9 +688,6 @@ build_amr_class_heatmap <- function(mat, opts = list()) {
   )
 
   cluster_columns <- identical(opts$column_grouping, "cluster")
-  # Resistance classes and virulence groups answer different questions, so they
-  # are drawn as separate blocks whenever both are present - unless the reader
-  # asked for a column dendrogram, which cannot coexist with a split.
   split <- if (!cluster_columns && any(virulence) && !all(virulence)) {
     factor(
       ifelse(virulence, "Virulence", "Resistance"),
@@ -919,19 +761,9 @@ build_amr_class_heatmap <- function(mat, opts = list()) {
   )
 }
 
-#' Wrap a ComplexHeatmap as a ggplot.
-#'
-#' The heatmap is drawn once into a grob and adopted by ggplot2, so the two
-#' matrix views share the prevalence chart's render, export and thumbnail paths
-#' instead of each needing their own device handling (which is what master did,
-#' repeating a png/jpeg/svg/bmp block per format). The plot background is set
-#' here rather than on the device, exactly as epi_plot.R does and for the same
-#' reason: ggsave derives the device background from the theme, so the whole
-#' frame takes the chosen colour.
+#' Converts a ComplexHeatmap object into a standard ggplot2 object.
 #' @export
 amr_as_ggplot <- function(ht, background = "#FFFFFF") {
-  # ComplexHeatmap narrates its automatic colour mapping on stderr; the matrices
-  # here are discrete, so there is nothing for it to say that a user needs.
   opt <- ComplexHeatmap$ht_opt
   opt$message <- FALSE
   grob <- grid.grabExpr(
@@ -941,13 +773,9 @@ amr_as_ggplot <- function(ht, background = "#FFFFFF") {
     theme(plot.background = element_rect(fill = background, colour = NA))
 }
 
-# --- prevalence chart --------------------------------------------------------
+# --- Prevalence Chart --------------------------------------------------------
 
-#' Ranked prevalence bars, as a ggplot.
-#'
-#' The one view that answers "what is common in this collection" rather than
-#' "what does each isolate carry" - and the only one that stays readable when a
-#' screen turns up several hundred genes, because it is truncated to the top n.
+#' Builds a horizontal ggplot2 bar chart for AMR gene/class prevalence.
 #' @export
 build_amr_prevalence <- function(df, opts = list()) {
   text_color <- opts$text_color %||% "#000000"
@@ -957,8 +785,6 @@ build_amr_prevalence <- function(df, opts = list()) {
   cats <- sort(unique(df$group))
   cols <- amr_palette(cats, amr_fit_scale(opts$bar_scale, length(cats)))
 
-  # Ranked descending: coord_flip puts the first factor level at the bottom, so
-  # the levels go up the ranking for the largest bar to land at the top.
   df$item <- factor(df$item, levels = rev(df$item))
 
   ggplot(df, aes(x = .data$item, y = .data$n, fill = .data$group)) +
@@ -991,15 +817,9 @@ build_amr_prevalence <- function(df, opts = list()) {
     )
 }
 
-# --- export ------------------------------------------------------------------
+# --- Export Utilities --------------------------------------------------------
 
-#' Render a plot to a PNG at an exact pixel size, for the on-screen view.
-#'
-#' `width_px`/`height_px` are the CSS pixels the image occupies; `res` is the dpi
-#' the layout is measured against (keeping text at its intended point size) and
-#' `scale` multiplies the pixels actually rendered - pass the browser's
-#' devicePixelRatio so the image stays crisp on HiDPI screens while laying out
-#' identically. Mirrors `render_epi_png()`.
+#' Renders a plot object to a PNG file scaled for display.
 #' @export
 render_amr_png <- function(
   plot,
@@ -1020,8 +840,7 @@ render_amr_png <- function(
   )
 }
 
-#' Save the current plot in one of the offered formats. Mirrors
-#' `save_epi_plot()` / `save_tree_plot()`.
+#' Saves a plot object to disk using a specified format and resolution.
 #' @export
 save_amr_plot <- function(
   plot,

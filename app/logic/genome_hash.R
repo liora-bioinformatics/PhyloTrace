@@ -1,76 +1,7 @@
 # app/logic/genome_hash.R
 #
-# Content identity for the *assembly* an isolate was typed from.
-#
-# An isolate is identified by its name, which loop-pymlst.sh derives from the
-# assembly's file name (basename minus extension) and pyMLST stores as
-# `mlst.souche` - the one column in the schema still carrying pyMLST's French
-# spelling. Every PhyloTrace-owned table calls the same key `isolate`.
-#
-# Keying on a name makes identity a property of the file name rather than of the
-# data: renaming an assembly and re-typing it silently creates a second isolate,
-# and two different assemblies that happen to share a file name silently
-# collapse into one (pyMLST rejects the second as `StrainAlreadyPresent`, which
-# the UI reports as "Duplicate"). Neither is detectable today, because the
-# assembly itself is never stored.
-#
-# `genome_hashes` closes that gap by recording a content digest of the assembly
-# next to the isolate it produced. What it does and does not prove matters:
-#
-#   * A match proves the two runs consumed the byte-identical *assembly*.
-#   * A mismatch proves nothing at all. Re-assembling the same reads with a
-#     different assembler, assembler version or read depth yields a different
-#     digest AND a materially different allele profile, so "different digest"
-#     never means "different isolate".
-#
-# It is therefore a one-way alarm and a provenance record - not an isolate
-# identity, and never a uniqueness constraint. The isolate name stays the key
-# that `metadata` / `amr_*` / `classical_mlst` join on; the digest is one more
-# attribute hanging off it. For the *biological* "same isolate?" question at
-# cgMLST resolution, `isolate_profile_hashes()` in db_import.R remains the better
-# instrument - it is robust to reassembly, which this deliberately is not.
-#
-# ## The digest
-#
-# Hashing the file bytes would make the answer depend on FASTA headers, line
-# wrapping and contig order - none of which are part of the sequence. GA4GH
-# solved exactly this for refget: normalise a sequence by stripping whitespace
-# and restricting to A-Z (headers never participate), then digest it with
-# `sha512t24u` - SHA-512 truncated to 24 bytes, base64url-encoded.
-#
-# An assembly is a *collection* of sequences, which is refget Sequence
-# Collections (seqcol) territory. We deliberately do NOT compute seqcol's
-# top-level ("level 0") digest: only `names` and `sequences` are inherent there,
-# so renaming a contig changes it - and draft-assembly contig names are assembler
-# noise (`NODE_1_length_..._cov_...`). We compute seqcol's `sorted_sequences`
-# attribute instead, which exists precisely to give a name-invariant and
-# order-invariant content identity:
-#
-#   1. discard every header
-#   2. per record: strip whitespace, uppercase, keep A-Z   (refget normalisation)
-#   3. digest each record with sha512t24u
-#   4. sort the digests lexicographically
-#   5. digest the canonical JSON array of them with sha512t24u
-#
-# Step 5's canonical JSON (RFC-8785) needs no library here: the members are
-# base64url strings, whose alphabet holds no JSON-escapable character, so the
-# canonical form is exactly `["<d1>","<d2>",...]`.
-#
-# Each per-record digest is a genuine refget identifier - prefix it `ga4gh:SQ.`
-# and it is comparable against ENA, refget servers and VRS. That portability is
-# the point, and is why this module uses sha512t24u where the `hashes` table
-# (allele sequences) uses sha256 hex: the allele table speaks chewBBACA's dialect
-# because that is its ecosystem, and this one speaks refget's.
-#
-# There is no R implementation of seqcol (tooling is Python: refgenie/refget,
-# seqcolapi). We implement one narrow, fully specified attribute of it, not the
-# standard - hence the explicit `algorithm` column, so a future move to a true
-# seqcol digest becomes a new value rather than a schema migration.
-#
-# Reverse-complement / circularity canonicalisation (seqhash-style) is
-# deliberately out of scope: a re-run of the same pipeline is byte-identical
-# anyway, a genuine reassembly moves contig boundaries so orientation is moot,
-# and handling palindromes / IUPAC codes correctly is real risk for no gain.
+# Sequence normalization, GA4GH refget seqcol hashing, and genome assembly identity
+# verification against the database to trace provenance and flag duplicates.
 
 box::use(
   RSQLite[SQLite],
@@ -88,15 +19,11 @@ box::use(
   app / logic / logging[log_event],
 )
 
-# Bumped only if the construction above changes. Stored per row so a database
-# written by an older build stays interpretable.
+#' Algorithm specification identifier for GA4GH-compatible sorted sequence digests.
 #' @export
 GENOME_HASH_ALGORITHM <- "ga4gh-sorted-sequences-v1"
 
-# `isolate` is the primary key: one assembly per isolate, and re-typing REPLACEs
-# rather than accumulating. No file-name column - the isolate name already *is*
-# the file name, and a lab-internal path is exactly what should not ride along
-# in an export.
+#' Data definition language query for creating the `genome_hashes` table.
 #' @export
 GENOME_HASHES_DDL <- "CREATE TABLE IF NOT EXISTS genome_hashes (
        isolate TEXT PRIMARY KEY,
@@ -109,29 +36,29 @@ GENOME_HASHES_DDL <- "CREATE TABLE IF NOT EXISTS genome_hashes (
        hashed_at TEXT
      )"
 
-### The GA4GH digest: SHA-512, truncated to 24 bytes, base64url, 32 chars
-# Verified against the specification's test vector:
-#   sha512t24u(charToRaw("ACGT")) == "aKF498dAxcJAqme6QYQ7EZ07-fiw8Kw2"
-# i.e. `ga4gh:SQ.aKF498dAxcJAqme6QYQ7EZ07-fiw8Kw2`. base64url is plain base64
-# with "+/" mapped to "-_" and the "=" padding dropped (RFC 4648 §5).
+#' Compute GA4GH refget sha512t24u Sequence Digest
+#'
+#' Truncates a SHA-512 digest to 24 bytes and applies RFC 4648 §5 base64url encoding.
+#'
+#' @param x Character string or raw vector to digest.
+#' @return 32-character base64url string.
 #' @export
 sha512t24u <- function(x) {
   if (is.character(x)) {
     x <- charToRaw(paste(x, collapse = ""))
   }
-  gsub("=", "", chartr("+/", "-_", base64_encode(sha512(x)[1:24])), fixed = TRUE)
+  gsub(
+    "=",
+    "",
+    chartr("+/", "-_", base64_encode(sha512(x)[1:24])),
+    fixed = TRUE
+  )
 }
 
-# refget normalisation: strip every whitespace character, uppercase, keep only
-# A-Z. Soft-masked (lowercase) bases, `*`, `-` and stray digits therefore never
-# change the digest, and neither does line wrapping.
+# Refget normalization: Strip whitespace and filter non-alphabetic characters
 .normalize <- function(x) gsub("[^A-Z]", "", toupper(x))
 
-### Normalised sequences of a FASTA file, headers discarded
-# Returns one string per record, in file order (the caller sorts their digests).
-# Records that normalise to nothing are dropped: an empty record carries no
-# sequence, so it must not change the collection's identity. Anything with no
-# ">" line at all is not FASTA and yields character(0).
+# Parse FASTA records and discard headers, returning normalized sequence strings
 .read_fasta <- function(path) {
   lines <- readLines(path, warn = FALSE)
   header <- startsWith(lines, ">")
@@ -139,8 +66,6 @@ sha512t24u <- function(x) {
     return(character(0))
   }
 
-  # cumsum over the header flags numbers the records; body lines preceding the
-  # first header (group 0) belong to no record and are dropped.
   record <- cumsum(header)[!header]
   body <- lines[!header]
   body <- body[record > 0L]
@@ -159,20 +84,21 @@ sha512t24u <- function(x) {
   seqs[nzchar(seqs)]
 }
 
-# Streamed rather than read whole: openssl hashes a connection incrementally, but
-# leaves it open, so closing is on us.
+# Stream raw file bytes to generate standard sha256 checksum
 .file_sha256 <- function(path) {
   con <- file(path, "rb")
   on.exit(try(close(con), silent = TRUE), add = TRUE)
   as.character(sha256(con))
 }
 
-### Content digest of one assembly
-# Returns NULL when the file is missing or holds no usable FASTA record - the
-# caller treats that as "nothing to record", never as an error. `file_sha256` is
-# the plain sha256 of the file bytes: the audit anchor a bare `sha256sum` can
-# reproduce. When it differs but `genome_digest` matches, the file was
-# re-wrapped, re-headered or recompressed and the sequence content is untouched.
+#' Generate Order-Invariant Content Digest of Genome Assembly
+#'
+#' Normalizes sequence contigs, computes refget digests per contig, and hashes
+#' the canonical sorted JSON array of contig digests according to the
+#' `ga4gh-sorted-sequences-v1` specification.
+#'
+#' @param path File path to input FASTA assembly.
+#' @return Named list of assembly digest metrics, or NULL if path/FASTA is invalid.
 #' @export
 genome_digest <- function(path) {
   if (
@@ -190,9 +116,6 @@ genome_digest <- function(path) {
     return(NULL)
   }
 
-  # One call per record rather than openssl's vectorised form: that returns hex
-  # strings, and we need the raw bytes to truncate. A draft assembly has a few
-  # hundred contigs at most, so the loop is free next to reading the file.
   digests <- sort(vapply(
     seqs,
     function(s) sha512t24u(charToRaw(s)),
@@ -200,7 +123,6 @@ genome_digest <- function(path) {
     USE.NAMES = FALSE
   ))
 
-  # RFC-8785 canonical JSON for an array of base64url strings (see header).
   canonical <- paste0('["', paste(digests, collapse = '","'), '"]')
 
   list(
@@ -213,11 +135,13 @@ genome_digest <- function(path) {
   )
 }
 
-### Persist one isolate's assembly digest into the mother database
-# Mirrors store_amr_results(): best-effort, additive, and never able to disturb
-# cgMLST results. `digest` accepts a precomputed genome_digest() so the typing
-# run does not hash the same assembly twice. Re-typing REPLACEs the row, since
-# `isolate` is the primary key.
+#' Persist Assembly Digest to Database
+#'
+#' @param db_path Path to target SQLite database.
+#' @param strain Isolate name string.
+#' @param genome_file Path to input FASTA assembly.
+#' @param digest Optional precomputed list from `genome_digest()`.
+#' @return Invisible logical indicating whether insertion succeeded.
 #' @export
 store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
   if (
@@ -281,8 +205,10 @@ store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
   invisible(ok)
 }
 
-### Every recorded digest, as isolate -> genome_digest
-# Empty when the database has never typed a genome with this build.
+#' Map Database Isolates to Recorded Genome Digests
+#'
+#' @param db_path Path to target SQLite database.
+#' @return Named character vector mapping isolates to genome digests.
 #' @export
 genome_hash_map <- function(db_path) {
   empty <- setNames(character(0), character(0))
@@ -308,49 +234,27 @@ genome_hash_map <- function(db_path) {
   setNames(res$genome_digest, res$isolate)
 }
 
-### Classify assemblies about to be typed against what the database already holds
-# Returns one row per input file: `strain`, `file`, `digest` (NA when the file
-# could not be read), `status` and `other` (the isolate a "same_genome" collides
-# with). Statuses:
-#
-#   new           - neither the name nor the assembly is on record
-#   same_genome   - this exact assembly is already stored under ANOTHER isolate
-#                   (`other`): typing it again would enter one isolate twice
-#   retype        - same isolate, same assembly - a genuine re-run
-#   name_conflict - the isolate exists but was typed from a DIFFERENT assembly;
-#                   pyMLST will reject this file as a duplicate and its data
-#                   will be silently dropped
-#   unknown       - the isolate exists but predates digest recording, so nothing
-#                   can be said. This is the majority state for older databases
-#                   and must never be reported as a mismatch.
-#
-# Purely advisory. Nothing here blocks a run: re-typing an assembly under a new
-# name is legitimate (a different scheme, a re-analysis), and only the metadata
-# can settle whether two records are really the same epidemiological isolate.
-# Classify a single assembly against what the database already holds. Split out
-# of check_genomes so callers that need to walk a large selection without
-# blocking (the typing module runs this one genome per reactive tick, so the
-# check stays interruptible and drives the progress bar) can drive the loop
-# themselves. `recorded` is the genome_hash_map() for the target DB and
-# `known_strains` the isolates already on record; both are read once by the
-# caller and passed in so a batch does not re-query the database per file.
-# Returns a one-element list: `digest` (NA when the file could not be read),
-# `status` (see check_genomes for the vocabulary) and `other`.
+#' Classify Input Assembly Status Against Known Database Records
+#'
+#' Evaluates whether an input assembly file is new, a identical re-type, a duplicate
+#' under a different isolate name (`same_genome`), or a conflicting assembly under an
+#' existing isolate name (`name_conflict`).
+#'
+#' @param strain Target isolate identifier.
+#' @param file Path to assembly file.
+#' @param recorded Map of recorded genome digests from `genome_hash_map()`.
+#' @param known_strains Character vector of isolate names existing in database.
+#' @return List containing `digest`, `status` classification string, and `other` isolate name.
 #' @export
 classify_genome <- function(strain, file, recorded, known_strains) {
   digest <- tryCatch(genome_digest(file), error = function(e) NULL)
   if (is.null(digest)) {
-    # Unreadable / non-FASTA: nothing the digest can say, so it stays "new" -
-    # the run itself will report whatever pyMLST makes of the file.
     return(list(digest = NA_character_, status = "new", other = NA_character_))
   }
   d <- digest$genome_digest
 
   known <- strain %in% known_strains
   stored <- if (strain %in% names(recorded)) recorded[[strain]] else NULL
-
-  # A digest already on record under a different isolate is the interesting
-  # case, and outranks the name-based verdict: it is the same assembly.
   elsewhere <- setdiff(names(recorded)[recorded == d], strain)
 
   if (length(elsewhere)) {
@@ -366,6 +270,14 @@ classify_genome <- function(strain, file, recorded, known_strains) {
   }
 }
 
+#' Batch Check and Classify Multiple Genome Assemblies
+#'
+#' @param db_path Path to target SQLite database.
+#' @param strains Vector of isolate identifiers.
+#' @param files Vector of assembly file paths.
+#' @param known_strains Vector of isolates already on record.
+#' @param progress Optional progress callback function `function(value, detail)`.
+#' @return Data frame listing strain, file path, digest, classification status, and collateral isolate match.
 #' @export
 check_genomes <- function(
   db_path,

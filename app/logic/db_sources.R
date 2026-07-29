@@ -1,46 +1,43 @@
 # app/logic/db_sources.R
 #
-# Where the isolates in a database came from: typed here, or brought in by a
-# merge - and from which peer database.
+# Tracks provenance for isolate origins: locally typed versus peer database imports.
 #
-# Two pieces work together:
+# Provenance tracking operates via two complementary mechanisms:
 #
-#   * `metadata.source`, one standard metadata column holding a human-readable
-#     label ("local", "partner-lab-2026"). Denormalised on purpose. Metadata
-#     travels: it is exported, read by peers, and re-imported. A foreign key
-#     into a registry table the peer does not have would not survive that trip,
-#     while a plain label stays readable everywhere - including in a CSV a user
-#     opens outside the app.
+#   * `metadata.source`: A standard metadata column storing a human-readable
+#     provenance string (e.g., "local", "partner-lab-2026"). Intentional
+#     denormalization ensures portability during data export/import workflows across
+#     external tools and CSV exports without relying on database-specific
+#     foreign key relationships.
 #
-#   * `phylotrace_sources`, the local registry that hands those labels out and
-#     keeps them stable across repeat imports of the same peer.
+#   * `phylotrace_sources`: A local registry table that issues standardized labels
+#     and maintains key stability across repeated imports from the same peer.
 #
-# Labels are collision-aware. A peer is identified by its `phylotrace_meta.uuid`
-# - the identity PhyloTrace already stamps into every database it creates - and
-# only by its file name when it carries no uuid. So importing the same peer
-# twice, even after it was renamed on disk, reuses its one label; two *different*
-# databases that happen to share a file name get "partner-lab" and
-# "partner-lab (2)". Once handed out a label is never rewritten: metadata rows
-# already carry it, and rewriting would mean touching every one of them.
+# Source labeling uses collision-aware logic based on unique peer identifiers:
+# - Primary tracking utilizes `phylotrace_meta.uuid` assigned during database creation.
+# - Fallback tracking uses normalized filenames if UUID metadata is absent.
+#
+# Consequently, repeated imports from the same peer (even across file renames)
+# retain the existing source label. Distinct databases with identical filenames
+# receive disambiguated labels (e.g., "partner-lab", "partner-lab (2)"). Assigned
+# labels remain static to maintain historical consistency across existing rows.
 
 box::use(
-  DBI[dbExecute, dbGetQuery, dbListTables],
+  DBI[dbExecute, dbGetQuery, dbListListTables],
 )
 
-# The metadata column carrying the label. Reserved (see METADATA_RESERVED in
-# db_import.R): a peer's own `source` values describe *its* history, so they are
-# never mapped onto ours - the merge stamps its own label instead.
+# Metadata field reserved for tracking provenance source labels.
 #' @export
 SOURCE_COL <- "source"
 
-# Label for isolates this database typed itself. Reserved against external
-# labels too, so a peer database that happens to be called "local.db" cannot
-# claim it.
+# Reserved identifier for isolates generated directly within the local database.
 #' @export
 SOURCE_LOCAL <- "local"
 
+# Local source registry table identifier.
 SOURCES_TABLE <- "phylotrace_sources"
 
+# Schema definition for the local source registry table.
 SOURCES_DDL <- sprintf(
   "CREATE TABLE IF NOT EXISTS %s (
      source_key TEXT PRIMARY KEY,
@@ -53,15 +50,24 @@ SOURCES_DDL <- sprintf(
   SOURCES_TABLE
 )
 
-#' Create the registry table if this database has never recorded a source.
+#' Ensure Sources Registry Table
+#'
+#' Initializes the `phylotrace_sources` table in the database if it does not yet exist.
+#'
+#' @param con Active DBI database connection.
 #' @export
 ensure_sources_table <- function(con) {
   dbExecute(con, SOURCES_DDL)
   invisible(NULL)
 }
 
-#' The `phylotrace_meta.uuid` of an attached (or the main) database, or NA when
-#' the database predates that table / was not written by PhyloTrace.
+#' Get Database UUID
+#'
+#' Retrieves the unique identifier (`phylotrace_meta.uuid`) from the specified database schema.
+#'
+#' @param con Active DBI database connection.
+#' @param schema Character name of target attached schema. Defaults to `"main"`.
+#' @return Character string containing the database UUID, or `NA_character_` if absent.
 #' @export
 db_uuid <- function(con, schema = "main") {
   tbls <- tryCatch(
@@ -87,9 +93,7 @@ db_uuid <- function(con, schema = "main") {
   as.character(val[[1]])
 }
 
-# What makes two imports "the same peer". The uuid when there is one (survives a
-# rename on disk); the file name otherwise, lowercased so a case-only difference
-# does not mint a second label for one file.
+# Constructs a stable registry key based on UUID or normalized lower-case filename.
 .source_key <- function(uuid, file_name) {
   if (length(uuid) && !is.na(uuid) && nzchar(uuid)) {
     return(paste0("uuid:", uuid))
@@ -97,6 +101,7 @@ db_uuid <- function(con, schema = "main") {
   paste0("file:", tolower(.base_name(file_name)))
 }
 
+# Extracts stripped base file name omitting extension.
 .base_name <- function(file_name) {
   if (!length(file_name) || is.na(file_name[[1]])) {
     return("")
@@ -104,12 +109,13 @@ db_uuid <- function(con, schema = "main") {
   sub("\\.db$", "", basename(as.character(file_name[[1]])), ignore.case = TRUE)
 }
 
-#' The label a database file would get, given the labels already handed out.
+#' Generate Unique Source Label
 #'
-#' Collisions are resolved with a numeric suffix rather than by mangling the
-#' name, so the common case reads as the plain file name. Comparison is
-#' case-insensitive: "Partner" and "partner" would be one label to a reader.
-#' `SOURCE_LOCAL` always counts as taken.
+#' Constructs a collision-free source label by appending numeric suffixes when encountering duplicates.
+#'
+#' @param file_name Character string indicating file source name.
+#' @param taken Character vector of labels currently in use.
+#' @return Character string containing unique, disambiguated source label.
 #' @export
 unique_source_label <- function(file_name, taken = character(0)) {
   base <- trimws(gsub("\\s+", " ", .base_name(file_name)))
@@ -127,13 +133,12 @@ unique_source_label <- function(file_name, taken = character(0)) {
   candidate
 }
 
-# Every label a new one must not collide with: the registry, plus whatever
-# `metadata.source` already carries. The second half matters when the registry
-# and the metadata disagree - a database restored from an export, say, where the
-# rows kept their labels but the registry did not travel with them. Without it a
-# second, unrelated peer could be handed a label rows already use.
+# Collects all active source labels from both registry and existing metadata entries.
 .labels_in_use <- function(con) {
-  labels <- dbGetQuery(con, sprintf("SELECT label FROM %s", SOURCES_TABLE))$label
+  labels <- dbGetQuery(
+    con,
+    sprintf("SELECT label FROM %s", SOURCES_TABLE)
+  )$label
 
   tbls <- tryCatch(dbListTables(con), error = function(e) character(0))
   if ("metadata" %in% tbls) {
@@ -146,7 +151,6 @@ unique_source_label <- function(file_name, taken = character(0)) {
           SOURCE_COL
         )
       )$label,
-      # No `source` column yet: nothing in use.
       error = function(e) character(0)
     )
     labels <- c(labels, in_rows)
@@ -154,18 +158,20 @@ unique_source_label <- function(file_name, taken = character(0)) {
   unique(labels[!is.na(labels) & nzchar(labels)])
 }
 
-#' Label for one incoming peer database, registering it on first sight.
+#' Register Database Source
 #'
-#' Idempotent per peer: the second import of the same database returns the label
-#' the first one created and only refreshes `last_imported`.
+#' Registers an incoming external database peer or retrieves its existing source label.
 #'
-#' @param con Connection to the database being written into.
-#' @param uuid The peer's `phylotrace_meta.uuid`, or NA.
-#' @param file_name The peer's file name *as the user chose it* - not the staged
-#'   temp copy a merge may be reading from, whose name means nothing to anyone.
-#' @return The label to write into `metadata.source`.
+#' @param con Active DBI database connection.
+#' @param uuid Optional UUID string of peer database.
+#' @param file_name Original filename of peer database.
+#' @return Character string containing the unique assigned source label.
 #' @export
-register_source <- function(con, uuid = NA_character_, file_name = NA_character_) {
+register_source <- function(
+  con,
+  uuid = NA_character_,
+  file_name = NA_character_
+) {
   ensure_sources_table(con)
 
   key <- .source_key(uuid, file_name)
@@ -179,7 +185,10 @@ register_source <- function(con, uuid = NA_character_, file_name = NA_character_
   if (nrow(hit)) {
     dbExecute(
       con,
-      sprintf("UPDATE %s SET last_imported = ?, file_name = ? WHERE source_key = ?", SOURCES_TABLE),
+      sprintf(
+        "UPDATE %s SET last_imported = ?, file_name = ? WHERE source_key = ?",
+        SOURCES_TABLE
+      ),
       params = list(now, .base_name(file_name), key)
     )
     return(hit$label[[1]])
@@ -205,8 +214,12 @@ register_source <- function(con, uuid = NA_character_, file_name = NA_character_
   label
 }
 
-#' Every source this database has recorded, newest import first. Empty frame
-#' when nothing was ever imported.
+#' List Registered Sources
+#'
+#' Returns all source database records present in the local database registry.
+#'
+#' @param con Active DBI database connection.
+#' @return Data frame listing registered source labels and import timestamps ordered by `last_imported` descending.
 #' @export
 list_sources <- function(con) {
   if (!SOURCES_TABLE %in% dbListTables(con)) {

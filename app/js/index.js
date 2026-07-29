@@ -3,32 +3,25 @@ import "./dt-column-sizing";
 import "./dt-column-visibility";
 import "./virtual-select-popup-confirm";
 
-// Restrict free-text entry to a filesystem-/SQL-safe character set
-// ([a-zA-Z0-9_-]) so anything the user types to *name* an identifier (a
-// database, a scheme, an isolate) stays safe to persist, export as a filename,
-// and query with.
-//
-// It must NOT touch inputs where symbols and spaces are legitimate and
-// expected, which the exemptions below carve out:
-//   * colour-picker hex fields (which need "#"),
-//   * the search boxes inside select/picker dropdowns (a query, not a name),
-//   * anything a user is *labelling* rather than naming an identifier — plot
-//     titles, subtitles, annotation labels, and the analysis/plot names on the
-//     dashboard — which are display text and should take spaces and punctuation
-//     freely. Those inputs opt out by sitting inside a ".allow-free-text"
-//     wrapper (see the visualization and analysis_dashboard submodules).
+/**
+ * Determines whether an input element is exempt from character set sanitization.
+ *
+ * Exempts search filters, color pickers, and explicit display text containers (.allow-free-text)
+ * where spaces, punctuation, or special characters are required.
+ */
 function isExemptFromCharset(el) {
   return Boolean(
-    el.classList.contains("pcr-result") || // colour-picker hex field
-    el.closest(".pickr") ||                 // anywhere inside a colour picker
-    el.closest(".bs-searchbox") ||          // pickerInput live-search box
-    el.closest(".vscomp-dropbox") ||        // virtualSelectInput search box
-    el.closest(".selectize-control") ||     // selectize search / entry
-    el.closest(".dropdown-menu") ||         // any dropdown's own search field
-    el.closest(".allow-free-text")          // plot labels/titles: display text
+    el.classList.contains("pcr-result") || // Color picker hex value
+    el.closest(".pickr") ||                 // Color picker component container
+    el.closest(".bs-searchbox") ||          // Bootstrap-select search filter
+    el.closest(".vscomp-dropbox") ||        // Virtual-select search filter
+    el.closest(".selectize-control") ||     // Selectize input filter
+    el.closest(".dropdown-menu") ||         // Generic dropdown search field
+    el.closest(".allow-free-text")          // Opt-out wrapper for display text (e.g., plot titles/labels)
   );
 }
 
+// Restrict default text inputs to filesystem and SQL-safe characters ([a-zA-Z0-9_-]).
 document.addEventListener("input", function (event) {
   var el = event.target;
   var isText = el.tagName === "INPUT" && el.type === "text";
@@ -42,17 +35,13 @@ document.addEventListener("input", function (event) {
   }
 });
 
-// Editable DT tables (database_browser.R, database_custom.R) only enter
-// cell-edit mode on double click — DT hard-codes a `dblclick.dt` handler in
-// its own htmlwidget bundle with no option to configure the trigger. Promote
-// the first click to that same event so editing starts immediately. Mirrors
-// DT's own `e.target !== this` guard, so a click on a cell's already-open
-// <input> (itself inside the td) is left alone rather than re-opening it.
+// Converts single-click interactions into double-clicks to enable immediate cell editing in DataTables.
 $(document).on("click", ".edit-table table.dataTable tbody td", function (e) {
-  if (e.target !== this) return;
+  if (e.target !== this) return; // Ignore clicks targetting active cell editors
   $(this).trigger("dblclick");
 });
 
+// Fades out and cleans up the initial splash loading screen upon initial Shiny idle.
 $(document).one("shiny:idle", function () {
   setTimeout(function () {
     var overlay = document.querySelector(".waiter-overlay");

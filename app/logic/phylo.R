@@ -1,11 +1,11 @@
 # app/logic/phylo.R
 #
-# Phylogenetic tree computation from cgMLST allele profiles.
+# Phylogenetic tree and Minimum Spanning Tree (MST) computation from cgMLST allele profiles.
 #
-# Pipeline: read the per-sample allele profile from the `mlst` table, build a
-# pairwise Hamming distance matrix (with a configurable missing-value policy),
-# and construct an NJ or UPGMA tree. NJ edge lengths are passed through the
-# inverse hyperbolic sine to keep the tree renderable without clipping.
+# Pipeline:
+# 1. Read per-isolate allele profiles from the `mlst` table (and optional staged imports).
+# 2. Compute pairwise Hamming distance matrices using specified NA-handling policies.
+# 3. Construct Neighbor-Joining (NJ) / UPGMA trees or interactive MST network graphs.
 
 box::use(
   RSQLite[SQLite],
@@ -47,26 +47,24 @@ box::use(
   app / logic / db_staging[imported_profile_long, local_allele_map],
 )
 
-# --- 1. Allele profile -------------------------------------------------------
+# --- 1. Allele Profile Extraction --------------------------------------------
 
-# Read the wide allele profile (rows = samples, cols = loci, value = allele id)
-# from the `mlst` table. The synthetic `ref` core-genome strain is excluded.
-# Returns an integer matrix with sample (isolate) names as rownames; absent
-# sample/locus combinations are NA. When `isolates` is non-NULL, the matrix is
-# restricted to those sample names (the Visualization isolate preselection) —
-# NULL means all isolates.
-#
-# `imported_sets` optionally folds in staged peer profiles (see db_staging.R).
-# Those carry an allele *hash* rather than a `seqid`, so they are mapped onto the
-# local seqid code space: an allele we already know reuses its seqid, and one we
-# have never seen gets a fresh code above the local maximum. The codes are only
-# ever an in-memory comparison currency — nothing is written back — and the
-# distance kernels below compare with `!=`, so they neither know nor care whether
-# a cell is a seqid or a synthetic code.
-#
-# With `imported_sets = NULL` this runs exactly the query it always has.
+#' Load Isolate Allele Profiles
+#'
+#' Queries the SQLite database for allele profiles (excluding synthetic reference entries)
+#' and reshapes them into a matrix (isolates x loci). Staged imported peer profiles can
+#' optionally be folded in and mapped into the local integer seqid code space[cite: 12].
+#'
+#' @param db_path File path to SQLite database[cite: 12].
+#' @param isolates Vector of isolate IDs to filter, or NULL for all[cite: 12].
+#' @param imported_sets Optional list of staged imported peer profile datasets[cite: 12].
+#' @return Integer matrix of allele profiles with isolate names as row names[cite: 12].
 #' @export
-load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) {
+load_allele_profile <- function(
+  db_path,
+  isolates = NULL,
+  imported_sets = NULL
+) {
   con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
   on.exit(dbDisconnect(con))
 
@@ -99,7 +97,7 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
   mat
 }
 
-# Staged profiles in the local seqid code space, shaped like the `mlst` rows.
+# Helper: Format staged imported profiles into long format within local seqid code space
 .imported_long <- function(db_path, imported_sets, local_seqids) {
   imp <- imported_profile_long(db_path, imported_sets)
   if (!nrow(imp)) {
@@ -112,9 +110,7 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
     paste(map$gene, map$hash)
   )]
 
-  # An allele the database has never seen is a *novel* allele, not a missing one:
-  # it must differ from every local allele at that locus, so it gets its own code
-  # above the local id space. Two imported isolates sharing it share the code.
+  # Assign novel integer seqids above local max for imported alleles unseen in local database
   novel <- is.na(imp$seqid)
   if (any(novel)) {
     base <- max(c(local_seqids, map$seqid), na.rm = TRUE)
@@ -130,30 +126,44 @@ load_allele_profile <- function(db_path, isolates = NULL, imported_sets = NULL) 
   )
 }
 
-# --- 2. Pairwise Hamming kernels ---------------------------------------------
+# --- 2. Pairwise Distance Kernels --------------------------------------------
 
-# Standard: count all differing positions.
+#' Standard Hamming Distance Kernel
+#' @param x Vector of allele values[cite: 12].
+#' @param y Vector of allele values[cite: 12].
+#' @return Integer count of differing positions[cite: 12].
 #' @export
 hamming_dist <- function(x, y) {
   sum(x != y)
 }
 
-# Ignore pairwise: only count positions where both values are present.
+#' Missing-Value Pairwise Ignore Hamming Distance Kernel
+#' @param x Vector of allele values[cite: 12].
+#' @param y Vector of allele values[cite: 12].
+#' @return Integer count of mismatches excluding positions where either value is NA[cite: 12].
 #' @export
 hamming_dist_ignore <- function(x, y) {
   sum((x != y) & !is.na(x) & !is.na(y))
 }
 
-# NA as category: NA vs. a value counts as a mismatch; NA vs. NA does not.
+#' NA-as-Category Hamming Distance Kernel
+#' @param x Vector of allele values[cite: 12].
+#' @param y Vector of allele values[cite: 12].
+#' @return Integer count where NA vs value is a mismatch, but NA vs NA is a match[cite: 12].
 #' @export
 hamming_dist_category <- function(x, y) {
   sum((x != y | xor(is.na(x), is.na(y))) & !(is.na(x) & is.na(y)))
 }
 
-# --- 3. Distance matrix ------------------------------------------------------
+# --- 3. Distance Matrix Construction ----------------------------------------
 
-# Apply the chosen kernel to every sample pair. The matrix is symmetric with a
-# zero diagonal.
+#' Compute Distance Matrix Across Profiles
+#'
+#' Applies a distance metric function across all pairwise isolate profile combinations[cite: 12].
+#'
+#' @param profile Matrix of allele profiles[cite: 12].
+#' @param hamming_method Distance function kernel to apply[cite: 12].
+#' @return Symmetric distance matrix[cite: 12].
 #' @export
 compute_dist_matrix <- function(profile, hamming_method) {
   mat <- as.matrix(profile)
@@ -171,10 +181,17 @@ compute_dist_matrix <- function(profile, hamming_method) {
   dist_mat
 }
 
-# --- 4. Tree construction ----------------------------------------------------
+# --- 4. Phylogenetic Tree Construction --------------------------------------
 
-# Build a phylo tree from a square distance matrix. `algo` is one of
-# "Neighbour-Joining" or "UPGMA". NJ edge lengths are mapped through asinh.
+#' Construct Phylogenetic Tree Object
+#'
+#' Builds an ape `phylo` object using Neighbor-Joining (NJ) or UPGMA[cite: 12].
+#' NJ branch lengths are transformed via inverse hyperbolic sine (asinh)[cite: 12].
+#'
+#' @param dist_mat Distance matrix[cite: 12].
+#' @param labels Tip label vector matching distance matrix ordering[cite: 12].
+#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA")[cite: 12].
+#' @return An ape `phylo` object[cite: 12].
 #' @export
 build_tree <- function(dist_mat, labels, algo) {
   d <- as.dist(dist_mat)
@@ -183,9 +200,6 @@ build_tree <- function(dist_mat, labels, algo) {
     as.phylo(hclust(d, method = "average"))
   } else {
     nj_tree <- nj(d)
-    # NJ can produce negative branch lengths. Apply asinh (in log form) so the
-    # full real line maps to non-negative values, preserving zero and relative
-    # structure while compressing large magnitudes.
     el <- abs(nj_tree[["edge.length"]])
     nj_tree[["edge.length"]] <- log(el + sqrt(el^2 + 1))
     nj_tree
@@ -195,15 +209,9 @@ build_tree <- function(dist_mat, labels, algo) {
   tree
 }
 
-# --- 5. Shared distance preparation ------------------------------------------
+# --- 5. Internal Distance Preparation ---------------------------------------
 
-# Load the profile for the current database and compute its distance matrix
-# under the chosen missing-value policy. Returns a list with the (possibly
-# omit-filtered) `profile`, the `method` kernel used, and the `dist` matrix, or
-# NULL when the database holds no isolates.
-#   "omit": drop any locus with a missing value across the included samples,
-#   then compare with the standard kernel. The other policies use NA-aware
-#   kernels on the full profile.
+# Helper: Load allele profile and prepare distance matrix according to NA policy
 prepare_distance <- function(
   db_path,
   na_handling,
@@ -235,12 +243,18 @@ prepare_distance <- function(
   )
 }
 
-# --- 6. Orchestration: tree --------------------------------------------------
+# --- 6. Tree Orchestration --------------------------------------------------
 
-# Compute a phylo tree for the currently loaded database.
-#   na_handling - one of "ignore_na", "omit", "category" (see visualization UI).
-#   algo        - "Neighbour-Joining" or "UPGMA".
-# Returns a phylo object, or NULL when there are too few samples to build a tree.
+#' Compute Phylogenetic Tree
+#'
+#' High-level wrapper to calculate distances and return a phylogenetic tree[cite: 12].
+#'
+#' @param db_path Database path[cite: 12].
+#' @param na_handling Strategy for missing values ("ignore_na", "omit", or "category")[cite: 12].
+#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA")[cite: 12].
+#' @param isolates Optional list of isolate IDs[cite: 12].
+#' @param imported_sets Optional list of staged imported peer profiles[cite: 12].
+#' @return A `phylo` object, or NULL if insufficient isolates are provided[cite: 12].
 #' @export
 compute_phylo_tree <- function(
   db_path,
@@ -261,18 +275,18 @@ compute_phylo_tree <- function(
   )
 }
 
-# --- 7. Orchestration: MST ---------------------------------------------------
+# --- 7. Minimum Spanning Tree (MST) Orchestration ----------------------------
 
-# Compute a Minimum Spanning Tree (igraph object) for the current database.
-#
-# Samples with a pairwise Hamming distance of 0 (identical allelic profiles)
-# are first collapsed into a single node via the connected components of the
-# zero-distance graph. Each merged node carries the constituent sample names
-# (newline-joined) in its `name` attribute and the sample count in `n`. A fresh
-# distance matrix is computed on one representative per group, turned into a
-# weighted graph (edge weight = allelic distance), and reduced to its MST.
-#
-# Returns an igraph object, or NULL when there are too few samples.
+#' Compute Minimum Spanning Tree Graph
+#'
+#' Builds an igraph MST representation from isolate allele profiles[cite: 12].
+#' Zero-distance isolates are merged into single representative nodes[cite: 12].
+#'
+#' @param db_path Database path[cite: 12].
+#' @param na_handling Strategy for handling missing values[cite: 12].
+#' @param isolates Optional list of isolate IDs[cite: 12].
+#' @param imported_sets Optional list of staged imported peer profiles[cite: 12].
+#' @return An `igraph` object, or NULL if insufficient isolates exist[cite: 12].
 #' @export
 compute_mst <- function(
   db_path,
@@ -307,7 +321,6 @@ compute_mst <- function(
   )
   group_sizes <- lengths(groups)
 
-  # Recompute distances on one representative per group, then build the MST.
   rep_profile <- profile[rep_idx, , drop = FALSE]
   rep_dist <- compute_dist_matrix(rep_profile, prep$method)
 
@@ -323,10 +336,7 @@ compute_mst <- function(
   tree
 }
 
-# Per-node label text for a chosen metadata field. Each MST node id is the
-# newline-joined sample names it represents; the label joins those samples'
-# values of `field` (from make_metadata_table) the same way. With field
-# "isolate" this returns the node id unchanged.
+# Helper: Extract node label text given metadata column
 mst_node_labels <- function(node_ids, metadata, field) {
   if (is.null(field) || !field %in% names(metadata)) {
     field <- "isolate"
@@ -346,9 +356,7 @@ mst_node_labels <- function(node_ids, metadata, field) {
 # `value`/`scaling` mechanism, so duplicate-count scaling does not apply.
 .border_sized_shapes <- c("circle", "box", "text", "database")
 
-# Custom canvas renderer: vis.js calls this for nodes with shape "custom" to
-# paint each node as a pie chart (slice data is the JSON `metadata` field) with
-# the label drawn below it. Engaged only when variable coloring is active.
+# JavaScript HTML Canvas renderer for pie-chart MST nodes
 ctxRendererJS <- JS(
   "({ctx, id, x, y, state: { selected, hover }, style, font, label, metadata}) => {
     var pieData = JSON.parse(metadata);
@@ -412,7 +420,7 @@ ctxRendererJS <- JS(
     }"
 )
 
-# Map a set of category values to colors. NA is treated as its own category.
+# Generate metadata palette colors
 mst_palette <- function(values, scale) {
   cats <- unique(values)
   n <- length(cats)
@@ -420,8 +428,7 @@ mst_palette <- function(values, scale) {
   data.frame(value = cats, color = cols, stringsAsFactors = FALSE)
 }
 
-# Per-node pie slice JSON: each node's share of every category of `col_var`
-# across its constituent samples, colored via `var_cols`.
+# Generate JSON payload for HTML canvas pie chart rendering
 mst_pie_metadata <- function(node_ids, metadata, col_var, var_cols) {
   vapply(
     node_ids,
@@ -432,8 +439,6 @@ mst_pie_metadata <- function(node_ids, metadata, col_var, var_cols) {
       slices <- vapply(
         cats,
         function(v) {
-          # NA-safe membership: an NA category matches NA values, otherwise a
-          # present value matches by equality (avoids NA poisoning the sum).
           in_cat <- if (is.na(v)) {
             is.na(values)
           } else {
@@ -452,9 +457,7 @@ mst_pie_metadata <- function(node_ids, metadata, col_var, var_cols) {
   )
 }
 
-# Flood-fill clusters of nodes connected through edges within `threshold`.
-# Returns per-node group labels ("Group N", "0" when unclustered) and the
-# matching label per edge (only for edges inside a >1-node cluster).
+# Calculate distance threshold cluster groupings
 compute_clusters <- function(nodes, edges, threshold) {
   ids <- nodes$id
   qual <- edges[edges$weight <= threshold, c("from", "to"), drop = FALSE]
@@ -481,7 +484,7 @@ compute_clusters <- function(nodes, edges, threshold) {
   list(groups = groups, edge_group = edge_group)
 }
 
-# Legend node entries (one per category) for visLegend(addNodes=).
+# Format legend configuration nodes for visNetwork
 mst_legend_nodes <- function(var_cols, symbol_size, font_size, font_color) {
   lapply(seq_len(nrow(var_cols)), function(i) {
     list(
@@ -494,7 +497,7 @@ mst_legend_nodes <- function(var_cols, symbol_size, font_size, font_color) {
   })
 }
 
-# Legend column count scales with the number of categories.
+# Determine number of legend columns based on category count
 legend_col <- function(n) {
   if (n <= 5) {
     1
@@ -505,7 +508,7 @@ legend_col <- function(n) {
   }
 }
 
-# Cluster color vector (one entry per cluster).
+# Generate color palette for graph clusters
 mst_cluster_palette <- function(n, scale) {
   if (n == 0) {
     return(character(0))
@@ -513,8 +516,7 @@ mst_cluster_palette <- function(n, scale) {
   if (identical(scale, "Rainbow")) rainbow(n) else viridis(n)
 }
 
-# Skeleton clustering: overlay a thick translucent colored edge per cluster on
-# top of a thin black base layer.
+# Generate dual-layer skeleton edge configurations for clusters
 mst_skeleton_edges <- function(edges, edge_group, width, scale) {
   thin <- edges
   thin$width <- 2
@@ -533,10 +535,14 @@ mst_skeleton_edges <- function(edges, edge_group, width, scale) {
   rbind(thick, thin)
 }
 
-# Build an interactive visNetwork widget from an MST igraph object. `opts` is a
-# plain list of resolved control values (no reactives), keeping this pure and
-# testable. Node size optionally scales with the number of samples a node
-# represents; edge length optionally scales with allelic distance.
+#' Build Interactive MST visNetwork Widget
+#'
+#' Converts an `igraph` MST object into an interactive HTML `visNetwork` widget[cite: 12].
+#'
+#' @param graph An `igraph` MST object[cite: 12].
+#' @param metadata Isolate metadata data frame[cite: 12].
+#' @param opts Visual display options list[cite: 12].
+#' @return A `visNetwork` htmlwidget object[cite: 12].
 #' @export
 build_mst_visnetwork <- function(graph, metadata, opts) {
   data <- toVisNetworkData(graph)
@@ -680,10 +686,17 @@ build_mst_visnetwork <- function(graph, metadata, opts) {
   vis
 }
 
-# Serialise a built MST widget to a self-contained HTML file.
+#' Save MST HTML Visualization
+#'
+#' Exports a visNetwork widget object as a standalone HTML file[cite: 12].
+#'
+#' @param widget Interactive visNetwork widget[cite: 12].
+#' @param file Output HTML file path[cite: 12].
+#' @param background Canvas background color string[cite: 12].
 #' @export
 save_mst_html <- function(widget, file, background) {
   visSave(widget, file = file, background = background)
 }
 
+# Null-coalescing infix operator
 `%||%` <- function(a, b) if (is.null(a)) b else a

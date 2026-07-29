@@ -1,21 +1,8 @@
 # app/logic/field_types.R
 #
-# What *type* of variable each metadata column holds.
-#
-# Custom variables already carry an authoritative type: the user picks one when
-# defining the variable and `phylotrace_custom_fields.type` stores its slug (see
-# app/logic/custom_fields.R, CUSTOM_TYPES). The fixed GenEpiO schema has no such
-# table — its types are a property of the schema itself — so they are declared
-# here, in the same vocabulary. One lookup then answers "is this column a date?"
-# for a column of either origin, which is what lets a consumer (the browse
-# table's cell editors, the visualization modules' time filter) treat a
-# user-defined date variable exactly like the built-in collection date without
-# knowing where either came from.
-#
-# Deliberately cheap: one small query against the loaded database, no metadata
-# rows read, nothing inferred from a column's contents. A column's type is
-# declared, never guessed — guessing is what made the built-in and the custom
-# date columns behave differently in the first place.
+# Variable type lookup and validation logic for metadata columns.
+# Defines core data type mapping rules for standard, derived, and custom fields
+# to maintain uniform behavior across interactive inputs and filters.
 
 box::use(
   stats[setNames],
@@ -25,51 +12,29 @@ box::use(
   app / logic / custom_fields[custom_col, CUSTOM_TYPES, list_custom_fields],
 )
 
-#' Types of the fixed metadata schema's columns, as `column = "type slug"`.
-#'
-#' The slugs are `custom_fields$CUSTOM_TYPES`', plus `"datetime"` for the
-#' app-stamped timestamps (a date *and* a time of day — the distinction matters
-#' to an editor, not to a time filter, which is why consumers ask for the set of
-#' types they can handle rather than for one type).
-#'
-#' Only columns whose type is something other than free text are listed; every
-#' unlisted column — including a metadata field an imported peer database
-#' brought in that this app has never seen — reads as `"text"`.
+#' Map of fixed schema column names to their declared type slugs.
+#' Columns not listed default to "text".
 #' @export
 FIXED_FIELD_TYPES <- c(
   sample_collection_date = "date",
   called_at = "datetime"
 )
 
-#' Types the derived, appender-built columns carry, keyed by name prefix.
-#'
-#' `mlst_<locus>` holds an allele identifier and `amr_<class>` holds the genes
-#' called for a drug class: both are nominal codes, never free text and never
-#' ordered — allele "412" is a name that happens to look like a number, and
-#' averaging or ranking it is meaningless. Declaring them here rather than
-#' letting them fall through to `"text"` is what lets one lookup answer for
-#' every column of the visualization metadata table, whichever appender put it
-#' there (see app/view/visualization.R).
-#'
-#' `amr_profile` is the exception and is deliberately absent: it is a
-#' comma-joined summary of every class with a hit, so it reads as text.
+#' Default type mappings assigned to derived columns based on name prefix.
 #' @export
 PREFIX_FIELD_TYPES <- c(
   mlst_ = "category",
   amr_ = "category"
 )
 
-# Columns a prefix would otherwise claim, but whose contents are not what the
-# prefix implies.
+#' Derived column names exempt from prefix type assignment.
 PREFIX_EXCEPTIONS <- c("amr_profile")
 
-#' Human-readable name for each type slug, for anything that shows a type to
-#' the user (the mapping picker's sub-text, a variable's chip in the browser).
-#' One vocabulary so two controls never name the same type differently.
+#' Human-readable labels for variable type slugs.
 #' @export
 TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time")
 
-# The type a column's name prefix declares, or NA when no prefix claims it.
+# Determine column type derived from prefix naming conventions
 .prefix_type <- function(cols) {
   out <- rep(NA_character_, length(cols))
   for (p in names(PREFIX_FIELD_TYPES)) {
@@ -79,13 +44,15 @@ TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time")
   out
 }
 
-#' Every column's type, as a named character vector `column -> type slug`.
+#' Look Up Column Variable Types
 #'
-#' With `cols` given, the result covers exactly those columns in that order,
-#' with `"text"` for anything not declared. With `cols` NULL it returns only the
-#' declared ones (the fixed schema's plus this database's custom variables),
-#' which is the form to use when the caller wants to know what exists rather
-#' than to classify a frame it already holds.
+#' Retrieves declared column types from fixed schema rules, custom database
+#' definitions, and prefix conventions.
+#'
+#' @param db_path Path to the SQLite database file.
+#' @param cols Optional vector of column names to classify. If NULL, returns all
+#'   explicitly declared schema and custom field types.
+#' @return Named character vector mapping column names to type slugs.
 #' @export
 field_types <- function(db_path, cols = NULL) {
   defs <- list_custom_fields(db_path)
@@ -100,11 +67,7 @@ field_types <- function(db_path, cols = NULL) {
     return(known)
   }
 
-  # Three sources, most specific last: the "text" default, then what a column's
-  # name prefix declares, then what the schema or the custom-field table
-  # declares for that exact column. A database that somehow carried a custom
-  # variable named like an MLST locus gets its own declared type, not the
-  # prefix's guess at one.
+  # Build type vector: default to "text", apply prefix rules, then apply explicit definitions
   out <- setNames(rep("text", length(cols)), cols)
   pref <- .prefix_type(cols)
   out[!is.na(pref)] <- pref[!is.na(pref)]
@@ -113,12 +76,14 @@ field_types <- function(db_path, cols = NULL) {
   out
 }
 
-#' The date-typed columns among `cols`, in `cols` order.
+#' Extract Date-Typed Column Names
 #'
-#' `types` is the set the caller can actually handle: a cell editor wants plain
-#' `"date"` columns only (a date picker on a timestamp would silently drop its
-#' time of day), while a time filter is happy to take `"datetime"` too since it
-#' only ever compares whole days.
+#' Filters input column names to those matching target temporal types.
+#'
+#' @param db_path Path to the database file.
+#' @param cols Vector of column names to inspect.
+#' @param types Character vector of acceptable date-like type slugs.
+#' @return Character vector of matching date column names in input order.
 #' @export
 date_fields <- function(db_path, cols, types = c("date", "datetime")) {
   if (is.null(cols) || !length(cols)) {
@@ -128,15 +93,13 @@ date_fields <- function(db_path, cols, types = c("date", "datetime")) {
   names(ft)[ft %in% types]
 }
 
-#' Parse a date-typed metadata column to `Date`, tolerating the two ways it
-#' fails.
+#' Safely Parse Input to Date Vector
 #'
-#' Values are stored as TEXT in a canonical ISO form, but the fixed schema's
-#' `sample_collection_date` is free text the user may have typed anything into,
-#' and `as.Date.character()` returns NA for unreadable values *only as long as
-#' at least one value in the vector parses* — hand it a column where none do and
-#' it throws instead. A column that is entirely unparseable has to come back
-#' all-NA. Timestamps (`"2024-05-06 11:22:33"`) truncate to their day.
+#' Converts character or raw metadata vectors into `Date` objects. Returns an
+#' all-NA Date vector if parsing fails completely, avoiding execution errors.
+#'
+#' @param x Vector of date strings, timestamps, or raw input.
+#' @return Vector of `Date` values with unparseable entries set to NA.
 #' @export
 as_date_safe <- function(x) {
   if (inherits(x, "Date")) {

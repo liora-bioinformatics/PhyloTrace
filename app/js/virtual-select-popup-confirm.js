@@ -1,29 +1,12 @@
-// Give the *multi-select* modal virtualSelectInput popups (showDropboxAsPopup
-// = TRUE in database_browser.R / database_custom.R) an explicit Confirm button
-// next to the library's own close button.
-//
-// virtual-select applies every checkbox click to the underlying value as soon
-// as it happens - there is no staged/pending selection to "confirm". What the
-// close (X) button actually does today is just dismiss the popup, which reads
-// as confirming by accident: there is no way to back out of a multi-select
-// session once you have started ticking boxes. This module gives the X real
-// Cancel semantics (revert to whatever was selected when the popup opened)
-// and adds a checkmark button that keeps the current selection. Clicking the
-// backdrop cancels too, since that also raises "beforeClose".
-//
-// Single-select popups (scheme_browser.R's scheme_selector) are deliberately
-// left alone: picking an option there is one click that already closes the
-// popup by itself, so there is nothing to confirm and no partial state to back
-// out of. A confirm/cancel pair would only add a step to a one-click gesture.
-//
-// Scoped to `.vscomp-wrapper.show-as-popup`, the class virtual-select itself
-// adds only when `showDropboxAsPopup` resolves to true (see
-// popupDropboxBreakpoint in the vendored library) - plain (non-popup)
-// virtualSelectInputs are untouched.
+/**
+ * Adds staged Confirm/Cancel semantics to multi-select virtual-select popups[cite: 5].
+ *
+ * Virtual-select updates selection state immediately on click without staging[cite: 5].
+ * This module snapshots current selections when popups open, allowing users to 
+ * confirm changes explicitly or revert selection on close (Cancel button, 
+ * backdrop click, or Escape key)[cite: 5]. Single-select popups are omitted[cite: 5].
+ */
 
-// Keyed on the outer `#<inputId>.virtual-select` container so a Shiny
-// re-render (which replaces that element) starts fresh rather than being
-// mistaken for one we have already wired up.
 var bound = new WeakSet();
 var openSnapshots = new WeakMap();
 var confirming = new WeakSet();
@@ -37,8 +20,6 @@ function addConfirmButton(container, instance) {
   var closeButton = instance.$dropboxCloseButton;
   if (!closeButton || !closeButton.parentElement) return false;
 
-  // Marks the dropbox as carrying the button pair, so the stylesheet can shift
-  // the close button off center only where a confirm button sits beside it.
   closeButton.parentElement.classList.add("pt-has-confirm");
 
   closeButton.title = "Cancel";
@@ -74,32 +55,22 @@ function bind(container) {
   if (!instance || !instance.multiple) return;
 
   bound.add(container);
-  // Without a confirm button there is no way to keep a selection, so the
-  // revert-on-close listeners below must not be attached either.
   if (!addConfirmButton(container, instance)) return;
 
-  // Non-bubbling by design (virtual-select dispatches them straight on the
-  // element passed to init), so these must be bound per instance rather than
-  // delegated from document.
+  // Custom events do not bubble; attach directly to individual instance containers.
   container.addEventListener("afterOpen", function () {
     confirming.delete(container);
     openSnapshots.set(container, selectedValuesArray(instance));
   });
 
   container.addEventListener("beforeClose", function () {
-    if (confirming.delete(container)) return; // confirmed - keep current value
+    if (confirming.delete(container)) return; // Keep current selection on explicit confirm
+
     var snapshot = openSnapshots.get(container);
     if (snapshot === undefined) return;
-    // setValue() is the low-level setter: it rewrites `selectedValues` and the
-    // toggle's label but leaves each option's `isSelected` flag - and the
-    // already-rendered `.vscomp-option.selected` rows - exactly as the
-    // cancelled session left them. Reopening does not repaint the list either
-    // (openDropbox only re-renders when showSelectedOptionsFirst is on), so the
-    // ticks would outlive the value they came from. Worse, selectOption() reads
-    // tick-vs-untick off the row's class while pushing onto `selectedValues`,
-    // so a row the revert deselected can be re-ticked into a duplicate value.
-    // setValueMethod() re-derives every `isSelected` from the value it is
-    // given, and renderOptions() repaints the rows from those flags.
+
+    // Use `setValueMethod` and `renderOptions` instead of `setValue` to ensure internal 
+    // `isSelected` flags and DOM option tickmarks are properly updated to match restored state.
     instance.setValueMethod(snapshot);
     instance.renderOptions();
   });
@@ -112,14 +83,7 @@ function scan() {
   });
 }
 
-// Escape has to be handled here because the library's own handler cannot fire
-// for these popups. It gates on `$wrapper.contains(document.activeElement)`,
-// but `$wrapper` is the inline control while `showDropboxAsPopup` renders the
-// options into the body-appended `$dropboxWrapper` (dropboxWrapper = "body").
-// Focus therefore always sits outside the element it tests, and Escape is a
-// dead key on every popup in the app. Closing through closeDropbox() raises
-// "beforeClose", so multi-select popups revert via the listener above and
-// single-select ones simply close.
+// Global Escape key handler for body-appended popup dropboxes (bypasses library's default focus check).
 document.addEventListener("keydown", function (event) {
   if (event.key !== "Escape") return;
   var openWrapper = document.querySelector(
@@ -130,6 +94,7 @@ document.addEventListener("keydown", function (event) {
   }
 });
 
+// Rescan DOM on Shiny reactive updates, Bootstrap modal displays, and page load.
 $(document).on("shiny:value", function () {
   setTimeout(scan, 0);
 });

@@ -1,16 +1,19 @@
 # app/logic/db_compat.R
 #
-# Compatibility gate for importing a peer PhyloTrace database.
+# Compatibility gate for importing peer PhyloTrace database files.
 #
-# A PhyloTrace `.db` is only mergeable into another one when both were built
-# from the *same scheme*: same organism, same scheme identity, same locus set,
-# and — the strongest signal — the same reference alleles. The synthetic "ref"
-# souche in `mlst` holds one row per locus for the scheme's seed genome, so
-# comparing its `(gene, sha256(sequence))` set catches the nasty case of two
-# databases that agree on locus *names* but were built from different reference
-# genomes.
+# A PhyloTrace SQLite database (.db) can only be merged into another instance
+# when both share an identical typing scheme: identical organism, scheme identity,
+# locus definitions, and reference alleles.
 #
-# Nothing here writes: every connection is opened read-only.
+# The synthetic "ref" strain (souche) in the `mlst` table contains one entry per
+# locus derived from the scheme's seed genome. Evaluating the set of
+# (gene, sha256(sequence)) pairs ensures compatibility even when two databases
+# share identical locus nomenclature but originate from different underlying
+# reference genomes.
+#
+# Read-only enforcement: All database connections established in this module
+# are opened strictly in read-only mode to prevent unintended state mutations.
 
 box::use(
   RSQLite[SQLite, SQLITE_RO],
@@ -34,19 +37,21 @@ CORE_TABLES <- c("mlst", "mlst_type", "sequences")
 #' @export
 REF_SOUCHE <- "ref"
 
-# `targets` spells a locus "PA0195_1" where `mlst` spells it "PA0195-1".
-# Mirrors the private `.norm_locus()` in database_functions.R.
+# Standardizes locus identifiers by replacing underscores with hyphens.
 .norm_locus <- function(x) gsub("[-_]", "-", x)
 
+# Returns fallback value if target is NULL or NA.
 `%||%` <- function(a, b) if (is.null(a) || is.na(a)) b else a
 
-#' Open a database read-only. Callers must `dbDisconnect()`.
+#' Open Read-Only Database Connection
 #'
-#' `synchronous = NULL` skips the PRAGMA RSQLite would otherwise issue on
-#' connect, matching the rest of the app and keeping the failure quiet when the
-#' file turns out not to be a database at all.
+#' Establishes a read-only SQLite connection. Callers must handle `dbDisconnect()`.
+#'
+#' @param db_path Character path to the target database.
+#' @return DBI connection object.
 #' @export
 connect_ro <- function(db_path) {
+  # synchronous = NULL skips default PRAGMA, matching app pattern and failing silently for non-DBs
   dbConnect(
     SQLite(),
     db_path,
@@ -58,22 +63,13 @@ connect_ro <- function(db_path) {
 
 .connect_ro <- connect_ro
 
-#' A `file:` URI for `path`, safe to hand to SQLite.
-#'
-#' Two traps, both reachable from the file picker's "Root" volume:
-#'
-#'  * `shinyFiles` yields `//tmp/x.db` for a Root-relative pick. Pasted after
-#'    `file:` that reads as `file://tmp/...`, where `tmp` is a URI *authority*
-#'    and SQLite refuses it ("invalid uri authority").
-#'  * SQLite splits the query string at the first `?`, so a database named
-#'    `odd?.db` would truncate the path *and* discard the `mode=ro` flag,
-#'    silently attaching a different file read-write.
-#'
-#' Collapsing the leading slashes and percent-encoding each path segment fixes
-#' both.
+# Formats a file path into a SQLite-safe file: URI string with encoded path segments.
 .db_uri <- function(path) {
+  # Normalize slashes and clean up leading slash sequences
   p <- normalizePath(path, winslash = "/", mustWork = FALSE)
   p <- sub("^/{2,}", "/", p)
+
+  # Percent-encode individual path segments to prevent query string truncation or bad URI authorities
   segments <- strsplit(p, "/", fixed = TRUE)[[1]]
   encoded <- vapply(
     segments,
@@ -85,14 +81,16 @@ connect_ro <- function(db_path) {
   paste0("file:", paste(encoded, collapse = "/"))
 }
 
-#' ATTACH `path` under `alias`, read-only.
+#' Attach Database as Read-Only Alias
 #'
-#' RSQLite compiles SQLite with URI filename support and enforces `?mode=ro` on
-#' an attached database — a plain-path ATTACH is attached read-write, and a
-#' stray write would corrupt the peer's file. Verified behaviour; do not
-#' "simplify" this to the bare path.
+#' Attaches an external SQLite database file under a designated alias in read-only mode using URIs.
+#'
+#' @param con Active DBI database connection.
+#' @param path Character path to the target database file.
+#' @param alias Character alias for the attached database.
 #' @export
 attach_ro <- function(con, path, alias) {
+  # SQLite requires explicit ?mode=ro on URIs to prevent standard read-write attachments
   dbExecute(
     con,
     sprintf("ATTACH DATABASE ? AS %s", alias),
@@ -100,18 +98,23 @@ attach_ro <- function(con, path, alias) {
   )
 }
 
+# Extracts the first non-null/non-empty scalar value from a vector.
 .scalar <- function(x) {
   x <- x[!is.na(x) & nzchar(x)]
   if (!length(x)) NA_character_ else as.character(x[[1]])
 }
 
+# Trims whitespace and normalizes string casing for comparisons.
 .norm_cmp <- function(x) {
   if (is.na(x)) NA_character_ else tolower(trimws(x))
 }
 
-#' Read everything needed to compare two databases, without loading the bulk of
-#' either. Returns a list; `ok` is FALSE when the core tables are missing, in
-#' which case the remaining fields are placeholders.
+#' Extract Database Compatibility Signature
+#'
+#' Reads schema metadata, locus sets, and reference allele hashes needed for database comparison.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return A list containing schema parameters, loci, and reference hashes, or placeholder values if invalid.
 #' @export
 read_db_signature <- function(db_path) {
   empty <- list(
@@ -147,6 +150,7 @@ read_db_signature <- function(db_path) {
   tables <- tryCatch(dbListTables(con), error = function(e) character(0))
   empty$tables <- tables
 
+  # Verify presence of base required schema tables
   if (!all(CORE_TABLES %in% tables)) {
     return(empty)
   }
@@ -181,10 +185,10 @@ read_db_signature <- function(db_path) {
   )
 }
 
-# The reference genome's alleles as a sorted "gene\thash" character vector.
-# Uses the `hashes` table when it covers the ref seqids; otherwise hashes just
-# the ~3.9k reference sequences in R rather than the whole file.
+# Constructs tab-separated 'gene\thash' character entries for reference strains.
+# Prefers precomputed 'hashes' table when available; falls back to SHA-256 in R.
 .ref_alleles <- function(con, tables) {
+  # Query using existing hashes table when populated
   if ("hashes" %in% tables) {
     res <- dbGetQuery(
       con,
@@ -204,6 +208,7 @@ read_db_signature <- function(db_path) {
     }
   }
 
+  # Fallback: compute SHA-256 directly on reference allele sequences
   res <- dbGetQuery(
     con,
     "SELECT m.gene AS gene, s.sequence AS sequence
@@ -222,6 +227,7 @@ read_db_signature <- function(db_path) {
   ))
 }
 
+# Constructs a standardized compatibility result row data frame.
 .row <- function(check, status, detail) {
   data.frame(
     check = check,
@@ -231,7 +237,7 @@ read_db_signature <- function(db_path) {
   )
 }
 
-# "3 differ (PA0001, PA0002, PA0003 …)" — keeps the detail column readable.
+# Creates a concise, human-readable summary string of differing elements.
 .summarise_diff <- function(only_a, only_b, label_a, label_b) {
   parts <- character(0)
   fmt <- function(x, label) {
@@ -253,16 +259,19 @@ read_db_signature <- function(db_path) {
   paste(parts, collapse = "; ")
 }
 
-#' Compare an external database against the loaded one.
+#' Validate Compatibility for Peer Database Import
 #'
-#' Returns a data.frame of `check` / `status` ("pass" | "warn" | "fail") /
-#' `detail`, with `attr(x, "blocked")` TRUE when any check failed. Checks after
-#' a structural failure are reported as "skipped" rather than guessed at.
+#' Evaluates whether an external database matches the schema, species, scheme, loci, and reference alleles of the loaded database.
+#'
+#' @param local_path Character path to the target/local SQLite database file.
+#' @param ext_path Character path to the incoming external SQLite database file.
+#' @return A data frame containing check names, status ("pass", "warn", "fail", "skipped"), and descriptive details.
 #' @export
 check_import_compatibility <- function(local_path, ext_path) {
   local <- read_db_signature(local_path)
   ext <- read_db_signature(ext_path)
 
+  # Attaches result metadata attributes upon return completion
   finish <- function(df) {
     attr(df, "blocked") <- any(df$status == "fail")
     attr(df, "local") <- local
@@ -312,9 +321,7 @@ check_import_compatibility <- function(local_path, ext_path) {
   )
 
   # 2. Organism -------------------------------------------------------------
-  # One species per database is a load-bearing invariant: `organism` in
-  # `metadata` and `species` in `mlst_type` are uneditable in the UI because the
-  # whole typing/visualisation stack assumes a single organism.
+  # Single species enforcement across metadata and mlst_type
   same_species <- identical(.norm_cmp(local$species), .norm_cmp(ext$species))
   checks <- rbind(
     checks,
@@ -358,9 +365,7 @@ check_import_compatibility <- function(local_path, ext_path) {
   )
 
   # 4. Locus set ------------------------------------------------------------
-  # Hard gate. A superset would introduce loci with no `ref` row, silently
-  # corrupting the scheme_size() denominator behind the QC completeness metric
-  # and the distance matrices.
+  # Strict check: mismatched gene sets break scheme sizing and distance metrics
   only_local <- setdiff(local$genes, ext$genes)
   only_ext <- setdiff(ext$genes, local$genes)
   same_loci <- !length(only_local) && !length(only_ext)
@@ -412,9 +417,7 @@ check_import_compatibility <- function(local_path, ext_path) {
   }
 
   # 6. Schema revision (advisory) -------------------------------------------
-  # `alembic_version` is Alembic's (SQLAlchemy's migration tool) revision stamp,
-  # written by pyMLST. PhyloTrace never reads it; a mismatch only means the two
-  # files were created by different pyMLST versions. Advisory, never blocking.
+  # alembic_version tracks pyMLST migrations; mismatch is non-blocking
   same_alembic <- identical(local$alembic, ext$alembic)
   checks <- rbind(
     checks,

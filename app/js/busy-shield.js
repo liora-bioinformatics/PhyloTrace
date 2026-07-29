@@ -1,26 +1,19 @@
-// Block pointer input for the duration of a user-triggered server round trip.
-//
-// R is single-threaded: while an event handler runs, the browser stays fully
-// interactive and every further click is queued and replayed the moment R frees
-// up — a burst of handlers running against state the user no longer expects.
-// This shield rejects those clicks at the source.
-//
-// It cannot be driven from inside the R handlers themselves: the click that
-// overflows is fired *during* the round trip, before the handler body starts, so
-// a lock engaged there always trails the problem. Instead the shield engages on
-// the client the instant a gesture pushes an input to the server, and holds
-// while Shiny reports itself busy.
-//
-// The trigger is deliberately "did a user gesture cause this?", not "is the
-// server busy?". Shiny sets `shiny-busy` for *any* server activity, including
-// the 700ms typing progress poll and the 750ms Map/Epi animation ticks — locking
-// on that alone would hold the page for the whole run and make Terminate and
-// Pause unreachable.
+/**
+ * Input Shield for Shiny Applications
+ *
+ * Prevents UI interaction during server-side processing to eliminate queued click 
+ * bursts caused by R's single-threaded nature.
+ *
+ * Design Note:
+ * Engages immediately upon client-side user gestures rather than relying solely on 
+ * `shiny-busy` (which also fires during background polling/animations where full 
+ * UI locking is unwanted).
+ */
 
-var GESTURE_WINDOW_MS = 400; // how recent a gesture must be to count as the cause
-var BUSY_PROBE_MS = 250; // grace before we insist the server actually got busy
-var IDLE_GRACE_MS = 150; // bridges chains that span several reactive cycles
-var MAX_HOLD_MS = 10 * 60 * 1000; // last-resort failsafe
+var GESTURE_WINDOW_MS = 400;      // Max time window between user gesture and input change
+var BUSY_PROBE_MS = 250;          // Grace period before displaying busy cursor and verifying server state
+var IDLE_GRACE_MS = 150;          // Bridges rapid back-to-back reactive updates
+var MAX_HOLD_MS = 10 * 60 * 1000; // Failsafe timeout to prevent permanent UI lockup
 
 var engaged = false;
 var pointerDown = false;
@@ -30,50 +23,34 @@ var graceTimer = null;
 var failsafeTimer = null;
 var shieldEl = null;
 
-// Interactions that must never engage the shield, because locking them breaks
-// the interaction itself rather than protecting it.
 function isTypingSurface(el) {
   if (el.tagName === "TEXTAREA") return true;
   if (el.tagName !== "INPUT") return false;
   return el.type === "text" || el.type === "search";
 }
 
-// A pickerInput bound to a `multiple` select: the menu stays open and the user
-// keeps clicking options. Single-select pickers are NOT exempt — committing one
-// is a discrete choice that usually drives an expensive rebuild.
+// Exempt multi-select pickers as users select multiple items while keeping the menu open.
 function isMultiSelectMenu(el) {
   var wrapper = el.closest(".bootstrap-select");
   return Boolean(wrapper && wrapper.querySelector("select[multiple]"));
 }
 
+// Exempts interactive elements where immediate blocking breaks natural usage (e.g., rapid clicks, drags, typing).
 function isExemptFromShield(el) {
   if (!el || typeof el.closest !== "function") return true;
 
-  // Deliberately NOT the whole `.dropdown-menu`: that would also cover the
-  // option items, and choosing a value from a pickerInput is exactly the kind of
-  // gesture the shield exists for. Only the search *field* inside it is exempt,
-  // which the typing-surface test below already covers — along with the DT
-  // filter box and every textInput.
-  //
-  // The three widget families after the first group are exempt for one shared
-  // reason: their normal use is a *rapid repeated* interaction, and blocking
-  // optimistically on the first click swallows the second. A DT cell sends
-  // `_cell_clicked` on the opening click of a double-click, so shielding there
-  // means the dblclick never lands and inline editing silently stops working.
+  // Note: Sliders (`.irs`) are implicitly handled via `pointerDown` state tracking.
   return Boolean(
     isTypingSurface(el) ||
-    el.closest(".time-step-buttons") || // Map/Epi play + step transport
-    el.closest(".pt-no-lock") ||        // generic opt-out (typing Terminate)
-    el.closest(".leaflet") ||           // map pan-zoom streams inputs
-    el.closest(".vis-network") ||       // MST node drags stream inputs
-    el.closest(".pickr") ||             // colour picker updates while dragging
-    el.closest("table.dataTable tbody") || // dblclick-to-edit, row selection
-    isMultiSelectMenu(el) ||            // menu stays open across picks
-    (el.tagName === "INPUT" && el.type === "number") // stepper arrows
+    el.closest(".time-step-buttons") ||        // Transport controls (play/step)
+    el.closest(".pt-no-lock") ||               // Generic opt-out hook
+    el.closest(".leaflet") ||                  // Map panning/zooming
+    el.closest(".vis-network") ||              // Graph node dragging
+    el.closest(".pickr") ||                    // Color picker dragging
+    el.closest("table.dataTable tbody") ||     // Row selection and dblclick inline edits
+    isMultiSelectMenu(el) ||
+    (el.tagName === "INPUT" && el.type === "number") // Stepper arrows
   );
-  // Sliders are deliberately absent: the pointerDown guard already suppresses
-  // the values ionRangeSlider streams mid-drag, and exempting `.irs` outright
-  // would also skip the replot on release — the expensive half.
 }
 
 function clearTimers() {
@@ -106,15 +83,10 @@ function engage() {
   clearTimers();
   document.documentElement.classList.add("pt-busy");
 
-  // Blocking is immediate, but the wait cursor is delayed: most handlers finish
-  // well inside BUSY_PROBE_MS and a cursor flip that fast only reads as flicker.
-  // The same timer doubles as the "did this input actually reach the server?"
-  // check — a gesture that caused no server work releases here.
+  // Delay the visual wait cursor to prevent flicker on rapid round-trips.
+  // Checks DOM state directly because `shiny:busy` only triggers on 0 -> 1 count transitions.
   probeTimer = setTimeout(function () {
     probeTimer = null;
-    // State, not the shiny:busy event: if R was *already* busy when this input
-    // landed, incrementBusyCount() does not re-send `busy` (it only fires on the
-    // 0 -> 1 transition), so an event-based check would wrongly release.
     if (serverIsBusy()) {
       document.documentElement.classList.add("pt-busy-visible");
     } else {
@@ -134,39 +106,32 @@ document.addEventListener("pointerdown", function () {
   pointerDown = true;
 }, true);
 
-// Arm on pointer *up*, so a drag — a slider handle, a map pan, a network node —
-// only counts once it has finished. Combined with the pointerDown guard below,
-// this exempts every drag interaction without having to enumerate them.
+// Register gestures on `pointerup` so continuous drag operations (maps, sliders) only count when finished.
 document.addEventListener("pointerup", function (event) {
   pointerDown = false;
   if (!isExemptFromShield(event.target)) lastGestureAt = Date.now();
 }, true);
 
-// Enter/Space only. Plain keystrokes never arm, which is what keeps text and
-// search fields usable while they push values to the server per character.
+// Track key activation (Enter/Space) while allowing regular text input to stream unhindered.
 document.addEventListener("keyup", function (event) {
   if (event.key !== "Enter" && event.key !== " ") return;
   if (!isExemptFromShield(event.target)) lastGestureAt = Date.now();
 }, true);
 
+// Suppress key triggers on currently focused UI elements while the shield is active.
 document.addEventListener("keydown", function (event) {
   if (!engaged) return;
   if (event.key === "Escape") {
-    release(); // escape hatch
+    release(); // Manual override
     return;
   }
-  // Keyboard is not covered by pointer-events, so a focused button could still
-  // be re-triggered. Swallow the keys that would do it. Deliberately no blur():
-  // that fires a change event and starts another round trip.
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     event.stopPropagation();
   }
 }, true);
 
-// Keyed to the input change rather than the raw click: it is the actual cause of
-// server work, and requiring a recent gesture excludes programmatic cascades
-// (the animation loops' updateSliderInput) and timer-driven traffic.
+// Engage shield only when server work originates from a recent client gesture.
 $(document).on("shiny:inputchanged", function () {
   if (pointerDown) return;
   if (Date.now() - lastGestureAt > GESTURE_WINDOW_MS) return;
@@ -177,6 +142,7 @@ $(document).on("shiny:busy", function () {
   if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
 });
 
+// Delay release during idle states to bridge momentary gaps between reactive cycles.
 $(document).on("shiny:idle", function () {
   if (!engaged || graceTimer) return;
   graceTimer = setTimeout(function () {
@@ -185,5 +151,4 @@ $(document).on("shiny:idle", function () {
   }, IDLE_GRACE_MS);
 });
 
-// Shiny puts up its own overlay from here on.
 $(document).on("shiny:disconnected", release);

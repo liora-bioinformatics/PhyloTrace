@@ -18,7 +18,7 @@ box::use(
   app / logic / logging[log_event],
 )
 
-# Lazily-loaded, cached species metadata (taxonomy + descriptions).
+# Lazily-loaded, package-scoped cache for species metadata (taxonomy and descriptions)
 .metadata_cache <- new.env(parent = emptyenv())
 
 species_metadata <- function() {
@@ -31,17 +31,18 @@ species_metadata <- function() {
   .metadata_cache$data
 }
 
-# Normalise a species name so spaces and underscores compare equal
-# (e.g. "Providencia stuartii" vs "Providencia_stuartii").
+# Normalizes species strings to ensure equivalent matching across space/underscore variations
 .norm_species <- function(x) gsub("[ _]+", "_", trimws(x))
 
-#' Assemble a database file path from a shinyFiles directory selection and a
-#' user-defined database name.
+#' Assemble Target Database File Path
 #'
-#' `download_location` is the raw `shinyDirChoose` input value and `db_name`
-#' the raw text input. The name is sanitised to a safe filename and a `.db`
-#' suffix is appended. Returns `NULL` when either input is missing or empty,
-#' so callers can guard on a complete selection.
+#' @description Combines a `shinyFiles` directory selection with a user-supplied
+#'   database name to construct a clean, sanitized `.db` file path.
+#'
+#' @param download_location List or character string. Raw selection object from `shinyDirChoose`.
+#' @param db_name Character string. User-entered database name.
+#'
+#' @return Complete file path string ending in `.db`, or `NULL` if inputs are invalid or empty.
 #' @export
 assemble_db_location <- function(download_location, db_name) {
   download_path <- parseDirPath(
@@ -57,6 +58,7 @@ assemble_db_location <- function(download_location, db_name) {
     return(NULL)
   }
 
+  # Strip out non-alphanumeric characters except hyphens and underscores to ensure safe file paths
   db_name_safe <- gsub("[^a-zA-Z0-9_-]", "", db_name)
 
   if (db_name_safe == "") {
@@ -66,6 +68,13 @@ assemble_db_location <- function(download_location, db_name) {
   file.path(download_path, paste0(db_name_safe, ".db"))
 }
 
+#' Resolve Species Asset Image Path
+#'
+#' @description Maps a selected species name to its corresponding local PNG illustration path.
+#'
+#' @param species_select Character string. Selected species identifier.
+#'
+#' @return Character string path to the static image asset.
 #' @export
 get_species_img <- function(species_select) {
   name <- cgmlst_org_schemes$abb[which(
@@ -75,8 +84,13 @@ get_species_img <- function(species_select) {
   file.path("app/static/species", paste0(name, ".png"))
 }
 
-#' Look up enriched metadata (NCBI taxonomy + description) for a species.
-#' Returns the record as a list, or NULL when no match is found.
+#' Fetch Enriched Species Metadata
+#'
+#' @description Looks up NCBI taxonomy details and descriptive metadata for a given species name.
+#'
+#' @param species_select Character string. Target species identifier.
+#'
+#' @return A named `list` containing metadata attributes, or `NULL` if no matching record exists.
 #' @export
 get_species_details <- function(species_select) {
   key <- .norm_species(species_select)
@@ -88,6 +102,14 @@ get_species_details <- function(species_select) {
   NULL
 }
 
+#' Store Scheme Overview Table in Database
+#'
+#' @description Persists key-value overview details for a schema into the `scheme_overview` table.
+#'
+#' @param scheme_overview `data.frame`. Two-column table containing scheme key-value pairs.
+#' @param db_path Character string. Target SQLite database file path.
+#'
+#' @return Invisible `TRUE` on successful database write.
 #' @export
 download_scheme_overview <- function(scheme_overview, db_path) {
   con <- dbConnect(SQLite(), db_path)
@@ -109,16 +131,15 @@ download_scheme_overview <- function(scheme_overview, db_path) {
   invisible(TRUE)
 }
 
-#' Fetch the scheme's target/locus table from cgmlst.org and store it as a
-#' `targets` table in the downloaded database. The locus list is the same one
-#' shown at `cgmlst.org/ncs/schema/<abb>/locus/` and downloadable there as CSV
-#' (actually tab-separated). `select_cgmlst` is the species name as picked in
-#' the UI (with spaces); it is normalised and mapped to the URL slug via the
-#' `abb` column, exactly like `get_scheme_overview()`.
+#' Fetch and Store Scheme Target Loci
 #'
-#' Returns `FALSE` on any fetch/parse failure (transient cgmlst.org problem,
-#' unknown species, empty table) so a successful database download is never
-#' aborted by a missing targets table.
+#' @description Retrieves locus definition tables directly from cgmlst.org and writes them
+#'   to the `targets` table in the destination SQLite database.
+#'
+#' @param select_cgmlst Character string. Species name as selected in UI.
+#' @param db_path Character string. Target SQLite database file path.
+#'
+#' @return Invisible `TRUE` on successful download and table update; `FALSE` if retrieval or parsing fails.
 #' @export
 download_scheme_targets <- function(select_cgmlst, db_path) {
   select_cgmlst <- gsub(" ", "_", select_cgmlst)
@@ -142,12 +163,9 @@ download_scheme_targets <- function(select_cgmlst, db_path) {
       }
       txt <- rawToChar(response$content)
 
-      # The export's header carries the real column names (Locus, Gene, Start,
-      # Length, Product, Alleles) plus a trailing tab. Each *data* row is, in
-      # addition, prefixed with an empty field, so a plain header=TRUE read
-      # misaligns (R consumes that leading column as row names). Read the body
-      # headerless, then take the columns aligned to the parsed header names,
-      # accounting for the spurious leading column.
+      # cgmlst.org CSV endpoints return tab-separated values with a leading empty field in data rows,
+      # which causes R's default parser to misalign column headers with row names.
+      # Headerless parsing with manual column re-alignment corrects this shift.
       header <- strsplit(strsplit(txt, "\n")[[1]][1], "\t")[[1]]
       header <- header[nzchar(header)]
 
@@ -187,6 +205,14 @@ download_scheme_targets <- function(select_cgmlst, db_path) {
   invisible(TRUE)
 }
 
+#' Fetch Scheme Overview HTML Summary
+#'
+#' @description Scrapes and parses the online scheme summary table from cgmlst.org
+#'   and appends local navigation links.
+#'
+#' @param select_cgmlst Character string. Species name as selected in UI.
+#'
+#' @return A `data.frame` containing summary metadata, or error message string on fetch failure.
 #' @export
 get_scheme_overview <- function(
   select_cgmlst
@@ -203,7 +229,6 @@ get_scheme_overview <- function(
     )
   }
 
-  # Fetch scheme url
   scheme_overview <- tryCatch(
     {
       response <- curl_fetch_memory(url)
@@ -224,7 +249,7 @@ get_scheme_overview <- function(
 
     names(scheme_overview) <- c("X1", "X2")
 
-    # Drop fields that aren't relevant to the scheme overview
+    # Filter non-relevant rows and insert source server links at top of summary
     scheme_overview <- scheme_overview[
       scheme_overview$X1 != "Accessory Scheme",
     ]

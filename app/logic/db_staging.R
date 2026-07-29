@@ -2,32 +2,17 @@
 #
 # Staging area for imported typing results.
 #
-# A profile table from a peer carries allele *identifiers*, not sequences. Those
-# isolates can therefore contribute to a distance matrix — Hamming compares
-# identity, not sequence — but they can never become first-class members of the
-# typing database, which needs the real DNA behind every allele call.
+# A profile table from a peer carries allele identifiers rather than raw sequences.
+# These isolates can participate in distance matrices (e.g., Hamming distance),
+# but they are not added directly to the main typing database tables (mlst, sequences,
+# hashes, metadata). Staging them separately preserves the seqid space, keeps
+# hash_database() functioning correctly, and ensures cleanly clonable exports.
 #
-# So they live in their own `imported_*` tables and are read only by the
-# distance path (Tree / MST). `mlst`, `sequences`, `hashes` and `metadata` are
-# never touched: the `seqid` space stays intact, `hash_database()` keeps working,
-# the `.db` export stays a clean clone, and a `.db` merge is unaffected.
-#
-# THE LINKABILITY PROBLEM
-#
-# An identifier is only useful if we can anchor it to a real allele:
-#
-#   hash        already the portable identity. Usable as-is.
-#   index       the integer is this database's `sequences.id` — a GLOBAL id, not
-#               a per-locus allele number. So we can simply ASK the database
-#               whether every (gene, integer) is a real (gene, seqid) pair here.
-#               Our own exports answer yes. A foreign per-locus profile answers
-#               no almost immediately (locus PA5568 has alleles {3868, 2}; a
-#               SeqSphere "3" is not one of them).
-#   +sequences  any identifier becomes linkable, because we hash the supplied
-#               DNA ourselves and get the portable identity back.
-#
-# We never invent an identity we cannot justify: an unlinkable profile is
-# refused, not silently turned into a meaningless distance.
+# Linkability model:
+#   * hash: Standard portable identity; usable as-is.
+#   * index: Matches the local database's `sequences.id` space. Linkability is verified
+#     by checking whether (gene, integer) maps to a valid local pair.
+#   * +sequences: FASTA sequences are hashed directly to establish portable identifiers.
 
 box::use(
   RSQLite[SQLite],
@@ -54,15 +39,12 @@ box::use(
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
-# An integer profile whose calls resolve at or above this rate came from this
-# database's lineage; the shortfall is alleles pruned from `sequences` since the
-# export (remove_isolates() drops unreferenced ones). Below it, the integers are
-# from another tool's numbering space and mean nothing here.
+# Minimum proportion of integer profile calls that must resolve locally to consider
+# the profile linked to this database lineage.
 LINK_RATE_OK <- 0.95
 
-# Below this share of already-known alleles, a hash profile almost certainly came
-# from a tool that hashes sequences differently than we do (different strand or
-# trimming), and the distances would be nonsense.
+# Minimum share of matching alleles required before warning about potential
+# hashing convention mismatches (e.g., strand differences or trimming).
 SHARED_RATE_WARN <- 0.5
 
 STAGING_TABLES <- c(
@@ -72,6 +54,12 @@ STAGING_TABLES <- c(
   "imported_metadata"
 )
 
+#' Ensure Staging Tables
+#'
+#' Creates staging tables (`imported_sets`, `imported_profiles`,
+#' `imported_sequences`, and `imported_metadata`) if they do not exist.
+#'
+#' @param con Active DBI database connection.
 #' @export
 ensure_staging_tables <- function(con) {
   have <- dbListTables(con)
@@ -111,8 +99,6 @@ ensure_staging_tables <- function(con) {
     )
   }
   if (!"imported_metadata" %in% have) {
-    # Long form: a peer's metadata columns are arbitrary, and this avoids
-    # ALTER TABLE churn on every import.
     dbExecute(
       con,
       "CREATE TABLE imported_metadata (
@@ -127,12 +113,15 @@ ensure_staging_tables <- function(con) {
 }
 
 # ---------------------------------------------------------------------------
-# The local allele universe
+# Local Allele Map
 # ---------------------------------------------------------------------------
 
-#' Every allele this database knows: `(gene, hash, seqid)`. `seqid` is the code
-#' the distance path already uses, so an imported allele that matches one of
-#' these can slot straight into the existing profile matrix.
+#' Retrieve Local Allele Map
+#'
+#' Fetches all known alleles in the target database as a data frame of `(gene, hash, seqid)`.
+#'
+#' @param db_path Path to SQLite database file.
+#' @return Data frame mapping gene names to sequence IDs and hashes.
 #' @export
 local_allele_map <- function(db_path) {
   con <- connect_ro(db_path)
@@ -157,18 +146,18 @@ local_allele_map <- function(db_path) {
 }
 
 # ---------------------------------------------------------------------------
-# Resolving a parsed profile to allele identities
+# Profile Resolution Logic
 # ---------------------------------------------------------------------------
 
-#' Turn a parsed profile (from `parse_profile_file()`) into `(isolate, gene,
-#' hash)` — the portable identity — or explain why it cannot be done.
+#' Resolve Parsed Profile
 #'
-#' `sequences` is an optional data.frame of `(gene, allele, sequence)` from an
-#' accompanying FASTA; it is what makes a foreign profile linkable.
+#' Maps a parsed profile to portable allele identities `(isolate, gene, hash)`.
+#' Validates input using supplied sequence data, hash checks, or local index lookups.
 #'
-#' Returns a list with `long` (NULL when unlinkable), `linkable`, `checks`
-#' (a pass/warn/fail data.frame in the same shape the Import panel already
-#' renders), and the rates behind them.
+#' @param db_path Path to SQLite database file.
+#' @param parsed Parsed profile structure from `parse_profile_file()`.
+#' @param sequences Optional data frame containing `(gene, allele, sequence)` from FASTA input.
+#' @return List with resolved long profile, linkability flag, check results, and summary metrics.
 #' @export
 resolve_profile <- function(db_path, parsed, sequences = NULL) {
   map <- local_allele_map(db_path)
@@ -198,8 +187,7 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
     ))
   }
 
-  # --- hash from the supplied sequences ------------------------------------
-  # Any identifier becomes portable once we can hash the DNA ourselves.
+  # --- Hashes derived from sequences ----------------------------------------
   if (!is.null(sequences) && nrow(sequences)) {
     seqmap <- sequences
     seqmap$gene <- norm_locus(seqmap$gene)
@@ -207,8 +195,6 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
 
     key <- paste(long$gene, long$value)
     seqkey <- paste(seqmap$gene, seqmap$allele)
-    # Our own FASTA is keyed by hash, so a hash profile matches on the allele id
-    # directly; a foreign FASTA is keyed by that tool's allele number.
     idx <- match(key, seqkey)
 
     resolved <- !is.na(idx)
@@ -231,7 +217,11 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
 
     checks <- rbind(
       checks,
-      .row("Allele values", "pass", sprintf("%s, resolved from the supplied sequences", kind)),
+      .row(
+        "Allele values",
+        "pass",
+        sprintf("%s, resolved from the supplied sequences", kind)
+      ),
       .row(
         "Sequences",
         if (rate == 1) "pass" else "warn",
@@ -241,7 +231,7 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
     return(.finish(db_path, long, kind, map, checks, sequences = seqmap))
   }
 
-  # --- hash profile, no sequences ------------------------------------------
+  # --- Direct Hash Profiles -------------------------------------------------
   if (identical(kind, "hash")) {
     long$hash <- tolower(long$value)
     checks <- rbind(
@@ -263,8 +253,7 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
     ))
   }
 
-  # --- integer profile, no sequences ---------------------------------------
-  # Ask the database whether these integers are its own seqids.
+  # --- Integer Profile Resolution -------------------------------------------
   key <- paste(long$gene, long$value)
   mapkey <- paste(map$gene, map$seqid)
   idx <- match(key, mapkey)
@@ -321,7 +310,10 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
       "Shared alleles",
       if (shared >= SHARED_RATE_WARN) "pass" else "warn",
       if (shared >= SHARED_RATE_WARN) {
-        sprintf("%.1f%% of the calls are alleles this database already holds", 100 * shared)
+        sprintf(
+          "%.1f%% of the calls are alleles this database already holds",
+          100 * shared
+        )
       } else {
         sprintf(
           paste(
@@ -382,11 +374,15 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
 }
 
 # ---------------------------------------------------------------------------
-# Writing / reading staged sets
+# Database Operations: Read / Write Staged Sets
 # ---------------------------------------------------------------------------
 
-#' Existing isolate names the import must not collide with: the typing
-#' database's souches plus every already-staged set's isolates.
+#' List Reserved Isolate Names
+#'
+#' Retrieves names of isolates currently present in the database or staged sets to prevent collisions.
+#'
+#' @param db_path Path to SQLite database file.
+#' @return Character vector of used isolate names.
 #' @export
 taken_isolate_names <- function(db_path) {
   con <- connect_ro(db_path)
@@ -402,10 +398,17 @@ taken_isolate_names <- function(db_path) {
   unique(c(setdiff(local, REF_SOUCHE), staged))
 }
 
-#' Persist a resolved profile as a named set.
+#' Stage Resolved Profile Set
 #'
-#' `renames` maps original isolate name -> final name (for collisions).
-#' `metadata` is an optional wide data.frame with an `isolate` column.
+#' Writes a resolved profile, optional novel sequences, and metadata into staging tables.
+#'
+#' @param db_path Path to SQLite database file.
+#' @param name Human-readable string identifier for the imported set.
+#' @param resolved Profile resolution output structure from `resolve_profile()`.
+#' @param metadata Optional metadata data frame with an `isolate` column.
+#' @param renames Optional named vector mapping old isolate names to new ones.
+#' @param source_file Name of the original source file.
+#' @return Assigned integer `set_id`.
 #' @export
 stage_profile_set <- function(
   db_path,
@@ -434,13 +437,13 @@ stage_profile_set <- function(
 
   ensure_staging_tables(con)
 
-  # Name first: re-importing the same file would otherwise fail on the isolate
-  # collision, which tells the user far less about what they actually did.
-  if (nrow(dbGetQuery(
-    con,
-    "SELECT 1 FROM imported_sets WHERE name = ?",
-    params = list(name)
-  ))) {
+  if (
+    nrow(dbGetQuery(
+      con,
+      "SELECT 1 FROM imported_sets WHERE name = ?",
+      params = list(name)
+    ))
+  ) {
     stop("An imported set named '", name, "' already exists.")
   }
 
@@ -483,8 +486,6 @@ stage_profile_set <- function(
         append = TRUE
       )
 
-      # Only the alleles we do not already hold: the rest are retrievable from
-      # `sequences` via the hash, so storing them again would just bloat the file.
       if (!is.null(resolved$sequences)) {
         novel <- dbGetQuery(
           con,
@@ -506,7 +507,9 @@ stage_profile_set <- function(
         }
       }
 
-      if (!is.null(metadata) && nrow(metadata) && "isolate" %in% names(metadata)) {
+      if (
+        !is.null(metadata) && nrow(metadata) && "isolate" %in% names(metadata)
+      ) {
         md <- metadata
         if (!is.null(renames) && length(renames)) {
           hit <- match(md$isolate, names(renames))
@@ -545,6 +548,12 @@ stage_profile_set <- function(
   )
 }
 
+#' List Imported Sets
+#'
+#' Retrieves metadata for all staged sets currently stored in the database.
+#'
+#' @param db_path Path to SQLite database file.
+#' @return Data frame listing staged profile sets ordered by import timestamp descending.
 #' @export
 list_imported_sets <- function(db_path) {
   empty <- data.frame(
@@ -560,7 +569,12 @@ list_imported_sets <- function(db_path) {
     stringsAsFactors = FALSE
   )
 
-  if (is.null(db_path) || length(db_path) != 1 || is.na(db_path) || !file.exists(db_path)) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
     return(empty)
   }
 
@@ -576,6 +590,12 @@ list_imported_sets <- function(db_path) {
   dbGetQuery(con, "SELECT * FROM imported_sets ORDER BY imported_at DESC")
 }
 
+#' Delete Imported Set
+#'
+#' Removes a staged set and cleans up any unreferenced imported sequences.
+#'
+#' @param db_path Path to SQLite database file.
+#' @param set_id Target integer identifier of the set to remove.
 #' @export
 delete_imported_set <- function(db_path, set_id) {
   con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
@@ -617,8 +637,13 @@ delete_imported_set <- function(db_path, set_id) {
   invisible(TRUE)
 }
 
-#' Allele calls of the given sets, as `(isolate, gene, hash)`. This is what the
-#' distance path consumes.
+#' Get Imported Long Profile
+#'
+#' Extracts allele calls in long format `(isolate, gene, hash)` for specified staged sets.
+#'
+#' @param db_path Path to SQLite database file.
+#' @param set_ids Vector of target integer set identifiers.
+#' @return Data frame of allele mappings.
 #' @export
 imported_profile_long <- function(db_path, set_ids) {
   empty <- data.frame(
@@ -648,9 +673,13 @@ imported_profile_long <- function(db_path, set_ids) {
   )
 }
 
-#' Staged metadata pivoted back to a wide frame, with the `isolate` column plus
-#' a `source` column naming the set. Shaped so it can be row-bound onto
-#' `make_metadata_table()`'s output.
+#' Pivot Staged Metadata to Wide Format
+#'
+#' Fetches staged metadata for specified set IDs and formats it into a wide frame compatible with local metadata representations.
+#'
+#' @param db_path Path to SQLite database file.
+#' @param set_ids Vector of target integer set identifiers.
+#' @return Wide data frame containing metadata fields per isolate, or `NULL` if empty.
 #' @export
 imported_metadata_wide <- function(db_path, set_ids) {
   if (!length(set_ids)) {

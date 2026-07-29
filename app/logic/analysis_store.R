@@ -1,17 +1,8 @@
 # app/logic/analysis_store.R
 #
-# Persistence for the Analysis Dashboard.
-#
-# A dashboard "Analysis" is a named container of saved "Plots"; each Plot holds
-# the full input snapshot needed to reproduce a visualization plus a base64 PNG
-# thumbnail shown in the dashboard box. Everything lives inside the loaded
-# PhyloTrace `.db` itself (tables prefixed `phylotrace_`), so Analyses are
-# automatically scoped to their database and travel with the file when it is
-# moved or shared.
-#
-# All access follows the app's standard idiom: open a private connection, close
-# it on exit, and use parameterised statements. Callers pass the `db_path` that
-# the rest of the app threads down from the landing page.
+# Persistence layer for Analysis Dashboard containers and visualization plots.
+# Stores saved analyses, plot input configurations, and thumbnails within the
+# SQLite database (`phylotrace_` prefixed tables).
 
 box::use(
   DBI[
@@ -31,10 +22,10 @@ box::use(
 
 SCHEMA_VERSION <- "1"
 
-# ISO-ish local timestamp used for created/modified columns.
+# Helper: returns formatted local timestamp for record creation/modification columns.
 .now <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
-# A usable single-file path pointing at an existing database.
+# Helper: validates that a database path argument is non-empty and exists.
 .usable <- function(db_path) {
   !is.null(db_path) &&
     length(db_path) == 1 &&
@@ -43,6 +34,7 @@ SCHEMA_VERSION <- "1"
     file.exists(db_path)
 }
 
+# Helper: returns empty data frame structure for analyses queries.
 .empty_analyses <- function() {
   data.frame(
     id = integer(0),
@@ -53,6 +45,7 @@ SCHEMA_VERSION <- "1"
   )
 }
 
+# Helper: returns empty data frame structure for plots queries.
 .empty_plots <- function() {
   data.frame(
     id = integer(0),
@@ -66,13 +59,12 @@ SCHEMA_VERSION <- "1"
   )
 }
 
-# 32-char hex identity string, stamped once per database.
+# Helper: generates a random 32-character hex UUID string.
 .new_uuid <- function() {
   paste(as.character(rand_bytes(16)), collapse = "")
 }
 
-# CREATE TABLE IF NOT EXISTS for the three tables. Cheap and idempotent, so
-# every write path calls it — a write can never fail on a missing table.
+# Ensures core tables and migration columns exist in the target database connection.
 .ensure_tables <- function(con) {
   dbExecute(
     con,
@@ -93,8 +85,7 @@ SCHEMA_VERSION <- "1"
        isolate_universe TEXT
      )"
   )
-  # Migrations: add columns introduced after the table first shipped (SQLite
-  # appends them; NULL = unset / no static selection).
+
   have_cols <- dbListFields(con, "phylotrace_analyses")
   for (col in setdiff(
     c("description", "isolate_selection", "isolate_universe"),
@@ -105,6 +96,7 @@ SCHEMA_VERSION <- "1"
       sprintf("ALTER TABLE phylotrace_analyses ADD COLUMN %s TEXT", col)
     )
   }
+
   dbExecute(
     con,
     "CREATE TABLE IF NOT EXISTS phylotrace_plots (
@@ -121,14 +113,18 @@ SCHEMA_VERSION <- "1"
   invisible(NULL)
 }
 
+# Helper: fetches the integer primary key of the last inserted row.
 .last_id <- function(con) {
   as.integer(dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]])
 }
 
-#' Create the schema (if absent) and stamp identity/version rows.
+#' Ensure Database Schema and Versioning Metadata
 #'
-#' Safe to call on every database load. Returns the database's stable UUID, or
-#' NULL when `db_path` is not a usable database file.
+#' Initializes required `phylotrace_` database tables and populates schema
+#' versioning and database UUID entries if missing.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Character UUID string for the database, or `NULL` if invalid path.
 #' @export
 ensure_schema <- function(db_path) {
   if (!.usable(db_path)) {
@@ -163,8 +159,13 @@ ensure_schema <- function(db_path) {
   uuid
 }
 
-#' All Analyses in the database, oldest first. Empty data.frame when the
-#' database is unusable or the schema does not exist yet.
+#' List All Saved Analyses
+#'
+#' Retrieves summary metadata for all saved analyses ordered by creation index.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame of available analyses, or an empty schema structure if
+#'   unusable.
 #' @export
 list_analyses <- function(db_path) {
   if (!.usable(db_path)) {
@@ -186,11 +187,13 @@ list_analyses <- function(db_path) {
   )
 }
 
-#' Whether two isolate selections describe a different set.
+#' Check for Isolate Selection Differences
 #'
-#' NULL means "all isolates" (no restriction), so it is only equal to another
-#' NULL. Order is irrelevant. Shared by the dashboard (retrospective-change
-#' confirmation, drift hints) and the Visualization module (reopen warning).
+#' Compares two isolate selection vectors, ignoring element order.
+#'
+#' @param a Character vector of isolate names or `NULL`.
+#' @param b Character vector of isolate names or `NULL`.
+#' @return Logical `TRUE` if selections differ, `FALSE` otherwise.
 #' @export
 selection_differs <- function(a, b) {
   if (is.null(a) && is.null(b)) {
@@ -202,12 +205,12 @@ selection_differs <- function(a, b) {
   !setequal(a, b)
 }
 
-#' The isolate names currently in the database, sorted.
+#' List Isolate Names from Database
 #'
-#' Read-only on purpose: `make_metadata_table()` also yields the isolate list
-#' but creates/backfills the `metadata` table as a side effect, which is far too
-#' heavy for the drift checks the dashboard runs on every render. Returns
-#' `character(0)` when the database is unusable or has no `mlst` table.
+#' Queries distinct non-reference isolate identifiers from the MLST table.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Character vector of sorted isolate names.
 #' @export
 list_isolates <- function(db_path) {
   if (!.usable(db_path)) {
@@ -228,7 +231,11 @@ list_isolates <- function(db_path) {
   as.character(res$souche)
 }
 
-#' A single Analysis row, or NULL when not found.
+#' Retrieve Analysis Record by ID
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer analysis identifier.
+#' @return Named list containing analysis properties, or `NULL` if not found.
 #' @export
 get_analysis <- function(db_path, id) {
   if (!.usable(db_path)) {
@@ -257,9 +264,12 @@ get_analysis <- function(db_path, id) {
   as.list(res[1, ])
 }
 
-#' Set (or clear) an Analysis's static isolate selection. `selection_json` is a
-#' JSON array of isolate names to fix for every plot in the Analysis, or NULL to
-#' clear it (plots then use their own per-plot selection).
+#' Update Static Isolate Selection for an Analysis
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer analysis identifier.
+#' @param selection_json Character JSON array of isolate names, or `NULL` to reset.
+#' @return Invisible `NULL`.
 #' @export
 set_analysis_selection <- function(db_path, id, selection_json) {
   con <- dbConnect(SQLite(), db_path)
@@ -281,12 +291,17 @@ set_analysis_selection <- function(db_path, id, selection_json) {
   invisible(NULL)
 }
 
-#' Insert a new Analysis; returns its integer id. `description` and
-#' `isolate_selection` (a JSON array, or NULL for "all isolates") are optional
-#' and captured during the dashboard's setup wizard. `isolate_universe` is the
-#' concrete isolate list the database held when the Analysis was configured —
-#' recorded even when nothing is restricted, so later isolate additions to the
-#' database can be detected (see list_isolates()).
+#' Insert a New Analysis Container
+#'
+#' Creates a new analysis entry with optional static selection constraints and
+#' universe tracking.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param name Display name for the analysis.
+#' @param description Optional detailed text description.
+#' @param isolate_selection Optional JSON array of isolate names.
+#' @param isolate_universe Optional JSON array recording active isolates at creation time.
+#' @return Integer ID of the newly created analysis.
 #' @export
 add_analysis <- function(
   db_path,
@@ -320,6 +335,12 @@ add_analysis <- function(
   new_id
 }
 
+#' Rename an Analysis
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer analysis identifier.
+#' @param name New display name.
+#' @return Invisible `NULL`.
 #' @export
 rename_analysis <- function(db_path, id, name) {
   con <- dbConnect(SQLite(), db_path)
@@ -335,9 +356,17 @@ rename_analysis <- function(db_path, id, name) {
   invisible(NULL)
 }
 
-#' Update an Analysis's full settings (name, description, static isolate
-#' selection, recorded isolate universe) from the dashboard's setup wizard.
-#' NULL clears the field.
+#' Update Analysis Container Settings
+#'
+#' Replaces name, description, static selection, and recorded isolate universe.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer analysis identifier.
+#' @param name Display name.
+#' @param description Optional detailed text description.
+#' @param isolate_selection Optional JSON array of isolate names.
+#' @param isolate_universe Optional JSON array recording active isolates.
+#' @return Invisible `NULL`.
 #' @export
 update_analysis_settings <- function(
   db_path,
@@ -370,7 +399,14 @@ update_analysis_settings <- function(
   invisible(NULL)
 }
 
-#' Delete an Analysis and every Plot it contains.
+#' Delete an Analysis and Associated Plots
+#'
+#' Cascades deletion to remove all child plot records associated with the target
+#' analysis ID.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer analysis identifier.
+#' @return Invisible `NULL`.
 #' @export
 delete_analysis <- function(db_path, id) {
   con <- dbConnect(SQLite(), db_path)
@@ -392,8 +428,13 @@ delete_analysis <- function(db_path, id) {
   invisible(NULL)
 }
 
-#' Plots in an Analysis, oldest first. Excludes the (potentially large)
-#' `inputs_json`; use `get_plot()` to fetch a single plot's snapshot.
+#' List Saved Plots for an Analysis
+#'
+#' Fetches plot metadata and thumbnail strings, excluding heavy input JSON bodies.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param analysis_id Integer analysis identifier.
+#' @return Data frame of plot records.
 #' @export
 list_plots <- function(db_path, analysis_id) {
   if (!.usable(db_path)) {
@@ -417,7 +458,11 @@ list_plots <- function(db_path, analysis_id) {
   )
 }
 
-#' A single Plot row including `inputs_json`, or NULL when not found.
+#' Retrieve Complete Plot Entry by ID
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer plot identifier.
+#' @return Named list containing complete plot properties, including `inputs_json`.
 #' @export
 get_plot <- function(db_path, id) {
   if (!.usable(db_path)) {
@@ -446,10 +491,19 @@ get_plot <- function(db_path, id) {
   as.list(res[1, ])
 }
 
-#' Insert a new Plot (when `plot_id` is NULL) or overwrite an existing one.
-#' Returns the plot's integer id.
+#' Create or Overwrite a Saved Plot
 #'
-#' On overwrite, `created` is preserved and only `modified` advances.
+#' Inserts a new plot or updates an existing plot entry. Preserves original creation
+#' timestamp during updates.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param analysis_id Integer analysis identifier.
+#' @param plot_id Integer plot identifier (or `NULL` to create new).
+#' @param name Display name for the plot.
+#' @param plot_type Character code defining visualizer type.
+#' @param inputs_json JSON string of full visualization input parameters.
+#' @param thumb_b64 Base64 encoded PNG preview string.
+#' @return Integer plot identifier.
 #' @export
 upsert_plot <- function(
   db_path,
@@ -511,10 +565,7 @@ upsert_plot <- function(
   as.integer(plot_id)
 }
 
-# Name for a copy of `base`, avoiding anything already in `existing`.
-# "MST plot" -> "MST plot (copy)" -> "MST plot (copy 2)" -> ...
-# An existing copy suffix is stripped first, so duplicating "MST plot (copy)"
-# yields "MST plot (copy 2)" rather than "MST plot (copy) (copy)".
+# Helper: generates incremental unique copy display names to prevent naming collisions.
 .copy_name <- function(base, existing) {
   root <- sub(" \\(copy(?: [0-9]+)?\\)$", "", base)
   candidate <- paste0(root, " (copy)")
@@ -526,9 +577,14 @@ upsert_plot <- function(
   candidate
 }
 
-#' Duplicate a Plot within its Analysis, carrying over its full settings
-#' snapshot and thumbnail under a non-clashing "(copy)" name. Returns the new
-#' plot's id, or NULL when the source doesn't exist.
+#' Duplicate an Existing Plot Entry
+#'
+#' Copies configuration parameters and thumbnail into a new plot entry with an
+#' automatically appended suffix name.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer source plot identifier.
+#' @return Integer ID of the newly created duplicate plot, or `NULL` if source missing.
 #' @export
 duplicate_plot <- function(db_path, id) {
   con <- dbConnect(SQLite(), db_path)
@@ -575,7 +631,12 @@ duplicate_plot <- function(db_path, id) {
   new_id
 }
 
-#' Update just a Plot's display name (used by the box inline rename).
+#' Rename a Plot Record
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer plot identifier.
+#' @param name New display name for the plot.
+#' @return Invisible `NULL`.
 #' @export
 rename_plot <- function(db_path, id, name) {
   con <- dbConnect(SQLite(), db_path)
@@ -591,6 +652,11 @@ rename_plot <- function(db_path, id, name) {
   invisible(NULL)
 }
 
+#' Delete a Plot Record
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param id Integer plot identifier.
+#' @return Invisible `NULL`.
 #' @export
 delete_plot <- function(db_path, id) {
   con <- dbConnect(SQLite(), db_path)

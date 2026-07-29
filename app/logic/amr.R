@@ -1,27 +1,21 @@
 # app/logic/amr.R
 #
-# Antimicrobial resistance (AMR) screening, riding along with the cgMLST /
-# classical MLST typing run. Each freshly typed assembly is screened with
-# abritamr (a curation wrapper around NCBI AMRFinderPlus, installed in the app's
-# own conda env) and the results are stored in the mother database, keyed on the
-# same isolate key (strain name = FASTA basename) used by `classical_mlst`
-# / `metadata`.
+# AMR screening that runs with cgMLST / classical MLST typing.
+# Each typed assembly is screened with abritamr (NCBI AMRFinderPlus wrapper)
+# and results are stored in the database under the same isolate key
+# (strain name = FASTA basename) used by classical_mlst and metadata.
 #
-# AMRFinderPlus always runs with `--plus`, so it reports acquired AMR genes,
-# virulence factors and stress/metal/biocide elements. Passing `--organism`
-# (via abritamr's `--species`) additionally calls resistance point mutations,
-# but only for a fixed set of supported species. When the loaded scheme's
-# species is not supported we fall back to running without it: everything except
-# point mutations is still detected.
+# AMRFinderPlus is always invoked with --plus (acquired genes, virulence,
+# stress/metal/biocide). --organism (via abritamr --species) adds resistance
+# point mutations for supported species only; otherwise gene detection alone
+# is performed.
 #
-# Two tables are written (both created lazily, mirroring `classical_mlst`):
-#   * amr_results  - one row per detected element (parsed from amrfinder.out),
-#                    the granular source of truth.
-#   * amr_summary  - abritamr's curated per-isolate drug-class rollup, stored
-#                    tidy/long (isolate, section, drug_class, genes) so it pivots
-#                    trivially to the classic matrix without dynamic columns.
-# Run-level provenance (tool versions, AMRFinder DB version, whether point
-# mutations were enabled) is denormalised onto every amr_results row.
+# Tables (created lazily, same pattern as classical_mlst):
+#   amr_results  – one row per element from amrfinder.out
+#   amr_summary  – abritamr drug-class rollup, tidy
+#                  (isolate, section, drug_class, genes)
+# Provenance (tool/DB versions, point-mutation flag) is stored on every
+# amr_results row.
 
 box::use(
   RSQLite[SQLite],
@@ -39,9 +33,8 @@ box::use(
   app / logic / logging[log_event],
 )
 
-# abritamr's `--species` accepted values (from `abritamr run --help`). Some are
-# genus-level (Campylobacter, Escherichia, Salmonella): a "Genus species" name
-# that has no exact match is retried against the genus alone.
+# Values accepted by abritamr --species.
+# Genus-only entries allow fallback when a full binomial has no exact match.
 SUPPORTED_AMR_SPECIES <- c(
   "Acinetobacter_baumannii",
   "Burkholderia_cepacia",
@@ -73,12 +66,8 @@ SUPPORTED_AMR_SPECIES <- c(
   "Vibrio_parahaemolyticus"
 )
 
-### Map a mother-DB species string to an abritamr `--species` token
-# `db_species` is the free-text species recorded for the loaded scheme (e.g.
-# "Pseudomonas aeruginosa"). Returns the matching supported token so point
-# mutations can be called, or NA when the species is unknown / unsupported (the
-# caller then runs abritamr without `--species`, i.e. the no-point-mutation
-# fallback).
+# Map free-text scheme species to an abritamr --species token.
+# Returns the token when supported, otherwise NA (caller omits --species).
 #' @export
 amr_species <- function(db_species) {
   if (
@@ -90,8 +79,7 @@ amr_species <- function(db_species) {
     return(NA_character_)
   }
   words <- strsplit(trimws(db_species), "\\s+")[[1]]
-  # Try "Genus_species" first, then the genus on its own (for the genus-level
-  # entries in the supported set).
+  # Try Genus_species first, then genus alone.
   candidates <- c(
     if (length(words) >= 2) paste(words[1], words[2], sep = "_"),
     words[1]
@@ -100,10 +88,8 @@ amr_species <- function(db_species) {
   if (length(hit)) hit[1] else NA_character_
 }
 
-### Scrape AMR run provenance from the typing log
-# The typing shell script emits the tool / database versions once (before the
-# genome loop) as `AMR ... version:` sentinel lines; parsed here into a list,
-# each NA when its line is absent. Mirrors `parse_clamlst_meta()`.
+# Pull abritamr / AMRFinder / DB versions from typing-log sentinel lines.
+# Missing lines become NA. Mirrors parse_clamlst_meta().
 #' @export
 parse_amr_meta <- function(log_lines) {
   log_text <- paste(log_lines, collapse = "\n")
@@ -123,17 +109,13 @@ parse_amr_meta <- function(log_lines) {
   )
 }
 
-# Read a value-keyed column from a data frame by exact (spaced) header name,
-# tolerating its absence across AMRFinderPlus versions.
+# Safe column lookup by exact header name; returns default when column is absent.
 .col <- function(df, name, default = NA) {
   if (name %in% names(df)) df[[name]] else rep(default, max(1L, nrow(df)))
 }
 
-### Parse an amrfinder.out TSV into the amr_results column shape
-# Returns a data frame with one row per detected element (empty when the file is
-# missing or holds only its header). Column names are the long AMRFinderPlus
-# headers; they are looked up by name so column order / extra columns do not
-# matter.
+# Parse amrfinder.out into the amr_results shape (one row per element).
+# Empty data.frame when file is missing or header-only. Columns matched by name.
 #' @export
 parse_amrfinder_out <- function(path) {
   empty <- data.frame(
@@ -196,11 +178,9 @@ parse_amrfinder_out <- function(path) {
   )
 }
 
-# Melt one abritamr summary_*.txt (single-sample: a header row of drug-class /
-# group names led by "Isolate", then one data row of comma-joined gene lists).
-# The "Isolate" cell holds abritamr's own label (the output prefix path), so it
-# is dropped - the caller supplies the real isolate. Returns (drug_class, genes)
-# for every non-empty cell.
+# Melt a single-sample abritamr summary_*.txt into (drug_class, genes) rows.
+# Header is drug-class names (led by "Isolate"); data row holds comma-joined
+# gene lists. Isolate cell is dropped; caller supplies the real isolate.
 .melt_summary <- function(path) {
   empty <- data.frame(
     drug_class = character(0),
@@ -230,10 +210,7 @@ parse_amrfinder_out <- function(path) {
     if (is.na(val) || !nzchar(val)) {
       return(NULL)
     }
-    # abritamr packs every gene it found for a drug class into one comma-joined
-    # cell (e.g. "mexE,mexX*"). Split it so each gene becomes its own row - the
-    # amr_summary table stays tidy (one gene per row), keeping its `*`/`^` quality
-    # flags intact.
+    # One gene per row; quality flags (*, ^) are kept.
     genes <- trimws(strsplit(val, ",", fixed = TRUE)[[1]])
     genes <- genes[nzchar(genes)]
     if (!length(genes)) {
@@ -245,9 +222,8 @@ parse_amrfinder_out <- function(path) {
   if (is.null(out)) empty else out
 }
 
-### Parse abritamr's three summary files into the tidy amr_summary shape
-# Returns a data frame(section, drug_class, genes) with section in
-# matches / partials / virulence; empty when nothing was reported.
+# Combine the three abritamr summary files into tidy (section, drug_class, genes).
+# section ∈ {matches, partials, virulence}. Empty when nothing reported.
 #' @export
 parse_abritamr_summary <- function(dir) {
   files <- c(
@@ -275,15 +251,11 @@ parse_abritamr_summary <- function(dir) {
   }
 }
 
-### Persist one strain's AMR screen into the mother database
-# Reads `amr_dir/amrfinder.out` (granular hits) and `amr_dir/summary_*.txt`
-# (curated rollup) and writes them to `amr_results` / `amr_summary`, both keyed
-# on `isolate = strain`. A strain's existing rows are replaced so re-screening
-# never duplicates them. When amrfinder.out is absent the screen did not run for
-# this strain, so nothing is touched (existing rows are preserved). A strain that
-# was screened but had no hits ends up with no rows - matching how a genome with
-# no called classical loci is stored. Best-effort: any failure rolls back and
-# returns FALSE without affecting cgMLST / classical MLST results.
+# Write one strain's AMR hits and summary into the database.
+# Replaces any prior rows for the isolate. If amrfinder.out is missing the
+# screen never ran and existing rows are left unchanged. A clean screen with
+# zero hits stores zero rows. Failure rolls back and returns FALSE; other
+# typing results are unaffected.
 #' @export
 store_amr_results <- function(
   db_path,
@@ -312,8 +284,7 @@ store_amr_results <- function(
     return(invisible(FALSE))
   }
 
-  # amrfinder.out is the proof the screen actually ran; without it, leave any
-  # existing rows for this strain untouched.
+  # No amrfinder.out → screen did not run; leave prior rows alone.
   amrfinder_out <- file.path(amr_dir, "amrfinder.out")
   if (!file.exists(amrfinder_out)) {
     return(invisible(FALSE))
@@ -371,7 +342,6 @@ store_amr_results <- function(
   dbBegin(con)
   ok <- tryCatch(
     {
-      # Refresh this strain's rows so re-screening never duplicates them.
       dbExecute(
         con,
         "DELETE FROM amr_results WHERE isolate = ?",
@@ -439,7 +409,11 @@ store_amr_results <- function(
     },
     error = function(e) FALSE
   )
-  if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
+  if (isTRUE(ok)) {
+    dbCommit(con)
+  } else {
+    dbRollback(con)
+  }
 
   log_event(
     "DB",

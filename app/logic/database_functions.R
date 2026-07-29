@@ -1,37 +1,41 @@
 # app/logic/database_functions.R
+#
+# Core database utilities for PhyloTrace, providing schema migration, metadata
+# table initialization and updates, and data fetching for classical MLST, AMR
+# screening, locus information, and isolate deletions.
 
 box::use(
   DBI[
+    dbBegin,
+    dbClearResult,
+    dbCommit,
     dbConnect,
     dbDisconnect,
-    dbListTables,
-    dbSendQuery,
-    dbFetch,
-    dbClearResult,
-    dbReadTable,
-    dbWriteTable,
-    dbListFields,
-    dbGetQuery,
     dbExecute,
-    dbBegin,
-    dbCommit,
-    dbRollback
+    dbFetch,
+    dbGetQuery,
+    dbListFields,
+    dbListTables,
+    dbReadTable,
+    dbRollback,
+    dbSendQuery,
+    dbWriteTable
   ],
   RSQLite[SQLite],
-  app / logic / field_labels[MLST_COL_PREFIX, AMR_COL_PREFIX],
-  app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / db_compat[REF_SOUCHE],
+  app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
+  app / logic / field_labels[AMR_COL_PREFIX, MLST_COL_PREFIX],
   app / logic / logging[log_event],
 )
 
-# The scheme's `targets` table stores loci as "FTL_0001" while the `mlst` table
-# stores the same locus as "FTL-0001"; normalise the separator so the two can
-# be matched.
+# Helper: normalizes locus names by converting underscores to hyphens for matching.
 .norm_locus <- function(x) gsub("[-_]", "-", x)
 
-# PhyloTrace-owned tables that key on an isolate name. pyMLST's own `mlst` is
-# deliberately absent: it spells the same key `souche`, that column is written by
-# pyMLST/alembic, and it is the one place in the schema allowed to say so.
+#' Tables Keyed on Isolate Name
+#'
+#' Character vector of PhyloTrace-managed tables that use `isolate` as a key.
+#' Note: pyMLST's own `mlst` table is deliberately excluded as it uses `souche`.
+#' @export
 ISOLATE_KEYED_TABLES <- c(
   "classical_mlst",
   "amr_results",
@@ -40,17 +44,13 @@ ISOLATE_KEYED_TABLES <- c(
   "genome_hashes"
 )
 
-### Bring a database's isolate key up to the current spelling
-# These tables used to inherit pyMLST's `souche` for their isolate column. They
-# now say `isolate`, so a database written before that change carries columns no
-# query can find - the app fails on load with "no such column: isolate". The
-# rename is metadata-only (SQLite rewrites the schema, not the rows), so it costs
-# nothing on a large database and is safe to attempt on every load: a table
-# already using `isolate`, or missing entirely, is skipped.
-#
-# Runs beside hash_database() when a database is opened. Best-effort by design -
-# a failure here must not stop the database from loading, and the caller finds
-# out through the same "no such column" error it would have had anyway.
+#' Migrate Database Isolate Column Names
+#'
+#' Legacy database versions used `souche` for isolate keys in custom tables.
+#' This function renames `souche` columns to `isolate` in relevant tables if needed.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Invisible character vector listing the names of modified tables.
 #' @export
 migrate_isolate_key <- function(db_path) {
   if (
@@ -100,7 +100,12 @@ migrate_isolate_key <- function(db_path) {
   invisible(renamed)
 }
 
-
+#' Load Scheme Overview Data
+#'
+#' Reads the high-level scheme summary table from the database if available.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame containing scheme overview information, or `NULL` if missing.
 #' @export
 load_db_scheme_overview <- function(db_path) {
   con <- dbConnect(SQLite(), db_path)
@@ -116,11 +121,12 @@ load_db_scheme_overview <- function(db_path) {
   return(dbReadTable(con, "scheme_overview"))
 }
 
-#' Read the organism/species name stored in the database's `mlst_type` table.
+#' Load Database Organism / Species
 #'
-#' This is the authoritative species of the loaded scheme (written at typing
-#' time) and is more robust than parsing it out of the scheme overview. Returns
-#' a single species string, or NULL when the table or value is absent.
+#' Extracts the species name stored in the `mlst_type` table.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Character scalar with the species name, or `NULL` if missing or unpopulated.
 #' @export
 load_db_species <- function(db_path) {
   con <- dbConnect(SQLite(), db_path)
@@ -143,6 +149,13 @@ load_db_species <- function(db_path) {
   species[[1]]
 }
 
+#' Construct or Synchronize Metadata Table
+#'
+#' Ensures the `metadata` table exists in the database and includes all present isolates.
+#' Automatically handles missing schema columns and appends unlisted isolates.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame representing the full `metadata` table, or `NULL` if prerequisites missing.
 #' @export
 make_metadata_table <- function(db_path) {
   con <- dbConnect(SQLite(), db_path)
@@ -155,7 +168,7 @@ make_metadata_table <- function(db_path) {
     return()
   }
 
-  # Get present isolates
+  # Query distinct isolates excluding reference strains
   res <- dbSendQuery(con, "SELECT DISTINCT souche FROM mlst")
   all_isolates <- unname(unlist(dbFetch(res)))
   dbClearResult(res)
@@ -164,20 +177,10 @@ make_metadata_table <- function(db_path) {
     return()
   }
 
-  # Get current organism
   organism <- dbReadTable(con, "mlst_type")$species
-
-  # Timestamp stamped on rows created now: the moment this database first
-  # records the isolate (and its cgMLST profile). Rows migrated onto an existing
-  # table keep NA — their true add time predates the column and is unknowable.
   now <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
-  # The authoritative per-isolate typing time is `genome_hashes.hashed_at`,
-  # stamped when the typed assembly was hashed. Prefer it; fall back to `now` for
-  # any isolate without a hash row (hashing skipped, or an imported isolate).
-  # `called_at_for()` maps an isolate vector to its stamp. `hashed_at` itself
-  # carries sub-second precision (as.character(Sys.time())); truncated to whole
-  # seconds here since `called_at` is a human-facing field.
+  # Lookup typing timestamp from genome_hashes if available
   hashed_at <- character(0)
   if ("genome_hashes" %in% tables) {
     gh <- tryCatch(
@@ -185,7 +188,10 @@ make_metadata_table <- function(db_path) {
       error = function(e) NULL
     )
     if (!is.null(gh) && nrow(gh)) {
-      hashed_at <- stats::setNames(substr(as.character(gh$hashed_at), 1, 19), gh$isolate)
+      hashed_at <- stats::setNames(
+        substr(as.character(gh$hashed_at), 1, 19),
+        gh$isolate
+      )
     }
   }
   called_at_for <- function(iso) {
@@ -194,7 +200,7 @@ make_metadata_table <- function(db_path) {
     stamp
   }
 
-  # If metadata table exists, only append rows for isolates not yet listed
+  # Append new isolates or migrate missing columns if table exists
   if ("metadata" %in% tables) {
     # Migrate metadata tables created before newer columns were added: SQLite
     # appends new columns at the end, matching the build-path column order.
@@ -231,12 +237,6 @@ make_metadata_table <- function(db_path) {
         geo_loc_coordinates = NA_character_,
         stringsAsFactors = FALSE
       )
-      # Rows only ever reach this branch for isolates that appeared in `mlst`
-      # without a metadata row of their own - i.e. typing wrote them, since a
-      # merge writes both together (see .write_metadata in db_import.R). Rows
-      # that predate the column keep NULL: this database has no record of how
-      # they arrived, and calling them local would make a merged-in isolate look
-      # native.
       new_rows[[SOURCE_COL]] <- SOURCE_LOCAL
       dbWriteTable(con, "metadata", new_rows, append = TRUE)
       log_event(
@@ -249,7 +249,7 @@ make_metadata_table <- function(db_path) {
     return(dbReadTable(con, "metadata"))
   }
 
-  # Build standard metadata table (GenEpiO-aligned fields)
+  # Initialize new metadata structure
   metadata <- data.frame(
     isolate = isolates,
     primary_laboratory_sample_id = NA_character_,
@@ -268,11 +268,8 @@ make_metadata_table <- function(db_path) {
     geo_loc_coordinates = NA_character_,
     stringsAsFactors = FALSE
   )
-  # A database with no metadata table at all has no import history to lose:
-  # everything in it was typed here.
   metadata[[SOURCE_COL]] <- SOURCE_LOCAL
 
-  # Write table to database
   dbWriteTable(con, "metadata", metadata)
   log_event(
     "DB",
@@ -283,9 +280,12 @@ make_metadata_table <- function(db_path) {
   return(metadata)
 }
 
-#' The `metadata` table's column names, or `character(0)` when the database has
-#' no metadata table. Read-only: unlike `make_metadata_table()` this never
-#' creates or migrates anything, so it is safe to call from a UI renderer.
+#' Get Metadata Fields
+#'
+#' Retrieves list of column names present in the database `metadata` table.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Character vector of field names, or `character(0)` if table missing/invalid.
 #' @export
 metadata_columns <- function(db_path) {
   if (
@@ -307,31 +307,18 @@ metadata_columns <- function(db_path) {
   dbListFields(con, "metadata")
 }
 
-# First non-empty value of `v`, or NA. Classical-MLST fields that are
-# strain-level (st, status) repeat across an isolate's per-locus rows, so any of
-# them stands in for the isolate.
+# Helper: extracts the first non-null/non-empty string from a character vector.
 .first_nonempty <- function(v) {
   v <- v[!is.na(v) & nzchar(v)]
   if (length(v)) v[[1]] else NA_character_
 }
 
-#' Per-isolate classical-MLST summary, wide, for display only.
+#' Load Classical MLST Results
 #'
-#' `classical_mlst` (written by pymlst at typing time) stores one row per
-#' (isolate, locus), with the strain-level ST and status repeated on each of the
-#' isolate's rows. This pivots it to one row per isolate: a `<prefix>st` column
-#' plus one `<prefix><locus>` column per locus holding that isolate's allele,
-#' where `<prefix>` is `MLST_COL_PREFIX`. Loci keep the order in which they were
-#' typed. Every column is character.
+#' Pivots non-7-gene classical MLST database records into a wide per-isolate display layout.
 #'
-#' The sequence type shows the registered ST number for a known profile;
-#' otherwise it shows the call `status` (e.g. "novel", "partial"), because a
-#' novel/partial profile has no ST to report and that distinction is what the
-#' viewer needs to see. This is a display convenience only.
-#'
-#' This never touches the `metadata` table - it is a read-only companion other
-#' views merge in at display time (see `append_classical_mlst`). Returns NULL
-#' when the database has no `classical_mlst` table or it holds no rows.
+#' @param db_path Character path to the SQLite database file.
+#' @return Wide data frame with isolate columns and locus alleles, or `NULL` if missing.
 #' @export
 load_classical_mlst <- function(db_path) {
   if (
@@ -350,7 +337,7 @@ load_classical_mlst <- function(db_path) {
     return(NULL)
   }
 
-  # `status` is part of the pymlst schema, but tolerate its absence so a
+  # absence of `status` is tolerated so a
   # partially-written table never errors the whole browse view.
   has_status <- "status" %in% dbListFields(con, "classical_mlst")
   cm <- dbGetQuery(
@@ -371,7 +358,7 @@ load_classical_mlst <- function(db_path) {
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
   # ST display: the registered number when known, otherwise the status word
-  # ("novel"/"partial") so a profile without an ST is still self-explanatory.
+  # ("novel"/"partial")
   st <- vapply(
     isolates,
     function(s) .first_nonempty(cm$st[cm$isolate == s]),
@@ -396,17 +383,13 @@ load_classical_mlst <- function(db_path) {
   out
 }
 
-#' Merge the display-only classical-MLST columns into a metadata frame keyed on
-#' `isolate`.
+#' Append Classical MLST Data to Metadata
 #'
-#' Reusable across views (the browse table, the visualization engines): given a
-#' metadata data frame and the database path, it appends the
-#' `load_classical_mlst` columns, matched by isolate, and records the names it
-#' added in the result's `"mlst_cols"` attribute (so callers can style them
-#' read-only, group them, or strip them before a save). Columns that would
-#' shadow an existing metadata field are skipped, so real metadata always wins.
-#' `meta` is returned unchanged (with an empty `"mlst_cols"`) when it is not a
-#' non-empty isolate-keyed frame or the database has no classical typing.
+#' Joins wide classical MLST profile columns onto an existing isolate-keyed metadata data frame.
+#'
+#' @param meta Metadata data frame with an `isolate` column.
+#' @param db_path Character path to the SQLite database file.
+#' @return Input data frame extended with MLST columns, with added names recorded in `"mlst_cols"` attribute.
 #' @export
 append_classical_mlst <- function(meta, db_path) {
   if (
@@ -432,19 +415,12 @@ append_classical_mlst <- function(meta, db_path) {
   meta
 }
 
-#' Per-isolate AMR-screening summary, wide, for display only.
+#' Load Summary AMR Results
 #'
-#' `amr_summary` (written by the AMR screen at typing time) stores one row per
-#' (isolate, section, drug_class, gene), tidy. This pivots it to one row per
-#' isolate: an `<prefix>profile` column listing the drug classes with a confident
-#' (`matches`) hit, plus one `<prefix><drug_class>` column per drug class /
-#' virulence-stress group holding that isolate's genes (comma-joined, keeping the
-#' `*`/`^` quality flags), where `<prefix>` is `AMR_COL_PREFIX`. Drug classes keep
-#' the order they first appear in the table. Every column is character.
+#' Pivots antimicrobial resistance summary records into a wide per-isolate display layout.
 #'
-#' Display-only companion, mirroring `load_classical_mlst`: never touches
-#' `metadata`. Returns NULL when the database has no `amr_summary` table or it
-#' holds no rows.
+#' @param db_path Character path to the SQLite database file.
+#' @return Wide data frame with drug class profile summary columns, or `NULL` if unavailable.
 #' @export
 load_amr <- function(db_path) {
   if (
@@ -502,12 +478,13 @@ load_amr <- function(db_path) {
   out
 }
 
-#' Merge the display-only AMR-screening columns into a metadata frame keyed on
-#' `isolate`, recording the added names in the result's `"amr_cols"` attribute.
-#' The AMR analogue of `append_classical_mlst`: reusable across views, columns
-#' that would shadow an existing metadata field are skipped, and `meta` is
-#' returned unchanged (empty `"amr_cols"`) when it is not a non-empty
-#' isolate-keyed frame or the database has no AMR screening.
+#' Append AMR Summary Data to Metadata
+#'
+#' Joins wide AMR summary columns onto an existing isolate-keyed metadata data frame.
+#'
+#' @param meta Metadata data frame with an `isolate` column.
+#' @param db_path Character path to the SQLite database file.
+#' @return Input data frame extended with AMR summary columns, tracking added fields in `"amr_cols"`.
 #' @export
 append_amr <- function(meta, db_path) {
   if (
@@ -533,49 +510,16 @@ append_amr <- function(meta, db_path) {
   meta
 }
 
-# The call-quality states an AMR gene cell can hold, best first. `min(rank)`
-# picks the state to show when one isolate has several rows for the same gene
-# (two copies found, one exact and one not).
+#' Priority Ordered AMR Match Call States
 #' @export
 AMR_CALL_STATES <- c("Match", "Inexact", "Partial")
 
-#' Per-isolate AMR gene-presence matrix, wide, hierarchical, for display only.
+#' Load Detailed Matrix of AMR Gene Calls
 #'
-#' A different pivot of `amr_summary` from `load_amr()`'s: instead of one
-#' comma-joined column per drug class, this holds one column per *individual*
-#' gene, with abritamr's trailing `*`/`^` quality flag stripped off the column's
-#' gene name and moved into the cell *value* instead. The flag is a property of
-#' one isolate's call, not of the gene: abritamr appends `*` when a gene-family
-#' hit came from an inexact BLAST match rather than an exact/allele one (see
-#' Collate.py's `ANNOTATIONS` / `MATCH`), so "mexX" and "mexX*" are the same
-#' gene called with different confidence in different isolates. Keeping them as
-#' two columns would split one gene across the grid and hide that they are
-#' comparable; keeping the distinction in the cell preserves it.
+#' Converts gene-level AMR findings into a factor matrix categorized by quality state.
 #'
-#' Every gene column is therefore a factor over `AMR_CALL_STATES`, `NA` where
-#' the isolate has no row for that gene:
-#'   * `"Match"`   - reported by abritamr without a quality flag. For an AMR
-#'                   gene family that means an exact/allele match; point
-#'                   mutations and virulence/stress genes are never flagged at
-#'                   all, so they always land here.
-#'   * `"Inexact"` - flagged `*`/`^`: a BLAST hit close to, but not identical
-#'                   to, a known reference allele.
-#'   * `"Partial"` - from `amr_summary`'s `partials` section: a method outside
-#'                   abritamr's `MATCH` set (e.g. an internal stop codon), so
-#'                   the gene is likely truncated or non-functional. Takes
-#'                   precedence over the `*` flag, which such rows also carry.
-#'
-#' Columns are grouped by drug class / virulence-stress group, first-seen order
-#' in `amr_summary`; genes within a group keep their first-seen order too. The
-#' grouping a caller needs to render a hierarchical header (or to let a picker
-#' show/hide a whole group at once) comes back as two attributes, both named by
-#' gene column and in column order:
-#'   * `"amr_gene_groups"` - the drug class / group label each column belongs to
-#'   * `"amr_gene_labels"` - the bare (canonical) gene symbol, for a leaf header
-#'
-#' Display-only companion, mirroring `load_amr`: never touches `metadata`.
-#' Returns NULL when the database has no `amr_summary` table or it holds no
-#' rows.
+#' @param db_path Character path to the SQLite database file.
+#' @return Wide data frame with factor columns for gene presence, or `NULL` if missing.
 #' @export
 load_amr_matrix <- function(db_path) {
   if (
@@ -638,14 +582,13 @@ load_amr_matrix <- function(db_path) {
   out
 }
 
-#' Merge the display-only AMR gene-matrix columns into a metadata frame keyed
-#' on `isolate`. The gene-level analogue of `append_amr()` - see
-#' `load_amr_matrix()` for the column shape. Adds the same `"amr_cols"`
-#' attribute `append_amr()` does (here one column per gene - readonly, hidden
-#' by default, stripped before save, exactly like the per-drug-class columns it
-#' replaces for this consumer), plus `"amr_gene_groups"` / `"amr_gene_labels"`,
-#' subset and reordered to the columns actually added, for a caller that
-#' renders a hierarchical header.
+#' Append Detailed AMR Gene Matrix to Metadata
+#'
+#' Joins individual AMR gene call state factors onto a metadata data frame.
+#'
+#' @param meta Metadata data frame containing an `isolate` column.
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame augmented with individual AMR gene presence columns.
 #' @export
 append_amr_matrix <- function(meta, db_path) {
   if (
@@ -679,43 +622,15 @@ append_amr_matrix <- function(meta, db_path) {
   meta
 }
 
-### Delete isolates and everything that hangs off them
-# One isolate spans the whole schema, and the pieces are joined by *name* rather
-# than by a foreign key, so removal has to visit each table explicitly:
-#
-#   mlst                      pyMLST's own table - the key is `souche` there
-#   sequences / hashes        allele storage, keyed on seqid; pruned to whatever
-#                             `mlst` still references
-#   metadata                  keyed on `isolate`
-#   ISOLATE_KEYED_TABLES      classical_mlst / amr_* / custom values / digests
-#
-# Two properties this has to guarantee:
-#
-#   * Atomicity. A half-finished removal leaves an isolate present in some
-#     tables and gone from others, and because the key is a name, the next
-#     isolate typed under that name silently inherits the leftovers. The whole
-#     removal therefore runs in one transaction and rolls back as a unit.
-#   * The scheme reference survives. `ref` is not an isolate: it is the seed
-#     genome whose `mlst` rows define the scheme. Deleting it would strip the
-#     file of its scheme while leaving the isolates in place, so it is filtered
-#     out here rather than trusted not to arrive.
-#
-# `phylotrace_analyses` is deliberately NOT pruned: a saved Analysis records the
-# isolate set it was built from, and the dashboard reports the drift ("n isolates
-# removed"). Rewriting the selection would erase exactly that signal.
-#
-# `keep_alleles = TRUE` (the default) removes the isolate's `mlst` mapping but
-# leaves its allele DNA in `sequences`/`hashes`, so imports that later match by
-# sequence hash re-use the same allele identity and nomenclature stays stable.
-# A kept allele with no remaining `mlst` reference is dormant - invisible to the
-# allele counts (which count `DISTINCT seqid FROM mlst`) but live for matching.
-# The one invariant this must never break is keeping `sequences` without their
-# `hashes`: a stale hash whose id a later insert reuses gives one seqid two hash
-# rows (see db_import.R). So the two are always pruned together or kept together,
-# never split.
-#
-# Returns TRUE when a removal was attempted, FALSE when there was nothing to do
-# or the transaction rolled back.
+#' Purge Isolates from Database
+#'
+#' Removes specified isolates and all associated profiles across all database tables.
+#' Runs within a transaction to guarantee atomic updates.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param isolates Character vector of isolate IDs/names to remove.
+#' @param keep_alleles Logical; if `TRUE`, orphan allele sequences are kept for matching.
+#' @return Invisible logical `TRUE` on successful deletion transaction, `FALSE` otherwise.
 #' @export
 remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
   isolates <- setdiff(unique(isolates[!is.na(isolates)]), REF_SOUCHE)
@@ -744,13 +659,6 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
             con,
             "DELETE FROM sequences WHERE id NOT IN (SELECT DISTINCT seqid FROM mlst)"
           )
-          # …and their hashes. Leaving orphans behind is not cosmetic: a later
-          # insert allocating `MAX(sequences.id) + n` can reuse an id that a
-          # stale `hashes` row still holds, giving one seqid two hash rows and
-          # silently corrupting every query that joins mlst to hashes. This is
-          # also why keep_alleles never prunes just one of the two: keeping
-          # `sequences` holds `MAX(id)` high, so no id is reused, and keeping
-          # `hashes` alongside them means there is no orphan to reuse against.
           if ("hashes" %in% tables) {
             dbExecute(
               con,
@@ -768,16 +676,6 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
         )
       }
 
-      # Every remaining table keys on `isolate` with no foreign key onto `mlst`
-      # (whose matching column is pyMLST's `souche`), so nothing cascades the
-      # delete for us - each has to be pruned here. Leaving the rows behind is
-      # not cosmetic, because the key is a *name*: a later isolate typed under
-      # the same name silently inherits the removed one's classical ST, AMR
-      # calls and custom-variable values. For `genome_hashes` the consequence is
-      # sharper still - a stale digest makes that new isolate read as a re-type
-      # of the deleted one, or raises a name conflict against an assembly the
-      # database no longer holds, corrupting the very signal the table exists to
-      # give.
       for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
         dbExecute(
           con,
@@ -789,7 +687,11 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
     },
     error = function(e) FALSE
   )
-  if (isTRUE(ok)) dbCommit(con) else dbRollback(con)
+  if (isTRUE(ok)) {
+    dbCommit(con)
+  } else {
+    dbRollback(con)
+  }
 
   log_event(
     "DB",
@@ -805,6 +707,13 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
   invisible(ok)
 }
 
+#' Overwrite Database Metadata Table
+#'
+#' Replaces contents of the `metadata` table with the provided data frame.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param data Data frame containing complete updated metadata.
+#' @return Invisible logical `TRUE` after writing to database.
 #' @export
 save_metadata_table <- function(db_path, data) {
   con <- dbConnect(SQLite(), db_path)
@@ -818,14 +727,12 @@ save_metadata_table <- function(db_path, data) {
   invisible(TRUE)
 }
 
-#' Read the scheme's `targets` (loci) table and enrich it with the number of
-#' distinct alleles stored per locus.
+#' Fetch Scheme Loci Summary with Allele Counts
 #'
-#' Returns a data frame with the display columns `Locus`, `Gene`, `Start`,
-#' `Length`, `Product`, `Allele Count`, plus an internal `.gene` column that
-#' carries the matching `mlst` gene name (the loci-detail queries key on the
-#' `mlst` spelling, not the `targets` one). Returns NULL when the database is
-#' missing the `targets` or `mlst` table.
+#' Returns scheme targets supplemented with distinct allele counts per target locus.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame listing locus attributes and allele counts, or `NULL` if missing.
 #' @export
 load_loci_info <- function(db_path) {
   con <- dbConnect(SQLite(), db_path)
@@ -862,19 +769,18 @@ load_loci_info <- function(db_path) {
     }
   }
 
-  # Replace the raw ".fasta" filename column with the integer count.
   targets$Alleles <- NULL
 
   targets
 }
 
-#' Allele usage for one locus.
+#' Load Locus Allele Usage
 #'
-#' `gene` is the `mlst` gene name (the `.gene` column of `load_loci_info`).
-#' Returns a data frame of every distinct allele stored for the locus with
-#' columns `seqid` (integer allele index), `count` (isolates carrying it,
-#' excluding the synthetic "ref") and `present` (`count > 0`). Rows are ordered
-#' present-first, then by descending count.
+#' Retrieves distinct allele IDs for a locus and counts isolate occurrences.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param gene Character scalar indicating the locus gene name.
+#' @return Data frame listing `seqid`, occurrence `count`, and `present` logical indicator.
 #' @export
 load_locus_alleles <- function(db_path, gene) {
   con <- dbConnect(SQLite(), db_path)
@@ -901,8 +807,13 @@ load_locus_alleles <- function(db_path, gene) {
   df[order(!df$present, -df$count), , drop = FALSE]
 }
 
-#' Nucleotide sequence (character scalar) for a single allele index, or NULL
-#' when the index is not stored.
+#' Fetch Allele Sequence Text
+#'
+#' Looks up the nucleotide sequence string corresponding to a specific sequence ID.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param seqid Integer sequence identifier.
+#' @return Character scalar nucleotide sequence, or `NULL` if not found.
 #' @export
 load_allele_sequence <- function(db_path, seqid) {
   con <- dbConnect(SQLite(), db_path)
@@ -917,9 +828,13 @@ load_allele_sequence <- function(db_path, seqid) {
   if (!length(res)) NULL else res[[1]]
 }
 
-#' All alleles of a locus as FASTA text: one `>index` / sequence record per
-#' distinct allele stored for `gene`. Returns a character vector (one element
-#' per record), or an empty vector when the locus has no alleles.
+#' Format Locus Alleles as FASTA
+#'
+#' Exports all sequence entries assigned to a specified locus as FASTA formatted strings.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param gene Character scalar specifying the locus gene.
+#' @return Character vector of formatted FASTA entries (one entry per record).
 #' @export
 locus_fasta <- function(db_path, gene) {
   con <- dbConnect(SQLite(), db_path)

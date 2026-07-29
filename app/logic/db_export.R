@@ -1,17 +1,16 @@
 # app/logic/db_export.R
 #
-# Write a user-selected subset of the loaded database to a new `.db` file that
-# a peer lab can import (or that pyMLST's `wgMLST` can still open directly).
+# Exports a user-selected subset of the loaded database to a new SQLite `.db`
+# file compatible with peer instances.
 #
-# The destination is *built fresh* rather than copied-and-pruned: unselected
-# isolates and withheld metadata columns are never written to the output file at
-# any point, not even transiently. That matters — the whole point of choosing
-# columns is that some of them are confidential.
+# To protect sensitive or confidential data, the target file is generated fresh
+# from schema DDL rather than via copy-and-prune operations. Unselected isolates
+# and unchosen metadata columns are never written to disk.
 #
-# The table DDL is replayed verbatim from the source's `sqlite_master` rather
-# than reconstructed with `CREATE TABLE … AS SELECT`, which would silently drop
-# `mlst`'s primary key, its `seqid -> sequences.id` foreign key, and the four
-# `ix_*` indexes, leaving a file pyMLST cannot type against.
+# Database schema definitions (DDL) are replayed directly from the source
+# `sqlite_master` table instead of using `CREATE TABLE ... AS SELECT`. This
+# preserves essential constraints, primary keys, foreign key definitions, and
+# indexing structures required for downstream typing.
 
 box::use(
   RSQLite[SQLite],
@@ -34,11 +33,12 @@ box::use(
   app / logic / logging[log_event],
 )
 
+# Returns fallback value if target is NULL.
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
-# Copied verbatim when present. `alembic_version` is carried so pyMLST still
-# recognises the schema revision; `targets` and `scheme_overview` back the
-# Loci Info and Scheme Info panels.
+# Core scheme tables copied verbatim when present. Carrying `alembic_version`
+# maintains pyMLST schema tracking, while `targets` and `scheme_overview`
+# support summary views in client applications.
 SCHEME_TABLES <- c(
   "mlst_type",
   "alembic_version",
@@ -46,29 +46,22 @@ SCHEME_TABLES <- c(
   "scheme_overview"
 )
 
-# Isolate-keyed analysis-result tables, carried only when the caller opts in.
-# All three key solely on `isolate` (no `seqid` / allele foreign keys), so they
-# copy with a plain isolate filter - no interaction with the allele remap.
-# `include_classical` gates `classical_mlst`; `include_amr` gates both AMR tables
-# (they are produced together).
+# Optional analysis result tables linked by isolate ID.
+# These tables do not contain allele foreign keys, allowing straightforward
+# filtering during export operations.
 CLASSICAL_TABLES <- c("classical_mlst")
 AMR_TABLES <- c("amr_results", "amr_summary")
 
-# The assembly digests (app/logic/genome_hash.R). Unlike the tables above these
-# are not an analysis result to opt into but provenance: a few hundred bytes per
-# isolate, carrying no lab-internal path or file name, and the only thing that
-# lets the receiving lab check an isolate was typed from the assembly it thinks.
-# They therefore always travel when the source has them.
+# Genome provenance assembly digests.
+# Stores assembly checksums to allow receiving systems to verify genome integrity.
 GENOME_TABLES <- c("genome_hashes")
 
-# The user-defined custom variables (see app/logic/custom_fields.R). Unlike the
-# result tables these are carried per *variable*, not all-or-nothing: a custom
-# variable can hold data a lab does not want to share, exactly like a metadata
-# column, so the panel offers the same per-field choice.
+# User-defined custom metadata variables.
+# Variable selection is managed individually per field to permit targeted sharing.
 #' @export
 CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 
-# Resolve the requested result tables that actually exist in the source.
+# Resolves requested analysis result tables that exist in the source database.
 .result_tables <- function(src_tables, include_classical, include_amr) {
   wanted <- c(
     if (isTRUE(include_classical)) CLASSICAL_TABLES,
@@ -78,9 +71,12 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
   intersect(wanted, src_tables)
 }
 
-#' Which optional analysis-result tables a database actually contains, so the
-#' UI can enable/disable the export/import toggles. Returns a list with logical
-#' `classical` (has `classical_mlst`) and `amr` (has both AMR tables).
+#' Query Available Analysis Result Tables
+#'
+#' Inspects the source database to determine which optional analysis tables are present.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return A list with logical flags `classical` and `amr` indicating table availability.
 #' @export
 available_result_tables <- function(db_path) {
   out <- list(classical = FALSE, amr = FALSE)
@@ -103,11 +99,12 @@ available_result_tables <- function(db_path) {
   out
 }
 
-#' The custom variables a database defines, by name, in display order.
+#' Retrieve Custom Metadata Fields
 #'
-#' Read-only and tolerant of a database that predates the feature (returns
-#' `character(0)`), so the export panel can offer them without depending on the
-#' store module's write paths.
+#' Retrieves ordered names of custom metadata fields defined in the database.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Character vector of custom field names in display order.
 #' @export
 exportable_custom_fields <- function(db_path) {
   if (
@@ -133,8 +130,7 @@ exportable_custom_fields <- function(db_path) {
   )$name
 }
 
-# The custom variables to carry: those the caller selected that the source
-# actually defines. Empty when the source has no custom tables at all.
+# Filters requested custom fields against those present in the source database.
 .custom_out_fields <- function(con, src_tables, custom_fields) {
   if (!length(custom_fields) || !all(CUSTOM_TABLES %in% src_tables)) {
     return(character(0))
@@ -146,15 +142,17 @@ exportable_custom_fields <- function(db_path) {
   intersect(have, custom_fields)
 }
 
-# Always present in the output, never user-selectable.
+# Immutable metadata columns exported by default regardless of user selection.
 #' @export
 METADATA_FIXED_COLS <- c("isolate", "organism")
 
+# Escapes double quotes in SQLite identifiers for safe query construction.
 .quote_ident <- function(x) paste0('"', gsub('"', '""', x), '"')
 
+# Default progress callback placeholder.
 .noop_progress <- function(frac, msg) invisible(NULL)
 
-# Table/index DDL exactly as the source declares it, so PK/FK/index survive.
+# Reconstructs table or index DDL directly from sqlite_master to preserve schema constraints.
 .source_ddl <- function(con, type, names) {
   if (!length(names)) {
     return(character(0))
@@ -172,7 +170,16 @@ METADATA_FIXED_COLS <- c("isolate", "organism")
   stats::setNames(res$sql, res$name)
 }
 
-#' Summarise what an export would contain, without writing anything.
+#' Summarize Planned Export Contents
+#'
+#' Calculates isolate, allele, locus counts, and column selections for an export job without writing to disk.
+#'
+#' @param src_path Character path to the source database file.
+#' @param isolates Character vector of isolate IDs selected for export.
+#' @param metadata_cols Character vector of metadata columns selected for inclusion.
+#' @param include_metadata Logical indicating whether metadata should be exported.
+#' @param custom_fields Character vector of custom fields selected for inclusion.
+#' @return A list containing summary metrics and selected field metadata.
 #' @export
 export_preview <- function(
   src_path,
@@ -184,6 +191,7 @@ export_preview <- function(
   con <- connect_ro(src_path)
   on.exit(dbDisconnect(con), add = TRUE)
 
+  # Exclude reference strain key from isolate filter list
   isolates <- setdiff(unique(isolates), REF_SOUCHE)
 
   if (!length(isolates)) {
@@ -200,6 +208,7 @@ export_preview <- function(
 
   .write_selection(con, isolates)
 
+  # Compute allele and locus metrics, including the required reference strain
   counts <- dbGetQuery(
     con,
     "SELECT COUNT(*) AS calls,
@@ -224,8 +233,7 @@ export_preview <- function(
   )
 }
 
-# A temp table beats an IN (?, ?, …) list: no SQLITE_MAX_VARIABLE_NUMBER limit
-# and the same plan.
+# Writes target isolate selections to a temporary SQLite table to optimize query evaluation.
 .write_selection <- function(con, isolates) {
   dbWriteTable(
     con,
@@ -236,12 +244,7 @@ export_preview <- function(
   )
 }
 
-# The exported columns, in the *source's* column order. `isolate` and `organism`
-# are always carried whether or not the user selected them.
-#
-# Keeping the source order (rather than hoisting the two fixed columns to the
-# front) means a full export is a structural clone of the source, not merely a
-# value-for-value one — a peer diffing the two files sees the same table shape.
+# Determines metadata output columns in source ordering, keeping fixed columns.
 .metadata_out_cols <- function(con, metadata_cols) {
   if (!"metadata" %in% dbListTables(con)) {
     return(character(0))
@@ -251,13 +254,20 @@ export_preview <- function(
   have[have %in% keep]
 }
 
-#' Build `dest_path` from `src_path`, carrying only `isolates` (plus the
-#' scheme's `ref` souche) and only `metadata_cols` of the metadata table.
+#' Export Database Subset
 #'
-#' Returns a list of what was written. The file appears at `dest_path` only on
-#' success — the build happens in a sibling `.part` file that is renamed at the
-#' end, so a crash never leaves a half-written database where a valid one is
-#' expected.
+#' Generates a new SQLite database file containing selected isolates, metadata, custom fields, and analysis tables.
+#'
+#' @param src_path Character path to the source SQLite database file.
+#' @param dest_path Character path for the output SQLite database file.
+#' @param isolates Character vector of isolate IDs to export.
+#' @param metadata_cols Character vector of metadata columns to include.
+#' @param include_metadata Logical indicating whether to include metadata.
+#' @param include_classical Logical indicating whether to include classical MLST data.
+#' @param include_amr Logical indicating whether to include AMR screening results.
+#' @param custom_fields Character vector of custom field names to include.
+#' @param progress Optional callback function for reporting progress.
+#' @return A list detailing exported records, field selections, and output file size.
 #' @export
 export_database <- function(
   src_path,
@@ -297,15 +307,14 @@ export_database <- function(
   }
   write_meta <- length(meta_cols) > 0L
 
-  # Isolate-keyed result tables to carry (only those the source actually has).
+  # Resolve optional result tables present in source
   result_tables <- .result_tables(src_tables, include_classical, include_amr)
 
-  # Custom variables to carry; the two tables travel only when at least one
-  # variable was selected, so an export that withholds them all looks exactly
-  # like one from a database that never had any.
+  # Resolve custom metadata fields to export
   out_custom <- .custom_out_fields(src, src_tables, custom_fields)
   custom_tables <- if (length(out_custom)) CUSTOM_TABLES else character(0)
 
+  # Build target database in a temporary partial file to ensure atomic file generation
   part <- paste0(dest_path, ".part")
   if (file.exists(part)) {
     unlink(part)
@@ -355,8 +364,7 @@ export_database <- function(
     )$name
   )
 
-  # Tables first, indexes last: inserting into an unindexed table is much
-  # cheaper than maintaining four indexes per row.
+  # Create tables prior to index build to optimize bulk insertion performance
   for (nm in copy_tables) {
     dbExecute(con, table_ddl[[nm]])
   }
@@ -381,8 +389,7 @@ export_database <- function(
       }
 
       progress(0.35, "Copying allele calls …")
-      # The scheme reference is carried regardless of isolate selection: without
-      # it the file has no scheme, and scheme_size() / the compat gate break.
+      # Always carry scheme reference strain to preserve scheme metrics
       dbExecute(
         con,
         "INSERT INTO mlst SELECT * FROM src.mlst
@@ -391,8 +398,7 @@ export_database <- function(
       )
 
       progress(0.6, "Copying sequences …")
-      # Original seqids are kept — import remaps by (gene, hash) anyway, and
-      # renumbering would only invite off-by-one bugs.
+      # Maintain original sequence IDs to ensure consistent cross-referencing
       dbExecute(
         con,
         "INSERT INTO sequences SELECT * FROM src.sequences
@@ -420,10 +426,7 @@ export_database <- function(
         )
       }
 
-      # Analysis-result tables, filtered to the selected isolates. Their DDL was
-      # already replayed above (they are in `copy_tables`); each keys on `isolate`
-      # with no allele foreign keys, so a plain filter suffices. The fresh output
-      # has a single source, so carrying source ids via `SELECT *` cannot collide.
+      # Filter and write optional analysis results for selected isolates
       if (length(result_tables)) {
         progress(0.85, "Copying analysis results …")
         for (nm in result_tables) {
@@ -438,10 +441,7 @@ export_database <- function(
         }
       }
 
-      # Custom variables: the selected definitions, then the values those
-      # definitions hold for the selected isolates. Definition ids carry over
-      # verbatim (same argument as the result tables: one source, fresh output),
-      # so the values' field_id keeps pointing at the right variable.
+      # Transfer custom field definitions and corresponding isolate values
       if (length(out_custom)) {
         progress(0.87, "Copying custom variables …")
         dbExecute(
@@ -471,6 +471,7 @@ export_database <- function(
     }
   )
 
+  # Construct table indexes after record insertion
   progress(0.9, "Building indexes …")
   for (sql in index_ddl) {
     dbExecute(con, sql)
@@ -485,12 +486,12 @@ export_database <- function(
   )
 
   dbExecute(con, "DETACH DATABASE src")
-  # Close before renaming so no journal/WAL sidecar outlives the .part file.
+  # Close target connection prior to final file rename operation
   dbDisconnect(con)
   ok <- TRUE
 
   if (!file.rename(part, dest_path)) {
-    # Different filesystem: fall back to a copy.
+    # Fallback copy if moving across distinct file system mounts
     if (!file.copy(part, dest_path, overwrite = TRUE)) {
       unlink(part)
       stop("Could not write to ", dest_path)
