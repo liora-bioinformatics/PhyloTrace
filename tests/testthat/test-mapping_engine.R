@@ -73,18 +73,34 @@ test_that("a variable that cannot group is offered no aesthetic at all", {
   expect_null(mapping_engine$assign_mapping_layer(prof(1)))
 })
 
-test_that("each aesthetic is claimed at most once", {
+test_that("each exclusive aesthetic is claimed at most once", {
+  # A tip has one label, one point colour and one shape; those cannot repeat.
   ls <- layers_of(prof(3, field = "a"), prof(4, field = "b"),
     prof(5, field = "c"), prof(6, field = "d"))
   aes <- vapply(ls, function(l) l$aesthetic, character(1))
-  expect_identical(length(unique(aes)), 4L)
+  excl <- aes[!aes %in% mapping_engine$REPEATABLE_AESTHETICS]
+  expect_identical(length(unique(excl)), length(excl))
 })
 
-test_that("a fifth layer has nowhere to go", {
-  ls <- layers_of(prof(3, field = "a"), prof(4, field = "b"),
-    prof(5, field = "c"), prof(6, field = "d"))
+test_that("tile strips stack, up to their own limit", {
+  # Several strips side by side is the normal way to read a few categorical
+  # variables against a tree, so `tile` is the one aesthetic that repeats.
+  wide <- lapply(1:6, function(i) prof(20, n = 300, field = paste0("t", i)))
+  ls <- do.call(layers_of, wide)
+  tiles <- Filter(function(l) identical(l$aesthetic, "tile"), ls)
+  expect_identical(length(tiles), mapping_engine$MAX_TILES)
+})
+
+test_that("a layer past the ceiling has nowhere to go", {
+  # Three exclusive aesthetics plus MAX_TILES strips, and then no more: every
+  # strip widens the canvas, so the tree's share of the page shrinks with each.
+  specs <- lapply(
+    seq_len(mapping_engine$MAX_LAYERS),
+    function(i) prof(if (i <= 3) i + 2 else 20, n = 300, field = paste0("f", i))
+  )
+  ls <- do.call(layers_of, specs)
   expect_identical(length(ls), mapping_engine$MAX_LAYERS)
-  expect_null(mapping_engine$assign_mapping_layer(prof(3, field = "e"), ls))
+  expect_null(mapping_engine$assign_mapping_layer(prof(3, field = "z"), ls))
 })
 
 # --- Which palette -----------------------------------------------------------

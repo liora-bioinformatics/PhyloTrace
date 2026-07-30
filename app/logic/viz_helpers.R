@@ -360,6 +360,35 @@ export_panel <- function(ns, prefix, formats) {
   )
 }
 
+#' Row-action button that reports which record it belongs to.
+#'
+#' The record id travels in the *value* rather than in the button's own input id,
+#' so one observer serves every row however many times the list re-renders — an
+#' observeEvent created inside renderUI is re-registered on every render, which
+#' is how a two-click delete happens.
+#'
+#' @param ns Function. Module namespace function.
+#' @param input_id Character. Shared input the click writes to.
+#' @param record_id Character. Value the click writes.
+#' @param icon_name Character. Font Awesome icon name.
+#' @param title Character. Tooltip and accessible label.
+#' @return A `<button>` tag.
+#' @export
+layer_action_btn <- function(ns, input_id, record_id, icon_name, title) {
+  tags$button(
+    type = "button",
+    class = "btn btn-sm tree-layer_btn",
+    title = title,
+    `aria-label` = title,
+    onclick = sprintf(
+      "Shiny.setInputValue('%s', '%s', {priority: 'event'})",
+      ns(input_id),
+      record_id
+    ),
+    icon(icon_name)
+  )
+}
+
 # --- State Reset Helpers -----------------------------------------------------
 
 #' Reset Color Pickers to Default Hex Values

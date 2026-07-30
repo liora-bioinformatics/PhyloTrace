@@ -51,6 +51,7 @@ box::use(
   stats[quantile, setNames],
   utils[head],
   RColorBrewer[brewer.pal, brewer.pal.info],
+  viridisLite[viridis],
   grDevices[colorRampPalette],
 )
 
@@ -220,16 +221,82 @@ tree_branch_cutoff <- function(n_branches, target = BRANCH_LABEL_TARGET) {
   round(.clamp(100 * (1 - target / n), 0, 99))
 }
 
-ANNOTATION_BUDGET <- 0.45
+# --- Annotation widths -------------------------------------------------------
+#
+# Every annotation drawn beside the tips — a tile strip, a heatmap column — is
+# sized by what it has to show rather than by dividing a fixed budget between
+# them. Widths are fractions of the tree's own span.
+#
+# A fixed budget was the wrong model, and produced both reported faults: one
+# tile strip took the whole 0.45 and left the heatmap the 0.1 floor (a 15-column
+# matrix in a tenth of the tree's width, illegible), and the strip itself was
+# thin because 0.45 of the tree span is only about a fifth of the panel once the
+# labels and the axis expansion are counted.
+#
+# Sizing by content is only safe because the canvas now grows to fit
+# (annotation_total feeds tree_panel_width_in): asking for more room adds
+# canvas rather than taking it off the tree.
 
-#' Calculate Individual Tile Strip Width
-#'
-#' @param n_strips Integer. Number of active tile annotation layers.
-#' @return Relative width fraction per strip.
+# Width of one tile strip. A strip carries a single variable, so its width is
+# about being seen rather than about resolving columns.
+TILE_SPAN_EACH <- 0.16
+
+# Width of one heatmap column. Enough that a column of a 15-class AMR matrix is
+# still a readable block rather than a hairline.
+HEATMAP_COL_SPAN <- 0.055
+
+# Ceiling on all annotations together, as a multiple of the tree span. The
+# canvas grows for them, but the tree must stay the larger part of the picture;
+# past this the columns share what is left.
+ANNOTATION_SPAN_MAX <- 1.1
+
+# Kept for the callers and tests that ask "how wide is one strip": now a
+# constant per strip rather than a budget split, since strips no longer compete.
 #' @export
 tree_annotation_width <- function(n_strips) {
-  n <- max(as.integer(n_strips %||% 1L), 1L)
-  round(ANNOTATION_BUDGET / n, 2)
+  TILE_SPAN_EACH
+}
+
+# Number of tile strips in a layer set.
+.n_tiles <- function(opts) {
+  sum(vapply(
+    opts$layers %||% list(),
+    function(l) identical(l$aesthetic, "tile"),
+    logical(1)
+  ))
+}
+
+#' Width of the tile strips together, gaps included, in tree spans.
+#' @export
+tile_total <- function(opts) {
+  n <- .n_tiles(opts)
+  if (!n) {
+    return(0)
+  }
+  n * (TILE_SPAN_EACH + TILE_GAP)
+}
+
+#' Width of the heatmap panels together, gaps included, in tree spans.
+#' @export
+heatmap_total <- function(opts) {
+  hs <- opts$heatmaps %||% list()
+  # A panel with no columns draws nothing, and the builder drops it — so it must
+  # not reserve a gap here either.
+  hs <- Filter(function(h) length(h$cols) > 0L, hs)
+  if (!length(hs)) {
+    return(0)
+  }
+  n_cols <- sum(vapply(hs, function(h) length(h$cols), integer(1)))
+  n_cols * HEATMAP_COL_SPAN + HEATMAP_GAP * length(hs)
+}
+
+# The scale factor that brings the annotations back under ANNOTATION_SPAN_MAX.
+.annotation_squeeze <- function(opts) {
+  want <- tile_total(opts) + heatmap_total(opts)
+  if (want <= ANNOTATION_SPAN_MAX || want <= 0) {
+    return(1)
+  }
+  ANNOTATION_SPAN_MAX / want
 }
 
 .tiplab_frac <- function(opts, md) {
@@ -248,7 +315,13 @@ tree_annotation_width <- function(n_strips) {
 }
 
 X_EXPANSION <- 1.1
-HEATMAP_CLEARANCE <- 1.3
+
+# HEATMAP_CLEARANCE is gone. It padded the tip-label reserve by a further 30%
+# so an annotation matrix placed at exactly `reserve` would not touch the
+# labels. The annotations now carry their own gap (HEATMAP_GAP, TILE_GAP) and
+# are placed past it, so the padding had nothing left to do except leave a band
+# of dead space between the labels and the matrix as wide as the labels
+# themselves.
 
 # Legend geometry, in inches at legend_size 10.
 LEGEND_KEY_IN <- 0.16 # key square plus its gap
@@ -354,6 +427,39 @@ AMR_ABSENT <- "Not detected"
 #' @export
 AMR_HEATMAP_FILL <- c("#B2182B", "#E8E8E8")
 
+#' Inches of canvas the panel needs so the tree and its labels still get
+#' `panel_in` of it once the annotations have taken their share.
+#'
+#' `.tiplab_xlim()` divides the x axis three ways — the tree, the label reserve,
+#' and the annotations — and the annotations' share is expressed against the
+#' *tree's span*, not against the panel. So growing the canvas by
+#' `panel_in * annotation_total()` overshoots: it hands the annotations less
+#' physical width than it charged for and leaves the difference as dead space
+#' between the labels and the matrix. This solves the axis split for the canvas
+#' that makes the tree-plus-labels come out at exactly `panel_in`, which is the
+#' only reason the two agree.
+#'
+#' Lives here, beside the solve it has to match, rather than in the view module
+#' that calls it.
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame. Per-tip metadata.
+#' @param panel_in Numeric. Inches the tree and its labels are to keep.
+#' @return Numeric panel width in inches, never less than `panel_in`.
+#' @export
+tree_panel_width_in <- function(opts, md, panel_in) {
+  heat <- annotation_total(opts)
+  if (!isTRUE(heat > 0)) {
+    return(panel_in)
+  }
+  frac <- .clamp(.tiplab_frac(opts, md) * X_EXPANSION, 0, 0.8)
+  share <- (1 - frac) / (1 + heat) + frac
+  if (!is.finite(share) || share <= 0) {
+    return(panel_in)
+  }
+  max(panel_in / share, panel_in)
+}
+
 #' Total width of every annotation drawn to the right of the tip labels, as a
 #' fraction of the tree's own span.
 #'
@@ -367,20 +473,7 @@ AMR_HEATMAP_FILL <- c("#B2182B", "#E8E8E8")
 #' @return Numeric fraction of the tree span.
 #' @export
 annotation_total <- function(opts) {
-  n_tiles <- sum(vapply(
-    opts$layers %||% list(),
-    function(l) identical(l$aesthetic, "tile"),
-    logical(1)
-  ))
-  tiles <- if (n_tiles) {
-    n_tiles * (tree_annotation_width(n_tiles) + TILE_GAP)
-  } else {
-    0
-  }
-  # A little more than the annotations strictly occupy. The axis solve lands
-  # exactly on the last panel's right edge otherwise, which clips its final
-  # column and its header text against the panel border.
-  (tiles + heatmap_panels(opts, 1, 0)$total) * ANNOTATION_CLEARANCE
+  (tile_total(opts) + heatmap_total(opts)) * .annotation_squeeze(opts)
 }
 
 #' Widths and offsets for the heatmap panels, in x-axis data units.
@@ -400,29 +493,33 @@ heatmap_panels <- function(opts, tree_span, label_reserve = 0) {
   if (!length(hs)) {
     return(list(panels = list(), total = 0))
   }
-  n_tiles <- sum(vapply(
-    opts$layers %||% list(),
-    function(l) identical(l$aesthetic, "tile"),
-    logical(1)
-  ))
-  spent <- if (n_tiles) n_tiles * tree_annotation_width(n_tiles) else 0
-  budget <- max(ANNOTATION_BUDGET - spent, 0.1)
+  squeeze <- .annotation_squeeze(opts)
 
+  # Each panel is as wide as it has columns. Sharing a fixed budget is what left
+  # a 15-column matrix in a tenth of the tree's width once a tile strip had
+  # taken the rest.
   n_cols <- vapply(hs, function(h) length(h$cols), integer(1))
-  widths <- budget * n_cols / sum(n_cols)
+  widths <- n_cols * HEATMAP_COL_SPAN * squeeze
+  gaps <- HEATMAP_GAP * squeeze
+
+  # The first panel starts past the tip labels *and* past the tile strips.
+  # gheatmap's offset is absolute from the tree's edge, unlike geom_fruit's,
+  # which is relative to the annotation before it — so the tiles are invisible
+  # to this calculation unless counted here. Not counting them is what drew the
+  # heatmap straight over the tile strip.
+  base <- label_reserve + tile_total(opts) * squeeze * tree_span
   starts <- cumsum(c(0, head(widths, -1)))
-  gaps <- HEATMAP_GAP * seq_along(hs)
 
   panels <- Map(
-    function(h, w, s, g) {
-      c(h, list(width = w, offset = label_reserve + (s + g) * tree_span))
+    function(h, w, s, i) {
+      c(h, list(width = w, offset = base + (s + gaps * i) * tree_span))
     },
     hs,
     widths,
     starts,
-    gaps
+    seq_along(hs)
   )
-  list(panels = panels, total = sum(widths) + HEATMAP_GAP * length(hs))
+  list(panels = panels, total = sum(widths) + gaps * length(hs))
 }
 
 #' Fraction of the panel height to keep clear above the tree for the heatmap
@@ -480,11 +577,7 @@ HEADER_CHAR_ROWS <- 0.62
 
 # Solves x-axis plot range ensuring tip labels and heatmaps fit without clipping
 .tiplab_xlim <- function(opts, md, tree_data, max_x, heat = 0) {
-  frac <- .clamp(
-    .tiplab_frac(opts, md) * X_EXPANSION * HEATMAP_CLEARANCE,
-    0,
-    0.8
-  )
+  frac <- .clamp(.tiplab_frac(opts, md) * X_EXPANSION, 0, 0.8)
   x_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
   if (!is.finite(x_min)) {
     x_min <- 0
@@ -544,50 +637,135 @@ tree_discrete_colors <- function(palette, n) {
   if (n <= max_n) base[seq_len(n)] else colorRampPalette(base)(n)
 }
 
-tree_scale <- function(values, palette, aesthetic, name = NULL) {
-  numeric <- is.numeric(values)
-  viridis <- is.null(palette) || palette %in% .viridis_scales
-  opt <- if (is.null(palette) || !viridis) "viridis" else palette
-  n_levels <- field_levels(values)
+#' Label and colour for values the database does not have.
+#'
+#' A blank string and NA mean the same thing to a reader — nobody recorded it —
+#' but to ggplot2 `""` is an ordinary level, which is why an unlabelled swatch
+#' appeared in the legend beside the real categories. Naming the case makes the
+#' plot say what it means, and pinning it to a neutral grey keeps it from
+#' competing with the values that do carry information.
+#' @export
+MISSING_LABEL <- "Not recorded"
 
-  guide <- if (numeric) {
-    "colourbar"
+# Characters a legend key label may run to before it wraps onto another line.
+#
+# ggplot2 sizes the guide box from its widest label, and nothing caps it — so
+# "Antimicrobial resistance surveillance" alone claimed nearly half a 5.5in
+# canvas, twice over for two mappings, and left the tree a hairline. Wrapping
+# bounds the width without truncating: the reader still gets the whole category
+# name, on two lines instead of one. It also makes tree_legend_width_in()'s
+# estimate an upper bound it can actually rely on.
+#' @export
+LEGEND_LABEL_WRAP <- 22L
+
+# Wrap legend key labels at LEGEND_LABEL_WRAP characters.
+.wrap_legend_labels <- function(x) {
+  vapply(
+    as.character(x),
+    function(s) {
+      if (is.na(s)) {
+        return(MISSING_LABEL)
+      }
+      paste(strwrap(s, width = LEGEND_LABEL_WRAP), collapse = "\n")
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
+}
+#' A mid grey, not a pale one: this colour has to work as tip-label *text* as
+#' well as a heatmap swatch, and anything lighter reads as invisible rather than
+#' as de-emphasised.
+#' @export
+MISSING_COLOR <- "#9E9E9E"
+
+# The shape reserved for the missing level, outside TREE_SHAPES so a mapping of
+# six real values plus "not recorded" still has somewhere to put it.
+TREE_MISSING_SHAPE <- 4
+
+#' Normalise a mapped column: one explicit level for "not recorded", last.
+#'
+#' Also the fix for a crash. `field_levels()` counts distinct values *excluding*
+#' blanks, but the scale it sized was handed the raw column, where `""` counts —
+#' so a 7-category variable with some blanks asked a 7-colour scale to cover 8
+#' levels and errored with "Insufficient values in manual scale". Levels are
+#' decided here, once, and the scale is built from them.
+#' @export
+mapped_values <- function(v) {
+  if (is.numeric(v) || inherits(v, "Date")) {
+    return(v)
+  }
+  ch <- trimws(as.character(v))
+  ch[!nzchar(ch)] <- NA_character_
+  present <- sort(unique(ch[!is.na(ch)]))
+  if (!anyNA(ch)) {
+    return(factor(ch, levels = present))
+  }
+  ch[is.na(ch)] <- MISSING_LABEL
+  factor(ch, levels = c(present, MISSING_LABEL))
+}
+
+#' Colours for a discrete scale's levels, as a named vector.
+#'
+#' Built explicitly rather than left to `scale_*_viridis_d`/`_brewer` because
+#' the missing level has to be pinned to grey wherever it appears, and only a
+#' manual scale can say which level gets which colour.
+#' @export
+tree_level_colors <- function(levels, palette) {
+  real <- setdiff(levels, MISSING_LABEL)
+  n <- max(length(real), 1L)
+  cols <- if (is.null(palette) || palette %in% .viridis_scales) {
+    viridis(n, option = if (is.null(palette)) "viridis" else palette)
   } else {
-    guide_legend(ncol = tree_legend_ncol(n_levels))
+    tree_discrete_colors(palette, n)
+  }
+  out <- setNames(cols[seq_along(real)], real)
+  if (MISSING_LABEL %in% levels) {
+    out[[MISSING_LABEL]] <- MISSING_COLOR
+  }
+  out
+}
+
+tree_scale <- function(values, palette, aesthetic, name = NULL) {
+  numeric <- is.numeric(values) || inherits(values, "Date")
+  viridis_pal <- is.null(palette) || palette %in% .viridis_scales
+  opt <- if (is.null(palette) || !viridis_pal) "viridis" else palette
+
+  if (numeric) {
+    return(if (identical(aesthetic, "fill")) {
+      if (viridis_pal) {
+        scale_fill_viridis_c(option = opt, name = name)
+      } else {
+        scale_fill_distiller(palette = palette, name = name)
+      }
+    } else {
+      if (viridis_pal) {
+        scale_color_viridis_c(option = opt, name = name)
+      } else {
+        scale_color_distiller(palette = palette, name = name)
+      }
+    })
   }
 
+  values <- mapped_values(values)
+  cols <- tree_level_colors(levels(values), palette)
+  guide <- guide_legend(ncol = tree_legend_ncol(length(cols)))
+
   if (identical(aesthetic, "fill")) {
-    if (numeric && viridis) {
-      scale_fill_viridis_c(option = opt, name = name)
-    } else if (numeric) {
-      scale_fill_distiller(palette = palette, name = name)
-    } else if (viridis) {
-      scale_fill_viridis_d(option = opt, guide = guide, name = name)
-    } else {
-      # scale_fill_brewer() greys out every level past the palette's capacity;
-      # tree_discrete_colors() interpolates instead. See its comment.
-      scale_fill_manual(
-        values = tree_discrete_colors(palette, n_levels),
-        guide = guide,
-        name = name,
-        na.value = "grey80"
-      )
-    }
+    scale_fill_manual(
+      values = cols,
+      guide = guide,
+      name = name,
+      labels = .wrap_legend_labels,
+      na.value = MISSING_COLOR
+    )
   } else {
-    if (numeric && viridis) {
-      scale_color_viridis_c(option = opt, name = name)
-    } else if (numeric) {
-      scale_color_distiller(palette = palette, name = name)
-    } else if (viridis) {
-      scale_color_viridis_d(option = opt, guide = guide, name = name)
-    } else {
-      scale_color_manual(
-        values = tree_discrete_colors(palette, n_levels),
-        guide = guide,
-        name = name,
-        na.value = "grey80"
-      )
-    }
+    scale_color_manual(
+      values = cols,
+      guide = guide,
+      name = name,
+      labels = .wrap_legend_labels,
+      na.value = MISSING_COLOR
+    )
   }
 }
 
@@ -610,7 +788,29 @@ layer_for <- function(opts, aesthetic) {
 # unordered colours — this is the one place a declared type changes the draw.
 .layer_values <- function(layer, md) {
   v <- md[[layer$field]]
-  if (identical(layer$transform, "as_date")) as_date_safe(v) else v
+  if (identical(layer$transform, "as_date")) as_date_safe(v) else mapped_values(v)
+}
+
+# The mapped column as the plot must see it. The aes() references md[[field]]
+# directly, so the normalisation has to be written back into the frame — a
+# scale built from normalised levels over raw data is exactly the mismatch that
+# errored.
+.normalize_mapped_columns <- function(opts, md) {
+  fields <- unique(vapply(
+    opts$layers %||% list(),
+    function(l) l$field,
+    character(1)
+  ))
+  for (f in fields) {
+    layer <- layer_for_field(opts, f)
+    md[[f]] <- .layer_values(layer, md)
+  }
+  md
+}
+
+layer_for_field <- function(opts, field) {
+  hit <- Filter(function(l) identical(l$field, field), opts$layers %||% list())
+  if (length(hit)) hit[[1]] else NULL
 }
 
 tree_tiplab_layer <- function(opts, layer = NULL) {
@@ -719,7 +919,13 @@ tree_clade_layers <- function(opts) {
 
 TILE_GAP <- 0.03
 
-tree_tile_layers <- function(opts, md, tiles = NULL, label_frac = 0) {
+tree_tile_layers <- function(
+  opts,
+  md,
+  tiles = NULL,
+  label_frac = 0,
+  tree_span = 1
+) {
   if (is.null(tiles)) {
     tiles <- Filter(
       function(l) identical(l$aesthetic, "tile"),
@@ -729,14 +935,28 @@ tree_tile_layers <- function(opts, md, tiles = NULL, label_frac = 0) {
   if (!length(tiles)) {
     return(NULL)
   }
-  # Geometry is fitted rather than set: the strips share the annotation budget,
-  # so however many are switched on the tree stays the thing the plot is of.
+  # Each strip gets the same width whatever the count — they do not compete for
+  # a budget, the canvas grows for them instead (see annotation_total). Squeezed
+  # only once the whole annotation run would dwarf the tree.
   #
-  # geom_fruit measures `offset` from the previous annotation, so only the
-  # first strip has to clear the tip labels — `label_frac` is that reserve as a
+  # geom_fruit measures `offset` from the previous annotation, so only the first
+  # strip has to clear the tip labels — `label_frac` is that reserve as a
   # fraction of the tree's span. Without it the first strip starts at the tree's
   # own edge, directly over the labels.
-  pwidth <- tree_annotation_width(length(tiles))
+  squeeze <- .annotation_squeeze(opts)
+  frac <- TILE_SPAN_EACH * squeeze
+  gap <- TILE_GAP * squeeze
+
+  # `pwidth` is documented as a fraction of the tree width, but for a
+  # single-column tile strip geom_fruit says so itself — "the `pwidth` will be
+  # as `width`" — and uses it as the tile's width in *data units*. On a cgMLST
+  # tree whose span runs into the hundreds, a pwidth of 0.45 is a hairline,
+  # which is exactly how the strip came out. Scaling by the span is what makes
+  # the requested fraction the fraction actually drawn.
+  pwidth <- frac * tree_span
+
+  # `offset` *is* fractional, and measures to the strip's centre rather than its
+  # near edge — hence the half-width in the first strip's clearance.
   layers <- list()
   for (i in seq_along(tiles)) {
     tile <- tiles[[i]]
@@ -749,7 +969,11 @@ tree_tile_layers <- function(opts, md, tiles = NULL, label_frac = 0) {
           mapping = aes(fill = .data[[tile$field]]),
           alpha = 1,
           pwidth = pwidth,
-          offset = if (i == 1L) label_frac + TILE_GAP else TILE_GAP
+          offset = if (i == 1L) {
+            label_frac + gap + frac / 2
+          } else {
+            gap + frac
+          }
         ),
         tree_scale(
           .layer_values(tile, md),
@@ -831,6 +1055,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     })
   )
 
+  # Mapped columns are normalised in place, so every scale is built from the
+  # same levels the geoms will actually draw.
+  md <- .normalize_mapped_columns(opts, md)
+
   circular <- opts$layout %in% .circular_layouts
   label_reserve <- 0
   # ggtree's own name for the inward-facing radial layout is "inward_circular".
@@ -892,19 +1120,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   }
   annot_total <- annotation_total(opts)
   if (!circular) {
-    # The guide box lives outside the panel now, so the panel is narrower than
-    # the canvas by its width. Labels, matrices and the legend are all solved
-    # against the *panel*: sizing the label reserve against the full canvas is
-    # what would push the labels back under the legend.
-    legend_in <- tree_legend_width_in(
-      opts$layers,
-      md,
-      opts$legend_size,
-      opts$width_in
-    )
-    panel_opts <- opts
-    panel_opts$width_in <- max((opts$width_in %||% 5.5) - legend_in, 1)
-    fit <- .tiplab_xlim(panel_opts, md, tree_data, max_x, annot_total)
+    # `opts$width_in` is the tree-and-labels budget, not the whole canvas: the
+    # caller grows the canvas for the legend and the annotations rather than
+    # taking their room out of the tree (see TREE_PANEL_IN in
+    # visualization_tree.R). So the reserve is solved against it unmodified —
+    # subtracting the legend here too would charge the tree for it twice, which
+    # is what turned a few hundred isolates into a hairline.
+    fit <- .tiplab_xlim(opts, md, tree_data, max_x, annot_total)
     label_reserve <- fit$reserve
   }
 
@@ -945,16 +1167,29 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       )
     },
     if (!is.null(shp_l)) {
+      # Levels come off the normalised column, not the layer's recorded count:
+      # "not recorded" is a level the reader needs a mark for, and it is not
+      # part of the count the mapping engine capped at six.
+      shp_levels <- levels(md[[shp_l$field]])
+      shp_real <- setdiff(shp_levels, MISSING_LABEL)
+      shp_values <- setNames(
+        TREE_SHAPES[seq_along(shp_real)],
+        shp_real
+      )
+      if (MISSING_LABEL %in% shp_levels) {
+        shp_values[[MISSING_LABEL]] <- TREE_MISSING_SHAPE
+      }
       list(scale_shape_manual(
-        values = TREE_SHAPES[seq_len(min(shp_l$n_levels, length(TREE_SHAPES)))],
+        values = shp_values,
         name = shp_l$title,
-        guide = guide_legend(ncol = tree_legend_ncol(shp_l$n_levels))
+        labels = .wrap_legend_labels,
+        guide = guide_legend(ncol = tree_legend_ncol(length(shp_values)))
       ))
     },
     if (isTRUE(opts$nodelabel_show)) {
       list(geom_nodelab(aes(label = .data[["node"]])))
     },
-    tree_tile_layers(opts, md, tile_ls, label_reserve / tree_span)
+    tree_tile_layers(opts, md, tile_ls, label_reserve / tree_span, tree_span)
   )
   layers <- Filter(Negate(is.null), layers)
   for (layer in layers) {
@@ -1025,6 +1260,14 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         size = opts$legend_size
       ),
       legend.key.size = unit(0.05 * opts$legend_size, "cm"),
+      # The guide box keeps ggplot2's own theme colours unless it is told
+      # otherwise — a white backdrop and grey key squares — so every legend on
+      # a dark background arrived as a pale block with paler tiles behind the
+      # keys. The background colour is one colour for the whole plot; the guides
+      # sit on it like everything else.
+      legend.background = element_rect(fill = opts$bg, color = NA),
+      legend.box.background = element_rect(fill = opts$bg, color = NA),
+      legend.key = element_rect(fill = opts$bg, color = NA),
       plot.background = element_rect(fill = opts$bg, color = opts$bg)
     )
 

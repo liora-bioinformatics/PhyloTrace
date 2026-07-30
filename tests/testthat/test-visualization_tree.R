@@ -327,11 +327,86 @@ test_that("a mapping is offered every column, and picks the aesthetic itself", {
       # A mapping onto the tip points is meaningless while they are hidden, and
       # that switch lives in another tab — so it comes on with the mapping.
       expect_true(isolate(fitted$nj_tippoint_show))
+
+      # And goes off again when the mapping that needed it is deleted: the
+      # points were the mapping's doing, so leaving them behind put dots on the
+      # tree that nothing was mapped to.
+      session$setInputs(nj_layer_delete = "L1")
+      session$flushReact()
+      expect_length(tree_opts()$layers, 1L)
+      expect_false(isolate(fitted$nj_tippoint_show))
     }
   )
 })
 
-test_that("the canvas is fixed, not taken from the browser", {
+test_that("a mapping keeps its tip points drawn even if the switch says off", {
+  # The sidebar locks "Show tip points" on while a mapping is drawn on them,
+  # but the lock lives in the browser. The plot enforces the same rule itself,
+  # so a switch that reads FALSE — a restored Analysis writing a saved "off"
+  # into the mirror after the mapping is already there — cannot leave the tree
+  # with a legend for marks it never drew.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:12),
+    purpose = rep(c("outbreak", "surveillance", "screening"), 4),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      expect_equal(tree_opts()$layers[[1]]$aesthetic, "tippoint_shape")
+
+      session$setInputs(nj_tippoint_show = FALSE)
+      session$flushReact()
+      expect_false(isolate(fitted$nj_tippoint_show))
+      expect_true(tree_opts()$tippoint_show)
+    }
+  )
+})
+
+test_that("tip points the user switched on survive their mapping", {
+  # The other half of the same rule: only the points the mapping turned on are
+  # turned back off. A user who opened Elements and asked for tip points keeps
+  # them when a tip-point mapping comes and goes.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:12),
+    purpose = rep(c("outbreak", "surveillance", "screening"), 4),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_tippoint_show = TRUE)
+      session$flushReact()
+
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      expect_equal(tree_opts()$layers[[1]]$aesthetic, "tippoint_shape")
+
+      session$setInputs(nj_layer_delete = "L1")
+      session$flushReact()
+      expect_length(tree_opts()$layers, 0L)
+      expect_true(isolate(fitted$nj_tippoint_show))
+    }
+  )
+})
+
+test_that("the tree's own width is fixed, not taken from the browser", {
   # renderPlot re-executes whenever the output's pixel size changes, so a canvas
   # sized from session$clientData redraws the tree — a second of work for a few
   # hundred tips — on every width the browser reports, which is what drew one
@@ -344,8 +419,71 @@ test_that("the canvas is fixed, not taken from the browser", {
     {
       set_tree_inputs(session)
       session$flushReact()
-      expect_equal(plot_width_in(), impl$PLOT_WIDTH_PX / impl$PLOT_RES)
-      expect_equal(tree_opts()$width_in, impl$PLOT_WIDTH_PX / impl$PLOT_RES)
+      expect_equal(plot_width_in(), impl$TREE_PANEL_IN)
+      expect_equal(tree_opts()$width_in, impl$TREE_PANEL_IN)
+    }
+  )
+})
+
+test_that("the canvas grows for what is drawn beside the tree", {
+  # The reported failure: an annotation or a legend was paid for out of the
+  # tree's own width, so switching a heatmap on turned the tree into a hairline.
+  # The tree's budget is fixed; the canvas is what moves.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    amr_gly = rep(c("aac", ""), 4),
+    stringsAsFactors = FALSE
+  )
+  attr(meta, "amr_cols") <- "amr_gly"
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta, amr_cols = "amr_gly")),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$flushReact()
+      bare <- plot_canvas()
+      expect_equal(bare$canvas_in, impl$TREE_PANEL_IN)
+
+      # A mapping adds a legend, and a tile strip beside the tips.
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      mapped <- plot_canvas()
+      expect_gt(mapped$canvas_in, bare$canvas_in)
+      # The tree itself keeps its width, and the height keeps its row pitch.
+      expect_equal(tree_opts()$width_in, impl$TREE_PANEL_IN)
+      expect_equal(mapped$height_in, bare$height_in)
+    }
+  )
+})
+
+test_that("the canvas cannot grow without limit", {
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    v = rep(c("an extremely long category label", "another very long one"), 4),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_layer_add = "v")
+      session$flushReact()
+      expect_lte(
+        plot_canvas()$canvas_in,
+        impl$TREE_PANEL_IN * impl$CANVAS_MAX_FACTOR
+      )
     }
   )
 })
@@ -377,17 +515,21 @@ test_that("Generate draws the tree exactly once, already fitted", {
         draws <<- draws + 1L
       })
       session$flushReact()
-      expect_identical(draws, 1L)
-      expect_true(generated())
+      # Nothing before Generate. The left sidebar is a form the user submits, so
+      # a freshly opened tab shows its "press Generate" prompt rather than a tree
+      # nobody asked for — and does not spend a second computing one.
+      expect_identical(draws, 0L)
+      expect_false(generated())
 
-      # A Generate over a different isolate set: a new tree and a new fit, so a
-      # redraw is owed — exactly one, with the fitted values already in it.
-      # This is where three used to be logged, one per control echoing back.
+      # Generate over an isolate set: a tree and a fit, so exactly one draw, with
+      # the fitted values already in it. This is where three used to be logged,
+      # one per control echoing back.
       selected(c("A", "B", "C"))
       generate(1L)
       session$flushReact()
 
-      expect_identical(draws, 2L)
+      expect_identical(draws, 1L)
+      expect_true(generated())
       expect_identical(length(tree_obj()$tip.label), 3L)
 
       # Three tips on the fixed canvas: a squat plot with large labels.
@@ -404,7 +546,7 @@ test_that("Generate draws the tree exactly once, already fitted", {
         nj_branch_size = isolate(fitted$nj_branch_size)
       )
       session$flushReact()
-      expect_identical(draws, 2L)
+      expect_identical(draws, 1L)
     }
   )
 })

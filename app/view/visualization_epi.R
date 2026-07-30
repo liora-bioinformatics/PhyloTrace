@@ -446,7 +446,9 @@ epi_controls <- function(ns) {
 }
 
 #' @export
-ui <- function(id, generate_id) {
+# `options_ui` is accepted for one signature across all engines; this one has no
+# distance-computation controls, so the tab never passes any.
+ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(

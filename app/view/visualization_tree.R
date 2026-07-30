@@ -56,10 +56,13 @@ box::use(
   app /
     logic /
     tree_plot[
+      annotation_total,
       build_tree_ggtree,
       save_tree_plot,
       tree_auto_layout,
       tree_branch_cutoff,
+      tree_legend_width_in,
+      tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
   app / logic / phylo[compute_phylo_tree],
@@ -166,6 +169,18 @@ HEATMAP_KINDS <- list(
   Filter(function(l) !is.na(l$field %||% NA), out)
 }
 
+# Does any mapping draw on the tip points? Three answers hang off this one
+# question — whether the points come on with the mapping, whether their switch
+# is the user's to touch, and whether the plot draws them at all — and they only
+# agree with each other because they ask it the same way.
+.layers_want_tippoints <- function(layers) {
+  any(vapply(
+    layers,
+    function(l) l$aesthetic %in% c("tippoint_color", "tippoint_shape"),
+    logical(1)
+  ))
+}
+
 # A row-action button that reports which record it belongs to. The id travels
 # in the value rather than in the button's own input id, so one observer serves
 # every row however many times the list re-renders.
@@ -226,7 +241,24 @@ HEATMAP_KINDS <- list(
 # also makes the export match the preview exactly, and makes a saved Analysis
 # render identically on a different screen.
 PLOT_RES <- 192
-PLOT_WIDTH_PX <- 1056
+
+# Inches the tree and its tip labels always get, whatever else is on the plot.
+# This is the budget tree_auto_layout and the tip-label reserve reason about,
+# and it does not move — which is the point.
+#
+# Everything else the plot has to show (annotation strips, heatmap panels, the
+# legend) is added to the *canvas* rather than taken out of this. Taking it out
+# was the reported failure: .tiplab_xlim makes room for an annotation by
+# widening the x axis, which on a fixed canvas means the same tree drawn into a
+# narrower strip — so switching a heatmap on turned 346 isolates into an
+# unreadable hairline, and a legend of long category names did it again.
+TREE_PANEL_IN <- 5.5
+
+# How far the canvas may grow past the tree's own budget before the annotations
+# are simply given less. Without a ceiling, four wide legends and three heatmap
+# panels ask for a canvas no screen can show and no export can rasterise.
+CANVAS_MAX_FACTOR <- 2.6
+
 # A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
 PLOT_MAX_PX <- 12000
 
@@ -349,7 +381,15 @@ MIRRORED_IDS <- c(
 
 # --- Tree (NJ / UPGMA) control tabs ------------------------------------------
 
-tree_controls <- function(ns) {
+# `options_ui` is the tab's own distance-computation controls (missing-value
+# handling, imported sets, algorithm, zoom view), built in visualization_plot.R
+# and rendered here rather than in the left sidebar. It arrives already
+# namespaced to the *tab*, not to this engine, so every observer behind it keeps
+# working where it is — this moves where the controls appear, not who owns them.
+#
+# They belong on this side because they are live: the left sidebar is the
+# "press Generate to apply" side, and these take effect as soon as they change.
+tree_controls <- function(ns, options_ui = NULL) {
   shiny$tagList(
     navset_tab(
       # Labels -----------------------------------------------------------------
@@ -444,7 +484,16 @@ tree_controls <- function(ns) {
           accordion_panel(
             "Tip Points",
             icon = shiny$icon("circle"),
+            # The switch is locked on while a mapping is drawn on the points
+            # (see the sidebar-state observer): the hint is what says so,
+            # because a disabled control with no reason given reads as a bug.
             input_switch(ns("nj_tippoint_show"), "Show tip points", FALSE),
+            shiny$div(
+              id = ns("nj_tippoint_show_hint"),
+              class = "text-muted fst-italic small mb-2 d-none",
+              "A mapped variable is drawn on the tip points. Remove the ",
+              "mapping to hide them."
+            ),
             pickerInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
             layout_columns(
               col_widths = c(6, 6),
@@ -593,7 +642,18 @@ tree_controls <- function(ns) {
             )
           )
         )
-      )
+      ),
+      # Options ----------------------------------------------------------------
+      # The tab's distance-computation controls, moved here from the left
+      # sidebar. Emitted only when the tab has any to give (the distance
+      # engines); `nav_panel(NULL)` would otherwise leave an empty tab.
+      if (!is.null(options_ui)) {
+        nav_panel(
+          "Options",
+          icon = shiny$icon("gear"),
+          options_ui
+        )
+      }
     ),
     shiny$div(
       class = "reset-buttons",
@@ -608,7 +668,7 @@ tree_controls <- function(ns) {
 }
 
 #' @export
-ui <- function(id, generate_id) {
+ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -627,7 +687,7 @@ ui <- function(id, generate_id) {
         shiny$div(
           id = ns("controls_wrap"),
           class = "viz-nav-wrap",
-          tree_controls(ns)
+          tree_controls(ns, options_ui)
         )
       )
     ),
@@ -702,12 +762,11 @@ server <- function(
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # Width of the canvas, in inches. Everything that has to reason about how
-    # much room the plot has — the layout fit at Generate, the tip-label
-    # reserve, the export canvas — goes through this one constant, which is why
-    # all three agree and why none of them can be invalidated by the browser
-    # (see PLOT_WIDTH_PX).
-    plot_width_in <- function() PLOT_WIDTH_PX / PLOT_RES
+    # Inches the tree and its labels get. Everything that reasons about how much
+    # room the *tree* has — the layout fit, the tip-label reserve, the export —
+    # goes through this, which is why they agree, and none of them can be
+    # invalidated by the browser (see TREE_PANEL_IN).
+    plot_width_in <- function() TREE_PANEL_IN
 
     # Mirrors of the fitted controls, and the only thing the render reads for
     # them — never input$nj_aspect_ratio and friends directly.
@@ -854,21 +913,41 @@ server <- function(
       }
     }
 
+    # Whether the tip points are on because a mapping needed them rather than
+    # because the user asked for them — which is what makes the switch below
+    # reversible without ever undoing a deliberate choice. Cleared as soon as
+    # the switch is seen off (see the observer below): points the user turns
+    # back on from there are theirs, and stay on when the mapping goes.
+    tippoint_auto_on <- shiny$reactiveVal(FALSE)
+
+    shiny$observeEvent(input$nj_tippoint_show, {
+      if (!isTRUE(input$nj_tippoint_show)) {
+        tippoint_auto_on(FALSE)
+      }
+    })
+
     # A mapping onto the tip points draws nothing while the tip points
     # themselves are switched off, and that switch lives in a different tab
     # (Elements) from the mapping that needs it — so adding such a mapping
     # appeared to do nothing at all. Turn the points on with it.
+    #
+    # And off again with it: the points are an artefact of the mapping, so
+    # deleting the mapping (or editing it onto another aesthetic) left the tree
+    # wearing dots nobody asked for, in a tab the user had never opened. Only
+    # the points this observer switched on are switched back off.
     shiny$observeEvent(
       nj_layers(),
       {
-        wants_points <- any(vapply(
-          nj_layers(),
-          function(l) l$aesthetic %in% c("tippoint_color", "tippoint_shape"),
-          logical(1)
-        ))
-        if (wants_points && !isTRUE(shiny$isolate(fitted$nj_tippoint_show))) {
+        wants_points <- .layers_want_tippoints(nj_layers())
+        shown <- isTRUE(shiny$isolate(fitted$nj_tippoint_show))
+        if (wants_points && !shown) {
+          tippoint_auto_on(TRUE)
           set_fitted("nj_tippoint_show", TRUE)
           bslib::update_switch("nj_tippoint_show", value = TRUE)
+        } else if (!wants_points && shown && shiny$isolate(tippoint_auto_on())) {
+          tippoint_auto_on(FALSE)
+          set_fitted("nj_tippoint_show", FALSE)
+          bslib::update_switch("nj_tippoint_show", value = FALSE)
         }
       },
       ignoreInit = TRUE
@@ -905,7 +984,104 @@ server <- function(
           condition = !isTRUE(active[[id]])
         )
       }
+
+      # The same rule one step further: while a mapping is drawn on the tip
+      # points, "Show tip points" is not the user's to turn off. Switching it
+      # off hid the points and left the mapping in place — a legend for marks
+      # that were not on the tree, and no way to tell from the Elements tab
+      # that anything was wrong. Removing the mapping is how the points go.
+      owned <- .layers_want_tippoints(ls)
+      shinyjs::toggleState("nj_tippoint_show", condition = !owned)
+      shinyjs::toggleClass(
+        id = "nj_tippoint_show_hint",
+        class = "d-none",
+        condition = !owned
+      )
     })
+
+    # Fit the layout controls to the data, the way the Map fits its "Max
+    # intensity" slider to the busiest place. The coded defaults (aspect 0.6,
+    # tip label size 4) suit roughly fifteen tips and nothing else — five
+    # isolates got oversized overlapping labels and three hundred an unreadable
+    # smear that no hand-tuning could fix, since the aspect ratio needed is
+    # several times what the slider used to offer.
+    #
+    # Each fitted value goes to two places: the mirror the render reads, so the
+    # tree draws once and draws right, and the slider, so the sidebar shows what
+    # was chosen and stays the place to adjust it. The slider is only touched
+    # when the value really changed — its echo is harmless (see `fitted`) but
+    # pointless.
+    refit_layout <- function(tree, notify = FALSE) {
+      if (is.null(tree)) {
+        return(invisible(NULL))
+      }
+      fit <- tree_auto_layout(
+        length(tree$tip.label),
+        plot_width_in(),
+        shiny$isolate(input$nj_layout),
+        .label_chars(
+          tree,
+          shiny$isolate(viz_metadata()),
+          shiny$isolate(fitted$nj_tiplab)
+        )
+      )
+      # The branch-label cutoff is fitted from the branches themselves rather
+      # than from the tip count, so it goes alongside the geometry rather than
+      # inside it.
+      fit$branch_cutoff <- tree_branch_cutoff(length(tree$edge.length))
+
+      for (id in c(names(FITTED_DEFAULTS), "nj_branchlabel_cutoff")) {
+        value <- fit[[FITTED_FIELDS[[id]]]]
+        if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
+          shiny$updateSliderInput(session, id, value = value)
+        }
+        set_fitted(id, value)
+      }
+
+      # Past a certain tip count the labels are a grey smudge at any size that
+      # fits, so the fit draws the tree without them — and says so, rather than
+      # silently moving a toggle the user may have set deliberately. Only on a
+      # Generate: a re-fit triggered by adding a mapping must not countermand a
+      # toggle the user has just set by hand.
+      if (
+        notify &&
+          !fit$labels_legible &&
+          isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+      ) {
+        set_fitted("nj_tiplab_show", FALSE)
+        bslib::update_switch("nj_tiplab_show", value = FALSE)
+        shiny$showNotification(
+          paste0(
+            length(tree$tip.label),
+            " isolates leave no room for readable tip labels — they have ",
+            "been switched off. Narrow the isolate selection to bring them ",
+            "back, or re-enable them under Labels > Isolate Labels."
+          ),
+          type = "warning",
+          duration = 12
+        )
+      }
+      invisible(fit)
+    }
+
+    # Keep the layout fitted as the plot's contents change, not only at
+    # Generate. Switching layout between linear and circular changes the row
+    # pitch outright, and the label source changes how much width the labels
+    # need — both were previously fitted once and then left stale until the next
+    # Generate, which is why a circular tree opened at a linear aspect.
+    #
+    # Deliberately *not* dependent on the mappings: the annotations they add are
+    # paid for by a wider canvas (see plot_canvas), not by re-fitting the tree,
+    # so a re-fit here would be a redraw that changed nothing. Nor on anything
+    # this writes, which would loop.
+    shiny$observeEvent(
+      list(input$nj_layout, fitted$nj_tiplab, fitted$nj_tiplab_show),
+      {
+        shiny$req(tree_obj())
+        refit_layout(tree_obj())
+      },
+      ignoreInit = TRUE
+    )
 
     # Fill the pickers as soon as a database is loaded, rather than waiting for
     # a Generate. Until this, every variable picker in this sidebar listed the
@@ -1026,8 +1202,14 @@ server <- function(
         branch_size = fitted$nj_branch_size,
         branch_cutoff = fitted$nj_branchlabel_cutoff,
         branch_color = input$nj_branch_color,
-        # Tip points.
-        tippoint_show = fitted$nj_tippoint_show,
+        # Tip points. A mapping onto them is drawn *on* the points, so it brings
+        # the element with it whatever the switch says. The switch is locked on
+        # while such a mapping exists (see the sidebar-state observer), and this
+        # is what makes that true of the plot rather than only of the sidebar —
+        # a restored Analysis can put a saved "off" into the mirror after the
+        # mapping is already there.
+        tippoint_show = isTRUE(fitted$nj_tippoint_show) ||
+          .layers_want_tippoints(nj_layers()),
         tippoint_alpha = input$nj_tippoint_alpha,
         tippoint_size = fitted$nj_tippoint_size,
         tippoint_color = input$nj_tippoint_color,
@@ -1051,6 +1233,51 @@ server <- function(
         legend_size = input$nj_legend_size
       )
     )
+
+    # How big the canvas has to be for this plot's contents, in inches.
+    #
+    # The tree keeps TREE_PANEL_IN whatever happens; the annotations and the
+    # legend are added *around* it. Height follows the tree's own budget and
+    # aspect, so switching a legend on widens the image without stretching the
+    # rows — the row pitch is what makes the tip labels legible, and it must not
+    # move because something was added beside them.
+    #
+    # Capped at CANVAS_MAX_FACTOR: past that the annotations share what is left
+    # rather than the canvas growing without limit.
+    plot_canvas <- shiny$reactive({
+      opts <- tree_opts()
+      meta <- viz_metadata()
+      md <- if (is.null(meta)) data.frame() else meta
+
+      legend_in <- tree_legend_width_in(
+        opts$layers,
+        md,
+        opts$legend_size,
+        TREE_PANEL_IN
+      )
+      # Solved in tree_plot.R, beside the axis split it has to agree with: the
+      # annotations' share is a fraction of the tree's *span*, not of the panel,
+      # so the panel a given annotation set needs is not simply the sum.
+      panel_in <- tree_panel_width_in(opts, md, TREE_PANEL_IN)
+      canvas_in <- min(
+        panel_in + legend_in,
+        TREE_PANEL_IN * CANVAS_MAX_FACTOR
+      )
+
+      circular <- identical(opts$layout, "circular") ||
+        identical(opts$layout, "inward")
+      aspect <- if (circular) 1 else fitted$nj_aspect_ratio
+      height_in <- TREE_PANEL_IN * aspect
+
+      list(
+        panel_in = TREE_PANEL_IN,
+        canvas_in = canvas_in,
+        height_in = height_in,
+        # The aspect of the finished image, which is what the export and the
+        # thumbnail need — not the tree's own aspect, since the canvas is wider.
+        aspect = height_in / canvas_in
+      )
+    })
 
     # Everything the ggtree build consumes, republished only when it actually
     # differs from what was published last.
@@ -1113,10 +1340,32 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    shiny$observeEvent(generate(), {
-      if (!identical(plot_type(), "Tree")) {
-        return()
-      }
+    # Recompute the tree. Fires on Generate, and also on the computation options
+    # that now live in this engine's own sidebar rather than the tab's — the
+    # missing-value handling, the algorithm and the imported sets. Those are on
+    # the live side of the split, so they take effect when they change.
+    #
+    # The isolate selection is deliberately *not* here: it is a left-sidebar
+    # control, and the tab only publishes it once Generate has applied it (see
+    # applied_selection in visualization_plot.R), so it reaches this observer
+    # through generate() alone.
+    #
+    # This is the expensive path — a few hundred isolates spend most of a second
+    # in the distance matrix — so the trigger list is kept to inputs that really
+    # change what is computed.
+    shiny$observeEvent(
+      list(generate(), na_handling(), algo(), imported_sets()),
+      {
+        if (!identical(plot_type(), "Tree")) {
+          return()
+        }
+        # Nothing to compute before the first Generate; without this, touching an
+        # option on a fresh tab would draw a tree the user never asked for.
+        if (
+          !isTRUE(generated()) && !isTRUE((generate() %||% 0L) > 0L)
+        ) {
+          return()
+        }
 
       # Populate the metadata-backed selects (no heavy compute here; the tree is
       # computed lazily by its output so the waiter can cover it).
@@ -1150,64 +1399,15 @@ server <- function(
         # spinner up until the 45s client-side safety timeout.
         shinyjs::removeClass(id = "plot_stage", class = "is-loading")
       }
-      # Fit the layout controls to the data before publishing the tree, the way
-      # the Map fits its "Max intensity" slider to the busiest place. The coded
-      # defaults (aspect 0.6, tip label size 4) suit roughly fifteen tips and
-      # nothing else — five isolates got a strip with oversized, overlapping
-      # labels and three hundred got an unreadable smear that no hand-tuning
-      # could fix, since the aspect ratio needed is several times what the
-      # slider used to offer. Re-fitted on every Generate, so a manual tweak
-      # lives until the next one.
-      #
-      # Each fitted value goes to two places: the mirror the render reads, so
-      # this Generate draws once and draws right, and the slider, so the sidebar
-      # shows what was chosen and stays the place to adjust it. The slider is
-      # only touched when the value really changed — its echo is harmless (see
-      # `fitted`) but pointless.
-      if (!is.null(tree)) {
-        fit <- tree_auto_layout(
-          length(tree$tip.label),
-          plot_width_in(),
-          input$nj_layout,
-          .label_chars(tree, viz_metadata(), input$nj_tiplab)
-        )
-        # The branch-label cutoff is fitted from the branches themselves rather
-        # than from the tip count, so it goes alongside the geometry rather than
-        # inside it.
-        fit$branch_cutoff <- tree_branch_cutoff(length(tree$edge.length))
+        if (!is.null(tree)) {
+          refit_layout(tree, notify = TRUE)
+        }
 
-        for (id in c(names(FITTED_DEFAULTS), "nj_branchlabel_cutoff")) {
-          value <- fit[[FITTED_FIELDS[[id]]]]
-          if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
-            shiny$updateSliderInput(session, id, value = value)
-          }
-          set_fitted(id, value)
-        }
-        # Past a certain tip count the labels are a grey smudge at any size that
-        # fits, so the fit draws the tree without them — and says so, rather
-        # than silently moving a toggle the user may have set deliberately.
-        if (
-          !fit$labels_legible && isTRUE(shiny$isolate(fitted$nj_tiplab_show))
-        ) {
-          set_fitted("nj_tiplab_show", FALSE)
-          bslib::update_switch("nj_tiplab_show", value = FALSE)
-          shiny$showNotification(
-            paste0(
-              length(tree$tip.label),
-              " isolates leave no room for readable tip labels — they have ",
-              "been switched off. Narrow the isolate selection to bring them ",
-              "back, or re-enable them under Labels > Isolate Labels."
-            ),
-            type = "warning",
-            duration = 12
-          )
-        }
+        tree_obj(tree)
+
+        generated(TRUE)
       }
-
-      tree_obj(tree)
-
-      generated(TRUE)
-    })
+    )
 
     # Restrict a variable-mapping color-scale picker's choices to whichever
     # color_scales categories suit the type of the variable currently mapped
@@ -1531,17 +1731,15 @@ server <- function(
         render_info("visualization_tree tree_plot")
         tree_plot_built()
       },
-      width = function() PLOT_WIDTH_PX,
+      # Both come from plot_canvas(), which grows the canvas for whatever the
+      # plot has to show beside the tree rather than shrinking the tree to fit
+      # it. Still no clientData anywhere in here, so no report from the browser
+      # can trigger a redraw.
+      width = function() {
+        min(PLOT_MAX_PX, as.integer(plot_canvas()$canvas_in * PLOT_RES))
+      },
       height = function() {
-        aspect <- if (
-          identical(input$nj_layout, "circular") ||
-            identical(input$nj_layout, "inward")
-        ) {
-          1
-        } else {
-          fitted$nj_aspect_ratio
-        }
-        min(PLOT_MAX_PX, as.integer(PLOT_WIDTH_PX * aspect))
+        min(PLOT_MAX_PX, as.integer(plot_canvas()$height_in * PLOT_RES))
       },
       res = PLOT_RES
     )
@@ -1716,22 +1914,16 @@ server <- function(
         paste0(Sys.Date(), "_tree.", input$nj_filetype)
       },
       content = function(file) {
-        aspect <- if (
-          identical(input$nj_layout, "circular") ||
-            identical(input$nj_layout, "inward")
-        ) {
-          1
-        } else {
-          fitted$nj_aspect_ratio
-        }
-        # Exported on the same canvas width as the preview, so the tip labels
-        # keep the proportion they were tuned to (see save_tree_plot).
+        # Exported on the same canvas as the preview — width and aspect both —
+        # so the tip labels keep the proportion they were tuned to and whatever
+        # sits beside the tree gets the room it had on screen.
+        canvas <- plot_canvas()
         save_tree_plot(
           tree_plot_built(),
           file,
           input$nj_filetype,
-          aspect,
-          width = plot_width_in()
+          canvas$aspect,
+          width = canvas$canvas_in
         )
       }
     )
@@ -1929,22 +2121,14 @@ server <- function(
     # canvas (so it looks like the plot it stands for), with dpi carrying the
     # requested pixel width.
     save_thumb <- function(file, w, h) {
-      aspect <- if (
-        identical(input$nj_layout, "circular") ||
-          identical(input$nj_layout, "inward")
-      ) {
-        1
-      } else {
-        fitted$nj_aspect_ratio
-      }
-      width_in <- plot_width_in()
+      canvas <- plot_canvas()
       save_tree_plot(
         tree_plot_built(),
         file,
         "png",
-        aspect,
-        width = width_in,
-        dpi = max(24, round(w / width_in))
+        canvas$aspect,
+        width = canvas$canvas_in,
+        dpi = max(24, round(w / canvas$canvas_in))
       )
     }
 

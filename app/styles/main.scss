@@ -1572,6 +1572,43 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin-bottom: 0.5rem;
 }
 
+// Generate, when the left sidebar is holding changes the plot has not been
+// redrawn with. The left sidebar is a form you submit, so the one control that
+// submits it has to say when there is something to submit — and Shiny's own
+// disabled styling is quiet enough that the enabled state needs to be the loud
+// one, not merely the not-grey one.
+#plot-setup .btn.is-pending,
+.plot-setup .btn.is-pending {
+    box-shadow: 0 0 0 0.2rem var(--bs-primary-bg-subtle);
+    animation: plot-generate-pending 1.6s ease-in-out infinite;
+}
+
+@keyframes plot-generate-pending {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0.15rem var(--bs-primary-bg-subtle);
+    }
+
+    50% {
+        box-shadow: 0 0 0 0.3rem var(--bs-primary-bg-subtle);
+    }
+}
+
+// A disabled Generate should read as "nothing to apply", not as "broken".
+#plot-setup .btn#generate:disabled,
+.plot-setup .btn:disabled {
+    opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    #plot-setup .btn.is-pending,
+    .plot-setup .btn.is-pending {
+        animation: none;
+    }
+}
+
 .selection-modal-filter .input-daterange .input-group-addon.input-group-prepend.input-group-append .input-group-text,
 .selection-modal-filter .input-daterange,
 .selection-modal-filter .shiny-date-range-input {
@@ -1622,6 +1659,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     color: var(--bs-secondary-color);
     margin-bottom: 0;
     white-space: nowrap;
+}
+
+.visNetwork hr {
+    display: none;
+}
+
+.visNetwork>div {
+    height: 100%;
 }
 
 // "Fixed isolate selection" badge on an Analysis card.

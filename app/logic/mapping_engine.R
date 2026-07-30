@@ -15,37 +15,144 @@
 # already occupy. Every rule below is a rule about legibility, and each one
 # names the failure it exists to prevent.
 #
+# Two media, one engine. A tree draws onto tip points, tip labels and tile
+# strips; an MST draws onto node fill, node shape, node border and node label.
+# The *rules* are the same in both — a shape cannot show a continuum, a
+# tabulated palette cannot show 46 countries — so they are written once here and
+# the medium only supplies its own list of channels (`MAPPING_MEDIA`).
+#
 # Pure: no shiny, no database, no ggplot.
 
 box::use(
   app / logic / field_profile[MAX_QUAL_LEVELS, MAX_SHAPE_LEVELS],
 )
 
-#' Aesthetics a mapping layer can drive.
+#' The channels each drawing medium has, and how to rank them for a variable.
+#'
+#' `order` returns the aesthetics a variable of this profile should prefer, best
+#' first, and is where the medium's own legibility argument lives.
+#'
+#' The MST's ranking differs from the tree's in one deliberate way: fill leads
+#' for *every* variable, where the tree gives shape priority for low-cardinality
+#' ones. An MST node is a set of isolates merged because their allele profiles
+#' are identical, so a categorical variable over it is a distribution — the fill
+#' is a pie and can show all of it, while a shape or a border has to collapse to
+#' the majority value and quietly lose the rest. Scarcity is why the tree ranks
+#' shape first; fidelity is why the MST does not.
 #' @export
-AESTHETIC_POOL <- c(
-  "tippoint_shape",
-  "tippoint_color",
-  "tiplab_color",
-  "tile"
+MAPPING_MEDIA <- list(
+  tree = list(
+    pool = c("tippoint_shape", "tippoint_color", "tiplab_color", "tile"),
+    labels = c(
+      tippoint_shape = "Tip point shape",
+      tippoint_color = "Tip point colour",
+      tiplab_color = "Tip label colour",
+      tile = "Tile strip"
+    ),
+    color = c("tippoint_color", "tiplab_color", "tile"),
+    shape = "tippoint_shape",
+    # A tip has one label, one point colour and one shape, so those three are
+    # exclusive. Tile strips are not: they stack outward beside the tips, and
+    # several side by side is the normal way to read a handful of categorical
+    # variables against a tree.
+    repeatable = "tile",
+    caps = c(tile = 4L),
+    # Three exclusive aesthetics plus room for the strips. The ceiling is about
+    # legibility rather than mechanism: every strip widens the canvas
+    # (tree_plot$annotation_total), so the tree gets a smaller share of the page
+    # with each one.
+    max_layers = 7L,
+    order = function(profile) {
+      if (isTRUE(profile$continuous)) {
+        c("tippoint_color", "tiplab_color", "tile")
+      } else if (profile$levels <= MAX_SHAPE_LEVELS) {
+        c("tippoint_shape", "tippoint_color", "tiplab_color", "tile")
+      } else if (profile$levels <= MAX_QUAL_LEVELS) {
+        c("tiplab_color", "tippoint_color", "tile")
+      } else {
+        c("tile", "tippoint_color", "tiplab_color")
+      }
+    }
+  ),
+  mst = list(
+    pool = c("node_fill", "node_shape", "node_border", "label_color"),
+    labels = c(
+      node_fill = "Node fill",
+      node_shape = "Node shape",
+      node_border = "Node border",
+      label_color = "Node label colour"
+    ),
+    color = c("node_fill", "node_border", "label_color"),
+    shape = "node_shape",
+    # Nothing stacks on a network node: it has one fill, one outline, one shape
+    # and one label. The MST's answer to "more variables than channels" is the
+    # tooltip, which carries every mapped field whether or not it has a channel.
+    repeatable = character(0),
+    caps = integer(0),
+    max_layers = 4L,
+    order = function(profile) {
+      if (isTRUE(profile$continuous)) {
+        c("node_fill", "node_border", "label_color")
+      } else if (profile$levels <= MAX_SHAPE_LEVELS) {
+        c("node_fill", "node_shape", "node_border", "label_color")
+      } else {
+        c("node_fill", "node_border", "label_color")
+      }
+    }
+  )
 )
 
-#' Display names for each aesthetic.
+# The medium's record, by name. An unknown name is a caller bug rather than a
+# runtime condition, so it fails loudly instead of defaulting to the tree.
+.medium <- function(medium) {
+  spec <- MAPPING_MEDIA[[medium %||% "tree"]]
+  if (is.null(spec)) {
+    stop("Unknown mapping medium: ", medium)
+  }
+  spec
+}
+
+#' Display names for one medium's aesthetics.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
+#' @return Named character vector.
 #' @export
-AESTHETIC_LABELS <- c(
-  tippoint_shape = "Tip point shape",
-  tippoint_color = "Tip point colour",
-  tiplab_color = "Tip label colour",
-  tile = "Tile strip"
-)
+aesthetic_labels <- function(medium = "tree") .medium(medium)$labels
+
+#' Most layers one medium can draw at once.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
+#' @return Integer.
+#' @export
+max_layers <- function(medium = "tree") .medium(medium)$max_layers
+
+# The tree's own channels, kept as exported constants because the tree module
+# reads them directly — but taken from the medium table rather than written out
+# again, so there is one definition of what a tree can draw onto.
+#' Aesthetics a tree mapping layer can drive.
+#' @export
+AESTHETIC_POOL <- MAPPING_MEDIA$tree$pool
+
+#' Display names for each tree aesthetic.
+#' @export
+AESTHETIC_LABELS <- MAPPING_MEDIA$tree$labels
 
 #' Aesthetics that carry a colour scale, and so must not repeat a palette.
 #' @export
-COLOR_AESTHETICS <- c("tippoint_color", "tiplab_color", "tile")
+COLOR_AESTHETICS <- unique(c(
+  MAPPING_MEDIA$tree$color,
+  MAPPING_MEDIA$mst$color
+))
 
-#' Most layers that can be drawn at once — one per aesthetic.
+#' Aesthetics that can carry more than one variable at a time.
 #' @export
-MAX_LAYERS <- length(AESTHETIC_POOL)
+REPEATABLE_AESTHETICS <- MAPPING_MEDIA$tree$repeatable
+
+#' Most layers a tree can draw at once.
+#' @export
+MAX_LAYERS <- MAPPING_MEDIA$tree$max_layers
+
+#' Most tile strips that can be drawn at once.
+#' @export
+MAX_TILES <- unname(MAPPING_MEDIA$tree$caps[["tile"]])
 
 #' Palettes per family, most-distinguishable first.
 #'
@@ -113,22 +220,28 @@ next_palette <- function(family, taken = character(0)) {
 #'
 #' @param profile One-row profile frame.
 #' @param taken Character vector of aesthetics already occupied.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @return Character vector of aesthetic names, best first, possibly empty.
 #' @export
-eligible_aesthetics <- function(profile, taken = character(0)) {
+eligible_aesthetics <- function(
+  profile,
+  taken = character(0),
+  medium = "tree"
+) {
   if (is.null(profile) || !isTRUE(profile$groupable)) {
     return(character(0))
   }
-  order <- if (isTRUE(profile$continuous)) {
-    c("tippoint_color", "tiplab_color", "tile")
-  } else if (profile$levels <= MAX_SHAPE_LEVELS) {
-    c("tippoint_shape", "tippoint_color", "tiplab_color", "tile")
-  } else if (profile$levels <= MAX_QUAL_LEVELS) {
-    c("tiplab_color", "tippoint_color", "tile")
-  } else {
-    c("tile", "tippoint_color", "tiplab_color")
+  spec <- .medium(medium)
+  order <- spec$order(profile)
+  # A repeatable aesthetic is never used up by an existing layer; the exclusive
+  # ones are. A capped one is used up once it is at its cap.
+  spent <- setdiff(taken, spec$repeatable)
+  for (aes in names(spec$caps)) {
+    if (sum(taken == aes) >= spec$caps[[aes]]) {
+      spent <- c(spent, aes)
+    }
   }
-  setdiff(order, taken)
+  setdiff(order, spent)
 }
 
 #' Why an aesthetic is unavailable for this variable, for the edit dialog.
@@ -137,10 +250,11 @@ eligible_aesthetics <- function(profile, taken = character(0)) {
 #' leaves the user to guess, which is the failure this whole rewrite is about.
 #'
 #' @param profile One-row profile frame.
-#' @param aesthetic Name of an `AESTHETIC_POOL` entry.
+#' @param aesthetic Name of an aesthetic in this medium's pool.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @return A sentence, or NULL.
 #' @export
-aesthetic_block_reason <- function(profile, aesthetic) {
+aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
   if (is.null(profile)) {
     return("No such variable.")
   }
@@ -151,7 +265,7 @@ aesthetic_block_reason <- function(profile, aesthetic) {
       if (profile$levels == 1L) "" else "s", profile$n
     ))
   }
-  if (identical(aesthetic, "tippoint_shape")) {
+  if (identical(aesthetic, .medium(medium)$shape)) {
     if (isTRUE(profile$continuous)) {
       return("A shape cannot show a continuous variable.")
     }
@@ -170,11 +284,17 @@ aesthetic_block_reason <- function(profile, aesthetic) {
 #' @param profile One-row profile frame.
 #' @param existing List of layer records already present.
 #' @param id Stable identifier for the new layer.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @return A layer record, or NULL when no aesthetic is free.
 #' @export
-assign_mapping_layer <- function(profile, existing = list(), id = "L1") {
+assign_mapping_layer <- function(
+  profile,
+  existing = list(),
+  id = "L1",
+  medium = "tree"
+) {
   taken <- vapply(existing, function(l) l$aesthetic, character(1))
-  choice <- eligible_aesthetics(profile, taken)
+  choice <- eligible_aesthetics(profile, taken, medium)
   if (!length(choice)) {
     return(NULL)
   }
@@ -223,9 +343,10 @@ assign_mapping_layer <- function(profile, existing = list(), id = "L1") {
 #'
 #' @param layers List of layer records, in draw order.
 #' @param profiles Profile frame, for the current level counts.
+#' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @return The list, same length and order, automatic entries re-derived.
 #' @export
-rebalance_layers <- function(layers, profiles) {
+rebalance_layers <- function(layers, profiles, medium = "tree") {
   if (!length(layers)) {
     return(layers)
   }
@@ -245,7 +366,7 @@ rebalance_layers <- function(layers, profiles) {
       out[[i]] <- l
       next
     }
-    choice <- eligible_aesthetics(prof, taken)
+    choice <- eligible_aesthetics(prof, taken, medium)
     # Nothing free: keep what it had rather than dropping the layer, so a
     # rebalance can never lose a mapping the user asked for.
     aesthetic <- if (length(choice)) choice[[1]] else l$aesthetic
@@ -255,6 +376,50 @@ rebalance_layers <- function(layers, profiles) {
     settled <- c(settled, list(fresh))
   }
   out
+}
+
+#' Rebuild layer records from whatever a saved snapshot deserialised into.
+#'
+#' jsonlite reads a JSON array of same-shaped objects back as a *data.frame*, so
+#' a saved analysis's layer list does NOT come back as the list-of-lists the
+#' modules hold. Assigning that straight in corrupts it. This rebuilds the
+#' canonical shape from whatever JSON handed over, filling anything absent from
+#' the defaults so older or partial snapshots restore cleanly too.
+#'
+#' @param x A list, a data frame, or NULL.
+#' @param defaults Named list of every field a record must end up with.
+#' @return List of records, or NULL when `x` carried nothing.
+#' @export
+normalize_layer_records <- function(x, defaults) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  rows <- if (is.data.frame(x)) {
+    lapply(seq_len(nrow(x)), function(i) as.list(x[i, , drop = FALSE]))
+  } else if (is.list(x)) {
+    x
+  } else {
+    return(NULL)
+  }
+
+  lapply(rows, function(row) {
+    rec <- defaults
+    if (is.list(row)) {
+      for (f in names(row)) {
+        v <- row[[f]]
+        # A JSON null arrives as NULL or NA — keep the default for those.
+        if (is.null(v) || (!is.list(v) && length(v) == 1L && is.na(v))) {
+          next
+        }
+        rec[[f]] <- if (is.list(v) && length(v) == 1L) {
+          unname(v[[1]])
+        } else {
+          unname(v)
+        }
+      }
+    }
+    rec
+  })
 }
 
 .profile_row <- function(profiles, field) {

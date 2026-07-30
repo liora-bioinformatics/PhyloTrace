@@ -191,7 +191,7 @@ test_that("the x limit hands the labels their share of the whole panel", {
   # What the labels actually get, once the root edge, ggplot's expansion and the
   # clearance the annotation matrix needs are counted in, is what was asked for.
   expect_equal(
-    (lim - max_x) / ((lim - x_min) * impl$X_EXPANSION * impl$HEATMAP_CLEARANCE),
+    (lim - max_x) / ((lim - x_min) * impl$X_EXPANSION),
     frac
   )
   # The reserve is where the labels end, so an annotation matrix starting there
@@ -222,15 +222,84 @@ test_that("the scale bar carries a round number", {
   expect_true(is.finite(tree_plot$tree_nice_width(0)))
 })
 
-test_that("annotation strips share a budget instead of each taking the tree", {
+test_that("every strip gets the same width, whatever the count", {
+  # Strips used to divide a fixed budget between them, which meant one strip
+  # took all of it and a heatmap beside it was left the floor — a 15-column
+  # matrix in a tenth of the tree's width. They no longer compete: each is sized
+  # for legibility and the canvas grows (see tree_panel_width_in).
   one <- tree_plot$tree_annotation_width(1)
   four <- tree_plot$tree_annotation_width(4)
 
-  # pwidth is a multiple of the tree's own width; the 2 this shipped with drew a
-  # strip twice as wide as the tree.
+  expect_equal(one, four)
+  # Still a fraction of the tree, not a multiple of it: the 2 this shipped with
+  # drew a strip twice as wide as the tree it annotates.
   expect_lt(one, 1)
-  expect_lt(four, one)
-  expect_equal(four * 4, one, tolerance = 0.02)
+  expect_gt(one, 0)
+})
+
+test_that("annotations are sized by what they have to show", {
+  tiles <- function(n) {
+    list(
+      layers = lapply(seq_len(n), function(i) {
+        list(aesthetic = "tile", field = paste0("v", i))
+      }),
+      heatmaps = list()
+    )
+  }
+  heat <- function(n) {
+    # `paste0("c", seq_len(0))` is "c", not character(0) — R recycles a
+    # zero-length argument to "". So "no heatmap" has to be an empty panel list.
+    panels <- if (n) list(list(kind = "amr", cols = paste0("c", seq_len(n)))) else list()
+    list(layers = list(), heatmaps = panels)
+  }
+
+  # More strips, more room — they do not share a fixed allowance.
+  expect_gt(tree_plot$tile_total(tiles(3)), tree_plot$tile_total(tiles(1)))
+  # More columns, more room.
+  expect_gt(tree_plot$heatmap_total(heat(15)), tree_plot$heatmap_total(heat(3)))
+  # Nothing mapped, nothing reserved.
+  expect_equal(tree_plot$tile_total(tiles(0)), 0)
+  expect_equal(tree_plot$heatmap_total(heat(0)), 0)
+})
+
+test_that("a heatmap beside a tile strip keeps its own width", {
+  # The reported fault: one strip took the whole budget and the matrix collapsed
+  # to the floor. A strip must cost the heatmap nothing.
+  cols <- paste0("c", 1:15)
+  alone <- list(layers = list(), heatmaps = list(list(kind = "amr", cols = cols)))
+  beside <- list(
+    layers = list(list(aesthetic = "tile", field = "v")),
+    heatmaps = list(list(kind = "amr", cols = cols))
+  )
+  expect_equal(
+    tree_plot$heatmap_total(alone),
+    tree_plot$heatmap_total(beside)
+  )
+})
+
+test_that("a heatmap starts past the tile strips, not on top of them", {
+  # gheatmap's offset is absolute from the tree's edge, geom_fruit's is relative
+  # to the annotation before it — so the strips are invisible to the heatmap's
+  # placement unless counted. Not counting them drew the matrix over the strip.
+  cols <- c("a", "b", "c")
+  bare <- list(layers = list(), heatmaps = list(list(kind = "amr", cols = cols)))
+  tiled <- list(
+    layers = list(list(aesthetic = "tile", field = "v")),
+    heatmaps = list(list(kind = "amr", cols = cols))
+  )
+  off_bare <- tree_plot$heatmap_panels(bare, 1, 0.5)$panels[[1]]$offset
+  off_tiled <- tree_plot$heatmap_panels(tiled, 1, 0.5)$panels[[1]]$offset
+
+  # Pushed out by at least the strip's own width.
+  expect_gte(off_tiled - off_bare, tree_plot$tile_total(tiled) * 0.99)
+})
+
+test_that("annotations together never dwarf the tree", {
+  huge <- list(
+    layers = lapply(1:4, function(i) list(aesthetic = "tile", field = paste0("v", i))),
+    heatmaps = list(list(kind = "amr", cols = paste0("c", 1:60)))
+  )
+  expect_lte(tree_plot$annotation_total(huge), impl$ANNOTATION_SPAN_MAX + 1e-9)
 })
 
 test_that("the branch-label cutoff leaves a readable number of labels", {
@@ -457,4 +526,220 @@ test_that("a layer naming a column the database no longer has is dropped", {
   )
 
   expect_true(inherits(tree_plot$build_tree_ggtree(tree, meta, opts), "ggplot"))
+})
+
+test_that("the background colour is the legend's background too", {
+  # ggplot2 leaves the guide box on its own theme colours — white behind the
+  # box, grey behind each key — so a legend on a dark background arrived as a
+  # pale block stuck to the tree. One colour control, one background.
+  set.seed(13)
+  tree <- ape::rtree(6)
+  tree$tip.label <- sprintf("iso%02d", 1:6)
+  meta <- data.frame(
+    isolate = tree$tip.label,
+    ward = rep(c("ICU", "ER"), 3),
+    stringsAsFactors = FALSE
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#ffffff",
+    bg = "#101820", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    align = TRUE, tiplab_color = "#ffffff",
+    layers = list(list(id = "L1", field = "ward", title = "Ward",
+      aesthetic = "tippoint_color", palette = "Set1", n_levels = 2L,
+      continuous = FALSE, transform = NULL, auto = TRUE)),
+    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_color = "#ffffff", tippoint_show = TRUE, tippoint_alpha = 1,
+    tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
+    nodelabel_show = FALSE, parentnodes = character(0),
+    clade_color = "#D0F221", heatmaps = list(),
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  # The theme is set on the ggtree plot before it is wrapped into a grob, so
+  # intercept it there (same trick as the heatmap-panels test above).
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+  suppressWarnings(suppressMessages(build(tree, meta, opts)))
+
+  for (el in c("legend.background", "legend.box.background", "legend.key")) {
+    expect_identical(inner$theme[[el]]$fill, opts$bg)
+  }
+})
+
+# --- Missing values ----------------------------------------------------------
+
+test_that("blanks and NA become one explicit level, last", {
+  m <- tree_plot$mapped_values(c("b", "", "a", NA, "  ", "b"))
+  expect_identical(levels(m), c("a", "b", tree_plot$MISSING_LABEL))
+  # Three of the six values were unrecorded, one way or another.
+  expect_identical(sum(m == tree_plot$MISSING_LABEL), 3L)
+})
+
+test_that("a column with nothing missing gains no extra level", {
+  m <- tree_plot$mapped_values(c("a", "b", "a"))
+  expect_identical(levels(m), c("a", "b"))
+  expect_false(tree_plot$MISSING_LABEL %in% levels(m))
+})
+
+test_that("numbers and dates pass through untouched", {
+  expect_identical(tree_plot$mapped_values(c(1, 2, NA)), c(1, 2, NA))
+  d <- as.Date(c("2024-01-01", NA))
+  expect_identical(tree_plot$mapped_values(d), d)
+})
+
+test_that("the scale covers every level the data actually has", {
+  # The reported crash: "Insufficient values in manual scale. 8 needed but only
+  # 7 provided." field_levels() counts distinct values *excluding* blanks, but
+  # the scale it sized was handed the raw column, where "" is a level of its
+  # own. Levels and colours now come from the same place.
+  raw <- c(rep(paste0("cat", 1:7), 3), "", NA)
+  vals <- tree_plot$mapped_values(raw)
+  cols <- tree_plot$tree_level_colors(levels(vals), "Set1")
+
+  expect_identical(length(cols), 8L)
+  expect_identical(names(cols), levels(vals))
+  expect_true(all(levels(vals) %in% names(cols)))
+})
+
+test_that("the missing level is grey whichever palette is chosen", {
+  lv <- c("a", "b", tree_plot$MISSING_LABEL)
+  for (pal in c("Set1", "viridis", "Blues", NULL)) {
+    cols <- tree_plot$tree_level_colors(lv, pal)
+    expect_identical(cols[[tree_plot$MISSING_LABEL]], tree_plot$MISSING_COLOR)
+    # And it never takes a colour a real category is using.
+    expect_false(tree_plot$MISSING_COLOR %in% cols[c("a", "b")])
+  }
+})
+
+test_that("a mapping with blanks builds without erroring", {
+  # End to end, because the crash only appeared once the scale met the data.
+  set.seed(21)
+  n <- 24
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(
+    isolate = tree$tip.label,
+    purpose = c(rep(paste0("cat", 1:7), 3), "", "", NA),
+    stringsAsFactors = FALSE
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    align = TRUE, tiplab_color = "#000000",
+    layers = list(list(id = "L1", field = "purpose", title = "Purpose",
+      aesthetic = "tiplab_color", palette = "Set1", n_levels = 7L,
+      continuous = FALSE, transform = NULL, auto = TRUE)),
+    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
+    tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
+    nodelabel_show = FALSE, parentnodes = character(0),
+    clade_color = "#D0F221", heatmaps = list(),
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 5.5,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  expect_no_error(suppressWarnings(
+    tree_plot$build_tree_ggtree(tree, meta, opts)
+  ))
+})
+
+test_that("a shape mapping keeps a mark for the missing level", {
+  # The engine caps shapeable variables at six levels, but "not recorded" is a
+  # seventh the reader still needs to see — TREE_SHAPES alone would run out.
+  expect_identical(length(tree_plot$TREE_SHAPES), 6L)
+  m <- tree_plot$mapped_values(c(paste0("g", 1:6), ""))
+  expect_identical(length(levels(m)), 7L)
+})
+
+# --- Legend width ------------------------------------------------------------
+
+test_that("a long legend label is wrapped, not left to widen the guide box", {
+  # ggplot2 sizes the guide box from its widest label and caps nothing, so one
+  # 37-character category claimed nearly half a 5.5in canvas and left the tree a
+  # hairline.
+  wrapped <- impl$.wrap_legend_labels("Antimicrobial resistance surveillance")
+  expect_true(grepl("\n", wrapped, fixed = TRUE))
+  expect_true(all(
+    nchar(strsplit(wrapped, "\n", fixed = TRUE)[[1]]) <=
+      tree_plot$LEGEND_LABEL_WRAP
+  ))
+  # Short labels are left alone.
+  expect_identical(impl$.wrap_legend_labels("Clinical"), "Clinical")
+})
+
+test_that("the legend estimate is bounded by the wrap", {
+  short <- data.frame(v = rep("ab", 4), stringsAsFactors = FALSE)
+  long <- data.frame(
+    v = rep(strrep("x", 120), 4),
+    stringsAsFactors = FALSE
+  )
+  layer <- list(field = "v", title = "V", n_levels = 1L)
+  # A 120-character label cannot ask for 120 characters of guide box.
+  expect_equal(
+    tree_plot$tree_legend_width_in(list(layer), long, 10, 5.5),
+    tree_plot$tree_legend_width_in(
+      list(layer),
+      data.frame(v = rep(strrep("x", 60), 4), stringsAsFactors = FALSE),
+      10, 5.5
+    )
+  )
+  expect_gt(
+    tree_plot$tree_legend_width_in(list(layer), long, 10, 5.5),
+    tree_plot$tree_legend_width_in(list(layer), short, 10, 5.5)
+  )
+})
+
+# --- The adaptive canvas -----------------------------------------------------
+
+test_that("the panel grows so the tree keeps its own width", {
+  md <- data.frame(isolate = strrep("A", 30), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.5, width_in = 5.5,
+    layers = list(), heatmaps = list()
+  )
+  # Nothing beside the tree: the panel is the tree's budget, unchanged.
+  expect_equal(tree_plot$tree_panel_width_in(opts, md, 5.5), 5.5)
+
+  # A heatmap has to come out of extra canvas, not out of the tree.
+  heated <- opts
+  heated$heatmaps <- list(list(kind = "amr", cols = c("a", "b", "c")))
+  expect_gt(tree_plot$tree_panel_width_in(heated, md, 5.5), 5.5)
+
+  # And a tile strip likewise.
+  tiled <- opts
+  tiled$layers <- list(list(aesthetic = "tile", field = "v"))
+  expect_gt(tree_plot$tree_panel_width_in(tiled, md, 5.5), 5.5)
+})
+
+test_that("the grown panel leaves the tree exactly its budget", {
+  # This is the invariant the whole fix rests on, so it is checked against the
+  # axis solve rather than asserted in prose: of the widened panel, the share
+  # the tree and its labels occupy must be the original budget.
+  md <- data.frame(isolate = strrep("A", 30), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.5, width_in = 5.5,
+    layers = list(), rootedge_show = FALSE,
+    heatmaps = list(list(kind = "amr", cols = c("a", "b", "c")))
+  )
+  panel <- tree_plot$tree_panel_width_in(opts, md, 5.5)
+
+  max_x <- 1
+  tree_data <- data.frame(x = c(0, 0.5, max_x))
+  fit <- impl$.tiplab_xlim(
+    opts, md, tree_data, max_x, tree_plot$annotation_total(opts)
+  )
+  axis <- fit$limit - 0 # x_min is 0 with the root edge off
+  # Physical inches the tree and its labels get out of the widened panel.
+  tree_and_labels <- panel * (max_x / axis + fit$reserve / axis)
+
+  expect_equal(tree_and_labels, 5.5, tolerance = 0.02)
 })

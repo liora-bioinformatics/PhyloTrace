@@ -264,11 +264,7 @@ ui <- function(id, plot_type) {
           ),
           accordion(
             id = ns("setup_accordion"),
-            open = if (spec$distance) {
-              c("Selection", "Options")
-            } else {
-              "Selection"
-            },
+            open = "Selection",
             # Isolate preselection. The button opens a modal with the metadata
             # table where the user picks which isolates feed this plot; the info
             # line summarises the current selection. See the selection_button /
@@ -284,53 +280,6 @@ ui <- function(id, plot_type) {
               ),
               uiOutput(ns("selection_info"))
             ),
-            # Only the distance engines have anything to put here. For Map and Epi
-            # the panel is not emitted at all — it used to be rendered empty with a
-            # "Not available" placeholder and hidden with shinyjs, which is
-            # unnecessary now that the tab knows its type up front.
-            if (spec$distance) {
-              accordion_panel(
-                "Options",
-                icon = icon("gear"),
-                pickerInput(
-                  ns("na_handling"),
-                  span(
-                    "Missing values ",
-                    span(
-                      class = "tooltip-bttn",
-                      actionButton(
-                        ns("na_handling_info"),
-                        label = NULL,
-                        icon = icon("circle-info")
-                      )
-                    )
-                  ),
-                  choices = c(
-                    "Ignore for pairwise comparison" = "ignore_na",
-                    "Omit loci with missing values" = "omit",
-                    "Treat missing as allele variant" = "category"
-                  )
-                ),
-                # Typing results imported from a peer (Database > Import). They
-                # carry allele identity but no sequences, so they can join a
-                # distance computation but nothing else.
-                uiOutput(ns("imported_picker_ui")),
-                # Tree-only. `algo` is a computation input (feeds compute_phylo_tree
-                # on Generate, like the missing-value handling above); `zoom_view`
-                # is purely presentational — the engine applies it as a CSS class
-                # with no re-render.
-                if (identical(plot_type, "Tree")) {
-                  tagList(
-                    prettyRadioButtons(
-                      ns("algo"),
-                      "Algorithm",
-                      choices = c("Neighbour-Joining", "UPGMA")
-                    ),
-                    input_switch(ns("zoom_view"), "Zoom view", FALSE)
-                  )
-                }
-              )
-            },
             accordion_panel(
               "Export Plot",
               icon = icon("arrow-up-from-bracket"),
@@ -367,7 +316,55 @@ ui <- function(id, plot_type) {
         # The engine's whole inner layout. `as_fill_carrier` used to come from the
         # coordinator wrapping each navset panel; the tab has to supply it now.
         as_fill_carrier(
-          spec$mod$ui(ns("engine"), generate_id = ns("generate"))
+          spec$mod$ui(
+            ns("engine"),
+            generate_id = ns("generate"),
+            # The distance-computation controls, rendered in the engine's own
+            # right-hand sidebar rather than here. They stay namespaced to this
+            # module, so every observer behind them is unchanged — what moves is
+            # only where they appear, and with it what they mean: the left
+            # sidebar is the "press Generate to apply" side, the right sidebar
+            # takes effect live. Only the distance engines have any.
+            options_ui = if (spec$distance) {
+              tagList(
+                pickerInput(
+                  ns("na_handling"),
+                  span(
+                    "Missing values ",
+                    span(
+                      class = "tooltip-bttn",
+                      actionButton(
+                        ns("na_handling_info"),
+                        label = NULL,
+                        icon = icon("circle-info")
+                      )
+                    )
+                  ),
+                  choices = c(
+                    "Ignore for pairwise comparison" = "ignore_na",
+                    "Omit loci with missing values" = "omit",
+                    "Treat missing as allele variant" = "category"
+                  )
+                ),
+                # Typing results imported from a peer (Database > Import). They
+                # carry allele identity but no sequences, so they can join a
+                # distance computation but nothing else.
+                uiOutput(ns("imported_picker_ui")),
+                if (identical(plot_type, "Tree")) {
+                  tagList(
+                    prettyRadioButtons(
+                      ns("algo"),
+                      "Algorithm",
+                      choices = c("Neighbour-Joining", "UPGMA")
+                    ),
+                    # Purely presentational — the engine applies it as a CSS
+                    # class with no re-render.
+                    input_switch(ns("zoom_view"), "Zoom view", FALSE)
+                  )
+                }
+              )
+            }
+          )
         )
       )
     )
@@ -524,23 +521,58 @@ server <- function(
     # database, a session reset, or a new confirmed selection.
     selected_isolates <- reactiveVal(NULL)
 
+    # The selection the plot on screen was actually drawn from, as opposed to the
+    # one the user has picked but not yet applied. Everything the engine sees
+    # goes through this, which is what makes the left sidebar a form you submit
+    # rather than a set of live controls: confirming a different set of isolates
+    # changed the metadata under the tree immediately, so the plot redrew with
+    # new labels against a tree still computed from the old set.
+    #
+    # NULL before the first Generate; thereafter whatever Generate captured.
+    applied_selection <- reactiveVal(NULL)
+
     # A new database means the previous isolate names may not exist any more.
     reg(observeEvent(
       viz_metadata(),
-      selected_isolates(NULL),
+      {
+        selected_isolates(NULL)
+        applied_selection(NULL)
+      },
       ignoreInit = TRUE
     ))
 
     # Two flavours: the Map and the Epi curve plot straight from the metadata
     # and must see only local isolates; the distance engines also label and
     # colour the staged peer isolates they compute distances for.
+    #
+    # Both read the *applied* selection: they feed the engine, and the engine
+    # draws whatever it is given the moment it is given it.
     viz_metadata_selected <- reactive({
-      .subset_meta(viz_metadata(), selected_isolates())
+      .subset_meta(viz_metadata(), applied_selection())
     })
 
     viz_metadata_selected_all <- reactive({
-      .subset_meta(viz_metadata_all(), selected_isolates())
+      .subset_meta(viz_metadata_all(), applied_selection())
     })
+
+    # TRUE once this tab has drawn a plot at least once.
+    generated_once <- reactiveVal(FALSE)
+
+    # Whether the left sidebar holds anything not yet in the plot. Before the
+    # first Generate everything is pending, so the button is live from the start.
+    pending_changes <- reactive({
+      !isTRUE(generated_once()) ||
+        !identical(selected_isolates(), applied_selection())
+    })
+
+    # Generate is the only way to apply them, so it is only offered when there is
+    # something to apply — and says so, rather than looking pressable and doing
+    # nothing.
+    reg(observe({
+      pending <- isTRUE(pending_changes())
+      shinyjs::toggleState("generate", condition = pending)
+      shinyjs::toggleClass("generate", "is-pending", condition = pending)
+    }))
 
     # ------------------------------------------------------ time filter ---
     # The date-typed columns the modal's time filter can work along: the fixed
@@ -984,6 +1016,22 @@ server <- function(
     # generation it produces is booked as already-saved (it is, by definition,
     # what is stored) rather than leaving a freshly reopened plot dirty.
     restore_pending <- reactiveVal(FALSE)
+
+    # Apply what the left sidebar is holding. `priority` is load-bearing: the
+    # engine's own Generate observer was created before this one, so at equal
+    # priority it would run first and compute from the *previous* selection.
+    # Higher priority runs first, so the engine sees the applied selection in the
+    # same flush that told it to generate.
+    reg(observeEvent(
+      input$generate,
+      {
+        applied_selection(isolate(selected_isolates()))
+        generated_once(TRUE)
+      },
+      ignoreInit = TRUE,
+      priority = 100
+    ))
+
     reg(observeEvent(
       input$generate,
       {
@@ -1072,6 +1120,7 @@ server <- function(
       )
       if (restricted) {
         isolate(selected_isolates(sel))
+        isolate(applied_selection(sel))
       }
     }))
 
@@ -1166,7 +1215,9 @@ server <- function(
       } else {
         NULL
       }
-      effective_selection <- static_sel %||% selected_isolates()
+      # The *applied* selection: a save records the plot that is displayed, not
+      # a selection the user has picked and not yet generated.
+      effective_selection <- static_sel %||% applied_selection()
 
       # `selection` is the *restriction* (NULL = "all isolates"), which on its
       # own can't distinguish "all" at save time from "all" later — so a plot
@@ -1344,7 +1395,12 @@ server <- function(
           list(value = isTRUE(snap$zoom_view))
         )
       }
+      # Both, because a restored plot is drawn from the snapshot rather than
+      # waiting for the user to press Generate — the synthetic Generate below
+      # would otherwise find nothing pending and be disabled.
       selected_isolates(snap$selection)
+      applied_selection(snap$selection)
+      generated_once(TRUE)
 
       if (!is.null(eng$restore)) {
         try(eng$restore(snap$engine), silent = TRUE)
@@ -1376,6 +1432,7 @@ server <- function(
       }
       if (!is.null(preset$selection)) {
         selected_isolates(preset$selection)
+        applied_selection(preset$selection)
       }
       shinyjs::delay(150, {
         if (!is.null(preset$save_target)) {
@@ -1411,6 +1468,8 @@ server <- function(
         try(outputOptions(output, o, suspend = TRUE), silent = TRUE)
       }
       selected_isolates(NULL)
+      applied_selection(NULL)
+      generated_once(FALSE)
       pending(NULL)
       pending_save_target(NULL)
       invisible(NULL)
