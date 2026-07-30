@@ -1649,14 +1649,20 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // Retrospective-change warning inside the settings wizard's isolate step.
+// Collapsed to a hoverable icon badge; the full text lives in its tooltip.
 .ad-retro-warning {
-    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    font-size: .85rem;
     color: var(--bs-warning-text-emphasis, #997404);
     background-color: var(--bs-warning-bg-subtle, #fff3cd);
     border: 1px solid var(--bs-warning-border-subtle, #ffe69c);
     border-radius: var(--bs-border-radius);
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 0.75rem;
+    padding: .25rem 1rem;
+    cursor: default;
+    height: 47px;
+    gap: 1rem;
+    margin-left: auto;
 }
 
 // Badge pinned to a plot card whose isolate set no longer matches its Analysis.

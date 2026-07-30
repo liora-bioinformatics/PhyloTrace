@@ -44,6 +44,7 @@ box::use(
   bslib[
     page_sidebar,
     sidebar,
+    tooltip,
   ],
   DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
   app / view / analysis_dashboard / group,
@@ -308,17 +309,21 @@ server <- function(
           nrow(analysis_store$list_plots(db_path(), editing_analysis()))
         }
         retro_warning <- if (n_saved > 0) {
-          div(
-            class = "ad-retro-warning",
-            icon("triangle-exclamation"),
+          plural <- if (n_saved == 1) "" else "s"
+          tooltip(
+            div(
+              class = "ad-retro-warning",
+              icon("triangle-exclamation"),
+              sprintf(" %d saved plot%s built from this set", n_saved, plural)
+            ),
             sprintf(
               paste(
-                " This Analysis already contains %d saved plot%s built from",
+                "This Analysis already contains %d saved plot%s built from",
                 "the current isolate set. Changing it re-bases them onto",
                 "different data — they will be flagged as out of date."
               ),
               n_saved,
-              if (n_saved == 1) "" else "s"
+              plural
             )
           )
         }
@@ -337,8 +342,7 @@ server <- function(
         showModal(div(
           class = "selection-modal",
           modalDialog(
-            title = "Select isolates",
-            retro_warning,
+            title = NULL,
             div(
               class = "selection-modal-toolbar",
               actionButton(
@@ -353,13 +357,7 @@ server <- function(
                 label = "None",
                 icon = icon("xmark")
               ),
-              # Compact hint so the modal keeps the same footprint as
-              # Visualization's own isolate picker; leaving the selection empty
-              # is explained here rather than in a separate paragraph.
-              span(
-                class = "text-muted small ms-2",
-                "Empty = all isolates; every plot here uses this set."
-              ),
+              retro_warning,
               uiOutput(ns("wiz_sel_count"), class = "selection-modal-count")
             ),
             div(
@@ -500,8 +498,10 @@ server <- function(
         # app/view/visualization_plot.R).
         date_col <- input$wiz_date_field
         pin_cols <- if (
-          !is.null(date_col) && nzchar(date_col) &&
-            !identical(date_col, "isolate") && date_col %in% names(tbl)
+          !is.null(date_col) &&
+            nzchar(date_col) &&
+            !identical(date_col, "isolate") &&
+            date_col %in% names(tbl)
         ) {
           c("isolate", date_col)
         } else {

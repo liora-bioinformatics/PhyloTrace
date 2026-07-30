@@ -31,6 +31,13 @@ box::use(
     setProgress,
     tagList,
     h5,
+    showModal,
+    modalDialog,
+    modalButton,
+    removeModal,
+    dateRangeInput,
+    updateDateRangeInput,
+    isolate,
   ],
   bslib[as_fill_carrier, tooltip, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable],
@@ -38,6 +45,7 @@ box::use(
   shinyFiles[shinySaveButton, shinyFileSave, parseSavePath],
   fs[path_home],
   waiter[Waiter, spin_flower, useWaiter],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
 )
 
 box::use(
@@ -55,6 +63,7 @@ box::use(
   app / logic / db_sources[SOURCE_COL],
   app / logic / pymlst[existing_strains],
   app / logic / field_labels[field_chips, field_labels_for],
+  app / logic / field_types[as_date_safe, date_fields],
   app / logic / functions[panel_card, stat_tile, transfer_cards],
   app /
     logic /
@@ -462,7 +471,7 @@ server <- function(
         selected_meta
       )
       md <- md[
-        md$isolate %in% input$isolates,
+        md$isolate %in% resolved_isolates(),
         names(md)[names(md) %in% keep],
         drop = FALSE
       ]
@@ -514,24 +523,308 @@ server <- function(
       setdiff(metadata_columns(path), c(METADATA_FIXED_COLS, SOURCE_COL))
     })
 
+    # ------------------------------------------------- isolate selection ---
+    # Same modal/table isolate picker as the Visualization module's plot setup
+    # and the Analysis Dashboard's wizard (see app/view/visualization_plot.R,
+    # sel_* — this mirrors it almost line for line). NULL = no restriction
+    # (every export-eligible isolate); otherwise the isolate names confirmed
+    # in the modal.
+    selected_isolates <- reactiveVal(NULL)
+
+    # A new database means the previous isolate names may not exist any more.
+    observeEvent(isolates(), selected_isolates(NULL), ignoreInit = TRUE)
+
+    # The concrete isolate list every downstream export step reads — resolves
+    # the NULL "no restriction" sentinel to the full export-eligible set, so
+    # callers never have to special-case NULL themselves the way input$isolates
+    # never needed to (it always held a concrete vector).
+    resolved_isolates <- reactive({
+      sel <- selected_isolates()
+      if (is.null(sel)) isolates() else sel
+    })
+
+    # The metadata table backing the modal, restricted to isolates() (the
+    # export-eligible set the mlst table actually holds calls for) so the
+    # modal can never let the user pick something export_database()/
+    # export_typing_results() would reject.
+    export_meta <- reactive({
+      path <- db_path()
+      req(path)
+      iso <- isolates()
+      req(length(iso) > 0)
+      md <- make_metadata_table(path)
+      req(md)
+      md[md$isolate %in% iso, , drop = FALSE]
+    })
+
+    export_date_choices <- reactive({
+      meta <- export_meta()
+      if (is.null(meta)) {
+        return(character(0))
+      }
+      cols <- date_fields(db_path(), names(meta))
+      stats::setNames(cols, field_labels_for(cols))
+    })
+
+    export_dates <- reactive({
+      meta <- export_meta()
+      col <- input$export_date_field
+      if (is.null(meta) || is.null(col) || !nzchar(col)) {
+        return(NULL)
+      }
+      if (!col %in% names(meta)) {
+        return(NULL)
+      }
+      as_date_safe(meta[[col]])
+    })
+
+    export_filtered <- reactive({
+      meta <- export_meta()
+      req(meta)
+      d <- export_dates()
+      rng <- input$export_date_range
+      if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
+        return(meta)
+      }
+      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      meta[keep, , drop = FALSE]
+    })
+
+    export_checked <- reactiveVal(character(0))
+
     output$isolate_picker_ui <- renderUI({
-      choices <- isolates()
-      pickerInput(
-        ns("isolates"),
-        label = NULL,
-        choices = choices,
-        selected = choices,
-        multiple = TRUE,
-        options = pickerOptions(
-          actionsBox = TRUE,
-          title = "Select isolates …",
-          selectedTextFormat = "count > 2",
-          countSelectedText = paste0("{0} / ", length(choices), " isolates"),
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search isolates ...",
-          container = "body"
-        )
+      div(
+        actionButton(
+          ns("isolates_button"),
+          "Choose isolates",
+          icon = icon("list-check"),
+          width = "100%"
+        ),
+        uiOutput(ns("isolates_selection_info"))
       )
+    })
+
+    output$isolates_selection_info <- renderUI({
+      meta <- export_meta()
+      if (is.null(meta)) {
+        return(div(class = "text-muted small mt-2", "No database loaded"))
+      }
+      total <- nrow(meta)
+      sel <- selected_isolates()
+      if (is.null(sel)) {
+        div(
+          class = "small mt-2 text-muted",
+          sprintf("All %d isolates selected", total)
+        )
+      } else {
+        div(
+          class = "small mt-2",
+          sprintf("%d of %d isolates selected", length(sel), total)
+        )
+      }
+    })
+
+    observeEvent(input$isolates_button, {
+      meta <- export_meta()
+      req(meta)
+      # Sticky across reopens, like the other isolate pickers: the checked set
+      # carries the last confirmed selection, and the date controls come back
+      # holding whatever they were last set to.
+      export_checked(selected_isolates() %||% character(0))
+      dates <- export_date_choices()
+      field <- isolate(input$export_date_field) %||% ""
+      rng <- isolate(input$export_date_range)
+
+      showModal(div(
+        class = "selection-modal",
+        modalDialog(
+          title = NULL,
+          div(
+            class = "selection-modal-toolbar",
+            actionButton(
+              ns("isolates_sel_all"),
+              "Select all",
+              icon = icon("check-double")
+            ),
+            actionButton(
+              ns("isolates_sel_none"),
+              "Select none",
+              icon = icon("xmark")
+            ),
+            uiOutput(ns("isolates_sel_count"), class = "selection-modal-count")
+          ),
+          div(
+            class = "isolate-selection-table",
+            DTOutput(ns("isolates_table"), fill = FALSE)
+          ),
+          footer = tagList(
+            if (length(dates)) {
+              div(
+                class = "selection-modal-filter",
+                pickerInput(
+                  ns("export_date_field"),
+                  label = NULL,
+                  choices = c("No time filter" = "", dates),
+                  selected = if (field %in% dates) field else "",
+                  width = "fit"
+                ),
+                div(
+                  id = ns("export_date_range_wrap"),
+                  dateRangeInput(
+                    ns("export_date_range"),
+                    label = NULL,
+                    start = rng[1],
+                    end = rng[2],
+                    separator = "–",
+                    width = "17rem"
+                  )
+                )
+              )
+            },
+            modalButton("Cancel"),
+            actionButton(
+              ns("isolates_confirm"),
+              "Confirm selection",
+              class = "btn-primary"
+            )
+          ),
+          easyClose = TRUE
+        )
+      ))
+      shinyjs::toggleState(
+        "export_date_range",
+        condition = nzchar(field) && field %in% dates
+      )
+    })
+
+    observeEvent(input$export_date_field, {
+      d <- export_dates()
+      shinyjs::toggleState("export_date_range", condition = !is.null(d))
+      if (is.null(d) || all(is.na(d))) {
+        return()
+      }
+      updateDateRangeInput(
+        session,
+        "export_date_range",
+        start = min(d, na.rm = TRUE),
+        end = max(d, na.rm = TRUE),
+        min = min(d, na.rm = TRUE),
+        max = max(d, na.rm = TRUE)
+      )
+    })
+
+    observeEvent(
+      input$isolates_table_rows_selected,
+      {
+        rows <- input$isolates_table_rows_selected
+        tbl <- export_filtered()
+        export_checked(if (length(rows)) tbl$isolate[rows] else character(0))
+      },
+      ignoreNULL = FALSE
+    )
+
+    output$isolates_table <- renderDT(
+      {
+        tbl <- export_filtered()
+        req(tbl)
+        keep <- match(isolate(export_checked()), tbl$isolate)
+
+        date_col <- input$export_date_field
+        pin_cols <- if (
+          !is.null(date_col) &&
+            nzchar(date_col) &&
+            !identical(date_col, "isolate") &&
+            date_col %in% names(tbl)
+        ) {
+          c("isolate", date_col)
+        } else {
+          "isolate"
+        }
+        tbl <- tbl[, c(pin_cols, setdiff(names(tbl), pin_cols)), drop = FALSE]
+
+        datatable(
+          tbl,
+          rownames = FALSE,
+          filter = "top",
+          class = "row-border hover order-column",
+          selection = list(mode = "multiple", selected = keep[!is.na(keep)]),
+          extensions = "FixedColumns",
+          options = list(
+            dom = "tip",
+            pageLength = 20,
+            scrollX = TRUE,
+            scrollY = "1px",
+            scrollCollapse = TRUE,
+            fixedColumns = list(leftColumns = length(pin_cols)),
+            # See the identical comment in visualization_plot.R, where this
+            # FixedColumns/filter-row fix first landed.
+            initComplete = JS(sprintf(
+              "function(settings) {
+                 var rows = $(this.api().table().header()).find('tr');
+                 var headerCells = rows.eq(0).find('th');
+                 var filterCells = rows.eq(1).find('td');
+                 for (var i = 0; i < %d; i++) {
+                   filterCells.eq(i).addClass('dtfc-fixed-left').css({
+                     position: 'sticky',
+                     left: headerCells.eq(i).css('left') || '0px',
+                     zIndex: 3
+                   });
+                 }
+               }",
+              length(pin_cols)
+            ))
+          )
+        )
+      },
+      server = FALSE
+    )
+
+    output$isolates_sel_count <- renderUI({
+      meta <- export_meta()
+      req(meta)
+      shown <- nrow(export_filtered())
+      n <- length(input$isolates_table_rows_selected)
+      if (shown == nrow(meta)) {
+        return(span(sprintf("%d of %d selected", n, shown)))
+      }
+      d <- export_dates()
+      missing <- if (is.null(d)) 0L else sum(is.na(d))
+      outside <- nrow(meta) - shown - missing
+      detail <- if (missing > 0 && outside > 0) {
+        sprintf(" · %d outside window, %d missing date", outside, missing)
+      } else if (missing > 0) {
+        sprintf(" · %d missing date", missing)
+      } else {
+        sprintf(" · %d outside window", outside)
+      }
+      span(
+        sprintf("%d of %d selected", n, shown),
+        span(class = "selection-modal-count-total", detail)
+      )
+    })
+
+    isolates_proxy <- dataTableProxy("isolates_table")
+    observeEvent(
+      input$isolates_sel_all,
+      selectRows(isolates_proxy, input$isolates_table_rows_all)
+    )
+    observeEvent(input$isolates_sel_none, selectRows(isolates_proxy, NULL))
+
+    observeEvent(input$isolates_confirm, {
+      meta <- export_meta()
+      tbl <- export_filtered()
+      req(meta, tbl)
+      rows <- input$isolates_table_rows_selected
+      picked <- if (length(rows)) tbl$isolate[rows] else tbl$isolate
+      if (!length(picked)) {
+        showNotification(
+          "No isolates left to select — widen the time filter.",
+          type = "warning"
+        )
+        return()
+      }
+      selected_isolates(if (setequal(picked, meta$isolate)) NULL else picked)
+      removeModal()
     })
 
     # The custom variables this database defines. Empty for a database that has
@@ -610,7 +903,7 @@ server <- function(
     preview <- reactive({
       path <- db_path()
       req(!is.null(path), !is.na(path))
-      sel <- input$isolates
+      sel <- resolved_isolates()
       if (!length(sel)) {
         return(NULL)
       }
@@ -795,7 +1088,7 @@ server <- function(
       # ui_mounted(): the rebuilt button always comes back disabled, so state it
       # again rather than leave a ready selection looking blocked.
       ui_mounted()
-      ready <- !is.null(dest_path()) && length(input$isolates) > 0
+      ready <- !is.null(dest_path()) && length(resolved_isolates()) > 0
       if (ready) enable("export_btn") else disable("export_btn")
     })
 
@@ -805,7 +1098,7 @@ server <- function(
 
       path <- db_path()
       dest <- dest_path()
-      req(!is.null(path), !is.null(dest), length(input$isolates))
+      req(!is.null(path), !is.null(dest), length(resolved_isolates()))
 
       as_typing <- typing()
       md <- if (as_typing) typing_metadata() else NULL
@@ -834,7 +1127,7 @@ server <- function(
           export_typing_results(
             db_path = path,
             dest_path = dest,
-            isolates = input$isolates,
+            isolates = resolved_isolates(),
             metadata = md,
             format = input$file_format %||% "xlsx",
             value_kind = "hash",
@@ -846,7 +1139,7 @@ server <- function(
           export_database(
             src_path = path,
             dest_path = dest,
-            isolates = input$isolates,
+            isolates = resolved_isolates(),
             metadata_cols = input$meta_cols %||% character(0),
             include_classical = isTRUE(input$include_classical),
             include_amr = isTRUE(input$include_amr),

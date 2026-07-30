@@ -285,15 +285,19 @@ tree_legend_width_in <- function(layers, md, legend_size, width_in) {
     width_in
   }
   size <- legend_size %||% 10
-  per <- vapply(layers, function(l) {
-    labs <- unique(as.character(md[[l$field]]))
-    chars <- suppressWarnings(max(nchar(c(labs, l$title %||% "")), 1L))
-    if (!is.finite(chars)) {
-      chars <- 1L
-    }
-    ncol <- tree_legend_ncol(l$n_levels %||% 1L)
-    ncol * (LEGEND_KEY_IN + chars * TIP_CHAR_EM * size / 72)
-  }, numeric(1))
+  per <- vapply(
+    layers,
+    function(l) {
+      labs <- unique(as.character(md[[l$field]]))
+      chars <- suppressWarnings(max(nchar(c(labs, l$title %||% "")), 1L))
+      if (!is.finite(chars)) {
+        chars <- 1L
+      }
+      ncol <- tree_legend_ncol(l$n_levels %||% 1L)
+      ncol * (LEGEND_KEY_IN + chars * TIP_CHAR_EM * size / 72)
+    },
+    numeric(1)
+  )
   min(max(per) + LEGEND_PAD_IN, LEGEND_MAX_FRAC * w)
 }
 
@@ -410,8 +414,13 @@ heatmap_panels <- function(opts, tree_span, label_reserve = 0) {
   gaps <- HEATMAP_GAP * seq_along(hs)
 
   panels <- Map(
-    function(h, w, s, g) c(h, list(width = w, offset = label_reserve + (s + g) * tree_span)),
-    hs, widths, starts, gaps
+    function(h, w, s, g) {
+      c(h, list(width = w, offset = label_reserve + (s + g) * tree_span))
+    },
+    hs,
+    widths,
+    starts,
+    gaps
   )
   list(panels = panels, total = sum(widths) + HEATMAP_GAP * length(hs))
 }
@@ -433,9 +442,13 @@ heatmap_header_frac <- function(opts, n_tip) {
   if (!length(hs)) {
     return(0.02)
   }
-  chars <- max(vapply(hs, function(h) {
-    suppressWarnings(max(nchar(field_labels_for(h$cols)), 1L))
-  }, numeric(1)))
+  chars <- max(vapply(
+    hs,
+    function(h) {
+      suppressWarnings(max(nchar(field_labels_for(h$cols)), 1L))
+    },
+    numeric(1)
+  ))
   if (!is.finite(chars)) {
     chars <- 1
   }
@@ -700,7 +713,7 @@ tree_clade_layers <- function(opts) {
     return(NULL)
   }
   lapply(nodes, function(n) {
-    geom_hilight(node = n, fill = opts$clade_color, type = "roundrect")
+    geom_hilight(node = n, fill = opts$clade_color)
   })
 }
 
@@ -884,7 +897,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # against the *panel*: sizing the label reserve against the full canvas is
     # what would push the labels back under the legend.
     legend_in <- tree_legend_width_in(
-      opts$layers, md, opts$legend_size, opts$width_in
+      opts$layers,
+      md,
+      opts$legend_size,
+      opts$width_in
     )
     panel_opts <- opts
     panel_opts$width_in <- max((opts$width_in %||% 5.5) - legend_in, 1)
@@ -905,7 +921,9 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     if (!is.null(lab_l)) {
       list(
         tree_scale(
-          .layer_values(lab_l, md), lab_l$palette, "color",
+          .layer_values(lab_l, md),
+          lab_l$palette,
+          "color",
           name = lab_l$title
         ),
         new_scale_color()
@@ -918,7 +936,9 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     if (!is.null(pt_l)) {
       list(
         tree_scale(
-          .layer_values(pt_l, md), pt_l$palette, "color",
+          .layer_values(pt_l, md),
+          pt_l$palette,
+          "color",
           name = pt_l$title
         ),
         new_scale_color()
@@ -969,9 +989,11 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       # ggtree's y scale is the point, so its announcement is not news.
       p <- suppressMessages(
         p +
-          scale_y_continuous(expand = expansion(
-            mult = c(0.02, heatmap_header_frac(opts, sum(tree_data$isTip)))
-          ))
+          scale_y_continuous(
+            expand = expansion(
+              mult = c(0.02, heatmap_header_frac(opts, sum(tree_data$isTip)))
+            )
+          )
       )
     }
   }
