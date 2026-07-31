@@ -22,6 +22,7 @@ box::use(
     as_fill_carrier,
   ],
   shinyWidgets[
+    actionGroupButtons,
     radioGroupButtons,
     pickerInput,
     pickerOptions,
@@ -263,8 +264,12 @@ LAYER_DEFAULTS <- list(
 .normalize_heatmaps <- function(x) {
   out <- .normalize_records(
     x,
-    list(kind = NA_character_, cols = character(0), palette = "Reds",
-         title = NA_character_)
+    list(
+      kind = NA_character_,
+      cols = character(0),
+      palette = "Reds",
+      title = NA_character_
+    )
   )
   if (is.null(out)) {
     return(NULL)
@@ -447,6 +452,39 @@ MIRRORED_IDS <- c(
 tree_controls <- function(ns, options_ui = NULL) {
   shiny$tagList(
     navset_tab(
+      # Options ----------------------------------------------------------------
+      if (!is.null(options_ui)) {
+        nav_panel(
+          "Options",
+          icon = shiny$icon("gear"),
+          options_ui,
+          accordion(
+            open = c("Tree Rooting", "Layout"),
+            accordion_panel(
+              "Tree Rooting",
+              icon = shiny$icon("seedling"),
+              pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
+            ),
+            accordion_panel(
+              "Layout",
+              icon = shiny$icon("project-diagram"),
+              pickerInput(
+                ns("nj_layout"),
+                "Layout",
+                list(
+                  Linear = c(
+                    Rectangular = "rectangular",
+                    Roundrect = "roundrect",
+                    Slanted = "slanted",
+                    Ellipse = "ellipse"
+                  ),
+                  Circular = c(Circular = "circular", Inward = "inward")
+                )
+              )
+            )
+          )
+        )
+      },
       # Labels -----------------------------------------------------------------
       nav_panel(
         "Labels",
@@ -472,7 +510,7 @@ tree_controls <- function(ns, options_ui = NULL) {
             )
           ),
           accordion_panel(
-            "Branch Labels",
+            "Allelic Distance",
             icon = shiny$icon("code-branch"),
             # One switch, and nothing else. Allelic distance is the only value
             # worth writing on a branch, and nothing about how it is written is
@@ -483,11 +521,13 @@ tree_controls <- function(ns, options_ui = NULL) {
             # and no other label shares its row, which is the only rule under
             # which the numbers stay readable on a tree whose branch lengths
             # differ by three orders of magnitude.
+            input_switch(ns("nj_axis_show"), "Distance axis", TRUE),
             input_switch(
               ns("nj_show_branch_label"),
-              "Show allelic distances",
+              "Show on branches",
               FALSE
-            )
+            ),
+            input_switch(ns("nj_treescale_show"), "Scale bar", FALSE)
           )
         )
       ),
@@ -530,19 +570,6 @@ tree_controls <- function(ns, options_ui = NULL) {
               "One column per gene, shaded by how confident the call is."
             )
           )
-        )
-      ),
-      # Colors -----------------------------------------------------------------
-      nav_panel(
-        "Colors",
-        icon = shiny$icon("fill-drip"),
-        shiny$div(
-          class = "viz-color-grid",
-          viz_color(ns, "nj_color", "Lines / Text", "#000000"),
-          viz_color(ns, "nj_bg", "Background", "#ffffff"),
-          viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
-          viz_color(ns, "nj_branch_color", "Allelic Distance", "#000000"),
-          viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
         )
       ),
       # Elements ---------------------------------------------------------------
@@ -604,12 +631,57 @@ tree_controls <- function(ns, options_ui = NULL) {
               )
             ),
             viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221")
+          ),
+
+          accordion_panel(
+            "Legend",
+            icon = shiny$icon("list"),
+            radioGroupButtons(
+              ns("nj_legend_orientation"),
+              "Orientation",
+              c(Vertical = "vertical", Horizontal = "horizontal"),
+              justified = TRUE
+            ),
+            shiny$sliderInput(
+              ns("nj_legend_size"),
+              "Size",
+              5,
+              25,
+              10,
+              ticks = FALSE
+            ),
+            # No position sliders. The legend gets a reserved column beside the
+            # tree (below it, for circular layouts) that the layout engine
+            # sizes to the widest key — placing it by hand is what let it land
+            # on top of the tips and run off the canvas.
+            shiny$div(
+              class = "text-muted small",
+              "Placed beside the tree automatically, clear of the labels."
+            )
+          ),
+          accordion_panel(
+            "Other Elements",
+            icon = shiny$icon("code-branch"),
+            input_switch(ns("nj_rootedge_show"), "Root edge", TRUE)
           )
+        )
+      ),
+      # Colors -----------------------------------------------------------------
+      nav_panel(
+        "Colors",
+        icon = shiny$icon("fill-drip"),
+        shiny$div(
+          class = "viz-color-grid",
+          viz_color(ns, "nj_color", "Lines / Text", "#000000"),
+          viz_color(ns, "nj_bg", "Background", "#ffffff"),
+          viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
+          viz_color(ns, "nj_branch_color", "Allelic Distance", "#000000"),
+          viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
         )
       ),
       # Layout -----------------------------------------------------------------
       nav_panel(
-        "Layout",
+        "Position",
         icon = shiny$icon("sliders"),
         accordion(
           open = "Dimensions",
@@ -660,71 +732,19 @@ tree_controls <- function(ns, options_ui = NULL) {
               step = 0.05,
               ticks = FALSE
             )
-          ),
-          accordion_panel(
-            "Tree Rooting",
-            icon = shiny$icon("seedling"),
-            pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
-          ),
-          accordion_panel(
-            "Layout",
-            icon = shiny$icon("project-diagram"),
-            pickerInput(
-              ns("nj_layout"),
-              "Layout",
-              list(
-                Linear = c(
-                  Rectangular = "rectangular",
-                  Roundrect = "roundrect",
-                  Slanted = "slanted",
-                  Ellipse = "ellipse"
-                ),
-                Circular = c(Circular = "circular", Inward = "inward")
-              )
-            ),
-            input_switch(ns("nj_rootedge_show"), "Root edge", TRUE),
-            input_switch(ns("nj_treescale_show"), "Scale bar", TRUE),
-            input_switch(ns("nj_axis_show"), "Distance axis", FALSE)
-          ),
-          accordion_panel(
-            "Legend",
-            icon = shiny$icon("list"),
-            radioGroupButtons(
-              ns("nj_legend_orientation"),
-              "Orientation",
-              c(Vertical = "vertical", Horizontal = "horizontal"),
-              justified = TRUE
-            ),
-            shiny$sliderInput(
-              ns("nj_legend_size"),
-              "Size",
-              5,
-              25,
-              10,
-              ticks = FALSE
-            ),
-            # No position sliders. The legend gets a reserved column beside the
-            # tree (below it, for circular layouts) that the layout engine
-            # sizes to the widest key — placing it by hand is what let it land
-            # on top of the tips and run off the canvas.
-            shiny$div(
-              class = "text-muted small",
-              "Placed beside the tree automatically, clear of the labels."
-            )
           )
         )
-      ),
-      # Options ----------------------------------------------------------------
-      # The tab's distance-computation controls, moved here from the left
-      # sidebar. Emitted only when the tab has any to give (the distance
-      # engines); `nav_panel(NULL)` would otherwise leave an empty tab.
-      if (!is.null(options_ui)) {
-        nav_panel(
-          "Options",
-          icon = shiny$icon("gear"),
-          options_ui
-        )
-      }
+      )
+    ),
+    shiny$div(
+      class = "reset-buttons",
+      radioGroupButtons(
+        ns("zoom_view"),
+        NULL,
+        choiceNames = c("Full", "Zoomed"),
+        choiceValues = c(FALSE, TRUE),
+        width = "100%"
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -1015,7 +1035,9 @@ server <- function(
           tippoint_auto_on(TRUE)
           set_fitted("nj_tippoint_show", TRUE)
           bslib::update_switch("nj_tippoint_show", value = TRUE)
-        } else if (!wants_points && shown && shiny$isolate(tippoint_auto_on())) {
+        } else if (
+          !wants_points && shown && shiny$isolate(tippoint_auto_on())
+        ) {
           tippoint_auto_on(FALSE)
           set_fitted("nj_tippoint_show", FALSE)
           bslib::update_switch("nj_tippoint_show", value = FALSE)
@@ -1036,7 +1058,11 @@ server <- function(
     shiny$observe({
       ls <- nj_layers()
       layer_on <- function(aesthetic) {
-        any(vapply(ls, function(l) identical(l$aesthetic, aesthetic), logical(1)))
+        any(vapply(
+          ls,
+          function(l) identical(l$aesthetic, aesthetic),
+          logical(1)
+        ))
       }
       active <- list(
         nj_color = TRUE,
@@ -1440,44 +1466,42 @@ server <- function(
         }
         # Nothing to compute before the first Generate; without this, touching an
         # option on a fresh tab would draw a tree the user never asked for.
-        if (
-          !isTRUE(generated()) && !isTRUE((generate() %||% 0L) > 0L)
-        ) {
+        if (!isTRUE(generated()) && !isTRUE((generate() %||% 0L) > 0L)) {
           return()
         }
 
-      # Populate the metadata-backed selects (no heavy compute here; the tree is
-      # computed lazily by its output so the waiter can cover it).
-      populate_metadata_selects(force_default = FALSE)
+        # Populate the metadata-backed selects (no heavy compute here; the tree is
+        # computed lazily by its output so the waiter can cover it).
+        populate_metadata_selects(force_default = FALSE)
 
-      # Compute the tree (heavy work is covered by the client-side loading
-      # overlay, which stays up until this engine's plot fires its value event).
-      tree <- tryCatch(
-        compute_phylo_tree(
-          db_path(),
-          na_handling(),
-          algo(),
-          selected_isolates(),
-          imported_sets()
-        ),
-        error = function(e) {
-          shiny$showNotification(
-            paste("Tree computation failed:", conditionMessage(e)),
-            type = "error"
-          )
-          NULL
-        }
-      )
-      if (is.null(tree)) {
-        shiny$showNotification(
-          "Could not build a tree: need at least 3 isolates in the database.",
-          type = "warning"
+        # Compute the tree (heavy work is covered by the client-side loading
+        # overlay, which stays up until this engine's plot fires its value event).
+        tree <- tryCatch(
+          compute_phylo_tree(
+            db_path(),
+            na_handling(),
+            algo(),
+            selected_isolates(),
+            imported_sets()
+          ),
+          error = function(e) {
+            shiny$showNotification(
+              paste("Tree computation failed:", conditionMessage(e)),
+              type = "error"
+            )
+            NULL
+          }
         )
-        # No plot will render, so the value event that normally clears the
-        # loading overlay never fires — hide it now instead of leaving the
-        # spinner up until the 45s client-side safety timeout.
-        shinyjs::removeClass(id = "plot_stage", class = "is-loading")
-      }
+        if (is.null(tree)) {
+          shiny$showNotification(
+            "Could not build a tree: need at least 3 isolates in the database.",
+            type = "warning"
+          )
+          # No plot will render, so the value event that normally clears the
+          # loading overlay never fires — hide it now instead of leaving the
+          # spinner up until the 45s client-side safety timeout.
+          shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+        }
         if (!is.null(tree)) {
           refit_layout(tree, notify = TRUE)
         }
@@ -1568,7 +1592,9 @@ server <- function(
       )
 
       layers <- nj_layers()
-      if (any(vapply(layers, function(l) identical(l$field, field), logical(1)))) {
+      if (
+        any(vapply(layers, function(l) identical(l$field, field), logical(1)))
+      ) {
         return()
       }
       if (length(layers) >= MAX_LAYERS) {
@@ -1867,8 +1893,11 @@ server <- function(
     # it: a label, the group to file it under, and a sub-text. Both levels
     # answer in the same shape, so the picker does not care which it is showing.
     .empty_catalog <- data.frame(
-      col = character(0), label = character(0), group = character(0),
-      description = character(0), stringsAsFactors = FALSE
+      col = character(0),
+      label = character(0),
+      group = character(0),
+      description = character(0),
+      stringsAsFactors = FALSE
     )
 
     gene_catalog <- shiny$reactive({
@@ -1891,7 +1920,8 @@ server <- function(
         group = unname(ifelse(is.na(groups), "Other", groups)),
         description = sprintf(
           "%d isolate%s · %s",
-          hits, ifelse(hits == 1L, "", "s"),
+          hits,
+          ifelse(hits == 1L, "", "s"),
           unname(ifelse(is.na(sections), "Resistance", sections))
         ),
         stringsAsFactors = FALSE
@@ -1920,7 +1950,11 @@ server <- function(
         col = cols,
         label = field_labels_for(cols),
         group = unname(ifelse(is.na(sections), "Resistance", sections)),
-        description = sprintf("%d isolate%s", hits, ifelse(hits == 1L, "", "s")),
+        description = sprintf(
+          "%d isolate%s",
+          hits,
+          ifelse(hits == 1L, "", "s")
+        ),
         stringsAsFactors = FALSE
       )
     })
@@ -2178,12 +2212,24 @@ server <- function(
     # reopened Analysis draws what it drew when it was saved.
     .migrate_legacy_mapping <- function(vals) {
       legacy <- list(
-        list(show = "nj_mapping_show", field = "nj_color_mapping",
-             palette = "nj_tiplab_scale", aesthetic = "tiplab_color"),
-        list(show = "nj_tipcolor_mapping_show", field = "nj_tipcolor_mapping",
-             palette = "nj_tippoint_scale", aesthetic = "tippoint_color"),
-        list(show = "nj_tipshape_mapping_show", field = "nj_tipshape_mapping",
-             palette = NULL, aesthetic = "tippoint_shape")
+        list(
+          show = "nj_mapping_show",
+          field = "nj_color_mapping",
+          palette = "nj_tiplab_scale",
+          aesthetic = "tiplab_color"
+        ),
+        list(
+          show = "nj_tipcolor_mapping_show",
+          field = "nj_tipcolor_mapping",
+          palette = "nj_tippoint_scale",
+          aesthetic = "tippoint_color"
+        ),
+        list(
+          show = "nj_tipshape_mapping_show",
+          field = "nj_tipshape_mapping",
+          palette = NULL,
+          aesthetic = "tippoint_shape"
+        )
       )
       out <- list()
       prof <- profiles()
@@ -2192,7 +2238,11 @@ server <- function(
         if (is.null(row) || !isTRUE(row$groupable)) {
           return()
         }
-        layer <- assign_mapping_layer(row, out, id = paste0("L", length(out) + 1L))
+        layer <- assign_mapping_layer(
+          row,
+          out,
+          id = paste0("L", length(out) + 1L)
+        )
         if (is.null(layer)) {
           return()
         }
@@ -2214,9 +2264,15 @@ server <- function(
           if (is.null(spec$palette)) NULL else vals[[spec$palette]]
         )
       }
-      for (tile in .normalize_records(vals$.tiles, list(
-        show = FALSE, variable = NA_character_, scale = "viridis"
-      )) %||% list()) {
+      for (tile in .normalize_records(
+        vals$.tiles,
+        list(
+          show = FALSE,
+          variable = NA_character_,
+          scale = "viridis"
+        )
+      ) %||%
+        list()) {
         if (isTRUE(tile$show) && !is.na(tile$variable %||% NA)) {
           add(tile$variable, "tile", tile$scale)
         }

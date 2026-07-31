@@ -351,10 +351,7 @@ ui <- function(id, plot_type) {
                       ns("algo"),
                       "Algorithm",
                       choices = c("Neighbour-Joining", "UPGMA")
-                    ),
-                    # Purely presentational — the engine applies it as a CSS
-                    # class with no re-render.
-                    input_switch(ns("zoom_view"), "Zoom view", FALSE)
+                    )
                   )
                 }
               )

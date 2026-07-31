@@ -61,8 +61,8 @@ set_tree_inputs <- function(session) {
     nj_clade_scale = "#D0F221",
     nj_heatmap_show = FALSE,
     nj_rootedge_show = TRUE,
-    nj_treescale_show = TRUE,
-    nj_axis_show = FALSE,
+    nj_treescale_show = FALSE,
+    nj_axis_show = TRUE,
     nj_aspect_ratio = 0.6,
     nj_zoom = 0.95,
     nj_h = -0.05,
@@ -563,7 +563,9 @@ amr_meta <- function() {
     check.names = FALSE
   )
   attr(meta, "amr_cols") <- c(
-    "amr_Beta-lactam", "amr_Aminoglycoside", "amr_profile"
+    "amr_Beta-lactam",
+    "amr_Aminoglycoside",
+    "amr_profile"
   )
   attr(meta, "amr_class_sections") <- c(
     `amr_Beta-lactam` = "Resistance",
@@ -576,7 +578,10 @@ amr_meta <- function() {
 amr_args <- function(meta) {
   list(
     viz_metadata = reactive(meta),
-    field_profiles = reactive(field_profiles(meta, amr_cols = attr(meta, "amr_cols"))),
+    field_profiles = reactive(field_profiles(
+      meta,
+      amr_cols = attr(meta, "amr_cols")
+    )),
     plot_type = reactiveVal("Tree")
   )
 }

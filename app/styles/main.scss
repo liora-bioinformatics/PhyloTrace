@@ -1130,6 +1130,10 @@ $viz-tile-row-gap: 0.85rem;
     background-color: #ddd;
 }
 
+.test {
+    width: 100%;
+}
+
 // Unified backing for every floating Map control -----------------------------
 // Leaflet ships each control type with its own ad-hoc background: the zoom and
 // fullscreen bars are fully opaque white, the scale bar and attribution are
@@ -3250,10 +3254,15 @@ table.dataTable thead>tr>th.sorting {
     justify-content: space-between;
     gap: 1rem;
     margin-top: 1rem;
-}
 
-.reset-buttons .btn-default {
-    font-size: 12px;
+    .btn-default,
+    .btn-group>.btn {
+        font-size: 12px;
+    }
+
+    .btn-group {
+        width: 100%;
+    }
 }
 
 // Two arrow-pairs (start/end handle) flank Play. Five items in one row
