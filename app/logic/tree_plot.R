@@ -13,7 +13,6 @@ box::use(
     geom_rootedge,
     geom_hilight,
     geom_nodelab,
-    geom_text2,
     gheatmap,
     theme_tree,
   ],
@@ -26,6 +25,7 @@ box::use(
     geom_text,
     geom_label,
     geom_tile,
+    geom_segment,
     ggsave,
     guide_legend,
     theme,
@@ -48,7 +48,7 @@ box::use(
     expansion,
   ],
   ape[root],
-  stats[quantile, setNames],
+  stats[setNames],
   utils[head],
   RColorBrewer[brewer.pal, brewer.pal.info],
   viridisLite[viridis],
@@ -204,21 +204,260 @@ tree_nice_width <- function(x) {
   step[max(which(step * mag <= x))] * mag
 }
 
+# --- Whole-tree distance axis -------------------------------------------------
+#
+# An alternative to the scale bar, not a replacement for it — the two answer
+# different questions and stay independently switchable.
+#
+# The scale bar (geom_treescale, above) shows what one representative distance
+# looks like; reading any other distance off it means eyeballing a multiple of
+# that one segment. A phylogram's x position is already cumulative allelic
+# distance from the root — that is the entire premise of drawing branch
+# lengths to scale rather than as a cladogram — so a real axis, ticked and
+# labelled from 0 to the tree's own depth, only makes explicit what the
+# drawing already encodes. It does not change what any position means, which
+# is why it is fine where the log axis and the truncation considered earlier
+# were not.
+#
+# It does not fix the legibility problem a very unequal tree has, either: the
+# ticks are still spaced linearly, so a cluster of near-zero branches still
+# collapses to a few pixels near the origin. It is a more precise read-out of
+# the same geometry, not a cure for what the geometry does to unequal data —
+# that is still the branch labels' job, on the few branches wide enough to
+# hold one.
+
+AXIS_TICK_LEN <- 0.4 # Tick length below the axis line, in tip rows.
+AXIS_LABEL_GAP <- 0.6 # Label clearance below the tick, in tip rows.
+AXIS_TARGET_TICKS <- 6L
+
+#' Round tick positions for a whole-tree distance axis
+#'
+#' `pretty()` picks the same human-friendly steps R's own axes use. Its result
+#' can overshoot `max_x` by up to half a step, which `tree_nice_width()`'s
+#' single value never has to worry about — a tick past the tree's own depth
+#' would sit in the label reserve rather than over anything drawn, so it is
+#' dropped rather than clipped.
+#'
+#' @param max_x Numeric. The tree's maximum x (the root sits at 0).
+#' @param n Integer. Target tick count.
+#' @return Numeric vector of break positions, ascending, within `[0, max_x]`.
+#' @export
+tree_axis_breaks <- function(max_x, n = AXIS_TARGET_TICKS) {
+  if (!isTRUE(is.finite(max_x) && max_x > 0)) {
+    return(numeric(0))
+  }
+  breaks <- pretty(c(0, max_x), n = n)
+  breaks[breaks >= 0 & breaks <= max_x * 1.001]
+}
+
+#' A ticked, labelled axis under the tree, to the same scale as the branches
+#'
+#' @param opts List. Resolved tree options.
+#' @param max_x Numeric. The tree's own maximum x.
+#' @param y0 Numeric. Row position of the axis line.
+#' @return A list of ggplot2 layers, or NULL when switched off or degenerate.
+tree_axis_layer <- function(opts, max_x, y0) {
+  if (!isTRUE(opts$axis_show)) {
+    return(NULL)
+  }
+  breaks <- tree_axis_breaks(max_x)
+  if (!length(breaks)) {
+    return(NULL)
+  }
+
+  digits <- tree_branch_digits(breaks[breaks > 0])
+  tick_y <- y0 - AXIS_TICK_LEN
+  label_y <- tick_y - AXIS_LABEL_GAP
+
+  line <- data.frame(x = 0, xend = max_x, y = y0, yend = y0)
+  ticks <- data.frame(x = breaks, xend = breaks, y = y0, yend = tick_y)
+  labels <- data.frame(
+    x = breaks,
+    y = label_y,
+    label = tree_branch_format(breaks, digits)
+  )
+
+  seg <- function(d) {
+    geom_segment(
+      data = d,
+      mapping = aes(
+        x = .data[["x"]],
+        xend = .data[["xend"]],
+        y = .data[["y"]],
+        yend = .data[["yend"]]
+      ),
+      inherit.aes = FALSE,
+      color = opts$line_color
+    )
+  }
+
+  list(
+    seg(line),
+    seg(ticks),
+    geom_text(
+      data = labels,
+      mapping = aes(
+        x = .data[["x"]],
+        y = .data[["y"]],
+        label = .data[["label"]]
+      ),
+      inherit.aes = FALSE,
+      size = opts$branch_size * BRANCH_ABOVE_SHRINK,
+      vjust = 1,
+      color = opts$line_color
+    )
+  )
+}
+
+# --- Branch labels -----------------------------------------------------------
+#
+# Which branches carry their allelic distance in writing.
+#
+# The tree itself is left alone. Branch lengths are drawn to scale and the
+# distances are read from the scale bar — that is the convention every tree
+# viewer follows, and the only one under which the drawn distance between two
+# tips equals the sum of the branches between them. Neither of the tricks that
+# suggest themselves for a tree with one branch far longer than the rest is
+# used here: a log axis destroys that additivity outright (a path's drawn
+# length stops being the sum of its parts, and the scale bar stops meaning
+# anything), and truncating the long branch is only honest with a break glyph
+# and the true value printed beside it, which is a figure the *reader* has to
+# be told about rather than something to do to a tree silently.
+#
+# So the length disparity is not the label layer's to fix, and it is not what
+# was wrong. What was wrong is that labels were picked by *rank*: the longest
+# `BRANCH_LABEL_MAX` branches, whatever they measured. In a tree where one
+# branch holds almost the whole span, the 2nd through 25th longest are all
+# hairlines inside the same tight cluster, drawn at nearly the same x and y —
+# so their numbers printed on top of each other in a blot while the branches
+# they belonged to were invisible.
+#
+# Legibility is geometry, not rank. A branch can carry a label when the branch
+# is drawn wide enough to hold the text, and when no label already sits on the
+# same row. Both are computable from the axis split that is solved anyway, so
+# both are decided here instead of being left to the eye.
+
 BRANCH_ABOVE_SHRINK <- 0.72
 BRANCH_VJUST <- -0.35
-BRANCH_LABEL_TARGET <- 25L
 
-#' Calculate Branch Length Filtering Cutoff
+# Never more than this many, even where they all fit: past it the numbers are
+# the figure rather than an annotation on it.
+BRANCH_LABEL_MAX <- 25L
+
+# Slack on the width test, so a label that only just fits still has air on
+# either side of it rather than butting into the next branch's.
+BRANCH_LABEL_PAD <- 1.2
+
+# Minimum vertical separation between two labels, in tip rows. The text is
+# fitted to a fraction of the row pitch (tree_auto_layout), so one clear row is
+# always enough — and internal nodes deep in a ladder sit fractions of a row
+# apart, which is what stacked them.
+BRANCH_ROW_GAP <- 1
+
+# A circular tree's span is a radius, so it occupies about half the panel.
+TREE_RADIAL_FRAC <- 0.5
+
+#' Decimal places for a set of branch labels
 #'
-#' Converts target label count into a percentile cutoff for branch filtering.
+#' One choice for the whole figure rather than per label: allelic distances
+#' printed as "1600.5" beside "3.78" read as different quantities.
 #'
-#' @param n_branches Integer. Total branch count.
-#' @param target Integer. Desired number of labeled branches.
-#' @return Percentile threshold (0-99).
+#' The two cases that actually arise get exact answers first. An allelic
+#' distance matrix counts mismatched loci, so it is integral, and neighbour
+#' joining halves it at most — so whole numbers print whole and halves print
+#' with one decimal, rather than dragging "8.00" along behind a "12.50".
+#' Anything else falls back to about three significant figures.
+#'
+#' @param x Numeric vector of branch lengths that may be labelled.
+#' @return Integer, 0 to 2.
 #' @export
-tree_branch_cutoff <- function(n_branches, target = BRANCH_LABEL_TARGET) {
-  n <- max(as.integer(n_branches %||% 0L), 1L)
-  round(.clamp(100 * (1 - target / n), 0, 99))
+tree_branch_digits <- function(x) {
+  x <- x[is.finite(x) & x > 0]
+  if (!length(x)) {
+    return(0L)
+  }
+  resolves_at <- function(step) all(abs(x / step - round(x / step)) < 1e-6)
+  if (resolves_at(1)) {
+    return(0L)
+  }
+  if (resolves_at(0.5)) {
+    return(1L)
+  }
+  as.integer(.clamp(3 - floor(log10(max(x))), 0, 2))
+}
+
+#' Format branch lengths for printing on a branch
+#'
+#' @param x Numeric vector of branch lengths.
+#' @param digits Integer decimal places, from `tree_branch_digits()`.
+#' @return Character vector.
+#' @export
+tree_branch_format <- function(x, digits) {
+  formatC(round(x, digits), format = "f", digits = digits)
+}
+
+#' Select the branches whose label can actually be read
+#'
+#' Two tests, in order. A branch has to be drawn at least as wide as its own
+#' text (`BRANCH_LABEL_PAD` times, for air), which is what excludes the
+#' hairlines inside a tight cluster however long they are relative to their
+#' neighbours. Then, longest first, a branch is taken only if no label already
+#' accepted sits within `BRANCH_ROW_GAP` rows of it — greedy, so where two
+#' branches compete for a row the longer one wins.
+#'
+#' @param len Numeric branch lengths.
+#' @param y Numeric vertical positions, in tip rows.
+#' @param span_x Numeric. The tree's own x span, in tree units.
+#' @param span_in Numeric. Inches that span is drawn across.
+#' @param size Numeric. Rendered text size, in mm (ggplot2's `size`).
+#' @param digits Integer decimal places, from `tree_branch_digits()`.
+#' @param max_labels Integer cap.
+#' @param row_gap Numeric minimum row separation.
+#' @return Integer vector of positions into `len`, longest branch first.
+#' @export
+tree_branch_keep <- function(
+  len,
+  y,
+  span_x,
+  span_in,
+  size,
+  digits,
+  max_labels = BRANCH_LABEL_MAX,
+  row_gap = BRANCH_ROW_GAP
+) {
+  n <- length(len)
+  if (!n || !isTRUE(is.finite(span_x) && span_x > 0)) {
+    return(integer(0))
+  }
+  if (!isTRUE(is.finite(span_in) && span_in > 0)) {
+    return(integer(0))
+  }
+
+  # Both sides in inches: the text from its character count at the rendered
+  # size (the em width tip labels are reserved with), the branch from its
+  # share of the tree's span.
+  chars <- nchar(tree_branch_format(len, digits))
+  need <- BRANCH_LABEL_PAD * chars * TIP_CHAR_EM * size / 25.4
+  have <- len / span_x * span_in
+
+  fits <- which(is.finite(len) & len > 0 & is.finite(y) & have >= need)
+  if (!length(fits)) {
+    return(integer(0))
+  }
+
+  keep <- integer(0)
+  taken_y <- numeric(0)
+  for (i in fits[order(len[fits], decreasing = TRUE)]) {
+    if (length(taken_y) && min(abs(taken_y - y[i])) < row_gap) {
+      next
+    }
+    keep <- c(keep, i)
+    taken_y <- c(taken_y, y[i])
+    if (length(keep) >= max_labels) {
+      break
+    }
+  }
+  keep
 }
 
 # --- Annotation widths -------------------------------------------------------
@@ -314,7 +553,11 @@ heatmap_total <- function(opts) {
   min(0.45, chars * TIP_CHAR_EM * (opts$tiplab_size %||% 4) / 25.4 / w)
 }
 
-X_EXPANSION <- 1.1
+# Slack on the tip-label reserve. Small: the reserve is already measured from
+# the longest label being drawn, so this is a rounding allowance and not a
+# margin. It used to be a margin, and the annotations sat a label's width away
+# from the tips because of it.
+X_EXPANSION <- 1.02
 
 # HEATMAP_CLEARANCE is gone. It padded the tip-label reserve by a further 30%
 # so an annotation matrix placed at exactly `reserve` would not touch the
@@ -415,17 +658,36 @@ tree_inward_xlim <- function(opts, md, max_x) {
   max_x / (1 - frac)
 }
 
-HEATMAP_GAP <- 0.02
-ANNOTATION_CLEARANCE <- 1.12
+HEATMAP_GAP <- 0.012
+ANNOTATION_CLEARANCE <- 1.06
 
 # Fixed two-colour fill for the AMR panel. Its cells hold comma-joined gene
 # symbols, so a shared categorical scale over the raw strings would give one
 # colour per distinct *combination* of genes — dozens of them, none comparable.
 # What the panel is actually read for is whether a class was hit at all.
-AMR_PRESENT <- "Resistance detected"
+AMR_PRESENT <- "Detected"
 AMR_ABSENT <- "Not detected"
+
+# Gene-level calls carry abritamr's own confidence, which a presence/absence
+# recode would throw away: an exact match and a partial hit are not the same
+# claim about the isolate. The states are ordered strongest first so the legend
+# reads as a scale.
 #' @export
-AMR_HEATMAP_FILL <- c("#B2182B", "#E8E8E8")
+AMR_GENE_STATES <- c("Match", "Inexact", "Partial", AMR_ABSENT)
+
+#' Fills for the AMR heatmap, at either level.
+#'
+#' One family of reds so the panel reads as a single measurement, darkest for
+#' the strongest call, and a neutral grey for absence — which is most of the
+#' matrix and must not compete with the hits.
+#' @export
+AMR_HEATMAP_FILL <- c(
+  Detected = "#B2182B",
+  Match = "#B2182B",
+  Inexact = "#E08214",
+  Partial = "#F4C99B",
+  `Not detected` = "#EDEDED"
+)
 
 #' Inches of canvas the panel needs so the tree and its labels still get
 #' `panel_in` of it once the annotations have taken their share.
@@ -536,41 +798,112 @@ heatmap_panels <- function(opts, tree_span, label_reserve = 0) {
 #' @export
 heatmap_header_frac <- function(opts, n_tip) {
   hs <- opts$heatmaps %||% list()
-  if (!length(hs)) {
+  tiles <- Filter(
+    function(l) identical(l$aesthetic, "tile"),
+    opts$layers %||% list()
+  )
+  if (!length(hs) && !length(tiles)) {
     return(0.02)
   }
-  chars <- max(vapply(
-    hs,
-    function(h) {
-      suppressWarnings(max(nchar(field_labels_for(h$cols)), 1L))
-    },
-    numeric(1)
-  ))
+
+  # Both kinds of annotation carry a vertical header, so both claim room — and
+  # a tile strip's header is its variable's *name*, which is far longer than a
+  # gene symbol. Sizing this from the heatmap alone is what clipped the strip
+  # headers off the top of the panel.
+  heat_chars <- vapply(hs, function(h) {
+    labs <- if (identical(h$level, "gene")) {
+      h$labels %||% h$cols
+    } else {
+      field_labels_for(h$cols)
+    }
+    suppressWarnings(max(nchar(labs), 1L))
+  }, numeric(1))
+
+  tile_chars <- vapply(tiles, function(l) {
+    suppressWarnings(max(nchar(l$title %||% l$field), 1L))
+  }, numeric(1))
+
+  chars <- suppressWarnings(max(c(heat_chars, tile_chars), 1))
   if (!is.finite(chars)) {
     chars <- 1
   }
   n <- max(as.integer(n_tip %||% 1L), 1L)
-  .clamp(chars * HEADER_CHAR_ROWS / n, 0.04, 0.4)
+  .clamp(chars * HEADER_CHAR_ROWS / n, 0.04, 0.45)
 }
 
 # Rows of tip pitch one header character occupies when set vertically, at the
 # header font size gheatmap is given below.
 HEADER_CHAR_ROWS <- 0.62
 
-# The frame one panel draws, with its rows keyed the way gheatmap matches them.
-.heatmap_frame <- function(panel, md) {
-  heat <- md[, panel$cols, drop = FALSE]
-  if (identical(panel$kind, "amr")) {
-    # Presence/absence, not the gene strings themselves.
-    heat[] <- lapply(heat, function(v) {
-      present <- !is.na(v) & nzchar(trimws(as.character(v)))
-      factor(
-        ifelse(present, AMR_PRESENT, AMR_ABSENT),
-        levels = c(AMR_PRESENT, AMR_ABSENT)
-      )
-    })
+# Annotation headers are set vertically over their own column, so the column's
+# *width* is what limits the type size — the same constraint the tip labels
+# answer to, applied to the other axis. A fixed size is what let thirty gene
+# names overprint each other into a smear.
+HEADER_SIZE_MAX <- 2.8
+HEADER_SIZE_MIN <- 0.9
+# Share of a column a header may fill across its width, leaving the rest as the
+# gap that keeps neighbouring headers apart.
+HEADER_FILL <- 0.78
+
+#' Type size for an annotation header, fitted to the column it sits over.
+#'
+#' @param col_units Numeric. Width of one column, in x-axis data units.
+#' @param axis_units Numeric. Full width of the x axis, same units.
+#' @param panel_in Numeric. Physical width of the panel, in inches.
+#' @return Numeric ggplot2 text size.
+#' @export
+tree_header_size <- function(col_units, axis_units, panel_in) {
+  if (!is.finite(col_units) || !is.finite(axis_units) || axis_units <= 0) {
+    return(HEADER_SIZE_MIN)
   }
-  names(heat) <- field_labels_for(panel$cols)
+  col_mm <- 25.4 * panel_in * col_units / axis_units
+  .clamp(col_mm * HEADER_FILL, HEADER_SIZE_MIN, HEADER_SIZE_MAX)
+}
+
+# The frame one panel draws, with its rows keyed the way gheatmap matches them.
+# The frame one panel draws.
+#
+# At drug-class level the source is the metadata table itself, whose columns
+# hold comma-joined gene symbols — a shared categorical scale over those would
+# give one colour per distinct *combination* of genes, dozens of them and none
+# comparable, so they recode to presence/absence. At gene level the source is
+# the separate call matrix (database_functions$load_amr_matrix), which is
+# already a factor of Match/Inexact/Partial per gene; absence is simply the NA
+# it leaves behind.
+.heatmap_frame <- function(panel, md, amr_matrix = NULL) {
+  if (identical(panel$level, "gene")) {
+    if (is.null(amr_matrix)) {
+      return(NULL)
+    }
+    cols <- intersect(panel$cols, names(amr_matrix))
+    if (!length(cols)) {
+      return(NULL)
+    }
+    idx <- match(md$isolate, amr_matrix$isolate)
+    heat <- amr_matrix[idx, cols, drop = FALSE]
+    heat[] <- lapply(heat, function(v) {
+      v <- as.character(v)
+      v[is.na(v)] <- AMR_ABSENT
+      factor(v, levels = AMR_GENE_STATES)
+    })
+    names(heat) <- panel$labels %||% cols
+    rownames(heat) <- md$label
+    return(heat)
+  }
+
+  cols <- intersect(panel$cols, names(md))
+  if (!length(cols)) {
+    return(NULL)
+  }
+  heat <- md[, cols, drop = FALSE]
+  heat[] <- lapply(heat, function(v) {
+    present <- !is.na(v) & nzchar(trimws(as.character(v)))
+    factor(
+      ifelse(present, AMR_PRESENT, AMR_ABSENT),
+      levels = c(AMR_PRESENT, AMR_ABSENT)
+    )
+  })
+  names(heat) <- field_labels_for(cols)
   rownames(heat) <- md$label
   heat
 }
@@ -832,9 +1165,9 @@ tree_tiplab_layer <- function(opts, layer = NULL) {
     size = opts$tiplab_size,
     # Aligning draws a leader line from each tip out to the axis limit. In an
     # inward tree every one of those runs toward the centre, where they all
-    # converge into a solid blot over the root — so the option that makes a
-    # linear tree readable is the one that ruins this layout.
-    align = isTRUE(opts$align) && !inward,
+    # converge into a solid blot over the root — so the layout that makes a
+    # linear tree readable is the one that ruins this one.
+    align = !inward,
     geom = "text"
   )
 
@@ -853,24 +1186,60 @@ tree_tiplab_layer <- function(opts, layer = NULL) {
   do.call(geom_tiplab, params)
 }
 
-tree_branch_layer <- function(opts, branch_lengths) {
+#' Allelic distances written on the branches that can hold them
+#'
+#' The selection is made here rather than by a `subset` inside the aesthetic,
+#' because it is geometry (see `tree_branch_keep()`) and needs the axis split
+#' the caller has already solved. What survives is drawn from its own data
+#' frame, so a branch that was not chosen contributes nothing to the layer at
+#' all.
+#'
+#' @param opts List. Resolved tree options.
+#' @param tree_data Data frame. `ggtree()`'s plot data.
+#' @param span_x Numeric. The tree's x span, in tree units.
+#' @param span_in Numeric. Inches that span is drawn across.
+#' @return A ggplot2 layer, or NULL when nothing can be labelled legibly.
+tree_branch_layer <- function(opts, tree_data, span_x, span_in) {
   if (!isTRUE(opts$branch_show)) {
     return(NULL)
   }
 
-  cut <- quantile(
-    branch_lengths,
-    probs = opts$branch_cutoff / 100,
-    na.rm = TRUE
+  len <- tree_data$branch.length
+  if (is.null(len) || !any(is.finite(len) & len > 0)) {
+    return(NULL)
+  }
+
+  size <- opts$branch_size * BRANCH_ABOVE_SHRINK
+  digits <- tree_branch_digits(len)
+  keep <- tree_branch_keep(
+    len,
+    tree_data$y,
+    span_x,
+    span_in,
+    size,
+    digits
+  )
+  if (!length(keep)) {
+    return(NULL)
+  }
+
+  # `branch` is the midpoint of the branch, which is where the number goes.
+  labels <- data.frame(
+    x = tree_data$branch[keep],
+    y = tree_data$y[keep],
+    label = tree_branch_format(len[keep], digits),
+    stringsAsFactors = FALSE
   )
 
-  geom_text2(
+  geom_text(
+    data = labels,
     mapping = aes(
-      x = .data[["branch"]],
-      label = round(.data[["branch.length"]], 2),
-      subset = .data[["branch.length"]] > cut
+      x = .data[["x"]],
+      y = .data[["y"]],
+      label = .data[["label"]]
     ),
-    size = opts$branch_size * BRANCH_ABOVE_SHRINK,
+    inherit.aes = FALSE,
+    size = size,
     vjust = BRANCH_VJUST,
     color = opts$branch_color
   )
@@ -917,14 +1286,42 @@ tree_clade_layers <- function(opts) {
   })
 }
 
-TILE_GAP <- 0.03
+TILE_GAP <- 0.012
+
+#' Where each tile strip's centre sits, in x-axis data units.
+#'
+#' The same arithmetic geom_fruit is given below, run again so the headers can
+#' be placed over the strips they name. geom_fruit computes its own positions
+#' internally and reports none of them, so a header has no other way to find its
+#' strip.
+#'
+#' @param opts List. Resolved tree options.
+#' @param n Integer. Number of strips.
+#' @param label_frac Numeric. Tip-label reserve, as a fraction of the tree span.
+#' @param max_x Numeric. Deepest tip position.
+#' @param tree_span Numeric. Width of the tree in x-axis units.
+#' @return Numeric vector of centres, one per strip.
+#' @export
+tile_centres <- function(opts, n, label_frac, max_x, tree_span) {
+  if (!n) {
+    return(numeric(0))
+  }
+  squeeze <- .annotation_squeeze(opts)
+  frac <- TILE_SPAN_EACH * squeeze
+  gap <- TILE_GAP * squeeze
+  first <- label_frac + gap + frac / 2
+  max_x + (first + (seq_len(n) - 1L) * (frac + gap)) * tree_span
+}
 
 tree_tile_layers <- function(
   opts,
   md,
   tiles = NULL,
   label_frac = 0,
-  tree_span = 1
+  tree_span = 1,
+  max_x = NULL,
+  n_tip = NULL,
+  axis_units = NULL
 ) {
   if (is.null(tiles)) {
     tiles <- Filter(
@@ -983,6 +1380,38 @@ tree_tile_layers <- function(
         )
       )
     )
+  }
+
+  # A header over each strip. Without one, several strips side by side are a
+  # block of colour with nothing saying which variable is which — the legends
+  # name the values, not the columns. Drawn the same way the heatmap's column
+  # names are: vertical, above the last tip, in the space the header reserve
+  # keeps clear.
+  if (!is.null(max_x) && !is.null(n_tip) && n_tip > 0) {
+    centres <- tile_centres(opts, length(tiles), label_frac, max_x, tree_span)
+    header_size <- if (is.null(axis_units)) {
+      HEADER_SIZE_MAX
+    } else {
+      tree_header_size(pwidth, axis_units, opts$width_in %||% 5.5)
+    }
+    layers <- c(layers, list(
+      geom_text(
+        data = data.frame(
+          .x = centres,
+          .y = n_tip + 0.6,
+          .label = vapply(tiles, function(t) t$title %||% t$field, character(1)),
+          stringsAsFactors = FALSE
+        ),
+        mapping = aes(x = .data[[".x"]], y = .data[[".y"]],
+          label = .data[[".label"]]),
+        inherit.aes = FALSE,
+        angle = 90,
+        hjust = 0,
+        vjust = 0.5,
+        size = header_size,
+        colour = opts$line_color %||% "#000000"
+      )
+    ))
   }
   layers
 }
@@ -1047,10 +1476,14 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # column this database no longer has is dropped rather than allowed to reach
   # aes() and error.
   opts$layers <- Filter(function(l) valid(l$field), opts$layers %||% list())
+  # Gene-level panels draw from the call matrix, not from the metadata table, so
+  # only the drug-class ones are validated against its columns.
   opts$heatmaps <- Filter(
     function(h) length(h$cols) > 0L,
     lapply(opts$heatmaps %||% list(), function(h) {
-      h$cols <- intersect(h$cols, cols)
+      if (!identical(h$level, "gene")) {
+        h$cols <- intersect(h$cols, cols)
+      }
       h
     })
   )
@@ -1097,7 +1530,6 @@ build_tree_ggtree <- function(tree, metadata, opts) {
 
   tree_data <- base$data
   max_x <- max(tree_data$x, na.rm = TRUE)
-  branch_lengths <- tree_data$branch.length[tree_data$branch.length > 0]
 
   p <- base %<+% md
 
@@ -1130,6 +1562,24 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     label_reserve <- fit$reserve
   }
 
+  # How much x axis the panel spans, which is what turns a column's width in
+  # data units into its width on the page — and so into a type size that fits
+  # it. Circular layouts have no such solve, so their headers take the cap.
+  axis_units <- if (!circular) {
+    fit$limit - suppressWarnings(min(tree_data$x, na.rm = TRUE))
+  } else {
+    NA_real_
+  }
+
+  # Inches the tree's *own* span is drawn across — what is left of the
+  # tree-and-labels budget once the labels have taken their fraction. This is
+  # the only thing that says whether a given branch is physically wide enough
+  # to print a number on (tree_branch_keep); the annotations are paid for by a
+  # wider canvas, so they do not come out of it.
+  span_in <- opts$width_in *
+    (1 - .clamp(.tiplab_frac(opts, md) * X_EXPANSION, 0, 0.8)) *
+    if (circular) TREE_RADIAL_FRAC else 1
+
   # Assemble plot layers (order maintains visual hierarchy).
   #
   # The new_scale_color() invariant, stated so it survives future edits: emit
@@ -1152,7 +1602,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       )
     },
     list(
-      tree_branch_layer(opts, branch_lengths),
+      tree_branch_layer(opts, tree_data, tree_span, span_in),
       tree_tippoint_layer(opts, pt_l, shp_l)
     ),
     if (!is.null(pt_l)) {
@@ -1189,7 +1639,16 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     if (isTRUE(opts$nodelabel_show)) {
       list(geom_nodelab(aes(label = .data[["node"]])))
     },
-    tree_tile_layers(opts, md, tile_ls, label_reserve / tree_span, tree_span)
+    tree_tile_layers(
+      opts,
+      md,
+      tile_ls,
+      label_reserve / tree_span,
+      tree_span,
+      max_x,
+      sum(tree_data$isTip),
+      axis_units
+    )
   )
   layers <- Filter(Negate(is.null), layers)
   for (layer in layers) {
@@ -1213,13 +1672,22 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         fontsize = 4
       )
   }
+  if (!circular) {
+    # Stacked below the scale bar rather than sharing its row, so switching
+    # both on at once still leaves each legible instead of drawing one over
+    # the other.
+    axis_y <- if (isTRUE(opts$treescale_show)) -2 else -1
+    for (layer in tree_axis_layer(opts, max_x, axis_y) %||% list()) {
+      p <- p + layer
+    }
+  }
 
   # `fit` was solved before the layers were assembled, because the tile strips
   # needed the label reserve to place themselves.
   if (!circular) {
     p <- p + xlim(NA, fit$limit)
-    if (length(opts$heatmaps %||% list())) {
-      # Room above the last tip for the heatmap column headers, which are set
+    if (annotation_total(opts) > 0) {
+      # Room above the last tip for the annotation headers, which are set
       # vertically and would otherwise be clipped by the panel. Replacing
       # ggtree's y scale is the point, so its announcement is not news.
       p <- suppressMessages(
@@ -1276,9 +1744,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # coexist as separate legends rather than collapsing into one that explains
   # neither.
   for (pan in heatmap_panels(opts, tree_span, label_reserve)$panels) {
+    frame <- .heatmap_frame(pan, md, opts$amr_matrix)
+    if (is.null(frame)) {
+      next
+    }
     p <- gheatmap(
       p + new_scale_fill(),
-      data = .heatmap_frame(pan, md),
+      data = frame,
       offset = if (circular) 0 else pan$offset,
       width = pan$width,
       legend_title = pan$title,
@@ -1290,22 +1762,31 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       colnames_angle = 90,
       hjust = 0,
       colnames_offset_y = 0.4,
-      font.size = 2.6
-    )
-    if (identical(pan$kind, "amr")) {
-      # gheatmap installs a default fill scale of its own, so replacing it is
-      # the intended move — but ggplot2 announces every replacement, and this
-      # one is not news. Deliberate, so silenced here rather than logged on
-      # every draw.
-      p <- suppressMessages(
-        p +
-          scale_fill_manual(
-            values = setNames(AMR_HEATMAP_FILL, c(AMR_PRESENT, AMR_ABSENT)),
-            name = pan$title,
-            na.value = "grey90"
-          )
+      # Fitted to the column, not fixed: thirty gene names at a fixed size
+      # overprint each other into a smear.
+      font.size = tree_header_size(
+        pan$width * tree_span / max(ncol(frame), 1L),
+        axis_units,
+        opts$width_in %||% 5.5
       )
-    }
+    )
+    # gheatmap installs a default fill scale of its own, so replacing it is the
+    # intended move — but ggplot2 announces every replacement, and this one is
+    # not news. Deliberate, so silenced here rather than logged on every draw.
+    p <- suppressMessages(
+      p +
+        scale_fill_manual(
+          values = AMR_HEATMAP_FILL[levels(frame[[1]])],
+          # Without explicit breaks the legend sorts its keys alphabetically —
+          # "Inexact, Match, Not detected, Partial" — which reads as four
+          # unrelated categories. These are a confidence scale, so they are
+          # listed as one, strongest first.
+          breaks = levels(frame[[1]]),
+          name = pan$title,
+          na.value = AMR_HEATMAP_FILL[[AMR_ABSENT]],
+          drop = FALSE
+        )
+    )
   }
 
   out <- as.ggplot(p, scale = opts$zoom, hjust = opts$h, vjust = opts$v)

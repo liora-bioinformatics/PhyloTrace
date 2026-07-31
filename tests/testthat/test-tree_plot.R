@@ -302,20 +302,101 @@ test_that("annotations together never dwarf the tree", {
   expect_lte(tree_plot$annotation_total(huge), impl$ANNOTATION_SPAN_MAX + 1e-9)
 })
 
-test_that("the branch-label cutoff leaves a readable number of labels", {
-  # ~690 branches for the 346-isolate database: labelling 90% of them (the
-  # shipped cutoff of 10) is a band of text over the tree.
-  big <- tree_plot$tree_branch_cutoff(690)
-  expect_true(big > 90 && big < 100)
+test_that("a branch too narrow to hold its number does not get one", {
+  # The reported fault, as geometry. One 1600-unit stem takes the whole span
+  # and thirty hairlines sit behind it; picking the longest 25 put twenty-five
+  # numbers on top of each other where the branches were sub-pixel.
+  len <- c(1600.5, 1531.5, 1542, 1563.5, 1579.38, 3.78, 3.81, 9.68, 11.03, 4.5)
+  y <- c(18, 31, 33, 34, 35, 8, 10, 14, 16, 20)
+  digits <- tree_plot$tree_branch_digits(len)
+  keep <- tree_plot$tree_branch_keep(
+    len, y, max(len), 3.6, 4 * impl$BRANCH_ABOVE_SHRINK, digits
+  )
 
-  # At ~15 tips (27 branches) the fit lands near the 10 the control shipped
-  # with, which is where that default was reasonable.
-  expect_true(abs(tree_plot$tree_branch_cutoff(27) - 10) < 10)
+  # Only the five long ones survive; every hairline is dropped.
+  expect_setequal(keep, 1:5)
+})
 
-  # Never past the slider, and never negative on a tree with fewer branches
-  # than the target.
-  expect_equal(tree_plot$tree_branch_cutoff(3), 0)
-  expect_true(tree_plot$tree_branch_cutoff(100000) <= 99)
+test_that("two labels never land on the same row", {
+  # Internal nodes deep in a ladder sit fractions of a row apart, which is the
+  # other half of what stacked the numbers.
+  len <- rep(100, 5)
+  keep <- tree_plot$tree_branch_keep(
+    len, c(1, 1.2, 1.4, 5, 9), 100, 5.5, 3, 0L
+  )
+  expect_equal(length(keep), 3L)
+
+  # Where two compete for a row, the longer branch wins it.
+  keep <- tree_plot$tree_branch_keep(
+    c(50, 90), c(2, 2.3), 100, 5.5, 3, 0L
+  )
+  expect_equal(keep, 2L)
+})
+
+test_that("branch labels are capped however many would fit", {
+  n <- 60L
+  keep <- tree_plot$tree_branch_keep(
+    rep(50, n), seq_len(n), 50, 5.5, 3, 0L
+  )
+  expect_equal(length(keep), impl$BRANCH_LABEL_MAX)
+})
+
+test_that("nothing labellable draws nothing rather than erroring", {
+  expect_length(tree_plot$tree_branch_keep(numeric(0), numeric(0), 1, 5.5, 3, 0L), 0)
+  expect_length(tree_plot$tree_branch_keep(rep(0, 5), 1:5, 1, 5.5, 3, 0L), 0)
+  expect_length(tree_plot$tree_branch_keep(c(1, 2), c(1, 2), 0, 5.5, 3, 0L), 0)
+  expect_length(tree_plot$tree_branch_keep(c(1, 2), c(1, 2), 10, 0, 3, 0L), 0)
+})
+
+test_that("one decimal count serves the whole figure", {
+  # Allelic distances count mismatched loci, so they are integral; NJ halves
+  # them at most. Both print exactly, without dragging "8.00" behind "12.50".
+  expect_equal(tree_plot$tree_branch_digits(c(1, 5, 120)), 0L)
+  expect_equal(tree_plot$tree_branch_digits(c(1.5, 3, 12.5)), 1L)
+  expect_equal(tree_plot$tree_branch_format(c(1.5, 3), 1L), c("1.5", "3.0"))
+
+  # Anything else keeps about three significant figures, so a 1600-unit branch
+  # is not printed to two decimals beside a 3-unit one.
+  expect_equal(tree_plot$tree_branch_digits(c(3.78, 1600.38)), 0L)
+  expect_equal(tree_plot$tree_branch_digits(c(0.013, 0.4)), 2L)
+  expect_equal(tree_plot$tree_branch_digits(numeric(0)), 0L)
+})
+
+# --- Whole-tree distance axis -------------------------------------------------
+
+test_that("axis ticks land at round distances within the tree's own depth", {
+  breaks <- tree_plot$tree_axis_breaks(1637)
+  expect_true(all(breaks >= 0 & breaks <= 1637))
+  expect_false(is.unsorted(breaks))
+  expect_equal(breaks[1], 0)
+
+  # A degenerate span draws no axis at all rather than erroring.
+  expect_length(tree_plot$tree_axis_breaks(0), 0)
+  expect_length(tree_plot$tree_axis_breaks(NA_real_), 0)
+  expect_length(tree_plot$tree_axis_breaks(-5), 0)
+})
+
+test_that("the axis switch is independent of the scale bar", {
+  # Switched off draws nothing.
+  expect_null(impl$tree_axis_layer(list(axis_show = FALSE), 100, -1))
+
+  # Switched on with a real span draws the axis line, the tick marks and the
+  # value labels — three layers, the last of which is text.
+  layers <- impl$tree_axis_layer(
+    list(axis_show = TRUE, line_color = "#000000", branch_size = 4),
+    100,
+    -1
+  )
+  expect_equal(length(layers), 3L)
+  expect_true(inherits(layers[[1]]$geom, "GeomSegment"))
+  expect_true(inherits(layers[[2]]$geom, "GeomSegment"))
+  expect_true(inherits(layers[[3]]$geom, "GeomText"))
+})
+
+test_that("a zero-depth tree draws no axis rather than a single stuck tick", {
+  expect_null(
+    impl$tree_axis_layer(list(axis_show = TRUE, line_color = "#000000"), 0, -1)
+  )
 })
 
 # --- The legend's reserved column --------------------------------------------
@@ -357,19 +438,41 @@ test_that("the legend can never take more than its share of the canvas", {
 test_that("branch numbers are text above the line, not a box on it", {
   # They used to be geom_label2 centred on the branch, which hid the very line
   # the number describes behind an opaque panel. Guards the revert.
+  td <- data.frame(
+    branch.length = c(10, 20, 30),
+    branch = c(5, 15, 25),
+    y = c(1, 2, 3)
+  )
   layer <- impl$tree_branch_layer(
-    list(branch_show = TRUE, branch_cutoff = 10, branch_size = 4,
-      branch_color = "#000000"),
-    c(0.1, 0.2, 0.3)
+    list(branch_show = TRUE, branch_size = 4, branch_color = "#000000"),
+    td,
+    30,
+    5.5
   )
   expect_true(inherits(layer$geom, "GeomText"))
   expect_false(inherits(layer$geom, "GeomLabel"))
   # Lifted clear of the line rather than centred on it.
   expect_lt(layer$aes_params$vjust, 0)
+  # The chosen branches carry the layer as their own data, so an unchosen one
+  # contributes nothing to it at all.
+  expect_true(is.data.frame(layer$data))
+  expect_setequal(names(layer$data), c("x", "y", "label"))
 })
 
 test_that("branch labels switched off draw nothing", {
-  expect_null(impl$tree_branch_layer(list(branch_show = FALSE), c(0.1, 0.2)))
+  expect_null(impl$tree_branch_layer(list(branch_show = FALSE), NULL, 1, 5.5))
+})
+
+test_that("a tree with no drawable branch length draws no label layer", {
+  td <- data.frame(branch.length = c(0, NA, 0), branch = 1:3, y = 1:3)
+  expect_null(
+    impl$tree_branch_layer(
+      list(branch_show = TRUE, branch_size = 4, branch_color = "#000000"),
+      td,
+      1,
+      5.5
+    )
+  )
 })
 
 # --- Annotation geometry -----------------------------------------------------
@@ -444,8 +547,8 @@ test_that("two heatmap panels build as two independent fill scales", {
   opts <- list(
     root = "Automatic", layout = "rectangular", line_color = "#000000",
     bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
-    align = TRUE, tiplab_color = "#000000", layers = list(),
-    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3,
     branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
     tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
     nodelabel_show = FALSE, parentnodes = character(0),
@@ -512,11 +615,11 @@ test_that("a layer naming a column the database no longer has is dropped", {
   opts <- list(
     root = "Automatic", layout = "rectangular", line_color = "#000000",
     bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
-    align = TRUE, tiplab_color = "#000000",
+    tiplab_color = "#000000",
     layers = list(list(id = "L1", field = "gone_away", title = "Gone",
       aesthetic = "tiplab_color", palette = "Set1", n_levels = 3L,
       continuous = FALSE, transform = NULL, auto = TRUE)),
-    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_show = FALSE, branch_size = 3,
     branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
     tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
     nodelabel_show = FALSE, parentnodes = character(0),
@@ -544,11 +647,11 @@ test_that("the background colour is the legend's background too", {
   opts <- list(
     root = "Automatic", layout = "rectangular", line_color = "#ffffff",
     bg = "#101820", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
-    align = TRUE, tiplab_color = "#ffffff",
+    tiplab_color = "#ffffff",
     layers = list(list(id = "L1", field = "ward", title = "Ward",
       aesthetic = "tippoint_color", palette = "Set1", n_levels = 2L,
       continuous = FALSE, transform = NULL, auto = TRUE)),
-    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_show = FALSE, branch_size = 3,
     branch_color = "#ffffff", tippoint_show = TRUE, tippoint_alpha = 1,
     tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
     nodelabel_show = FALSE, parentnodes = character(0),
@@ -634,11 +737,11 @@ test_that("a mapping with blanks builds without erroring", {
   opts <- list(
     root = "Automatic", layout = "rectangular", line_color = "#000000",
     bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
-    align = TRUE, tiplab_color = "#000000",
+    tiplab_color = "#000000",
     layers = list(list(id = "L1", field = "purpose", title = "Purpose",
       aesthetic = "tiplab_color", palette = "Set1", n_levels = 7L,
       continuous = FALSE, transform = NULL, auto = TRUE)),
-    branch_show = FALSE, branch_size = 3, branch_cutoff = 10,
+    branch_show = FALSE, branch_size = 3,
     branch_color = "#000000", tippoint_show = FALSE, tippoint_alpha = 1,
     tippoint_size = 3, tippoint_color = "#3A4657", tippoint_shape = 16,
     nodelabel_show = FALSE, parentnodes = character(0),

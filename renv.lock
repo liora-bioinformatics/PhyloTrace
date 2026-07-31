@@ -6691,7 +6691,7 @@
     },
     "visNetwork": {
       "Package": "visNetwork",
-      "Version": "2.1.3",
+      "Version": "2.1.4",
       "Source": "GitHub",
       "Title": "Network Visualization using 'vis.js' Library",
       "Authors@R": "c( person(family = \"Almende B.V. and Contributors\", role = c(\"aut\", \"cph\"), comment = \"vis.js library in htmlwidgets/lib, https://visjs.org/, https://github.com/visjs/vis-network\"), person(\"Benoit\", \"Thieurmel\", role = c(\"aut\", \"cre\"), comment = \"R interface\", email = \"bthieurmel@gmail.com\") )",
@@ -6713,6 +6713,7 @@
         "stats"
       ],
       "License": "MIT + file LICENSE",
+      "Encoding": "UTF-8",
       "Suggests": [
         "knitr",
         "rmarkdown",
@@ -6728,14 +6729,14 @@
         "flashClust"
       ],
       "VignetteBuilder": "knitr, rmarkdown",
-      "RoxygenNote": "7.1.2",
+      "RoxygenNote": "7.3.3",
       "Author": "Almende B.V. and Contributors [aut, cph] (vis.js library in htmlwidgets/lib, https://visjs.org/, https://github.com/visjs/vis-network), Benoit Thieurmel [aut, cre] (R interface)",
       "RemoteType": "github",
       "RemoteHost": "api.github.com",
       "RemoteUsername": "fpaskali",
       "RemoteRepo": "visNetwork",
       "RemoteRef": "master",
-      "RemoteSha": "4df8e378cb811d483c6101b311a58fc0c64d86d4"
+      "RemoteSha": "8c05235f8d93f13d3a3278236edae169bc35a0ce"
     },
     "waiter": {
       "Package": "waiter",

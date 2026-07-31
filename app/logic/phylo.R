@@ -170,7 +170,20 @@ compute_dist_matrix <- function(profile, hamming_method) {
 #' Construct Phylogenetic Tree Object
 #'
 #' Builds an ape `phylo` object using Neighbor-Joining (NJ) or UPGMA[cite: 12].
-#' NJ branch lengths are transformed via inverse hyperbolic sine (asinh)[cite: 12].
+#' Branch lengths are left in the units of `dist_mat` (raw allelic distance),
+#' the same units the MST draws its edge weights in — a plot that shows one
+#' isolate as "3272 alleles apart" and another view of the same pair a
+#' different number for the same data is a bug, not a rendering choice[cite: 12].
+#'
+#' NJ's least-squares estimate can come out slightly negative for a very short
+#' branch, which has no biological reading (a negative number of allele
+#' differences), so those are clamped to zero — the same fix other NJ viewers
+#' apply — rather than compressed. A branch that is genuinely far longer than
+#' its neighbours (an outgroup, a divergent reference) stays exactly as long
+#' as the data says: which of those branches is legible enough to carry a
+#' printed number is a rendering decision, handled downstream in
+#' `tree_plot.R` (`tree_branch_keep`) from the drawn geometry rather than by
+#' silently rescaling what a branch means[cite: 12].
 #'
 #' @param dist_mat Distance matrix[cite: 12].
 #' @param labels Tip label vector matching distance matrix ordering[cite: 12].
@@ -184,8 +197,7 @@ build_tree <- function(dist_mat, labels, algo) {
     as.phylo(hclust(d, method = "average"))
   } else {
     nj_tree <- nj(d)
-    el <- abs(nj_tree[["edge.length"]])
-    nj_tree[["edge.length"]] <- log(el + sqrt(el^2 + 1))
+    nj_tree[["edge.length"]] <- pmax(nj_tree[["edge.length"]], 0)
     nj_tree
   }
 

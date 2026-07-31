@@ -25,8 +25,10 @@ box::use(
     radioGroupButtons,
     pickerInput,
     pickerOptions,
+    prepare_choices,
     updatePickerInput,
-    updateVirtualSelect
+    updateVirtualSelect,
+    virtualSelectInput
   ],
   stats[setNames],
 )
@@ -60,11 +62,11 @@ box::use(
       build_tree_ggtree,
       save_tree_plot,
       tree_auto_layout,
-      tree_branch_cutoff,
       tree_legend_width_in,
       tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
+  app / logic / database_functions[load_amr_matrix],
   app / logic / phylo[compute_phylo_tree],
   app /
     logic /
@@ -103,24 +105,17 @@ LAYER_DEFAULTS <- list(
   auto = TRUE
 )
 
-# The heatmap panels, in draw order. Only the appender-built families make a
-# coherent matrix: their columns are the same measurement repeated, which is
-# what one shared fill scale is for. Sample metadata is a bag of unrelated
-# fields, so it is structurally absent here rather than filtered out later.
-HEATMAP_KINDS <- list(
-  amr = list(
-    attr = "amr_cols",
-    title = "AMR screening",
-    palette = "Reds",
-    empty = "No AMR screening results in this database."
-  ),
-  custom = list(
-    attr = "custom_cols",
-    title = "Custom variables",
-    palette = "Blues",
-    empty = "No custom variables defined for this database."
-  )
-)
+# The heatmap is the AMR screening result and nothing else.
+#
+# A heatmap is a matrix under one shared fill scale, which only says something
+# when its columns are the same measurement repeated. AMR screening is exactly
+# that — every column is "was this found in this isolate" — while a set of
+# user-defined custom variables is a bag of unrelated fields, and drawing them
+# under one scale produced a legend that explained none of them.
+#
+# Two levels, because abritamr reports at two:
+#   class — one column per drug class / virulence group, presence or absence.
+#   gene  — one column per gene, carrying abritamr's own confidence in the call.
 
 # jsonlite reads a JSON array of same-shaped objects back as a *data.frame*, so
 # a saved snapshot's `.layers` does NOT come back as the list-of-lists the
@@ -199,6 +194,72 @@ HEATMAP_KINDS <- list(
   )
 }
 
+# One heatmap panel's controls: a switch and a column picker. Both levels get
+# one, and both can be on at once — a drug-class overview beside the genes that
+# produced it is the comparison the panel exists for.
+.heatmap_card <- function(ns, level, title, hint) {
+  shiny$div(
+    class = "tree-heatmap-card",
+    id = ns(paste0("nj_heatcard_", level)),
+    input_switch(ns(paste0("nj_heatmap_", level)), title, FALSE),
+    shiny$div(class = "text-muted small mb-2", hint),
+    virtualSelectInput(
+      ns(paste0("nj_heatcols_", level)),
+      "Columns",
+      choices = character(0),
+      selected = character(0),
+      multiple = TRUE,
+      search = TRUE,
+      searchPlaceholderText = "Search columns ...",
+      placeholder = "All columns",
+      hasOptionDescription = TRUE,
+      optionsCount = 5,
+      noOfDisplayValues = 2,
+      dropboxWrapper = "body",
+      showDropboxAsPopup = TRUE,
+      popupDropboxBreakpoint = "10000px",
+      updateOn = "close",
+      width = "100%"
+    )
+  )
+}
+
+# One heatmap panel's controls: a switch and a column picker. Both levels get
+# one, and both can be shown at once — a drug-class overview beside the genes
+# that produced it is the comparison the panel exists for.
+#
+# Rendered statically, and only their *choices* are filled in server-side. Built
+# in a renderUI they were re-created on every interaction (changing a control is
+# what changes the record the renderUI read), each time from
+# `choices = character(0)` — which is why the list came up empty, why a chosen
+# subset vanished, and why the tree drew twice.
+.heatmap_card <- function(ns, level, title, hint) {
+  shiny$div(
+    class = "tree-heatmap-card",
+    id = ns(paste0("nj_heatcard_", level)),
+    input_switch(ns(paste0("nj_heatmap_", level)), title, FALSE),
+    shiny$div(class = "text-muted small mb-2", hint),
+    virtualSelectInput(
+      ns(paste0("nj_heatcols_", level)),
+      "Columns",
+      choices = character(0),
+      selected = character(0),
+      multiple = TRUE,
+      search = TRUE,
+      searchPlaceholderText = "Search columns ...",
+      placeholder = "All columns",
+      hasOptionDescription = TRUE,
+      optionsCount = 5,
+      noOfDisplayValues = 2,
+      dropboxWrapper = "body",
+      showDropboxAsPopup = TRUE,
+      popupDropboxBreakpoint = "10000px",
+      updateOn = "close",
+      width = "100%"
+    )
+  )
+}
+
 .normalize_heatmaps <- function(x) {
   out <- .normalize_records(
     x,
@@ -271,21 +332,16 @@ FITTED_FIELDS <- c(
   nj_branch_size = "branch_size",
   nj_tippoint_size = "tippoint_size",
   nj_zoom = "zoom",
-  nj_h = "h",
-  nj_branchlabel_cutoff = "branch_cutoff"
+  nj_h = "h"
 )
 
 # The values those controls hold before any data is loaded. Taken from the logic
 # module rather than written out again here, because they are also the fit's
 # calibration anchor (tree_auto_layout returns exactly these at ~15 tips) — a
 # slider declared with anything else would quietly move the anchor.
-#
-# nj_branchlabel_cutoff is fitted but not part of the geometry anchor, so it is
-# not in TREE_FIT_DEFAULTS and has no seed value here.
-FITTED_SEED_IDS <- setdiff(names(FITTED_FIELDS), "nj_branchlabel_cutoff")
 FITTED_DEFAULTS <- setNames(
-  TREE_FIT_DEFAULTS[FITTED_FIELDS[FITTED_SEED_IDS]],
-  FITTED_SEED_IDS
+  TREE_FIT_DEFAULTS[FITTED_FIELDS],
+  names(FITTED_FIELDS)
 )
 
 # Not every id here still renders a slider — nj_branch_size is fitted from the
@@ -316,7 +372,6 @@ MIRRORED_IDS <- c(
   names(FITTED_DEFAULTS),
   "nj_tiplab_show",
   "nj_tippoint_show",
-  "nj_branchlabel_cutoff",
   MIRRORED_SELECTS
 )
 
@@ -414,27 +469,24 @@ tree_controls <- function(ns, options_ui = NULL) {
               FITTED_DEFAULTS$nj_tiplab_size,
               step = 0.1,
               ticks = FALSE
-            ),
-            input_switch(ns("nj_align"), "Align labels", TRUE)
+            )
           ),
           accordion_panel(
             "Branch Labels",
             icon = shiny$icon("code-branch"),
             # One switch, and nothing else. Allelic distance is the only value
-            # worth writing on a branch, and both of the numbers that used to be
-            # exposed here — the text size and the percentile cutoff above which
-            # a branch earns a label — are fitted from the tree itself
-            # (tree_auto_layout, tree_branch_cutoff). They stay as mirrors the
-            # render reads; they are just no longer anyone's decision to make.
+            # worth writing on a branch, and nothing about how it is written is
+            # a decision: the text size is fitted from the tip count
+            # (tree_auto_layout), and *which* branches get a label is solved
+            # from the drawn geometry rather than chosen (tree_branch_keep) —
+            # a branch is labelled when it is wide enough to hold the number
+            # and no other label shares its row, which is the only rule under
+            # which the numbers stay readable on a tree whose branch lengths
+            # differ by three orders of magnitude.
             input_switch(
               ns("nj_show_branch_label"),
-              "Show branch labels",
+              "Show allelic distances",
               FALSE
-            ),
-            shiny$div(
-              class = "text-muted small",
-              "Allelic distance, on the longest branches. Size and density are",
-              "fitted to the number of isolates."
             )
           )
         )
@@ -458,7 +510,25 @@ tree_controls <- function(ns, options_ui = NULL) {
           accordion_panel(
             "Heatmaps",
             icon = shiny$icon("border-all"),
-            shiny$uiOutput(ns("nj_heatmaps_ui"))
+            # Static, not a renderUI. The controls used to be rebuilt whenever
+            # the heatmap record changed — and since changing a control *is*
+            # what changes the record, every interaction re-created the picker
+            # from `choices = character(0)` and discarded the selection. That is
+            # why the column list came up empty, why a chosen subset vanished,
+            # and why the tree drew twice. Only the choices are server-side now.
+            shiny$uiOutput(ns("nj_heatmap_none")),
+            .heatmap_card(
+              ns,
+              "class",
+              "Drug classes, virulence and stress",
+              "One column per drug class or virulence/stress group, found or not."
+            ),
+            .heatmap_card(
+              ns,
+              "gene",
+              "Individual genes",
+              "One column per gene, shaded by how confident the call is."
+            )
           )
         )
       ),
@@ -471,7 +541,7 @@ tree_controls <- function(ns, options_ui = NULL) {
           viz_color(ns, "nj_color", "Lines / Text", "#000000"),
           viz_color(ns, "nj_bg", "Background", "#ffffff"),
           viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
-          viz_color(ns, "nj_branch_color", "Branch Label", "#000000"),
+          viz_color(ns, "nj_branch_color", "Allelic Distance", "#000000"),
           viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
         )
       ),
@@ -613,7 +683,8 @@ tree_controls <- function(ns, options_ui = NULL) {
               )
             ),
             input_switch(ns("nj_rootedge_show"), "Root edge", TRUE),
-            input_switch(ns("nj_treescale_show"), "Tree scale", TRUE)
+            input_switch(ns("nj_treescale_show"), "Scale bar", TRUE),
+            input_switch(ns("nj_axis_show"), "Distance axis", FALSE)
           ),
           accordion_panel(
             "Legend",
@@ -1025,12 +1096,7 @@ server <- function(
           shiny$isolate(fitted$nj_tiplab)
         )
       )
-      # The branch-label cutoff is fitted from the branches themselves rather
-      # than from the tip count, so it goes alongside the geometry rather than
-      # inside it.
-      fit$branch_cutoff <- tree_branch_cutoff(length(tree$edge.length))
-
-      for (id in c(names(FITTED_DEFAULTS), "nj_branchlabel_cutoff")) {
+      for (id in names(FITTED_DEFAULTS)) {
         value <- fit[[FITTED_FIELDS[[id]]]]
         if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
           shiny$updateSliderInput(session, id, value = value)
@@ -1161,7 +1227,7 @@ server <- function(
     # stale button's id to the layer that replaced it.
     nj_layer_seq <- shiny$reactiveVal(0L)
 
-    # The heatmap panels, keyed by HEATMAP_KINDS name.
+    # The heatmap panels, in draw order: drug classes then genes.
     nj_heatmaps <- shiny$reactiveVal(list())
 
     next_layer_id <- function() {
@@ -1187,7 +1253,6 @@ server <- function(
         tiplab_show = fitted$nj_tiplab_show,
         tiplab = fitted$nj_tiplab,
         tiplab_size = fitted$nj_tiplab_size,
-        align = input$nj_align,
         tiplab_color = input$nj_tiplab_color,
         # Every variable mapping, in draw order. One key replaces the eight the
         # five per-aesthetic panels used to contribute, and it needs none of
@@ -1197,10 +1262,12 @@ server <- function(
         layers = nj_layers(),
         # Branch labels. Allelic distance is the only thing they ever carry, so
         # there is no source to resolve — the picker that used to choose one was
-        # removed along with the rest of this section's controls.
+        # removed along with the rest of this section's controls. Which branches
+        # get one is not passed either: the renderer solves it from the axis it
+        # has just laid out (tree_branch_keep), which is the only place the
+        # drawn width of a branch is known.
         branch_show = input$nj_show_branch_label,
         branch_size = fitted$nj_branch_size,
-        branch_cutoff = fitted$nj_branchlabel_cutoff,
         branch_color = input$nj_branch_color,
         # Tip points. A mapping onto them is drawn *on* the points, so it brings
         # the element with it whatever the switch says. The switch is locked on
@@ -1218,11 +1285,23 @@ server <- function(
         nodelabel_show = input$nj_nodelabel_show,
         parentnodes = fitted$nj_parentnode %||% character(0),
         clade_color = input$nj_clade_scale,
-        # Heatmap panels, in draw order.
+        # Heatmap panel, and — only when it is drawing genes — the call
+        # matrix it reads from. Kept out of the metadata table because it is one
+        # column per gene and nothing maps it; see amr_matrix above.
         heatmaps = nj_heatmaps(),
+        amr_matrix = if (
+          any(vapply(
+            nj_heatmaps(),
+            function(h) identical(h$level, "gene"),
+            logical(1)
+          ))
+        ) {
+          amr_matrix()
+        },
         # Elements toggles.
         rootedge_show = input$nj_rootedge_show,
         treescale_show = input$nj_treescale_show,
+        axis_show = input$nj_axis_show,
         # Panel width, for the tip-label reserve (see .tiplab_frac).
         width_in = plot_width_in(),
         # Dimensions / legend.
@@ -1763,150 +1842,179 @@ server <- function(
     )
 
     # --- Heatmap panels ------------------------------------------------------
+    #
+    # Two panels, either or both. They answer different questions — "which drug
+    # classes did this isolate come back positive for" and "which genes said
+    # so" — and reading one against the other is the whole point of having both.
 
-    # Columns available to one heatmap kind: exactly the set its appender
-    # added, recorded on viz_metadata() as an attribute. Sample metadata is in
-    # none of them, so "not selectable for a heatmap" is a property of the data
-    # model rather than a filter someone has to remember to apply.
-    heatmap_cols <- function(kind) {
-      meta <- viz_metadata()
-      if (is.null(meta)) {
-        return(character(0))
+    # The gene-level call matrix. Read on demand: it is one column per gene —
+    # hundreds on a real database — and it is heatmap data, not a variable
+    # anyone maps, so it stays out of viz_metadata and out of every field
+    # picker.
+    # No req(): this is read from an observer that also builds the *class*
+    # panel, and a req() there would abort the whole observer — so a database
+    # with no gene matrix silently dropped the class heatmap as well. Absence
+    # is a value here, not a reason to stop.
+    amr_matrix <- shiny$reactive({
+      path <- db_path()
+      if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
+        return(NULL)
       }
-      intersect(names(meta), attr(meta, HEATMAP_KINDS[[kind]]$attr) %||% character(0))
-    }
+      load_amr_matrix(path)
+    })
 
-    heatmap_of <- function(kind) {
-      hit <- Filter(function(h) identical(h$kind, kind), nj_heatmaps())
-      if (length(hit)) hit[[1]] else NULL
-    }
+    # Every column one level could draw, with what the picker needs to describe
+    # it: a label, the group to file it under, and a sub-text. Both levels
+    # answer in the same shape, so the picker does not care which it is showing.
+    .empty_catalog <- data.frame(
+      col = character(0), label = character(0), group = character(0),
+      description = character(0), stringsAsFactors = FALSE
+    )
 
-    output$nj_heatmaps_ui <- shiny$renderUI({
-      active <- nj_heatmaps()
-      shiny$div(
-        class = "tree-heatmap-list",
-        lapply(names(HEATMAP_KINDS), function(kind) {
-          spec <- HEATMAP_KINDS[[kind]]
-          cols <- heatmap_cols(kind)
-          on <- !is.null(heatmap_of(kind))
-          if (!length(cols)) {
-            return(shiny$div(
-              class = "tree-heatmap-card is-empty",
-              shiny$div(class = "tree-layer_title", spec$title),
-              shiny$div(class = "text-muted small", spec$empty)
-            ))
-          }
-          n_sel <- length(heatmap_of(kind)$cols %||% character(0))
-          shiny$div(
-            class = "tree-heatmap-card",
-            input_switch(ns(paste0("nj_heatmap_", kind)), spec$title, on),
-            shiny$div(
-              class = "tree-layer_meta",
-              if (on) {
-                sprintf("%d of %d columns", n_sel, length(cols))
-              } else {
-                sprintf("%d columns available", length(cols))
-              }
-            ),
-            shiny$actionButton(
-              ns(paste0("nj_heatcols_", kind)),
-              "Choose columns",
-              icon = shiny$icon("list-check"),
-              class = "btn-sm"
-            )
-          )
-        })
+    gene_catalog <- shiny$reactive({
+      mat <- amr_matrix()
+      if (is.null(mat)) {
+        return(.empty_catalog)
+      }
+      cols <- setdiff(names(mat), "isolate")
+      if (!length(cols)) {
+        return(.empty_catalog)
+      }
+      genes <- (attr(mat, "amr_gene_labels") %||% character(0))[cols]
+      groups <- (attr(mat, "amr_gene_groups") %||% character(0))[cols]
+      sections <- (attr(mat, "amr_gene_sections") %||% character(0))[cols]
+      hits <- vapply(cols, function(c) sum(!is.na(mat[[c]])), integer(1))
+      data.frame(
+        col = cols,
+        label = unname(ifelse(is.na(genes), cols, genes)),
+        # Filed under the drug class, which is how a reader looks for a gene.
+        group = unname(ifelse(is.na(groups), "Other", groups)),
+        description = sprintf(
+          "%d isolate%s · %s",
+          hits, ifelse(hits == 1L, "", "s"),
+          unname(ifelse(is.na(sections), "Resistance", sections))
+        ),
+        stringsAsFactors = FALSE
       )
     })
 
-    # One observer per kind, created once at startup — the kinds are a fixed
-    # list, so this is not the renderUI re-registration trap the layer buttons
-    # avoid.
-    for (kind in names(HEATMAP_KINDS)) {
+    class_catalog <- shiny$reactive({
+      meta <- viz_metadata()
+      if (is.null(meta)) {
+        return(.empty_catalog)
+      }
+      cols <- intersect(names(meta), attr(meta, "amr_cols") %||% character(0))
+      # The profile column is a comma-joined summary of every other column, so
+      # it is not a measurement the matrix can show alongside them.
+      cols <- setdiff(cols, paste0("amr_", "profile"))
+      if (!length(cols)) {
+        return(.empty_catalog)
+      }
+      sections <- (attr(meta, "amr_class_sections") %||% character(0))[cols]
+      hits <- vapply(
+        cols,
+        function(c) sum(nzchar(trimws(as.character(meta[[c]]))), na.rm = TRUE),
+        integer(1)
+      )
+      data.frame(
+        col = cols,
+        label = field_labels_for(cols),
+        group = unname(ifelse(is.na(sections), "Resistance", sections)),
+        description = sprintf("%d isolate%s", hits, ifelse(hits == 1L, "", "s")),
+        stringsAsFactors = FALSE
+      )
+    })
+
+    heatmap_catalog <- function(level) {
+      if (identical(level, "gene")) gene_catalog() else class_catalog()
+    }
+
+    output$nj_heatmap_none <- shiny$renderUI({
+      if (nrow(class_catalog()) || nrow(gene_catalog())) {
+        return(NULL)
+      }
+      shiny$div(
+        class = "text-muted small",
+        "No AMR screening results in this database."
+      )
+    })
+
+    # Fill each picker's choices once its catalogue is known, and again if the
+    # database changes. A selection that still exists is kept — this is an
+    # update, not a rebuild, which is the whole reason the controls are static.
+    for (lvl in c("class", "gene")) {
       local({
-        k <- kind
-        spec <- HEATMAP_KINDS[[k]]
+        level <- lvl
+        picker <- paste0("nj_heatcols_", level)
 
-        shiny$observeEvent(input[[paste0("nj_heatmap_", k)]], {
-          on <- isTRUE(input[[paste0("nj_heatmap_", k)]])
-          others <- Filter(function(h) !identical(h$kind, k), nj_heatmaps())
-          if (!on) {
-            nj_heatmaps(others)
-            return()
-          }
-          existing <- heatmap_of(k)
-          cols <- existing$cols %||% heatmap_cols(k)
-          if (!length(cols)) {
-            return()
-          }
-          # Order follows HEATMAP_KINDS so the panels always draw left to right
-          # in the same sequence, whichever was switched on first.
-          fresh <- c(others, list(list(
-            kind = k, cols = cols, palette = spec$palette, title = spec$title
-          )))
-          nj_heatmaps(fresh[order(match(
-            vapply(fresh, function(h) h$kind, character(1)),
-            names(HEATMAP_KINDS)
-          ))])
-        }, ignoreInit = TRUE)
-
-        shiny$observeEvent(input[[paste0("nj_heatcols_", k)]], {
-          cols <- heatmap_cols(k)
-          shiny$req(length(cols))
-          meta <- viz_metadata()
-          shiny$showModal(shiny$modalDialog(
-            title = paste(spec$title, "columns"),
-            size = "m",
-            easyClose = TRUE,
-            shiny$p(
-              class = "text-muted small",
-              "These columns share one colour scale, which is what makes the",
-              "matrix readable as a block."
+        shiny$observe({
+          cat <- heatmap_catalog(level)
+          shiny$req(nrow(cat))
+          keep <- intersect(
+            shiny$isolate(input[[picker]]) %||% character(0),
+            cat$col
+          )
+          updateVirtualSelect(
+            inputId = picker,
+            session = session,
+            choices = prepare_choices(
+              cat,
+              label = label,
+              value = col,
+              group_by = group,
+              description = description
             ),
-            shiny$checkboxGroupInput(
-              ns(paste0("nj_heatcolsel_", k)),
-              NULL,
-              choices = setNames(
-                cols,
-                sprintf(
-                  "%s (%d)",
-                  field_labels_for(cols),
-                  vapply(cols, function(f) field_levels(meta[[f]]), integer(1))
-                )
-              ),
-              selected = heatmap_of(k)$cols %||% cols
-            ),
-            footer = shiny$tagList(
-              shiny$modalButton("Cancel"),
-              shiny$actionButton(ns(paste0("nj_heatapply_", k)), "Apply")
-            )
-          ))
+            selected = keep
+          )
         })
 
-        shiny$observeEvent(input[[paste0("nj_heatapply_", k)]], {
-          chosen <- input[[paste0("nj_heatcolsel_", k)]] %||% character(0)
-          others <- Filter(function(h) !identical(h$kind, k), nj_heatmaps())
-          if (!length(chosen)) {
-            # An empty panel draws nothing, so switching it off is the honest
-            # reading of "apply no columns".
-            nj_heatmaps(others)
-            bslib::update_switch(paste0("nj_heatmap_", k), value = FALSE)
-          } else {
-            fresh <- c(others, list(list(
-              kind = k, cols = chosen, palette = spec$palette,
-              title = spec$title
-            )))
-            nj_heatmaps(fresh[order(match(
-              vapply(fresh, function(h) h$kind, character(1)),
-              names(HEATMAP_KINDS)
-            ))])
-            bslib::update_switch(paste0("nj_heatmap_", k), value = TRUE)
-          }
-          shiny$removeModal()
+        # A level with nothing to show cannot be switched on.
+        shiny$observe({
+          shinyjs::toggleState(
+            id = paste0("nj_heatmap_", level),
+            condition = nrow(heatmap_catalog(level)) > 0L
+          )
         })
       })
     }
 
+    # One record per switched-on level, in a fixed order so the panels always
+    # draw class-then-gene however they were switched on. An empty picker means
+    # "all columns" rather than an empty matrix — the placeholder says so, and a
+    # panel with no columns draws nothing at all.
+    shiny$observe({
+      out <- list()
+      for (level in c("class", "gene")) {
+        if (!isTRUE(input[[paste0("nj_heatmap_", level)]])) {
+          next
+        }
+        cat <- heatmap_catalog(level)
+        if (!nrow(cat)) {
+          next
+        }
+        chosen <- intersect(
+          input[[paste0("nj_heatcols_", level)]] %||% character(0),
+          cat$col
+        )
+        if (!length(chosen)) {
+          chosen <- cat$col
+        }
+        idx <- match(chosen, cat$col)
+        out[[length(out) + 1L]] <- list(
+          kind = "amr",
+          level = level,
+          cols = chosen,
+          labels = cat$label[idx],
+          palette = "Reds",
+          title = if (identical(level, "gene")) {
+            "AMR genes"
+          } else {
+            "AMR classes"
+          }
+        )
+      }
+      nj_heatmaps(out)
+    })
 
     # Render the current tree to a file at the configured aspect ratio.
     output$download_nj <- shiny$downloadHandler(
@@ -1955,13 +2063,13 @@ server <- function(
         vals,
         switches = c(
           "nj_tiplab_show",
-          "nj_align",
           "nj_show_branch_label",
           "nj_tippoint_show",
           "nj_nodelabel_show",
           "nj_rootedge_show",
           "nj_treescale_show",
-          paste0("nj_heatmap_", names(HEATMAP_KINDS))
+          "nj_axis_show",
+          paste0("nj_heatmap_", c("class", "gene"))
         ),
         selects = c(
           "nj_tippoint_shape",
@@ -1970,7 +2078,6 @@ server <- function(
         sliders = c(
           "nj_tiplab_size",
           "nj_branch_size",
-          "nj_branchlabel_cutoff",
           "nj_tippoint_alpha",
           "nj_tippoint_size",
           "nj_aspect_ratio",

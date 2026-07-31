@@ -45,12 +45,10 @@ set_tree_inputs <- function(session) {
     nj_tiplab_show = TRUE,
     nj_tiplab = "isolate",
     nj_tiplab_size = 4,
-    nj_align = TRUE,
     nj_tiplab_color = "#000000",
     nj_mapping_show = FALSE,
     nj_show_branch_label = FALSE,
     nj_branch_size = 4,
-    nj_branchlabel_cutoff = 10,
     nj_branch_color = "#000000",
     nj_tippoint_show = FALSE,
     nj_tippoint_alpha = 0.5,
@@ -64,6 +62,7 @@ set_tree_inputs <- function(session) {
     nj_heatmap_show = FALSE,
     nj_rootedge_show = TRUE,
     nj_treescale_show = TRUE,
+    nj_axis_show = FALSE,
     nj_aspect_ratio = 0.6,
     nj_zoom = 0.95,
     nj_h = -0.05,
@@ -549,4 +548,129 @@ test_that("Generate draws the tree exactly once, already fitted", {
       expect_identical(draws, 1L)
     }
   )
+})
+
+# --- The AMR heatmap controls ------------------------------------------------
+
+amr_meta <- function() {
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    `amr_Beta-lactam` = rep(c("blaOXA", ""), 4),
+    amr_Aminoglycoside = rep(c("aac(6')", "", "", ""), 2),
+    amr_profile = rep(c("Beta-lactam", ""), 4),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  attr(meta, "amr_cols") <- c(
+    "amr_Beta-lactam", "amr_Aminoglycoside", "amr_profile"
+  )
+  attr(meta, "amr_class_sections") <- c(
+    `amr_Beta-lactam` = "Resistance",
+    amr_Aminoglycoside = "Resistance",
+    amr_profile = "Resistance"
+  )
+  meta
+}
+
+amr_args <- function(meta) {
+  list(
+    viz_metadata = reactive(meta),
+    field_profiles = reactive(field_profiles(meta, amr_cols = attr(meta, "amr_cols"))),
+    plot_type = reactiveVal("Tree")
+  )
+}
+
+test_that("switching the class heatmap on draws every column by default", {
+  meta <- amr_meta()
+  testServer(visualization_tree$server, args = amr_args(meta), {
+    set_tree_inputs(session)
+    session$flushReact()
+    expect_identical(length(tree_opts()$heatmaps), 0L)
+
+    session$setInputs(nj_heatmap_class = TRUE)
+    session$flushReact()
+
+    hs <- tree_opts()$heatmaps
+    expect_identical(length(hs), 1L)
+    expect_identical(hs[[1]]$level, "class")
+    # An empty picker means "all of them", not an empty matrix — and the
+    # profile column is a summary of the others, so it is never one of them.
+    expect_setequal(hs[[1]]$cols, c("amr_Beta-lactam", "amr_Aminoglycoside"))
+  })
+})
+
+test_that("a chosen subset survives, and costs exactly one redraw", {
+  # The reported fault: choosing a subset re-rendered the controls, which
+  # re-created the picker empty and discarded the selection — so the tree drew
+  # twice and the choice was gone. The controls are static now.
+  meta <- amr_meta()
+  testServer(visualization_tree$server, args = amr_args(meta), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_class = TRUE)
+    session$flushReact()
+
+    draws <- 0L
+    observe({
+      tree_opts()
+      draws <<- draws + 1L
+    })
+    session$flushReact()
+    draws <- 0L
+
+    session$setInputs(nj_heatcols_class = "amr_Beta-lactam")
+    session$flushReact()
+
+    expect_identical(draws, 1L)
+    expect_identical(tree_opts()$heatmaps[[1]]$cols, "amr_Beta-lactam")
+    # And it is still what the input holds — nothing reset it.
+    expect_identical(isolate(input$nj_heatcols_class), "amr_Beta-lactam")
+  })
+})
+
+test_that("both heatmap panels can be shown at once, classes first", {
+  meta <- amr_meta()
+  testServer(visualization_tree$server, args = amr_args(meta), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_class = TRUE, nj_heatmap_gene = TRUE)
+    session$flushReact()
+
+    hs <- tree_opts()$heatmaps
+    # No gene matrix in this fixture, so only the class panel has anything to
+    # draw — a level with no columns contributes no panel rather than an empty
+    # one.
+    expect_true(length(hs) >= 1L)
+    expect_identical(hs[[1]]$level, "class")
+    if (length(hs) == 2L) {
+      expect_identical(hs[[2]]$level, "gene")
+    }
+  })
+})
+
+test_that("switching a heatmap off removes its panel", {
+  meta <- amr_meta()
+  testServer(visualization_tree$server, args = amr_args(meta), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_class = TRUE)
+    session$flushReact()
+    expect_identical(length(tree_opts()$heatmaps), 1L)
+
+    session$setInputs(nj_heatmap_class = FALSE)
+    session$flushReact()
+    expect_identical(length(tree_opts()$heatmaps), 0L)
+  })
+})
+
+test_that("a database with no AMR results offers no heatmap", {
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    purpose = rep(c("outbreak", "surveillance"), 4),
+    stringsAsFactors = FALSE
+  )
+  testServer(visualization_tree$server, args = amr_args(meta), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_class = TRUE)
+    session$flushReact()
+    expect_identical(length(tree_opts()$heatmaps), 0L)
+  })
 })

@@ -264,12 +264,7 @@ ui <- function(id, plot_type) {
           ),
           accordion(
             id = ns("setup_accordion"),
-            open = "Selection",
-            # Isolate preselection. The button opens a modal with the metadata
-            # table where the user picks which isolates feed this plot; the info
-            # line summarises the current selection. See the selection_button /
-            # sel_* handlers below, and how selected_isolates threads into the
-            # engine through viz_metadata_selected*.
+            open = c("Selection", "Export Plot", "Save Analysis"),
             accordion_panel(
               "Selection",
               icon = icon("list-check"),
@@ -572,6 +567,7 @@ server <- function(
       pending <- isTRUE(pending_changes())
       shinyjs::toggleState("generate", condition = pending)
       shinyjs::toggleClass("generate", "is-pending", condition = pending)
+      shinyjs::toggleClass("generate", "btn-primary", condition = pending)
     }))
 
     # ------------------------------------------------------ time filter ---
@@ -757,8 +753,10 @@ server <- function(
         # database).
         date_col <- input$sel_date_field
         pin_cols <- if (
-          !is.null(date_col) && nzchar(date_col) &&
-            !identical(date_col, "isolate") && date_col %in% names(tbl)
+          !is.null(date_col) &&
+            nzchar(date_col) &&
+            !identical(date_col, "isolate") &&
+            date_col %in% names(tbl)
         ) {
           c("isolate", date_col)
         } else {

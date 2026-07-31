@@ -463,6 +463,13 @@ load_amr <- function(db_path) {
   )
   out[[paste0(AMR_COL_PREFIX, "profile")]] <- unname(profile)
 
+  # Which section a drug class belongs to. abritamr reports resistance
+  # (matches/partials) and virulence/stress in separate files, and a class only
+  # ever comes from one of them — so this labels the column rather than
+  # splitting it. Consumers that show AMR columns to the user (the tree's
+  # heatmap picker) group by it.
+  class_section <- character(0)
+
   # One column per drug class / group (first-seen order), holding the isolate's
   # genes across all sections, comma-joined.
   for (dc in unique(as$drug_class)) {
@@ -473,8 +480,16 @@ load_amr <- function(db_path) {
       function(v) paste(unique(v[!is.na(v) & nzchar(v)]), collapse = ", ")
     )
     out[[paste0(AMR_COL_PREFIX, dc)]] <- as.character(genes[isolates])
+    class_section[paste0(AMR_COL_PREFIX, dc)] <- if (
+      all(as$section[as$drug_class == dc] == "virulence")
+    ) {
+      "Virulence / stress"
+    } else {
+      "Resistance"
+    }
   }
 
+  attr(out, "amr_class_sections") <- class_section
   out
 }
 
@@ -507,6 +522,13 @@ append_amr <- function(meta, db_path) {
   }
 
   attr(meta, "amr_cols") <- appended
+  # Which of them are resistance and which virulence/stress, for consumers that
+  # group AMR columns when offering them (the tree's heatmap picker).
+  attr(meta, "amr_class_sections") <- if (is.null(amr)) {
+    character(0)
+  } else {
+    (attr(amr, "amr_class_sections") %||% character(0))[appended]
+  }
   meta
 }
 
@@ -561,6 +583,7 @@ load_amr_matrix <- function(db_path) {
 
   col_group <- character(0)
   col_gene <- character(0)
+  col_section <- character(0)
   n <- 0L
   for (grp in unique(as$drug_class)) {
     for (gene in unique(as$gene[as$drug_class == grp])) {
@@ -574,11 +597,17 @@ load_amr_matrix <- function(db_path) {
       )
       col_group[col] <- grp
       col_gene[col] <- gene
+      col_section[col] <- if (all(sub$section == "virulence")) {
+        "Virulence / stress"
+      } else {
+        "Resistance"
+      }
     }
   }
 
   attr(out, "amr_gene_groups") <- col_group
   attr(out, "amr_gene_labels") <- col_gene
+  attr(out, "amr_gene_sections") <- col_section
   out
 }
 

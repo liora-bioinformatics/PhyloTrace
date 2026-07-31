@@ -2548,8 +2548,10 @@ server <- function(
           # neutral #ddd backing off, so it keeps working for every plot tab's
           # own map instance. See the .viz-map-canvas rule for why it exists.
           shiny$tagAppendAttributes(
-            leafletOutput(ns("map"), height = "100%"),
-            class = "viz-map-canvas"
+            div(
+              class = "viz-map-canvas",
+              leafletOutput(ns("map"), height = "100%"),
+            )
           )
         )
       )

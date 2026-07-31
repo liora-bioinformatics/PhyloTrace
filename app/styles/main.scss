@@ -1562,12 +1562,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     padding: 0.5rem 1rem 0.5rem 1rem;
 }
 
-.plot-setup>.sidebar-content,
-.viz-controls-sidebar>.sidebar-content {
-    padding-top: 2.5rem !important;
-    gap: 1rem !important;
-}
-
 .plot-setup .form-group {
     margin-bottom: 0.5rem;
 }
@@ -1666,7 +1660,7 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 .visNetwork>div {
-    height: 100%;
+    height: 100% !important;
 }
 
 // "Fixed isolate selection" badge on an Analysis card.
@@ -3861,6 +3855,19 @@ label {
 
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
+
+    .bslib-sidebar-layout>.sidebar {
+        padding: 2.5rem 0.75rem 1rem 0.75rem;
+    }
+
+    .bslib-sidebar-layout>.sidebar>.sidebar-content {
+        padding: 0;
+    }
+
+    .bslib-sidebar-layout>.sidebar>.sidebar-content>.accordion {
+        margin-left: unset;
+        margin-right: unset;
+    }
 
     .bslib-card {
         border-radius: 0;
