@@ -6736,7 +6736,7 @@
       "RemoteUsername": "fpaskali",
       "RemoteRepo": "visNetwork",
       "RemoteRef": "master",
-      "RemoteSha": "8c05235f8d93f13d3a3278236edae169bc35a0ce"
+      "RemoteSha": "e2226f265642b7e254bf77ea20fc871502e2967e"
     },
     "waiter": {
       "Package": "waiter",

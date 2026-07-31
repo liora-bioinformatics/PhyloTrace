@@ -43,9 +43,6 @@ box::use(
   htmlwidgets[JS],
   stats[median, quantile, setNames],
   utils[head],
-  # Accessed with `$` rather than imported one by one: this module uses ten of
-  # visNetwork's builders, past the point where a list of names is the clearer
-  # form.
   visNetwork,
 )
 
@@ -267,7 +264,11 @@ mst_edge_lengths <- function(
     return(1L)
   }
   ecc <- if (n <= 800L) {
-    vapply(seq_len(n), function(s) max(.bfs(nb, n, s), na.rm = TRUE), integer(1))
+    vapply(
+      seq_len(n),
+      function(s) max(.bfs(nb, n, s), na.rm = TRUE),
+      integer(1)
+    )
   } else {
     # Double sweep: the midpoint of a longest path approximates the centre in
     # O(n) rather than O(n^2). A 2000-node MST is not worth four million BFS
@@ -684,7 +685,11 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
     table = data.frame(
       cluster = names(multi),
       nodes = as.integer(lengths(multi)),
-      isolates = as.integer(vapply(multi, function(m) sum(sizes[m]), integer(1))),
+      isolates = as.integer(vapply(
+        multi,
+        function(m) sum(sizes[m]),
+        integer(1)
+      )),
       row.names = NULL,
       stringsAsFactors = FALSE
     )
@@ -736,12 +741,17 @@ mst_cluster_blobs <- function(
   names_by_size <- names(sort(table(node_cluster[keep]), decreasing = TRUE))
   out <- lapply(names_by_size, function(nm) {
     rows <- which(!is.na(node_cluster) & node_cluster == nm)
-    e <- which(!is.na(edge_cluster) & edge_cluster == nm & !is.na(f) & !is.na(t))
+    e <- which(
+      !is.na(edge_cluster) & edge_cluster == nm & !is.na(f) & !is.na(t)
+    )
     list(
       x = coords$x[rows],
       y = coords$y[rows],
       seg = cbind(
-        coords$x[f[e]], coords$y[f[e]], coords$x[t[e]], coords$y[t[e]]
+        coords$x[f[e]],
+        coords$y[f[e]],
+        coords$x[t[e]],
+        coords$y[t[e]]
       ),
       radius = max(radius[rows]) + pad
     )
@@ -850,8 +860,11 @@ mst_node_titles <- function(
         USE.NAMES = FALSE
       )
       paste(
-        c(lead, if (!is.null(cluster) && !is.na(cluster[[i]])) cluster[[i]],
-          extra[nzchar(extra)]),
+        c(
+          lead,
+          if (!is.null(cluster) && !is.na(cluster[[i]])) cluster[[i]],
+          extra[nzchar(extra)]
+        ),
         collapse = "<br>"
       )
     },
@@ -1034,10 +1047,13 @@ MST_LEGEND_LABEL_CHARS <- 22L
     })
   )
   if (length(keys) > length(shown)) {
-    out <- c(out, list(.legend_entry(
-      "note",
-      sprintf("+ %d more", length(keys) - length(shown))
-    )))
+    out <- c(
+      out,
+      list(.legend_entry(
+        "note",
+        sprintf("+ %d more", length(keys) - length(shown))
+      ))
+    )
   }
   out
 }
@@ -1083,26 +1099,35 @@ mst_legend_items <- function(
     shown <- head(seq_len(nrow(clusters)), budget)
     items <- c(
       items,
-      list(.legend_entry("header", if (is.null(threshold)) {
-        "Clusters"
-      } else {
-        sprintf("Clusters (≤ %s alleles)", threshold)
-      })),
+      list(.legend_entry(
+        "header",
+        if (is.null(threshold)) {
+          "Clusters"
+        } else {
+          sprintf("Clusters (≤ %s alleles)", threshold)
+        }
+      )),
       lapply(shown, function(i) {
         .legend_entry(
           "key",
-          sprintf("%s – %d isolates", clusters$cluster[[i]],
-                  clusters$isolates[[i]]),
+          sprintf(
+            "%s – %d isolates",
+            clusters$cluster[[i]],
+            clusters$isolates[[i]]
+          ),
           color = .lookup(cluster_colors, clusters$cluster[[i]], MISSING_COLOR),
           shape = "square"
         )
       })
     )
     if (nrow(clusters) > length(shown)) {
-      items <- c(items, list(.legend_entry(
-        "note",
-        sprintf("+ %d more", nrow(clusters) - length(shown))
-      )))
+      items <- c(
+        items,
+        list(.legend_entry(
+          "note",
+          sprintf("+ %d more", nrow(clusters) - length(shown))
+        ))
+      )
     }
   }
 
@@ -1130,8 +1155,12 @@ mst_legend_layout <- function(items, canvas_px = c(900, 600)) {
   n <- length(items)
   if (!n) {
     return(list(
-      ncol = 1L, font_size = 14, symbol_size = 12,
-      step_y = 27, width = 0, rows = 0L
+      ncol = 1L,
+      font_size = 14,
+      symbol_size = 12,
+      step_y = 27,
+      width = 0,
+      rows = 0L
     ))
   }
   # unlist(): the caller reads these off the browser's clientData, which hands
@@ -1380,7 +1409,9 @@ MST_NODE_RENDERER <- JS(
     USE.NAMES = FALSE
   )
   JS(paste0(
-    "function(ctx){var B=[", paste(spec, collapse = ","), "];",
+    "function(ctx){var B=[",
+    paste(spec, collapse = ","),
+    "];",
     "B.forEach(function(b){if(!b.x.length)return;",
     "ctx.save();ctx.fillStyle=b.f;ctx.strokeStyle=b.f;",
     "ctx.lineWidth=2*b.r;ctx.lineCap='round';ctx.lineJoin='round';",
@@ -1422,7 +1453,9 @@ MST_NODE_RENDERER <- JS(
     ""
   } else {
     paste0(
-      "var L=", legend_spec, ";",
+      "var L=",
+      legend_spec,
+      ";",
       "if(L.items.length){",
       "var pr=ctx.canvas.width/ctx.canvas.clientWidth;",
       "ctx.save();ctx.setTransform(pr,0,0,pr,0,0);",
@@ -1532,7 +1565,10 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
       }
       sprintf(
         '{"slices":%s,"shape":"%s","border":"%s","bw":1,"lc":"%s"}',
-        body, shapes[[i]], borders[[i]], label_colors[[i]]
+        body,
+        shapes[[i]],
+        borders[[i]],
+        label_colors[[i]]
       )
     },
     character(1),
@@ -1549,8 +1585,11 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
   if (continuous) {
     finite <- vals$value[is.finite(vals$value)]
     keys <- if (length(finite)) {
-      format(quantile(finite, c(0, 0.5, 1), names = FALSE), digits = 3,
-             trim = TRUE)
+      format(
+        quantile(finite, c(0, 0.5, 1), names = FALSE),
+        digits = 3,
+        trim = TRUE
+      )
     } else {
       character(0)
     }
@@ -1592,8 +1631,12 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
       }
       setNames(
         unname(s),
-        vapply(names(s), function(k) .lookup(colors, k, MISSING_COLOR),
-               character(1), USE.NAMES = FALSE)
+        vapply(
+          names(s),
+          function(k) .lookup(colors, k, MISSING_COLOR),
+          character(1),
+          USE.NAMES = FALSE
+        )
       )
     }),
     node_shape = .dominant(vals$shares, shape_map, "dot")
@@ -1646,8 +1689,12 @@ mst_frames <- function(graph, metadata, opts) {
   blobs <- list()
   if (isTRUE(opts$show_clusters)) {
     found <- mst_clusters(
-      ids, edges$from, edges$to, edges$weight,
-      opts$cluster_threshold, counts
+      ids,
+      edges$from,
+      edges$to,
+      edges$weight,
+      opts$cluster_threshold,
+      counts
     )
     if (nrow(found$table)) {
       clusters <- found
@@ -1657,8 +1704,13 @@ mst_frames <- function(graph, metadata, opts) {
       )
       if (!identical(opts$cluster_type, "Skeleton")) {
         blobs <- mst_cluster_blobs(
-          coords, clusters$node, clusters$edge, edges$from, edges$to,
-          radii, max(radii) * 0.45
+          coords,
+          clusters$node,
+          clusters$edge,
+          edges$from,
+          edges$to,
+          radii,
+          max(radii) * 0.45
         )
       }
     }
@@ -1695,20 +1747,23 @@ mst_frames <- function(graph, metadata, opts) {
       }
       title <- paste(title, "(shape)")
     }
-    legend_layers <- c(legend_layers, list(list(
-      title = title,
-      levels = ch$keys,
-      colors = if (identical(l$aesthetic, "node_shape")) {
-        setNames(rep(node_color, length(ch$keys)), ch$keys)
-      } else {
-        ch$colors
-      },
-      shapes = if (identical(l$aesthetic, "node_shape")) {
-        ch$shapes
-      } else {
-        setNames(rep("dot", length(ch$keys)), ch$keys)
-      }
-    )))
+    legend_layers <- c(
+      legend_layers,
+      list(list(
+        title = title,
+        levels = ch$keys,
+        colors = if (identical(l$aesthetic, "node_shape")) {
+          setNames(rep(node_color, length(ch$keys)), ch$keys)
+        } else {
+          ch$colors
+        },
+        shapes = if (identical(l$aesthetic, "node_shape")) {
+          ch$shapes
+        } else {
+          setNames(rep("dot", length(ch$keys)), ch$keys)
+        }
+      ))
+    )
   }
 
   # The custom renderer earns its keep as soon as anything is per-node: a pie, a
@@ -1720,7 +1775,9 @@ mst_frames <- function(graph, metadata, opts) {
     id = ids,
     label = if (isTRUE(opts$show_label)) {
       mst_node_labels(
-        ids, metadata, opts$field,
+        ids,
+        metadata,
+        opts$field,
         opts$label_lines %||% MST_FIT_DEFAULTS$label_lines
       )
     } else {
@@ -1780,8 +1837,10 @@ mst_frames <- function(graph, metadata, opts) {
         function(nm) {
           sprintf(
             "rgba(%s,0.55)",
-            paste(col2rgb(.lookup(cluster_colors, nm, MISSING_COLOR)),
-                  collapse = ",")
+            paste(
+              col2rgb(.lookup(cluster_colors, nm, MISSING_COLOR)),
+              collapse = ","
+            )
           )
         },
         character(1),

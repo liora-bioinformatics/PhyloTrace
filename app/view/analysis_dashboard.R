@@ -2,17 +2,12 @@
 # Tier 3: the Analysis Dashboard. Lists the Analyses stored in the loaded
 # database and lets the user add/navigate them. Each Analysis is a persistent
 # container of saved Plots (see group.R / item.R).
-#
-# State is no longer in-memory: Analyses and their Plots live in the database
-# (app/logic/analysis_store.R) and are refreshed on the shared `plots_changed`
-# tick. The module bubbles two requests up to main.R, which routes them to the
-# Visualization module:
-#   * request_add_plot  — user clicked "Add Plot" in an Analysis
-#   * request_open_plot — user clicked a saved Plot to reopen/restore it
 
 box::use(
+  bslib[page_sidebar, sidebar, tooltip],
+  DT[datatable, dataTableProxy, DTOutput, JS, renderDT, selectRows],
+  jsonlite[fromJSON, toJSON],
   shiny[
-    NS,
     actionButton,
     dateRangeInput,
     div,
@@ -22,6 +17,7 @@ box::use(
     modalButton,
     modalDialog,
     moduleServer,
+    NS,
     observe,
     observeEvent,
     outputOptions,
@@ -41,18 +37,14 @@ box::use(
     updateDateRangeInput,
   ],
   shinyWidgets[pickerInput, pickerOptions],
-  bslib[
-    page_sidebar,
-    sidebar,
-    tooltip,
-  ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
-  app / view / analysis_dashboard / group,
+)
+
+box::use(
   app / logic / analysis_store,
-  app / logic / database_functions[make_metadata_table, append_classical_mlst],
+  app / logic / database_functions[append_classical_mlst, make_metadata_table],
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
-  jsonlite[toJSON, fromJSON],
+  app / view / analysis_dashboard / group,
 )
 
 #' @export
@@ -80,6 +72,7 @@ ui <- function(id) {
   )
 }
 
+# Returns default value if a vector or list is NULL or empty
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # An Analysis's stored isolate_selection JSON as a character vector, or NULL
@@ -91,6 +84,7 @@ ui <- function(id) {
   as.character(fromJSON(raw))
 }
 
+# Validates if a file path is a valid non-empty string referencing an existing file
 .usable_path <- function(path) {
   !is.null(path) &&
     length(path) == 1 &&
@@ -117,10 +111,14 @@ server <- function(
     request_open_plot <- reactiveVal(NULL)
     add_seq <- 0L
     open_seq <- 0L
+
+    # Handles user request to add a new plot to an analysis
     handle_add_plot <- function(analysis_id) {
       add_seq <<- add_seq + 1L
       request_add_plot(list(analysis_id = analysis_id, n = add_seq))
     }
+
+    # Handles user request to open an existing saved plot
     handle_open_plot <- function(plot_id) {
       open_seq <<- open_seq + 1L
       request_open_plot(list(plot_id = plot_id, n = open_seq))
@@ -266,6 +264,7 @@ server <- function(
       if (length(ticked)) ticked else tbl$isolate
     }
 
+    # Displays the multi-step analysis creation and editing wizard modal
     show_wizard <- function() {
       creating <- is.null(editing_analysis())
       if (identical(wizard_step(), 1L)) {
@@ -482,14 +481,12 @@ server <- function(
       ignoreNULL = FALSE
     )
 
+    # Renders the interactive DataTables view for isolate selection in wizard step 2
     output$wiz_table <- renderDT(
       {
         tbl <- wiz_filtered()
         req(tbl)
-        # Row indices of the isolates ticked before the window changed, so the
-        # re-render restores rather than clears them. Read non-reactively: the
-        # checked set is an *output* of this table, and depending on it would
-        # re-render on every click.
+
         keep <- match(isolate(wiz_checked()), tbl$isolate)
 
         # Pinned (FixedColumns) columns: `isolate` always, plus whatever date
@@ -553,6 +550,7 @@ server <- function(
       server = FALSE
     )
 
+    # Renders selection summary text showing selected vs total count and filter info
     output$wiz_sel_count <- renderUI({
       meta <- settings_meta()
       req(meta)
@@ -701,6 +699,7 @@ server <- function(
 
     observeEvent(input$confirm_selection_change, commit_settings())
 
+    # Renders the sidebar dropdown to switch view filter between analyses
     output$sidebar_navigation <- renderUI({
       df <- analyses()
       choices_list <- c("Show All Analyses" = "all")
@@ -734,6 +733,7 @@ server <- function(
       current_view(input$selected_group_view)
     })
 
+    # Renders the list of active analysis group UI modules
     output$groups_vertical_stack <- renderUI({
       df <- analyses()
 

@@ -1,49 +1,47 @@
 # app/view/database_cgmlst.R
-#
-# "cgMLST" interface of the Database menu: Scheme Info and Loci Info, shown as
-# two tabs of a navset_card_tab so they share one sidebar entry. UI and
-# backend live here so the panel computes its own state independently of the
-# other menu entries.
+
+#' "cgMLST" interface of the Database menu: Scheme Info and Loci Info tabs.
 
 box::use(
-  shiny[
-    NS,
-    moduleServer,
-    reactive,
-    reactiveVal,
-    observeEvent,
-    req,
-    div,
-    span,
-    em,
-    a,
-    p,
-    icon,
-    actionButton,
-    downloadButton,
-    downloadHandler,
-    imageOutput,
-    renderImage,
-    renderUI,
-    uiOutput,
-    outputOptions,
-    tagList,
-    HTML
-  ],
   bslib[
     as_fill_carrier,
     as_fill_item,
     as_fillable_container,
-    navset_card_tab,
-    nav_panel,
     card,
+    card_body,
     card_header,
-    card_body
+    nav_panel,
+    navset_card_tab
   ],
-  DT[DTOutput, renderDT, datatable, JS],
-  shinyWidgets[pickerInput, pickerOptions, updatePickerInput],
-  shinyjs[runjs],
+  DT[DTOutput, JS, datatable, renderDT],
+  htmltools[HTML],
   jsonlite[toJSON],
+  shiny[
+    NS,
+    a,
+    actionButton,
+    div,
+    downloadButton,
+    downloadHandler,
+    em,
+    icon,
+    imageOutput,
+    moduleServer,
+    observeEvent,
+    outputOptions,
+    p,
+    reactive,
+    reactiveVal,
+    renderImage,
+    renderUI,
+    req,
+    span,
+    tagList,
+    uiOutput
+  ],
+  shinyjs[runjs],
+  shinyWidgets[pickerInput, pickerOptions, updatePickerInput],
+  stats[setNames],
   utils[write.csv]
 )
 
@@ -51,15 +49,15 @@ box::use(
   app /
     logic /
     database_functions[
+      load_allele_sequence,
+      load_db_scheme_overview,
+      load_db_species,
       load_loci_info,
       load_locus_alleles,
-      load_allele_sequence,
-      locus_fasta,
-      load_db_scheme_overview,
-      load_db_species
+      locus_fasta
     ],
   app / logic / functions[render_info],
-  app / logic / scheme_browser[get_species_img, get_species_details]
+  app / logic / scheme_browser[get_species_details, get_species_img]
 )
 
 # Columns of the loci table shown to the user (the internal `.gene` column
@@ -75,8 +73,7 @@ color_sequence <- function(sequence) {
   sequence
 }
 
-# Push text to the client-side clipboard. toJSON turns the value into a safely
-# escaped JS string literal.
+# Push text to the client-side clipboard.
 copy_to_clipboard <- function(text) {
   runjs(sprintf(
     "navigator.clipboard.writeText(%s);",
@@ -84,15 +81,11 @@ copy_to_clipboard <- function(text) {
   ))
 }
 
-# Scheme Info tab --------------------------------------------------------
-
+# Renders the UI layout for the Scheme Info tab.
 scheme_info_ui <- function(ns) {
   as_fill_carrier(
-    # Flex row: the metadata card fills all remaining space, the species
-    # aside stays at its fixed (photo) width on the right.
     div(
       class = "scheme-info-layout",
-      # Left: scheme overview, fills the available width
       as_fill_carrier(
         div(
           class = "scheme-info-main",
@@ -108,9 +101,6 @@ scheme_info_ui <- function(ns) {
           )
         )
       ),
-      # Right: species photo (relocated out of Details) + details card.
-      # The aside is fixed at the photo's width so the Details card below
-      # lines up to the same width as the image.
       as_fill_carrier(
         div(
           class = "scheme-aside",
@@ -141,8 +131,7 @@ scheme_info_ui <- function(ns) {
   )
 }
 
-# Loci Info tab -----------------------------------------------------------
-
+# Renders the UI layout for the Loci Info tab.
 loci_info_ui <- function(ns) {
   as_fill_carrier(
     div(
@@ -166,7 +155,6 @@ loci_info_ui <- function(ns) {
               ),
               card_body(
                 class = "loci-table-body",
-                # Loading overlay shown until the DataTable has drawn
                 div(
                   class = "loci-table-loading",
                   div(
@@ -243,29 +231,27 @@ ui <- function(id) {
   )
 }
 
-# Scheme Info server logic -------------------------------------------------
-
+# Handles server logic for displaying scheme overview and species metadata.
 scheme_info_server <- function(input, output, session, db_path) {
-  # Load the scheme overview of the current database
   scheme_overview <- reactive({
     req(db_path())
     load_db_scheme_overview(db_path())
   })
 
-  # Authoritative species of the loaded scheme, read from the database's
-  # `mlst_type` table (written at typing time).
   scheme_species <- reactive({
     req(db_path())
     load_db_species(db_path())
   })
 
-  # Render scheme info table
   output$local_scheme_table <- renderDT({
     overview <- scheme_overview()
 
     if (is.null(overview) || isFALSE(is.data.frame(overview))) {
       overview <- data.frame(
-        " " = "No 'Scheme Overview' table found. <br> Try rebuilding the schema in the <strong>Create Scheme</strong> module",
+        " " = paste(
+          "No 'Scheme Overview' table found. <br> Try rebuilding",
+          "the schema in the <strong>Create Scheme</strong> module"
+        ),
         check.names = FALSE
       )
     }
@@ -283,7 +269,6 @@ scheme_info_server <- function(input, output, session, db_path) {
     )
   })
 
-  # Render species img
   output$species_img <- renderImage(
     {
       species <- scheme_species()
@@ -296,7 +281,6 @@ scheme_info_server <- function(input, output, session, db_path) {
     deleteFile = FALSE
   )
 
-  # Enriched species metadata (taxonomy + description)
   species_record <- reactive({
     species <- scheme_species()
     req(species)
@@ -304,9 +288,6 @@ scheme_info_server <- function(input, output, session, db_path) {
     get_species_details(species)
   })
 
-  # Overlays on the photo: rank + NCBI badges in the top corner (kept off the
-  # name row so they never wrap onto a second line at narrow widths), species
-  # name across the bottom.
   output$species_caption <- renderUI({
     render_info("output$species_caption")
 
@@ -340,7 +321,6 @@ scheme_info_server <- function(input, output, session, db_path) {
     )
   })
 
-  # Render taxonomy ladder
   output$species_details <- renderUI({
     render_info("output$species_details")
 
@@ -355,7 +335,6 @@ scheme_info_server <- function(input, output, session, db_path) {
       ))
     }
 
-    # Taxonomy ladder: one chip per known rank (skips missing ranks)
     ranks <- c("phylum", "class", "order", "family", "genus")
     chips <- lapply(ranks, function(rank) {
       value <- details$lineage[[rank]]
@@ -371,12 +350,10 @@ scheme_info_server <- function(input, output, session, db_path) {
 
     div(
       class = "species-details",
-      # Taxonomy ladder
       div(class = "species-details_lineage", chips)
     )
   })
 
-  # Render description in its own full-width row below the title/image
   output$species_summary <- renderUI({
     render_info("output$species_summary")
 
@@ -387,8 +364,7 @@ scheme_info_server <- function(input, output, session, db_path) {
   })
 }
 
-# Loci Info server logic ---------------------------------------------------
-
+# Handles server logic for browsing loci, inspecting sequence alleles, and exporting data.
 loci_info_server <- function(input, output, session, db_path, session_reset) {
   ns <- session$ns
 
@@ -399,13 +375,10 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
   # Reset module state when the user returns to the landing screen.
   observeEvent(session_reset(), seq_cache(NULL), ignoreInit = TRUE)
 
-  # Re-arm the table loading overlay whenever a new database is loaded, so the
-  # spinner shows again while the (new) table redraws (initComplete clears it).
   observeEvent(db_path(), {
     runjs("$('.loci-table-body').removeClass('is-loaded');")
   })
 
-  # Loci table (targets enriched with per-locus allele counts).
   loci_info <- reactive({
     req(db_path())
     load_loci_info(db_path())
@@ -458,8 +431,6 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
         scrollY = "1px",
         scrollCollapse = TRUE,
         columnDefs = list(list(className = "dt-left", targets = "_all")),
-        # Signal the server that the table has finished drawing so the loading
-        # waiter can be hidden (plain output events fire before this render).
         initComplete = draw_signal
       )
     )
@@ -502,12 +473,11 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
       session,
       "allele_select",
       label = paste("Selected Locus:", selected_row()$.gene),
-      choices = stats::setNames(as.character(df$seqid), labels),
+      choices = setNames(as.character(df$seqid), labels),
       selected = as.character(df$seqid[1])
     )
   })
 
-  # color-coded sequence in FASTA form with allele index header
   output$allele_sequence <- renderUI({
     req(db_path(), input$allele_select)
 
@@ -556,13 +526,6 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
     }
   )
 
-  # NB: db_loci is deliberately NOT pre-rendered (suspendWhenHidden left at its
-  # default TRUE). Initialising this scrollX/scrollY DataTable while the Loci
-  # Info sub-tab is hidden makes DataTables throw during its width calculation;
-  # that error breaks the client message loop mid-load, so the sibling navbar
-  # panels never finish inserting and open blank. Letting it render on first
-  # visit (tab visible) is correct — the loading overlay covers that first
-  # draw via initComplete above.
   outputOptions(output, "allele_sequence", suspendWhenHidden = FALSE)
 }
 

@@ -9,26 +9,18 @@
 # engines) merges them in read-only.
 
 box::use(
-  shiny,
-  bslib[as_fill_carrier, navset_card_tab, nav_panel, layout_sidebar, sidebar],
+  bslib,
+  DT,
   jsonlite[toJSON],
+  shiny,
   shinyjs[addClass, disable, disabled, enable, hidden, removeClass, toggle],
   shinyWidgets[virtualSelectInput],
-  DT[
-    DTOutput,
-    JS,
-    dataTableProxy,
-    datatable,
-    renderDT,
-    replaceData,
-    selectRows
-  ],
+  stats[setNames],
 )
 
 box::use(
   app / logic / custom_fields,
   app / logic / field_labels[field_labels_for],
-  app / logic / functions[panel_card],
   app / logic / pymlst[existing_strains],
 )
 
@@ -42,7 +34,7 @@ BOOLEAN_LEVELS <- c("yes", "no")
   as.integer(idx[!is.na(idx)] - 1L)
 }
 
-# The values a cell of `type` may take, or NULL when it is free-form.
+# Returns allowed values for a given variable type, or NULL if free-form.
 .type_levels <- function(type, levels_json) {
   if (identical(type, "boolean")) {
     return(BOOLEAN_LEVELS)
@@ -53,7 +45,7 @@ BOOLEAN_LEVELS <- c("yes", "no")
   NULL
 }
 
-# Comma-separated user input -> level vector.
+# Splits comma-separated user input into a clean vector of levels.
 .split_levels <- function(x) {
   if (is.null(x) || !nzchar(trimws(x))) {
     return(character(0))
@@ -65,10 +57,10 @@ BOOLEAN_LEVELS <- c("yes", "no")
 ui <- function(id) {
   ns <- shiny$NS(id)
 
-  as_fill_carrier(
+  bslib$as_fill_carrier(
     shiny$div(
       id = ns("module-container"),
-      as_fill_carrier(shiny$uiOutput(ns("body"), fill = TRUE))
+      bslib$as_fill_carrier(shiny$uiOutput(ns("body"), fill = TRUE))
     )
   )
 }
@@ -128,7 +120,7 @@ server <- function(
     # and the definitions (which the type restrictions come from).
     col_types <- shiny$reactive({
       defs <- fields()
-      stats::setNames(defs$type, custom_fields$custom_col(defs$name))
+      setNames(defs$type, custom_fields$custom_col(defs$name))
     })
 
     isolates <- shiny$reactive({
@@ -179,22 +171,22 @@ server <- function(
 
     output$body <- shiny$renderUI({
       if (!nrow(fields())) {
-        return(as_fill_carrier(shiny$div(
+        return(bslib$as_fill_carrier(shiny$div(
           class = "db-transfer-body",
           empty_hint(ns)
         )))
       }
 
-      layout_sidebar(
+      bslib$layout_sidebar(
         padding = 0,
         border = FALSE,
-        sidebar = sidebar(
+        sidebar = bslib$sidebar(
           id = ns("controls_sidebar"),
           position = "right",
           width = 300,
           open = TRUE,
           fillable = TRUE,
-          as_fill_carrier(
+          bslib$as_fill_carrier(
             shiny$div(
               class = "sidebar-control",
               shiny$div(
@@ -245,7 +237,7 @@ server <- function(
             )
           )
         ),
-        navset_card_tab(
+        bslib$navset_card_tab(
           id = ns("tabs"),
           # save()/reload() re-run this renderUI (it reads fields()), which
           # would otherwise rebuild the navset back to its first panel on
@@ -258,18 +250,18 @@ server <- function(
           } else {
             shiny$isolate(input$tabs)
           },
-          nav_panel(
+          bslib$nav_panel(
             "Variables",
-            as_fill_carrier(shiny$div(
+            bslib$as_fill_carrier(shiny$div(
               class = "db-page_body values-table",
-              DTOutput(ns("fields_table"))
+              DT$DTOutput(ns("fields_table"))
             ))
           ),
-          nav_panel(
+          bslib$nav_panel(
             "Values",
-            as_fill_carrier(shiny$div(
+            bslib$as_fill_carrier(shiny$div(
               class = "db-page_body custom-fields-values allow-free-text edit-table",
-              DTOutput(ns("values_table"), fill = TRUE)
+              DT$DTOutput(ns("values_table"), fill = TRUE)
             ))
           )
         )
@@ -278,7 +270,7 @@ server <- function(
 
     # -- Definitions table ---------------------------------------------------
 
-    output$fields_table <- renderDT({
+    output$fields_table <- DT$renderDT({
       defs <- fields()
       shiny$req(nrow(defs) > 0)
 
@@ -301,7 +293,7 @@ server <- function(
         stringsAsFactors = FALSE
       )
 
-      datatable(
+      DT$datatable(
         overview,
         rownames = FALSE,
         selection = "single",
@@ -320,7 +312,7 @@ server <- function(
       )
     })
 
-    fields_proxy <- dataTableProxy("fields_table", session = session)
+    fields_proxy <- DT$dataTableProxy("fields_table", session = session)
 
     # A click on a definition row opens the edit dialog for that variable. The
     # selection is cleared straight away: a row that stayed selected could not
@@ -331,16 +323,16 @@ server <- function(
       shiny$req(length(row) == 1)
       defs <- fields()
       shiny$req(row <= nrow(defs))
-      selectRows(fields_proxy, NULL)
+      DT$selectRows(fields_proxy, NULL)
       show_field_modal(defs[row, , drop = FALSE])
     })
 
     # -- Values table --------------------------------------------------------
 
-    output$values_table <- renderDT({
+    output$values_table <- DT$renderDT({
       df <- values_base()
       if (is.null(df) || !nrow(df)) {
-        return(datatable(
+        return(DT$datatable(
           data.frame(
             " " = paste(
               "No isolates in this database yet.<br>Add isolates by typing",
@@ -387,7 +379,7 @@ server <- function(
         }
       }
 
-      datatable(
+      DT$datatable(
         df,
         rownames = FALSE,
         colnames = field_labels_for(cols),
@@ -426,7 +418,7 @@ server <- function(
               list(list(className = "col-date", targets = date_idx))
             }
           ),
-          initComplete = JS(sprintf(
+          initComplete = DT$JS(sprintf(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
@@ -539,7 +531,7 @@ server <- function(
       )
     })
 
-    proxy <- dataTableProxy("values_table", session = session)
+    proxy <- DT$dataTableProxy("values_table", session = session)
 
     # Every edit is validated against its variable's type before it reaches the
     # in-memory frame: a rejected value is rolled back in the table, so what the
@@ -559,7 +551,7 @@ server <- function(
       )
 
       if (!isTRUE(checked$ok)) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
         shiny$showNotification(
           paste0(
             "\"",
@@ -644,7 +636,7 @@ server <- function(
       # every cell edited since the table last rendered, even though the
       # value was already saved correctly (a full reload always showed it
       # right, since that goes through a real render).
-      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
     })
 
     shiny$observeEvent(State$pending, {
@@ -678,14 +670,12 @@ server <- function(
       State$data <- fresh
       State$dirty <- NULL
       State$pending <- FALSE
-      replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
+      DT$replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
     })
 
     # -- New / edit variable -------------------------------------------------
 
-    # One dialog for both: `def` is NULL when creating. The type is only
-    # choosable on creation — stored values are canonicalised for the type they
-    # were entered under, so changing it later would silently invalidate them.
+    # Displays modal dialog to create a new custom variable or edit an existing definition.
     show_field_modal <- function(def = NULL) {
       editing <- !is.null(def)
       type <- if (editing) def$type[[1]] else "text"
@@ -747,7 +737,7 @@ server <- function(
               shiny$pickerInput(
                 ns("var_type"),
                 "Type",
-                choices = stats::setNames(
+                choices = setNames(
                   names(custom_fields$CUSTOM_TYPES),
                   unname(custom_fields$CUSTOM_TYPES)
                 )
@@ -861,18 +851,14 @@ server <- function(
     output$remove_picker_ui <- shiny$renderUI({
       defs <- fields()
       choices <- if (nrow(defs)) {
-        stats::setNames(
+        setNames(
           defs$id,
           field_labels_for(custom_fields$custom_col(defs$name))
         )
       } else {
         character(0)
       }
-      # virtualSelectInput, same as Browse Entries' col_picker / remove_picker
-      # (see database_browser.R): opens centered over the viewport via the
-      # popup config below instead of anchored under this 300px sidebar
-      # control, and dropboxWrapper = "body" still escapes the sidebar's own
-      # clipping ancestor for the (unlikely) non-popup fallback.
+
       virtualSelectInput(
         ns("remove_picker"),
         label = NULL,
@@ -946,8 +932,7 @@ server <- function(
   })
 }
 
-# Shown instead of the two tables while no variable is defined: what custom
-# variables are for, and how to make one.
+# Renders empty state guidance UI when no custom variables exist.
 empty_hint <- function(ns) {
   example <- function(name, type, what) {
     shiny$tags$li(
