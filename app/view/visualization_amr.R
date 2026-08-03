@@ -53,6 +53,7 @@ box::use(
 )
 box::use(
   app / logic / amr_plot,
+  app / logic / db_events,
   app / logic / field_labels[field_label],
   app / logic / field_profile[field_profiles_of = field_profiles],
   app / logic / functions[render_info],
@@ -560,6 +561,7 @@ ui <- function(id, generate_id, options_ui = NULL) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
@@ -602,11 +604,13 @@ server <- function(
     # --- data ---------------------------------------------------------------
 
     amr_hits <- shiny$reactive({
+      db_events$depend(db_rev, "amr", "isolates")
       shiny$req(db_path())
       amr_plot$load_amr_hits(db_path())
     })
 
     amr_sections <- shiny$reactive({
+      db_events$depend(db_rev, "amr", "isolates")
       shiny$req(db_path())
       amr_plot$load_amr_sections(db_path())
     })

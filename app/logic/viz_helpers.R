@@ -18,6 +18,7 @@ box::use(
     updateTextInput,
   ],
   bslib[nav_panel, update_switch],
+  RColorBrewer[brewer.pal, brewer.pal.info],
   shinyWidgets[
     colorPickr,
     prepare_choices,
@@ -28,6 +29,7 @@ box::use(
     pickerInput,
     virtualSelectInput
   ],
+  viridisLite[viridis],
 )
 
 box::use(
@@ -97,6 +99,43 @@ color_scales <- list(
   ),
   Diverging = c("Spectral", "RdYlGn", "RdBu", "PuOr", "PRGn", "PiYG", "BrBG")
 )
+
+# Inline `style` swatch for one palette's <option>, previewing the actual
+# colours it renders (RColorBrewer's tabulated stops, or a sampled viridis
+# ramp) rather than a value hardcoded separately from the plotting code. Brewer
+# families get hard-edged bands (they're discrete palettes); viridis families
+# blend smoothly (they're continuous ones). Passed through pickerInput's
+# `style` choicesOpt, which bootstrap-select sets as the `style` attribute of
+# the rendered <a class="dropdown-item">) itself — the option row's real,
+# full-width box — rather than on some nested span that would only ever cover
+# its own shrink-wrapped content. The picker's toggle button doesn't inherit
+# an option's style this way, so app/js/viz-scale-swatch.js mirrors it across
+# on selection.
+.scale_swatch_style <- function(name) {
+  gradient <- name %in% color_scales$Gradient
+  cols <- if (gradient) {
+    viridis(20, option = name)
+  } else {
+    brewer.pal(brewer.pal.info[name, "maxcolors"], name)
+  }
+  stops <- if (gradient) {
+    paste(cols, collapse = ", ")
+  } else {
+    n <- length(cols)
+    step <- 100 / n
+    paste(
+      vapply(seq_len(n), function(i) {
+        sprintf("%s %g%%, %s %g%%", cols[i], (i - 1) * step, cols[i], i * step)
+      }, character(1)),
+      collapse = ", "
+    )
+  }
+  sprintf(
+    "background: linear-gradient(to right, %s); color: %s;",
+    stops,
+    if (gradient) "white" else "black"
+  )
+}
 
 #' Determine Suitable Color Scale Categories
 #'
@@ -315,21 +354,29 @@ update_field_select <- function(
 
 #' Grouped Palette Selector UI Component
 #'
-#' Renders a dropdown picker for selecting grouped visual color scales.
-#' Uses `.viz-scale-select` CSS class for global styling across instances.
+#' Renders a dropdown picker for selecting grouped visual color scales, each
+#' option previewing its own colours via an inline gradient swatch.
 #'
 #' @param ns Function. Module namespace function (`session$ns`).
 #' @param id Character. Input ID.
 #' @param categories Character vector. Palette categories to expose (default: all).
+#' @param selected Character. Palette to preselect (default: none, first choice wins).
 #' @return Shiny UI tag list.
 #' @export
-scale_select <- function(ns, id, categories = names(color_scales)) {
+scale_select <- function(ns, id, categories = names(color_scales), selected = NULL) {
+  palettes <- unlist(color_scales[categories], use.names = FALSE)
   div(
     class = "viz-scale-select",
     pickerInput(
       ns(id),
       "Color scale",
       choices = color_scales[categories],
+      selected = selected,
+      choicesOpt = list(style = vapply(palettes, .scale_swatch_style, character(1))),
+      # Rendered into <body> (see main.scss's "Dropdown overflow" rules) so the
+      # long option list is capped and scrolled against the viewport instead
+      # of expanding whatever small container (often a modal) it opens in.
+      options = list(container = "body"),
       width = "100%"
     )
   )

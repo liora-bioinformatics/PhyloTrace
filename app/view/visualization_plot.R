@@ -64,6 +64,7 @@ box::use(
   DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
 )
 box::use(
+  app / logic / db_events,
   app / logic / db_staging[imported_metadata_wide],
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
@@ -385,7 +386,7 @@ server <- function(
   staged_sets = shiny::reactive(NULL),
   # Grouped Save-target choices, kept current by the coordinator.
   picker_choices = shiny::reactive(list()),
-  plots_changed = shiny::reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   # TRUE while this tab is the selected nav panel. Only the Map needs it (to
   # nudge Leaflet into recomputing its size), but it costs nothing to thread.
   is_active = shiny::reactive(TRUE),
@@ -523,15 +524,55 @@ server <- function(
     # NULL before the first Generate; thereafter whatever Generate captured.
     applied_selection <- reactiveVal(NULL)
 
-    # A new database means the previous isolate names may not exist any more.
+    # The isolate pool moved underneath this tab, so the sidebar's selection has
+    # to be re-checked against it.
+    #
+    # This used to clear it outright, which was right while viz_metadata() only
+    # ever changed when a different database was loaded. Now that it also
+    # advances on an isolate removal, a typing run or a metadata edit, clearing
+    # would throw away a selection the user built by hand every time somebody
+    # touched an unrelated cell. So: keep what still exists, drop what does not,
+    # and only fall back to NULL ("all isolates") when nothing survives.
+    #
+    # Only `selected_isolates`, the sidebar form. `applied_selection` is the
+    # record of what the plot on screen was drawn from and is deliberately left
+    # alone: reconciling it would erase the very difference that tells the user
+    # their plot is out of date.
     reg(observeEvent(
       viz_metadata(),
       {
-        selected_isolates(NULL)
-        applied_selection(NULL)
+        live <- db_events$reconcile_names(
+          isolate(selected_isolates()),
+          viz_metadata()$isolate
+        )
+        if (live$changed) {
+          selected_isolates(if (length(live$kept)) live$kept else NULL)
+        }
       },
       ignoreInit = TRUE
     ))
+
+    # Say it once, when it happens, rather than leaving the user to notice that
+    # Generate has lit up. Fires only for a plot already on screen - before the
+    # first Generate there is nothing to be out of date.
+    reg(observeEvent(plot_missing(), {
+      n <- length(plot_missing())
+      if (!n) {
+        return()
+      }
+      showNotification(
+        tagList(
+          tags$strong(sprintf(
+            "%d isolate(s) in this plot were removed from the database.",
+            n
+          )),
+          tags$br(),
+          "The plot still shows them. Press Generate to rebuild it without them."
+        ),
+        type = "warning",
+        duration = 12
+      )
+    }))
 
     # Two flavours: the Map and the Epi curve plot straight from the metadata
     # and must see only local isolates; the distance engines also label and
@@ -539,12 +580,64 @@ server <- function(
     #
     # Both read the *applied* selection: they feed the engine, and the engine
     # draws whatever it is given the moment it is given it.
+    # The metadata the plot on screen was actually drawn from, captured at
+    # Generate alongside `applied_selection`.
+    #
+    # This has to be a snapshot, not a live read. The distance engines keep the
+    # computed topology in a reactiveVal that only Generate replaces, but they
+    # rebuild the *drawing* whenever their metadata changes - so a live table
+    # let the two halves drift apart. Removing isolates from the database left
+    # the tree with the branches and tips it was computed from and a metadata
+    # table that no longer described them, and it redrew as a tree whose tips
+    # had silently lost their labels.
+    #
+    # NULL until the first Generate, where the reactives below fall through to
+    # the live table: the engines fill their variable pickers from it as soon as
+    # a database is loaded, which must keep working before anything is drawn.
+    applied_metadata <- reactiveVal(NULL)
+    applied_metadata_all <- reactiveVal(NULL)
+
     viz_metadata_selected <- reactive({
-      .subset_meta(viz_metadata(), applied_selection())
+      applied_metadata() %||%
+        .subset_meta(viz_metadata(), applied_selection())
     })
 
     viz_metadata_selected_all <- reactive({
-      .subset_meta(viz_metadata_all(), applied_selection())
+      applied_metadata_all() %||%
+        .subset_meta(viz_metadata_all(), applied_selection())
+    })
+
+    # How the drawn plot differs from the database as it stands now.
+    #
+    # `plot_missing` is what makes the plot wrong rather than merely dated: those
+    # isolates are still drawn, but nothing in the database backs them any more.
+    # `plot_new` only counts for a plot drawn from the whole database - with an
+    # explicit selection a newly typed isolate simply is not part of it, so it is
+    # no reason to call the plot out of date.
+    plot_missing <- reactive({
+      snap <- applied_metadata()
+      live <- viz_metadata()
+      if (is.null(snap) || is.null(live)) {
+        return(character(0))
+      }
+      setdiff(snap$isolate, live$isolate)
+    })
+
+    plot_new <- reactive({
+      snap <- applied_metadata()
+      live <- viz_metadata()
+      if (is.null(snap) || is.null(live) || !is.null(applied_selection())) {
+        return(character(0))
+      }
+      setdiff(live$isolate, snap$isolate)
+    })
+
+    # Load-bearing for a plot drawn from "all isolates": there the sidebar
+    # selection and the applied one are both NULL, so comparing them can never
+    # reveal that the database moved, and Generate would stay greyed out over a
+    # plot showing isolates that no longer exist.
+    plot_stale <- reactive({
+      length(plot_missing()) > 0L || length(plot_new()) > 0L
     })
 
     # TRUE once this tab has drawn a plot at least once.
@@ -554,7 +647,8 @@ server <- function(
     # first Generate everything is pending, so the button is live from the start.
     pending_changes <- reactive({
       !isTRUE(generated_once()) ||
-        !identical(selected_isolates(), applied_selection())
+        !identical(selected_isolates(), applied_selection()) ||
+        isTRUE(plot_stale())
     })
 
     # Generate is the only way to apply them, so it is only offered when there is
@@ -660,9 +754,10 @@ server <- function(
       dates <- sel_date_choices()
       field <- isolate(input$sel_date_field) %||% ""
       rng <- isolate(input$sel_date_range)
-      # Opens with nothing ticked, as it always has; the sticky part is the
-      # window, not the selection.
-      sel_checked(character(0))
+      # Seeds the tick state from the last confirmed selection, so reopening
+      # the modal shows what's actually applied instead of starting blank
+      # every time (NULL means "everything", which ticks nothing).
+      sel_checked(isolate(selected_isolates()) %||% character(0))
       showModal(div(
         class = "selection-modal",
         modalDialog(
@@ -715,7 +810,13 @@ server <- function(
             modalButton("Cancel"),
             actionButton(
               ns("sel_confirm"),
-              "Confirm selection",
+              "Confirm",
+              class = "btn-primary"
+            ),
+            actionButton(
+              ns("sel_confirm_generate"),
+              "Confirm & Generate",
+              icon = icon("bolt"),
               class = "btn-primary"
             )
           ),
@@ -855,6 +956,16 @@ server <- function(
       )
     })
 
+    # Unlike plain Confirm, an empty tick set has no "everything in the
+    # window" fallback here — it would generate immediately from a selection
+    # the user never actually made.
+    reg(observe({
+      shinyjs::toggleState(
+        "sel_confirm_generate",
+        condition = length(input$sel_table_rows_selected) > 0
+      )
+    }))
+
     # Select all / none act on the currently *filtered* rows, so "Select all"
     # after filtering only checks the visible subset.
     sel_proxy <- dataTableProxy("sel_table")
@@ -864,7 +975,10 @@ server <- function(
     ))
     reg(observeEvent(input$sel_none, selectRows(sel_proxy, NULL)))
 
-    reg(observeEvent(input$sel_confirm, {
+    # Shared by the plain confirm and the "confirm & generate" button: applies
+    # the ticked (or, if none ticked, filtered) rows as the selection. Returns
+    # FALSE, leaving the modal open, when there is nothing to select.
+    do_sel_confirm <- function() {
       meta <- viz_metadata_all()
       tbl <- sel_filtered()
       req(meta, tbl)
@@ -878,12 +992,31 @@ server <- function(
           "No isolates left to select — widen the time filter.",
           type = "warning"
         )
-        return()
+        return(FALSE)
       }
       # Collapse "all of them" back to NULL (no filter), so a window that
       # happens to cover the whole database costs the engines nothing.
       selected_isolates(if (setequal(picked, meta$isolate)) NULL else picked)
       removeModal()
+      TRUE
+    }
+
+    reg(observeEvent(input$sel_confirm, do_sel_confirm()))
+
+    # Applies the selection exactly like Confirm, then synthesizes a click on
+    # Generate so the plot redraws without a second click. The Generate button
+    # is disabled whenever nothing is pending; the toggleState observer that
+    # would flip it back on only fires on the next reactive flush, after this
+    # message is already queued, so the click's own JS also clears `disabled`
+    # first rather than trusting the button's client-side state to have caught
+    # up yet.
+    reg(observeEvent(input$sel_confirm_generate, {
+      if (isTRUE(do_sel_confirm())) {
+        shinyjs::runjs(sprintf(
+          "var b=document.getElementById('%s'); if(b){b.disabled=false; b.click();}",
+          ns("generate")
+        ))
+      }
     }))
 
     output$selection_info <- renderUI({
@@ -904,17 +1037,40 @@ server <- function(
           sprintf("%d of %d isolates selected", length(sel), total)
         )
       }
-      if (!is.null(active_analysis_restriction())) {
-        tagList(
-          base,
-          div(
-            class = "small text-info",
-            icon("lock"),
-            " Set by this Analysis"
-          )
+      # A toast fades; this does not. It is the standing answer to "why is
+      # Generate lit up on a plot I have not touched?", and it names the two
+      # cases separately because they mean different things: the plot is *wrong*
+      # when it still draws isolates the database no longer has, and merely
+      # *behind* when new isolates would join it.
+      missing_n <- length(plot_missing())
+      new_n <- length(plot_new())
+      staleness <- if (missing_n || new_n) {
+        div(
+          class = "small mt-1 text-warning",
+          icon("triangle-exclamation"),
+          " ",
+          if (missing_n) {
+            sprintf("%d isolate(s) in this plot were removed. ", missing_n)
+          },
+          if (new_n) {
+            sprintf("%d new isolate(s) are not in it. ", new_n)
+          },
+          "Press Generate to rebuild."
         )
-      } else {
+      }
+
+      restriction <- if (!is.null(active_analysis_restriction())) {
+        div(
+          class = "small text-info",
+          icon("lock"),
+          " Set by this Analysis"
+        )
+      }
+
+      if (is.null(staleness) && is.null(restriction)) {
         base
+      } else {
+        tagList(base, restriction, staleness)
       }
     })
 
@@ -958,6 +1114,10 @@ server <- function(
       list("engine"),
       list(
         db_path = gate(db_path),
+        # Not gated: it is a bus, not a reactive, and the engines that read the
+        # database directly (AMR hits, the tree's AMR matrix, the MST's scheme
+        # overview) need it to know when those reads went stale.
+        db_rev = db_rev,
         session_reset = gate(session_reset),
         selected_isolates = gate(selected_isolates),
         na_handling = gate(reactive(input$na_handling %||% "ignore_na")),
@@ -980,10 +1140,7 @@ server <- function(
     if (identical(plot_type, "Tree")) {
       engine_args <- c(
         engine_args,
-        list(
-          algo = gate(reactive(input$algo)),
-          zoom_view = gate(reactive(input$zoom_view))
-        )
+        list(algo = gate(reactive(input$algo)))
       )
     }
     if (identical(plot_type, "Map")) {
@@ -1020,7 +1177,12 @@ server <- function(
     reg(observeEvent(
       input$generate,
       {
-        applied_selection(isolate(selected_isolates()))
+        sel <- isolate(selected_isolates())
+        applied_selection(sel)
+        # Pin the metadata to the same instant the engine computes from, so the
+        # topology and the table describing it can never disagree afterwards.
+        applied_metadata(.subset_meta(isolate(viz_metadata()), sel))
+        applied_metadata_all(.subset_meta(isolate(viz_metadata_all()), sel))
         generated_once(TRUE)
       },
       ignoreInit = TRUE,
@@ -1089,8 +1251,17 @@ server <- function(
     # Analysis is targeted or the targeted Analysis doesn't restrict isolates.
     # Some Analyses fix a selection and some don't — this, not merely "is an
     # Analysis targeted", is what gates the per-plot isolate controls.
+    # An Analysis stores its fixed set as isolate *names*, so unlike the
+    # in-memory selections above it can still be naming isolates that were
+    # removed from the database long after it was defined. Reconcile it here,
+    # at the one point it is read, rather than rewriting the stored Analysis:
+    # the set the user chose is a record of intent, and an isolate that comes
+    # back (re-typed, or restored from a backup) should fall back under it.
+    #
+    # Depends on `isolates` as well as `analyses` for that reason - the stored
+    # value has not changed, but what it resolves to has.
     active_analysis_restriction <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses", "isolates")
       aid <- active_analysis_id()
       if (is.null(aid)) {
         return(NULL)
@@ -1099,7 +1270,15 @@ server <- function(
       if (is.null(row)) {
         return(NULL)
       }
-      parse_static(row$isolate_selection)
+      stored <- parse_static(row$isolate_selection)
+      if (is.null(stored)) {
+        return(NULL)
+      }
+      # An Analysis whose isolates are all gone stops restricting rather than
+      # restricting to nothing, which would render an empty plot with the
+      # controls locked and no way for the user to act on it.
+      live <- db_events$reconcile_names(stored, viz_metadata()$isolate)
+      if (length(live$kept)) live$kept else NULL
     })
 
     # A restricting Analysis owns the isolate set (defined in the dashboard's
@@ -1164,7 +1343,7 @@ server <- function(
         # further Save appends another copy instead of updating this one —
         # easy to trip now that a tab sticks around to be saved repeatedly.
         preferred_target(paste0("plot:", new_id))
-        plots_changed(isolate(plots_changed()) + 1L)
+        db_events$bump(db_rev, "analyses")
         showNotification(
           "Plot saved to the Analysis dashboard.",
           type = "message"
@@ -1232,7 +1411,6 @@ server <- function(
         na_handling = input$na_handling,
         imported_sets = input$imported_sets,
         algo = input$algo,
-        zoom_view = isTRUE(input$zoom_view),
         engine = tryCatch(eng$snapshot(), error = function(e) list())
       )
       inputs_json <- toJSON(
@@ -1384,12 +1562,6 @@ server <- function(
       if (!is.null(snap$algo)) {
         updatePrettyRadioButtons(session, "algo", selected = snap$algo)
       }
-      if (identical(plot_type, "Tree")) {
-        session$sendInputMessage(
-          "zoom_view",
-          list(value = isTRUE(snap$zoom_view))
-        )
-      }
       # Both, because a restored plot is drawn from the snapshot rather than
       # waiting for the user to press Generate — the synthetic Generate below
       # would otherwise find nothing pending and be disabled.
@@ -1464,6 +1636,8 @@ server <- function(
       }
       selected_isolates(NULL)
       applied_selection(NULL)
+      applied_metadata(NULL)
+      applied_metadata_all(NULL)
       generated_once(FALSE)
       pending(NULL)
       pending_save_target(NULL)

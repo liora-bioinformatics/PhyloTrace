@@ -13,9 +13,7 @@
 # indexing structures required for downstream typing.
 
 box::use(
-  RSQLite[SQLite],
   DBI[
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbGetQuery,
@@ -29,6 +27,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
   app / logic / logging[log_event],
 )
@@ -320,7 +319,7 @@ export_database <- function(
     unlink(part)
   }
 
-  con <- dbConnect(SQLite(), part)
+  con <- connect(part)
   ok <- FALSE
   on.exit(
     {

@@ -2,7 +2,7 @@
 # Tier 1: a single saved Plot, rendered as a value box with a live thumbnail.
 #
 # The box is data-driven: it reads its own row from the database (keyed by
-# `plot_id`) and re-reads whenever the shared `plots_changed` tick advances, so
+# `plot_id`) and re-reads whenever the `analyses` revision advances (app/logic/db_events.R), so
 # an overwrite (new thumbnail), rename, or delete elsewhere is reflected here
 # without re-instantiating the module. Clicking the thumbnail (or the open
 # button) bubbles an "open this plot" request up to the dashboard, which asks
@@ -35,6 +35,7 @@ box::use(
     value_box,
   ],
   app / logic / analysis_store,
+  app / logic / db_events,
   jsonlite[fromJSON],
 )
 
@@ -99,7 +100,7 @@ server <- function(
   id,
   plot_id,
   db_path = shiny::reactive(NULL),
-  plots_changed = shiny::reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   on_open = function(plot_id) NULL,
   analysis_isolates = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L)
@@ -111,7 +112,7 @@ server <- function(
 
     # This plot's current persisted row; re-read on every change tick.
     plot_row <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$get_plot(db_path(), plot_id)
     })
 
@@ -153,7 +154,7 @@ server <- function(
         new_name <- input$title_input
         if (!is.null(new_name) && nzchar(new_name)) {
           analysis_store$rename_plot(db_path(), plot_id, new_name)
-          plots_changed(plots_changed() + 1L)
+          db_events$bump(db_rev, "analyses")
         }
         is_editing(FALSE)
       } else {
@@ -185,7 +186,7 @@ server <- function(
     observeEvent(input$confirm_delete_box, {
       removeModal()
       analysis_store$delete_plot(db_path(), plot_id)
-      plots_changed(plots_changed() + 1L)
+      db_events$bump(db_rev, "analyses")
     })
 
     output$box_container <- renderUI({
@@ -292,7 +293,7 @@ server <- function(
         showNotification("Could not duplicate this plot.", type = "error")
         return()
       }
-      plots_changed(plots_changed() + 1L)
+      db_events$bump(db_rev, "analyses")
       copy <- analysis_store$get_plot(db_path(), new_id)
       showNotification(
         paste0(

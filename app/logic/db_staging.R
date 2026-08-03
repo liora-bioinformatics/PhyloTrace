@@ -15,9 +15,7 @@
 #   * +sequences: FASTA sequences are hashed directly to establish portable identifiers.
 
 box::use(
-  RSQLite[SQLite],
   DBI[
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbGetQuery,
@@ -32,6 +30,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / db_compat[REF_SOUCHE, connect_ro],
   app / logic / profile_io[norm_locus],
   app / logic / logging[log_event],
@@ -432,7 +431,7 @@ stage_profile_set <- function(
     long$isolate[!is.na(hit)] <- unname(renames[hit[!is.na(hit)]])
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(if (dbIsValid(con)) dbDisconnect(con), add = TRUE)
 
   ensure_staging_tables(con)
@@ -598,7 +597,7 @@ list_imported_sets <- function(db_path) {
 #' @param set_id Target integer identifier of the set to remove.
 #' @export
 delete_imported_set <- function(db_path, set_id) {
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con), add = TRUE)
 
   if (!"imported_sets" %in% dbListTables(con)) {

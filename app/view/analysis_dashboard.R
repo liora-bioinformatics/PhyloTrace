@@ -41,6 +41,7 @@ box::use(
 
 box::use(
   app / logic / analysis_store,
+  app / logic / db_events,
   app / logic / database_functions[append_classical_mlst, make_metadata_table],
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
@@ -98,7 +99,7 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  plots_changed = shiny::reactiveVal(0L)
+  db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -126,7 +127,7 @@ server <- function(
 
     # Current Analyses, refreshed whenever the store changes or the DB reloads.
     analyses <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$list_analyses(db_path())
     })
 
@@ -141,7 +142,7 @@ server <- function(
       if (nrow(analysis_store$list_analyses(path)) == 0L) {
         analysis_store$add_analysis(path, "Analysis 1")
       }
-      plots_changed(isolate(plots_changed()) + 1L)
+      db_events$bump(db_rev, "analyses")
     }
     observeEvent(db_path(), sync_db(), ignoreNULL = FALSE)
     observeEvent(
@@ -167,7 +168,7 @@ server <- function(
               id = paste0("group_instance_", this_aid),
               analysis_id = this_aid,
               db_path = db_path,
-              plots_changed = plots_changed,
+              db_rev = db_rev,
               on_add_plot = handle_add_plot,
               on_open_plot = handle_open_plot,
               on_edit_settings = handle_edit_settings,
@@ -204,6 +205,7 @@ server <- function(
     # Isolate metadata backing the selection step — the same table the
     # Visualization module's isolate picker shows.
     settings_meta <- reactive({
+      db_events$depend(db_rev, "isolates", "metadata")
       req(db_path())
       append_classical_mlst(make_metadata_table(db_path()), db_path())
     })
@@ -630,7 +632,7 @@ server <- function(
           universe_json
         )
       }
-      plots_changed(isolate(plots_changed()) + 1L)
+      db_events$bump(db_rev, "analyses")
       removeModal()
     }
 

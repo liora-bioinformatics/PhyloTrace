@@ -52,13 +52,20 @@ REF_SOUCHE <- "ref"
 #' @export
 connect_ro <- function(db_path) {
   # synchronous = NULL skips default PRAGMA, matching app pattern and failing silently for non-DBs
-  dbConnect(
+  con <- dbConnect(
     SQLite(),
     db_path,
     flags = SQLITE_RO,
-    synchronous = NULL,
-    busy_timeout = 5000
+    synchronous = NULL
   )
+  # As a PRAGMA, not a dbConnect() argument: RSQLite accepts and silently drops
+  # an unknown `busy_timeout =` argument, leaving the timeout at 0. Typing runs
+  # pyMLST in a separate process that writes this same file, so a read taken
+  # while that process holds the write lock must wait rather than fail outright.
+  # Safe on a file that is not a database - the PRAGMA succeeds and the first
+  # real query still raises "file is not a database", as callers expect.
+  dbExecute(con, "PRAGMA busy_timeout = 5000")
+  con
 }
 
 .connect_ro <- connect_ro

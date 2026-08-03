@@ -6,17 +6,16 @@
 
 box::use(
   DBI[
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbGetQuery,
     dbListTables,
     dbListFields,
   ],
-  RSQLite[SQLite],
   openssl[rand_bytes],
 )
 box::use(
+  app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
 
@@ -131,7 +130,7 @@ ensure_schema <- function(db_path) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -172,7 +171,7 @@ list_analyses <- function(db_path) {
     return(.empty_analyses())
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_analyses" %in% dbListTables(con)) {
@@ -217,7 +216,7 @@ list_isolates <- function(db_path) {
     return(character(0))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"mlst" %in% dbListTables(con)) {
@@ -242,7 +241,7 @@ get_analysis <- function(db_path, id) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_analyses" %in% dbListTables(con)) {
@@ -272,7 +271,7 @@ get_analysis <- function(db_path, id) {
 #' @return Invisible `NULL`.
 #' @export
 set_analysis_selection <- function(db_path, id, selection_json) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -310,7 +309,7 @@ add_analysis <- function(
   isolate_selection = NULL,
   isolate_universe = NULL
 ) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -343,7 +342,7 @@ add_analysis <- function(
 #' @return Invisible `NULL`.
 #' @export
 rename_analysis <- function(db_path, id, name) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -376,7 +375,7 @@ update_analysis_settings <- function(
   isolate_selection = NULL,
   isolate_universe = NULL
 ) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -409,7 +408,7 @@ update_analysis_settings <- function(
 #' @return Invisible `NULL`.
 #' @export
 delete_analysis <- function(db_path, id) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -441,7 +440,7 @@ list_plots <- function(db_path, analysis_id) {
     return(.empty_plots())
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_plots" %in% dbListTables(con)) {
@@ -469,7 +468,7 @@ get_plot <- function(db_path, id) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_plots" %in% dbListTables(con)) {
@@ -514,7 +513,7 @@ upsert_plot <- function(
   inputs_json,
   thumb_b64
 ) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -587,7 +586,7 @@ upsert_plot <- function(
 #' @return Integer ID of the newly created duplicate plot, or `NULL` if source missing.
 #' @export
 duplicate_plot <- function(db_path, id) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -639,7 +638,7 @@ duplicate_plot <- function(db_path, id) {
 #' @return Invisible `NULL`.
 #' @export
 rename_plot <- function(db_path, id, name) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -659,7 +658,7 @@ rename_plot <- function(db_path, id, name) {
 #' @return Invisible `NULL`.
 #' @export
 delete_plot <- function(db_path, id) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)

@@ -8,12 +8,12 @@ box::use(
   jsonlite[fromJSON],
   shinyFiles[parseDirPath],
   fs[path_home],
-  DBI[dbConnect, dbDisconnect, dbWriteTable],
-  RSQLite[SQLite],
+  DBI[dbDisconnect, dbWriteTable],
   utils[read.delim]
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / schemes[cgmlst_org_schemes],
   app / logic / logging[log_event],
 )
@@ -112,7 +112,7 @@ get_species_details <- function(species_select) {
 #' @return Invisible `TRUE` on successful database write.
 #' @export
 download_scheme_overview <- function(scheme_overview, db_path) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   names(scheme_overview) <- c("key", "value")
@@ -197,7 +197,7 @@ download_scheme_targets <- function(select_cgmlst, db_path) {
     return(FALSE)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   dbWriteTable(con, "targets", targets, overwrite = TRUE)

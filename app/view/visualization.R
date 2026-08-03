@@ -56,6 +56,7 @@ box::use(
 )
 box::use(
   app / logic / custom_fields[append_custom],
+  app / logic / db_events,
   app /
     logic /
     database_functions[append_amr, append_classical_mlst, make_metadata_table],
@@ -267,15 +268,13 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  typing_status = shiny::reactive("idle"),
-  db_updated = shiny::reactiveVal(0L),
   # Dashboard integration: `launch_ctx` fires when "Add Plot" was clicked for an
   # Analysis (carries its id); `open_ctx` fires when a saved plot was clicked to
-  # reopen it (carries its plot id). `plots_changed` is the shared tick both
+  # reopen it (carries its plot id). `db_rev`'s `analyses` revision is what both
   # this module and the dashboard bump/observe to stay in sync.
   launch_ctx = shiny::reactive(NULL),
   open_ctx = shiny::reactive(NULL),
-  plots_changed = shiny::reactiveVal(0L)
+  db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -286,6 +285,12 @@ server <- function(
     # plots are open. Local isolates only — a staged peer isolate has no place
     # on a map it was never geocoded for.
     viz_metadata <- reactive({
+      # The four domains this table is assembled from. Without them the whole
+      # module is blind to every write: db_path() does not change when an
+      # isolate is removed, a metadata cell is edited, a custom variable is
+      # defined or a typing run adds isolates, so this read would keep serving
+      # the version it took when the database was first opened.
+      db_events$depend(db_rev, "isolates", "metadata", "custom_fields", "amr")
       req(db_path())
       # Surface the classical-MLST columns (ST + per-locus alleles), the
       # AMR-screening columns (the resistance profile plus one per drug class)
@@ -326,6 +331,7 @@ server <- function(
     })
 
     staged_sets <- reactive({
+      db_events$depend(db_rev, "staged")
       req(db_path())
       list_imported_sets(db_path())
     })
@@ -336,7 +342,7 @@ server <- function(
     # saved plots (value "plot:<id>"). One read here feeds every tab's picker.
     NONE_TARGET <- "none"
     picker_choices <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       path <- db_path()
       none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       req(path)
@@ -453,7 +459,7 @@ server <- function(
         viz_field_profiles = viz_field_profiles,
         staged_sets = staged_sets,
         picker_choices = picker_choices,
-        plots_changed = plots_changed,
+        db_rev = db_rev,
         is_active = reactive(identical(input$plot_set, tid)),
         alive = alive,
         preset = preset

@@ -34,6 +34,7 @@ box::use(
   stats[setNames],
 )
 box::use(
+  app / logic / db_events,
   app / logic / field_labels[field_labels_for, grouped_field_choices],
   app /
     logic /
@@ -442,10 +443,13 @@ MIRRORED_IDS <- c(
 # --- Tree (NJ / UPGMA) control tabs ------------------------------------------
 
 # `options_ui` is the tab's own distance-computation controls (missing-value
-# handling, imported sets, algorithm, zoom view), built in visualization_plot.R
-# and rendered here rather than in the left sidebar. It arrives already
-# namespaced to the *tab*, not to this engine, so every observer behind it keeps
-# working where it is — this moves where the controls appear, not who owns them.
+# handling, imported sets, algorithm), built in visualization_plot.R and
+# rendered here rather than in the left sidebar. It arrives already namespaced
+# to the *tab*, not to this engine, so every observer behind it keeps working
+# where it is — this moves where the controls appear, not who owns them.
+#
+# The zoom-view switch below, by contrast, is local to this engine (Tree-only)
+# and namespaced here, so it is read straight off this module's own `input`.
 #
 # They belong on this side because they are live: the left sidebar is the
 # "press Generate to apply" side, and these take effect as soon as they change.
@@ -662,7 +666,7 @@ tree_controls <- function(ns, options_ui = NULL) {
           accordion_panel(
             "Other Elements",
             icon = shiny$icon("code-branch"),
-            input_switch(ns("nj_rootedge_show"), "Root edge", TRUE)
+            input_switch(ns("nj_rootedge_show"), "Root edge", FALSE)
           )
         )
       ),
@@ -830,6 +834,7 @@ ui <- function(id, generate_id, options_ui = NULL) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
@@ -844,11 +849,7 @@ server <- function(
   imported_sets = shiny$reactive(NULL),
   generate = shiny$reactive(0L),
   plot_type = shiny$reactive("Tree"),
-  algo = shiny$reactive("Neighbour-Joining"),
-  # Display mode driven from the parent module's Options accordion (left
-  # sidebar): FALSE = "fit" (default), TRUE = "zoom". Applied as the .is-zoom
-  # class on the stage below — purely presentational, never re-renders.
-  zoom_view = shiny$reactive(FALSE)
+  algo = shiny$reactive("Neighbour-Joining")
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -1716,15 +1717,7 @@ server <- function(
           )
         },
         if (l$aesthetic %in% COLOR_AESTHETICS) {
-          shiny$div(
-            class = "viz-scale-select",
-            pickerInput(
-              ns("nj_layer_palette"),
-              "Color scale",
-              choices = color_scales[cats],
-              selected = l$palette
-            )
-          )
+          scale_select(ns, "nj_layer_palette", categories = cats, selected = l$palette)
         },
         footer = shiny$tagList(
           shiny$modalButton("Cancel"),
@@ -1796,7 +1789,10 @@ server <- function(
         # live toggles are handled by the observer below.
         class = paste(
           "viz-plot-stage tree-stage",
-          if (isTRUE(shiny$isolate(zoom_view()))) "is-zoom"
+          # radioGroupButtons' choiceValues = c(FALSE, TRUE) round-trip as the
+          # strings "FALSE"/"TRUE" (the widget's HTML `value` attribute), never
+          # as a logical — as.logical() is what makes isTRUE() mean anything here.
+          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
         ),
         id = ns("plot_stage"),
         prompt,
@@ -1849,19 +1845,19 @@ server <- function(
       res = PLOT_RES
     )
 
-    # Fit ⇄ Zoom display mode, driven by the parent's `zoom_view` switch (left
-    # sidebar → Options). Purely toggles the .is-zoom class on the mounted stage
-    # — the image itself is not re-rendered (see the tree-stage CSS in
-    # app/styles/main.scss). ignoreInit: the initial state is already stamped on
-    # the stage div by renderUI's isolate() read, so the first (FALSE) value
-    # needs no toggle; this only fires on user changes.
+    # Fit ⇄ Zoom display mode, driven by this engine's own `zoom_view` switch
+    # (right sidebar, tree_controls()). Purely toggles the .is-zoom class on the
+    # mounted stage — the image itself is not re-rendered (see the tree-stage
+    # CSS in app/styles/main.scss). ignoreInit: the initial state is already
+    # stamped on the stage div by renderUI's isolate() read, so the first
+    # (FALSE) value needs no toggle; this only fires on user changes.
     shiny$observeEvent(
-      zoom_view(),
+      input$zoom_view,
       {
         shinyjs::toggleClass(
           id = "plot_stage",
           class = "is-zoom",
-          condition = isTRUE(zoom_view())
+          condition = isTRUE(as.logical(input$zoom_view))
         )
       },
       ignoreInit = TRUE
@@ -1882,6 +1878,7 @@ server <- function(
     # with no gene matrix silently dropped the class heatmap as well. Absence
     # is a value here, not a reason to stop.
     amr_matrix <- shiny$reactive({
+      db_events$depend(db_rev, "amr", "isolates")
       path <- db_path()
       if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
         return(NULL)
@@ -2088,7 +2085,11 @@ server <- function(
     # reactiveVals rather than inputs (the mapping layers and the heatmaps).
     snapshot <- shiny$reactive(c(
       collect_input_snapshot(input, "nj_"),
-      list(.layers = nj_layers(), .heatmaps = nj_heatmaps())
+      list(
+        zoom_view = isTRUE(as.logical(input$zoom_view)),
+        .layers = nj_layers(),
+        .heatmaps = nj_heatmaps()
+      )
     ))
 
     restore <- function(vals) {
@@ -2128,7 +2129,7 @@ server <- function(
           "nj_tippoint_color",
           "nj_clade_scale"
         ),
-        radio_groups = "nj_legend_orientation"
+        radio_groups = c("nj_legend_orientation", "zoom_view")
       )
 
       # Put the fitted controls' saved values straight into the mirrors the

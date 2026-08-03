@@ -8,7 +8,6 @@ box::use(
   DBI[
     dbBegin,
     dbCommit,
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbGetQuery,
@@ -16,10 +15,10 @@ box::use(
     dbRollback
   ],
   jsonlite[fromJSON, toJSON],
-  RSQLite[SQLite],
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / database_functions[metadata_columns],
   app /
     logic /
@@ -127,7 +126,7 @@ ensure_custom_schema <- function(db_path) {
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   .ensure_tables(con)
@@ -193,7 +192,7 @@ list_custom_fields <- function(db_path) {
     return(.empty_fields())
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_custom_fields" %in% dbListTables(con)) {
@@ -319,7 +318,7 @@ create_custom_field <- function(
     description <- NA_character_
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
   .ensure_tables(con)
 
@@ -424,7 +423,7 @@ update_custom_field <- function(
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   dbExecute(
@@ -454,7 +453,7 @@ delete_custom_field <- function(db_path, id) {
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"phylotrace_custom_fields" %in% dbListTables(con)) {
@@ -618,7 +617,7 @@ load_custom_values <- function(db_path, fields = NULL) {
     }
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   values <- if ("phylotrace_custom_values" %in% dbListTables(con)) {
@@ -697,7 +696,7 @@ save_custom_values <- function(db_path, edits) {
     return(invisible(0L))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
   .ensure_tables(con)
 

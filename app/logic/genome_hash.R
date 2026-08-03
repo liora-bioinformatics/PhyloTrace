@@ -4,9 +4,7 @@
 # verification against the database to trace provenance and flag duplicates.
 
 box::use(
-  RSQLite[SQLite],
   DBI[
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbGetQuery,
@@ -16,6 +14,7 @@ box::use(
   stats[setNames],
 )
 box::use(
+  app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
 
@@ -164,7 +163,7 @@ store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   ok <- tryCatch(
@@ -221,7 +220,7 @@ genome_hash_map <- function(db_path) {
     return(empty)
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"genome_hashes" %in% dbListTables(con)) {

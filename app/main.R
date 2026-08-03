@@ -48,6 +48,7 @@ box::use(
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database, hashes_pending],
   app / logic / database_functions[migrate_isolate_key],
+  app / logic / db_events[bump_all, new_bus],
   app / view / landing_page,
   app / view / scheme_browser,
   app / view / database,
@@ -263,10 +264,21 @@ server <- function(id) {
     # Deferred through later() on purpose - see the bump site for why.
     ui_mounted <- reactiveVal(0L)
 
-    # Shared change signal for saved Analyses/Plots. Bumped by whichever module
-    # writes (the dashboard on add/rename/delete, the Visualization module on
-    # Save); both re-read the database when it advances so they stay in sync.
-    plots_changed <- reactiveVal(0L)
+    # Per-domain revision counters for the loaded database (app/logic/db_events.R).
+    #
+    # A SQLite write is invisible to Shiny's reactive graph: db_path() does not
+    # change, so a reader keyed only on it never re-queries and quietly shows
+    # data from before the write. Every module that writes bumps the domains it
+    # touched; every module that reads names the domains it depends on. This
+    # supersedes the per-pair signals the app grew one at a time (Analyses/plots,
+    # custom variables, staged sets, typed isolates), which each covered exactly
+    # one edge of that graph and left the rest stale.
+    #
+    # Distinct from data_reset below: this says "re-read, your query is out of
+    # date", not "tear down, the session moved". Modules holding unsaved user
+    # input (the Database Browser's edit grid) deliberately treat a bump as a
+    # staleness marker rather than a cue to reload over the user's work.
+    db_rev <- new_bus()
 
     SCHEME_BROWSER_vals <- scheme_browser$server(
       "scheme_browser",
@@ -287,7 +299,8 @@ server <- function(id) {
     TYPING_vals <- typing$server(
       "typing",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = data_reset
+      session_reset = data_reset,
+      db_rev = db_rev
     )
 
     # IDs of currently shown "database changed" notifications; used to remove
@@ -307,8 +320,7 @@ server <- function(id) {
       session_reset = data_reset,
       show_browse = show_browse,
       ui_mounted = ui_mounted,
-      typing_status = TYPING_vals$typing_status,
-      db_updated = TYPING_vals$db_updated
+      db_rev = db_rev
     )
 
     # The database changed underneath the open session, so offer a reload —
@@ -378,23 +390,22 @@ server <- function(id) {
       },
       ignoreInit = TRUE
     )
+
     ANALYSIS_DASHBOARD_vals <- analysis_dashboard$server(
       "analysis_dashboard",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = data_reset,
-      plots_changed = plots_changed
+      db_rev = db_rev
     )
     visualization$server(
       "visualization",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = data_reset,
-      typing_status = TYPING_vals$typing_status,
-      db_updated = TYPING_vals$db_updated,
       # Dashboard -> Visualization: "Add Plot" for an Analysis and "open a saved
       # plot" both route here and preselect / restore in the Save panel.
       launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,
       open_ctx = ANALYSIS_DASHBOARD_vals$request_open_plot,
-      plots_changed = plots_changed
+      db_rev = db_rev
     )
 
     # Dashboard buttons that hand off to the Visualization tab.
@@ -468,6 +479,12 @@ server <- function(id) {
       # the database, then fill in any missing allele hashes.
       migrate_isolate_key(db_path)
       hash_database(db_path)
+
+      # Both of the above write. Readers keyed on db_path() invalidate anyway
+      # when it changes, but a reload of the *same* path (the landing page can
+      # re-fire load for the database already open) leaves db_path() untouched,
+      # so the revisions are what makes those reads re-run.
+      bump_all(db_rev)
 
       app_panels <- list(
         fillable_panel(
@@ -602,6 +619,10 @@ server <- function(id) {
       # data_reset() triggers the rebuild flush.
       # gc(full = TRUE) # [A/B TEST — TEMPORARY] disabled; re-enable to restore fix
       data_reset(data_reset() + 1L)
+      # "Reload Database" means every query is suspect, including the ones whose
+      # module opted out of automatic refresh (the Browser's edit grid) - the
+      # user asking for a reload is the explicit consent that opt-out waits for.
+      bump_all(db_rev)
     }
 
     # Full reset: everything reload_data() does, plus the true session_reset

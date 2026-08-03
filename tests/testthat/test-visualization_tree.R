@@ -60,7 +60,7 @@ set_tree_inputs <- function(session) {
     nj_nodelabel_show = FALSE,
     nj_clade_scale = "#D0F221",
     nj_heatmap_show = FALSE,
-    nj_rootedge_show = TRUE,
+    nj_rootedge_show = FALSE,
     nj_treescale_show = FALSE,
     nj_axis_show = TRUE,
     nj_aspect_ratio = 0.6,

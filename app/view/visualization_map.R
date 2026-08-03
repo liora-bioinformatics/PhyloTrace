@@ -91,6 +91,7 @@ box::use(
       collect_input_snapshot,
       apply_input_snapshot,
     ],
+  app / logic / db_events,
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
   app / logic / field_labels[field_label],
@@ -2049,6 +2050,7 @@ ui <- function(id, generate_id, options_ui = NULL) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,

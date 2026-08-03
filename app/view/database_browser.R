@@ -61,6 +61,7 @@ box::use(
       append_classical_mlst,
       append_amr_matrix
     ],
+  app / logic / db_events,
   app / logic / field_labels[field_labels_for, grouped_field_choices],
   app / logic / field_types[date_fields],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
@@ -242,13 +243,39 @@ ui <- function(id) {
   )
 }
 
+# Re-bases the grid's edited snapshot onto the metadata table as it stands now.
+#
+# `current` decides which isolates exist and in what column order, so isolates
+# added since the grid was filled keep their fresh row and isolates removed
+# since simply are not there. `edited` decides the values, but only for the
+# isolates present in both and only for columns both sides have.
+.reconcile_metadata <- function(edited, current) {
+  if (is.null(current) || !nrow(current)) {
+    return(edited)
+  }
+  if (is.null(edited) || !nrow(edited)) {
+    return(current)
+  }
+
+  keep <- intersect(edited$isolate, current$isolate)
+  if (!length(keep)) {
+    return(current)
+  }
+
+  into <- match(keep, current$isolate)
+  from <- match(keep, edited$isolate)
+  for (col in setdiff(intersect(names(edited), names(current)), "isolate")) {
+    current[[col]][into] <- edited[[col]][from]
+  }
+  current
+}
+
 #' @export
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  db_updated = shiny::reactiveVal(0L),
-  custom_updated = shiny::reactiveVal(0L)
+  db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -269,11 +296,16 @@ server <- function(
       )
     )
 
-    # Incremented only when the user explicitly requests a data reload (via
-    # the "Reload Database" notification button, which calls reset_session()).
-    # This is the sole mechanism that invalidates metadata_base's cache after
-    # the initial load — db_updated() is intentionally NOT a dependency so
-    # that background typing never wipes pending client-side edits.
+    # The only thing that invalidates metadata_base's cache after the initial
+    # load. Everything that wants this grid re-read goes through here rather
+    # than becoming a dependency of metadata_base itself, because every route
+    # has to pass the same test first: are there unsaved edits on screen?
+    #
+    # Bumped by an explicit data reload, by save and discard, and - via the
+    # revision observer below - by another module's write, but in that last case
+    # only when nothing is pending. db_rev is deliberately not a dependency of
+    # metadata_base() itself: a re-read behind the user's back wipes edits they
+    # have not committed.
     reload_token <- reactiveVal(0L)
 
     metadata_base <- reactive({
@@ -665,12 +697,17 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    # The Custom Variables panel changed a definition or a value: pick the new
-    # columns up. Skipped while edits are pending — the same reason db_updated()
-    # is not a dependency of metadata_base(): a reload would wipe them. The user
-    # sees the change after they save or discard.
+    # Someone else wrote what this grid is showing: custom variable definitions
+    # or values (the Custom Variables panel), the isolate pool (typing, a
+    # removal), or the metadata itself (a merge or a restore).
+    #
+    # Skipped while edits are pending. This grid is the one place in the app
+    # holding uncommitted user input, so an automatic re-read is not a refresh -
+    # it is data loss. It goes stale instead, and catches up on the next save,
+    # discard or explicit "Reload Database"; main.R's reload notification warns
+    # about the pending edits before offering that button.
     observeEvent(
-      custom_updated(),
+      db_events$revision(db_rev, "custom_fields", "isolates", "metadata"),
       {
         if (!isTRUE(State$pending)) {
           reload_token(reload_token() + 1L)
@@ -1147,34 +1184,77 @@ server <- function(
       # phylotrace_custom_values, so they are stripped from the metadata write
       # and sent through save_custom_values() instead.
       strip <- c(mlst_cols(), amr_cols(), custom_cols())
-      to_save <- State$data[,
+      edited <- State$data[,
         setdiff(names(State$data), strip),
         drop = FALSE
       ]
+
+      # save_metadata_table() replaces the whole table, so whatever this grid
+      # holds becomes the database. That is only safe if the grid still matches
+      # the isolate pool — and this grid deliberately does not refresh while
+      # edits are pending, so between the read that filled it and this save
+      # typing may have added isolates and a removal may have taken some away.
+      # Writing the snapshot unreconciled would delete the metadata rows of
+      # everything added since and resurrect everything removed since.
+      current <- make_metadata_table(db_path())
+      to_save <- .reconcile_metadata(edited, current)
       save_metadata_table(db_path(), to_save)
 
-      if (is.data.frame(State$custom_dirty) && nrow(State$custom_dirty)) {
-        save_custom_values(db_path(), State$custom_dirty)
+      wrote_custom <- is.data.frame(State$custom_dirty) &&
+        nrow(State$custom_dirty)
+      if (wrote_custom) {
+        # A custom value keyed to an isolate that no longer exists would be an
+        # orphan row no view can reach, so drop those the same way.
+        dirty <- State$custom_dirty
+        live <- db_events$reconcile_names(dirty$isolate, current$isolate)
+        save_custom_values(db_path(), dirty[!(dirty$isolate %in% live$dropped), ])
         State$custom_dirty <- NULL
-        # Same signal the Custom Variables panel raises when it writes, so the
-        # two views of phylotrace_custom_values cannot drift apart.
-        custom_updated(isolate(custom_updated()) + 1L)
       }
 
       State$pending <- FALSE
+
+      # Announce before reporting: `metadata` always, `custom_fields` only when
+      # the second write actually ran. Clearing State$pending first means this
+      # grid's own observer above now accepts the re-read it has been skipping,
+      # so a save also catches the grid up on whatever it ignored meanwhile.
+      domains <- c("metadata", if (wrote_custom) "custom_fields")
+      do.call(db_events$bump, c(list(db_rev), as.list(domains)))
+
+      dropped <- setdiff(edited$isolate, to_save$isolate)
+      appeared <- setdiff(to_save$isolate, edited$isolate)
       showNotification(
-        "Database changes saved.",
+        if (length(dropped) || length(appeared)) {
+          tagList(
+            tags$strong("Database changes saved."),
+            tags$br(),
+            sprintf(
+              paste(
+                "The isolate list moved while you were editing:",
+                "%d added, %d removed elsewhere. Your edits were applied to",
+                "the isolates that are still present."
+              ),
+              length(appeared),
+              length(dropped)
+            )
+          )
+        } else {
+          "Database changes saved."
+        },
         type = "message",
-        duration = 3
+        duration = if (length(dropped) || length(appeared)) 10 else 3
       )
     })
 
-    # Discard: re-fetch from DB and push back to the table without re-render
+    # Discard: re-fetch from DB and push back to the table without re-render.
+    # Bumps reload_token first because metadata_base() may be holding a read
+    # from before a change this grid skipped while edits were pending —
+    # discarding has to land on the database as it is now, not as it was.
     observeEvent(input$discard, {
-      fresh <- metadata_base()
-      State$data <- fresh
       State$custom_dirty <- NULL
       State$pending <- FALSE
+      reload_token(isolate(reload_token()) + 1L)
+      fresh <- metadata_base()
+      State$data <- fresh
       replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
     })
 
@@ -1253,6 +1333,20 @@ server <- function(
       # exactly the baseline and the row is highlighted as nothing at all.
       baseline_isolates <<- setdiff(baseline_isolates, isolates)
       reload_token(reload_token() + 1L)
+      # The widest-reaching write in the app: remove_isolates() deletes from
+      # mlst, metadata and every isolate-keyed table (classical MLST, AMR,
+      # custom values, genome hashes), and with keep_alleles = FALSE from
+      # sequences and hashes as well. Everything except staged sets and saved
+      # Analyses is affected, and those two only hold *names* of isolates, which
+      # their own readers reconcile.
+      db_events$bump(
+        db_rev,
+        "isolates",
+        "metadata",
+        "custom_fields",
+        "amr",
+        "schema"
+      )
       showNotification(
         paste0(length(isolates), " isolate(s) removed from the database."),
         type = "message",

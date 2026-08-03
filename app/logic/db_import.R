@@ -37,6 +37,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / custom_fields[CUSTOM_SCHEMA_DDL],
   app /
     logic /
@@ -937,7 +938,7 @@ merge_databases <- function(
 
   organism <- load_db_species(local_path)
 
-  con <- dbConnect(SQLite(), work, busy_timeout = 5000)
+  con <- connect(work)
   on.exit(if (dbIsValid(con)) dbDisconnect(con), add = TRUE)
 
   attach_ro(con, prep_ext$path, "ext")

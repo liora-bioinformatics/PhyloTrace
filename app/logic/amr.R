@@ -18,9 +18,7 @@
 # amr_results row.
 
 box::use(
-  RSQLite[SQLite],
   DBI[
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbBegin,
@@ -30,6 +28,7 @@ box::use(
   utils[read.delim],
 )
 box::use(
+  app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
 
@@ -294,7 +293,7 @@ store_amr_results <- function(
   summary <- parse_abritamr_summary(amr_dir)
   pm <- if (isTRUE(point_mutations)) 1L else 0L
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   dbExecute(

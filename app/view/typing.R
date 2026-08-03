@@ -74,6 +74,7 @@ box::use(
   fs[path_home],
 )
 box::use(
+  app / logic / db_events,
   app / logic / functions[render_info],
   app / logic / logging[typing_log_file, log_event],
   app /
@@ -596,7 +597,8 @@ ui <- function(id) {
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  session_reset = shiny::reactive(0L),
+  db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -834,9 +836,13 @@ server <- function(
     })
 
     # Strains already in the loaded database; re-queried after each run so the
-    # selection table's "Already present" flags stay current.
+    # selection table's "Already present" flags stay current. Also on any change
+    # to the isolate pool from elsewhere - removing isolates in the Database
+    # Browser used to leave this list claiming they were still present, so a
+    # re-type of a removed isolate was flagged as a duplicate that no longer was.
     existing <- reactive({
       Typing$refresh
+      db_events$depend(db_rev, "isolates")
       existing_strains(db_path())
     })
 
@@ -1928,11 +1934,12 @@ server <- function(
       tryCatch(Typing$proc$kill_tree(), error = function(e) NULL)
     })
 
-    # Expose the current typing status for other modules to react to.
-    typing_status <- reactive(Typing$status)
-
     # Incremented whenever a typing run (completed or terminated) has written at
-    # least one new strain to the database
+    # least one new strain to the database. Read by main.R, which turns it into
+    # the "New isolates added" prompt offering a full database reload — the
+    # heavy path that also re-runs the allele-hash backfill and releases the
+    # modules that hold back automatic refresh while they carry unsaved edits.
+    # What the other modules re-read on their own goes through db_rev instead.
     db_updated <- reactiveVal(0L)
 
     # Poll the background process: tail the log, refresh the results table and
@@ -2125,7 +2132,23 @@ server <- function(
       }
 
       # Signal other modules that the DB has new data.
+      #
+      # Announced once here, at the end of the run, rather than per strain: the
+      # allele calls are written by pyMLST in a separate process, so for the
+      # whole run the database is a moving target that no reader should be
+      # invalidated onto. By this point that process has exited and the
+      # in-process writes above (genome hashes, AMR) have committed, so this is
+      # the first moment the database is both changed and consistent.
+      #
+      # `schema` because new isolates bring new allele rows into `sequences`;
+      # `metadata` because make_metadata_table() back-fills a row per new
+      # isolate. `amr` only when screening actually stored something.
       if (added > 0L) {
+        domains <- c("isolates", "metadata", "schema")
+        if (amr_screened > 0L) {
+          domains <- c(domains, "amr")
+        }
+        do.call(db_events$bump, c(list(db_rev), as.list(domains)))
         db_updated(db_updated() + 1L)
       }
 
@@ -2183,6 +2206,6 @@ server <- function(
       )
     })
 
-    list(typing_status = typing_status, db_updated = db_updated)
+    list(db_updated = db_updated)
   })
 }

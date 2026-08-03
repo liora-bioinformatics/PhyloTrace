@@ -9,7 +9,6 @@ box::use(
     dbBegin,
     dbClearResult,
     dbCommit,
-    dbConnect,
     dbDisconnect,
     dbExecute,
     dbFetch,
@@ -21,8 +20,8 @@ box::use(
     dbSendQuery,
     dbWriteTable
   ],
-  RSQLite[SQLite],
   app / logic / db_compat[REF_SOUCHE],
+  app / logic / db_connect[connect],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / field_labels[AMR_COL_PREFIX, MLST_COL_PREFIX],
   app / logic / logging[log_event],
@@ -62,7 +61,7 @@ migrate_isolate_key <- function(db_path) {
     return(invisible(character(0)))
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- tryCatch(dbListTables(con), error = function(e) character(0))
@@ -108,7 +107,7 @@ migrate_isolate_key <- function(db_path) {
 #' @return Data frame containing scheme overview information, or `NULL` if missing.
 #' @export
 load_db_scheme_overview <- function(db_path) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -129,7 +128,7 @@ load_db_scheme_overview <- function(db_path) {
 #' @return Character scalar with the species name, or `NULL` if missing or unpopulated.
 #' @export
 load_db_species <- function(db_path) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -158,7 +157,7 @@ load_db_species <- function(db_path) {
 #' @return Data frame representing the full `metadata` table, or `NULL` if prerequisites missing.
 #' @export
 make_metadata_table <- function(db_path) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -297,7 +296,7 @@ metadata_columns <- function(db_path) {
     return(character(0))
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"metadata" %in% dbListTables(con)) {
@@ -330,7 +329,7 @@ load_classical_mlst <- function(db_path) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"classical_mlst" %in% dbListTables(con)) {
@@ -432,7 +431,7 @@ load_amr <- function(db_path) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"amr_summary" %in% dbListTables(con)) {
@@ -553,7 +552,7 @@ load_amr_matrix <- function(db_path) {
     return(NULL)
   }
 
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"amr_summary" %in% dbListTables(con)) {
@@ -667,7 +666,7 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
     return(invisible(FALSE))
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -745,7 +744,7 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
 #' @return Invisible logical `TRUE` after writing to database.
 #' @export
 save_metadata_table <- function(db_path, data) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
   dbWriteTable(con, "metadata", data, overwrite = TRUE)
   log_event(
@@ -764,7 +763,7 @@ save_metadata_table <- function(db_path, data) {
 #' @return Data frame listing locus attributes and allele counts, or `NULL` if missing.
 #' @export
 load_loci_info <- function(db_path) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -812,7 +811,7 @@ load_loci_info <- function(db_path) {
 #' @return Data frame listing `seqid`, occurrence `count`, and `present` logical indicator.
 #' @export
 load_locus_alleles <- function(db_path, gene) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   all_ids <- dbGetQuery(
@@ -845,7 +844,7 @@ load_locus_alleles <- function(db_path, gene) {
 #' @return Character scalar nucleotide sequence, or `NULL` if not found.
 #' @export
 load_allele_sequence <- function(db_path, seqid) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   res <- dbGetQuery(
@@ -866,7 +865,7 @@ load_allele_sequence <- function(db_path, seqid) {
 #' @return Character vector of formatted FASTA entries (one entry per record).
 #' @export
 locus_fasta <- function(db_path, gene) {
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   res <- dbGetQuery(

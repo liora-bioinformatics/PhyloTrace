@@ -1,9 +1,7 @@
 # app/logic/pymlst.R
 
 box::use(
-  RSQLite[SQLite],
   DBI[
-    dbConnect,
     dbListTables,
     dbReadTable,
     dbGetQuery,
@@ -20,6 +18,7 @@ box::use(
   dplyr[select, left_join],
 )
 box::use(
+  app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
 
@@ -569,7 +568,7 @@ db_species <- function(db_path) {
     return(NA_character_)
   }
 
-  con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   if (!"mlst_type" %in% dbListTables(con)) {
@@ -605,7 +604,7 @@ clamlst_refs <- function(cla_db_path) {
   }
 
   con <- tryCatch(
-    dbConnect(SQLite(), cla_db_path, synchronous = NULL, busy_timeout = 5000),
+    connect(cla_db_path, synchronous = NULL),
     error = function(e) NULL
   )
   if (is.null(con)) {
@@ -733,7 +732,7 @@ store_clamlst_results <- function(
     data.frame(gene = gene[ok], allele = allele[ok], stringsAsFactors = FALSE)
   }
 
-  con <- dbConnect(SQLite(), db_path, busy_timeout = 5000)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   dbExecute(
@@ -861,7 +860,7 @@ existing_strains <- function(db_path) {
     return(character(0))
   }
 
-  con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   if (!"mlst" %in% dbListTables(con)) {
@@ -891,7 +890,7 @@ scheme_size <- function(db_path) {
     return(NA_integer_)
   }
 
-  con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   if (!"mlst" %in% dbListTables(con)) {
@@ -927,7 +926,7 @@ strain_gene_counts <- function(db_path, strains) {
     return(counts)
   }
 
-  con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   if (!"mlst" %in% dbListTables(con)) {
@@ -958,12 +957,7 @@ strain_gene_counts <- function(db_path, strains) {
 #' @return Logical indicating whether `hash_database()` needs to run.
 #' @export
 hashes_pending <- function(db_path) {
-  con <- dbConnect(
-    SQLite(),
-    db_path,
-    synchronous = NULL,
-    busy_timeout = 5000
-  )
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   tables <- dbListTables(con)
@@ -988,12 +982,7 @@ hashes_pending <- function(db_path) {
 hash_database <- function(db_path) {
   message("Checking database hashing status ...")
 
-  con <- dbConnect(
-    SQLite(),
-    db_path,
-    synchronous = NULL,
-    busy_timeout = 5000
-  )
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   sequences <- dbReadTable(con, "sequences")

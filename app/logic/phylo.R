@@ -10,11 +10,9 @@
 
 box::use(
   DBI[
-    dbConnect,
     dbDisconnect,
     dbGetQuery,
   ],
-  RSQLite[SQLite],
   ape[as.phylo, nj],
   dplyr[select],
   igraph[
@@ -28,6 +26,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_connect[connect],
   app / logic / db_staging[imported_profile_long, local_allele_map],
 )
 
@@ -49,7 +48,7 @@ load_allele_profile <- function(
   isolates = NULL,
   imported_sets = NULL
 ) {
-  con <- dbConnect(SQLite(), db_path, synchronous = NULL, busy_timeout = 5000)
+  con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
   long <- dbGetQuery(

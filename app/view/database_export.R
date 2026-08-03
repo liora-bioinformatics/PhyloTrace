@@ -30,6 +30,7 @@ box::use(
       exportable_custom_fields,
       METADATA_FIXED_COLS
     ],
+  app / logic / db_events,
   app / logic / db_sources[SOURCE_COL],
   app / logic / field_labels[field_chips, field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
@@ -264,7 +265,7 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
-  custom_updated = shiny$reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   ui_mounted = shiny$reactive(0L)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
@@ -378,6 +379,7 @@ server <- function(
       path <- db_path()
       shiny$req(!is.null(path), !is.na(path))
 
+      db_events$depend(db_rev, "metadata", "custom_fields")
       md <- make_metadata_table(path)
       if (is.null(md) || !nrow(md)) {
         return(NULL)
@@ -417,11 +419,13 @@ server <- function(
     })
 
     isolates <- shiny$reactive({
+      db_events$depend(db_rev, "isolates")
       path <- db_path()
       if (is.null(path) || is.na(path)) character(0) else existing_strains(path)
     })
 
     optional_meta <- shiny$reactive({
+      db_events$depend(db_rev, "metadata")
       path <- db_path()
       if (is.null(path) || is.na(path)) {
         return(character(0))
@@ -431,7 +435,35 @@ server <- function(
 
     selected_isolates <- shiny$reactiveVal(NULL)
 
-    shiny$observeEvent(isolates(), selected_isolates(NULL), ignoreInit = TRUE)
+    # The isolate pool moved (typing, a removal, a merge). A narrowed export
+    # selection is reconciled rather than reset: NULL here means "export
+    # everything", so clearing it would silently widen the export instead of
+    # narrowing it, and the user would not necessarily notice before the file
+    # was written. Dropping to NULL is right only when nothing survives.
+    shiny$observeEvent(
+      isolates(),
+      {
+        live <- db_events$reconcile_names(
+          shiny$isolate(selected_isolates()),
+          isolates()
+        )
+        if (live$changed) {
+          selected_isolates(if (length(live$kept)) live$kept else NULL)
+          shiny$showNotification(
+            sprintf(
+              paste(
+                "%d selected isolate(s) are no longer in the database and",
+                "were removed from the export selection."
+              ),
+              length(live$dropped)
+            ),
+            type = "warning",
+            duration = 8
+          )
+        }
+      },
+      ignoreInit = TRUE
+    )
 
     resolved_isolates <- shiny$reactive({
       sel <- selected_isolates()
@@ -439,6 +471,7 @@ server <- function(
     })
 
     export_meta <- shiny$reactive({
+      db_events$depend(db_rev, "metadata")
       path <- db_path()
       shiny$req(path)
       iso <- isolates()
@@ -721,7 +754,7 @@ server <- function(
     })
 
     custom_choices <- shiny$reactive({
-      custom_updated()
+      db_events$depend(db_rev, "custom_fields")
       path <- db_path()
       if (is.null(path) || is.na(path)) {
         return(character(0))

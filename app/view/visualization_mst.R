@@ -46,6 +46,7 @@ box::use(
 )
 box::use(
   app / logic / database_functions[load_db_scheme_overview],
+  app / logic / db_events,
   app /
     logic /
     field_profile[
@@ -84,10 +85,10 @@ box::use(
     viz_helpers[
       apply_input_snapshot,
       collect_input_snapshot,
-      color_scales,
       field_select,
       layer_action_btn,
       reset_viz_colors,
+      scale_select,
       suitable_scale_categories,
       update_field_select,
       viz_color,
@@ -349,15 +350,7 @@ mst_controls <- function(ns, options_ui = NULL) {
               id = ns("mst_threshold_note"),
               class = "text-muted small mb-2"
             ),
-            shiny$div(
-              class = "viz-scale-select",
-              pickerInput(
-                ns("mst_cluster_col_scale"),
-                "color scale",
-                choices = color_scales,
-                selected = "viridis"
-              )
-            ),
+            scale_select(ns, "mst_cluster_col_scale", selected = "viridis"),
             pickerInput(ns("mst_cluster_type"), "Type", c("Area", "Skeleton")),
             shiny$div(
               id = ns("mst_cluster_width_wrap"),
@@ -483,6 +476,7 @@ ui <- function(id, generate_id, options_ui = NULL) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
@@ -612,6 +606,7 @@ server <- function(
 
     # The scheme's published complex-type distance, read once per database.
     scheme_threshold <- shiny$reactive({
+      db_events$depend(db_rev, "schema")
       path <- db_path()
       if (is.null(path) || !nzchar(path) || !file.exists(path)) {
         return(NULL)
@@ -923,15 +918,7 @@ server <- function(
           )
         },
         if (l$aesthetic %in% COLOR_AESTHETICS) {
-          shiny$div(
-            class = "viz-scale-select",
-            pickerInput(
-              ns("mst_layer_palette"),
-              "Color scale",
-              choices = color_scales[cats],
-              selected = l$palette
-            )
-          )
+          scale_select(ns, "mst_layer_palette", categories = cats, selected = l$palette)
         },
         footer = shiny$tagList(
           shiny$modalButton("Cancel"),

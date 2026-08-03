@@ -3,7 +3,8 @@
 # `analysis_id` and offers "Add Plot" (which hands off to Visualization).
 #
 # Data-driven like the item tier: the plot list comes from the database and is
-# refreshed on the shared `plots_changed` tick. A plot's item server is created
+# refreshed when the `analyses` revision advances (app/logic/db_events.R).
+# A plot's item server is created
 # exactly once (tracked in `instantiated`); deleted plots simply stop rendering.
 # Servers persist across database reloads and re-read `db_path()` reactively, so
 # reusing a container id for a different database is safe.
@@ -40,6 +41,7 @@ box::use(
   ],
   app / view / analysis_dashboard / item,
   app / logic / analysis_store,
+  app / logic / db_events,
   jsonlite[fromJSON],
 )
 
@@ -64,7 +66,7 @@ server <- function(
   id,
   analysis_id,
   db_path = shiny::reactive(NULL),
-  plots_changed = shiny::reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   on_add_plot = function(analysis_id) NULL,
   on_open_plot = function(plot_id) NULL,
   on_edit_settings = function(analysis_id) NULL,
@@ -75,12 +77,12 @@ server <- function(
 
     # This Analysis's row (for its name) and its plots, refreshed on any change.
     analysis_row <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$get_analysis(db_path(), analysis_id)
     })
 
     plots <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$list_plots(db_path(), analysis_id)
     })
 
@@ -90,7 +92,7 @@ server <- function(
     # built from a different set (changed restriction, or isolates added to the
     # database since) without each one re-querying.
     current_isolates <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       row <- analysis_row()
       restriction <- if (is.null(row)) {
         NULL
@@ -103,7 +105,7 @@ server <- function(
     # Isolates added to (or removed from) the database since this Analysis was
     # set up. Only meaningful once a universe was recorded.
     universe_drift <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       row <- analysis_row()
       recorded <- if (is.null(row)) {
         NULL
@@ -135,7 +137,7 @@ server <- function(
               id = paste0("box_", this_pid),
               plot_id = this_pid,
               db_path = db_path,
-              plots_changed = plots_changed,
+              db_rev = db_rev,
               on_open = on_open_plot,
               analysis_isolates = current_isolates,
               session_reset = session_reset
@@ -183,7 +185,7 @@ server <- function(
     observeEvent(input$confirm_delete_group, {
       removeModal()
       analysis_store$delete_analysis(db_path(), analysis_id)
-      plots_changed(plots_changed() + 1L)
+      db_events$bump(db_rev, "analyses")
     })
 
     output$group_card_layout <- renderUI({

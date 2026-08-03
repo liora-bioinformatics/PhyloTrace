@@ -52,6 +52,7 @@ box::use(
   app / logic / custom_fields[CUSTOM_TYPES],
   app / logic / database_functions[metadata_columns],
   app / logic / db_compat[check_import_compatibility],
+  app / logic / db_events,
   app / logic / db_export[available_result_tables],
   app /
     logic /
@@ -293,7 +294,7 @@ server <- function(
   id,
   db_path = reactive(NULL),
   session_reset = reactive(0L),
-  custom_updated = reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   # Advances every time this panel's markup is (re)inserted into the page. The
   # Database panel is rebuilt on every database load while this server keeps
   # running, and DOM state applied from here does not survive that rebuild —
@@ -533,6 +534,7 @@ server <- function(
     # Fetches list of currently staged sets
     staged_sets <- reactive({
       local_token()
+      db_events$depend(db_rev, "staged")
       list_imported_sets(db_path())
     })
 
@@ -541,6 +543,7 @@ server <- function(
     # Evaluates database compatibility between local and external sources
     compat <- reactive({
       local_token()
+      db_events$depend(db_rev, "schema", "isolates")
       local <- db_path()
       ext <- selected()
       req(!is.null(local), !is.na(local), !is.null(ext))
@@ -569,6 +572,7 @@ server <- function(
     # Returns list of existing local isolate names
     local_isolates <- reactive({
       local_token()
+      db_events$depend(db_rev, "isolates")
       existing_strains(db_path())
     })
 
@@ -632,11 +636,10 @@ server <- function(
     # What the peer defines, split into what can be merged and what clashes.
     # A `.db` merge only: a profile file has no custom-variable tables.
     custom_split <- reactive({
-      # Re-check whenever the Custom Variables panel changes a local
-      # definition — its type governs which of the peer's variables clash
-      # (see importable_custom_fields()), and that can flip while an external
-      # database is already selected.
-      custom_updated()
+      # Re-check whenever a local definition changes — its type governs which
+      # of the peer's variables clash (see importable_custom_fields()), and that
+      # can flip while an external database is already selected.
+      db_events$depend(db_rev, "custom_fields")
       staged <- prep()
       req(!is.null(staged), !typing())
       importable_custom_fields(db_path(), staged$path)
@@ -1114,7 +1117,12 @@ server <- function(
       seq_path(NULL)
       meta_path(NULL)
       local_token(local_token() + 1L)
-      imported(imported() + 1L)
+      # Staging adds a set alongside the local isolates without touching them,
+      # so the only reader affected is the Visualization module's staged-set
+      # picker, which follows this revision. Deliberately not `imported` - that
+      # raises main.R's "reload the database" prompt, which is the right
+      # response to a merge or a restore and far too heavy for this.
+      db_events$bump(db_rev, "staged")
 
       showNotification(
         tagList(
@@ -1143,7 +1151,7 @@ server <- function(
             {
               delete_imported_set(db_path(), this)
               local_token(local_token() + 1L)
-              imported(imported() + 1L)
+              db_events$bump(db_rev, "staged")
               showNotification(
                 "Staged typing results removed.",
                 type = "message",
@@ -1262,6 +1270,11 @@ server <- function(
       clear_ext_db()
 
       local_token(local_token() + 1L)
+      # A merge rewrites the database wholesale, so every domain moves. The
+      # `imported` signal stays as well: main.R turns it into the reload prompt,
+      # which is what re-runs the hash backfill and releases the modules that
+      # hold back automatic refresh while they carry unsaved edits.
+      db_events$bump_all(db_rev)
       imported(imported() + 1L)
 
       showNotification(
@@ -1372,6 +1385,8 @@ server <- function(
       }
 
       local_token(local_token() + 1L)
+      # A restore replaces the file; same reasoning as the merge above.
+      db_events$bump_all(db_rev)
       imported(imported() + 1L)
 
       showNotification(

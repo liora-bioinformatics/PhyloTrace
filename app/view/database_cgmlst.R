@@ -56,6 +56,7 @@ box::use(
       load_locus_alleles,
       locus_fasta
     ],
+  app / logic / db_events,
   app / logic / functions[render_info],
   app / logic / scheme_browser[get_species_details, get_species_img]
 )
@@ -232,14 +233,19 @@ ui <- function(id) {
 }
 
 # Handles server logic for displaying scheme overview and species metadata.
-scheme_info_server <- function(input, output, session, db_path) {
+# Both reads are scheme-level, so they follow the `schema` revision only: a
+# merge or a restore can replace the scheme, while adding or removing isolates
+# leaves it untouched.
+scheme_info_server <- function(input, output, session, db_path, db_rev) {
   scheme_overview <- reactive({
     req(db_path())
+    db_events$depend(db_rev, "schema")
     load_db_scheme_overview(db_path())
   })
 
   scheme_species <- reactive({
     req(db_path())
+    db_events$depend(db_rev, "schema")
     load_db_species(db_path())
   })
 
@@ -365,7 +371,14 @@ scheme_info_server <- function(input, output, session, db_path) {
 }
 
 # Handles server logic for browsing loci, inspecting sequence alleles, and exporting data.
-loci_info_server <- function(input, output, session, db_path, session_reset) {
+loci_info_server <- function(
+  input,
+  output,
+  session,
+  db_path,
+  session_reset,
+  db_rev
+) {
   ns <- session$ns
 
   # Sequence of the currently displayed allele, cached so the "Sequence" copy
@@ -379,8 +392,12 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
     runjs("$('.loci-table-body').removeClass('is-loaded');")
   })
 
+  # `isolates` as well as `schema`: the "Allele Count" column counts distinct
+  # alleles per locus off the `mlst` table, so typing and isolate removal move
+  # these numbers even though the scheme itself has not changed.
   loci_info <- reactive({
     req(db_path())
+    db_events$depend(db_rev, "schema", "isolates")
     load_loci_info(db_path())
   })
 
@@ -533,10 +550,11 @@ loci_info_server <- function(input, output, session, db_path, session_reset) {
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  session_reset = shiny::reactive(0L),
+  db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
-    scheme_info_server(input, output, session, db_path)
-    loci_info_server(input, output, session, db_path, session_reset)
+    scheme_info_server(input, output, session, db_path, db_rev)
+    loci_info_server(input, output, session, db_path, session_reset, db_rev)
   })
 }

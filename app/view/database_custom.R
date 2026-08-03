@@ -20,6 +20,7 @@ box::use(
 
 box::use(
   app / logic / custom_fields,
+  app / logic / db_events,
   app / logic / field_labels[field_labels_for],
   app / logic / pymlst[existing_strains],
 )
@@ -70,7 +71,7 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
-  custom_updated = shiny$reactiveVal(0L)
+  db_rev = db_events$new_bus()
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -83,24 +84,30 @@ server <- function(
     # The variable currently open in the edit dialog.
     editing_id <- shiny$reactiveVal(NULL)
 
-    # Bumped whenever this panel changes the store, to re-read it. `reload()`
-    # also signals the change outwards, so Browse Entries can pick the new
-    # columns up (see database.R's custom_updated).
+    # Bumped whenever the store this panel shows has to be re-read. `reload()`
+    # also announces the write outwards, so every other reader of custom
+    # variables (Browse Entries' column picker, the visualization engines'
+    # field lists, Export) picks the change up.
     reload_token <- shiny$reactiveVal(0L)
 
     reload <- function() {
       reload_token(shiny$isolate(reload_token()) + 1L)
-      custom_updated(shiny$isolate(custom_updated()) + 1L)
+      db_events$bump(db_rev, "custom_fields")
     }
 
-    # Browse Entries edits these same values now, so the signal runs both ways:
-    # re-read when someone else writes the store. Skipped while this panel has
-    # unsaved edits — a reload would wipe them — exactly as Browse Entries
-    # guards its own reload. The bump `reload()` raises is caught here too, but
-    # only ever costs one redundant re-read: reload_token does not feed back
-    # into custom_updated.
+    # The reverse direction: someone else wrote what this panel is showing.
+    # `custom_fields` because Browse Entries edits these same values, and
+    # `isolates` because the table has one row per isolate, so typing or a
+    # removal changes its shape.
+    #
+    # Skipped while this panel has unsaved edits - a re-read would wipe them.
+    # That is the deliberate exception to automatic refresh: the panel goes
+    # stale rather than discarding work the user has not saved, and catches up
+    # on the next save or discard. `reload()`'s own bump lands here too, but
+    # only ever costs one redundant re-read - reload_token does not feed back
+    # into db_rev.
     shiny$observeEvent(
-      custom_updated(),
+      db_events$revision(db_rev, "custom_fields", "isolates"),
       {
         if (!isTRUE(State$pending)) {
           reload_token(shiny$isolate(reload_token()) + 1L)
@@ -928,7 +935,10 @@ server <- function(
       )
     })
 
-    list(changed = shiny$reactive(custom_updated()))
+    # Nothing to return: this panel's writes are announced on the shared
+    # revision bus, which every other reader of custom variables follows
+    # directly. The `changed` reactive it used to hand back had no consumer.
+    invisible(NULL)
   })
 }
 

@@ -5,7 +5,7 @@
 
 box::use(
   ComplexHeatmap,
-  DBI[dbConnect, dbDisconnect, dbGetQuery, dbListTables],
+  DBI[dbDisconnect, dbGetQuery, dbListTables],
   ggplot2[
     .data,
     aes,
@@ -26,10 +26,10 @@ box::use(
   ],
   ggplotify[as.ggplot],
   grid[gpar, grid.grabExpr, unit],
-  RSQLite[SQLite],
   stats[dist, hclust, setNames],
 )
 box::use(
+  app / logic / db_connect[connect],
   app / logic / epi_plot[epi_fit_scale, epi_palette, epi_scale_choices],
 )
 
@@ -122,7 +122,7 @@ has_amr_data <- function(db_path) {
   if (!.usable_path(db_path)) {
     return(FALSE)
   }
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
   tables <- dbListTables(con)
   if (!"amr_results" %in% tables) {
@@ -138,7 +138,7 @@ load_amr_hits <- function(db_path) {
   if (!.usable_path(db_path)) {
     return(.EMPTY_HITS)
   }
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"amr_results" %in% dbListTables(con)) {
@@ -166,7 +166,7 @@ load_amr_sections <- function(db_path) {
   if (!.usable_path(db_path)) {
     return(.EMPTY_SECTIONS)
   }
-  con <- dbConnect(SQLite(), db_path)
+  con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
   if (!"amr_summary" %in% dbListTables(con)) {
