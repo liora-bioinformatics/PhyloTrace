@@ -148,11 +148,9 @@ test_that("new isolates are not stale for a plot with an explicit selection", {
   }))
 })
 
-test_that("staleness lights Generate up even when no selection changed", {
-  # The load-bearing case: drawn from "all isolates", so the sidebar selection
-  # and the applied one are both NULL and comparing them can never reveal that
-  # the database moved. Without plot_stale() Generate stays greyed out over a
-  # plot showing isolates that no longer exist.
+test_that("a database change alone does not arm Generate", {
+  # Reported but not acted on: the plot is still a valid answer for the
+  # isolates it was built from, so a redraw stays the user's call.
   with_tab(c("A", "B", "C"), quote({
     session$setInputs(generate = 1)
     session$flushReact()
@@ -161,9 +159,45 @@ test_that("staleness lights Generate up even when no selection changed", {
     pool_is(c("A", "B"))
     session$flushReact()
 
+    expect_true(isolate(plot_stale()))
+    expect_false(isolate(pending_changes()))
+  }))
+})
+
+test_that("confirming the isolate modal arms Generate", {
+  # Even when the confirmation collapses back to the same NULL the plot was
+  # generated from. Without this a plot drawn from the whole database could
+  # never be rebuilt after new isolates arrived: ticking them and confirming
+  # would compare equal to the applied selection and leave Generate disabled.
+  with_tab(c("A", "B"), quote({
+    session$setInputs(generate = 1)
+    session$flushReact()
+    expect_false(isolate(pending_changes()))
+
+    pool_is(c("A", "B", "typed_since"))
+    session$flushReact()
+    expect_false(isolate(pending_changes()))
+
+    selection_touched(TRUE)
+    session$flushReact()
     expect_null(isolate(selected_isolates()))
     expect_null(isolate(applied_selection()))
     expect_true(isolate(pending_changes()))
+  }))
+})
+
+test_that("Generate clears the confirmation flag", {
+  with_tab(c("A", "B"), quote({
+    session$setInputs(generate = 1)
+    session$flushReact()
+    selection_touched(TRUE)
+    session$flushReact()
+    expect_true(isolate(pending_changes()))
+
+    session$setInputs(generate = 2)
+    session$flushReact()
+    expect_false(isolate(selection_touched()))
+    expect_false(isolate(pending_changes()))
   }))
 })
 

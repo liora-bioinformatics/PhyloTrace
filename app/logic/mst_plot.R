@@ -28,18 +28,16 @@
 #    *zero* (log(1) = 0) — 60 of the 185 edges in the reference database — which
 #    is what piled unrelated isolates into one blob. See mst_edge_lengths().
 #
-# 3. Clusters are drawn as shaded regions or edge halos, never as node fill.
-#    Node fill
-#    belongs to the mapped variable, and when both wanted it the pie renderer
-#    silently won: switching clusters on with a mapping active changed nothing
-#    at all on the canvas.
+# 3. Clusters are drawn as a shaded region behind the graph, never as node fill.
+#    Node fill belongs to the mapped variable, and when both wanted it the pie
+#    renderer silently won: switching clusters on with a mapping active changed
+#    nothing at all on the canvas.
 #
 # 4. The layout is crossing-free by construction (equal-angle; see mst_layout).
 #    No force layout can promise that, and a crossing in a tree is a false
 #    relationship — two lineages appear to touch where no edge exists.
 
 box::use(
-  grDevices[col2rgb],
   htmlwidgets[JS],
   stats[median, quantile, setNames],
   utils[head],
@@ -471,6 +469,37 @@ mst_count_crossings <- function(coords, from, to) {
   count
 }
 
+#' Rotate a laid-out MST about its own centre.
+#'
+#' A rigid rotation of `mst_layout()`'s coordinates. It changes nothing about
+#' the tree — no length, no angle between siblings, no crossing, since a
+#' rotation is an isometry — only which compass direction the root faces on the
+#' canvas. That is worth controlling: the equal-angle layout's starting
+#' direction falls out of vertex index order, not out of anything about the
+#' data, and the default orientation routinely puts the branch a reader cares
+#' about under the legend or off at an awkward diagonal.
+#'
+#' @param coords Data frame from `mst_layout()`.
+#' @param degrees Numeric rotation, clockwise on screen, in degrees.
+#' @return `coords` with `x`/`y` rotated.
+#' @export
+mst_rotate <- function(coords, degrees = 0) {
+  theta <- ((as.numeric(degrees %||% 0) %% 360) * pi) / 180
+  if (!nrow(coords) || theta == 0) {
+    return(coords)
+  }
+  # Screen y grows downward, so the standard counter-clockwise rotation matrix
+  # reads as clockwise once it is drawn — which is the direction the slider is
+  # labelled for.
+  cs <- cos(theta)
+  sn <- sin(theta)
+  x <- coords$x
+  y <- coords$y
+  coords$x <- x * cs - y * sn
+  coords$y <- x * sn + y * cs
+  coords
+}
+
 # --- 3. Controls fitted to the data ------------------------------------------
 
 #' Control values the fit returns for a small MST — and so the values the
@@ -696,7 +725,7 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
   )
 }
 
-#' The shaded region behind each cluster, for the "Area" rendering.
+#' The shaded region behind each cluster.
 #'
 #' Follows the cluster's own subtree — a disc at each member node and a capsule
 #' along each edge *inside* the cluster — rather than enclosing it in a convex
@@ -766,6 +795,90 @@ mst_cluster_blobs <- function(
 # The isolates behind one node id. compute_mst() merges zero-distance isolates
 # and joins their names with a newline, so the id is also the membership list.
 .members <- function(ids) strsplit(as.character(ids), "\n", fixed = TRUE)
+
+#' Merge nodes no further apart than a threshold.
+#'
+#' The generalisation of what `compute_mst()` already does at distance zero:
+#' contract every branch at or below `threshold` and let the nodes it joined
+#' become one. This is GrapeTree's "collapse branches" and it is how a cgMLST
+#' MST of any size is made readable — published figures collapse at 50, 100 or
+#' 150 alleles depending on what the figure is about, and GrapeTree does it
+#' unasked past 20,000 nodes.
+#'
+#' It is a contraction of a tree, so the result is a tree: no branch can end up
+#' parallel to another, and no cycle can appear. The merged node's id is its
+#' members' names newline-joined, which is exactly the shape a zero-distance
+#' merge already produces — so counts, radii, pies, labels and tooltips all read
+#' it without knowing collapsing happened.
+#'
+#' @param ids Character vector of node ids.
+#' @param from,to,weight Edges of the MST.
+#' @param threshold Numeric allelic distance; below 1 collapses nothing.
+#' @return List with `ids`, `edges` (`from`, `to`, `weight`) and `merged`, the
+#'   number of branches contracted.
+#' @export
+mst_collapse <- function(ids, from, to, weight, threshold = 0) {
+  ids <- as.character(ids)
+  edges <- data.frame(
+    from = as.character(from),
+    to = as.character(to),
+    weight = as.numeric(weight),
+    stringsAsFactors = FALSE
+  )
+  none <- list(ids = ids, edges = edges, merged = 0L)
+
+  thr <- suppressWarnings(as.numeric(threshold %||% 0))
+  n <- length(ids)
+  if (!n || !nrow(edges) || !length(thr) || !is.finite(thr) || thr < 1) {
+    return(none)
+  }
+
+  ix <- setNames(seq_len(n), ids)
+  f <- unname(ix[edges$from])
+  t <- unname(ix[edges$to])
+  ok <- !is.na(f) & !is.na(t)
+  qual <- which(ok & edges$weight <= thr)
+  if (!length(qual)) {
+    return(none)
+  }
+
+  parent <- seq_len(n)
+  find <- function(i) {
+    while (parent[[i]] != i) {
+      i <- parent[[i]]
+    }
+    i
+  }
+  for (e in qual) {
+    ra <- find(f[[e]])
+    rb <- find(t[[e]])
+    if (ra != rb) {
+      parent[[ra]] <- rb
+    }
+  }
+  comp <- vapply(seq_len(n), find, integer(1))
+
+  # Members in the original node order, so a saved analysis reopens as the same
+  # picture rather than one whose node ids depend on hash iteration.
+  merged_id <- vapply(
+    split(ids, comp),
+    function(m) paste(m, collapse = "\n"),
+    character(1)
+  )
+  new_id <- unname(merged_id[as.character(comp)])
+
+  keep <- ok & comp[f] != comp[t]
+  list(
+    ids = unique(new_id),
+    edges = data.frame(
+      from = new_id[f[keep]],
+      to = new_id[t[keep]],
+      weight = edges$weight[keep],
+      stringsAsFactors = FALSE
+    ),
+    merged = length(qual)
+  )
+}
 
 #' Isolate counts per node id.
 #' @param ids Character vector of node ids.
@@ -1374,35 +1487,38 @@ MST_NODE_RENDERER <- JS(
 }"
 )
 
-# Mix a colour with white. The cluster regions are painted *opaque* in a tint
-# rather than translucent in the full colour, because a translucent region is
-# composited once per capsule and per disc it is built from — so every place two
-# of them overlapped came out darker than the rest of the same cluster, and the
-# region read as a pattern rather than as one area. One flat tint has no seams.
-.tint <- function(color, amount = 0.7) {
-  rgb <- col2rgb(color)[, 1]
-  mixed <- round(rgb + (255 - rgb) * amount)
-  sprintf("#%02X%02X%02X", mixed[[1]], mixed[[2]], mixed[[3]])
-}
-
 # The cluster regions, drawn under the graph in graph coordinates so they pan
 # and zoom with it. beforeDrawing rather than afterDrawing: a region drawn over
 # the nodes reads as a shape in front of them.
-.blob_renderer <- function(blobs, colors) {
+#
+# One region is one path: every member disc and every intra-cluster capsule is
+# added as a subpath and the whole thing filled in a single call. That is what
+# lets the colour be drawn at the user's own opacity instead of as an opaque
+# tint — a fill per shape composites each overlap again, so a translucent region
+# came out as a patchwork of darker patches wherever a disc met a capsule. The
+# subpaths are wound in one direction for the same reason: nonzero winding
+# subtracts an overlap traversed the other way, which would punch holes in it.
+.blob_renderer <- function(
+  blobs,
+  colors,
+  opacity = 0.35,
+  label_size = 16,
+  label_color = NULL
+) {
   spec <- vapply(
     names(blobs),
     function(nm) {
       b <- blobs[[nm]]
       col <- .lookup(colors, nm, MISSING_COLOR)
       sprintf(
-        '{"x":[%s],"y":[%s],"s":[%s],"r":%s,"f":"%s","c":"%s","l":"%s"}',
+        '{"x":[%s],"y":[%s],"s":[%s],"r":%s,"c":"%s","lc":"%s","l":%s}',
         paste(round(b$x, 1), collapse = ","),
         paste(round(b$y, 1), collapse = ","),
         paste(round(as.vector(t(b$seg)), 1), collapse = ","),
         round(b$radius, 1),
-        .tint(col),
         col,
-        nm
+        label_color %||% col,
+        .json_string(nm)
       )
     },
     character(1),
@@ -1411,25 +1527,33 @@ MST_NODE_RENDERER <- JS(
   JS(paste0(
     "function(ctx){var B=[",
     paste(spec, collapse = ","),
-    "];",
+    "];var A=",
+    round(.clamp(as.numeric(opacity %||% 0.35), 0, 1), 3),
+    ",LS=",
+    max(round(as.numeric(label_size %||% 16)), 0),
+    ";",
     "B.forEach(function(b){if(!b.x.length)return;",
-    "ctx.save();ctx.fillStyle=b.f;ctx.strokeStyle=b.f;",
-    "ctx.lineWidth=2*b.r;ctx.lineCap='round';ctx.lineJoin='round';",
-    # Capsules along the cluster's own edges, then a disc at every member: the
-    # union is the region, and painting it in one opaque tint means the overlaps
-    # do not show.
-    "for(var i=0;i+3<b.s.length;i+=4){ctx.beginPath();",
-    "ctx.moveTo(b.s[i],b.s[i+1]);ctx.lineTo(b.s[i+2],b.s[i+3]);ctx.stroke();}",
-    "for(var j=0;j<b.x.length;j++){ctx.beginPath();",
-    "ctx.arc(b.x[j],b.y[j],b.r,0,2*Math.PI);ctx.fill();}",
+    "ctx.save();ctx.globalAlpha=A;ctx.fillStyle=b.c;ctx.beginPath();",
+    # A capsule per intra-cluster edge, as a quad of half-width b.r about the
+    # segment; its round ends are the member discs added straight after.
+    "for(var i=0;i+3<b.s.length;i+=4){",
+    "var ax=b.s[i],ay=b.s[i+1],bx=b.s[i+2],by=b.s[i+3];",
+    "var dx=bx-ax,dy=by-ay,L=Math.sqrt(dx*dx+dy*dy);if(!L)continue;",
+    "var nx=-dy/L*b.r,ny=dx/L*b.r;",
+    "ctx.moveTo(ax-nx,ay-ny);ctx.lineTo(bx-nx,by-ny);",
+    "ctx.lineTo(bx+nx,by+ny);ctx.lineTo(ax+nx,ay+ny);ctx.closePath();}",
+    "for(var j=0;j<b.x.length;j++){ctx.moveTo(b.x[j]+b.r,b.y[j]);",
+    "ctx.arc(b.x[j],b.y[j],b.r,0,2*Math.PI);}",
+    "ctx.fill();ctx.globalAlpha=1;",
     # The name at the top of the region, so a reader does not have to hold the
-    # legend's colours in their head.
-    "var cx=0,ymin=b.y[0];",
+    # legend's colours in their head. Size 0 is how it is switched off.
+    "if(LS>0){var cx=0,ymin=b.y[0];",
     "for(var k=0;k<b.x.length;k++){cx+=b.x[k];",
     "if(b.y[k]<ymin)ymin=b.y[k];}",
-    "ctx.fillStyle=b.c;ctx.font='bold 13px sans-serif';",
+    "ctx.fillStyle=b.lc;ctx.font='bold '+LS+'px sans-serif';",
     "ctx.textAlign='center';ctx.textBaseline='bottom';",
-    "ctx.fillText(b.l,cx/b.x.length,ymin-b.r-3);ctx.restore();});}"
+    "ctx.fillText(b.l,cx/b.x.length,ymin-b.r-LS*0.35);}",
+    "ctx.restore();});}"
   ))
 }
 
@@ -1448,7 +1572,68 @@ MST_NODE_RENDERER <- JS(
 # legend is drawn the fit also gives up the strip the legend occupies, so the
 # two do not sit on top of each other. A resize is the one case where
 # re-framing is what the user meant.
-.drawn_js <- function(legend_spec = NULL) {
+#' One-line caption stating how branch length is to be read.
+#'
+#' A minimum spanning tree has no natural scale bar the way a phylogeny with a
+#' substitution rate does — the allelic distance is already printed on every
+#' branch — but *which* of `MST_LENGTH_MODES` decided how long to draw one is
+#' not otherwise visible anywhere on the canvas, and the three modes draw very
+#' different pictures from the same numbers: a reader who assumes proportional
+#' length while looking at a log-scaled tree will misjudge how related two
+#' clusters are. This is this medium's equivalent of a scale bar, in the spirit
+#' of the legend line a BioNumerics-style figure prints for its own convention
+#' ("thick/short = 1 locus different").
+#'
+#' @param mode One of `MST_LENGTH_MODES`.
+#' @param shorten Logical. Long branches are capped and dashed.
+#' @return A character string, never empty.
+#' @export
+mst_scale_caption <- function(mode, shorten = TRUE) {
+  base <- switch(
+    mode %||% "log",
+    real = "Branch length is proportional to allelic distance.",
+    uniform = "Branch lengths are not to scale; distances are on the labels.",
+    "Branch length is log-scaled, not proportional; distances are on the labels."
+  )
+  if (isTRUE(shorten) && !identical(mode, "uniform")) {
+    paste(base, sprintf(
+      "Branches over %sx the median are capped and dashed.",
+      MST_MAX_EDGE_MULT
+    ))
+  } else {
+    base
+  }
+}
+
+# The caption bar: a single line, centred at the foot of the canvas, sized to
+# its own text rather than to a column grid — the legend's per-key layout
+# would ellipsise a sentence meant to be read whole.
+.caption_js <- function(text, font_color, panel_color) {
+  if (!nzchar(text %||% "")) {
+    return("")
+  }
+  paste0(
+    "var pr=ctx.canvas.width/ctx.canvas.clientWidth;",
+    "ctx.save();ctx.setTransform(pr,0,0,pr,0,0);",
+    "var W=ctx.canvas.clientWidth,H=ctx.canvas.clientHeight;",
+    "var f=12;ctx.font=f+'px sans-serif';",
+    "var s=", .json_string(text), ";",
+    "var tw=ctx.measureText(s).width;",
+    "var pad=7,bw=Math.min(tw+2*pad,W-10),bh=f+2*pad;",
+    "var x0=(W-bw)/2,y0=H-bh-6;",
+    "ctx.globalAlpha=0.88;ctx.fillStyle='", panel_color, "';",
+    "ctx.fillRect(x0,y0,bw,bh);ctx.globalAlpha=1;",
+    "ctx.strokeStyle='rgba(0,0,0,0.18)';ctx.lineWidth=1;",
+    "ctx.strokeRect(x0+0.5,y0+0.5,bw,bh);",
+    "ctx.fillStyle='", font_color, "';ctx.textAlign='center';",
+    "ctx.textBaseline='middle';",
+    "ctx.fillText(s,x0+bw/2,y0+bh/2,bw-2*pad);",
+    "ctx.restore();"
+  )
+}
+
+.drawn_js <- function(legend_spec = NULL, caption = NULL, caption_fg = "#000000",
+                      caption_bg = "#ffffff") {
   legend <- if (is.null(legend_spec)) {
     ""
   } else {
@@ -1509,6 +1694,7 @@ MST_NODE_RENDERER <- JS(
   paste0(
     "function(ctx){",
     legend,
+    .caption_js(caption, caption_fg, caption_bg),
     "if(!this.__ptFitted){this.__ptFitted=true;",
     "this.fit({animation:false});",
     "var res=this.__ptReserve;",
@@ -1545,8 +1731,11 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
   )
 }
 
-# The per-node renderer payload, one JSON string per node.
-.node_spec <- function(slices, shapes, borders, label_colors, fills) {
+# The per-node renderer payload, one JSON string per node. `border` and `lc` are
+# one colour for the whole drawing — the outline follows the edge colour and the
+# caption the text colour — but they still travel per node, because vis.js hands
+# a custom renderer only the node's own fields.
+.node_spec <- function(slices, shapes, border, label_color, fills) {
   vapply(
     seq_along(shapes),
     function(i) {
@@ -1567,8 +1756,8 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
         '{"slices":%s,"shape":"%s","border":"%s","bw":1,"lc":"%s"}',
         body,
         shapes[[i]],
-        borders[[i]],
-        label_colors[[i]]
+        border,
+        label_color
       )
     },
     character(1),
@@ -1660,6 +1849,17 @@ mst_frames <- function(graph, metadata, opts) {
   data <- visNetwork$toVisNetworkData(graph)
   ids <- data$nodes$id
   edges <- data$edges
+
+  collapsed <- mst_collapse(
+    ids,
+    edges$from,
+    edges$to,
+    edges$weight,
+    opts$collapse_threshold %||% 0
+  )
+  ids <- collapsed$ids
+  edges <- collapsed$edges
+
   counts <- mst_node_sizes(ids)
   n <- length(ids)
 
@@ -1672,14 +1872,26 @@ mst_frames <- function(graph, metadata, opts) {
     isTRUE(opts$shorten_long)
   )
   coords <- mst_layout(edges$from, edges$to, lens$length, ids, counts)
+  coords <- mst_rotate(coords, opts$rotation)
 
+  # The size control is one slider that grows a second handle when node area
+  # encodes the duplicate count, so what arrives here is a vector of one or two.
+  # Reading it for what it is, rather than falling back to the fitted defaults,
+  # is what makes the slider do anything at all while "Scale by duplicates" is
+  # on.
+  sizes <- as.numeric(opts$node_size %||% MST_FIT_DEFAULTS$node_size)
+  sizes <- sizes[is.finite(sizes)]
+  if (!length(sizes)) {
+    sizes <- MST_FIT_DEFAULTS$node_size
+  }
   size_range <- if (isTRUE(opts$scale_nodes)) {
-    c(
-      opts$node_size_min %||% MST_FIT_DEFAULTS$node_size_min,
-      opts$node_size_max %||% MST_FIT_DEFAULTS$node_size_max
-    )
+    if (length(sizes) >= 2L) {
+      range(sizes)
+    } else {
+      c(MST_FIT_DEFAULTS$node_size_min, sizes[[1]])
+    }
   } else {
-    opts$node_size %||% MST_FIT_DEFAULTS$node_size
+    sizes[[length(sizes)]]
   }
   radii <- mst_node_radii(counts, size_range)
 
@@ -1702,17 +1914,18 @@ mst_frames <- function(graph, metadata, opts) {
         clusters$table$cluster,
         opts$cluster_col_scale %||% "viridis"
       )
-      if (!identical(opts$cluster_type, "Skeleton")) {
-        blobs <- mst_cluster_blobs(
-          coords,
-          clusters$node,
-          clusters$edge,
-          edges$from,
-          edges$to,
-          radii,
-          max(radii) * 0.45
-        )
-      }
+      blobs <- mst_cluster_blobs(
+        coords,
+        clusters$node,
+        clusters$edge,
+        edges$from,
+        edges$to,
+        radii,
+        # How far the region reaches past the nodes and branches it covers. One
+        # slider, because the old Area/Skeleton pair drew the same region and
+        # differed only in this.
+        opts$cluster_width %||% round(max(radii) * 0.45)
+      )
     }
   }
 
@@ -1725,27 +1938,24 @@ mst_frames <- function(graph, metadata, opts) {
   fills <- rep(node_color, n)
   slices <- rep(list(NULL), n)
   shapes <- rep(opts$shape %||% "dot", n)
-  borders <- rep(opts$node_border %||% "#000000", n)
-  label_colors <- rep(opts$node_font_color %||% "#000000", n)
+  # The outline follows the branch colour and the caption the text colour. Both
+  # used to be mappable channels and neither could be read at the size a node is
+  # drawn, so they are plain styling now — one colour for the whole drawing.
+  border_color <- opts$edge_color %||% "#000000"
+  label_color <- opts$node_font_color %||% "#000000"
   legend_layers <- list()
 
   for (l in layers) {
     ch <- .layer_channel(l, ids, metadata, node_color)
     title <- l$title %||% l$field
-    if (identical(l$aesthetic, "node_fill")) {
-      fills <- ch$node_color
-      slices <- ch$slices
-    } else if (identical(l$aesthetic, "node_border")) {
-      borders <- ch$node_color
-      title <- paste(title, "(border)")
-    } else if (identical(l$aesthetic, "label_color")) {
-      label_colors <- ch$node_color
-      title <- paste(title, "(label)")
-    } else if (identical(l$aesthetic, "node_shape")) {
+    if (identical(l$aesthetic, "node_shape")) {
       if (!is.null(ch$node_shape)) {
         shapes <- ch$node_shape
       }
       title <- paste(title, "(shape)")
+    } else {
+      fills <- ch$node_color
+      slices <- ch$slices
     }
     legend_layers <- c(
       legend_layers,
@@ -1766,9 +1976,8 @@ mst_frames <- function(graph, metadata, opts) {
     )
   }
 
-  # The custom renderer earns its keep as soon as anything is per-node: a pie, a
-  # border colour, a shape or a label colour. With no mapping the native shapes
-  # are cheaper and look the same.
+  # The custom renderer earns its keep as soon as anything is per-node: a pie or
+  # a shape. With no mapping the native shapes are cheaper and look the same.
   custom <- length(layers) > 0L
 
   nodes <- data.frame(
@@ -1794,15 +2003,21 @@ mst_frames <- function(graph, metadata, opts) {
     size = radii,
     shape = if (custom) "custom" else shapes,
     color.background = fills,
-    color.border = borders,
+    color.border = border_color,
     borderWidth = 1,
     font.size = opts$node_font_size %||% MST_FIT_DEFAULTS$node_font_size,
-    font.color = label_colors,
-    metadata = .node_spec(slices, shapes, borders, label_colors, fills),
+    font.color = label_color,
+    metadata = .node_spec(slices, shapes, border_color, label_color, fills),
     stringsAsFactors = FALSE
   )
 
   # -- edges
+  #
+  # The branch font travels per edge rather than in visEdges(). Both live in the
+  # widget's *options*, which the incremental (visNetworkProxy) path cannot
+  # touch — so a font size or colour set there changed nothing until the next
+  # full rebuild, and nothing rebuilds for a font. As a column it is data, and
+  # data is exactly what the proxy pushes.
   edges_out <- data.frame(
     from = edges$from,
     to = edges$to,
@@ -1815,40 +2030,13 @@ mst_frames <- function(graph, metadata, opts) {
     title = sprintf("%s allele differences", edges$weight),
     width = 1.6,
     color = opts$edge_color %||% "#000000",
+    font.size = opts$edge_font_size %||% MST_FIT_DEFAULTS$edge_font_size,
+    font.color = opts$edge_font_color %||% "#000000",
     # A capped branch is drawn dashed, so its length is visibly not a
     # measurement — the signal GrapeTree gives for a shortened branch.
     dashes = lens$shortened,
     stringsAsFactors = FALSE
   )
-  if (!is.null(clusters) && identical(opts$cluster_type, "Skeleton")) {
-    # One extra edge per intra-cluster link, thick and translucent, drawn
-    # *under* the thin black one. The old version emitted a halo for every
-    # edge, transparent where there was no cluster, which doubled the edge
-    # count for nothing.
-    inside <- which(!is.na(clusters$edge))
-    if (length(inside)) {
-      halo <- edges_out[inside, , drop = FALSE]
-      halo$label <- ""
-      halo$title <- NA_character_
-      halo$width <- opts$cluster_width %||% 24
-      halo$dashes <- FALSE
-      halo$color <- vapply(
-        clusters$edge[inside],
-        function(nm) {
-          sprintf(
-            "rgba(%s,0.55)",
-            paste(
-              col2rgb(.lookup(cluster_colors, nm, MISSING_COLOR)),
-              collapse = ","
-            )
-          )
-        },
-        character(1),
-        USE.NAMES = FALSE
-      )
-      edges_out <- rbind(halo, edges_out)
-    }
-  }
 
   list(
     nodes = nodes,
@@ -1866,7 +2054,8 @@ mst_frames <- function(graph, metadata, opts) {
       isTRUE(opts$scale_nodes) && max(counts) > 1L
     ),
     custom = custom,
-    length_mode = mode
+    length_mode = mode,
+    collapsed = collapsed$merged
   )
 }
 
@@ -1909,18 +2098,26 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
       # — 185 invisible bodies for this database's MST, all simulated on every
       # frame.
       smooth = FALSE,
-      font = list(
-        color = opts$edge_font_color %||% "#000000",
-        size = opts$edge_font_size %||% MST_FIT_DEFAULTS$edge_font_size,
-        strokeWidth = 4,
-        strokeColor = halo,
-        align = "middle"
-      )
+      # Size and colour are per edge (see mst_frames), so only the parts that
+      # cannot be: the halo, which follows the canvas background, and the
+      # placement.
+      font = list(strokeWidth = 4, strokeColor = halo, align = "middle")
     ) |>
     # Coordinates come from mst_layout(); there is nothing left to simulate.
     visNetwork$visPhysics(enabled = FALSE, stabilization = FALSE) |>
     visNetwork$visOptions(collapse = FALSE) |>
-    visNetwork$visInteraction(hover = TRUE, tooltipDelay = 200, zoomView = TRUE)
+    visNetwork$visInteraction(
+      hover = TRUE,
+      tooltipDelay = 200,
+      zoomView = TRUE,
+      # Dragging a node is the one interaction that can make this plot lie. The
+      # coordinates *are* the data — every branch is drawn at the length its
+      # allelic distance earned — so moving one silently breaks that, and the
+      # cluster regions cannot follow it in any case: they are painted from the
+      # coordinates R computed, baked into a canvas hook at build time. Panning
+      # and zooming stay; only moving a node is refused.
+      dragNodes = FALSE
+    )
 
   legend <- if (length(fr$legend) && !isFALSE(opts$show_legend)) {
     .legend_spec(
@@ -1931,13 +2128,35 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
       halo
     )
   }
+  # Shares the legend's own toggle: both are explanatory chrome over the graph
+  # rather than the graph itself, and a caption with no way to hide it would be
+  # exactly the kind of control nobody asked for.
+  caption <- if (!isFALSE(opts$show_legend)) {
+    mst_scale_caption(fr$length_mode, opts$shorten_long)
+  }
 
   events <- list(
-    afterDrawing = JS(.drawn_js(legend)),
+    afterDrawing = JS(.drawn_js(
+      legend,
+      caption,
+      opts$node_font_color %||% "#000000",
+      halo
+    )),
     resize = JS(MST_RESIZE_JS)
   )
   if (length(fr$blobs)) {
-    events$beforeDrawing <- .blob_renderer(fr$blobs, fr$cluster_colors)
+    events$beforeDrawing <- .blob_renderer(
+      fr$blobs,
+      fr$cluster_colors,
+      opts$cluster_opacity %||% 0.35,
+      opts$cluster_label_size %||% 16,
+      # NULL means every region's name in its own colour.
+      if (isTRUE(opts$cluster_label_tint)) {
+        NULL
+      } else {
+        opts$node_font_color %||% "#000000"
+      }
+    )
   }
   do.call(visNetwork$visEvents, c(list(graph = vis), events))
 }

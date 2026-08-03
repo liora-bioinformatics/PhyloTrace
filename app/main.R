@@ -400,7 +400,18 @@ server <- function(id) {
     visualization$server(
       "visualization",
       db_path = LANDING_PAGE_vals$db_path,
-      session_reset = data_reset,
+      # The true session_reset, NOT data_reset — the one module wired this way.
+      #
+      # Visualization tears its plot tabs down on this signal, and does so
+      # without removing their nav markup, because the only caller that raises
+      # it (input$reset) has already removed the whole Visualization panel.
+      # data_reset does not: "Reload Database" leaves every panel in place, so
+      # feeding it here destroyed each tab's server behind nav markup that
+      # stayed on screen — a blank plot tab that could not be used or closed.
+      #
+      # It no longer needs data_reset either. Everything it would have re-read
+      # on a reload it now re-reads through db_rev, which reload_data() bumps.
+      session_reset = session_reset,
       # Dashboard -> Visualization: "Add Plot" for an Analysis and "open a saved
       # plot" both route here and preselect / restore in the Save panel.
       launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,

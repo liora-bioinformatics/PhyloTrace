@@ -75,28 +75,35 @@ MAPPING_MEDIA <- list(
     }
   ),
   mst = list(
-    pool = c("node_fill", "node_shape", "node_border", "label_color"),
+    # Fill and shape only. Border colour and label colour were channels here
+    # too, and both were unreadable at the size an MST node is actually drawn:
+    # a 1 px outline and a caption cannot carry a 46-level variable, and both
+    # collapse a merged node's distribution to its majority value — which is
+    # exactly what the pie exists to avoid. The border now belongs to the edge
+    # colour and the label to the text colour, as plain styling.
+    pool = c("node_fill", "node_shape"),
     labels = c(
       node_fill = "Node fill",
-      node_shape = "Node shape",
-      node_border = "Node border",
-      label_color = "Node label colour"
+      node_shape = "Node shape"
     ),
-    color = c("node_fill", "node_border", "label_color"),
+    color = "node_fill",
     shape = "node_shape",
-    # Nothing stacks on a network node: it has one fill, one outline, one shape
-    # and one label. The MST's answer to "more variables than channels" is the
-    # tooltip, which carries every mapped field whether or not it has a channel.
+    # Nothing stacks on a network node: it has one fill and one shape. The MST's
+    # answer to "more variables than channels" is the tooltip, which carries
+    # every mapped field whether or not it has a channel.
     repeatable = character(0),
     caps = integer(0),
-    max_layers = 4L,
+    max_layers = 2L,
+    # Fill leads always, and a shape only ever takes the *second* variable: it
+    # is the one channel that cannot show a distribution, so nothing should be
+    # sent to it while the pie is free.
     order = function(profile) {
       if (isTRUE(profile$continuous)) {
-        c("node_fill", "node_border", "label_color")
+        "node_fill"
       } else if (profile$levels <= MAX_SHAPE_LEVELS) {
-        c("node_fill", "node_shape", "node_border", "label_color")
+        c("node_fill", "node_shape")
       } else {
-        c("node_fill", "node_border", "label_color")
+        "node_fill"
       }
     }
   )

@@ -567,7 +567,7 @@ server <- function(
             n
           )),
           tags$br(),
-          "The plot still shows them. Press Generate to rebuild it without them."
+          "The plot still shows them."
         ),
         type = "warning",
         duration = 12
@@ -632,10 +632,10 @@ server <- function(
       setdiff(live$isolate, snap$isolate)
     })
 
-    # Load-bearing for a plot drawn from "all isolates": there the sidebar
-    # selection and the applied one are both NULL, so comparing them can never
-    # reveal that the database moved, and Generate would stay greyed out over a
-    # plot showing isolates that no longer exist.
+    # Reported, not acted on. This drives the note under the isolate count and
+    # nothing else: a database change does not arm Generate, because the plot on
+    # screen is still a valid answer for the isolates it was built from and a
+    # redraw is the user's call. They make it by choosing isolates.
     plot_stale <- reactive({
       length(plot_missing()) > 0L || length(plot_new()) > 0L
     })
@@ -645,10 +645,26 @@ server <- function(
 
     # Whether the left sidebar holds anything not yet in the plot. Before the
     # first Generate everything is pending, so the button is live from the start.
+    # Set when the user confirms the isolate modal, cleared at Generate.
+    #
+    # Needed because confirming collapses "all of them" back to NULL (see
+    # do_sel_confirm). Without it a plot drawn from the whole database could
+    # never be rebuilt after new isolates arrived: the user would tick them,
+    # confirm, and the selection would collapse to the same NULL the plot was
+    # generated from, comparing equal and leaving Generate disabled over a plot
+    # that no longer covers the database.
+    selection_touched <- reactiveVal(FALSE)
+
+    # Deliberately does not include plot_stale(). A database change on its own
+    # is reported (see selection_info) but does not arm Generate: the plot on
+    # screen is still a valid answer for the isolates it was built from, and
+    # nothing should invite a redraw the user did not ask for. Choosing isolates
+    # is what arms it — including re-confirming "all", which after a typing run
+    # means a different set than it did at the last Generate.
     pending_changes <- reactive({
       !isTRUE(generated_once()) ||
         !identical(selected_isolates(), applied_selection()) ||
-        isTRUE(plot_stale())
+        isTRUE(selection_touched())
     })
 
     # Generate is the only way to apply them, so it is only offered when there is
@@ -757,7 +773,8 @@ server <- function(
       # Seeds the tick state from the last confirmed selection, so reopening
       # the modal shows what's actually applied instead of starting blank
       # every time (NULL means "everything", which ticks nothing).
-      sel_checked(isolate(selected_isolates()) %||% character(0))
+      seed <- isolate(selected_isolates()) %||% character(0)
+      sel_checked(seed)
       showModal(div(
         class = "selection-modal",
         modalDialog(
@@ -830,6 +847,19 @@ server <- function(
         "sel_date_range",
         condition = nzchar(field) && field %in% dates
       )
+      # Baking `seed` into this render's own `selection=` argument isn't
+      # reliable: reopening rebinds the DT widget, and its own initial
+      # "nothing selected yet" report can reach the server after this render
+      # already ran, wiping out `sel_checked` before the ticks ever show.
+      # Applying it out-of-band, once the widget has had time to settle,
+      # sidesteps that race.
+      if (length(seed)) {
+        shinyjs::delay(150, {
+          tbl <- isolate(sel_filtered())
+          rows <- match(seed, tbl$isolate)
+          selectRows(sel_proxy, rows[!is.na(rows)])
+        })
+      }
     }))
 
     output$sel_table <- renderDT(
@@ -997,6 +1027,10 @@ server <- function(
       # Collapse "all of them" back to NULL (no filter), so a window that
       # happens to cover the whole database costs the engines nothing.
       selected_isolates(if (setequal(picked, meta$isolate)) NULL else picked)
+      # The user has chosen a set. That, not a database change, is what arms
+      # Generate — and it has to be recorded separately because the collapse
+      # above can leave the value identical to the applied one.
+      selection_touched(TRUE)
       removeModal()
       TRUE
     }
@@ -1050,12 +1084,12 @@ server <- function(
           icon("triangle-exclamation"),
           " ",
           if (missing_n) {
-            sprintf("%d isolate(s) in this plot were removed. ", missing_n)
+            sprintf("%d isolate(s) in this plot were removed.", missing_n)
           },
+          if (missing_n && new_n) " ",
           if (new_n) {
-            sprintf("%d new isolate(s) are not in it. ", new_n)
-          },
-          "Press Generate to rebuild."
+            sprintf("%d new isolate(s) are not included.", new_n)
+          }
         )
       }
 
@@ -1184,6 +1218,7 @@ server <- function(
         applied_metadata(.subset_meta(isolate(viz_metadata()), sel))
         applied_metadata_all(.subset_meta(isolate(viz_metadata_all()), sel))
         generated_once(TRUE)
+        selection_touched(FALSE)
       },
       ignoreInit = TRUE,
       priority = 100
@@ -1638,6 +1673,7 @@ server <- function(
       applied_selection(NULL)
       applied_metadata(NULL)
       applied_metadata_all(NULL)
+      selection_touched(FALSE)
       generated_once(FALSE)
       pending(NULL)
       pending_save_target(NULL)

@@ -71,22 +71,23 @@ set_mst_inputs <- function(session, ...) {
     mst_edge_font_size = 14,
     mst_text_color = "#000000",
     mst_color_node = "#B2FACA",
-    mst_node_border = "#000000",
     mst_color_edge = "#000000",
     mst_edge_font_color = "#000000",
     mst_background_color = "#ffffff",
     mst_background_transparent = TRUE,
     mst_scale_nodes = TRUE,
-    mst_node_shape = "dot",
     mst_shadow = TRUE,
     mst_length_mode = "log",
     mst_edge_length_scale = 15,
     mst_shorten_long = TRUE,
     mst_aspect_ratio = 0.6,
+    mst_rotation = 0,
     mst_show_clusters = FALSE,
     mst_cluster_col_scale = "viridis",
-    mst_cluster_type = "Area",
-    mst_cluster_width = 24,
+    mst_cluster_width = 14,
+    mst_cluster_opacity = 35,
+    mst_cluster_label_size = 18,
+    mst_cluster_label_tint = TRUE,
     mst_show_legend = TRUE,
     mst_legend_ori = "left"
   )
@@ -281,6 +282,119 @@ test_that("a colour change is a data push, not a rebuilt network", {
     # into it.
     expect_identical(shell(), before)
     expect_identical(unique(drawn()$edges$color), "#FF0000")
+  })
+})
+
+test_that("the branch font is a data push too", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    before <- shell()
+
+    session$setInputs(mst_edge_font_size = 26, mst_edge_font_color = "#FF0000")
+    session$flushReact()
+    # It used to reach neither path: not the shell, which does not depend on it,
+    # and not the data, which did not carry it — so the control did nothing.
+    expect_identical(shell(), before)
+    expect_identical(unique(drawn()$edges$font.size), 26)
+    expect_identical(unique(drawn()$edges$font.color), "#FF0000")
+  })
+})
+
+test_that("the size slider reaches the radii while duplicates scale them", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session, mst_scale_nodes = TRUE)
+    generate(1L)
+    session$flushReact()
+
+    session$setInputs(mst_node_size = c(8, 44))
+    session$flushReact()
+    expect_equal(range(frames()$nodes$size), c(8, 44))
+  })
+})
+
+test_that("the label switch survives everything but a fresh Generate", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+
+    session$setInputs(mst_show_label = FALSE)
+    session$flushReact()
+    expect_false(fitted$mst_show_label)
+
+    # A refit used to ride along with the label source and take this with it.
+    session$setInputs(mst_node_label = "isolate")
+    session$flushReact()
+    expect_false(fitted$mst_show_label)
+  })
+})
+
+test_that("the label source offers Isolate and nothing else", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session)
+    session$flushReact()
+    # Any other column is a property of the isolates *inside* a node, and a node
+    # holds a set of them.
+    expect_identical(fitted$mst_node_label, "isolate")
+    expect_identical(
+      profiles()$field[profiles()$field == "isolate"],
+      "isolate"
+    )
+  })
+})
+
+test_that("a cluster region's look rebuilds the network", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session, mst_show_clusters = TRUE)
+    generate(1L)
+    session$flushReact()
+    before <- shell()
+
+    # The region is painted by a beforeDrawing hook, which is baked into the
+    # widget — the proxy cannot reach it, so every one of these has to rebuild.
+    for (change in list(
+      list(mst_cluster_width = 40),
+      list(mst_cluster_opacity = 90),
+      list(mst_cluster_label_size = 0),
+      list(mst_cluster_label_tint = FALSE)
+    )) {
+      previous <- shell()
+      do.call(session$setInputs, change)
+      session$flushReact()
+      expect_false(identical(shell(), previous))
+    }
+    expect_false(identical(shell(), before))
+  })
+})
+
+test_that("a legacy layer on a channel that is gone lands back on the fill", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session)
+    restore(list(.layers = list(list(
+      id = "L1", field = "host", title = "Host", aesthetic = "node_border",
+      palette = "viridis", n_levels = 2L, continuous = FALSE, auto = FALSE
+    ))))
+    session$flushReact()
+    expect_identical(length(mst_layers()), 1L)
+    expect_identical(mst_layers()[[1]]$aesthetic, "node_fill")
   })
 })
 

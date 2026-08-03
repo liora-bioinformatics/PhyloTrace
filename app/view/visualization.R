@@ -785,6 +785,15 @@ server <- function(
     # there is no nav to remove from — but the tab servers are still resident
     # here and have to be taken down explicitly. `tab_seq` deliberately keeps
     # counting, so ids from the old session are never handed out again.
+    #
+    # `remove_ui = FALSE` makes this a contract, not a preference: whatever is
+    # wired to `session_reset` MUST already have removed this module's panel.
+    # Raise it without doing so and every tab becomes a destroyed server behind
+    # nav markup that is still on screen — visibly a plot tab, but blank and
+    # inert, with even its close button dead. app/main.R's `data_reset` is the
+    # signal that looks right and is not: "Reload Database" raises it and leaves
+    # the panels standing. A reload needs no teardown here at all; the plots
+    # belong to the same database, and db_rev refreshes what they read.
     observeEvent(
       session_reset(),
       {

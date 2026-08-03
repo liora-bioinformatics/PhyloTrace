@@ -537,12 +537,15 @@ base_opts <- function(...) {
     show_label = TRUE, field = "isolate", label_lines = 3L,
     show_edge_label = TRUE, node_font_size = 13, edge_font_size = 14,
     node_font_color = "#000000", node_color = "#B2FACA",
-    node_border = "#000000", edge_color = "#000000",
+    edge_color = "#000000",
     edge_font_color = "#000000", background = "#ffffff", transparent = TRUE,
     scale_nodes = TRUE, node_size = c(10, 24), shape = "dot", shadow = TRUE,
-    length_mode = "log", spread = 15, shorten_long = TRUE, layers = list(),
+    length_mode = "log", spread = 15, shorten_long = TRUE, rotation = 0,
+    layers = list(),
     show_clusters = FALSE, cluster_threshold = 10,
-    cluster_col_scale = "viridis", cluster_type = "Area", cluster_width = 24,
+    cluster_col_scale = "viridis", cluster_width = 14,
+    cluster_opacity = 0.35, cluster_label_size = 18,
+    cluster_label_tint = TRUE,
     show_legend = TRUE, legend_ori = "left", canvas_px = c(900, 620)
   )
   overrides <- list(...)
@@ -589,7 +592,7 @@ test_that("a mapping turns the node into a pie of its members' values", {
   expect_true(length(fr$legend) > 1L)
 })
 
-test_that("a mapping onto shape or border leaves the fill alone", {
+test_that("a mapping onto shape leaves the fill alone", {
   opts <- base_opts(layers = list(list(
     field = "country", title = "Country", aesthetic = "node_shape",
     palette = NULL
@@ -618,20 +621,47 @@ test_that("clusters are drawn as regions, never as node fill", {
   ))))
 })
 
-test_that("the skeleton adds one halo per intra-cluster edge and no more", {
+test_that("clustering never adds edges to the drawing", {
   plain <- mst_plot$mst_frames(demo_graph(), demo_meta(), base_opts())
-  skel <- mst_plot$mst_frames(
+  clustered <- mst_plot$mst_frames(
     demo_graph(), demo_meta(),
-    base_opts(show_clusters = TRUE, cluster_threshold = 5,
-              cluster_type = "Skeleton")
+    base_opts(show_clusters = TRUE, cluster_threshold = 5)
   )
-  inside <- sum(!is.na(skel$clusters$edge))
-  expect_identical(nrow(skel$edges), nrow(plain$edges) + inside)
-  # The old version emitted a transparent halo for *every* edge, which doubled
-  # the edge count for nothing.
-  expect_true(inside < nrow(plain$edges))
-  expect_identical(length(skel$blobs), 0L)
-  expect_true(all(skel$edges$width[seq_len(inside)] > 2))
+  # The region is painted by a hook, not by a second, thicker copy of every
+  # intra-cluster edge — which is what the old "Skeleton" rendering did.
+  expect_identical(nrow(clustered$edges), nrow(plain$edges))
+})
+
+test_that("the region width is the control, not the node radius", {
+  narrow <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 5, cluster_width = 4)
+  )
+  wide <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 5, cluster_width = 40)
+  )
+  expect_equal(
+    wide$blobs[[1]]$radius - narrow$blobs[[1]]$radius,
+    36
+  )
+})
+
+test_that("the region is one path at the requested opacity", {
+  opts <- base_opts(show_clusters = TRUE, cluster_threshold = 5,
+                    cluster_opacity = 0.5, cluster_label_size = 22)
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  hook <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts, fr
+  )$x$events$beforeDrawing
+  expect_true(grepl("var A=0.5", hook, fixed = TRUE))
+  expect_true(grepl("LS=22", hook, fixed = TRUE))
+  # One beginPath and one fill per region: a fill per disc and capsule is what
+  # made a translucent region composite into a patchwork.
+  expect_identical(
+    lengths(regmatches(hook, gregexpr("ctx.fill()", hook, fixed = TRUE))),
+    1L
+  )
 })
 
 test_that("the widget is built without physics and with the layout baked in", {
@@ -647,6 +677,39 @@ test_that("the widget is built without physics and with the layout baked in", {
   # Nothing is mapped and nothing is clustered, so there is nothing to key: an
   # empty legend panel over the drawing would be furniture.
   expect_false(grepl("L.items", widget$x$events$afterDrawing, fixed = TRUE))
+})
+
+test_that("the branch font travels as edge data, not as a widget option", {
+  # In the widget's options it was unreachable: the incremental update path
+  # pushes node and edge tables and nothing else, so a font size or colour set
+  # there changed nothing at all until the next full rebuild.
+  fr <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(edge_font_size = 27, edge_font_color = "#FF0000")
+  )
+  expect_identical(unique(fr$edges$font.size), 27)
+  expect_identical(unique(fr$edges$font.color), "#FF0000")
+})
+
+test_that("the size slider drives the radii while duplicates scale them", {
+  small <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(scale_nodes = TRUE, node_size = c(6, 12))
+  )
+  large <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(scale_nodes = TRUE, node_size = c(20, 50))
+  )
+  # The builder used to fall back to the fitted defaults here, so both handles
+  # of the slider did nothing whenever scaling was on.
+  expect_equal(range(small$nodes$size), c(6, 12))
+  expect_equal(range(large$nodes$size), c(20, 50))
+  # One handle, one radius.
+  fixed <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(scale_nodes = FALSE, node_size = 31)
+  )
+  expect_identical(unique(fixed$nodes$size), 31)
 })
 
 test_that("a keyed drawing carries its legend into the draw hook", {
