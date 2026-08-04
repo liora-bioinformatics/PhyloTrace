@@ -1269,32 +1269,9 @@ square_panel_ratio <- function(binned, mode = "stacked") {
 
 # --- Export Utilities --------------------------------------------------------
 
-#' Save Epidemiological Curve Plot to Disk
-#'
-#' @param plot ggplot2 object to export.
-#' @param file Output destination file path.
-#' @param filetype Format extension string (e.g. "png", "pdf").
-#' @param aspect_ratio Numeric plot aspect multiplier (height = width * aspect_ratio).
-#' @param dpi Resolution in dots per inch.
-#' @export
-save_epi_plot <- function(
-  plot,
-  file,
-  filetype = "png",
-  aspect_ratio = 0.55,
-  dpi = 192
-) {
-  width <- 12
-  ggsave(
-    filename = file,
-    plot = plot,
-    device = filetype,
-    width = width,
-    height = width * aspect_ratio,
-    dpi = dpi,
-    limitsize = FALSE
-  )
-}
+# File export goes through app/logic/viz_export.R's save_plot_export(), which
+# owns the device settings for every plot type; what stays here is the on-screen
+# render below, which is sized in pixels rather than in physical units.
 
 #' Render Epi Curve PNG Buffer for Display
 #'

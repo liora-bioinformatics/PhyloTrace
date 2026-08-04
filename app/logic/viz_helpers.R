@@ -6,9 +6,7 @@
 box::use(
   shiny[
     div,
-    actionButton,
     icon,
-    hr,
     tags,
     HTML,
     singleton,
@@ -17,7 +15,7 @@ box::use(
     updateNumericInput,
     updateTextInput,
   ],
-  bslib[nav_panel, update_switch],
+  bslib[update_switch],
   RColorBrewer[brewer.pal, brewer.pal.info],
   shinyWidgets[
     colorPickr,
@@ -378,31 +376,6 @@ scale_select <- function(ns, id, categories = names(color_scales), selected = NU
       # of expanding whatever small container (often a modal) it opens in.
       options = list(container = "body"),
       width = "100%"
-    )
-  )
-}
-
-#' Shared Visualization Export Panel UI
-#'
-#' Renders a standard plot export tab panel containing format selection and download trigger.
-#'
-#' @param ns Function. Module namespace function (`session$ns`).
-#' @param prefix Character. ID prefix unique to the calling submodule.
-#' @param formats Character vector. Allowed export file formats (e.g., png, pdf, svg).
-#' @return bslib `nav_panel` UI element.
-#' @export
-export_panel <- function(ns, prefix, formats) {
-  nav_panel(
-    "Export",
-    icon = icon("download"),
-    div(
-      class = "viz-export",
-      pickerInput(ns(paste0(prefix, "_filetype")), "File format", formats),
-      actionButton(
-        ns(paste0(prefix, "_download")),
-        "Save plot",
-        icon = icon("download")
-      )
     )
   )
 }

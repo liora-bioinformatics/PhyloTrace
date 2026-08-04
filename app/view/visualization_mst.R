@@ -59,7 +59,6 @@ box::use(
   app /
     logic /
     mapping_engine[
-      COLOR_AESTHETICS,
       aesthetic_block_reason,
       aesthetic_labels,
       assign_mapping_layer,
@@ -72,6 +71,7 @@ box::use(
     mst_plot[
       MST_FIT_DEFAULTS,
       MST_LENGTH_MODES,
+      MST_MAX_EDGE_MULT,
       build_mst_visnetwork,
       mst_auto_layout,
       mst_frames,
@@ -97,7 +97,7 @@ box::use(
 # --- Variable mapping layers -------------------------------------------------
 
 # The medium this engine maps onto, in app/logic/mapping_engine.R's terms: node
-# fill and node shape.
+# fill alone.
 MEDIUM <- "mst"
 
 # Canonical shape of one mapping layer. The engine fills these in; the
@@ -183,27 +183,108 @@ MIRRORED_IDS <- c(
 mst_controls <- function(ns, options_ui = NULL) {
   shiny$tagList(
     navset_tab(
-      # Labels -----------------------------------------------------------------
-      nav_panel(
-        "Labels",
-        icon = shiny$icon("tag"),
-        accordion(
-          open = "Isolate Labels",
-          accordion_panel(
-            "Isolate Labels",
-            icon = shiny$icon("tag"),
-            input_switch(
-              ns("mst_show_label"),
-              "Show node labels",
-              FITTED_DEFAULTS$mst_show_label
+      if (!is.null(options_ui)) {
+        nav_panel(
+          "Options",
+          icon = shiny$icon("gear"),
+          options_ui,
+          accordion(
+            open = "clustering",
+            accordion_panel(
+              "Clustering",
+              icon = shiny$icon("tag"),
+              input_switch(ns("mst_show_clusters"), "Show clusters", TRUE),
+              shiny$numericInput(
+                ns("mst_cluster_threshold"),
+                "Threshold (allelic distance)",
+                value = THRESHOLD_PLACEHOLDER,
+                min = 1,
+                max = 10000
+              ),
+              shiny$div(
+                id = ns("mst_threshold_note"),
+                class = "text-muted small mb-2"
+              ),
+              scale_select(ns, "mst_cluster_col_scale", selected = "turbo"),
             ),
-            # Isolate only. Every other column is a property of the *isolates*
-            # inside a node, and a node holds a set of them — so any other
-            # source labels a merged node with a list of values it has to
-            # truncate, which is what the mapped fill and the tooltip already
-            # show properly. The picker stays so the label's source is stated
-            # rather than implied.
-            field_select(ns, "mst_node_label", "Label source"),
+            accordion_panel(
+              "Cluster Options",
+              icon = shiny$icon("sliders"),
+              shiny$sliderInput(
+                ns("mst_cluster_width"),
+                "Width",
+                0,
+                60,
+                20,
+                ticks = FALSE
+              ),
+              shiny$sliderInput(
+                ns("mst_cluster_opacity"),
+                "Opacity (%)",
+                5,
+                100,
+                66,
+                ticks = FALSE
+              ),
+              shiny$sliderInput(
+                ns("mst_cluster_label_size"),
+                "Label size (0 = off)",
+                0,
+                48,
+                18,
+                ticks = FALSE
+              ),
+              input_switch(
+                ns("mst_cluster_label_tint"),
+                "Label Colors",
+                FALSE
+              )
+            ),
+            accordion_panel(
+              "Collapsing",
+              icon = shiny$icon("arrows-to-dot"),
+              shiny$numericInput(
+                ns("mst_collapse_threshold"),
+                "Collapse branches ≤ (allelic distance)",
+                value = 0,
+                min = 0,
+                max = 10000
+              ),
+              shiny$div(
+                id = ns("mst_collapse_note"),
+                class = "text-muted small mb-2"
+              )
+            )
+          )
+        )
+      },
+      # Nodes -----------------------------------------------------------------
+      nav_panel(
+        "Nodes",
+        icon = shiny$icon("circle"),
+        accordion(
+          open = "Labels",
+          accordion_panel(
+            "Labels",
+            icon = shiny$icon("tag"),
+            tooltip(
+              input_switch(
+                ns("mst_show_label"),
+                "Show node labels",
+                FITTED_DEFAULTS$mst_show_label
+              ),
+              paste(
+                "A node holding several identical isolates lists the first few",
+                "and counts the rest. Hover any node for all of them."
+              )
+            ),
+            field_select(
+              ns,
+              "mst_node_label",
+              "Label source",
+              extra = c(Isolate = "isolate"),
+              selected = "isolate"
+            ),
             shiny$sliderInput(
               ns("mst_node_label_fontsize"),
               "Font size",
@@ -211,15 +292,86 @@ mst_controls <- function(ns, options_ui = NULL) {
               30,
               FITTED_DEFAULTS$mst_node_label_fontsize,
               ticks = FALSE
-            ),
-            shiny$div(
-              class = "text-muted small",
-              "A node holding several identical isolates lists the first few and",
-              "counts the rest. Hover any node for all of them."
             )
           ),
           accordion_panel(
-            "Branch Labels",
+            "Size",
+            icon = shiny$icon("arrows-up-down"),
+            tooltip(
+              input_switch(ns("mst_scale_nodes"), "Scale by duplicates", TRUE),
+              "Node area is proportional to the number of isolates it holds."
+            ),
+            shiny$uiOutput(ns("mst_node_size_ui"))
+          ),
+          accordion_panel(
+            "Shadow",
+            icon = shiny$icon("circle-dot"),
+            input_switch(ns("mst_shadow"), "Show shadow", TRUE)
+          )
+        )
+      ),
+      # Edges -----------------------------------------------------------------
+      nav_panel(
+        "Edges",
+        icon = shiny$icon("grip-lines-vertical"),
+        accordion(
+          open = c("Length"),
+          accordion_panel(
+            "Length",
+            icon = shiny$icon("grip-lines"),
+            # Edge length is a named transform, not a multiplier on an unnamed
+            # one. See mst_plot$MST_LENGTH_MODES for why these three.
+            pickerInput(
+              ns("mst_length_mode"),
+              "Length",
+              choices = MST_LENGTH_MODES,
+              selected = FITTED_DEFAULTS$mst_length_mode
+            ),
+            shiny$sliderInput(
+              ns("mst_edge_length_scale"),
+              "Spread",
+              3,
+              60,
+              MST_FIT_DEFAULTS$spread,
+              ticks = FALSE
+            ),
+            tooltip(
+              shiny$div(
+                id = ns("mst_shorten_wrap"),
+                input_switch(
+                  ns("mst_shorten_long"),
+                  "Shorten long branches",
+                  TRUE
+                )
+              ),
+              paste(
+                "Applies only while branch length carries the allelic distance.",
+                "With equal lengths there is nothing to shorten."
+              )
+            ),
+            tooltip(
+              shiny$div(
+                id = ns("mst_cap_mult_wrap"),
+                class = "viz-slider-row",
+                shiny$sliderInput(
+                  ns("mst_cap_mult"),
+                  "Cap at (x median)",
+                  2,
+                  20,
+                  MST_MAX_EDGE_MULT,
+                  step = 1,
+                  ticks = FALSE
+                )
+              ),
+              paste(
+                "A branch longer than this multiple of the median is capped",
+                "and dashed rather than drawn to scale; its distance stays on",
+                "the label."
+              )
+            )
+          ),
+          accordion_panel(
+            "Labels",
             icon = shiny$icon("code-branch"),
             input_switch(
               ns("mst_show_edge_label"),
@@ -241,22 +393,22 @@ mst_controls <- function(ns, options_ui = NULL) {
       nav_panel(
         "Mapping",
         icon = shiny$icon("palette"),
-        # One picker over the *variables*, not one panel per aesthetic. Picking a
-        # variable adds a layer and app/logic/mapping_engine.R decides which
-        # channel and palette it gets, from the variable's own profile and what
-        # the other layers already hold — the same arrangement as the Tree, over
-        # this medium's four channels.
-        field_select(ns, "mst_layer_add", "Map a variable"),
-        shiny$uiOutput(ns("mst_layers_ui")),
-        shiny$div(
-          class = "text-muted small mt-2",
-          "A node can stand for several identical isolates. Fill shows every",
-          "value they carry, as a pie; shape shows the commonest."
-        )
+        # One picker, the same arrangement as the Tree, though the MST has only
+        # one channel to give a variable: node fill. Picking a variable adds a
+        # layer and app/logic/mapping_engine.R decides its palette, from the
+        # variable's own profile.
+        tooltip(
+          field_select(ns, "mst_layer_add", "Map a variable"),
+          paste(
+            "A node can stand for several identical isolates; fill shows",
+            "every value they carry, as a pie."
+          )
+        ),
+        shiny$uiOutput(ns("mst_layers_ui"))
       ),
       # colors ----------------------------------------------------------------
       nav_panel(
-        "colors",
+        "Colors",
         icon = shiny$icon("fill-drip"),
         shiny$div(
           class = "viz-color-grid",
@@ -275,181 +427,23 @@ mst_controls <- function(ns, options_ui = NULL) {
           )
         )
       ),
-      # Sizing -----------------------------------------------------------------
-      nav_panel(
-        "Sizing",
-        icon = shiny$icon("up-down"),
-        accordion(
-          open = "Nodes",
-          accordion_panel(
-            "Nodes",
-            icon = shiny$icon("circle"),
-            input_switch(ns("mst_scale_nodes"), "Scale by duplicates", TRUE),
-            # One slider that grows a second handle when the size means two
-            # things (smallest and largest node) rather than one. Rendered from
-            # the server because a slider's handle count is fixed when it is
-            # created and cannot be updated.
-            shiny$uiOutput(ns("mst_node_size_ui")),
-            shiny$div(
-              class = "text-muted small",
-              "Node area is proportional to the number of isolates it holds."
-            )
-          ),
-          accordion_panel(
-            "Edges",
-            icon = shiny$icon("grip-lines"),
-            # Edge length is a named transform, not a multiplier on an unnamed
-            # one. See mst_plot$MST_LENGTH_MODES for why these three.
-            pickerInput(
-              ns("mst_length_mode"),
-              "Length",
-              choices = MST_LENGTH_MODES,
-              selected = FITTED_DEFAULTS$mst_length_mode
-            ),
-            shiny$sliderInput(
-              ns("mst_edge_length_scale"),
-              "Spread",
-              3,
-              60,
-              MST_FIT_DEFAULTS$spread,
-              ticks = FALSE
-            ),
-            # The cap only means something while length carries distance. Under
-            # "Equal length" every branch is already the same, so the control is
-            # disabled from the server and says so rather than sitting there
-            # doing nothing.
-            tooltip(
-              shiny$div(
-                id = ns("mst_shorten_wrap"),
-                input_switch(
-                  ns("mst_shorten_long"),
-                  "Shorten long branches",
-                  TRUE
-                )
-              ),
-              paste(
-                "Applies only while branch length carries the allelic distance.",
-                "With equal lengths there is nothing to shorten."
-              )
-            ),
-            shiny$div(
-              class = "text-muted small",
-              "A branch too long to draw to scale is capped and dashed; its",
-              "distance stays on the label."
-            )
-          )
-        )
-      ),
       # Layout -----------------------------------------------------------------
       nav_panel(
         "Layout",
         icon = shiny$icon("sliders"),
+        open = c("Orientation", "Legend", "Caption"),
         accordion(
-          open = "Clustering",
           accordion_panel(
-            "Dimensions",
-            icon = shiny$icon("up-right-and-down-left-from-center"),
-            shiny$sliderInput(
-              ns("mst_aspect_ratio"),
-              "Aspect ratio",
-              0.5,
-              2,
-              0.6,
-              step = 0.1,
-              ticks = FALSE
-            ),
+            "Orientation",
+            icon = shiny$icon("compass"),
             shiny$sliderInput(
               ns("mst_rotation"),
-              "Rotation (°)",
-              0,
-              360,
+              "Rotation",
+              -180,
+              180,
               0,
               step = 5,
               ticks = FALSE
-            )
-          ),
-          accordion_panel(
-            "Nodes",
-            icon = shiny$icon("circle"),
-            # Shape is always the plain dot now: the picker that let it be
-            # something else drew every node the same regardless — a shape only
-            # ever differs per node when a mapping drives it (mst_layers, the
-            # node_shape aesthetic), and that path does not go through this
-            # control at all.
-            input_switch(ns("mst_shadow"), "Show shadow", TRUE)
-          ),
-          accordion_panel(
-            "Collapsing",
-            icon = shiny$icon("compress"),
-            shiny$numericInput(
-              ns("mst_collapse_threshold"),
-              "Collapse branches ≤ (allelic distance)",
-              value = 0,
-              min = 0,
-              max = 10000
-            ),
-            shiny$div(
-              id = ns("mst_collapse_note"),
-              class = "text-muted small mb-2"
-            ),
-            shiny$div(
-              class = "text-muted small",
-              "Merges nodes no further apart than this into one, the same way",
-              "isolates with identical profiles already merge at zero. GrapeTree",
-              "and comparable tools collapse in this range to keep a large tree",
-              "readable — published figures use anywhere from 50 to 150",
-              "alleles depending on the question; 0 collapses nothing."
-            )
-          ),
-          accordion_panel(
-            "Clustering",
-            icon = shiny$icon("circle-nodes"),
-            input_switch(ns("mst_show_clusters"), "Show clusters", FALSE),
-            shiny$numericInput(
-              ns("mst_cluster_threshold"),
-              "Threshold (allelic distance)",
-              value = THRESHOLD_PLACEHOLDER,
-              min = 1,
-              max = 10000
-            ),
-            shiny$div(
-              id = ns("mst_threshold_note"),
-              class = "text-muted small mb-2"
-            ),
-            scale_select(ns, "mst_cluster_col_scale", selected = "viridis"),
-            # One region rendering, two sliders. "Area" and "Skeleton" drew the
-            # same shape and differed only in how far it reached past the nodes
-            # and branches — which is a width, not a type.
-            shiny$sliderInput(
-              ns("mst_cluster_width"),
-              "Region width",
-              0,
-              60,
-              14,
-              ticks = FALSE
-            ),
-            shiny$sliderInput(
-              ns("mst_cluster_opacity"),
-              "Region opacity (%)",
-              5,
-              100,
-              35,
-              ticks = FALSE
-            ),
-            # Size 0 is how the in-plot annotation is switched off, so the
-            # question "labelled at all?" and "how large?" stay one control.
-            shiny$sliderInput(
-              ns("mst_cluster_label_size"),
-              "Label size (0 = off)",
-              0,
-              48,
-              18,
-              ticks = FALSE
-            ),
-            input_switch(
-              ns("mst_cluster_label_tint"),
-              "Label in the cluster's colour",
-              TRUE
             )
           ),
           accordion_panel(
@@ -460,26 +454,19 @@ mst_controls <- function(ns, options_ui = NULL) {
               ns("mst_legend_ori"),
               "Position",
               c(Left = "left", Right = "right")
-            ),
-            # No font-size or key-size sliders. The legend's arrangement is
-            # solved from its own contents against the canvas
-            # (mst_plot$mst_legend_layout): the size that suits four keys
-            # overflows at forty-six, so it was never a choice anyone could make
-            # correctly.
-            shiny$div(
-              class = "text-muted small",
-              "Sized and arranged automatically from the number of keys."
+            )
+          ),
+          accordion_panel(
+            "Caption",
+            icon = shiny$icon("closed-captioning"),
+            input_switch(
+              ns("mst_show_scale_caption"),
+              "Show caption",
+              TRUE
             )
           )
         )
-      ),
-      if (!is.null(options_ui)) {
-        nav_panel(
-          "Options",
-          icon = shiny$icon("gear"),
-          options_ui
-        )
-      }
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -641,6 +628,26 @@ server <- function(
       field_profiles() %||% field_profiles_of(meta)
     })
 
+    # A profile frame fit to label the node label source itself picker.
+    #
+    # `field_profiles()` marks a column `groupable` only while it partitions
+    # isolates into more than one bucket, which `isolate` never does — every
+    # row is its own value. That is the right rule for a *mapping* (fill has
+    # nothing to show for a variable that cannot group), and the wrong one
+    # for a *label*: any column can caption a node, grouping or not, and
+    # Isolate is the one column that has to stay pickable. update_field_select()
+    # disables whatever `!groupable` names, so a copy with every row forced
+    # groupable is what keeps the label picker from greying out its own
+    # default.
+    label_profile <- function() {
+      prof <- profiles()
+      if (is.null(prof) || !nrow(prof)) {
+        return(NULL)
+      }
+      prof$groupable <- TRUE
+      prof
+    }
+
     # mst_node_label's and mst_layer_add's *choices* are swapped out for the
     # loaded database's actual metadata columns — the UI-declared choices are
     # placeholders shown before any data is loaded. shinyjs::reset() only knows
@@ -648,21 +655,33 @@ server <- function(
     # those placeholders were current); it never restores `choices`, so after
     # Generate has swapped them out that captured value usually is not among the
     # select's current options any more, leaving the control visibly blank.
-    populate_metadata_selects <- function() {
+    # force_default = TRUE (Reset settings) always jumps to Isolate;
+    # force_default = FALSE (Generate, a fresh database) keeps a still-valid
+    # selection, so re-Generating does not clobber a deliberate choice.
+    populate_metadata_selects <- function(force_default = FALSE) {
       prof <- profiles()
+      label_prof <- label_profile()
       if (is.null(prof) || !nrow(prof)) {
         return(invisible(NULL))
       }
 
+      label_choice <- if (
+        !force_default && isTRUE(input$mst_node_label %in% prof$field)
+      ) {
+        input$mst_node_label
+      } else {
+        "isolate"
+      }
       update_field_select(
         session,
         "mst_node_label",
-        prof[prof$field == "isolate", , drop = FALSE],
-        selected = "isolate"
+        label_prof,
+        selected = label_choice
       )
-      set_fitted("mst_node_label", "isolate")
+      set_fitted("mst_node_label", label_choice)
 
-      # `isolate` names every node uniquely; it is a label, never a mapping.
+      # `isolate` names every node uniquely; it cannot group them, so it is
+      # left out of the *mapping* picker specifically.
       mappable <- prof[prof$field != "isolate", , drop = FALSE]
       if (nrow(mappable)) {
         update_field_select(session, "mst_layer_add", mappable)
@@ -675,7 +694,7 @@ server <- function(
     # which are not columns of any real database.
     shiny$observeEvent(
       profiles(),
-      populate_metadata_selects(),
+      populate_metadata_selects(force_default = FALSE),
       ignoreNULL = TRUE
     )
 
@@ -730,7 +749,11 @@ server <- function(
           THRESHOLD_PLACEHOLDER
         ))
       if (untouched) {
-        shiny$updateNumericInput(session, "mst_cluster_threshold", value = value)
+        shiny$updateNumericInput(
+          session,
+          "mst_cluster_threshold",
+          value = value
+        )
         set_fitted("mst_cluster_threshold", value)
       }
       invisible(NULL)
@@ -765,20 +788,37 @@ server <- function(
       )
     })
 
-    # Under "Equal length" every branch is already the same length, so the
-    # long-branch cap has nothing to act on. Disabled rather than hidden, so the
-    # tooltip on its wrapper can say why.
-    shiny$observe({
-      shinyjs::toggleState(
-        id = "mst_shorten_long",
-        condition = !identical(fitted$mst_length_mode, "uniform")
-      )
+    # The cap only matters under "Proportional": "Equal length" has no distance
+    # in the branch to shorten, and "Logarithmic" already compresses the range
+    # so the cap would not fire (see mst_plot$mst_length_mode). Disabled rather
+    # than hidden, so the tooltip on its wrapper can say why. The cap multiplier
+    # is the same question one level down: it means nothing while the cap
+    # itself is off, whether that is because of the length mode or because the
+    # user switched it off directly.
+    apply_capping_state <- function() {
+      capping <- identical(fitted$mst_length_mode, "real")
+      shinyjs::toggleState(id = "mst_shorten_long", condition = capping)
       shinyjs::toggleClass(
         id = "mst_shorten_wrap",
         class = "is-disabled",
-        condition = identical(fitted$mst_length_mode, "uniform")
+        condition = !capping
       )
-    })
+      capping <- capping && isTRUE(input$mst_shorten_long)
+      shinyjs::toggleState(id = "mst_cap_mult", condition = capping)
+      shinyjs::toggleClass(
+        id = "mst_cap_mult_wrap",
+        class = "is-disabled",
+        condition = !capping
+      )
+    }
+    shiny$observe(apply_capping_state())
+    # The observer's very first run fires before this tab's freshly-inserted
+    # markup has reached the browser, so the toggleState message it sends has
+    # nothing to attach to and is silently dropped — same race as
+    # populate_metadata_selects() below. One isolated, deferred re-application
+    # after mount is enough; every later change is a live reactive update with
+    # the DOM already in place.
+    shinyjs::delay(400, shiny$isolate(apply_capping_state()))
 
     # Grey out the node colour swatch while a mapping layer owns the fill: a
     # fixed colour loses to the per-node one, so the swatch is genuinely dead.
@@ -832,7 +872,7 @@ server <- function(
       }
       set_fitted("mst_edge_length_scale", MST_FIT_DEFAULTS$spread)
       shinyjs::delay(400, {
-        populate_metadata_selects()
+        populate_metadata_selects(force_default = TRUE)
         apply_scheme_threshold(force_default = TRUE)
       })
     }
@@ -859,18 +899,16 @@ server <- function(
       )
 
       layers <- mst_layers()
-      if (any(vapply(layers, function(l) identical(l$field, field), logical(1)))) {
+      if (
+        any(vapply(layers, function(l) identical(l$field, field), logical(1)))
+      ) {
         return()
       }
       if (length(layers) >= max_layers(MEDIUM)) {
         shiny$showNotification(
-          sprintf(
-            paste(
-              "%d mappings is the most an MST node can show at once. Remove one",
-              "first — every mapped variable stays in the node tooltip either",
-              "way."
-            ),
-            max_layers(MEDIUM)
+          paste(
+            "An MST node can show only one mapped variable at a time. Remove",
+            "it first."
           ),
           type = "warning"
         )
@@ -960,32 +998,18 @@ server <- function(
         )
       )
 
-      # No "Show as" picker any more. With node border and label colour gone the
-      # medium has two channels left, fill and shape, and which of them a layer
-      # takes is not a choice worth offering: fill is the only one that can show
-      # a merged node's whole distribution, so the first variable always takes
-      # it and a second, narrow one falls to shape. What is left to decide is
-      # the palette.
+      # No "Show as" picker: node fill is the medium's only channel, so what
+      # is left to decide is the palette.
       shiny$showModal(shiny$modalDialog(
         title = paste("Mapping:", l$title),
         size = "s",
         easyClose = TRUE,
-        shiny$div(
-          class = "small text-muted mb-2",
-          paste(
-            "Drawn as",
-            tolower(aesthetic_labels(MEDIUM)[[l$aesthetic]] %||% l$aesthetic)
-          )
+        scale_select(
+          ns,
+          "mst_layer_palette",
+          categories = cats,
+          selected = l$palette
         ),
-        if (l$aesthetic %in% COLOR_AESTHETICS) {
-          scale_select(ns, "mst_layer_palette", categories = cats, selected = l$palette)
-        } else {
-          shiny$div(
-            class = "small text-muted",
-            aesthetic_block_reason(prof, "node_fill", MEDIUM) %||%
-              "A shape carries no colour scale."
-          )
-        },
         footer = shiny$tagList(
           shiny$modalButton("Cancel"),
           shiny$actionButton(ns("mst_layer_apply"), "Apply")
@@ -1000,9 +1024,7 @@ server <- function(
         if (!identical(l$id, id)) {
           return(l)
         }
-        if (l$aesthetic %in% COLOR_AESTHETICS) {
-          l$palette <- input$mst_layer_palette %||% l$palette
-        }
+        l$palette <- input$mst_layer_palette %||% l$palette
         # Pinned: rebalance_layers() rebuilds automatic layers from scratch and
         # would discard the palette just chosen.
         l$auto <- FALSE
@@ -1079,27 +1101,22 @@ server <- function(
 
       if (notify && !isTRUE(fit$labels_legible)) {
         shiny$showNotification(
-          paste0(
-            vcount(graph),
-            " nodes and labels of up to ",
-            label_chars(graph),
-            " characters leave no room to read them, so they have been switched ",
-            "off. Hover a node for its isolates, or bring them back with a ",
-            "shorter label source, a wider spread, or fewer isolates."
-          ),
+          "Node labels disabled: too many nodes to display legibly. Hover a node to view it.",
           type = "warning",
-          duration = 12
+          duration = 8
         )
       }
       invisible(fit)
     }
 
-    # There is deliberately no refit when the label source changes. It used to
-    # exist because the source decided whether the labels fitted, and it took
-    # "Show node labels" with it every time — a fit that concluded the labels
-    # were illegible switched the user's own choice back off. The source is
-    # Isolate and nothing else now, so the fit runs on Generate alone and the
-    # switch stays wherever the user put it.
+    # There is deliberately no refit when the label source changes any more. It
+    # used to exist because the source decides whether the labels fit —
+    # label_chars() above still reflects a source change correctly — but a
+    # refit also touched "Show node labels" every time, and a fit that
+    # concluded the *new* source's labels were illegible switched the user's
+    # own choice back off without being asked. The fit now runs on Generate
+    # alone; changing the source after that changes what the labels say, never
+    # whether they are shown.
 
     # Fires on Generate, and on the computation options that now live in this
     # engine's own sidebar rather than the tab's left one — those are on the live
@@ -1153,16 +1170,25 @@ server <- function(
 
     # --- Options, frames, widget -------------------------------------------
 
-    # The canvas the legend is arranged against. Read without taking a reactive
-    # dependency: every browser report of a new size — the first layout pass, a
-    # scrollbar appearing, a window drag — would otherwise rebuild the widget.
+    # The canvas the legend is arranged against.
+    #
+    # isolate(), and it has to be explicit: session$clientData is a
+    # reactiveValues, so merely reading it inside a reactive takes a dependency
+    # on it. Without this every browser report of a new size — the first layout
+    # pass, a font finishing loading, a scrollbar appearing, a window drag —
+    # invalidates mst_opts(), which rebuilds every frame and pushes it into the
+    # network again. The comment here used to claim there was no dependency;
+    # there was, and it is a large part of what put three "Rendering mst_plot"
+    # lines in the log for a single Generate.
     canvas_px <- function() {
-      w <- session$clientData[[paste0("output_", ns("mst_plot"), "_width")]]
-      h <- session$clientData[[paste0("output_", ns("mst_plot"), "_height")]]
-      c(
-        if (is.null(w) || w < 200) 900 else w,
-        if (is.null(h) || h < 200) 620 else h
-      )
+      shiny$isolate({
+        w <- session$clientData[[paste0("output_", ns("mst_plot"), "_width")]]
+        h <- session$clientData[[paste0("output_", ns("mst_plot"), "_height")]]
+        c(
+          if (is.null(w) || w < 200) 900 else w,
+          if (is.null(h) || h < 200) 620 else h
+        )
+      })
     }
 
     # Resolved control values, gathered once so the live render, the incremental
@@ -1192,6 +1218,7 @@ server <- function(
         length_mode = fitted$mst_length_mode,
         spread = fitted$mst_edge_length_scale,
         shorten_long = input$mst_shorten_long,
+        cap_mult = input$mst_cap_mult,
         rotation = input$mst_rotation,
         collapse_threshold = input$mst_collapse_threshold,
         # Mapping.
@@ -1207,6 +1234,7 @@ server <- function(
         # Legend.
         show_legend = input$mst_show_legend,
         legend_ori = input$mst_legend_ori,
+        show_caption = input$mst_show_scale_caption,
         canvas_px = canvas_px()
       )
     )
@@ -1259,10 +1287,11 @@ server <- function(
         shadow = input$mst_shadow,
         legend = input$mst_show_legend,
         legend_ori = input$mst_legend_ori,
+        show_caption = input$mst_show_scale_caption,
         # Both the legend's type and an untinted cluster caption are painted by
         # hooks, so the text colour is a shell input as well as node data.
         text_color = input$mst_text_color,
-        # Any mapping at all installs the pie/shape/border renderer, and the
+        # Any mapping at all installs the pie/border renderer, and the
         # legend's keys come from the layers.
         layers = mst_layers(),
         # The cluster regions are painted by a hook, and their geometry follows
@@ -1281,6 +1310,7 @@ server <- function(
         length_mode = fitted$mst_length_mode,
         spread = fitted$mst_edge_length_scale,
         shorten_long = input$mst_shorten_long,
+        cap_mult = input$mst_cap_mult,
         # Rotation moves every coordinate, and the cluster regions are baked
         # from those coordinates at build time — so it belongs here for the
         # same reason spread and length_mode do.
@@ -1292,9 +1322,38 @@ server <- function(
     # whether it has anything to do.
     drawn <- shiny$reactiveVal(NULL)
 
+    # The shell as last *published*, republished only when it differs from what
+    # it held before.
+    #
+    # Depending on shell() directly made the rebuild invalidation-driven: shiny
+    # never compares a reactive's value, so any control that merely reports a
+    # change tore the network down and built it again, whether or not the change
+    # meant anything. A Generate touches a great many of them — refit_layout
+    # writes six mirrors and then sends six update*Input() messages, each of
+    # which the browser echoes back in its own flush — and every echo was a
+    # rebuilt canvas. Comparing the resolved value makes it value-driven
+    # instead, which no echo can defeat.
+    #
+    # priority: the gate has to settle before outputs are recalculated in the
+    # same flush, or the widget is built once from the stale value and again
+    # from the fresh one — the very thing this exists to stop. This is the
+    # arrangement visualization_tree.R uses for the same reason; see
+    # `plot_inputs` there.
+    shell_built <- shiny$reactiveVal(NULL)
+    shiny$observe(
+      {
+        shiny$req(mst_obj())
+        current <- shell()
+        if (!identical(shiny$isolate(shell_built()), current)) {
+          shell_built(current)
+        }
+      },
+      priority = 100
+    )
+
     output$mst_plot <- renderVisNetwork({
       render_info("visualization_mst mst_plot")
-      shell()
+      shiny$req(shell_built())
       fr <- shiny$isolate(frames())
       shiny$isolate(drawn(fr))
       build_mst_visnetwork(
@@ -1331,6 +1390,7 @@ server <- function(
       {
         mst_obj(NULL)
         drawn(NULL)
+        shell_built(NULL)
         generated(FALSE)
         reset_mst_settings()
       },
@@ -1368,34 +1428,32 @@ server <- function(
         )
       )
 
-      # Canvas width derives from the panel height and the aspect-ratio control;
-      # the height is only known after a first render, so fall back until the
-      # browser reports it.
-      aspect <- if (is.null(input$mst_aspect_ratio)) {
-        0.6
-      } else {
-        input$mst_aspect_ratio
-      }
-      h <- session$clientData[[paste0("output_", ns("mst_plot"), "_height")]]
-      width <- if (!is.null(h)) {
-        as.integer(h * (1 / aspect))
-      } else {
-        as.integer(500 * aspect)
-      }
+      # The canvas is sized by CSS (.mst-canvas-wrap's --mst-aspect), not by
+      # clientData and not by a user control.
+      #
+      # It used to be read right here from session$clientData, which made this
+      # output re-render for no user action at all: the width was computed from
+      # the height the *browser* reported for mst_plot, so every report
+      # re-rendered plot_area, which re-created the visNetworkOutput element,
+      # which made the browser report a size again. That loop is the duplicated
+      # "Rendering plot_area" / "Rendering mst_plot" pairs in the log, and it
+      # re-created the whole widget each time round.
+      #
+      # There used to be a user-facing aspect-ratio slider too. It is gone: the
+      # ratio is fixed at 16:9 (see .mst-canvas-wrap in main.scss) — the
+      # standard shape for a figure that is going to be screenshotted,
+      # presented or dropped into a document, which the downloaded HTML always
+      # will be. Nothing reactive is left in here, so this renders once per
+      # Generate.
       shiny$div(
-        class = "viz-plot-stage",
+        class = "viz-plot-stage mst-stage",
         id = ns("plot_stage"),
         prompt,
         loading,
-        visNetworkOutput(
-          ns("mst_plot"),
-          height = "100%",
-          width = paste0(width, "px")
-        ),
-        # Hidden target the export action button clicks to start the download.
         shiny$div(
-          style = "display:none;",
-          shiny$downloadButton(ns("mst_html"), "Download HTML")
+          id = ns("mst_canvas_wrap"),
+          class = "mst-canvas-wrap",
+          visNetworkOutput(ns("mst_plot"), height = "100%", width = "100%")
         )
       )
     })
@@ -1409,17 +1467,28 @@ server <- function(
       ignoreNULL = FALSE
     )
 
-    # Serialise the current MST as a self-contained HTML file. Built fresh
-    # rather than taken from the on-screen widget, so an export always carries
-    # every incremental update pushed since it was drawn.
-    output$mst_html <- shiny$downloadHandler(
-      filename = function() paste0(Sys.Date(), "_MST.html"),
-      content = function(file) {
-        bg <- if (isTRUE(input$mst_background_transparent)) {
-          "rgba(0,0,0,0)"
-        } else {
-          input$mst_background_color
-        }
+    # The background the export paints behind the network. The canvas itself
+    # carries only what was drawn on it, so both the HTML wrapper and the raster
+    # capture have to be told this separately.
+    export_bg <- shiny$reactive({
+      if (isTRUE(input$mst_background_transparent)) {
+        "rgba(0,0,0,0)"
+      } else {
+        input$mst_background_color
+      }
+    })
+
+    # ---- Export contract ----------------------------------------------------
+    # A browser-drawn engine: the tab's sidebar asks for a raster and the client
+    # answers through `capture_data`. HTML is the one format the server can
+    # write on its own, and it is built fresh rather than taken from the
+    # on-screen widget so an export always carries every incremental update
+    # pushed since it was drawn.
+    export <- list(
+      kind = "widget",
+      label = "MST",
+      ready = shiny$reactive(isTRUE(generated())),
+      save = function(file, format, opts) {
         save_mst_html(
           build_mst_visnetwork(
             mst_obj(),
@@ -1428,23 +1497,27 @@ server <- function(
             frames()
           ),
           file,
-          bg
+          export_bg()
         )
-      }
+      },
+      # "visnetwork" mode makes vis.js redraw the whole network into a buffer
+      # `scale` times larger, rather than copying the pixels already on screen.
+      # See the handler in app/view/visualization.R.
+      capture = function(format, opts) {
+        session$sendCustomMessage(
+          "phylotrace_capture",
+          list(
+            selector = paste0("#", ns("mst_plot")),
+            mode = "visnetwork",
+            inputId = session$ns("export_capture"),
+            scale = opts$scale,
+            format = format,
+            background = export_bg()
+          )
+        )
+      },
+      capture_data = shiny$reactive(input$export_capture)
     )
-
-    # The export tab uses an action button; route it to the hidden download
-    # link. Only HTML export is wired for now.
-    shiny$observeEvent(input$mst_download, {
-      if (identical(input$mst_filetype, "html")) {
-        shinyjs::click("mst_html")
-      } else {
-        shiny$showNotification(
-          "Only HTML export is available currently.",
-          type = "message"
-        )
-      }
-    })
 
     # Keep the outputs reactive while hidden: the panel is nav_remove'd on
     # session reset AND the inactive engine's panel is display:none-hidden by
@@ -1503,7 +1576,8 @@ server <- function(
           "mst_shadow",
           "mst_show_clusters",
           "mst_cluster_label_tint",
-          "mst_show_legend"
+          "mst_show_legend",
+          "mst_show_scale_caption"
         ),
         selects = c(
           "mst_length_mode",
@@ -1515,13 +1589,13 @@ server <- function(
           "mst_edge_length_scale",
           "mst_edge_font_size",
           "mst_node_label_fontsize",
-          "mst_aspect_ratio",
           "mst_rotation",
+          "mst_cap_mult",
           "mst_cluster_width",
           "mst_cluster_opacity",
           "mst_cluster_label_size"
         ),
-        numerics = "mst_cluster_threshold",
+        numerics = c("mst_cluster_threshold", "mst_collapse_threshold"),
         colors = c(
           "mst_text_color",
           "mst_color_node",
@@ -1556,10 +1630,25 @@ server <- function(
         set_fitted("mst_length_mode", "uniform")
       }
 
-      # The label source is Isolate and nothing else now, so a snapshot taken
-      # when it was a free choice restores to Isolate rather than to a column
-      # the picker no longer offers.
-      populate_metadata_selects()
+      # Fills the pickers' choices and defaults the label source to Isolate;
+      # overridden right after by the saved field, if the snapshot has one and
+      # the current database still carries it.
+      populate_metadata_selects(force_default = TRUE)
+      prof <- profiles()
+      label_prof <- label_profile()
+      if (
+        !is.null(prof) &&
+          nrow(prof) &&
+          isTRUE(vals$mst_node_label %in% prof$field)
+      ) {
+        update_field_select(
+          session,
+          "mst_node_label",
+          label_prof,
+          selected = vals$mst_node_label
+        )
+        set_fitted("mst_node_label", vals$mst_node_label)
+      }
     }
 
     # Thumbnail: capture the vis-network <canvas> in the browser and return the
@@ -1580,7 +1669,8 @@ server <- function(
       restore = restore,
       save_thumb = NULL,
       request_thumb = request_thumb,
-      thumb_data = shiny$reactive(input$thumb_data)
+      thumb_data = shiny$reactive(input$thumb_data),
+      export = export
     )
   })
 }

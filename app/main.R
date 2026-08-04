@@ -47,7 +47,7 @@ box::use(
   app / logic / logging[log_event, start_session_log],
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database, hashes_pending],
-  app / logic / database_functions[migrate_isolate_key],
+  app / logic / database_functions[migrate_isolate_key, migrate_species_name],
   app / logic / db_events[bump_all, new_bus],
   app / view / landing_page,
   app / view / scheme_browser,
@@ -486,9 +486,11 @@ server <- function(id) {
       )
       w$show()
 
-      # Bring the isolate key up to the current spelling before anything reads
-      # the database, then fill in any missing allele hashes.
+      # Bring the isolate key and the scheme species up to the current spelling
+      # before anything reads the database, then fill in any missing allele
+      # hashes.
       migrate_isolate_key(db_path)
+      migrate_species_name(db_path)
       hash_database(db_path)
 
       # Both of the above write. Readers keyed on db_path() invalidate anyway

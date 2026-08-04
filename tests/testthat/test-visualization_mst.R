@@ -68,7 +68,7 @@ set_mst_inputs <- function(session, ...) {
     mst_show_label = TRUE,
     mst_show_edge_label = TRUE,
     mst_node_label_fontsize = 13,
-    mst_edge_font_size = 14,
+    mst_edge_font_size = 20,
     mst_text_color = "#000000",
     mst_color_node = "#B2FACA",
     mst_color_edge = "#000000",
@@ -80,16 +80,18 @@ set_mst_inputs <- function(session, ...) {
     mst_length_mode = "log",
     mst_edge_length_scale = 15,
     mst_shorten_long = TRUE,
-    mst_aspect_ratio = 0.6,
+    mst_cap_mult = 7,
     mst_rotation = 0,
-    mst_show_clusters = FALSE,
+    mst_collapse_threshold = 0,
+    mst_show_clusters = TRUE,
     mst_cluster_col_scale = "viridis",
-    mst_cluster_width = 14,
+    mst_cluster_width = 20,
     mst_cluster_opacity = 35,
     mst_cluster_label_size = 18,
-    mst_cluster_label_tint = TRUE,
+    mst_cluster_label_tint = FALSE,
     mst_show_legend = TRUE,
-    mst_legend_ori = "left"
+    mst_legend_ori = "left",
+    mst_show_scale_caption = TRUE
   )
   do.call(session$setInputs, utils::modifyList(defaults, list(...)))
 }
@@ -192,7 +194,7 @@ test_that("a Generate for the other engine leaves this one's graph alone", {
 
 # --- Variable mapping ---------------------------------------------------------
 
-test_that("a mapped variable takes the fill first, then the other channels", {
+test_that("a mapped variable takes the fill; a second is refused", {
   dir <- local_tempdir()
   db <- fixture_db(dir)
   generate <- reactiveVal(0L)
@@ -204,38 +206,35 @@ test_that("a mapped variable takes the fill first, then the other channels", {
     session$setInputs(mst_layer_add = "host")
     expect_identical(length(mst_layers()), 1L)
     expect_identical(mst_layers()[[1]]$aesthetic, "node_fill")
-    # The fill is what shows a merged node's whole distribution, so it leads.
+    # The fill is what shows a merged node's whole distribution.
     expect_true(frames()$custom)
 
+    # Node fill is the MST's only channel, so a second variable is refused
+    # rather than replacing or stacking onto the first.
     session$setInputs(mst_layer_add = "purpose")
-    expect_identical(
-      vapply(mst_layers(), function(l) l$aesthetic, character(1)),
-      c("node_fill", "node_shape")
-    )
+    expect_identical(length(mst_layers()), 1L)
+    expect_identical(mst_layers()[[1]]$field, "host")
 
     # Adding the same variable twice is a no-op rather than a duplicate layer.
     session$setInputs(mst_layer_add = "host")
-    expect_identical(length(mst_layers()), 2L)
+    expect_identical(length(mst_layers()), 1L)
 
     # A column that names every isolate uniquely cannot group them, so it is
     # refused rather than mapped to nothing.
     session$setInputs(mst_layer_add = "ward")
-    expect_identical(length(mst_layers()), 2L)
+    expect_identical(length(mst_layers()), 1L)
   })
 })
 
-test_that("deleting a layer lets the remaining ones spread back out", {
+test_that("deleting the mapped layer leaves none", {
   dir <- local_tempdir()
   db <- fixture_db(dir)
   testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
     set_mst_inputs(session)
     session$setInputs(mst_layer_add = "host")
-    session$setInputs(mst_layer_add = "purpose")
-    first <- mst_layers()[[1]]$id
-    session$setInputs(mst_layer_delete = first)
-    expect_identical(length(mst_layers()), 1L)
-    # The survivor was on a second-choice channel and moves up to the fill.
-    expect_identical(mst_layers()[[1]]$aesthetic, "node_fill")
+    id <- mst_layers()[[1]]$id
+    session$setInputs(mst_layer_delete = id)
+    expect_identical(mst_layers(), list())
   })
 })
 
@@ -282,6 +281,86 @@ test_that("a colour change is a data push, not a rebuilt network", {
     # into it.
     expect_identical(shell(), before)
     expect_identical(unique(drawn()$edges$color), "#FF0000")
+  })
+})
+
+test_that("allelic distances can be switched back off once shown", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session, mst_show_edge_label = TRUE)
+    generate(1L)
+    session$flushReact()
+    expect_false(identical(unique(drawn()$edges$label), ""))
+    labelled <- drawn()$edges$id
+
+    session$setInputs(mst_show_edge_label = FALSE)
+    session$flushReact()
+    expect_identical(unique(drawn()$edges$label), "")
+    # Same ids, so the push updates the branches already on the canvas. Without
+    # them vis.js appended a second, unlabelled copy of every branch on top of
+    # the labelled ones — which stayed, and stayed readable.
+    expect_identical(drawn()$edges$id, labelled)
+  })
+})
+
+test_that("the widget is rebuilt on a changed value, not a changed input", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    built <- shell_built()
+    expect_false(is.null(built))
+
+    # Re-reporting a value it already holds — which is what every echo of an
+    # update*Input() message is — must not republish and so must not rebuild.
+    session$setInputs(mst_shadow = TRUE, mst_legend_ori = "left")
+    session$flushReact()
+    expect_identical(shell_built(), built)
+
+    session$setInputs(mst_legend_ori = "right")
+    session$flushReact()
+    expect_false(identical(shell_built(), built))
+  })
+})
+
+test_that("collapsing folds the tree and says how far", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    nodes <- nrow(frames()$nodes)
+    before <- shell()
+
+    session$setInputs(mst_collapse_threshold = 1)
+    session$flushReact()
+    expect_lt(nrow(frames()$nodes), nodes)
+    # A node the threshold folded away has to actually leave the canvas, and the
+    # incremental path only ever updates or adds by id — it never removes one.
+    expect_false(identical(shell(), before))
+  })
+})
+
+test_that("rotation turns the drawing and rebuilds it", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    before <- frames()$coords$x
+
+    session$setInputs(mst_rotation = 90)
+    session$flushReact()
+    expect_false(isTRUE(all.equal(frames()$coords$x, before)))
   })
 })
 
@@ -340,19 +419,35 @@ test_that("the label switch survives everything but a fresh Generate", {
   })
 })
 
-test_that("the label source offers Isolate and nothing else", {
+test_that("the label source is a full metadata picker, defaulting to Isolate", {
   dir <- local_tempdir()
   db <- fixture_db(dir)
   testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
     set_mst_inputs(session)
     session$flushReact()
-    # Any other column is a property of the isolates *inside* a node, and a node
-    # holds a set of them.
     expect_identical(fitted$mst_node_label, "isolate")
-    expect_identical(
-      profiles()$field[profiles()$field == "isolate"],
-      "isolate"
-    )
+    # Every metadata column is offered, Isolate included — the same set
+    # mst_layer_add draws from, plus Isolate itself.
+    expect_true(all(c("isolate", "host", "purpose") %in% profiles()$field))
+
+    session$setInputs(mst_node_label = "host")
+    session$flushReact()
+    expect_identical(fitted$mst_node_label, "host")
+  })
+})
+
+test_that("Isolate is a selectable label source, not disabled for being unique", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session)
+    session$flushReact()
+    # field_profiles() marks isolate non-groupable (it is unique per row),
+    # which is correct for the *mapping* picker but would grey Isolate out of
+    # the label picker too if the same profile reached it unmodified.
+    prof <- profiles()
+    expect_false(prof$groupable[prof$field == "isolate"])
+    expect_true(label_profile()$groupable[prof$field == "isolate"])
   })
 })
 
@@ -372,7 +467,7 @@ test_that("a cluster region's look rebuilds the network", {
       list(mst_cluster_width = 40),
       list(mst_cluster_opacity = 90),
       list(mst_cluster_label_size = 0),
-      list(mst_cluster_label_tint = FALSE)
+      list(mst_cluster_label_tint = TRUE)
     )) {
       previous <- shell()
       do.call(session$setInputs, change)
@@ -388,10 +483,18 @@ test_that("a legacy layer on a channel that is gone lands back on the fill", {
   db <- fixture_db(dir)
   testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
     set_mst_inputs(session)
-    restore(list(.layers = list(list(
-      id = "L1", field = "host", title = "Host", aesthetic = "node_border",
-      palette = "viridis", n_levels = 2L, continuous = FALSE, auto = FALSE
-    ))))
+    restore(list(
+      .layers = list(list(
+        id = "L1",
+        field = "host",
+        title = "Host",
+        aesthetic = "node_border",
+        palette = "viridis",
+        n_levels = 2L,
+        continuous = FALSE,
+        auto = FALSE
+      ))
+    ))
     session$flushReact()
     expect_identical(length(mst_layers()), 1L)
     expect_identical(mst_layers()[[1]]$aesthetic, "node_fill")
@@ -449,6 +552,28 @@ test_that("a saved analysis restores its layers, mirrors included", {
     # echo back would otherwise never reach the render.
     expect_identical(fitted$mst_node_label, "isolate")
     expect_equal(fitted$mst_edge_length_scale, snap[["mst_edge_length_scale"]])
+  })
+})
+
+test_that("a saved analysis restores a non-default label source", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session)
+    session$setInputs(mst_node_label = "host")
+    session$flushReact()
+    snap <- snapshot()
+    expect_identical(snap$mst_node_label, "host")
+
+    # reset_settings' own revert to Isolate happens behind shinyjs::delay(),
+    # which needs a browser to fire and so never runs inside testServer — mimic
+    # it directly instead, the way the module's own delayed callback would.
+    populate_metadata_selects(force_default = TRUE)
+    expect_identical(fitted$mst_node_label, "isolate")
+
+    restore(snap)
+    session$flushReact()
+    expect_identical(fitted$mst_node_label, "host")
   })
 })
 

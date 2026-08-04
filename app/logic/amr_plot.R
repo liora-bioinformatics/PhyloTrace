@@ -840,23 +840,6 @@ render_amr_png <- function(
   )
 }
 
-#' Saves a plot object to disk using a specified format and resolution.
-#' @export
-save_amr_plot <- function(
-  plot,
-  file,
-  filetype = "png",
-  aspect_ratio = 0.65,
-  dpi = 192
-) {
-  width <- 12
-  ggsave(
-    filename = file,
-    plot = plot,
-    device = filetype,
-    width = width,
-    height = width * aspect_ratio,
-    dpi = dpi,
-    limitsize = FALSE
-  )
-}
+# File export goes through app/logic/viz_export.R's save_plot_export(), which
+# owns the device settings for every plot type; what stays here is the on-screen
+# render above, which is sized in pixels rather than in physical units.

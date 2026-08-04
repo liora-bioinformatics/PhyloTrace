@@ -577,12 +577,15 @@ test_that("every style renders to a real image", {
     interval = "week"
   )
 
+  # The on-screen path. File export across every offered format is
+  # save_plot_export()'s job — see test-viz_export.R.
   for (mode in c("stacked", "cumulative")) {
     file <- tempfile(fileext = ".png")
-    epi_plot$save_epi_plot(
+    epi_plot$render_epi_png(
       epi_plot$build_epi_ggplot(binned, list(mode = mode, interval = "week")),
       file,
-      "png"
+      width_px = 800,
+      height_px = 440
     )
     expect_true(file.exists(file))
     expect_true(file.size(file) > 0)

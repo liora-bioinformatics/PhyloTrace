@@ -77,6 +77,7 @@ box::use(
   app / logic / db_events,
   app / logic / functions[render_info],
   app / logic / logging[typing_log_file, log_event],
+  app / logic / mlst_repo[REPO_URLS, resolve_mlst_scheme, write_scheme_spec],
   app /
     logic /
     pymlst[
@@ -217,7 +218,8 @@ results_columns <- list(
     class = "pt-col-mlst",
     tip = paste(
       "Classical 7-gene MLST: the Sequence Type, Novel (complete but",
-      "unregistered profile) or Partial (some loci not called)."
+      "unregistered profile), Partial (some loci not called) or Ambiguous",
+      "(several STs fit the profile)."
     )
   ),
   list(
@@ -620,6 +622,8 @@ server <- function(
       # Path to this run's interim claMLST reference DB (built by the typing
       # script, read once for reference sequences / metadata, then deleted).
       cla_db = NULL,
+      # Path to the resolved scheme's download spec, handed to the script.
+      cla_spec = NULL,
       # Base output dir for this run's AMR screens (one subdir per strain, read
       # once on finalize into amr_results / amr_summary, then deleted).
       amr_out = NULL,
@@ -938,7 +942,9 @@ server <- function(
         tags$dt("Sequence Type"),
         tags$dd(
           "Derived per genome right after allele calling (claMLST search),",
-          "using the same identity / coverage thresholds as cgMLST."
+          "using the same identity / coverage thresholds as cgMLST. A number is",
+          "shown only when all seven loci were called and exactly one ST matches;",
+          "otherwise the profile is flagged Novel, Partial or Ambiguous."
         ),
         tags$dt("Scheme source"),
         tags$dd(
@@ -1351,10 +1357,11 @@ server <- function(
       }
 
       # Classical MLST cell: the registered ST number when known, otherwise a
-      # badge flagging a novel profile (complete but unregistered) or a partial
-      # one (some loci uncalled). While the strain is still running it shows the
-      # step's own state; "—" when no classical scheme was used or the search
-      # returned nothing usable.
+      # badge flagging a novel profile (complete but unregistered), a partial one
+      # (some loci uncalled) or an ambiguous one (several STs fit the call). Only
+      # a "known" call has a single ST, so no other state ever prints a number.
+      # While the strain is still running it shows the step's own state; "—" when
+      # no classical scheme was used or the search returned nothing usable.
       st_cell <- function(status, st, state) {
         if (is.na(status)) {
           return(if (nzchar(state)) status_badge(state) else "—")
@@ -1364,6 +1371,7 @@ server <- function(
           known = as.character(st),
           novel = '<span class="badge text-bg-warning">Novel</span>',
           partial = '<span class="badge text-bg-secondary">Partial</span>',
+          ambiguous = '<span class="badge text-bg-secondary">Ambiguous</span>',
           "—"
         )
       }
@@ -1790,18 +1798,39 @@ server <- function(
       Typing$results <- parse_typing_log(character(0), Typing$queued_strains)
 
       # Classical MLST rides along in the same run: the scheme's species (from
-      # the mother DB) tells claMLST import which classical scheme to build; the
-      # ST is derived per genome. The reference DB is built by the script at this
-      # temp path and read back here on finalize (for reference sequences /
-      # metadata), then deleted. NA species => classical MLST skipped entirely.
+      # the mother DB) is resolved to exactly one repository scheme here, the
+      # script downloads and builds it at this temp path, and the ST is derived
+      # per genome. The reference DB is read back on finalize (for reference
+      # sequences / metadata), then deleted. No species or no scheme resolvable
+      # => classical MLST is skipped for the whole run.
       species <- db_species(db_path())
-      Typing$cla_db <- if (!is.na(species)) {
+      cla_scheme <- if (!is.na(species)) {
+        resolve_mlst_scheme(
+          species,
+          repos = union(or_default(input$cla_repo, "pubmlst"), names(REPO_URLS))
+        )
+      } else {
+        NULL
+      }
+      Typing$cla_db <- if (!is.null(cla_scheme)) {
         tempfile(fileext = ".clamlst.db")
+      } else {
+        NULL
+      }
+      Typing$cla_spec <- if (!is.null(cla_scheme)) {
+        write_scheme_spec(cla_scheme, tempfile(fileext = ".clamlst.spec"))
       } else {
         NULL
       }
       live_cla_db <<- Typing$cla_db
       Typing$cla_enabled <- !is.null(Typing$cla_db)
+
+      if (!is.na(species) && is.null(cla_scheme)) {
+        log_typing(
+          "No classical MLST scheme",
+          sprintf("%s: no single scheme in PubMLST or Pasteur", species)
+        )
+      }
 
       # AMR screening rides along too (opt-out via the sidebar checkbox). Each
       # genome is screened into a per-strain subdir of this run's temp AMR dir,
@@ -1829,7 +1858,11 @@ server <- function(
           or_default(input$identity, 0.95),
           or_default(input$coverage, 0.9),
           if (Typing$cla_enabled) "on" else "off",
-          or_default(input$cla_repo, "pubmlst"),
+          if (is.null(cla_scheme)) {
+            "no scheme"
+          } else {
+            sprintf("%s: %s", cla_scheme$repository, cla_scheme$scheme)
+          },
           if (run_amr) "on" else "off",
           if (is.na(amr_sp)) "acquired-only" else amr_sp
         )
@@ -1844,8 +1877,12 @@ server <- function(
           coverage = or_default(input$coverage, 0.9),
           env = conda_env,
           species = species,
-          repo = or_default(input$cla_repo, "pubmlst"),
           cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db,
+          cla_spec = if (is.null(Typing$cla_spec)) {
+            NA_character_
+          } else {
+            Typing$cla_spec
+          },
           amr_env = if (run_amr) conda_env else NA_character_,
           amr_species = amr_sp,
           amr_out = if (is.null(Typing$amr_out)) {
@@ -2046,7 +2083,11 @@ server <- function(
         error = function(e) NULL
       )
       cleanup_cla_db(Typing$cla_db)
+      if (!is.null(Typing$cla_spec)) {
+        unlink(Typing$cla_spec)
+      }
       Typing$cla_db <- NULL
+      Typing$cla_spec <- NULL
       live_cla_db <<- NULL
 
       added <- sum(results$status == "Added")

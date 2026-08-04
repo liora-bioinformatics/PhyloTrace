@@ -14,7 +14,7 @@ box::use(
   jsonlite[toJSON],
   shiny,
   shinyjs[addClass, disable, disabled, enable, hidden, removeClass, toggle],
-  shinyWidgets[virtualSelectInput],
+  shinyWidgets[virtualSelectInput, pickerInput],
   stats[setNames],
 )
 
@@ -741,7 +741,7 @@ server <- function(
                 )
               )
             } else {
-              shiny$pickerInput(
+              pickerInput(
                 ns("var_type"),
                 "Type",
                 choices = setNames(

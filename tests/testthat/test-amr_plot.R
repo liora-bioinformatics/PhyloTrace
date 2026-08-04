@@ -432,7 +432,7 @@ test_that("the drug-class heatmap renders clustered and split", {
   }
 })
 
-test_that("the prevalence chart renders and exports in every offered format", {
+test_that("the prevalence chart renders to a real image", {
   df <- amr_plot$amr_prevalence(
     hits_fixture(),
     sections_fixture(),
@@ -442,9 +442,10 @@ test_that("the prevalence chart renders and exports in every offered format", {
   plot <- amr_plot$build_amr_prevalence(df, list(n_isolates = 6))
   expect_s3_class(plot, "ggplot")
 
-  for (filetype in c("png", "jpeg", "pdf", "svg")) {
-    file <- local_tempfile(fileext = paste0(".", filetype))
-    amr_plot$save_amr_plot(plot, file, filetype)
-    expect_true(file.exists(file))
-  }
+  # The on-screen path. File export across every offered format is
+  # save_plot_export()'s job — see test-viz_export.R.
+  file <- local_tempfile(fileext = ".png")
+  amr_plot$render_amr_png(plot, file, width_px = 800, height_px = 520)
+  expect_true(file.exists(file))
+  expect_gt(file.size(file), 0)
 })

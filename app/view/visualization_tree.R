@@ -70,6 +70,7 @@ box::use(
     ],
   app / logic / database_functions[load_amr_matrix],
   app / logic / phylo[compute_phylo_tree],
+  app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
@@ -1801,12 +1802,7 @@ server <- function(
         # height renderPlot() derives from the panel width and the aspect-ratio
         # control below. The plotOutput default (height="400px") would instead
         # pin the box at 400px and clip the aspect-sized plot.
-        shiny$plotOutput(ns("tree_plot"), height = "auto"),
-        # Hidden target the export action button clicks to start the download.
-        shiny$div(
-          style = "display:none;",
-          shiny$downloadButton(ns("download_nj"), "Download plot")
-        )
+        shiny$plotOutput(ns("tree_plot"), height = "auto")
       )
     })
 
@@ -2047,28 +2043,29 @@ server <- function(
       nj_heatmaps(out)
     })
 
-    # Render the current tree to a file at the configured aspect ratio.
-    output$download_nj <- shiny$downloadHandler(
-      filename = function() {
-        paste0(Sys.Date(), "_tree.", input$nj_filetype)
-      },
-      content = function(file) {
-        # Exported on the same canvas as the preview — width and aspect both —
-        # so the tip labels keep the proportion they were tuned to and whatever
-        # sits beside the tree gets the room it had on screen.
-        canvas <- plot_canvas()
-        save_tree_plot(
+    # ---- Export contract ----------------------------------------------------
+    # The tab's sidebar owns the export panel and the download itself; this
+    # engine only says what it can produce and how to write it. Exported on the
+    # preview's own aspect ratio so the tip labels keep the proportion they were
+    # tuned to and whatever sits beside the tree gets the room it had on screen
+    # — the *width* comes from the export panel, since that is the one thing the
+    # user sets in physical units.
+    export <- list(
+      kind = "ggplot",
+      label = "tree",
+      ready = shiny$reactive(isTRUE(generated())),
+      aspect = shiny$reactive(plot_canvas()$aspect),
+      save = function(file, format, opts) {
+        save_plot_export(
           tree_plot_built(),
           file,
-          input$nj_filetype,
-          canvas$aspect,
-          width = canvas$canvas_in
+          format,
+          width_cm = opts$width_cm,
+          aspect = plot_canvas()$aspect,
+          dpi = opts$dpi
         )
       }
     )
-    shiny$observeEvent(input$nj_download, {
-      shinyjs::click("download_nj")
-    })
 
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
@@ -2301,7 +2298,8 @@ server <- function(
       restore = restore,
       save_thumb = save_thumb,
       request_thumb = NULL,
-      thumb_data = NULL
+      thumb_data = NULL,
+      export = export
     )
   })
 }

@@ -800,8 +800,6 @@ test_that("plot_area renders the stage with the shared overlay classes", {
       # Ids carry the module's namespace, whatever testServer mocks it as.
       expect_true(grepl(session$ns("epi_plot"), html, fixed = TRUE))
       expect_true(grepl(session$ns("plot_stage"), html, fixed = TRUE))
-      # The export action button clicks this hidden download target.
-      expect_true(grepl(session$ns("download_epi"), html, fixed = TRUE))
       # Keeps .viz-plot-stage so the shared .viz-plot-prompt overlay and the
       # `.viz-plot-stage.is-loading .viz-loading` toggle still reach it, and
       # adds .epi-stage to undo that class's flex centering.

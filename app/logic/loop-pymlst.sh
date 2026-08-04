@@ -13,8 +13,8 @@ IDENTITY=0.95
 COVERAGE=0.9
 env=PhyloTrace
 SPECIES=""
-REPO=pubmlst
 CLA_DB=""
+CLA_SPEC=""
 
 # AMR screening configurations (abritamr / AMRFinderPlus)
 AMR_ENV=""
@@ -27,7 +27,7 @@ AMR_OUT=""
 
 #' Display command-line usage and option flags.
 usage() {
-    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-r <pubmlst|pasteur>] [-m <cla_db_path>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
+    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-m <cla_db_path>] [-M <cla_scheme_spec>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
     exit 1
 }
 
@@ -105,15 +105,15 @@ process_genome() {
 # Option Parsing and Validation
 # ==============================================================================
 
-while getopts "d:i:c:e:s:r:m:A:p:o:" opt; do
+while getopts "d:i:c:e:s:m:M:A:p:o:" opt; do
     case "$opt" in
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
         c) COVERAGE="$OPTARG" ;;
         e) env="$OPTARG" ;;
         s) SPECIES="$OPTARG" ;;
-        r) REPO="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
+        M) CLA_SPEC="$OPTARG" ;;
         A) AMR_ENV="$OPTARG" ;;
         p) AMR_SPECIES="$OPTARG" ;;
         o) AMR_OUT="$OPTARG" ;;
@@ -134,34 +134,80 @@ fi
 # ==============================================================================
 
 # --- Build Classical MLST Reference Database ---
-if [[ -n "$SPECIES" && -n "$CLA_DB" ]]; then
-    if [[ "$REPO" == "pasteur" ]]; then
-        REPOS=("pasteur" "pubmlst")
-    else
-        REPOS=("pubmlst" "pasteur")
-    fi
+# The scheme is resolved beforehand in R (app/logic/mlst_repo.R) and handed over
+# as a spec file, so this step only downloads the exact profile table and allele
+# files it names and builds the reference locally with `claMLST create`.
+# pyMLST's own `claMLST import` re-searches the repositories by fuzzy substring
+# match and refuses to choose whenever more than one hit comes back, which loses
+# the ST for every species holding more than one scheme (Enterococcus faecium)
+# and can settle on a scheme from an entirely different genus.
+if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
+    CLA_REPO=""
+    CLA_DATABASE=""
+    CLA_SCHEME=""
+    CLA_VERSION=""
+    CLA_PROFILES=""
+    CLA_LOCI=()
+    while IFS= read -r line; do
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in
+            repository) CLA_REPO="$value" ;;
+            species)    [[ -n "$value" ]] && SPECIES="$value" ;;
+            database)   CLA_DATABASE="$value" ;;
+            scheme)     CLA_SCHEME="$value" ;;
+            version)    CLA_VERSION="$value" ;;
+            profiles)   CLA_PROFILES="$value" ;;
+            locus)      CLA_LOCI+=("$value") ;;
+        esac
+    done < "$CLA_SPEC"
 
     echo "------------------------------------------------"
     echo "Building classical MLST scheme for: $SPECIES"
+    echo "Scheme: $CLA_REPO / $CLA_DATABASE / $CLA_SCHEME (${#CLA_LOCI[@]} loci)"
+
     built=0
-    for repo in "${REPOS[@]}"; do
-        echo "Trying classical MLST repository: $repo"
-        if "$CONDA" run -n "$env" claMLST import --no-prompt -f -r "$repo" "$CLA_DB" "$SPECIES"; then
-            built=1
-            break
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Classical MLST: curl not found, cannot download the scheme."
+    elif [[ -z "$CLA_PROFILES" || ${#CLA_LOCI[@]} -eq 0 ]]; then
+        echo "Classical MLST: incomplete scheme specification."
+    else
+        CLA_TMP=$(mktemp -d)
+        mkdir -p "$CLA_TMP/locus"
+        downloaded=1
+        if ! curl -fsSL --retry 3 --retry-delay 2 -o "$CLA_TMP/profiles.csv" "$CLA_PROFILES"; then
+            echo "Classical MLST: download failed for the profile table."
+            downloaded=0
         fi
-        echo "Classical MLST import from $repo failed."
-    done
+        # claMLST create matches allele files to profile columns by file name, so
+        # each locus keeps the name the repository gives it.
+        if [[ "$downloaded" -eq 1 ]]; then
+            for locus_url in "${CLA_LOCI[@]}"; do
+                locus_name=${locus_url##*/}
+                if ! curl -fsSL --retry 3 --retry-delay 2 \
+                        -o "$CLA_TMP/locus/$locus_name.fasta" "$locus_url/alleles_fasta"; then
+                    echo "Classical MLST: download failed for locus $locus_name."
+                    downloaded=0
+                    break
+                fi
+            done
+        fi
+        if [[ "$downloaded" -eq 1 ]] && "$CONDA" run -n "$env" claMLST create -f \
+                -s "$SPECIES" -V "$CLA_VERSION" \
+                "$CLA_DB" "$CLA_TMP/profiles.csv" "$CLA_TMP"/locus/*.fasta; then
+            built=1
+        fi
+        rm -rf "$CLA_TMP"
+    fi
 
     if [[ "$built" -eq 1 && -f "$CLA_DB" ]]; then
-        cla_info=$("$CONDA" run -n "$env" claMLST info "$CLA_DB" 2>/dev/null)
-        echo "Classical MLST repository: $(echo "$cla_info" | awk -F'\t' '$1=="source"{print $2}')"
-        echo "Classical MLST scheme: $(echo "$cla_info" | awk -F'\t' '$1=="species"{print $2}')"
-        echo "Classical MLST scheme version: $(echo "$cla_info" | awk -F'\t' '$1=="version"{print $2}')"
+        echo "Classical MLST repository: $CLA_REPO"
+        echo "Classical MLST scheme: $CLA_DATABASE ($CLA_SCHEME)"
+        echo "Classical MLST scheme version: $CLA_VERSION"
         echo "pyMLST version: $("$CONDA" run -n "$env" claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
     else
         CLA_DB=""
-        echo "Classical MLST: no scheme found for '$SPECIES' (skipping ST calls)"
+        echo "Classical MLST: reference build failed for '$SPECIES' (skipping ST calls)"
     fi
 fi
 

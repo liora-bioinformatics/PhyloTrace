@@ -78,9 +78,17 @@ amr_species <- function(db_species) {
     return(NA_character_)
   }
   words <- strsplit(trimws(db_species), "\\s+")[[1]]
-  # Try Genus_species first, then genus alone.
+  # A cgMLST scheme can cover several species ("Klebsiella
+  # pneumoniae/variicola/quasipneumoniae"), so every epithet it names is a
+  # candidate binomial - in scheme order, the first being the scheme's namesake.
+  # Genus alone is the last resort (abritamr accepts a few genus-level tokens).
+  epithets <- if (length(words) >= 2) {
+    strsplit(paste(words[-1], collapse = " "), "/", fixed = TRUE)[[1]]
+  } else {
+    character(0)
+  }
   candidates <- c(
-    if (length(words) >= 2) paste(words[1], words[2], sep = "_"),
+    paste(words[1], trimws(epithets), sep = "_"),
     words[1]
   )
   hit <- candidates[candidates %in% SUPPORTED_AMR_SPECIES]

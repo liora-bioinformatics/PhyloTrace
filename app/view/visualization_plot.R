@@ -31,6 +31,7 @@ box::use(
     div,
     icon,
     actionButton,
+    downloadHandler,
     showNotification,
     tags,
     tagList,
@@ -68,7 +69,15 @@ box::use(
   app / logic / db_staging[imported_metadata_wide],
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
-  app / logic / viz_helpers[export_panel],
+  app /
+    logic /
+    viz_export[
+      export_filename,
+      export_hint,
+      export_panel,
+      vector_formats,
+      write_data_uri
+    ],
   app / logic / analysis_store,
   app / view / visualization_mst,
   app / view / visualization_tree,
@@ -88,12 +97,20 @@ box::use(
 # Options panel. The Map geocodes metadata, the Epi curve bins collection dates
 # and the AMR views read the screening tables, so none of the three has any use
 # for either.
+# `export_kind` picks the export route, which is a property of where the plot is
+# drawn rather than of what it shows: "ggplot" engines hold a plot object on the
+# server and can be re-rendered at any size, while "widget" engines are drawn by
+# the browser and have to be captured from it. See app/logic/viz_export.R.
 .ENGINES <- list(
-  MST = list(mod = visualization_mst, distance = TRUE),
-  Tree = list(mod = visualization_tree, distance = TRUE),
-  Map = list(mod = visualization_map, distance = FALSE),
-  Epi = list(mod = visualization_epi, distance = FALSE),
-  AMR = list(mod = visualization_amr, distance = FALSE)
+  MST = list(mod = visualization_mst, distance = TRUE, export_kind = "widget"),
+  Tree = list(
+    mod = visualization_tree,
+    distance = TRUE,
+    export_kind = "ggplot"
+  ),
+  Map = list(mod = visualization_map, distance = FALSE, export_kind = "widget"),
+  Epi = list(mod = visualization_epi, distance = FALSE, export_kind = "ggplot"),
+  AMR = list(mod = visualization_amr, distance = FALSE, export_kind = "ggplot")
 )
 
 #' @export
@@ -265,7 +282,7 @@ ui <- function(id, plot_type) {
           ),
           accordion(
             id = ns("setup_accordion"),
-            open = c("Selection", "Export Plot", "Save Analysis"),
+            open = "Selection",
             accordion_panel(
               "Selection",
               icon = icon("list-check"),
@@ -279,7 +296,7 @@ ui <- function(id, plot_type) {
             accordion_panel(
               "Export Plot",
               icon = icon("arrow-up-from-bracket"),
-              export_panel(ns, "test", c("png", "jpeg", "pdf", "svg"))
+              export_panel(ns, "export", spec$export_kind)
             ),
             # Save the currently displayed plot into an Analysis on the dashboard.
             # The picker's grouped choices are the Analyses (each with a "New plot"
@@ -1184,6 +1201,175 @@ server <- function(
     }
     eng <- do.call(spec$mod$server, engine_args)
 
+    # ------------------------------------------------------------ export ---
+    # The engine declares what it can produce and how to write it (its `export`
+    # contract); this owns the sidebar panel, the settings, and the single
+    # download the user actually clicks. Keeping the panel here rather than in
+    # each engine is what lets one plot type's export look and behave like
+    # another's.
+    exporter <- eng$export
+    export_widget <- identical(exporter$kind, "widget")
+
+    # A plain string for most engines; the AMR views make it a reactive, since
+    # their three modes are different plots and the file name has to say which.
+    export_label <- function() {
+      lbl <- exporter$label
+      if (is.function(lbl)) lbl() else lbl
+    }
+
+    export_format <- reactive(input$export_filetype %||% "png")
+
+    export_opts <- reactive({
+      width <- suppressWarnings(as.numeric(input$export_width %||% 25))
+      if (!isTRUE(is.finite(width))) {
+        width <- 25
+      }
+      list(
+        width_cm = max(4, min(60, width)),
+        dpi = suppressWarnings(as.numeric(input$export_dpi %||% 300)),
+        scale = suppressWarnings(as.integer(input$export_scale %||% 3))
+      )
+    })
+
+    # Grey out the quality control when the chosen format has no use for it,
+    # rather than leaving a live-looking slider that changes nothing: vector art
+    # has no resolution, and the interactive HTML is not rendered at all.
+    reg(observe({
+      fmt <- export_format()
+      if (export_widget) {
+        shinyjs::toggleState(
+          "export_scale",
+          condition = !identical(fmt, "html")
+        )
+      } else {
+        shinyjs::toggleState("export_dpi", condition = !fmt %in% vector_formats)
+      }
+    }))
+
+    output$export_hint <- renderUI({
+      aspect <- if (is.null(exporter$aspect)) {
+        0.62
+      } else {
+        tryCatch(exporter$aspect(), error = function(e) 0.62)
+      }
+      opts <- export_opts()
+      span(export_hint(
+        exporter$kind,
+        export_format(),
+        opts$width_cm,
+        if (export_widget) opts$scale else opts$dpi,
+        aspect
+      ))
+    })
+
+    # The finished file, waiting to be handed to the browser. Written before the
+    # download link is clicked, never inside the handler — see `stage()`.
+    export_ready <- reactiveVal(NULL)
+
+    # Write the file now and only then trigger the download.
+    #
+    # Doing it the other way round — letting the download handler render — makes
+    # every failure unreportable: an engine with nothing to draw fails its own
+    # `req()`, and Shiny answers the HTTP request with its 500 page, which the
+    # browser dutifully saves under the .png name the user asked for. `ready()`
+    # cannot catch that on its own, since it only says Generate was pressed, not
+    # that the result had any data in it.
+    stage <- function(fmt) {
+      previous <- isolate(export_ready())
+      if (!is.null(previous)) {
+        unlink(previous)
+      }
+      export_ready(NULL)
+      f <- tempfile(fileext = paste0(".", fmt))
+      ok <- tryCatch(
+        {
+          exporter$save(f, fmt, isolate(export_opts()))
+          file.exists(f) && file.size(f) > 0
+        },
+        error = function(e) FALSE
+      )
+      if (!ok) {
+        unlink(f)
+        showNotification(
+          "Nothing to export — this plot has no data to draw.",
+          type = "error"
+        )
+        return(invisible(FALSE))
+      }
+      export_ready(f)
+      shinyjs::click("export_file")
+      invisible(TRUE)
+    }
+
+    reg(observeEvent(input$export_download, {
+      if (!isTRUE(exporter$ready())) {
+        showNotification(
+          "Generate a plot before saving it.",
+          type = "warning"
+        )
+        return()
+      }
+      # A widget's raster only exists once the browser has drawn it, so it
+      # arrives asynchronously through capture_data() below and is staged there.
+      if (export_widget && !identical(export_format(), "html")) {
+        exporter$capture(export_format(), export_opts())
+      } else {
+        stage(export_format())
+      }
+    }))
+
+    # Arrival of a browser capture: stage the decoded image, then download it.
+    if (!is.null(exporter$capture_data)) {
+      reg(observeEvent(
+        exporter$capture_data(),
+        {
+          fmt <- isolate(export_format())
+          previous <- isolate(export_ready())
+          if (!is.null(previous)) {
+            unlink(previous)
+          }
+          export_ready(NULL)
+          f <- tempfile(fileext = paste0(".", fmt))
+          if (!write_data_uri(exporter$capture_data(), f)) {
+            unlink(f)
+            showNotification(
+              "The browser could not capture this plot. Try a lower render scale.",
+              type = "error"
+            )
+            return()
+          }
+          export_ready(f)
+          shinyjs::click("export_file")
+        },
+        ignoreInit = TRUE
+      ))
+    }
+
+    # Purely a handover: whatever `stage()` (or the capture observer) already
+    # wrote is what gets sent. The staged file is deliberately not deleted here
+    # — a browser is free to request a download URL more than once, and clearing
+    # it on the first request would answer the second with an empty file.
+    output$export_file <- downloadHandler(
+      filename = function() {
+        export_filename(isolate(export_label()), isolate(export_format()))
+      },
+      content = function(file) {
+        staged <- isolate(export_ready())
+        req(staged)
+        file.copy(staged, file, overwrite = TRUE)
+        invisible(NULL)
+      }
+    )
+
+    # Load-bearing, and the reason the Save button did nothing at all before.
+    # Shiny hands a download link its URL as an *output value*, and outputs
+    # default to being suspended while hidden — which this one always is, since
+    # it sits in a `d-none` wrapper so the visible control can be an
+    # actionButton that validates first. Suspended, it keeps `href=""` and the
+    # `disabled` class for the whole session, so clicking it navigates nowhere
+    # and the content function never runs.
+    outputOptions(output, "export_file", suspendWhenHidden = FALSE)
+
     # -------------------------------------------------------------- save ---
     # Identity of this tab. `plot_id` is NULL until the plot has been saved
     # into an Analysis at least once; the coordinator reads it to avoid
@@ -1665,7 +1851,8 @@ server <- function(
         "selection_info",
         "sel_table",
         "sel_count",
-        "save_status"
+        "save_status",
+        "export_hint"
       )) {
         try(outputOptions(output, o, suspend = TRUE), silent = TRUE)
       }
@@ -1677,6 +1864,13 @@ server <- function(
       generated_once(FALSE)
       pending(NULL)
       pending_save_target(NULL)
+      # A capture that never reached its download would otherwise leave its
+      # temp file behind for the rest of the session.
+      leftover <- export_ready()
+      if (!is.null(leftover)) {
+        unlink(leftover)
+      }
+      export_ready(NULL)
       invisible(NULL)
     }
 

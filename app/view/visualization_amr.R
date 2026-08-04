@@ -57,6 +57,7 @@ box::use(
   app / logic / field_labels[field_label],
   app / logic / field_profile[field_profiles_of = field_profiles],
   app / logic / functions[render_info],
+  app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
@@ -1098,12 +1099,7 @@ server <- function(
         id = ns("plot_stage"),
         prompt,
         loading,
-        shiny$plotOutput(ns("amr_plot"), height = "auto"),
-        # Hidden target the export action button clicks to start the download.
-        shiny$div(
-          class = "d-none",
-          shiny$downloadButton(ns("download_amr"), "Download plot")
-        )
+        shiny$plotOutput(ns("amr_plot"), height = "auto")
       )
     })
 
@@ -1145,38 +1141,29 @@ server <- function(
       deleteFile = TRUE
     )
 
-    output$download_amr <- shiny$downloadHandler(
-      filename = function() {
-        paste0(
-          Sys.Date(),
-          "_amr_",
-          mode(),
-          ".",
-          input$amr_filetype %||% "png"
-        )
-      },
-      content = function(file) {
-        amr_plot$save_amr_plot(
+    # ---- Export contract ----------------------------------------------------
+    # The tab's sidebar owns the export panel and the download; this engine only
+    # says what it can produce and how to write it. The file name carries the
+    # view mode, since the three modes are different plots over the same data
+    # and an exported heatmap should not be mistaken for a prevalence chart.
+    export_aspect <- shiny$reactive(input$amr_aspect_ratio %||% ASPECT_DEFAULT)
+
+    export <- list(
+      kind = "ggplot",
+      label = shiny$reactive(paste0("amr_", mode())),
+      ready = shiny$reactive(isTRUE(generated())),
+      aspect = export_aspect,
+      save = function(file, format, opts) {
+        save_plot_export(
           amr_ggplot(),
           file,
-          input$amr_filetype %||% "png",
-          input$amr_aspect_ratio %||% ASPECT_DEFAULT
+          format,
+          width_cm = opts$width_cm,
+          aspect = export_aspect(),
+          dpi = opts$dpi
         )
       }
     )
-
-    # The export tab uses an action button; route it to the hidden download
-    # link.
-    shiny$observeEvent(input$amr_download, {
-      if (!isTRUE(generated())) {
-        shiny$showNotification(
-          "Generate a plot before saving it.",
-          type = "warning"
-        )
-        return()
-      }
-      shinyjs::click("download_amr")
-    })
 
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
@@ -1205,8 +1192,7 @@ server <- function(
           "amr_cluster_method",
           "amr_anno_scale",
           "amr_class_scale",
-          "amr_bar_scale",
-          "amr_filetype"
+          "amr_bar_scale"
         ),
         sliders = c(
           "amr_top_n",
@@ -1261,7 +1247,8 @@ server <- function(
       restore = restore,
       save_thumb = save_thumb,
       request_thumb = NULL,
-      thumb_data = NULL
+      thumb_data = NULL,
+      export = export
     )
   })
 }

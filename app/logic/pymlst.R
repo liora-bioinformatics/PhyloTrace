@@ -18,8 +18,10 @@ box::use(
   dplyr[select, left_join],
 )
 box::use(
+  app / logic / database_functions[migrate_species_name],
   app / logic / db_connect[connect],
   app / logic / logging[log_event],
+  app / logic / mlst_repo[canonical_species],
 )
 
 # Central Conda environment where all external bioinformatics CLI dependencies
@@ -88,6 +90,13 @@ download_cgmlst_scheme <- function(
     error = function(e) e
   )
 
+  # pyMLST mangles the species it scrapes off the scheme page before writing it
+  # to `mlst_type`; repair it here so every later reader (classical MLST lookup,
+  # AMR species, organism display) sees the real name.
+  if (!inherits(download_status, "error") && file.exists(db_path)) {
+    migrate_species_name(db_path)
+  }
+
   return(download_status)
 }
 
@@ -95,6 +104,8 @@ download_cgmlst_scheme <- function(
 # Explicit genome file paths are passed after a `--` separator to prevent file names
 # from being parsed as CLI options. Optional parameters (species, classical MLST,
 # AMR screening) are appended only when non-empty strings are provided.
+# Classical MLST additionally needs the scheme spec written by
+# mlst_repo$write_scheme_spec() - without it the script has nothing to build.
 typing_args <- function(
   db_path,
   genome_files,
@@ -102,8 +113,8 @@ typing_args <- function(
   coverage,
   env,
   species = NA_character_,
-  repo = "pubmlst",
   cla_db = NA_character_,
+  cla_spec = NA_character_,
   amr_env = NA_character_,
   amr_species = NA_character_,
   amr_out = NA_character_
@@ -122,9 +133,9 @@ typing_args <- function(
     !is.null(x) && length(x) == 1 && !is.na(x) && nzchar(x)
   }
   if (scalar_chr(species)) {
-    args <- c(args, "-s", species, "-r", repo)
-    if (scalar_chr(cla_db)) {
-      args <- c(args, "-m", cla_db)
+    args <- c(args, "-s", species)
+    if (scalar_chr(cla_db) && scalar_chr(cla_spec)) {
+      args <- c(args, "-m", cla_db, "-M", cla_spec)
     }
   }
   if (scalar_chr(amr_out) && scalar_chr(amr_env)) {
@@ -235,8 +246,8 @@ type_genomes <- function(
 #' @param coverage Numeric. BLAT target coverage cutoff (0 to 1). Defaults to `0.9`.
 #' @param env Character string. Conda environment name. Defaults to `conda_env`.
 #' @param species Character string (optional). Species name for classical MLST lookup.
-#' @param repo Character string. Classical MLST repository source. Defaults to `"pubmlst"`.
 #' @param cla_db Character string (optional). File path for intermediate classical MLST database.
+#' @param cla_spec Character string (optional). Scheme spec file from `write_scheme_spec()`.
 #' @param amr_env Character string (optional). Conda environment for AMR screening tools.
 #' @param amr_species Character string (optional). Species token for point mutation screening.
 #' @param amr_out Character string (optional). Output directory for AMR results.
@@ -252,8 +263,8 @@ start_typing <- function(
   coverage = 0.9,
   env = conda_env,
   species = NA_character_,
-  repo = "pubmlst",
   cla_db = NA_character_,
+  cla_spec = NA_character_,
   amr_env = NA_character_,
   amr_species = NA_character_,
   amr_out = NA_character_
@@ -269,8 +280,8 @@ start_typing <- function(
         coverage,
         env,
         species,
-        repo,
         cla_db,
+        cla_spec,
         amr_env,
         amr_species,
         amr_out
@@ -290,41 +301,75 @@ start_typing <- function(
 #'   allele profile strings.
 #'
 #' @details
+#' The allele profile decides the category, not the ST field: `claMLST search`
+#' does not require a unique ST before printing one. Whenever a locus is missing
+#' it intersects only the loci it did call, so its ST column can hold every
+#' candidate profile compatible with the partial call, semicolon-separated
+#' (e.g. `"1953;3684;11;..."`). Such a list is not a Sequence Type and must never
+#' be read as one. The same separator appears inside a locus when one gene
+#' matched several alleles.
+#'
 #' Profile categories:
-#' - `known`: Standard registered ST returned.
-#' - `novel`: Unregistered ST, but all loci successfully called.
+#' - `known`: All loci called with registered alleles and exactly one matching ST.
+#' - `novel`: All loci called, but the profile is unregistered or carries a new allele.
 #' - `partial`: At least one locus failed to call.
+#' - `ambiguous`: Loci fully called, yet the search could not settle on one ST.
 #' - `NA`: No usable loci called.
 #'
 #' @param st Character string or numeric. Sequence Type assigned by search.
 #' @param alleles Character string. Comma-delimited locus-allele key-value string (`"gene=allele"`).
 #'
-#' @return Character string (`"known"`, `"novel"`, `"partial"`, or `NA_character_`).
+#' @return Character string (`"known"`, `"novel"`, `"partial"`, `"ambiguous"`, or
+#'   `NA_character_`).
 #' @export
 clamlst_status <- function(st, alleles) {
-  if (
-    !is.null(st) &&
-      length(st) == 1 &&
-      !is.na(st) &&
-      nzchar(trimws(as.character(st)))
+  st_vals <- if (
+    is.null(st) || length(st) != 1 || is.na(st)
   ) {
-    return("known")
+    character(0)
+  } else {
+    vals <- trimws(strsplit(as.character(st), ";", fixed = TRUE)[[1]])
+    vals[nzchar(vals)]
   }
+
+  # Without a profile to check against, only a single ST can be trusted.
   if (
     is.null(alleles) ||
       length(alleles) != 1 ||
       is.na(alleles) ||
       !nzchar(alleles)
   ) {
-    return(NA_character_)
+    return(switch(
+      as.character(length(st_vals)),
+      "0" = NA_character_,
+      "1" = "known",
+      "ambiguous"
+    ))
   }
+
   pairs <- strsplit(alleles, ",", fixed = TRUE)[[1]]
   vals <- trimws(sub("^[^=]*=", "", pairs))
   n_present <- sum(nzchar(vals))
   if (n_present == 0) {
     return(NA_character_)
   }
-  if (n_present == length(vals)) "novel" else "partial"
+  if (n_present < length(vals)) {
+    return("partial")
+  }
+  # A locus reported as "new" has no registered allele, so the profile is novel
+  # by definition; several alleles at one locus leave the profile undecided.
+  if (any(vals == "new")) {
+    return("novel")
+  }
+  if (any(grepl(";", vals, fixed = TRUE))) {
+    return("ambiguous")
+  }
+  switch(
+    as.character(length(st_vals)),
+    "0" = "novel",
+    "1" = "known",
+    "ambiguous"
+  )
 }
 
 #' Parse Typing Run Logs into Structured Table
@@ -552,7 +597,10 @@ parse_clamlst_meta <- function(log_lines) {
 
 #' Query Target Species from Database
 #'
-#' @description Reads the species associated with the database's schema from the `mlst_type` table.
+#' @description Reads the species associated with the database's schema from the
+#'   `mlst_type` table, as the canonical cgmlst.org scheme name. Databases
+#'   written before `migrate_species_name()` carry pyMLST's mangled spelling, so
+#'   the name is repaired on the way out too.
 #'
 #' @param db_path Character string. File path to SQLite database.
 #'
@@ -587,7 +635,7 @@ db_species <- function(db_path) {
     return(NA_character_)
   }
   species <- trimws(as.character(res$species[1]))
-  if (nzchar(species)) species else NA_character_
+  if (nzchar(species)) canonical_species(species) else NA_character_
 }
 
 # Reads allele reference sequences and database schema migration markers from the intermediate claMLST database

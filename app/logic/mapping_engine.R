@@ -16,10 +16,12 @@
 # names the failure it exists to prevent.
 #
 # Two media, one engine. A tree draws onto tip points, tip labels and tile
-# strips; an MST draws onto node fill, node shape, node border and node label.
-# The *rules* are the same in both — a shape cannot show a continuum, a
-# tabulated palette cannot show 46 countries — so they are written once here and
-# the medium only supplies its own list of channels (`MAPPING_MEDIA`).
+# strips; an MST draws onto node fill alone — a merged node holds several
+# isolates, and the fill's pie is the one channel that can show all of their
+# values rather than collapsing to one. The *rules* are the same across both
+# media — a shape cannot show a continuum, a tabulated palette cannot show 46
+# countries — so they are written once here and the medium only supplies its
+# own list of channels (`MAPPING_MEDIA`).
 #
 # Pure: no shiny, no database, no ggplot.
 
@@ -75,37 +77,25 @@ MAPPING_MEDIA <- list(
     }
   ),
   mst = list(
-    # Fill and shape only. Border colour and label colour were channels here
-    # too, and both were unreadable at the size an MST node is actually drawn:
-    # a 1 px outline and a caption cannot carry a 46-level variable, and both
-    # collapse a merged node's distribution to its majority value — which is
-    # exactly what the pie exists to avoid. The border now belongs to the edge
-    # colour and the label to the text colour, as plain styling.
-    pool = c("node_fill", "node_shape"),
+    # Fill only. Node shape, border colour and label colour were channels here
+    # too, and all three were unreadable at the size an MST node is actually
+    # drawn: a 1 px outline, a caption and a marker shape cannot carry a
+    # 46-level variable, and — shape most of all — each collapses a merged
+    # node's distribution to its majority value, which is exactly what the
+    # pie exists to avoid. The border now belongs to the edge colour and the
+    # label to the text colour, as plain styling; shape is simply gone.
+    pool = c("node_fill"),
     labels = c(
-      node_fill = "Node fill",
-      node_shape = "Node shape"
+      node_fill = "Node fill"
     ),
     color = "node_fill",
-    shape = "node_shape",
-    # Nothing stacks on a network node: it has one fill and one shape. The MST's
-    # answer to "more variables than channels" is the tooltip, which carries
-    # every mapped field whether or not it has a channel.
+    # Nothing stacks on a network node: it has one fill. The MST's answer to
+    # "more variables than channels" is the tooltip, which carries every
+    # mapped field whether or not it has a channel.
     repeatable = character(0),
     caps = integer(0),
-    max_layers = 2L,
-    # Fill leads always, and a shape only ever takes the *second* variable: it
-    # is the one channel that cannot show a distribution, so nothing should be
-    # sent to it while the pie is free.
-    order = function(profile) {
-      if (isTRUE(profile$continuous)) {
-        "node_fill"
-      } else if (profile$levels <= MAX_SHAPE_LEVELS) {
-        c("node_fill", "node_shape")
-      } else {
-        "node_fill"
-      }
-    }
+    max_layers = 1L,
+    order = function(profile) "node_fill"
   )
 )
 
@@ -272,7 +262,7 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
       if (profile$levels == 1L) "" else "s", profile$n
     ))
   }
-  if (identical(aesthetic, .medium(medium)$shape)) {
+  if (!is.null(aesthetic) && identical(aesthetic, .medium(medium)$shape)) {
     if (isTRUE(profile$continuous)) {
       return("A shape cannot show a continuous variable.")
     }

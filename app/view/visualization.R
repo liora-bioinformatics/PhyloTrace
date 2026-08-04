@@ -28,6 +28,7 @@ box::use(
     showNotification,
     tags,
     tagList,
+    HTML,
     span,
     showModal,
     modalDialog,
@@ -172,8 +173,12 @@ box::use(
     # engine's control panel is inserted with its tab, long after page load),
     # copy each icon-only tab's text content to its title attribute so the
     # browser shows a native hover tooltip.
+    # HTML() is not optional on any of the inline scripts below. htmltools
+    # escapes a script body like ordinary text, so a bare `&&` reaches the
+    # browser as `&amp;&amp;` and the whole block dies on a SyntaxError —
+    # silently, since a script that fails to parse simply never runs.
     tags$script(
-      "(function(){
+      HTML("(function(){
          if(window.__phylotraceTabLabelerRegistered) return;
          window.__phylotraceTabLabelerRegistered = true;
          function labelTabs(wrap){
@@ -191,50 +196,115 @@ box::use(
            });
          });
          mo.observe(document.body,{childList:true,subtree:true});
-       })();"
+       })();")
     ),
-    # html2canvas powers the Map (Leaflet) thumbnail capture below. Loaded from
-    # a CDN — the app already reaches the network at runtime (Nominatim
-    # geocoding), and if it is unavailable the capture handler falls back to a
-    # placeholder. For a fully offline build, vendor html2canvas.min.js into
-    # app/static/js and point this <script> at it instead.
+    # html2canvas rasterises the Leaflet map, for both its thumbnail and its
+    # image export. Vendored into app/static/js rather than pulled from a CDN:
+    # export has to work on a machine that never reaches the network, and the
+    # bundled copy inside visNetwork is 0.5.0-alpha1, which has no `scale`
+    # option and so cannot render above screen resolution.
+    tags$script(src = "static/js/html2canvas.min.js"),
+    # Widget capture, serving both the dashboard's "Save Analysis" thumbnails
+    # and the sidebar's image export. The engine sends
+    # {selector, mode, inputId, scale, format, background}; the resulting data
+    # URI (or "" on any failure — tainted canvas, missing library, a widget that
+    # has not drawn yet) comes back through Shiny.setInputValue(inputId).
+    # Selector and input id are both namespaced by the sending engine, so one
+    # handler serves every plot tab.
+    #
+    # `scale` is what makes this an export rather than a screenshot. Both modes
+    # redraw the widget at that multiple of its on-screen size instead of
+    # copying the pixels already on screen, so text and strokes are rasterised
+    # afresh at the higher resolution:
+    #
+    #   "visnetwork" — vis.js derives its canvas backing store from
+    #     canvas._determinePixelRatio(). Overriding that and re-running
+    #     setSize() makes it redraw the entire network into a larger buffer, so
+    #     a 4x export of a 960px widget is a true 3840px render.
+    #   "html2canvas" — rasterises a DOM subtree at `scale`. Leaflet's overlays
+    #     (markers, labels, legend, choropleth polygons) are DOM/SVG and are
+    #     redrawn crisply; the basemap tiles are 256px rasters and can only be
+    #     upscaled, which is why the Map also offers interactive HTML.
+    #   "canvas" — the original 1:1 read, still used for cheap thumbnails.
     tags$script(
-      src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
-    ),
-    # Plot-thumbnail capture for the dashboard "Save Analysis" feature. The
-    # engine sends {selector, mode, inputId}: "canvas" reads a widget's own
-    # <canvas> (MST/visNetwork) via toDataURL; "html2canvas" rasterises a DOM
-    # subtree (the Leaflet map) if the html2canvas library is present. Either
-    # way the PNG data URI (or "" on any failure — tainted canvas, missing lib)
-    # is returned through Shiny.setInputValue(inputId), which the engine's
-    # thumb_data() reactive observes to finish the save with a placeholder.
-    # The selector and the input id are both namespaced by the sending engine,
-    # so one handler serves every plot tab.
-    tags$script(
-      "(function(){
+      HTML("(function(){
          if(window.__phylotraceCaptureRegistered) return;
          window.__phylotraceCaptureRegistered = true;
          function send(id,val){Shiny.setInputValue(id,val,{priority:'event'});}
+
+         function isClear(bg){
+           return !bg || bg==='transparent' ||
+                  /rgba\\(\\s*0\\s*,\\s*0\\s*,\\s*0\\s*,\\s*0\\s*\\)/.test(bg);
+         }
+
+         // A widget canvas holds only what was drawn on it, so the sidebar's
+         // background colour has to be laid down underneath here. JPEG has no
+         // alpha channel and would otherwise come back black.
+         function encode(src,format,bg){
+           var type=(format==='jpeg')?'image/jpeg':'image/png';
+           if(isClear(bg)&&type==='image/png') return src.toDataURL(type);
+           var out=document.createElement('canvas');
+           out.width=src.width; out.height=src.height;
+           var ctx=out.getContext('2d');
+           ctx.fillStyle=isClear(bg)?'#ffffff':bg;
+           ctx.fillRect(0,0,out.width,out.height);
+           ctx.drawImage(src,0,0);
+           var url=out.toDataURL(type,type==='image/jpeg'?0.98:undefined);
+           out.width=out.height=0;
+           return url;
+         }
+
+         function visNet(root){
+           var host=root.classList.contains('visNetwork')?root
+                    :root.querySelector('.visNetwork');
+           var init=host&&host.htmlwidget_data_init_result;
+           return (init&&init.network)?init.network:null;
+         }
+
+         function grabVis(root,msg){
+           var net=visNet(root);
+           if(!net||!net.canvas) return null;
+           var cv=net.canvas, orig=cv._determinePixelRatio, url=null;
+           try{
+             cv._determinePixelRatio=function(){return msg.scale;};
+             cv.setSize(); net.redraw();
+             url=encode(cv.frame.canvas,msg.format,msg.background);
+           } finally {
+             // Always put the widget back at screen resolution, or the tab is
+             // left holding a buffer several times larger than it needs.
+             cv._determinePixelRatio=orig;
+             cv.setSize(); net.redraw();
+           }
+           return url;
+         }
+
          Shiny.addCustomMessageHandler('phylotrace_capture', function(msg){
+           msg.scale=msg.scale||1; msg.format=msg.format||'png';
            try{
              var root=document.querySelector(msg.selector);
              if(!root){send(msg.inputId,'');return;}
-             if(msg.mode==='canvas'){
+             if(msg.mode==='visnetwork'){
+               var u=grabVis(root,msg);
+               send(msg.inputId,u||'');
+             } else if(msg.mode==='canvas'){
                var cv=(root.tagName==='CANVAS')?root:root.querySelector('canvas');
                if(!cv){send(msg.inputId,'');return;}
                var url=''; try{url=cv.toDataURL('image/png');}catch(e){url='';}
                send(msg.inputId,url);
              } else if(msg.mode==='html2canvas'){
                if(typeof html2canvas!=='function'){send(msg.inputId,'');return;}
-               html2canvas(root,{useCORS:true,logging:false,backgroundColor:'#ffffff'})
+               html2canvas(root,{useCORS:true,logging:false,scale:msg.scale,
+                                 backgroundColor:isClear(msg.background)
+                                   ?'#ffffff':msg.background})
                  .then(function(canvas){
-                   var url=''; try{url=canvas.toDataURL('image/png');}catch(e){url='';}
+                   var url='';
+                   try{url=encode(canvas,msg.format,msg.background);}catch(e){url='';}
                    send(msg.inputId,url);
                  }).catch(function(){send(msg.inputId,'');});
              } else {send(msg.inputId,'');}
            }catch(e){send(msg.inputId,'');}
          });
-       })();"
+       })();")
     )
   )
 }

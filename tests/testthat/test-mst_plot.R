@@ -104,6 +104,21 @@ test_that("a branch too long to draw to scale is capped and reported", {
   expect_gt(max(loose$length), impl$MST_BASE_EDGE_PX * impl$MST_MAX_EDGE_MULT)
 })
 
+test_that("the cap multiplier is configurable, not fixed at MST_MAX_EDGE_MULT", {
+  weights <- c(1, 2, 2, 3, 5000)
+  tight <- mst_plot$mst_edge_lengths(weights, "real", shorten = TRUE, cap_mult = 3)
+  expect_equal(max(tight$length), impl$MST_BASE_EDGE_PX * 3)
+  expect_identical(tight$shortened, c(FALSE, FALSE, FALSE, FALSE, TRUE))
+  # A weight now capped at 3x that was not capped at the default 7x.
+  loose <- mst_plot$mst_edge_lengths(weights, "real", shorten = TRUE)
+  expect_lt(sum(loose$shortened), sum(tight$shortened) + 1L)
+  expect_gt(max(loose$length), max(tight$length))
+  # A cap below 1 is nonsensical (nothing would ever draw to scale), so it is
+  # floored rather than honoured.
+  floored <- mst_plot$mst_edge_lengths(weights, "real", shorten = TRUE, cap_mult = 0)
+  expect_equal(max(floored$length), impl$MST_BASE_EDGE_PX)
+})
+
 test_that("uniform lengths ignore the weights entirely", {
   len <- mst_plot$mst_edge_lengths(c(1, 17, 900), "uniform")$length
   expect_equal(length(unique(len)), 1L)
@@ -445,12 +460,6 @@ test_that("a continuous variable collapses to the node's mean", {
   expect_true(is.na(vals$value[[2]]))
 })
 
-test_that("shapes are assigned only to levels that have one", {
-  shapes <- mst_plot$mst_level_shapes(c("x", "y", "Not recorded"))
-  expect_identical(unname(shapes[c("x", "y")]), c("dot", "square"))
-  expect_identical(shapes[["Not recorded"]], "triangleDown")
-})
-
 # --- 7. Legend ---------------------------------------------------------------
 
 test_that("the legend names every cluster and the threshold that made them", {
@@ -540,13 +549,15 @@ base_opts <- function(...) {
     edge_color = "#000000",
     edge_font_color = "#000000", background = "#ffffff", transparent = TRUE,
     scale_nodes = TRUE, node_size = c(10, 24), shape = "dot", shadow = TRUE,
-    length_mode = "log", spread = 15, shorten_long = TRUE, rotation = 0,
+    length_mode = "log", spread = 15, shorten_long = TRUE, cap_mult = 7,
+    rotation = 0,
     layers = list(),
     show_clusters = FALSE, cluster_threshold = 10,
     cluster_col_scale = "viridis", cluster_width = 14,
     cluster_opacity = 0.35, cluster_label_size = 18,
     cluster_label_tint = TRUE,
-    show_legend = TRUE, legend_ori = "left", canvas_px = c(900, 620)
+    show_legend = TRUE, legend_ori = "left", show_caption = TRUE,
+    canvas_px = c(900, 620)
   )
   overrides <- list(...)
   for (name in names(overrides)) {
@@ -590,20 +601,6 @@ test_that("a mapping turns the node into a pie of its members' values", {
   single <- fr$nodes$metadata[fr$nodes$id == "a"]
   expect_identical(lengths(regmatches(single, gregexpr('"v":', single))), 1L)
   expect_true(length(fr$legend) > 1L)
-})
-
-test_that("a mapping onto shape leaves the fill alone", {
-  opts <- base_opts(layers = list(list(
-    field = "country", title = "Country", aesthetic = "node_shape",
-    palette = NULL
-  )))
-  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
-  expect_identical(unique(fr$nodes$color.background), "#B2FACA")
-  # Shape can hold one value per node, so a mixed node takes its commonest —
-  # and the legend says which shape means what.
-  expect_true(any(grepl("shape", vapply(
-    fr$legend, function(i) i$label %||% "", character(1)
-  ))))
 })
 
 test_that("clusters are drawn as regions, never as node fill", {
@@ -655,12 +652,138 @@ test_that("the region is one path at the requested opacity", {
     demo_graph(), demo_meta(), opts, fr
   )$x$events$beforeDrawing
   expect_true(grepl("var A=0.5", hook, fixed = TRUE))
-  expect_true(grepl("LS=22", hook, fixed = TRUE))
   # One beginPath and one fill per region: a fill per disc and capsule is what
   # made a translucent region composite into a patchwork.
   expect_identical(
     lengths(regmatches(hook, gregexpr("ctx.fill()", hook, fixed = TRUE))),
     1L
+  )
+})
+
+test_that("a cluster's name is drawn over the graph, not under it", {
+  opts <- base_opts(show_clusters = TRUE, cluster_threshold = 5,
+                    cluster_label_size = 22)
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  widget <- mst_plot$build_mst_visnetwork(demo_graph(), demo_meta(), opts, fr)
+  # It used to ride along in the region hook — a beforeDrawing handler — so any
+  # name that landed on the tree was painted underneath it and simply vanished.
+  expect_false(grepl("LS=22", widget$x$events$beforeDrawing, fixed = TRUE))
+  after <- widget$x$events$afterDrawing
+  expect_true(grepl("var LS=22", after, fixed = TRUE))
+  expect_true(grepl("Cluster 1", after, fixed = TRUE))
+  # And a halo behind the glyphs, for the part of a name that does cross a
+  # branch.
+  expect_true(grepl("strokeText", after, fixed = TRUE))
+  # Size 0 is off: no label pass at all.
+  off <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 5,
+              cluster_label_size = 0)
+  )$x$events$afterDrawing
+  expect_false(grepl("strokeText", off, fixed = TRUE))
+})
+
+test_that("every edge carries an id, so an update updates rather than adds", {
+  # vis.js's DataSet.update() looks an item up by id and *appends* the ones it
+  # cannot find, so an id-less edge table pushed through visUpdateEdges() added
+  # a second copy of every branch. It showed as allelic distances that could be
+  # switched on but never off: the new unlabelled edges were drawn on top of
+  # the labelled ones, which were still there.
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), base_opts())
+  expect_true("id" %in% names(fr$edges))
+  expect_identical(anyDuplicated(fr$edges$id), 0L)
+  # And the same edge keeps the same id when only its styling changes, or the
+  # update would still be an append.
+  off <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(show_edge_label = FALSE)
+  )
+  expect_identical(off$edges$id, fr$edges$id)
+  # A space, not "": vis.js only overwrites an edge label on update when the
+  # new value is truthy, so "" is silently ignored and the old label sticks.
+  expect_identical(unique(off$edges$label), " ")
+  expect_false(identical(unique(fr$edges$label), " "))
+})
+
+test_that("collapsing merges nodes no further apart than the threshold", {
+  plain <- mst_plot$mst_frames(demo_graph(), demo_meta(), base_opts())
+  # The demo tree's branches are 1, 2, 400 and 3 alleles.
+  at3 <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(collapse_threshold = 3)
+  )
+  expect_lt(nrow(at3$nodes), nrow(plain$nodes))
+  expect_identical(at3$collapsed, 3L)
+  # A contraction of a tree is a tree: no branch is lost or duplicated.
+  expect_identical(nrow(at3$edges), nrow(at3$nodes) - 1L)
+  # No isolate goes missing — the merged node's id is its members' names, which
+  # is the same shape a zero-distance merge already produces.
+  expect_identical(sum(at3$counts), sum(plain$counts))
+  # Only the 400-allele branch is left, so every node but two is now in one.
+  expect_true(all(at3$edges$weight > 3))
+  # 0 collapses nothing, and is the default.
+  expect_identical(
+    mst_plot$mst_frames(
+      demo_graph(), demo_meta(), base_opts(collapse_threshold = 0)
+    )$collapsed,
+    0L
+  )
+})
+
+test_that("a threshold that folds the whole tree still draws", {
+  # One node and no edges at all. Every constant edge column has to be built at
+  # length zero rather than as a scalar, or data.frame() refuses the frame and
+  # the module dies mid-render.
+  whole <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(collapse_threshold = 10000)
+  )
+  expect_identical(nrow(whole$nodes), 1L)
+  expect_identical(nrow(whole$edges), 0L)
+  expect_identical(whole$counts, 6L)
+  expect_silent(
+    mst_plot$build_mst_visnetwork(
+      demo_graph(), demo_meta(),
+      base_opts(collapse_threshold = 10000), whole
+    )
+  )
+})
+
+test_that("rotation moves the drawing without changing the tree", {
+  base <- mst_plot$mst_frames(demo_graph(), demo_meta(), base_opts())
+  turned <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(rotation = 90)
+  )
+  expect_false(isTRUE(all.equal(base$coords$x, turned$coords$x)))
+  # A rotation is an isometry: every branch keeps its length and the layout
+  # stays crossing-free.
+  seg_len <- function(fr) {
+    ix <- stats::setNames(seq_len(nrow(fr$coords)), fr$coords$id)
+    f <- ix[fr$edges$from]
+    t <- ix[fr$edges$to]
+    sqrt((fr$coords$x[f] - fr$coords$x[t])^2 +
+           (fr$coords$y[f] - fr$coords$y[t])^2)
+  }
+  expect_equal(seg_len(base), seg_len(turned))
+  expect_identical(
+    mst_plot$mst_count_crossings(
+      turned$coords, turned$edges$from, turned$edges$to
+    ),
+    0L
+  )
+  # 360 is a full turn, and 0 is a no-op.
+  expect_equal(
+    mst_plot$mst_frames(
+      demo_graph(), demo_meta(), base_opts(rotation = 360)
+    )$coords$x,
+    base$coords$x
+  )
+  # The control runs -180 to 180 rather than 0 to 360, but -90 and 270 are the
+  # same rotation, so the geometry has to agree either way.
+  expect_equal(
+    mst_plot$mst_frames(
+      demo_graph(), demo_meta(), base_opts(rotation = -90)
+    )$coords,
+    mst_plot$mst_frames(
+      demo_graph(), demo_meta(), base_opts(rotation = 270)
+    )$coords
   )
 })
 
@@ -670,6 +793,10 @@ test_that("the widget is built without physics and with the layout baked in", {
     demo_graph(), demo_meta(), base_opts(), fr
   )
   expect_false(widget$x$options$physics$enabled)
+  # Dragging a node would move it away from the coordinates that *are* the
+  # data, and the cluster regions — baked into a canvas hook at build time —
+  # cannot follow it.
+  expect_false(widget$x$options$interaction$dragNodes)
   expect_false(widget$x$options$edges$smooth)
   # Coordinates travel with the nodes, which is what there is instead of a
   # client-side simulation.
@@ -740,10 +867,61 @@ test_that("a category name with a quote in it cannot break the legend's JS", {
   expect_true(grepl('A \\"B\\"', drawn, fixed = TRUE))
 })
 
-test_that("the legend can be switched off entirely", {
+test_that("the legend can be switched off without hiding the caption", {
   opts <- base_opts(show_clusters = TRUE, cluster_threshold = 5,
                     show_legend = FALSE)
   fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
-  widget <- mst_plot$build_mst_visnetwork(demo_graph(), demo_meta(), opts, fr)
-  expect_false(grepl("Cluster 1", widget$x$events$afterDrawing, fixed = TRUE))
+  drawn <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts, fr
+  )$x$events$afterDrawing
+  # The two switches are independent: which length transform drew the branches
+  # is not the reader's own choice the way a mapping or a cluster threshold is,
+  # so it keeps its own control rather than riding along with the legend's.
+  expect_false(grepl("L.items", drawn, fixed = TRUE))
+  expect_true(grepl("Branch length", drawn, fixed = TRUE))
+})
+
+test_that("the caption has its own switch, off by default disabled", {
+  opts <- base_opts(show_caption = FALSE)
+  drawn <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts,
+    mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  )$x$events$afterDrawing
+  expect_false(grepl("Branch length", drawn, fixed = TRUE))
+})
+
+test_that("the caption states which length transform drew the branches", {
+  # A reader who assumes proportional length while looking at a log-scaled tree
+  # misjudges how related two clusters are, and nothing else on the canvas says
+  # which of the three drew it.
+  expect_match(mst_plot$mst_scale_caption("real"), "proportional to allelic")
+  expect_match(mst_plot$mst_scale_caption("log"), "log-scaled")
+  expect_match(mst_plot$mst_scale_caption("uniform"), "not to scale")
+  # The cap only exists where length carries distance, and states the
+  # multiplier actually in force rather than the constant default.
+  expect_match(mst_plot$mst_scale_caption("log", TRUE, 12), "12x the median")
+  expect_false(grepl("capped", mst_plot$mst_scale_caption("log", FALSE)))
+  expect_false(grepl("capped", mst_plot$mst_scale_caption("uniform", TRUE)))
+
+  opts <- base_opts(length_mode = "uniform")
+  drawn <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts,
+    mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  )$x$events$afterDrawing
+  expect_true(grepl("not to scale", drawn, fixed = TRUE))
+})
+
+test_that("the cap multiplier is a control, not just a constant", {
+  # The demo tree's longest branch is 400 alleles against a median of 2.5 —
+  # ~160x, so a 2x cap bites and a 200x one does not.
+  tight <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(length_mode = "real", cap_mult = 2)
+  )
+  loose <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(length_mode = "real", cap_mult = 200)
+  )
+  expect_true(any(tight$edges$dashes))
+  expect_false(any(loose$edges$dashes))
+  expect_gt(max(loose$coords$x) - min(loose$coords$x),
+            max(tight$coords$x) - min(tight$coords$x))
 })

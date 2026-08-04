@@ -48,6 +48,7 @@ box::use(
   app / logic / field_labels[field_label],
   app / logic / field_profile[field_profiles_of = field_profiles],
   app / logic / functions[render_info],
+  app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
@@ -1393,12 +1394,7 @@ server <- function(
         id = ns("plot_stage"),
         prompt,
         loading,
-        shiny$plotOutput(ns("epi_plot"), height = "auto"),
-        # Hidden target the export action button clicks to start the download.
-        shiny$div(
-          class = "d-none",
-          shiny$downloadButton(ns("download_epi"), "Download plot")
-        )
+        shiny$plotOutput(ns("epi_plot"), height = "auto")
       )
     })
 
@@ -1460,32 +1456,29 @@ server <- function(
       deleteFile = TRUE
     )
 
-    output$download_epi <- shiny$downloadHandler(
-      filename = function() {
-        paste0(Sys.Date(), "_epi_curve.", input$epi_filetype %||% "png")
-      },
-      content = function(file) {
-        epi_plot$save_epi_plot(
+    # ---- Export contract ----------------------------------------------------
+    # The tab's sidebar owns the export panel and the download; this engine only
+    # says what it can produce and how to write it. The canvas takes the aspect
+    # slider even in Square blocks mode, where coord_fixed centres the grid in
+    # it and plot.background fills the letterbox with the chosen colour.
+    export_aspect <- shiny$reactive(input$epi_aspect_ratio %||% ASPECT_DEFAULT)
+
+    export <- list(
+      kind = "ggplot",
+      label = "epi_curve",
+      ready = shiny$reactive(isTRUE(generated())),
+      aspect = export_aspect,
+      save = function(file, format, opts) {
+        save_plot_export(
           epi_ggplot(),
           file,
-          input$epi_filetype %||% "png",
-          input$epi_aspect_ratio %||% ASPECT_DEFAULT
+          format,
+          width_cm = opts$width_cm,
+          aspect = export_aspect(),
+          dpi = opts$dpi
         )
       }
     )
-
-    # The export tab uses an action button; route it to the hidden download
-    # link.
-    shiny$observeEvent(input$epi_download, {
-      if (!isTRUE(generated())) {
-        shiny$showNotification(
-          "Generate a plot before saving it.",
-          type = "warning"
-        )
-        return()
-      }
-      shinyjs::click("download_epi")
-    })
 
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
@@ -1561,7 +1554,8 @@ server <- function(
       restore = restore,
       save_thumb = save_thumb,
       request_thumb = NULL,
-      thumb_data = NULL
+      thumb_data = NULL,
+      export = export
     )
   })
 }

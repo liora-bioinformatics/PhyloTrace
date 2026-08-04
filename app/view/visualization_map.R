@@ -2981,12 +2981,16 @@ server <- function(
       frame_coords(leafletProxy("map"), coords, fly = TRUE)
     })
 
-    # HTML export: rebuild the current map with the shared builder and serialise
-    # it as a self-contained interactive HTML file (downloadButton triggers the
-    # browser download directly).
-    output$map_html <- shiny$downloadHandler(
-      filename = function() paste0(Sys.Date(), "_map.html"),
-      content = function(file) {
+    # ---- Export contract ----------------------------------------------------
+    # A browser-drawn engine: the tab's sidebar asks for a raster and the client
+    # answers through `capture_data`. HTML is the format the server writes
+    # itself, rebuilding the current map with the shared builder and serialising
+    # it as a self-contained interactive file.
+    export <- list(
+      kind = "widget",
+      label = "map",
+      ready = shiny$reactive(isTRUE(generated())),
+      save = function(file, format, opts) {
         o <- map_opts()
         base <- map_coords()
         coords <- filter_coords(base, o)
@@ -3003,7 +3007,25 @@ server <- function(
           m <- frame_coords(m, coords)
         }
         htmlwidgets::saveWidget(m, file, selfcontained = TRUE)
-      }
+      },
+      # html2canvas re-rasterises the DOM at `scale`, so the overlays that carry
+      # the data — markers, labels, legend, choropleth polygons — are redrawn
+      # crisply. The basemap tiles are fixed-resolution images and can only be
+      # upscaled, which is why HTML is offered alongside.
+      capture = function(format, opts) {
+        session$sendCustomMessage(
+          "phylotrace_capture",
+          list(
+            selector = paste0("#", ns("map")),
+            mode = "html2canvas",
+            inputId = session$ns("export_capture"),
+            scale = opts$scale,
+            format = format,
+            background = "#ffffff"
+          )
+        )
+      },
+      capture_data = shiny$reactive(input$export_capture)
     )
 
     # On session reset (top-level app-reset), clear the markers and cached
@@ -3262,7 +3284,8 @@ server <- function(
       restore = restore,
       save_thumb = NULL,
       request_thumb = request_thumb,
-      thumb_data = shiny$reactive(input$thumb_data)
+      thumb_data = shiny$reactive(input$thumb_data),
+      export = export
     )
   })
 }

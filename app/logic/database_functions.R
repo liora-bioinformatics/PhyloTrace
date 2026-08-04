@@ -25,6 +25,7 @@ box::use(
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / field_labels[AMR_COL_PREFIX, MLST_COL_PREFIX],
   app / logic / logging[log_event],
+  app / logic / mlst_repo[canonical_species],
 )
 
 # Helper: normalizes locus names by converting underscores to hyphens for matching.
@@ -97,6 +98,68 @@ migrate_isolate_key <- function(db_path) {
   }
 
   invisible(renamed)
+}
+
+#' Repair the Scheme Species Name
+#'
+#' pyMLST writes the cgmlst.org species into `mlst_type` through
+#' `str.lstrip("Species")`, which strips a character *set* rather than a prefix
+#' and so eats the leading letters of every epithet starting with S/p/e/c/i/s
+#' ("Klebsiella pneumoniae/..." arrives as "Klebsiella neumoniae/..."). That
+#' name is what classical MLST scheme lookup, AMR species mapping and the
+#' organism display all read, so it is repaired in place.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Invisibly, the canonical species when it was rewritten, else `NA`.
+#' @export
+migrate_species_name <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(invisible(NA_character_))
+  }
+
+  con <- connect(db_path)
+  on.exit(dbDisconnect(con))
+
+  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
+  if (!("mlst_type" %in% tables)) {
+    return(invisible(NA_character_))
+  }
+  current <- tryCatch(dbReadTable(con, "mlst_type")$species, error = function(e) NULL)
+  if (is.null(current) || !length(current) || is.na(current[1]) || !nzchar(current[1])) {
+    return(invisible(NA_character_))
+  }
+
+  canonical <- canonical_species(current[1])
+  if (is.na(canonical) || identical(canonical, current[1])) {
+    return(invisible(NA_character_))
+  }
+
+  ok <- tryCatch(
+    {
+      dbExecute(
+        con,
+        "UPDATE mlst_type SET species = ? WHERE species = ?",
+        params = list(canonical, current[1])
+      )
+      TRUE
+    },
+    error = function(e) FALSE
+  )
+  if (!isTRUE(ok)) {
+    return(invisible(NA_character_))
+  }
+
+  log_event(
+    "DB",
+    "migrate species name",
+    sprintf("'%s' -> '%s'", current[1], canonical)
+  )
+  invisible(canonical)
 }
 
 #' Load Scheme Overview Data
@@ -357,7 +420,7 @@ load_classical_mlst <- function(db_path) {
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
   # ST display: the registered number when known, otherwise the status word
-  # ("novel"/"partial")
+  # ("novel"/"partial"/"ambiguous") - only a "known" call has an ST stored.
   st <- vapply(
     isolates,
     function(s) .first_nonempty(cm$st[cm$isolate == s]),
@@ -368,6 +431,10 @@ load_classical_mlst <- function(db_path) {
     function(s) .first_nonempty(cm$status[cm$isolate == s]),
     character(1)
   )
+  # Rows written before claMLST's candidate lists were caught can hold a
+  # semicolon-separated set of STs where a single one belongs - never an ST.
+  undetermined <- !is.na(st) & grepl(";", st, fixed = TRUE)
+  st[undetermined] <- "ambiguous"
   missing <- is.na(st) | !nzchar(st)
   st[missing] <- status[missing]
   out[[paste0(MLST_COL_PREFIX, "st")]] <- unname(st)

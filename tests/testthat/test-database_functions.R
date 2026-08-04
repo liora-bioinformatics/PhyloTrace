@@ -74,6 +74,28 @@ test_that("load_classical_mlst pivots to one row per isolate", {
   expect_identical(out[[paste0(MLST_COL_PREFIX, "fumC")]], c("3", "5"))
 })
 
+test_that("load_classical_mlst never shows a candidate ST list as the ST", {
+  # Rows written before claMLST's candidate lists were caught: the search could
+  # not settle on one ST, yet stored the whole set under a "known" status.
+  dir <- local_tempdir()
+  db <- file.path(dir, "db.sqlite")
+  build_db(db, default_local())
+  add_classical_mlst(
+    db,
+    data.frame(
+      isolate = c("A", "A"),
+      gene = c("adk", "fumC"),
+      allele = c("1", "3"),
+      st = c("11;2193;690", "11;2193;690"),
+      status = c("known", "known"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  out <- load_classical_mlst(db)
+  expect_identical(out[[paste0(MLST_COL_PREFIX, "st")]], "ambiguous")
+})
+
 test_that("load_classical_mlst omits isolates absent from classical_mlst", {
   dir <- local_tempdir()
   db <- file.path(dir, "db.sqlite")

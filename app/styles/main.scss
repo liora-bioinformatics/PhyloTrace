@@ -677,6 +677,33 @@ $viz-tile-row-gap: 0.85rem;
     background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.2) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.2) 75%, transparent 75%);
 }
 
+// MST canvas (see visualization_mst.R). The vis.js canvas is sized here rather
+// than in R: its width used to be computed from the height the browser reported
+// for the output, which meant every size report re-rendered the output, which
+// made the browser report a size again — a loop that re-created the whole
+// network several times per Generate.
+//
+// --mst-aspect is width/height, fixed at 16:9 — the shape a figure is expected
+// to be in once it leaves this panel (screenshotted, presented, dropped into a
+// document), which the downloaded HTML always will be. There used to be a
+// slider for this; a control only makes sense where there is a reason to want
+// something other than the shape the plot is headed for.
+.mst-canvas-wrap {
+    --mst-aspect: 16 / 9;
+
+    height: 100%;
+    aspect-ratio: var(--mst-aspect);
+    // Never wider than the stage: past that the canvas would overflow the card
+    // rather than the drawing shrinking to fit it.
+    max-width: 100%;
+}
+
+.mst-canvas-wrap .visNetwork,
+.mst-canvas-wrap .vis-network {
+    width: 100% !important;
+    height: 100% !important;
+}
+
 // Tree display modes (see visualization_tree.R). The ggtree image is rendered
 // at panel-width × aspect-ratio by renderPlot(); this only restyles how that
 // already-rendered image is presented in the stage — it never re-renders.
@@ -902,6 +929,12 @@ $viz-tile-row-gap: 0.85rem;
     .viz-color-label {
         cursor: not-allowed;
     }
+}
+
+// A sliderInput whose control is disabled from the server: shinyjs dims the
+// ionRangeSlider track and handle on its own, but not the label above it.
+.viz-slider-row.is-disabled .control-label {
+    opacity: 0.5;
 }
 
 // Map plot stage: unlike .viz-plot-stage (which centers a fixed-size plot
@@ -3726,6 +3759,15 @@ label {
 
 .shinyFiles i {
     margin-right: 1ch;
+}
+
+#app-visualization-plot_set>li:first-child>.nav-link {
+    top: 1px;
+    position: relative
+}
+
+#app-visualization-plot_set>li:first-child>.nav-link.active {
+    cursor: auto !important;
 }
 
 .modal {
