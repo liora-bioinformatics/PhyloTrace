@@ -196,6 +196,10 @@ if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
                 -s "$SPECIES" -V "$CLA_VERSION" \
                 "$CLA_DB" "$CLA_TMP/profiles.csv" "$CLA_TMP"/locus/*.fasta; then
             built=1
+            # Kept for the ST lookup on finalize: claMLST create drops profile
+            # rows whose locus is recorded as absent (allele 0), so the table
+            # itself is the only place those STs can still be reached.
+            cp "$CLA_TMP/profiles.csv" "$CLA_DB.profiles.tsv"
         fi
         rm -rf "$CLA_TMP"
     fi
@@ -204,12 +208,22 @@ if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
         echo "Classical MLST repository: $CLA_REPO"
         echo "Classical MLST scheme: $CLA_DATABASE ($CLA_SCHEME)"
         echo "Classical MLST scheme version: $CLA_VERSION"
-        echo "pyMLST version: $("$CONDA" run -n "$env" claMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
     else
         CLA_DB=""
         echo "Classical MLST: reference build failed for '$SPECIES' (skipping ST calls)"
     fi
 fi
+
+# --- Report Allele Calling Tooling Provenance ---
+# pyMLST drives both allele calling and the ST search; BLAT finds the loci and
+# MAFFT aligns the incomplete ones. Reported unconditionally, so a run records
+# what typed it even with classical MLST and AMR screening switched off. BLAT
+# prints its banner and exits non-zero when given no arguments; MAFFT reports on
+# stderr.
+echo "------------------------------------------------"
+echo "pyMLST version: $("$CONDA" run -n "$env" wgMLST --version 2>/dev/null | awk -F': ' '/Version/{print $2}')"
+echo "BLAT version: $("$CONDA" run -n "$env" blat 2>&1 | sed -n 's/.*BLAT v\. *\([0-9.]*\).*/\1/p' | head -1)"
+echo "MAFFT version: $("$CONDA" run -n "$env" mafft --version 2>&1 | head -1 | awk '{print $1}')"
 
 # --- Report AMR Tooling Provenance ---
 if [[ -n "$AMR_OUT" && -n "$AMR_ENV" ]]; then

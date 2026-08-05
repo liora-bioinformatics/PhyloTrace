@@ -75,8 +75,10 @@ box::use(
 )
 box::use(
   app / logic / db_events,
+  app / logic / app_meta[APP_VERSION],
   app / logic / functions[render_info],
   app / logic / logging[typing_log_file, log_event],
+  app / logic / provenance[scheme_provenance, store_provenance],
   app / logic / mlst_repo[REPO_URLS, resolve_mlst_scheme, write_scheme_spec],
   app /
     logic /
@@ -85,6 +87,10 @@ box::use(
       start_typing,
       parse_typing_log,
       parse_clamlst_meta,
+      parse_tool_meta,
+      read_st_profiles,
+      clamlst_refs,
+      cg_outcome,
       db_species,
       store_clamlst_results,
       existing_strains,
@@ -102,6 +108,7 @@ box::use(
     genome_hash[
       classify_genome,
       genome_hash_map,
+      genome_hash_row,
       store_genome_hash,
     ],
 )
@@ -219,7 +226,8 @@ results_columns <- list(
     tip = paste(
       "Classical 7-gene MLST: the Sequence Type, Novel (complete but",
       "unregistered profile), Partial (some loci not called) or Ambiguous",
-      "(several STs fit the profile)."
+      "(several STs fit the profile). A starred ST comes from the scheme's",
+      "profile table, where the uncalled locus is recorded as absent."
     )
   ),
   list(
@@ -624,6 +632,13 @@ server <- function(
       cla_db = NULL,
       # Path to the resolved scheme's download spec, handed to the script.
       cla_spec = NULL,
+      # This run's scheme profile table, read back once the build step is over.
+      cla_profiles = NULL,
+      # This run's claMLST reference sequences / schema marker, read once.
+      cla_refs = NULL,
+      # The database's cgMLST scheme context, stamped onto every isolate typed
+      # in this run.
+      scheme_context = NULL,
       # Base output dir for this run's AMR screens (one subdir per strain, read
       # once on finalize into amr_results / amr_summary, then deleted).
       amr_out = NULL,
@@ -647,11 +662,31 @@ server <- function(
     # graph, so writing them each tick does not re-trigger the observe itself.
     chk <- new.env(parent = emptyenv())
 
-    # Delete an interim claMLST reference DB (and any SQLite side files). Safe to
-    # call with NULL / NA / a non-existent path.
+    # Which strains each step has already been written to the mother database
+    # for, off the reactive graph for the same reason as `chk`: the polling
+    # observe both reads and writes it every tick. `tried` is per (step, strain)
+    # attempt, so a strain is never written twice while the run is live; `done`
+    # records the attempts that actually stored something, so the finalize sweep
+    # can retry the rest once the pyMLST process - the only other writer - is
+    # gone.
+    persisted <- new.env(parent = emptyenv())
+    reset_persisted <- function() {
+      steps <- list(
+        cla = character(0),
+        amr = character(0),
+        hash = character(0),
+        prov = character(0)
+      )
+      persisted$tried <- steps
+      persisted$done <- steps
+    }
+    reset_persisted()
+
+    # Delete an interim claMLST reference DB (SQLite side files and the scheme's
+    # profile table included). Safe to call with NULL / NA / a non-existent path.
     cleanup_cla_db <- function(path) {
       if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
-        unlink(c(path, paste0(path, c("-wal", "-shm"))))
+        unlink(c(path, paste0(path, c("-wal", "-shm", ".profiles.tsv"))))
       }
     }
 
@@ -661,6 +696,239 @@ server <- function(
       if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
         unlink(path, recursive = TRUE)
       }
+    }
+
+    # Writes the results of this run into the mother database, one isolate and
+    # one step at a time, as soon as that step is over for that isolate - the
+    # treatment allele calling gets for free, since pyMLST writes its own calls
+    # per genome. What is persisted is therefore always a prefix of the work
+    # actually done: an interrupted run costs at most the genome in flight,
+    # rather than leaving every finished isolate with allele calls but no ST, no
+    # AMR profile and no assembly hash - a gap that cannot be filled later,
+    # because a strain already in the database is refused by `wgMLST add`.
+    #
+    # Nothing is written for a strain the mother database has not accepted, so no
+    # row is ever keyed to a rejected isolate. Every store is per isolate and
+    # replaces that isolate's rows, so a repeated attempt is harmless; all are
+    # best-effort, and a failure never affects allele calling.
+    #
+    # These writes share the database with the running pyMLST process, which is
+    # why connect() arms a busy timeout. Contention is the exception rather than
+    # the rule: a strain's steps report in while pyMLST is busy with the *next*
+    # genome's BLAT search or is waiting on that strain's AMR screen, holding no
+    # write lock either way. `retry = TRUE` re-attempts the strains that failed
+    # anyway, and is used by the finalize sweep once the pyMLST process is gone
+    # and nothing else is writing.
+    persist_results <- function(results, lines, retry = FALSE) {
+      if (is.null(results) || !nrow(results)) {
+        return(invisible(NULL))
+      }
+      ready <- cg_outcome(results) == "Added"
+      if (!any(ready)) {
+        return(invisible(NULL))
+      }
+
+      pending <- function(step, strain) {
+        seen <- if (retry) persisted$done[[step]] else persisted$tried[[step]]
+        !(strain %in% seen)
+      }
+      record <- function(step, strain, stored) {
+        persisted$tried[[step]] <- union(persisted$tried[[step]], strain)
+        if (isTRUE(stored)) {
+          persisted$done[[step]] <- union(persisted$done[[step]], strain)
+        }
+      }
+      # Strains whose provenance row is refreshed at the end of this pass. On
+      # the closing sweep that is every accepted strain, so the last figures a
+      # step only knows once it is over - elapsed time, elements detected -
+      # reach the row even for isolates written several polls ago.
+      touched <- if (retry) results$strain[ready] else character(0)
+
+      # Classical MLST: one row per locus, plus the per-allele reference sequence
+      # and schema marker read from this run's interim reference DB and the
+      # run-level provenance the script logged (repository actually used, scheme,
+      # reference release, pyMLST version, thresholds).
+      cla_rows <- which(ready & !is.na(results$cla_status))
+      cla_rows <- cla_rows[vapply(
+        results$strain[cla_rows],
+        pending,
+        logical(1),
+        step = "cla"
+      )]
+      if (isTRUE(Typing$cla_enabled) && length(cla_rows)) {
+        meta <- parse_clamlst_meta(lines)
+        # The reference DB holds every allele of the scheme, so it is read once
+        # per run rather than once per isolate.
+        if (is.null(Typing$cla_refs) && !is.null(Typing$cla_db)) {
+          Typing$cla_refs <- clamlst_refs(Typing$cla_db)
+        }
+        for (i in cla_rows) {
+          stored <- tryCatch(
+            store_clamlst_results(
+              db_path = db_path(),
+              results = results[i, , drop = FALSE],
+              cla_db_path = if (is.null(Typing$cla_db)) {
+                NA_character_
+              } else {
+                Typing$cla_db
+              },
+              identity = or_default(input$identity, 0.95),
+              coverage = or_default(input$coverage, 0.9),
+              repository = meta$repository,
+              scheme = meta$scheme,
+              scheme_version = meta$scheme_version,
+              pymlst_version = meta$pymlst_version,
+              refs = Typing$cla_refs
+            ),
+            error = function(e) FALSE
+          )
+          record("cla", results$strain[i], stored)
+          touched <- union(touched, results$strain[i])
+        }
+      }
+
+      # AMR: read back out of this strain's abritamr output directory, with the
+      # tool / database versions and whether point mutations were enabled.
+      amr_rows <- which(ready & !is.na(results$amr_status) & results$amr_status == "done")
+      amr_rows <- amr_rows[vapply(
+        results$strain[amr_rows],
+        pending,
+        logical(1),
+        step = "amr"
+      )]
+      if (isTRUE(Typing$amr_enabled) && !is.null(Typing$amr_out) && length(amr_rows)) {
+        amr_meta <- parse_amr_meta(lines)
+        organism <- amr_species(db_species(db_path()))
+        for (i in amr_rows) {
+          strain <- results$strain[i]
+          stored <- tryCatch(
+            store_amr_results(
+              db_path = db_path(),
+              strain = strain,
+              amr_dir = file.path(Typing$amr_out, strain),
+              abritamr_version = amr_meta$abritamr_version,
+              amrfinder_version = amr_meta$amrfinder_version,
+              amrfinder_db_version = amr_meta$amrfinder_db_version,
+              organism = organism,
+              point_mutations = !is.na(organism),
+              identity = NA_real_
+            ),
+            error = function(e) FALSE
+          )
+          record("amr", strain, stored)
+          touched <- union(touched, strain)
+        }
+      }
+
+      # Genome hash: the assembly each isolate was actually typed from. This is
+      # the only provenance allele calling has - the calls say nothing about the
+      # input they were called from.
+      hash_rows <- which(ready)
+      hash_rows <- hash_rows[vapply(
+        results$strain[hash_rows],
+        pending,
+        logical(1),
+        step = "hash"
+      )]
+      for (i in hash_rows) {
+        strain <- results$strain[i]
+        file <- Typing$queued_files[match(strain, Typing$queued_strains)]
+        stored <- if (is.na(file)) {
+          FALSE
+        } else {
+          tryCatch(
+            store_genome_hash(db_path(), strain, file),
+            error = function(e) FALSE
+          )
+        }
+        record("hash", strain, stored)
+        touched <- union(touched, strain)
+      }
+
+      # Provenance: how this isolate was typed - the assembly it came from, the
+      # scheme and thresholds each analysis ran against, the tool versions
+      # behind them and what allele calling made of it. Refreshed after any step
+      # of this pass reported in, so the row grows with the isolate's results
+      # instead of being assembled once at the end.
+      if (length(touched)) {
+        tools <- parse_tool_meta(lines)
+        cla_meta <- parse_clamlst_meta(lines)
+        amr_meta <- parse_amr_meta(lines)
+        amr_organism <- if (isTRUE(Typing$amr_enabled)) {
+          amr_species(db_species(db_path()))
+        } else {
+          NA_character_
+        }
+        # A database with no scheme overview leaves the locus count unknown, so
+        # completeness stays NA rather than being derived from nothing.
+        locus_count <- Typing$scheme_context$cg_locus_count
+        if (is.null(locus_count)) {
+          locus_count <- NA_real_
+        }
+
+        for (strain in touched) {
+          i <- match(strain, results$strain)
+          hashes <- genome_hash_row(db_path(), strain)
+          stored <- tryCatch(
+            store_provenance(
+              db_path(),
+              strain,
+              c(
+                Typing$scheme_context,
+                hashes,
+                list(
+                  run_id = if (is.null(Typing$log_file)) {
+                    NA_character_
+                  } else {
+                    basename(Typing$log_file)
+                  },
+                  elapsed_seconds = results$elapsed[i],
+                  phylotrace_version = APP_VERSION,
+                  cg_identity = or_default(input$identity, 0.95),
+                  cg_coverage = or_default(input$coverage, 0.9),
+                  cg_loci_found = results$found[i],
+                  cg_alleles_added = results$added[i],
+                  cg_partial_genes = results$partial[i],
+                  cg_filled_genes = results$filled[i],
+                  cg_removed_genes = results$removed[i],
+                  cg_completeness = if (
+                    !is.na(locus_count) && locus_count > 0 && !is.na(results$found[i])
+                  ) {
+                    round(results$found[i] / locus_count * 100, 1)
+                  } else {
+                    NA_real_
+                  },
+                  cla_scheme = cla_meta$scheme,
+                  cla_scheme_version = cla_meta$scheme_version,
+                  cla_alembic_version = Typing$cla_refs$alembic,
+                  cla_repository = cla_meta$repository,
+                  cla_identity = or_default(input$identity, 0.95),
+                  cla_coverage = or_default(input$coverage, 0.9),
+                  amr_organism = amr_organism,
+                  amr_point_mutations = if (isTRUE(Typing$amr_enabled)) {
+                    as.integer(!is.na(amr_organism))
+                  } else {
+                    NA_integer_
+                  },
+                  amr_elements = results$amr_elements[i],
+                  amr_abritamr_version = amr_meta$abritamr_version,
+                  amr_amrfinder_version = amr_meta$amrfinder_version,
+                  amr_amrfinder_db_version = amr_meta$amrfinder_db_version,
+                  pymlst_version = tools$pymlst,
+                  blat_version = tools$blat,
+                  mafft_version = tools$mafft
+                )
+              )
+            ),
+            error = function(e) FALSE
+          )
+          if (isTRUE(stored)) {
+            persisted$done$prov <- union(persisted$done$prov, strain)
+          }
+        }
+      }
+
+      invisible(NULL)
     }
 
     # Non-reactive mirror of the live typing process. onSessionEnded() runs
@@ -713,6 +981,7 @@ server <- function(
         Typing$results <- NULL
         Typing$terminated <- FALSE
         Typing$refresh <- 0L
+        reset_persisted()
         log_text("")
         updateProgressBar(
           session,
@@ -943,14 +1212,17 @@ server <- function(
         tags$dd(
           "Derived per genome right after allele calling (claMLST search),",
           "using the same identity / coverage thresholds as cgMLST. A number is",
-          "shown only when all seven loci were called and exactly one ST matches;",
-          "otherwise the profile is flagged Novel, Partial or Ambiguous."
+          "shown only when exactly one ST matches; otherwise the profile is",
+          "flagged Novel, Partial or Ambiguous. Where a scheme records a locus",
+          "as absent (allele 0, e.g. pstS in Enterococcus faecium), the ST is",
+          "read from its profile table and shown starred."
         ),
         tags$dt("Scheme source"),
         tags$dd(
-          "Repository the 7-gene scheme is fetched from. If the chosen",
-          "repository has no scheme for the species, the other is tried",
-          "automatically; if neither has it, the ST is left blank."
+          "Repository the 7-gene scheme is fetched from. The species is",
+          "resolved to exactly one database and one scheme; if the chosen",
+          "repository cannot do that, the other is tried, and if neither can,",
+          "classical MLST is skipped for the run."
         ),
         tags$dt("When it's skipped"),
         tags$dd(
@@ -1318,18 +1590,11 @@ server <- function(
       # rather than finished: TRUE while this strain is still working.
       in_flight <- results$status %in% c("Pending", "Running")
 
-      # Allele calling is over the moment pymlst prints its DONE line, but a
-      # strain's log section is only closed out once the steps behind it report
-      # in (see parse_typing_log), so `status` still reads "Running" all through
-      # the classical MLST search and the AMR screen. Report the cgMLST outcome
-      # as soon as it is actually known: otherwise cgMLST and MLST both sit at
-      # "Running", which reads as two steps running at once. Only a successful
-      # run reaches DONE, so this can never pre-empt a failure verdict.
-      cg_status <- ifelse(
-        results$status == "Running" & cg_done,
-        "Added",
-        results$status
-      )
+      # Report the cgMLST outcome as soon as it is actually known (see
+      # cg_outcome): otherwise cgMLST and MLST both sit at "Running", which reads
+      # as two steps running at once. The same verdict decides when a strain's
+      # results may be written to the mother database.
+      cg_status <- cg_outcome(results)
 
       # Completeness (loci called / scheme size) is a metric of allele calling
       # alone, so it is filled once allele calling is done - in step with the
@@ -1369,6 +1634,12 @@ server <- function(
         switch(
           status,
           known = as.character(st),
+          # Same ST, reached through the scheme's profile table because a locus
+          # the scheme itself records as absent was not called.
+          inferred = sprintf(
+            '<span title="Locus absent - ST read from the scheme profile">%s*</span>',
+            as.character(st)
+          ),
           novel = '<span class="badge text-bg-warning">Novel</span>',
           partial = '<span class="badge text-bg-secondary">Partial</span>',
           ambiguous = '<span class="badge text-bg-secondary">Ambiguous</span>',
@@ -1794,6 +2065,13 @@ server <- function(
       log_typing("Run log file", Typing$log_file)
       log_text("")
       Typing$terminated <- FALSE
+      # Nothing of this run has reached the database yet.
+      reset_persisted()
+      # The scheme every isolate of this run is typed against, read once and
+      # stamped onto each provenance row: a snapshot, so a later scheme refresh
+      # cannot rewrite what these calls were made against.
+      Typing$scheme_context <- scheme_provenance(db_path())
+      Typing$cla_refs <- NULL
       # Seed an all-Pending table so the queue is visible immediately.
       Typing$results <- parse_typing_log(character(0), Typing$queued_strains)
 
@@ -1805,6 +2083,9 @@ server <- function(
       # => classical MLST is skipped for the whole run.
       species <- db_species(db_path())
       cla_scheme <- if (!is.na(species)) {
+        # Blocks on the repository APIs for a moment - logged so a slow or
+        # unreachable repository is visible as such rather than as a stall.
+        log_typing("Resolving classical MLST scheme", species)
         resolve_mlst_scheme(
           species,
           repos = union(or_default(input$cla_repo, "pubmlst"), names(REPO_URLS))
@@ -1999,8 +2280,25 @@ server <- function(
 
       log_text(paste(lines, collapse = "\n"))
 
-      results <- parse_typing_log(lines, Typing$queued_strains)
+      # The scheme's profile table lands next to the reference DB once the build
+      # step is through; read it once per run, then every poll can resolve the
+      # STs claMLST left undetermined.
+      if (is.null(Typing$cla_profiles) && !is.null(Typing$cla_db)) {
+        Typing$cla_profiles <- read_st_profiles(
+          paste0(Typing$cla_db, ".profiles.tsv")
+        )
+      }
+
+      results <- parse_typing_log(
+        lines,
+        Typing$queued_strains,
+        Typing$cla_profiles
+      )
       Typing$results <- results
+
+      # Bank each isolate's results the moment its step is over, rather than
+      # holding the whole run's worth until the process exits.
+      persist_results(results, lines)
       # Genomes whose whole pipeline is over - allele calling, classical MLST and
       # the AMR screen alike. The bar counts genomes, so a genome still being
       # screened is not one of them; the phase it is in is named by the status
@@ -2049,45 +2347,35 @@ server <- function(
       }
       Typing$refresh <- Typing$refresh + 1L
 
-      # Persist any classical MLST STs derived during this run into the mother
-      # DB's classical_mlst table (one row per allele), together with the
-      # per-allele reference sequence + schema marker read from this run's
-      # interim reference DB, and run-level provenance (repository actually used,
-      # scheme/species, reference release, pyMLST version, identity/coverage).
-      # Best-effort and additive: rows without an ST are skipped and any failure
-      # never affects cgMLST results. The interim reference DB is deleted straight
-      # after - it is a disposable per-run artifact.
+      # Everything the run produced has been banked isolate by isolate as it
+      # came in; this is the closing sweep. It re-attempts only what failed
+      # earlier - by now the pyMLST process is gone, so a write that lost the
+      # race for the database lock can go through - and picks up the last
+      # genome, whose steps finished after the final poll. Both the interim
+      # reference DB and the AMR output directory are still around at this
+      # point, so a retry has everything it needs; they are deleted below.
+      persist_results(results, lines, retry = TRUE)
+
       meta <- parse_clamlst_meta(lines)
       if (Typing$cla_enabled) {
         log_typing(
-          "Persisting classical MLST results",
-          sprintf("repo=%s scheme=%s", meta$repository, meta$scheme)
+          "Classical MLST results persisted",
+          sprintf(
+            "%d isolate(s) | repo=%s scheme=%s",
+            length(persisted$done$cla),
+            meta$repository,
+            meta$scheme
+          )
         )
       }
-      tryCatch(
-        store_clamlst_results(
-          db_path = db_path(),
-          results = results,
-          cla_db_path = if (is.null(Typing$cla_db)) {
-            NA_character_
-          } else {
-            Typing$cla_db
-          },
-          identity = or_default(input$identity, 0.95),
-          coverage = or_default(input$coverage, 0.9),
-          repository = meta$repository,
-          scheme = meta$scheme,
-          scheme_version = meta$scheme_version,
-          pymlst_version = meta$pymlst_version
-        ),
-        error = function(e) NULL
-      )
       cleanup_cla_db(Typing$cla_db)
       if (!is.null(Typing$cla_spec)) {
         unlink(Typing$cla_spec)
       }
       Typing$cla_db <- NULL
       Typing$cla_spec <- NULL
+      Typing$cla_profiles <- NULL
+      Typing$cla_refs <- NULL
       live_cla_db <<- NULL
 
       added <- sum(results$status == "Added")
@@ -2098,57 +2386,15 @@ server <- function(
         sprintf("%d added, %d duplicate, %d failed", added, duplicate, failed)
       )
 
-      # Record the assembly each isolate was actually typed from, for the
-      # strains the mother DB accepted (so genome_hashes never keys a row to an
-      # isolate that was rejected). This is the only provenance cgMLST has: the
-      # allele calls say nothing about the input they were called from.
-      # Best-effort and additive, exactly like the AMR / classical MLST blocks
-      # around it - a genome that can no longer be read is simply not recorded.
-      if (added > 0L) {
-        log_typing("Storing genome hashes", sprintf("%d strain(s)", added))
-      }
-      for (strain in results$strain[results$status == "Added"]) {
-        file <- Typing$queued_files[match(strain, Typing$queued_strains)]
-        if (is.na(file)) {
-          next
-        }
-        tryCatch(
-          store_genome_hash(db_path(), strain, file),
-          error = function(e) NULL
-        )
-      }
+      log_typing(
+        "Genome hashes persisted",
+        sprintf("%d strain(s)", length(persisted$done$hash))
+      )
 
-      # Persist AMR screening results for the strains that were actually added
-      # (so amr_results never keys rows to an isolate the mother DB rejected).
-      # Each strain's abritamr output was written to amr_out/<strain>; read it
-      # back into amr_results / amr_summary with run-level provenance (tool /
-      # AMRFinder DB versions, whether point mutations were enabled). Best-effort
-      # and additive - any failure never affects cgMLST / classical MLST results.
-      # The per-run AMR output dir is a disposable artifact, deleted right after.
       amr_enabled <- !is.null(Typing$amr_out)
-      amr_screened <- 0L
+      amr_screened <- length(persisted$done$amr)
       amr_elements <- 0L
       if (amr_enabled) {
-        amr_meta <- parse_amr_meta(lines)
-        organism <- amr_species(db_species(db_path()))
-        point_mutations <- !is.na(organism)
-        for (strain in results$strain[results$status == "Added"]) {
-          stored <- tryCatch(
-            store_amr_results(
-              db_path = db_path(),
-              strain = strain,
-              amr_dir = file.path(Typing$amr_out, strain),
-              abritamr_version = amr_meta$abritamr_version,
-              amrfinder_version = amr_meta$amrfinder_version,
-              amrfinder_db_version = amr_meta$amrfinder_db_version,
-              organism = organism,
-              point_mutations = point_mutations,
-              identity = NA_real_
-            ),
-            error = function(e) FALSE
-          )
-          if (isTRUE(stored)) amr_screened <- amr_screened + 1L
-        }
         # Total detected elements, scraped from the script's per-strain sentinel.
         el <- regmatches(
           lines,
@@ -2167,6 +2413,8 @@ server <- function(
             amr_elements
           )
         )
+        # The per-run AMR output dir is a disposable artifact: every screen it
+        # holds has been read into amr_results / amr_summary by now.
         cleanup_amr_out(Typing$amr_out)
         Typing$amr_out <- NULL
         live_amr_out <<- NULL
@@ -2177,9 +2425,11 @@ server <- function(
       # Announced once here, at the end of the run, rather than per strain: the
       # allele calls are written by pyMLST in a separate process, so for the
       # whole run the database is a moving target that no reader should be
-      # invalidated onto. By this point that process has exited and the
-      # in-process writes above (genome hashes, AMR) have committed, so this is
-      # the first moment the database is both changed and consistent.
+      # invalidated onto. Writing early and announcing early are separate
+      # concerns - the per-isolate persistence above deliberately stays silent.
+      # By this point the pyMLST process has exited and every in-process write
+      # has committed, so this is the first moment the database is both changed
+      # and consistent.
       #
       # `schema` because new isolates bring new allele rows into `sequences`;
       # `metadata` because make_metadata_table() back-fills a row per new

@@ -242,32 +242,16 @@ test_that("a selection keeps only its own rows", {
 
 # --- export -----------------------------------------------------------------
 
-test_that("each engine kind gets the export controls that apply to it", {
-  # A server-rendered plot is asked for in physical units and rasterised at a
-  # chosen DPI; a browser-drawn widget has no physical size to ask for and can
-  # only be redrawn at a multiple of its on-screen pixels. Offering the wrong
-  # control means offering one that changes nothing.
-  ggplot_ui <- as.character(visualization_plot$ui("t", "AMR"))
-  widget_ui <- as.character(visualization_plot$ui("t", "MST"))
-
-  expect_true(grepl("t-export_width", ggplot_ui, fixed = TRUE))
-  expect_true(grepl("t-export_dpi", ggplot_ui, fixed = TRUE))
-  expect_false(grepl("t-export_scale", ggplot_ui, fixed = TRUE))
-
-  expect_true(grepl("t-export_scale", widget_ui, fixed = TRUE))
-  expect_false(grepl("t-export_dpi", widget_ui, fixed = TRUE))
-  expect_false(grepl("t-export_width", widget_ui, fixed = TRUE))
-})
-
-test_that("the export panel carries the download target the button clicks", {
-  # The visible control is an actionButton so the server can refuse, and say
-  # why, before any file is offered. Without the hidden downloadButton behind
-  # it nothing ever downloads — which is exactly how the placeholder panel that
-  # this replaced failed.
+test_that("the sidebar panel holds only the trigger and the download target", {
+  # Every setting lives in the modal now. The one thing that must NOT move there
+  # is the hidden downloadButton: removeModal() destroys the modal's DOM, and
+  # the server clicks this target afterwards — for a widget engine, seconds
+  # afterwards, once the browser has finished re-rendering.
   html <- as.character(visualization_plot$ui("t", "AMR"))
-  expect_true(grepl("t-export_filetype", html, fixed = TRUE))
-  expect_true(grepl("t-export_download", html, fixed = TRUE))
+  expect_true(grepl("t-export_open", html, fixed = TRUE))
   expect_true(grepl("t-export_file", html, fixed = TRUE))
+  expect_false(grepl("t-export_filetype", html, fixed = TRUE))
+  expect_false(grepl("t-export_dpi", html, fixed = TRUE))
 })
 
 test_that("an unusable width falls back instead of reaching the device", {

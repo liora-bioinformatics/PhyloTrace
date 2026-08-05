@@ -47,6 +47,7 @@ box::use(
   app / logic / logging[log_event, start_session_log],
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database, hashes_pending],
+  app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[migrate_isolate_key, migrate_species_name],
   app / logic / db_events[bump_all, new_bus],
   app / view / landing_page,
@@ -113,7 +114,7 @@ ui <- function(id) {
         scheme_browser$ui(ns("scheme_browser"))
       ),
       nav_spacer(),
-      nav_item("v1.6.1"),
+      nav_item(paste0("v", APP_VERSION)),
       nav_item(
         actionButton(
           inputId = ns("toggle_dark"),

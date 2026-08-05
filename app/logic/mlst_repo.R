@@ -78,7 +78,16 @@ lstrip_set <- function(x, chars) {
   if (!length(keep)) "" else paste(letters_x[keep[1]:length(letters_x)], collapse = "")
 }
 
-# The form pyMLST would have stored for a cgmlst.org scheme name.
+#' Reproduce pyMLST's Damage to a Scheme Name
+#'
+#' @description Returns the form pyMLST would have stored in `mlst_type.species`
+#'   for a cgmlst.org scheme name, so a stored name can be matched back to the
+#'   scheme it came from.
+#'
+#' @param species Character string. Scheme species, spelled with spaces.
+#'
+#' @return The mangled species string, or `""` for an empty name.
+#' @export
 mangle_species <- function(species) {
   parts <- strsplit(trimws(species), " ", fixed = TRUE)[[1]]
   if (!length(parts)) {
@@ -171,7 +180,7 @@ match_species_db <- function(descriptions, species) {
   )
 
   for (want in c("species", "genus")) {
-    hits <- which(level == want)
+    hits <- unname(which(level == want))
     if (length(hits) == 1) {
       return(hits)
     }
@@ -208,21 +217,21 @@ match_mlst_scheme <- function(descriptions, loci, species) {
   }
   normalized <- trimws(tolower(descriptions))
 
-  plain <- which(normalized == "mlst")
+  plain <- unname(which(normalized == "mlst"))
   if (length(plain)) {
     return(plain[1])
   }
-  seven <- which(loci == 7L)
+  seven <- unname(which(loci == 7L))
   if (length(seven) == 1) {
     return(seven)
   }
   epithets <- species_parts(species)$epithets
   if (length(epithets)) {
-    named <- which(vapply(
+    named <- unname(which(vapply(
       normalized,
       function(d) any(vapply(epithets, grepl, logical(1), x = d, fixed = TRUE)),
       logical(1)
-    ))
+    )))
     if (length(named) == 1) {
       return(named)
     }

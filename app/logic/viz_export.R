@@ -30,6 +30,7 @@ box::use(
     div,
     downloadButton,
     icon,
+    modalDialog,
     numericInput,
     sliderInput,
     tagList,
@@ -38,6 +39,8 @@ box::use(
   shinyWidgets[pickerInput],
   svglite[svglite],
 )
+
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # --- Format definitions ------------------------------------------------------
 
@@ -82,77 +85,26 @@ CM_PER_IN <- 2.54
 
 #' Shared Visualization Export Panel UI
 #'
-#' The sidebar's "Export Plot" controls: file format, physical size, and the
-#' quality control appropriate to the engine kind (DPI for a server-rendered
-#' plot, a linear scale factor for a browser-rendered widget).
+#' The sidebar's "Export Plot" panel: a single button that opens the settings
+#' modal. The settings themselves live in `export_modal()` rather than here,
+#' since a sidebar column is a poor place to lay out a form and the export is a
+#' deliberate, one-off action rather than a live control.
 #'
-#' Returns a plain container rather than a `nav_panel`, since it is mounted
-#' inside the setup sidebar's accordion.
-#'
-#' The download itself goes through a hidden `downloadButton`: the visible
-#' control is an `actionButton` so the server can refuse (and say why) before a
-#' file is offered, and so the widget engines can run their asynchronous capture
-#' between the click and the download.
+#' The hidden `downloadButton` stays in the sidebar and must not move into the
+#' modal: `removeModal()` destroys the modal's DOM, and the server clicks this
+#' target *after* the modal is gone — for the widget engines, several seconds
+#' after, once the browser has finished re-rendering.
 #'
 #' @param ns Function. Module namespace function (`session$ns`).
 #' @param prefix Character. ID prefix unique to the calling module.
-#' @param kind Character. "ggplot" or "widget"; see the file header.
-#' @return A `div` of export controls.
+#' @return A `div` holding the trigger and the download target.
 #' @export
-export_panel <- function(ns, prefix, kind = "ggplot") {
+export_panel <- function(ns, prefix) {
   id <- function(suffix) ns(paste0(prefix, "_", suffix))
-  widget <- identical(kind, "widget")
-
   div(
     class = "viz-export",
-    pickerInput(
-      id("filetype"),
-      "File format",
-      choices = as.list(export_formats[[kind]]),
-      selected = "png"
-    ),
-    # The two kinds measure size and quality differently, and neither reading
-    # transfers to the other. A server-rendered plot is laid out in inches and
-    # rasterised at a chosen DPI, so it is asked for in physical units. A widget
-    # is laid out in CSS pixels by the browser and can only be redrawn at a
-    # multiple of them — there is no physical size to ask for, so offering one
-    # would be offering a control that changes nothing.
-    if (widget) {
-      sliderInput(
-        id("scale"),
-        "Render scale",
-        min = 1,
-        max = 6,
-        value = 3,
-        step = 1,
-        ticks = FALSE
-      )
-    } else {
-      tagList(
-        numericInput(
-          id("width"),
-          "Width (cm)",
-          value = 25,
-          min = 4,
-          max = 60,
-          step = 1
-        ),
-        pickerInput(
-          id("dpi"),
-          "Resolution",
-          choices = list(
-            "150 dpi (screen)" = "150",
-            "300 dpi (print)" = "300",
-            "600 dpi (high)" = "600",
-            "1200 dpi (line art)" = "1200"
-          ),
-          selected = "300"
-        )
-      )
-    },
-    uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
     actionButton(
-      id("download"),
+      id("open"),
       "Save plot",
       icon = icon("download"),
       width = "100%"
@@ -161,6 +113,90 @@ export_panel <- function(ns, prefix, kind = "ggplot") {
     div(
       class = "d-none",
       downloadButton(id("file"), "Download")
+    )
+  )
+}
+
+#' Export Settings Modal
+#'
+#' Every export control, plus a footer that commits or abandons the export.
+#'
+#' Re-created on each open, so the caller passes the values the controls last
+#' held — Shiny keeps an input's value after its UI is removed, but re-rendering
+#' the control resets it to whatever the declaration says. Seeding them is what
+#' stops the modal from forgetting the settings between exports.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param prefix Character. ID prefix unique to the calling module.
+#' @param kind Character. "ggplot" or "widget"; see the file header.
+#' @param values Named list of previously held control values.
+#' @return A `modalDialog` wrapped in its styling container.
+#' @export
+export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
+  id <- function(suffix) ns(paste0(prefix, "_", suffix))
+  widget <- identical(kind, "widget")
+  held <- function(name, default) values[[name]] %||% default
+
+  div(
+    class = "info-modal",
+    modalDialog(
+      title = "Export plot",
+      pickerInput(
+        id("filetype"),
+        "File format",
+        choices = as.list(export_formats[[kind]]),
+        selected = held("filetype", "png")
+      ),
+      # The two kinds measure size and quality differently, and neither reading
+      # transfers to the other. A server-rendered plot is laid out in inches and
+      # rasterised at a chosen DPI, so it is asked for in physical units. A
+      # widget is laid out in CSS pixels by the browser and can only be redrawn
+      # at a multiple of them — there is no physical size to ask for, so
+      # offering one would be offering a control that changes nothing.
+      if (widget) {
+        sliderInput(
+          id("scale"),
+          "Render scale",
+          min = 1,
+          max = 6,
+          value = as.numeric(held("scale", 3)),
+          step = 1,
+          ticks = FALSE
+        )
+      } else {
+        tagList(
+          numericInput(
+            id("width"),
+            "Width (cm)",
+            value = as.numeric(held("width", 25)),
+            min = 4,
+            max = 60,
+            step = 1
+          ),
+          pickerInput(
+            id("dpi"),
+            "Resolution",
+            choices = list(
+              "150 dpi (screen)" = "150",
+              "300 dpi (print)" = "300",
+              "600 dpi (high)" = "600",
+              "1200 dpi (line art)" = "1200"
+            ),
+            selected = held("dpi", "300")
+          )
+        )
+      },
+      uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
+      footer = tagList(
+        actionButton(id("cancel"), "Cancel"),
+        actionButton(
+          id("download"),
+          "Export",
+          icon = icon("download"),
+          class = "btn-primary"
+        )
+      ),
+      easyClose = TRUE
     )
   )
 }

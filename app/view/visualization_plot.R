@@ -74,6 +74,7 @@ box::use(
     viz_export[
       export_filename,
       export_hint,
+      export_modal,
       export_panel,
       vector_formats,
       write_data_uri
@@ -296,7 +297,7 @@ ui <- function(id, plot_type) {
             accordion_panel(
               "Export Plot",
               icon = icon("arrow-up-from-bracket"),
-              export_panel(ns, "export", spec$export_kind)
+              export_panel(ns, "export")
             ),
             # Save the currently displayed plot into an Analysis on the dashboard.
             # The picker's grouped choices are the Analyses (each with a "New plot"
@@ -1231,6 +1232,48 @@ server <- function(
       )
     })
 
+    # What the modal's controls hold, mirrored continuously so reopening it
+    # restores the last choice however it was dismissed — Cancel, Export, or a
+    # click outside it, only the first two of which are observable events.
+    export_settings <- reactiveVal(list())
+
+    reg(observe({
+      export_settings(Filter(
+        Negate(is.null),
+        list(
+          filetype = input$export_filetype,
+          width = input$export_width,
+          dpi = input$export_dpi,
+          scale = input$export_scale
+        )
+      ))
+    }))
+
+    # The settings the confirmed export is running with, captured the moment
+    # Export is pressed. The controls live in the modal and are gone by the time
+    # the file is written, so nothing downstream may read them live.
+    export_request <- reactiveVal(NULL)
+
+    reg(observeEvent(input$export_open, {
+      # Refuse here rather than opening a settings form for a plot that does not
+      # exist yet.
+      if (!isTRUE(exporter$ready())) {
+        showNotification(
+          "Generate a plot before saving it.",
+          type = "warning"
+        )
+        return()
+      }
+      showModal(export_modal(
+        ns,
+        "export",
+        spec$export_kind,
+        isolate(export_settings())
+      ))
+    }))
+
+    reg(observeEvent(input$export_cancel, removeModal()))
+
     # Grey out the quality control when the chosen format has no use for it,
     # rather than leaving a live-looking slider that changes nothing: vector art
     # has no resolution, and the interactive HTML is not rendered at all.
@@ -1274,7 +1317,7 @@ server <- function(
     # browser dutifully saves under the .png name the user asked for. `ready()`
     # cannot catch that on its own, since it only says Generate was pressed, not
     # that the result had any data in it.
-    stage <- function(fmt) {
+    stage <- function(fmt, opts) {
       previous <- isolate(export_ready())
       if (!is.null(previous)) {
         unlink(previous)
@@ -1283,7 +1326,7 @@ server <- function(
       f <- tempfile(fileext = paste0(".", fmt))
       ok <- tryCatch(
         {
-          exporter$save(f, fmt, isolate(export_opts()))
+          exporter$save(f, fmt, opts)
           file.exists(f) && file.size(f) > 0
         },
         error = function(e) FALSE
@@ -1301,7 +1344,13 @@ server <- function(
       invisible(TRUE)
     }
 
+    # The modal's Export button. Settings are read before the modal closes and
+    # carried from here on, so nothing downstream depends on controls that no
+    # longer exist.
     reg(observeEvent(input$export_download, {
+      fmt <- export_format()
+      opts <- export_opts()
+      removeModal()
       if (!isTRUE(exporter$ready())) {
         showNotification(
           "Generate a plot before saving it.",
@@ -1309,12 +1358,13 @@ server <- function(
         )
         return()
       }
+      export_request(list(format = fmt, label = export_label()))
       # A widget's raster only exists once the browser has drawn it, so it
       # arrives asynchronously through capture_data() below and is staged there.
-      if (export_widget && !identical(export_format(), "html")) {
-        exporter$capture(export_format(), export_opts())
+      if (export_widget && !identical(fmt, "html")) {
+        exporter$capture(fmt, opts)
       } else {
-        stage(export_format())
+        stage(fmt, opts)
       }
     }))
 
@@ -1323,7 +1373,7 @@ server <- function(
       reg(observeEvent(
         exporter$capture_data(),
         {
-          fmt <- isolate(export_format())
+          fmt <- isolate(export_request())$format %||% "png"
           previous <- isolate(export_ready())
           if (!is.null(previous)) {
             unlink(previous)
@@ -1351,7 +1401,8 @@ server <- function(
     # it on the first request would answer the second with an empty file.
     output$export_file <- downloadHandler(
       filename = function() {
-        export_filename(isolate(export_label()), isolate(export_format()))
+        req <- isolate(export_request())
+        export_filename(req$label %||% plot_type, req$format %||% "png")
       },
       content = function(file) {
         staged <- isolate(export_ready())

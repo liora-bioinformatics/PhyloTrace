@@ -58,7 +58,9 @@ box::use(
     ],
   app / logic / db_events,
   app / logic / functions[render_info],
-  app / logic / scheme_browser[get_species_details, get_species_img]
+  app /
+    logic /
+    scheme_browser[get_species_details, get_species_img, resolve_scheme_key]
 )
 
 # Columns of the loci table shown to the user (the internal `.gene` column
@@ -249,6 +251,20 @@ scheme_info_server <- function(input, output, session, db_path, db_rev) {
     load_db_species(db_path())
   })
 
+  # The scheme this database was built from, as named by the scheme table. What
+  # pyMLST stored in `mlst_type.species` is not that name, so the overview's
+  # cgmlst.org URL gets the first say - see resolve_scheme_key().
+  scheme_key <- reactive({
+    resolve_scheme_key(scheme_species(), scheme_overview())
+  })
+
+  # Caption and metadata lookups follow the resolved scheme; an unknown scheme
+  # still shows whatever species name the database carries.
+  species_label <- reactive({
+    key <- scheme_key()
+    if (is.null(key)) scheme_species() else gsub("_", " ", key)
+  })
+
   output$local_scheme_table <- renderDT({
     overview <- scheme_overview()
 
@@ -277,27 +293,27 @@ scheme_info_server <- function(input, output, session, db_path, db_rev) {
 
   output$species_img <- renderImage(
     {
-      species <- scheme_species()
-      req(species)
+      src <- get_species_img(scheme_key())
+      req(src)
 
       render_info("output$species_img")
 
-      list(src = get_species_img(species))
+      list(src = src)
     },
     deleteFile = FALSE
   )
 
   species_record <- reactive({
-    species <- scheme_species()
-    req(species)
+    key <- scheme_key()
+    req(key)
 
-    get_species_details(species)
+    get_species_details(key)
   })
 
   output$species_caption <- renderUI({
     render_info("output$species_caption")
 
-    species <- scheme_species()
+    species <- species_label()
     req(species)
 
     details <- species_record()
@@ -330,7 +346,7 @@ scheme_info_server <- function(input, output, session, db_path, db_rev) {
   output$species_details <- renderUI({
     render_info("output$species_details")
 
-    req(scheme_species())
+    req(species_label())
 
     details <- species_record()
 

@@ -41,7 +41,8 @@ ISOLATE_KEYED_TABLES <- c(
   "amr_results",
   "amr_summary",
   "phylotrace_custom_values",
-  "genome_hashes"
+  "genome_hashes",
+  "typing_provenance"
 )
 
 #' Migrate Database Isolate Column Names

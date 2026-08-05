@@ -594,7 +594,7 @@
   },
   {
     "species": "Citrobacter_freundii/portucalensis/braakii/europaeus",
-    "abb": "Cfreundii",
+    "abb": "Cfreundii_complex",
     "query_name": "Citrobacter",
     "ncbi_taxid": 544,
     "scientific_name": "Citrobacter",

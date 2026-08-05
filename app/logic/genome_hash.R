@@ -204,6 +204,62 @@ store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
   invisible(ok)
 }
 
+#' Read One Isolate's Recorded Assembly Digests
+#'
+#' Returns the stored digests and assembly measures for a single isolate, as a
+#' list ready to be merged into a provenance row. The timestamp is left out:
+#' when the isolate was typed is recorded by the provenance row itself.
+#'
+#' @param db_path Path to target SQLite database.
+#' @param isolate Isolate identifier.
+#' @return Named list of digest fields; all `NA` when the isolate has no row.
+#' @export
+genome_hash_row <- function(db_path, isolate) {
+  empty <- list(
+    genome_digest = NA_character_,
+    file_sha256 = NA_character_,
+    algorithm = NA_character_,
+    n_contigs = NA_integer_,
+    total_length = NA_real_,
+    file_bytes = NA_real_
+  )
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path) ||
+      is.null(isolate) ||
+      length(isolate) != 1 ||
+      is.na(isolate)
+  ) {
+    return(empty)
+  }
+
+  con <- tryCatch(connect(db_path), error = function(e) NULL)
+  if (is.null(con)) {
+    return(empty)
+  }
+  on.exit(dbDisconnect(con))
+
+  if (!"genome_hashes" %in% dbListTables(con)) {
+    return(empty)
+  }
+  res <- tryCatch(
+    dbGetQuery(
+      con,
+      "SELECT genome_digest, file_sha256, algorithm, n_contigs, total_length,
+              file_bytes
+         FROM genome_hashes WHERE isolate = ?",
+      params = list(isolate)
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(res) || !nrow(res)) {
+    return(empty)
+  }
+  as.list(res[1, , drop = FALSE])
+}
+
 #' Map Database Isolates to Recorded Genome Digests
 #'
 #' @param db_path Path to target SQLite database.

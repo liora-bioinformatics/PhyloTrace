@@ -1016,7 +1016,8 @@ merge_databases <- function(
     c(
       if (isTRUE(include_classical)) "classical_mlst",
       if (isTRUE(include_amr)) c("amr_results", "amr_summary"),
-      "genome_hashes"
+      "genome_hashes",
+      "typing_provenance"
     ),
     ext_tables
   )

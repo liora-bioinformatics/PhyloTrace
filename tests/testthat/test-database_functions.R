@@ -3,7 +3,14 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
-  app / logic / database_functions[load_classical_mlst, remove_isolates],
+  app /
+    logic /
+    database_functions[
+      load_classical_mlst,
+      migrate_isolate_key,
+      migrate_species_name,
+      remove_isolates
+    ],
   app / logic / field_labels[MLST_COL_PREFIX],
 )
 
@@ -165,6 +172,41 @@ test_that("migrate_isolate_key tolerates a missing or unreadable database", {
   expect_identical(migrate_isolate_key(file.path(dir, "absent.db")), character(0))
   expect_identical(migrate_isolate_key(NULL), character(0))
   expect_identical(migrate_isolate_key(NA_character_), character(0))
+})
+
+test_that("migrate_species_name repairs the mangled scheme species", {
+  # pyMLST's lstrip("Species") eats the leading "p" of "pneumoniae" on its way
+  # into mlst_type - the name classical MLST lookup and AMR species mapping
+  # both read.
+  dir <- local_tempdir()
+  path <- file.path(dir, "kleb.db")
+  build_db(
+    path,
+    default_local(),
+    species = "Klebsiella neumoniae/variicola/quasipneumoniae"
+  )
+
+  expect_identical(
+    migrate_species_name(path),
+    "Klebsiella pneumoniae/variicola/quasipneumoniae"
+  )
+  expect_identical(
+    q1(path, "SELECT species FROM mlst_type"),
+    "Klebsiella pneumoniae/variicola/quasipneumoniae"
+  )
+  # Nothing left to repair on a second pass.
+  expect_identical(migrate_species_name(path), NA_character_)
+})
+
+test_that("migrate_species_name leaves unknown species and broken paths alone", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "other.db")
+  build_db(path, default_local(), species = "Testus organismus")
+
+  expect_identical(migrate_species_name(path), NA_character_)
+  expect_identical(q1(path, "SELECT species FROM mlst_type"), "Testus organismus")
+  expect_identical(migrate_species_name(file.path(dir, "absent.db")), NA_character_)
+  expect_identical(migrate_species_name(NULL), NA_character_)
 })
 
 test_that("removing an isolate drops its custom-variable values", {

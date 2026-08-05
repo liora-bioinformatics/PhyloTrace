@@ -14,8 +14,9 @@ box::use(
 
 box::use(
   app / logic / db_connect[connect],
-  app / logic / schemes[cgmlst_org_schemes],
   app / logic / logging[log_event],
+  app / logic / mlst_repo[mangle_species],
+  app / logic / schemes[cgmlst_org_schemes],
 )
 
 # Lazily-loaded, package-scoped cache for species metadata (taxonomy and descriptions)
@@ -23,8 +24,10 @@ box::use(
 
 species_metadata <- function() {
   if (is.null(.metadata_cache$data)) {
+    # box::file() resolves against this module's directory, so the table also
+    # loads when the working directory is not the app root (testthat).
     .metadata_cache$data <- fromJSON(
-      "app/logic/data/species_metadata.json",
+      box::file("data", "species_metadata.json"),
       simplifyVector = FALSE
     )
   }
@@ -33,6 +36,95 @@ species_metadata <- function() {
 
 # Normalizes species strings to ensure equivalent matching across space/underscore variations
 .norm_species <- function(x) gsub("[ _]+", "_", trimws(x))
+
+# Case-insensitive form used to compare two spellings of the same scheme.
+.match_key <- function(x) tolower(.norm_species(x))
+
+# Drops the curating institute a scheme name can carry ("... (RKI)"), which is
+# part of the scheme name on cgmlst.org but of no taxon.
+.drop_curator <- function(x) trimws(sub("\\s*\\([^)]*\\)\\s*$", "", x))
+
+# The scheme abbreviation out of a `scheme_overview` table: `get_scheme_overview()`
+# stores the cgmlst.org URL it scraped, and its last path segment names the scheme.
+.overview_abb <- function(scheme_overview) {
+  if (!is.data.frame(scheme_overview) || !nrow(scheme_overview)) {
+    return(NULL)
+  }
+
+  cells <- as.character(unlist(scheme_overview, use.names = FALSE))
+  found <- regmatches(
+    cells,
+    regexpr("/ncs/schema/[A-Za-z0-9_.-]+", cells)
+  )
+
+  if (!length(found)) {
+    return(NULL)
+  }
+
+  sub("^/ncs/schema/", "", found[[1]])
+}
+
+#' Resolve the Scheme a Database Was Built From
+#'
+#' @description Maps whatever identifies a scheme - a UI selection, the
+#'   `scheme_overview` URL stored at download time, or the species string pyMLST
+#'   left in `mlst_type` - onto the canonical scheme name shared by
+#'   `cgmlst_schemes.csv` and `species_metadata.json`.
+#'
+#' @param species Character string. Scheme or species name, as selected in the
+#'   UI or as stored in `mlst_type.species`.
+#' @param scheme_overview `data.frame` or `NULL`. The database's `scheme_overview`
+#'   table, whose cgmlst.org URL identifies the scheme exactly.
+#'
+#' @return Canonical scheme name (underscored, as in the scheme table), or `NULL`
+#'   when nothing matches.
+#' @export
+resolve_scheme_key <- function(species = NULL, scheme_overview = NULL) {
+  keys <- cgmlst_org_schemes$species
+
+  # The URL is written by this app rather than by pyMLST, so it survives both
+  # defects below and is the only identifier that tells two schemes of the same
+  # species ((RKI) vs (FLI)) apart.
+  abb <- .overview_abb(scheme_overview)
+  if (!is.null(abb)) {
+    hit <- which(tolower(cgmlst_org_schemes$abb) == tolower(abb))
+    if (length(hit) == 1) {
+      return(keys[hit])
+    }
+  }
+
+  if (
+    is.null(species) ||
+      length(species) != 1 ||
+      is.na(species) ||
+      !nzchar(trimws(species))
+  ) {
+    return(NULL)
+  }
+
+  # `mlst_type.species` is neither the scheme name nor reliably the species: the
+  # curator suffix is not part of the scraped page, and pyMLST's lstrip eats
+  # leading letters (see mangle_species()). Every spelling a scheme can reach the
+  # database under is therefore tried, most faithful first. Only the (RKI)/(FLI)
+  # pair collapses onto one string; they share a taxonomy, so the first is taken.
+  plain <- gsub("_", " ", keys)
+  spellings <- list(
+    plain,
+    .drop_curator(plain),
+    vapply(plain, mangle_species, character(1), USE.NAMES = FALSE),
+    vapply(.drop_curator(plain), mangle_species, character(1), USE.NAMES = FALSE)
+  )
+
+  target <- .match_key(species)
+  for (spelling in spellings) {
+    hit <- which(.match_key(spelling) == target)
+    if (length(hit)) {
+      return(keys[hit[1]])
+    }
+  }
+
+  NULL
+}
 
 #' Assemble Target Database File Path
 #'
@@ -72,14 +164,19 @@ assemble_db_location <- function(download_location, db_name) {
 #'
 #' @description Maps a selected species name to its corresponding local PNG illustration path.
 #'
-#' @param species_select Character string. Selected species identifier.
+#' @param species_select Character string. Selected species or scheme identifier.
 #'
-#' @return Character string path to the static image asset.
+#' @return Character string path to the static image asset, or `NULL` for an
+#'   unknown scheme.
 #' @export
 get_species_img <- function(species_select) {
-  name <- cgmlst_org_schemes$abb[which(
-    cgmlst_org_schemes$species == gsub(" ", "_", species_select)
-  )]
+  key <- resolve_scheme_key(species_select)
+
+  if (is.null(key)) {
+    return(NULL)
+  }
+
+  name <- cgmlst_org_schemes$abb[match(key, cgmlst_org_schemes$species)]
 
   file.path("app/static/species", paste0(name, ".png"))
 }
@@ -88,14 +185,19 @@ get_species_img <- function(species_select) {
 #'
 #' @description Looks up NCBI taxonomy details and descriptive metadata for a given species name.
 #'
-#' @param species_select Character string. Target species identifier.
+#' @param species_select Character string. Target species or scheme identifier.
 #'
 #' @return A named `list` containing metadata attributes, or `NULL` if no matching record exists.
 #' @export
 get_species_details <- function(species_select) {
-  key <- .norm_species(species_select)
+  key <- resolve_scheme_key(species_select)
+
+  if (is.null(key)) {
+    return(NULL)
+  }
+
   for (record in species_metadata()) {
-    if (identical(.norm_species(record$species), key)) {
+    if (identical(.match_key(record$species), .match_key(key))) {
       return(record)
     }
   }

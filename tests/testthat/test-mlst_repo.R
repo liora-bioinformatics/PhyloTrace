@@ -1,5 +1,5 @@
 box::use(
-  testthat[expect_equal, expect_identical, expect_null, expect_snapshot, expect_true, test_that],
+  testthat[expect_equal, expect_identical, expect_null, expect_true, test_that],
   utils[read.csv],
 )
 box::use(
@@ -46,7 +46,7 @@ test_that("every scheme name survives a round trip through pyMLST's damage", {
   species <- scheme_species()
   damaged <- vapply(species, impl$mangle_species, character(1))
   repaired <- vapply(unname(damaged), mlst_repo$canonical_species, character(1))
-  expect_identical(repaired, species)
+  expect_identical(unname(repaired), species)
 })
 
 test_that("match_species_db never crosses into another genus", {
@@ -55,9 +55,10 @@ test_that("match_species_db never crosses into another genus", {
   pubmlst <- repo_dbs("pubmlst")
   idx <- mlst_repo$match_species_db(pubmlst, "Corynebacterium pseudotuberculosis")
   expect_true(is.na(idx))
+  pasteur <- repo_dbs("pasteur")
   expect_identical(
-    mlst_repo$match_species_db(repo_dbs("pasteur"), "Corynebacterium pseudotuberculosis"),
-    1L
+    pasteur[mlst_repo$match_species_db(pasteur, "Corynebacterium pseudotuberculosis")],
+    "Corynebacterium"
   )
   # Neither does a genus-wide database serve a species it does not hold.
   expect_true(is.na(mlst_repo$match_species_db(pubmlst, "Yersinia enterocolitica")))
@@ -83,22 +84,72 @@ test_that("match_species_db reports rather than guesses between equals", {
   expect_true(grepl("2 genus-level", attr(idx, "reason")))
 })
 
-test_that("scheme species resolve to a stable repository database", {
-  # Automated tracking of the nomenclature mapping: this snapshot is the record
-  # of which database every cgMLST scheme's species resolves to. A rule change
-  # or a new scheme shows up here as a reviewable diff.
-  pick <- function(repo, species) {
-    dbs <- repo_dbs(repo)
-    idx <- mlst_repo$match_species_db(dbs, species)
-    if (is.na(idx)) "-" else dbs[idx]
-  }
-  mapping <- data.frame(
-    species = scheme_species(),
-    pubmlst = vapply(scheme_species(), pick, character(1), repo = "pubmlst"),
-    pasteur = vapply(scheme_species(), pick, character(1), repo = "pasteur"),
-    stringsAsFactors = FALSE
+test_that("every cgMLST scheme species resolves to the expected database", {
+  # Automated tracking of the nomenclature mapping: the record of which
+  # repository database each of the app's cgMLST schemes lands on, walking the
+  # repositories in default order. A rule change, a renamed scheme or a new row
+  # in cgmlst_schemes.csv shows up here as a reviewable diff. "-" means no
+  # classical MLST is available for that scheme at all.
+  expected <- c(
+    "Acinetobacter baumannii" = "pubmlst: Acinetobacter baumannii",
+    "Bacillus anthracis" = "-",
+    "Bordetella pertussis" = "pasteur: Bordetella",
+    "Brucella melitensis" = "pubmlst: Brucella spp.",
+    "Brucella spp" = "pubmlst: Brucella spp.",
+    "Burkholderia mallei (RKI)" = "pubmlst: Burkholderia mallei",
+    "Burkholderia mallei (FLI)" = "pubmlst: Burkholderia mallei",
+    "Burkholderia pseudomallei" = "pubmlst: Burkholderia pseudomallei",
+    "Campylobacter jejuni/coli" = "pubmlst: Campylobacter jejuni/coli",
+    "Clostridioides difficile" = "pubmlst: Clostridioides difficile",
+    "Clostridium perfringens" = "pubmlst: Clostridium perfringens",
+    "Corynebacterium diphtheriae" = "pasteur: Corynebacterium",
+    "Corynebacterium pseudotuberculosis" = "pasteur: Corynebacterium",
+    "Cronobacter sakazakii/malonaticus" = "pubmlst: Cronobacter spp.",
+    "Enterococcus faecalis" = "pubmlst: Enterococcus faecalis",
+    "Enterococcus faecium" = "pubmlst: Enterococcus faecium",
+    "Escherichia coli" = "pubmlst: Escherichia spp.",
+    "Francisella tularensis" = "-",
+    "Klebsiella oxytoca/grimontii/michiganensis/pasteurii" = "pubmlst: Klebsiella oxytoca",
+    "Klebsiella pneumoniae/variicola/quasipneumoniae" =
+      "pasteur: REST API access to Klebsiella seqdef database",
+    "Legionella pneumophila" = "-",
+    "Listeria monocytogenes" = "pasteur: REST API access to Listeria seqdef database",
+    "Mycobacterium tuberculosis/bovis/africanum/canettii" = "-",
+    "Mycobacteroides abscessus" = "pubmlst: Mycobacteroides abscessus complex",
+    "Mycoplasma gallisepticum" = "pubmlst: Mycoplasma gallisepticum",
+    "Paenibacillus larvae" = "pubmlst: Paenibacillus larvae",
+    "Pseudomonas aeruginosa" = "pubmlst: Pseudomonas aeruginosa",
+    "Salmonella enterica" = "pubmlst: Salmonella spp.",
+    "Serratia marcescens" = "pubmlst: Serratia spp.",
+    "Staphylococcus argenteus" = "-",
+    "Staphylococcus aureus" = "pubmlst: Staphylococcus aureus",
+    "Staphylococcus capitis" = "pubmlst: Staphylococcus capitis",
+    "Streptococcus pyogenes" = "pubmlst: Streptococcus pyogenes",
+    "Yersinia enterocolitica" = "pasteur: Yersinia",
+    "Citrobacter freundii" = "pubmlst: Citrobacter spp.",
+    "Citrobacter freundii/portucalensis/braakii/europaeus" = "pubmlst: Citrobacter spp.",
+    "Enterobacter hormaechei" = "pubmlst: Enterobacter spp.",
+    "Morganella morganii" = "pasteur: morganella",
+    "Proteus mirabilis" = "pubmlst: Proteus spp.",
+    "Providencia stuartii" = "pubmlst: Providencia spp."
   )
-  expect_snapshot(print(mapping, right = FALSE, row.names = FALSE))
+
+  resolved <- vapply(
+    scheme_species(),
+    function(species) {
+      for (repo in c("pubmlst", "pasteur")) {
+        dbs <- repo_dbs(repo)
+        idx <- mlst_repo$match_species_db(dbs, species)
+        if (!is.na(idx)) {
+          return(paste0(repo, ": ", dbs[idx]))
+        }
+      }
+      "-"
+    },
+    character(1)
+  )
+
+  expect_identical(resolved, expected)
 })
 
 test_that("match_mlst_scheme takes the repository's own plain MLST scheme", {
@@ -199,8 +250,8 @@ test_that("resolve_mlst_scheme returns one downloadable scheme", {
   expect_equal(length(hit$loci), 3)
 })
 
-test_that("resolve_mlst_scheme repairs the species before looking it up", {
-  hit <- mlst_repo$resolve_mlst_scheme("Enterococcus aecium", fetch = fake_fetch())
+test_that("resolve_mlst_scheme normalizes the species before looking it up", {
+  hit <- mlst_repo$resolve_mlst_scheme("Enterococcus_faecium ", fetch = fake_fetch())
   expect_identical(hit$species, "Enterococcus faecium")
 })
 

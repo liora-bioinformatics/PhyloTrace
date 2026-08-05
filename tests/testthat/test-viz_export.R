@@ -147,3 +147,52 @@ test_that("each engine kind offers only formats it can actually write", {
 test_that("an unknown format is refused rather than silently written", {
   expect_error(impl$.device_for("webp", 300), "Unsupported export format")
 })
+
+test_that("the modal carries the controls that apply to each engine kind", {
+  # A server-rendered plot is asked for in physical units and rasterised at a
+  # chosen DPI; a browser-drawn widget has no physical size to ask for and can
+  # only be redrawn at a multiple of its on-screen pixels. Offering the wrong
+  # control means offering one that changes nothing.
+  ggplot_modal <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
+  widget_modal <- as.character(viz_export$export_modal(identity, "e", "widget"))
+
+  expect_true(grepl("e_width", ggplot_modal, fixed = TRUE))
+  expect_true(grepl("e_dpi", ggplot_modal, fixed = TRUE))
+  expect_false(grepl("e_scale", ggplot_modal, fixed = TRUE))
+
+  expect_true(grepl("e_scale", widget_modal, fixed = TRUE))
+  expect_false(grepl("e_dpi", widget_modal, fixed = TRUE))
+  expect_false(grepl("e_width", widget_modal, fixed = TRUE))
+})
+
+test_that("the modal footer commits or abandons the export", {
+  html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
+  expect_true(grepl("e_download", html, fixed = TRUE))
+  expect_true(grepl("e_cancel", html, fixed = TRUE))
+  # The download target belongs to the sidebar, not here — removeModal() would
+  # destroy it before the server ever clicks it. Matched on the exact id, since
+  # "e_filetype" contains "e_file".
+  expect_false(grepl("id=\"e_file\"", html, fixed = TRUE))
+})
+
+test_that("reopening the modal restores the settings last chosen", {
+  # Shiny keeps an input's value after its UI is removed, but re-rendering the
+  # control resets it to its declaration — so the values have to be handed back
+  # in, or every export would start from the defaults again.
+  html <- as.character(viz_export$export_modal(
+    identity,
+    "e",
+    "ggplot",
+    values = list(filetype = "svg", width = 12, dpi = "600")
+  ))
+  expect_true(grepl("value=\"12\"", html, fixed = TRUE))
+  expect_true(grepl("<option value=\"svg\" selected>", html, fixed = TRUE))
+  expect_true(grepl("<option value=\"600\" selected>", html, fixed = TRUE))
+})
+
+test_that("the sidebar panel is just a trigger plus the download target", {
+  html <- as.character(viz_export$export_panel(identity, "e"))
+  expect_true(grepl("e_open", html, fixed = TRUE))
+  expect_true(grepl("e_file", html, fixed = TRUE))
+  expect_false(grepl("e_filetype", html, fixed = TRUE))
+})

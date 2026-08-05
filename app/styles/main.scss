@@ -3744,6 +3744,13 @@ label {
     }
 }
 
+.accordion .accordion-icon:not(:empty) {
+    margin-right: 0.75rem;
+    display: flex;
+    height: 16px;
+    width: 16px;
+    justify-content: center;
+}
 
 .tab-pane[data-value="scheme_browser_panel"] .waiter-overlay,
 .tab-pane[data-value="import"] .waiter-overlay,

@@ -16,6 +16,7 @@ box::use(
   openssl[sha256],
   tidyr[pivot_wider],
   dplyr[select, left_join],
+  utils[read.delim],
 )
 box::use(
   app / logic / database_functions[migrate_species_name],
@@ -372,6 +373,150 @@ clamlst_status <- function(st, alleles) {
   )
 }
 
+# Splits the "gene=allele,gene=allele" string the typing script logs into a
+# data frame, keeping loci that were not called (empty allele).
+parse_allele_spec <- function(spec) {
+  empty <- data.frame(
+    gene = character(0),
+    allele = character(0),
+    stringsAsFactors = FALSE
+  )
+  if (is.null(spec) || length(spec) != 1 || is.na(spec) || !nzchar(spec)) {
+    return(empty)
+  }
+  pairs <- strsplit(spec, ",", fixed = TRUE)[[1]]
+  kv <- regmatches(pairs, regexec("^[ \t]*([^=]+)=(.*)$", pairs))
+  gene <- vapply(
+    kv,
+    function(m) if (length(m) == 3) trimws(m[2]) else NA_character_,
+    character(1)
+  )
+  allele <- vapply(
+    kv,
+    function(m) if (length(m) == 3) trimws(m[3]) else NA_character_,
+    character(1)
+  )
+  ok <- !is.na(gene) & nzchar(gene)
+  data.frame(gene = gene[ok], allele = allele[ok], stringsAsFactors = FALSE)
+}
+
+# Locus names travel through pyMLST's clean_geneid() (underscores become
+# hyphens), so profile columns and reported loci are compared stripped down.
+norm_locus <- function(x) gsub("[^[:alnum:]]", "", tolower(x))
+
+#' Read a Classical MLST Profile Table
+#'
+#' @description Reads the scheme's profile table (`ST` plus one column per
+#'   locus) kept next to this run's reference database.
+#'
+#' @param path Character string. Path to the tab-separated profile table.
+#'
+#' @return A `data.frame` of character columns, or `NULL` when unreadable.
+#' @export
+read_st_profiles <- function(path) {
+  if (
+    is.null(path) ||
+      length(path) != 1 ||
+      is.na(path) ||
+      !nzchar(path) ||
+      !file.exists(path)
+  ) {
+    return(NULL)
+  }
+  profiles <- tryCatch(
+    read.delim(
+      path,
+      colClasses = "character",
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(profiles) || !nrow(profiles) || !ncol(profiles)) {
+    return(NULL)
+  }
+  profiles
+}
+
+#' Look Up a Sequence Type in the Scheme's Profile Table
+#'
+#' @description Resolves an allele profile against the scheme's own profile
+#'   table.
+#'
+#' @details
+#' A repository records a locus that is absent from a lineage as allele `0` -
+#' Enterococcus faecium carries 35 such STs, the pstS deletion. `claMLST search`
+#' cannot assign those: pyMLST drops allele `0` rows when it builds the
+#' reference, so a genome without pstS matches every ST sharing its other six
+#' alleles and comes back with a list instead of a call. Reading the profile
+#' table directly settles it - an uncalled locus matches the `0` the scheme uses
+#' for exactly that situation - and it is only ever accepted when a single row
+#' matches.
+#'
+#' @param alleles Character string. Comma-delimited `"gene=allele"` string, empty
+#'   allele for an uncalled locus.
+#' @param profiles Data frame from `read_st_profiles()`.
+#'
+#' @return The Sequence Type as a character string, or `NA_character_`.
+#' @export
+st_from_profile <- function(alleles, profiles) {
+  called <- parse_allele_spec(alleles)
+  if (is.null(profiles) || !nrow(profiles) || !nrow(called)) {
+    return(NA_character_)
+  }
+  # A new or multiply-hit allele has no profile to match against.
+  if (any(called$allele == "new" | grepl(";", called$allele, fixed = TRUE))) {
+    return(NA_character_)
+  }
+
+  columns <- match(norm_locus(called$gene), norm_locus(names(profiles)))
+  if (anyNA(columns)) {
+    return(NA_character_)
+  }
+
+  keep <- rep(TRUE, nrow(profiles))
+  for (i in seq_len(nrow(called))) {
+    wanted <- if (nzchar(called$allele[i])) called$allele[i] else "0"
+    keep <- keep & trimws(profiles[[columns[i]]]) == wanted
+  }
+  hits <- which(keep)
+  if (length(hits) != 1) {
+    return(NA_character_)
+  }
+  trimws(as.character(profiles[[1]][hits]))
+}
+
+#' Resolve a Classical MLST Call
+#'
+#' @description Combines what `claMLST search` reported with a profile-table
+#'   lookup into the Sequence Type to store and how it was reached.
+#'
+#' @details
+#' The search's own call is authoritative whenever it settled on one ST. The
+#' profile table is consulted only for the cases it left undetermined, and a
+#' single matching row there is reported as `inferred` - the scheme's own
+#' profile, reached without the search's help.
+#'
+#' @param st Character string. ST field as printed by `claMLST search`.
+#' @param alleles Character string. Comma-delimited `"gene=allele"` string.
+#' @param profiles Data frame from `read_st_profiles()`, or `NULL`.
+#'
+#' @return A list with `st` (character or `NA`) and `status`.
+#' @export
+resolve_clamlst_call <- function(st, alleles, profiles = NULL) {
+  status <- clamlst_status(st, alleles)
+  if (identical(status, "known")) {
+    return(list(st = trimws(as.character(st)), status = status))
+  }
+  if (!is.na(status)) {
+    hit <- st_from_profile(alleles, profiles)
+    if (!is.na(hit)) {
+      return(list(st = hit, status = "inferred"))
+    }
+  }
+  list(st = NA_character_, status = status)
+}
+
 #' Parse Typing Run Logs into Structured Table
 #'
 #' @description Parses raw output logs from `loop-pymlst.sh` into a structured
@@ -379,11 +524,13 @@ clamlst_status <- function(st, alleles) {
 #'
 #' @param log_lines Character vector or scalar string containing raw log lines.
 #' @param strains Character vector of expected strain identifiers (assembly names without extension).
+#' @param profiles Data frame from `read_st_profiles()` (optional). Resolves the
+#'   Sequence Types `claMLST search` leaves undetermined.
 #'
 #' @return A `data.frame` containing metrics, execution timing, classical MLST calls,
 #'   and AMR status per strain.
 #' @export
-parse_typing_log <- function(log_lines, strains) {
+parse_typing_log <- function(log_lines, strains, profiles = NULL) {
   log_text <- paste(log_lines, collapse = "\n")
   finished_all <- grepl("Done!", log_text, fixed = TRUE)
 
@@ -451,9 +598,10 @@ parse_typing_log <- function(log_lines, strains) {
 
     cla_st <- strval(chunk, "Classical MLST ST:[ \t]*(\\S+)")
     cla_alleles <- strval(chunk, "Classical MLST alleles:[ \t]*([^\n]+)")
-    metrics$st <- cla_st
+    call <- resolve_clamlst_call(cla_st, cla_alleles, profiles)
+    metrics$st <- call$st
     metrics$alleles <- cla_alleles
-    metrics$cla_status <- clamlst_status(cla_st, cla_alleles)
+    metrics$cla_status <- call$status
 
     amr_elements <- num(chunk, "AMR: done .* \\(([0-9]+) elements\\)")
     metrics$amr_elements <- amr_elements
@@ -567,6 +715,35 @@ parse_typing_log <- function(log_lines, strains) {
   do.call(rbind, rows)
 }
 
+#' Per-Strain Allele Calling Outcome
+#'
+#' @description The cgMLST verdict for each strain of a parsed run, known before
+#'   the strain's whole pipeline is over.
+#'
+#' @details
+#' A strain's log section only closes once the steps behind allele calling report
+#' in, so `status` still reads "Running" all through the classical MLST search
+#' and the AMR screen. Allele calling itself is over the moment pyMLST prints its
+#' DONE line, and only a successful run reaches it, so this can never pre-empt a
+#' failure verdict. It is what says whether the mother database has accepted the
+#' isolate - the condition for storing anything keyed to it.
+#'
+#' @param results Data frame from `parse_typing_log()`.
+#'
+#' @return Character vector of outcomes, parallel to `results`.
+#' @export
+cg_outcome <- function(results) {
+  if (is.null(results) || !nrow(results)) {
+    return(character(0))
+  }
+  cg_done <- if ("cg_done" %in% names(results)) {
+    results$cg_done
+  } else {
+    rep(FALSE, nrow(results))
+  }
+  ifelse(results$status == "Running" & cg_done, "Added", results$status)
+}
+
 #' Parse Classical MLST Provenance Metadata
 #'
 #' @description Extracts run-level classical MLST scheme details, repository sources,
@@ -592,6 +769,34 @@ parse_clamlst_meta <- function(log_lines) {
     scheme = grab("Classical MLST scheme:[ \t]*([^\n]+)"),
     scheme_version = grab("Classical MLST scheme version:[ \t]*([^\n]+)"),
     pymlst_version = grab("pyMLST version:[ \t]*([^\n]+)")
+  )
+}
+
+#' Parse Allele Calling Tool Versions
+#'
+#' @description Extracts the versions of the tools behind allele calling from a
+#'   typing log: pyMLST, which drives both allele calling and the ST search, and
+#'   the BLAT / MAFFT binaries it finds and aligns loci with.
+#'
+#' @param log_lines Character vector containing log output lines.
+#'
+#' @return A list with elements `pymlst`, `blat` and `mafft`.
+#' @export
+parse_tool_meta <- function(log_lines) {
+  log_text <- paste(log_lines, collapse = "\n")
+  grab <- function(pattern) {
+    match <- regmatches(log_text, regexec(pattern, log_text))[[1]]
+    if (length(match) > 1) {
+      value <- trimws(match[2])
+      if (nzchar(value)) value else NA_character_
+    } else {
+      NA_character_
+    }
+  }
+  list(
+    pymlst = grab("pyMLST version:[ \t]*([^\n]+)"),
+    blat = grab("BLAT version:[ \t]*([^\n]+)"),
+    mafft = grab("MAFFT version:[ \t]*([^\n]+)")
   )
 }
 
@@ -638,7 +843,19 @@ db_species <- function(db_path) {
   if (nzchar(species)) canonical_species(species) else NA_character_
 }
 
-# Reads allele reference sequences and database schema migration markers from the intermediate claMLST database
+#' Read the Classical MLST Reference Database
+#'
+#' @description Reads the allele reference sequences and the schema migration
+#'   marker out of a run's interim claMLST database.
+#'
+#' @details Read once per run and handed to `store_clamlst_results()`: the
+#'   sequence table holds every allele of the scheme, so re-reading it for each
+#'   isolate would repeat the whole scheme's worth of sequence per call.
+#'
+#' @param cla_db_path Character path to the interim claMLST database.
+#'
+#' @return A list with `sequences` (named by `gene\tallele`) and `alembic`.
+#' @export
 clamlst_refs <- function(cla_db_path) {
   empty <- list(sequences = character(0), alembic = NA_character_)
   if (
@@ -700,6 +917,7 @@ clamlst_refs <- function(cla_db_path) {
 #' @param scheme Character string (optional). Classical scheme identifier.
 #' @param scheme_version Character string (optional). Classical scheme version.
 #' @param pymlst_version Character string (optional). Executable tool version string.
+#' @param refs List from `clamlst_refs()` (optional). Read from `cla_db_path` when absent.
 #'
 #' @return Logical indicating transaction success invisibly.
 #' @export
@@ -712,7 +930,8 @@ store_clamlst_results <- function(
   repository = NA_character_,
   scheme = NA_character_,
   scheme_version = NA_character_,
-  pymlst_version = NA_character_
+  pymlst_version = NA_character_,
+  refs = NULL
 ) {
   if (
     is.null(db_path) ||
@@ -728,17 +947,26 @@ store_clamlst_results <- function(
 
   has_alleles <- "alleles" %in% names(results)
 
-  # Retain registered, novel, and partial profiles; drop only completely missing calls
-  status_vec <- vapply(
-    seq_len(nrow(results)),
-    function(i) {
-      clamlst_status(
-        results$st[i],
-        if (has_alleles) results$alleles[i] else NA_character_
-      )
-    },
-    character(1)
-  )
+  # `parse_typing_log()` has already resolved every call (including the profile
+  # lookup, which needs the scheme's profile table); its verdict is taken as is
+  # so a call is never classified twice. Frames without it - anything not coming
+  # from the log parser - are classified here from the search output alone.
+  # Registered, inferred, novel and partial profiles are all retained; only
+  # completely missing calls are dropped.
+  status_vec <- if ("cla_status" %in% names(results)) {
+    as.character(results$cla_status)
+  } else {
+    vapply(
+      seq_len(nrow(results)),
+      function(i) {
+        clamlst_status(
+          results$st[i],
+          if (has_alleles) results$alleles[i] else NA_character_
+        )
+      },
+      character(1)
+    )
+  }
   keep <- !is.na(status_vec)
   results <- results[keep, , drop = FALSE]
   status_vec <- status_vec[keep]
@@ -746,7 +974,9 @@ store_clamlst_results <- function(
     return(invisible(FALSE))
   }
 
-  refs <- clamlst_refs(cla_db_path)
+  if (is.null(refs)) {
+    refs <- clamlst_refs(cla_db_path)
+  }
   seq_for <- function(gene, allele) {
     if (is.na(gene) || is.na(allele) || !length(refs$sequences)) {
       return(NA_character_)
@@ -756,28 +986,11 @@ store_clamlst_results <- function(
   }
   alembic_version <- refs$alembic
 
+  # Only loci that were actually called get a row; an uncalled locus is absent
+  # from the table rather than stored as an empty allele.
   split_alleles <- function(spec) {
-    if (is.null(spec) || is.na(spec) || !nzchar(spec)) {
-      return(data.frame(
-        gene = character(0),
-        allele = character(0),
-        stringsAsFactors = FALSE
-      ))
-    }
-    pairs <- strsplit(spec, ",", fixed = TRUE)[[1]]
-    kv <- regmatches(pairs, regexec("^[ \t]*([^=]+)=(.*)$", pairs))
-    gene <- vapply(
-      kv,
-      function(m) if (length(m) == 3) trimws(m[2]) else NA_character_,
-      character(1)
-    )
-    allele <- vapply(
-      kv,
-      function(m) if (length(m) == 3) trimws(m[3]) else NA_character_,
-      character(1)
-    )
-    ok <- !is.na(gene) & nzchar(gene) & !is.na(allele) & nzchar(allele)
-    data.frame(gene = gene[ok], allele = allele[ok], stringsAsFactors = FALSE)
+    called <- parse_allele_spec(spec)
+    called[nzchar(called$allele), , drop = FALSE]
   }
 
   con <- connect(db_path)
@@ -813,7 +1026,10 @@ store_clamlst_results <- function(
       for (i in seq_len(nrow(results))) {
         isolate <- as.character(results$strain[i])
         status <- status_vec[i]
-        st <- if (identical(status, "known")) {
+        # A Sequence Type is stored only where one was actually determined -
+        # never the candidate list `claMLST search` prints for a call it could
+        # not settle.
+        st <- if (status %in% c("known", "inferred")) {
           as.character(results$st[i])
         } else {
           NA_character_

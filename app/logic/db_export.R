@@ -51,9 +51,10 @@ SCHEME_TABLES <- c(
 CLASSICAL_TABLES <- c("classical_mlst")
 AMR_TABLES <- c("amr_results", "amr_summary")
 
-# Genome provenance assembly digests.
-# Stores assembly checksums to allow receiving systems to verify genome integrity.
-GENOME_TABLES <- c("genome_hashes")
+# Genome provenance: assembly checksums, so receiving systems can verify genome
+# integrity, and the per-isolate record of the software and reference data that
+# produced each call.
+GENOME_TABLES <- c("genome_hashes", "typing_provenance")
 
 # User-defined custom metadata variables.
 # Variable selection is managed individually per field to permit targeted sharing.
