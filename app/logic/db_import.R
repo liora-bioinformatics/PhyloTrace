@@ -48,7 +48,7 @@ box::use(
       check_import_compatibility
     ],
   app / logic / pymlst[hash_database],
-  app / logic / database_functions[make_metadata_table, load_db_species],
+  app / logic / database_functions[sync_metadata_table, load_db_species],
   app / logic / db_sources[SOURCE_COL, db_uuid, register_source],
   app / logic / logging[log_event],
 )
@@ -472,7 +472,7 @@ import_preview <- function(
     names(ext_meta) %||% character(0)
   )
 
-  # `make_metadata_table()` skips creation when the local database has no
+  # `sync_metadata_table()` skips creation when the local database has no
   # isolates yet (a freshly downloaded scheme), so the table may not exist.
   if (!"metadata" %in% dbListTables(con)) {
     dbExecute(
@@ -933,7 +933,7 @@ merge_databases <- function(
     stop("Could not create a working copy of the database.")
   }
 
-  make_metadata_table(work)
+  sync_metadata_table(work)
   hash_database(work)
 
   organism <- load_db_species(local_path)

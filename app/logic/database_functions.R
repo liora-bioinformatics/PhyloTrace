@@ -45,62 +45,6 @@ ISOLATE_KEYED_TABLES <- c(
   "typing_provenance"
 )
 
-#' Migrate Database Isolate Column Names
-#'
-#' Legacy database versions used `souche` for isolate keys in custom tables.
-#' This function renames `souche` columns to `isolate` in relevant tables if needed.
-#'
-#' @param db_path Character path to the SQLite database file.
-#' @return Invisible character vector listing the names of modified tables.
-#' @export
-migrate_isolate_key <- function(db_path) {
-  if (
-    is.null(db_path) ||
-      length(db_path) != 1 ||
-      is.na(db_path) ||
-      !file.exists(db_path)
-  ) {
-    return(invisible(character(0)))
-  }
-
-  con <- connect(db_path)
-  on.exit(dbDisconnect(con))
-
-  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
-  renamed <- character(0)
-
-  for (nm in intersect(ISOLATE_KEYED_TABLES, tables)) {
-    cols <- tryCatch(dbListFields(con, nm), error = function(e) character(0))
-    if (!("souche" %in% cols) || "isolate" %in% cols) {
-      next
-    }
-    ok <- tryCatch(
-      {
-        dbExecute(
-          con,
-          sprintf("ALTER TABLE %s RENAME COLUMN souche TO isolate", nm)
-        )
-        TRUE
-      },
-      error = function(e) FALSE
-    )
-    if (isTRUE(ok)) renamed <- c(renamed, nm)
-  }
-
-  if (length(renamed)) {
-    log_event(
-      "DB",
-      "migrate isolate key",
-      sprintf(
-        "renamed souche -> isolate in: %s",
-        paste(renamed, collapse = ", ")
-      )
-    )
-  }
-
-  invisible(renamed)
-}
-
 #' Repair the Scheme Species Name
 #'
 #' pyMLST writes the cgmlst.org species into `mlst_type` through
@@ -212,15 +156,65 @@ load_db_species <- function(db_path) {
   species[[1]]
 }
 
+#' Read the Metadata Table
+#'
+#' Pure read of the `metadata` table exactly as it currently stands: no schema
+#' migration, no isolate backfill. This is what every display, export or
+#' selection reactive should call - never `sync_metadata_table()`.
+#'
+#' The two have to stay split. Backfilling a missing isolate row is a write,
+#' and if that write instead happened lazily inside a read - triggered by
+#' whichever reactive across whichever module happened to evaluate first -
+#' then two consumers invalidated by the same database change could each
+#' trigger it, and whichever one lost the race would see the *other's* write
+#' rather than its own. Worse, a consumer that only opens later (a plot tab
+#' that stayed hidden, an export panel nobody has visited yet) could still be
+#' the one that performs the backfill, at a time no other module is watching
+#' for it, so its result would never propagate anywhere else at all. Making
+#' the read pure removes both hazards: nothing here can create, migrate or
+#' backfill the table, so calling it can never race another caller's call.
+#' The corresponding write happens exactly once, at each point in the app
+#' that legitimately changes the isolate pool - see `sync_metadata_table()`.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @return Data frame representing the full `metadata` table, or `NULL` if the
+#'   database or the table does not exist yet.
+#' @export
+read_metadata_table <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(NULL)
+  }
+
+  con <- connect(db_path)
+  on.exit(dbDisconnect(con))
+
+  if (isFALSE("metadata" %in% dbListTables(con))) {
+    return(NULL)
+  }
+
+  dbReadTable(con, "metadata")
+}
+
 #' Construct or Synchronize Metadata Table
 #'
 #' Ensures the `metadata` table exists in the database and includes all present isolates.
 #' Automatically handles missing schema columns and appends unlisted isolates.
 #'
+#' Call this only at a point that legitimately changes the isolate pool or the
+#' metadata schema, and follow it with a `db_events::bump()` of the `metadata`
+#' domain (and `isolates`, if isolates were added) so every reader picks up
+#' the result. Everywhere else, read with `read_metadata_table()` - see its
+#' documentation for why the two must not be interchangeable.
+#'
 #' @param db_path Character path to the SQLite database file.
 #' @return Data frame representing the full `metadata` table, or `NULL` if prerequisites missing.
 #' @export
-make_metadata_table <- function(db_path) {
+sync_metadata_table <- function(db_path) {
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
@@ -432,10 +426,6 @@ load_classical_mlst <- function(db_path) {
     function(s) .first_nonempty(cm$status[cm$isolate == s]),
     character(1)
   )
-  # Rows written before claMLST's candidate lists were caught can hold a
-  # semicolon-separated set of STs where a single one belongs - never an ST.
-  undetermined <- !is.na(st) & grepl(";", st, fixed = TRUE)
-  st[undetermined] <- "ambiguous"
   missing <- is.na(st) | !nzchar(st)
   st[missing] <- status[missing]
   out[[paste0(MLST_COL_PREFIX, "st")]] <- unname(st)
@@ -803,24 +793,102 @@ remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) {
   invisible(ok)
 }
 
-#' Overwrite Database Metadata Table
+#' Update the Metadata Table
 #'
-#' Replaces contents of the `metadata` table with the provided data frame.
+#' Writes exactly the cells named in `edits`, one `UPDATE ... WHERE isolate =
+#' ?` per row - never a table-wide read or overwrite.
+#'
+#' This replaces an earlier implementation that overwrote the whole table
+#' (`dbWriteTable(overwrite = TRUE)`). That was fine for a single user, but
+#' the moment a second session has the same database open, its next save
+#' discarded the first session's entire table - not just the cells the second
+#' session actually touched, every column of every isolate, including rows
+#' the second session never displayed. Writing only the cells named in
+#' `edits` - the ones the caller knows the user actually changed, not merely
+#' the ones that happen to differ from whatever this connection reads back -
+#' is what makes two sessions editing different isolates, or different
+#' columns of the same one, compose safely. Two sessions editing the *same*
+#' cell still resolve as ordinary last-write-wins, which is the best a
+#' database with no per-cell locking can offer; nothing named in `edits` is
+#' ever silently skipped just because someone else changed it in between.
+#'
+#' Deliberately mirrors `save_custom_values()`'s shape: a tidy one-row-per-cell
+#' diff in, an `UPDATE` per row out. The caller (the Database Browser's
+#' cell-edit grid) is what turns individual DT edits into this diff, since it
+#' is the only place that actually knows which cells the user touched.
 #'
 #' @param db_path Character path to the SQLite database file.
-#' @param data Data frame containing complete updated metadata.
-#' @return Invisible logical `TRUE` after writing to database.
+#' @param edits Data frame with one row per edited cell: `isolate`, `column`
+#'   (a `metadata` column name) and `value` (the new value). Rows naming an
+#'   isolate or a column the database does not have are silently skipped -
+#'   this function never creates a metadata row or column, only updates
+#'   existing cells (see `sync_metadata_table()` for creation).
+#' @return Invisible integer count of cells actually written.
 #' @export
-save_metadata_table <- function(db_path, data) {
+save_metadata_table <- function(db_path, edits) {
+  if (
+    !is.data.frame(edits) ||
+      !nrow(edits) ||
+      isFALSE(all(c("isolate", "column", "value") %in% names(edits)))
+  ) {
+    return(invisible(0L))
+  }
+
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
-  dbWriteTable(con, "metadata", data, overwrite = TRUE)
+
+  if (isFALSE("metadata" %in% dbListTables(con))) {
+    return(invisible(0L))
+  }
+
+  known_cols <- dbListFields(con, "metadata")
+  known_isolates <- dbGetQuery(con, "SELECT isolate FROM metadata")$isolate
+  edits <- edits[
+    edits$column %in% known_cols & edits$isolate %in% known_isolates,
+    ,
+    drop = FALSE
+  ]
+  if (!nrow(edits)) {
+    return(invisible(0L))
+  }
+
+  n <- 0L
+  dbBegin(con)
+  ok <- tryCatch(
+    {
+      for (i in seq_len(nrow(edits))) {
+        dbExecute(
+          con,
+          sprintf(
+            'UPDATE metadata SET "%s" = ? WHERE isolate = ?',
+            edits$column[i]
+          ),
+          params = list(edits$value[i], edits$isolate[i])
+        )
+      }
+      n <- nrow(edits)
+      TRUE
+    },
+    error = function(e) FALSE
+  )
+  if (isTRUE(ok)) {
+    dbCommit(con)
+  } else {
+    dbRollback(con)
+    n <- 0L
+  }
+
   log_event(
     "DB",
     "metadata",
-    sprintf("saved (overwrite), %d row(s)", nrow(data))
+    sprintf(
+      "%d cell(s) updated%s",
+      n,
+      if (isTRUE(ok)) "" else " (failed, rolled back)"
+    )
   )
-  invisible(TRUE)
+
+  invisible(n)
 }
 
 #' Fetch Scheme Loci Summary with Allele Counts

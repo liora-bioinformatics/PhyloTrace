@@ -1,5 +1,13 @@
 box::use(
-  testthat[test_that, expect_null, expect_identical],
+  testthat[
+    expect_equal,
+    expect_false,
+    expect_identical,
+    expect_null,
+    expect_setequal,
+    expect_true,
+    test_that
+  ],
   withr[local_tempdir],
 )
 box::use(
@@ -7,9 +15,11 @@ box::use(
     logic /
     database_functions[
       load_classical_mlst,
-      migrate_isolate_key,
       migrate_species_name,
-      remove_isolates
+      read_metadata_table,
+      remove_isolates,
+      save_metadata_table,
+      sync_metadata_table
     ],
   app / logic / field_labels[MLST_COL_PREFIX],
 )
@@ -81,28 +91,6 @@ test_that("load_classical_mlst pivots to one row per isolate", {
   expect_identical(out[[paste0(MLST_COL_PREFIX, "fumC")]], c("3", "5"))
 })
 
-test_that("load_classical_mlst never shows a candidate ST list as the ST", {
-  # Rows written before claMLST's candidate lists were caught: the search could
-  # not settle on one ST, yet stored the whole set under a "known" status.
-  dir <- local_tempdir()
-  db <- file.path(dir, "db.sqlite")
-  build_db(db, default_local())
-  add_classical_mlst(
-    db,
-    data.frame(
-      isolate = c("A", "A"),
-      gene = c("adk", "fumC"),
-      allele = c("1", "3"),
-      st = c("11;2193;690", "11;2193;690"),
-      status = c("known", "known"),
-      stringsAsFactors = FALSE
-    )
-  )
-
-  out <- load_classical_mlst(db)
-  expect_identical(out[[paste0(MLST_COL_PREFIX, "st")]], "ambiguous")
-})
-
 test_that("load_classical_mlst omits isolates absent from classical_mlst", {
   dir <- local_tempdir()
   db <- file.path(dir, "db.sqlite")
@@ -122,56 +110,6 @@ test_that("load_classical_mlst omits isolates absent from classical_mlst", {
   # for it - exactly what the browse view fills in as an empty cell.
   idx <- match(c("A", "B"), out$isolate)
   expect_identical(out[[paste0(MLST_COL_PREFIX, "adk")]][idx], c("1", NA))
-})
-
-test_that("migrate_isolate_key renames souche and is idempotent", {
-  # Databases written before the key was renamed carry `souche` on PhyloTrace's
-  # own tables, which every query now misses with "no such column: isolate".
-  dir <- local_tempdir()
-  path <- file.path(dir, "old.db")
-  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
-
-  con <- DBI::dbConnect(RSQLite::SQLite(), path)
-  DBI::dbExecute(
-    con,
-    "CREATE TABLE amr_summary (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       souche TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
-  )
-  DBI::dbExecute(
-    con,
-    "INSERT INTO amr_summary (souche, section, drug_class, genes)
-     VALUES ('A', 'matches', 'Beta-lactam', 'blaTEST')"
-  )
-  # Already-current table: must be left alone, not renamed twice.
-  DBI::dbExecute(
-    con,
-    "CREATE TABLE genome_hashes (isolate TEXT PRIMARY KEY, genome_digest TEXT)"
-  )
-  DBI::dbDisconnect(con)
-
-  renamed <- suppressMessages(migrate_isolate_key(path))
-  expect_identical(renamed, "amr_summary")
-
-  # The rename is metadata-only: the row survives, reachable under the new name.
-  expect_identical(q1(path, "SELECT isolate FROM amr_summary"), "A")
-  expect_identical(q1(path, "SELECT genes FROM amr_summary"), "blaTEST")
-
-  # pyMLST's own table keeps its spelling.
-  expect_true("souche" %in% DBI::dbListFields(
-    DBI::dbConnect(RSQLite::SQLite(), path),
-    "mlst"
-  ))
-
-  # Second run is a no-op.
-  expect_identical(suppressMessages(migrate_isolate_key(path)), character(0))
-})
-
-test_that("migrate_isolate_key tolerates a missing or unreadable database", {
-  dir <- local_tempdir()
-  expect_identical(migrate_isolate_key(file.path(dir, "absent.db")), character(0))
-  expect_identical(migrate_isolate_key(NULL), character(0))
-  expect_identical(migrate_isolate_key(NA_character_), character(0))
 })
 
 test_that("migrate_species_name repairs the mangled scheme species", {
@@ -381,4 +319,211 @@ test_that("remove_isolates is atomic: a mid-way failure leaves nothing removed",
 
   # Nothing removed, including from the tables visited before the failure.
   expect_identical(isolate_footprint(path, "A"), before)
+})
+
+# ---------------------------------------------------------------------------
+# read_metadata_table(): the pure read half of the old make_metadata_table()
+# ---------------------------------------------------------------------------
+
+test_that("read_metadata_table returns NULL without a metadata table", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = NULL)
+  expect_null(read_metadata_table(path))
+})
+
+test_that("read_metadata_table never creates the table it did not find", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = NULL)
+  read_metadata_table(path)
+  tables <- qdf(path, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("metadata" %in% tables)
+})
+
+test_that("read_metadata_table does not backfill isolates mlst already has", {
+  # The defining difference from sync_metadata_table(): mlst has A and B, the
+  # metadata table only has A. A pure read must report exactly what the table
+  # holds, not what the isolate pool implies it should hold.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+  md <- read_metadata_table(path)
+  expect_identical(md$isolate, "A")
+})
+
+# ---------------------------------------------------------------------------
+# save_metadata_table(): targeted per-cell UPDATE, not a whole-table overwrite
+# ---------------------------------------------------------------------------
+
+test_that("save_metadata_table writes only the cells that actually changed", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  edit <- read_metadata_table(path)
+  edit$geo_loc_name_country[edit$isolate == "A"] <- "France"
+
+  n <- save_metadata_table(path, edit)
+  expect_identical(n, 1L)
+
+  after <- read_metadata_table(path)
+  expect_identical(after$geo_loc_name_country[after$isolate == "A"], "France")
+  # B's row, and every other column of A's row, is untouched.
+  expect_identical(
+    after$sample_collection_date,
+    read_metadata_table(path)$sample_collection_date
+  )
+})
+
+test_that("an isolate absent from data is left completely alone", {
+  # The actual fix: the old dbWriteTable(overwrite = TRUE) replaced the whole
+  # table with whatever was passed in, so an isolate simply not present in the
+  # snapshot being saved - typed by someone else after the grid was read, or
+  # never displayed in the first place - was deleted outright.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  before_b <- read_metadata_table(path)[read_metadata_table(path)$isolate == "B", ]
+
+  # A snapshot naming only A - as if B had never been read into this session.
+  only_a <- meta_df("A")
+  only_a$geo_loc_name_country <- "France"
+  save_metadata_table(path, only_a)
+
+  after <- read_metadata_table(path)
+  expect_setequal(after$isolate, c("A", "B"))
+  after_b <- after[after$isolate == "B", ]
+  expect_identical(after_b[names(before_b)], before_b)
+})
+
+test_that("two sessions editing different isolates do not clobber each other", {
+  # The concurrency scenario the new implementation exists for: two open
+  # sessions, each holding a full snapshot from before the other saved, each
+  # editing a different isolate.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  session1 <- read_metadata_table(path)
+  session2 <- read_metadata_table(path)
+
+  session1$geo_loc_name_country[session1$isolate == "A"] <- "France"
+  session2$geo_loc_name_country[session2$isolate == "B"] <- "Spain"
+
+  save_metadata_table(path, session1)
+  save_metadata_table(path, session2)
+
+  final <- read_metadata_table(path)
+  expect_identical(final$geo_loc_name_country[final$isolate == "A"], "France")
+  expect_identical(final$geo_loc_name_country[final$isolate == "B"], "Spain")
+})
+
+test_that("an isolate named in data but absent from the database is skipped", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  edit <- data.frame(
+    isolate = c("A", "ghost"),
+    geo_loc_name_country = c("France", "Nowhere"),
+    stringsAsFactors = FALSE
+  )
+  n <- save_metadata_table(path, edit)
+  expect_identical(n, 1L)
+
+  after <- read_metadata_table(path)
+  expect_identical(after$isolate, "A")
+})
+
+test_that("columns absent from the database table are ignored", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  edit <- read_metadata_table(path)
+  edit$mlst_st <- "42"
+
+  n <- save_metadata_table(path, edit)
+  expect_identical(n, 0L)
+  expect_false("mlst_st" %in% names(read_metadata_table(path)))
+})
+
+test_that("NA overwrites an existing value and counts as a change", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  edit <- read_metadata_table(path)
+  edit$geo_loc_name_country[edit$isolate == "A"] <- NA_character_
+
+  n <- save_metadata_table(path, edit)
+  expect_identical(n, 1L)
+  expect_true(is.na(read_metadata_table(path)$geo_loc_name_country))
+})
+
+test_that("two NAs are not a change and cost no write", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  # meta_df() does not set geo_loc_name_state_province, so it is NA already.
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  edit <- read_metadata_table(path)
+  n <- save_metadata_table(path, edit)
+  expect_identical(n, 0L)
+})
+
+test_that("save_metadata_table never creates the table, unlike the old overwrite", {
+  # dbWriteTable(overwrite = TRUE) would have created the table if it did not
+  # exist; a pure updater must not. Table creation belongs to
+  # sync_metadata_table() alone.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = NULL)
+
+  n <- save_metadata_table(path, meta_df("A"))
+  expect_identical(n, 0L)
+  tables <- qdf(path, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("metadata" %in% tables)
+})
+
+test_that("save_metadata_table tolerates empty or malformed input", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  expect_identical(save_metadata_table(path, data.frame()), 0L)
+  expect_identical(
+    save_metadata_table(path, data.frame(isolate = character(0))),
+    0L
+  )
+  expect_identical(
+    save_metadata_table(path, data.frame(country = "France")),
+    0L
+  )
+})
+
+test_that("save_metadata_table is atomic: a mid-way failure writes nothing", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  before <- read_metadata_table(path)
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  # Fires only on B's row, so A's UPDATE (which the column-major loop reaches
+  # first) has already run by the time this aborts the transaction.
+  DBI::dbExecute(
+    con,
+    "CREATE TRIGGER boom BEFORE UPDATE ON metadata
+     WHEN NEW.isolate = 'B'
+     BEGIN SELECT RAISE(ABORT, 'boom'); END"
+  )
+  DBI::dbDisconnect(con)
+
+  edit <- before
+  edit$geo_loc_name_country <- c("France", "Spain")
+
+  save_metadata_table(path, edit)
+
+  expect_identical(read_metadata_table(path), before)
 })

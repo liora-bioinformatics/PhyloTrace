@@ -20,7 +20,7 @@ box::use(
 
 box::use(
   app / logic / custom_fields[append_custom, custom_col],
-  app / logic / database_functions[make_metadata_table, metadata_columns],
+  app / logic / database_functions[metadata_columns],
   app /
     logic /
     db_export[
@@ -32,6 +32,7 @@ box::use(
     ],
   app / logic / db_events,
   app / logic / db_sources[SOURCE_COL],
+  app / logic / db_store,
   app / logic / field_labels[field_chips, field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
   app / logic / functions[panel_card, stat_tile, transfer_cards],
@@ -266,7 +267,11 @@ server <- function(
   db_path = shiny$reactive(NULL),
   session_reset = shiny$reactive(0L),
   db_rev = db_events$new_bus(),
-  ui_mounted = shiny$reactive(0L)
+  ui_mounted = shiny$reactive(0L),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -379,8 +384,10 @@ server <- function(
       path <- db_path()
       shiny$req(!is.null(path), !is.na(path))
 
-      db_events$depend(db_rev, "metadata", "custom_fields")
-      md <- make_metadata_table(path)
+      # `custom_fields` for append_custom() below; store$metadata() carries its
+      # own dependency on the domains that move the metadata table itself.
+      db_events$depend(db_rev, "custom_fields")
+      md <- store$metadata()
       if (is.null(md) || !nrow(md)) {
         return(NULL)
       }
@@ -471,12 +478,11 @@ server <- function(
     })
 
     export_meta <- shiny$reactive({
-      db_events$depend(db_rev, "metadata")
       path <- db_path()
       shiny$req(path)
       iso <- isolates()
       shiny$req(length(iso) > 0)
-      md <- make_metadata_table(path)
+      md <- store$metadata()
       shiny$req(md)
       md[md$isolate %in% iso, , drop = FALSE]
     })

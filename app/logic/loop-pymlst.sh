@@ -238,8 +238,6 @@ fi
 # Main Processing Loop
 # ==============================================================================
 
-echo "Starting allele calling..."
-
 for genome_file in "$@"; do
     if [[ -f "$genome_file" ]]; then
         process_genome "$DB_PATH" "$genome_file" "$IDENTITY" "$COVERAGE"

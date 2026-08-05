@@ -21,7 +21,7 @@ box::use(
       unique_source_label
     ],
   app / logic / db_import[METADATA_RESERVED, merge_databases],
-  app / logic / database_functions[make_metadata_table],
+  app / logic / database_functions[sync_metadata_table],
 )
 
 # `merge_databases()` and `hash_database()` are chatty; the messages are useful
@@ -61,7 +61,7 @@ meta_source <- function(path) {
   stats::setNames(df[[SOURCE_COL]], df$isolate)
 }
 
-# The columns `make_metadata_table()` appends for a newly typed isolate. A
+# The columns `sync_metadata_table()` appends for a newly typed isolate. A
 # metadata table missing any of them cannot take the append at all (an
 # app-written table always has them), so the local fixture carries the full set.
 FULL_META_EXTRA <- stats::setNames(
@@ -207,13 +207,13 @@ test_that("db_uuid reads phylotrace_meta and tolerates its absence", {
 # Provenance written through the real paths
 # ---------------------------------------------------------------------------
 
-test_that("make_metadata_table stamps isolates it appends as local", {
+test_that("sync_metadata_table stamps isolates it appends as local", {
   dir <- local_tempdir()
   path <- file.path(dir, "typed.db")
   # No metadata table at all: everything present was typed here.
   build_db(path, default_local(), metadata = NULL)
 
-  md <- quiet(make_metadata_table(path))
+  md <- quiet(sync_metadata_table(path))
 
   expect_true(SOURCE_COL %in% names(md))
   expect_setequal(md[[SOURCE_COL]], SOURCE_LOCAL)
@@ -239,7 +239,7 @@ test_that("an isolate typed after a merge is stamped local, not the peer", {
   )
   DBI::dbDisconnect(con)
 
-  md <- quiet(make_metadata_table(p$local))
+  md <- quiet(sync_metadata_table(p$local))
   src <- stats::setNames(md[[SOURCE_COL]], md$isolate)
 
   expect_identical(unname(src[["D"]]), SOURCE_LOCAL)
@@ -251,7 +251,7 @@ test_that("rows predating the column stay unknown rather than claiming local", {
   path <- file.path(dir, "legacy.db")
   build_db(path, default_local(), metadata = meta_df(c("A", "B")))
 
-  md <- quiet(make_metadata_table(path))
+  md <- quiet(sync_metadata_table(path))
 
   expect_true(SOURCE_COL %in% names(md))
   expect_true(all(is.na(md[[SOURCE_COL]])))

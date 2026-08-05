@@ -22,7 +22,6 @@ box::use(
   app / logic / database_functions[migrate_species_name],
   app / logic / db_connect[connect],
   app / logic / logging[log_event],
-  app / logic / mlst_repo[canonical_species],
 )
 
 # Central Conda environment where all external bioinformatics CLI dependencies
@@ -803,9 +802,9 @@ parse_tool_meta <- function(log_lines) {
 #' Query Target Species from Database
 #'
 #' @description Reads the species associated with the database's schema from the
-#'   `mlst_type` table, as the canonical cgmlst.org scheme name. Databases
-#'   written before `migrate_species_name()` carry pyMLST's mangled spelling, so
-#'   the name is repaired on the way out too.
+#'   `mlst_type` table. The name is repaired once, by `migrate_species_name()`
+#'   on database open and straight after a scheme download, so what is stored is
+#'   already the canonical cgmlst.org spelling.
 #'
 #' @param db_path Character string. File path to SQLite database.
 #'
@@ -840,7 +839,7 @@ db_species <- function(db_path) {
     return(NA_character_)
   }
   species <- trimws(as.character(res$species[1]))
-  if (nzchar(species)) canonical_species(species) else NA_character_
+  if (nzchar(species)) species else NA_character_
 }
 
 #' Read the Classical MLST Reference Database

@@ -87,7 +87,7 @@ set_default_inputs <- function(session) {
     amr_cluster_distance = "binary",
     amr_cluster_method = "average",
     amr_auto_fontsize = TRUE,
-    amr_show_row_names = TRUE,
+    amr_show_row_names = FALSE,
     amr_show_class_anno = TRUE,
     amr_level = "gene",
     amr_top_n = 30
@@ -114,7 +114,10 @@ test_that("Generate builds the matrix only while AMR is the active engine", {
       expect_true(generated())
       # Every isolate is a row, including the one that was never screened.
       expect_identical(nrow(presence_mat()), 4L)
-      expect_identical(sort(colnames(presence_mat())), c("blaTEST", "fimH", "gyrA"))
+      expect_identical(
+        sort(colnames(presence_mat())),
+        c("blaTEST", "fimH", "gyrA")
+      )
     }
   )
 })

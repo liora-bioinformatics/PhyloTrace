@@ -14,6 +14,7 @@ box::use(
   app /
     logic /
     db_export[export_preview, export_database, exportable_custom_fields],
+  app / logic / provenance[store_provenance],
   app / logic / db_compat[check_import_compatibility],
 )
 
@@ -299,4 +300,23 @@ test_that("exported result-table DDL matches the source verbatim", {
       info = nm
     )
   }
+})
+
+test_that("an export carries the provenance of the isolates it contains", {
+  dir <- local_tempdir()
+  src <- file.path(dir, "src.db")
+  build_db(src, default_local(), metadata = meta_df(c("A", "B")))
+  store_provenance(src, "A", list(genome_digest = "digestA", pymlst_version = "2.2.2"))
+  store_provenance(src, "B", list(genome_digest = "digestB", pymlst_version = "2.2.2"))
+
+  out <- file.path(dir, "out.db")
+  export_database(src, out, "A")
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), out)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  rows <- DBI::dbGetQuery(con, "SELECT isolate, genome_digest FROM typing_provenance")
+
+  # Only the exported isolate's row travels, exactly like its results.
+  expect_identical(rows$isolate, "A")
+  expect_identical(rows$genome_digest, "digestA")
 })

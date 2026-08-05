@@ -14,7 +14,7 @@ box::use(
   app / logic / epi_plot,
 )
 
-# A small metadata frame shaped like make_metadata_table()'s output: ISO date
+# A small metadata frame shaped like the `metadata` table's output: ISO date
 # strings (free text, so unparseable and NA values are expected).
 meta_fixture <- function() {
   data.frame(

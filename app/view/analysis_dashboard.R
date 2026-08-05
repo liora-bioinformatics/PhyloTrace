@@ -42,7 +42,8 @@ box::use(
 box::use(
   app / logic / analysis_store,
   app / logic / db_events,
-  app / logic / database_functions[append_classical_mlst, make_metadata_table],
+  app / logic / database_functions[append_classical_mlst],
+  app / logic / db_store,
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
   app / view / analysis_dashboard / group,
@@ -99,7 +100,11 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  db_rev = db_events$new_bus()
+  db_rev = db_events$new_bus(),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -203,11 +208,13 @@ server <- function(
     wiz_checked <- reactiveVal(character(0))
 
     # Isolate metadata backing the selection step — the same table the
-    # Visualization module's isolate picker shows.
+    # Visualization module's isolate picker shows, drawn from the same shared
+    # store so the two never disagree about which isolates exist. NULL flows
+    # through unchanged (not req()'d away) because every reader below checks
+    # for it explicitly, the same as before this read moved to the store.
     settings_meta <- reactive({
-      db_events$depend(db_rev, "isolates", "metadata")
       req(db_path())
-      append_classical_mlst(make_metadata_table(db_path()), db_path())
+      append_classical_mlst(store$metadata(), db_path())
     })
 
     # The date-typed columns the time filter can work along: the fixed

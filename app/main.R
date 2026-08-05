@@ -48,8 +48,9 @@ box::use(
   app / logic / paths[stat_json, app_local_share_path],
   app / logic / pymlst[hash_database, hashes_pending],
   app / logic / app_meta[APP_VERSION],
-  app / logic / database_functions[migrate_isolate_key, migrate_species_name],
+  app / logic / database_functions[migrate_species_name, sync_metadata_table],
   app / logic / db_events[bump_all, new_bus],
+  app / logic / db_store[new_store],
   app / view / landing_page,
   app / view / scheme_browser,
   app / view / database,
@@ -297,6 +298,12 @@ server <- function(id) {
       session_reset = session_reset
     )
 
+    # The shared metadata cache (app/logic/db_store.R): one reactive read of
+    # the `metadata` table, passed to every module that displays it, so the
+    # question "does the whole app agree on the isolate table" has exactly one
+    # answer rather than one per consumer.
+    store <- new_store(db_path = LANDING_PAGE_vals$db_path, db_rev = db_rev)
+
     TYPING_vals <- typing$server(
       "typing",
       db_path = LANDING_PAGE_vals$db_path,
@@ -321,7 +328,8 @@ server <- function(id) {
       session_reset = data_reset,
       show_browse = show_browse,
       ui_mounted = ui_mounted,
-      db_rev = db_rev
+      db_rev = db_rev,
+      store = store
     )
 
     # The database changed underneath the open session, so offer a reload —
@@ -396,7 +404,8 @@ server <- function(id) {
       "analysis_dashboard",
       db_path = LANDING_PAGE_vals$db_path,
       session_reset = data_reset,
-      db_rev = db_rev
+      db_rev = db_rev,
+      store = store
     )
     visualization$server(
       "visualization",
@@ -417,7 +426,8 @@ server <- function(id) {
       # plot" both route here and preselect / restore in the Save panel.
       launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,
       open_ctx = ANALYSIS_DASHBOARD_vals$request_open_plot,
-      db_rev = db_rev
+      db_rev = db_rev,
+      store = store
     )
 
     # Dashboard buttons that hand off to the Visualization tab.
@@ -487,17 +497,25 @@ server <- function(id) {
       )
       w$show()
 
-      # Bring the isolate key and the scheme species up to the current spelling
-      # before anything reads the database, then fill in any missing allele
-      # hashes.
-      migrate_isolate_key(db_path)
+      # Bring the scheme species up to the current spelling before anything
+      # reads the database, then fill in any missing allele hashes, then sync
+      # the metadata table - creating it and backfilling a row for every
+      # isolate `mlst` already has (this is only a no-op past the first load;
+      # a database opened before ever having a metadata table gets one here).
+      #
+      # This is the one explicit, deterministic sync call every module's read
+      # can rely on instead of triggering its own: see
+      # `sync_metadata_table()`'s docs for why performing it lazily, inside
+      # whichever reactive happened to read first, was the actual bug behind
+      # modules disagreeing about which isolates existed.
       migrate_species_name(db_path)
       hash_database(db_path)
+      sync_metadata_table(db_path)
 
-      # Both of the above write. Readers keyed on db_path() invalidate anyway
-      # when it changes, but a reload of the *same* path (the landing page can
-      # re-fire load for the database already open) leaves db_path() untouched,
-      # so the revisions are what makes those reads re-run.
+      # All three of the above write. Readers keyed on db_path() invalidate
+      # anyway when it changes, but a reload of the *same* path (the landing
+      # page can re-fire load for the database already open) leaves db_path()
+      # untouched, so the revisions are what makes those reads re-run.
       bump_all(db_rev)
 
       app_panels <- list(
@@ -704,12 +722,17 @@ server <- function(id) {
 
       # Step 2 (deferred to a later tick, so the nav switch + overlay actually
       # paint before the potentially blocking work runs behind it): backfill
-      # allele hashes for anything typed this session, then reload every
-      # module. Isolates typed this session add rows to `sequences` but not to
-      # the per-allele `hashes` table (only hash_database() maintains it), so
-      # backfilling here keeps hash-dependent reads (profile export, db
-      # import/export) correct without a full landing-page reload;
-      # hash_database() is a cheap no-op when nothing new was typed.
+      # allele hashes for anything typed this session, sync the metadata table,
+      # then reload every module. Isolates typed this session add rows to
+      # `sequences` but not to the per-allele `hashes` table (only
+      # hash_database() maintains it), so backfilling here keeps hash-dependent
+      # reads (profile export, db import/export) correct without a full
+      # landing-page reload; hash_database() is a cheap no-op when nothing new
+      # was typed. sync_metadata_table() is the same kind of belt-and-suspenders
+      # backfill: typing and import already call it themselves at the point
+      # they change the isolate pool, so this is normally a no-op too - it is
+      # here so that "Reload Database" stays a complete, no-questions-asked
+      # recovery action even if some future write path forgets to.
       #
       # withReactiveDomain() restores the session so waiter/reactiveVal writes
       # resolve; isolate() supplies the reactive context reload_data() needs to
@@ -730,6 +753,9 @@ server <- function(id) {
                     hashes_pending(db_path)
                 ) {
                   hash_database(db_path)
+                }
+                if (length(db_path) && !is.na(db_path)) {
+                  sync_metadata_table(db_path)
                 }
                 reload_data()
               },

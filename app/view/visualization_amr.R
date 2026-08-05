@@ -104,7 +104,7 @@ CLUSTER_METHOD_DEFAULT <- "average"
 CLUSTER_DISTANCE_DEFAULT <- "binary"
 
 TOP_N_DEFAULT <- 30L
-DEND_DEFAULT <- 2
+DEND_DEFAULT <- 1.5
 GRID_WIDTH_DEFAULT <- 1
 ASPECT_DEFAULT <- 0.65
 FONTSIZE_ROW_DEFAULT <- 10
@@ -112,7 +112,7 @@ FONTSIZE_COL_DEFAULT <- 10
 FONTSIZE_TITLE_DEFAULT <- 14
 FONTSIZE_LEGEND_DEFAULT <- 9
 
-PRESENT_COLOR_DEFAULT <- "#66C2A5"
+PRESENT_COLOR_DEFAULT <- "#000000"
 PARTIAL_COLOR_DEFAULT <- "#E5C494"
 ABSENT_COLOR_DEFAULT <- "#EFEFEF"
 GRID_COLOR_DEFAULT <- "#FFFFFF"
@@ -330,7 +330,11 @@ amr_controls <- function(ns) {
             shiny$conditionalPanel(
               condition = COND_HEATMAPS,
               ns = ns,
-              input_switch(ns("amr_show_row_names"), "Show isolate names", TRUE)
+              input_switch(
+                ns("amr_show_row_names"),
+                "Show isolate names",
+                FALSE
+              )
             ),
             # On (default) the label sizes step down as the matrix grows, which
             # is what master did and had no way to override. The steps stop

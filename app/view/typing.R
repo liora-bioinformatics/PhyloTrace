@@ -76,6 +76,7 @@ box::use(
 box::use(
   app / logic / db_events,
   app / logic / app_meta[APP_VERSION],
+  app / logic / database_functions[sync_metadata_table],
   app / logic / functions[render_info],
   app / logic / logging[typing_log_file, log_event],
   app / logic / provenance[scheme_provenance, store_provenance],
@@ -866,9 +867,32 @@ server <- function(
           locus_count <- NA_real_
         }
 
+        # What became of each step for this isolate. Without it a NULL column
+        # is ambiguous: a step that was never part of the run, one that ran and
+        # returned nothing, and one that failed all read the same, while the
+        # run-level fields around them (scheme, tool versions) are filled in
+        # either way. Left NA mid-run, when a step may simply not have reported
+        # yet, and settled on the closing sweep.
+        step_status <- function(enabled, observed, unfinished) {
+          if (!isTRUE(enabled)) {
+            "skipped"
+          } else if (!is.na(observed)) {
+            observed
+          } else if (retry) {
+            unfinished
+          } else {
+            NA_character_
+          }
+        }
+
         for (strain in touched) {
           i <- match(strain, results$strain)
           hashes <- genome_hash_row(db_path(), strain)
+          # "screening" is a state the log passes through, never one to record.
+          amr_observed <- results$amr_status[i]
+          if (!is.na(amr_observed) && !(amr_observed %in% c("done", "failed"))) {
+            amr_observed <- NA_character_
+          }
           stored <- tryCatch(
             store_provenance(
               db_path(),
@@ -898,12 +922,22 @@ server <- function(
                   } else {
                     NA_real_
                   },
+                  cla_status = step_status(
+                    Typing$cla_enabled,
+                    results$cla_status[i],
+                    "failed"
+                  ),
                   cla_scheme = cla_meta$scheme,
                   cla_scheme_version = cla_meta$scheme_version,
                   cla_alembic_version = Typing$cla_refs$alembic,
                   cla_repository = cla_meta$repository,
                   cla_identity = or_default(input$identity, 0.95),
                   cla_coverage = or_default(input$coverage, 0.9),
+                  amr_status = step_status(
+                    Typing$amr_enabled,
+                    amr_observed,
+                    "incomplete"
+                  ),
                   amr_organism = amr_organism,
                   amr_point_mutations = if (isTRUE(Typing$amr_enabled)) {
                     as.integer(!is.na(amr_organism))
@@ -2420,6 +2454,20 @@ server <- function(
         live_amr_out <<- NULL
       }
 
+      # Bring the metadata table up to date - one row per isolate `added`
+      # above just put into `mlst` - before announcing the change below.
+      # Explicit and synchronous, not left for whichever reactive across
+      # whichever module happens to read the metadata table next: that used
+      # to be how this row got backfilled, and since two different modules
+      # could each be the one to trigger it, one could catch a table the
+      # other had not backfilled yet and the two would disagree about which
+      # isolates existed. Doing it here means every reader downstream of the
+      # bump - regardless of which one runs first - sees the same, already
+      # -synced table. See `sync_metadata_table()`'s docs for the full case.
+      if (added > 0L) {
+        sync_metadata_table(db_path())
+      }
+
       # Signal other modules that the DB has new data.
       #
       # Announced once here, at the end of the run, rather than per strain: the
@@ -2427,12 +2475,12 @@ server <- function(
       # whole run the database is a moving target that no reader should be
       # invalidated onto. Writing early and announcing early are separate
       # concerns - the per-isolate persistence above deliberately stays silent.
-      # By this point the pyMLST process has exited and every in-process write
-      # has committed, so this is the first moment the database is both changed
-      # and consistent.
+      # By this point the pyMLST process has exited, every in-process write has
+      # committed and the metadata sync above has run, so this is the first
+      # moment the database is both changed and consistent.
       #
       # `schema` because new isolates bring new allele rows into `sequences`;
-      # `metadata` because make_metadata_table() back-fills a row per new
+      # `metadata` because the sync above just back-filled a row per new
       # isolate. `amr` only when screening actually stored something.
       if (added > 0L) {
         domains <- c("isolates", "metadata", "schema")

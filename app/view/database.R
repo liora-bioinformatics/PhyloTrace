@@ -7,6 +7,7 @@ box::use(
 )
 box::use(
   app / logic / db_events,
+  app / logic / db_store,
   app / logic / functions[sidebar_menu],
   app / view / database_browser,
   app / view / database_custom,
@@ -80,7 +81,14 @@ server <- function(
   session_reset = shiny::reactive(0L),
   show_browse = shiny::reactive(0L),
   ui_mounted = shiny::reactive(0L),
-  db_rev = db_events$new_bus()
+  db_rev = db_events$new_bus(),
+  # Defaults to a store wired to whatever db_path/db_rev this call actually
+  # received (R evaluates default expressions in the function's own frame, so
+  # this sees the bound values, not new_store()'s own defaults) - a plain
+  # `db_store$new_store()` default would silently construct a store pinned to
+  # its own reactive(NULL), never reflecting the real database regardless of
+  # what db_path was passed.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -116,16 +124,20 @@ server <- function(
     # that at least one of the others reads. It replaces the local
     # `custom_updated` signal that used to carry Custom Variables -> Browse
     # Entries / Import / Export, which covered that one edge and no others.
+    #
+    # `store` (the shared metadata cache, app/logic/db_store.R) goes only to
+    # the two sub-modules that display the metadata table.
     browse_entries_vals <- NULL
     import_vals <- NULL
     for (item in db_menu) {
       extra <- switch(
         item$value,
+        browse_entries = list(store = store),
         # Import and Export drive part of their sidebar from the server
         # (shinyjs::toggle on the control groups that only one source/export
         # type needs), so both need to know when their markup was rebuilt.
         import = list(ui_mounted = ui_mounted),
-        export = list(ui_mounted = ui_mounted),
+        export = list(ui_mounted = ui_mounted, store = store),
         list()
       )
       result <- do.call(

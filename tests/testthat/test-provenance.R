@@ -161,13 +161,14 @@ test_that("the column list is derived from the table definition", {
       "cg_complex_type_count", "cg_identity", "cg_coverage", "cg_loci_found",
       "cg_alleles_added", "cg_partial_genes", "cg_filled_genes",
       "cg_removed_genes", "cg_completeness", "cla_scheme", "cla_scheme_version",
-      "cla_alembic_version", "cla_repository", "cla_identity", "cla_coverage",
-      "amr_organism", "amr_point_mutations", "amr_elements",
+      "cla_status", "cla_alembic_version", "cla_repository", "cla_identity",
+      "cla_coverage", "amr_status", "amr_organism", "amr_point_mutations",
+      "amr_elements",
       "amr_abritamr_version", "amr_amrfinder_version",
       "amr_amrfinder_db_version", "pymlst_version", "blat_version",
       "mafft_version"
     ) %in%
       impl$PROVENANCE_COLUMNS
   ))
-  expect_identical(length(impl$PROVENANCE_COLUMNS), 42L)
+  expect_identical(length(impl$PROVENANCE_COLUMNS), 44L)
 })

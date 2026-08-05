@@ -55,13 +55,13 @@ box::use(
   app /
     logic /
     database_functions[
-      make_metadata_table,
       save_metadata_table,
       remove_isolates,
       append_classical_mlst,
       append_amr_matrix
     ],
   app / logic / db_events,
+  app / logic / db_store,
   app / logic / field_labels[field_labels_for, grouped_field_choices],
   app / logic / field_types[date_fields],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
@@ -275,14 +275,24 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  db_rev = db_events$new_bus()
+  db_rev = db_events$new_bus(),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # custom_dirty buffers edits bound for phylotrace_custom_values, which the
-    # metadata write path cannot carry (see the cell-edit observer).
-    State <- reactiveValues(data = NULL, pending = FALSE, custom_dirty = NULL)
+    # Two dirty buffers, one per write destination: metadata_dirty for
+    # save_metadata_table() (isolate/column/value, one row per edited cell),
+    # custom_dirty for save_custom_values() (see the cell-edit observer).
+    State <- reactiveValues(
+      data = NULL,
+      pending = FALSE,
+      metadata_dirty = NULL,
+      custom_dirty = NULL
+    )
 
     # Removing many isolates re-hashes what's left and can block the R
     # session for a while; cover the whole tab so the UI reads as busy
@@ -314,7 +324,11 @@ server <- function(
       if (is.null(path) || is.na(path)) {
         return(NULL)
       }
-      df <- make_metadata_table(path)
+      # isolate(): metadata_base must recompute only on reload_token, exactly
+      # as before the store existed - reading store$metadata() reactively would
+      # pull in its dependency on db_rev and defeat the whole point of routing
+      # every refresh through reload_token (see its definition above).
+      df <- isolate(store$metadata())
       if (is.null(df) || !nrow(df)) {
         return(NULL)
       }
@@ -568,6 +582,7 @@ server <- function(
 
     observeEvent(metadata_base(), {
       State$data <- metadata_base()
+      State$metadata_dirty <- NULL
       State$custom_dirty <- NULL
       State$pending <- FALSE
     })
@@ -1189,14 +1204,20 @@ server <- function(
         drop = FALSE
       ]
 
-      # save_metadata_table() replaces the whole table, so whatever this grid
-      # holds becomes the database. That is only safe if the grid still matches
-      # the isolate pool — and this grid deliberately does not refresh while
-      # edits are pending, so between the read that filled it and this save
-      # typing may have added isolates and a removal may have taken some away.
-      # Writing the snapshot unreconciled would delete the metadata rows of
-      # everything added since and resurrect everything removed since.
-      current <- make_metadata_table(db_path())
+      # This grid deliberately does not refresh while edits are pending, so
+      # between the read that filled it and this save, typing may have added
+      # isolates and a removal may have taken some away. Re-basing onto the
+      # current table first (rather than writing the grid's snapshot as-is)
+      # means an isolate that appeared meanwhile keeps its own fresh row
+      # instead of being absent from the write, and one that disappeared is
+      # not resurrected by it. save_metadata_table() itself only touches cells
+      # that actually differ from the database, so this reconciliation is not
+      # what stands between the grid and clobbering someone else's isolates
+      # (that would be true even for `edited` on its own) - it exists so the
+      # save reflects the isolate pool as it stands now, not as it stood when
+      # this tab last read it. observeEvent() handlers run isolated, so this
+      # read of the shared store does not add a reactive dependency here.
+      current <- store$metadata()
       to_save <- .reconcile_metadata(edited, current)
       save_metadata_table(db_path(), to_save)
 
@@ -1250,6 +1271,7 @@ server <- function(
     # from before a change this grid skipped while edits were pending —
     # discarding has to land on the database as it is now, not as it was.
     observeEvent(input$discard, {
+      State$metadata_dirty <- NULL
       State$custom_dirty <- NULL
       State$pending <- FALSE
       reload_token(isolate(reload_token()) + 1L)

@@ -56,15 +56,14 @@ box::use(
   shinyWidgets[radioGroupButtons],
 )
 box::use(
+  app / logic / analysis_store,
   app / logic / custom_fields[append_custom],
+  app / logic / database_functions[append_amr, append_classical_mlst],
   app / logic / db_events,
-  app /
-    logic /
-    database_functions[append_amr, append_classical_mlst, make_metadata_table],
   app / logic / db_staging[list_imported_sets],
+  app / logic / db_store,
   app / logic / field_profile[field_profiles],
   app / logic / field_types[field_types],
-  app / logic / analysis_store,
   app / view / visualization_plot,
   jsonlite[fromJSON],
 )
@@ -344,7 +343,11 @@ server <- function(
   # this module and the dashboard bump/observe to stay in sync.
   launch_ctx = shiny::reactive(NULL),
   open_ctx = shiny::reactive(NULL),
-  db_rev = db_events$new_bus()
+  db_rev = db_events$new_bus(),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -355,12 +358,13 @@ server <- function(
     # plots are open. Local isolates only — a staged peer isolate has no place
     # on a map it was never geocoded for.
     viz_metadata <- reactive({
-      # The four domains this table is assembled from. Without them the whole
-      # module is blind to every write: db_path() does not change when an
-      # isolate is removed, a metadata cell is edited, a custom variable is
-      # defined or a typing run adds isolates, so this read would keep serving
-      # the version it took when the database was first opened.
-      db_events$depend(db_rev, "isolates", "metadata", "custom_fields", "amr")
+      # `custom_fields` and `amr` because append_custom()/append_amr() below
+      # read those tables directly, not through the store. `isolates` and
+      # `metadata` need no explicit dependency here: reading store$metadata()
+      # reactively (below) already carries that dependency transitively - the
+      # store invalidates on those two domains, and anything that reads it
+      # reactively invalidates right along with it.
+      db_events$depend(db_rev, "custom_fields", "amr")
       req(db_path())
       # Surface the classical-MLST columns (ST + per-locus alleles), the
       # AMR-screening columns (the resistance profile plus one per drug class)
@@ -373,7 +377,7 @@ server <- function(
       # from the columns' name prefixes.
       append_custom(
         append_amr(
-          append_classical_mlst(make_metadata_table(db_path()), db_path()),
+          append_classical_mlst(store$metadata(), db_path()),
           db_path()
         ),
         db_path()

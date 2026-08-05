@@ -25,6 +25,7 @@ box::use(
       suggest_rename
     ],
   app / logic / database_functions[remove_isolates],
+  app / logic / provenance[store_provenance],
 )
 
 # `merge_databases()` and `hash_database()` are chatty; the messages are useful
@@ -815,4 +816,57 @@ test_that("import_preview classifies the peer's custom variables", {
   expect_identical(pv$custom_shared, "ward")
   expect_identical(pv$custom_only_ext, "outbreak_id")
   expect_identical(pv$custom_conflicts$name, "ct_value")
+})
+
+test_that("an imported isolate brings its provenance row with it", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+
+  # The peer typed C and recorded how; the local database has never seen the
+  # table before, so the merge has to create it.
+  store_provenance(p$peer, "C", list(
+    run_id = "typing_20260805_090000_ab.log",
+    genome_digest = "peerdigest",
+    cg_scheme_version = "1.0",
+    pymlst_version = "2.2.2"
+  ))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    backup = FALSE
+  ))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), p$local)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  rows <- DBI::dbGetQuery(con, "SELECT * FROM typing_provenance")
+
+  expect_identical(rows$isolate, "C")
+  expect_identical(rows$genome_digest, "peerdigest")
+  expect_identical(rows$pymlst_version, "2.2.2")
+})
+
+test_that("merging a peer that records no provenance leaves ours intact", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+
+  # Peers on older versions, or databases typed before provenance existed, send
+  # no such table at all.
+  store_provenance(p$local, "A", list(genome_digest = "localdigest"))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    default_resolutions(classify_isolate_collisions(p$local, p$peer)),
+    backup = FALSE
+  ))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), p$local)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  rows <- DBI::dbGetQuery(con, "SELECT isolate, genome_digest FROM typing_provenance")
+
+  # The imported isolate simply has no row; ours is untouched.
+  expect_identical(rows$isolate, "A")
+  expect_identical(rows$genome_digest, "localdigest")
 })

@@ -2411,14 +2411,27 @@ $session-new-tint: 20%;
 .edit-table table.dataTable td,
 .isolate-selection-table table.dataTable th,
 .edit-table table.dataTable th {
-    font-size: 0.8em;
+    font-size: 0.8em !important;
     border-bottom: 1px solid #ddd;
     border-right: 1px solid #ddd;
 }
 
-.values-table table.dataTable td,
-.values-table table.dataTable th {
-    font-size: 0.8em
+.datatables {
+    font-size: 0.9em;
+}
+
+td {
+    padding: 5px !important;
+}
+
+#app-scheme_browser-scheme_overview {
+    .table {
+        margin: 0px !important;
+    }
+
+    .table>thead {
+        display: none;
+    }
 }
 
 .values-table table.dataTable th {
@@ -3589,7 +3602,7 @@ table.dataTable thead>tr>th.sorting {
 .species-details_summary {
     line-height: 1.55;
     color: var(--bs-body-color);
-    font-size: 0.92rem;
+    font-size: 0.8em;
     text-align: justify;
     margin: 0.5rem 0 0;
 }

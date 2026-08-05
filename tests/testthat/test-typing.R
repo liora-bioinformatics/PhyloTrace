@@ -271,3 +271,91 @@ test_that("every isolate gets a provenance row as it is typed", {
     expect_identical(row$elapsed_seconds, 10)
   })
 })
+
+test_that("a provenance row says which steps failed, ran, or never ran", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- genome
+    Typing$cla_enabled <- TRUE
+    Typing$amr_enabled <- TRUE
+    Typing$amr_out <- file.path(dir, "amr")
+
+    # Allele calling worked; the ST search returned nothing usable and the AMR
+    # screen fell over. Both leave their result tables empty, so without a
+    # status the run-level scheme and version fields would be all the row shows.
+    lines <- c(
+      RUN_PREAMBLE,
+      "Processing Strain: A",
+      "[INFO: 2026-08-05 09:00:00,000] found 2350 genes",
+      "[INFO: 2026-08-05 09:00:00,000] DONE",
+      "Classical MLST ST: NA",
+      "AMR: failed A",
+      "Strain elapsed: 10",
+      "Strain finished: 09:00:10",
+      "Done!"
+    )
+    results <- parse_typing_log(lines, Typing$queued_strains)
+    persist_results(results, lines, retry = TRUE)
+
+    con <- DBI::dbConnect(RSQLite::SQLite(), path)
+    on.exit(DBI::dbDisconnect(con), add = TRUE)
+    row <- DBI::dbGetQuery(con, "SELECT * FROM typing_provenance")
+
+    expect_identical(nrow(row), 1L)
+    expect_identical(row$cla_status, "failed")
+    expect_identical(row$amr_status, "failed")
+    # The scheme searched against is still recorded - it is what the failed
+    # search ran on - but no result was produced by either step.
+    expect_identical(row$cla_scheme, "Klebsiella (MLST)")
+    expect_identical(row$amr_elements, NA_integer_)
+    expect_identical(isolates_in(path, "classical_mlst"), character(0))
+    expect_identical(isolates_in(path, "amr_results"), character(0))
+  })
+})
+
+test_that("steps switched off for a run are recorded as skipped", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- genome
+    # No classical scheme resolved, AMR screening opted out.
+    Typing$cla_enabled <- FALSE
+    Typing$amr_enabled <- FALSE
+
+    lines <- c(
+      "pyMLST version: 2.2.2",
+      "BLAT version: 35",
+      "Processing Strain: A",
+      "[INFO: 2026-08-05 09:00:00,000] found 2350 genes",
+      "[INFO: 2026-08-05 09:00:00,000] DONE",
+      "Strain elapsed: 10",
+      "Strain finished: 09:00:10",
+      "Done!"
+    )
+    results <- parse_typing_log(lines, Typing$queued_strains)
+    persist_results(results, lines, retry = TRUE)
+
+    con <- DBI::dbConnect(RSQLite::SQLite(), path)
+    on.exit(DBI::dbDisconnect(con), add = TRUE)
+    row <- DBI::dbGetQuery(con, "SELECT * FROM typing_provenance")
+
+    expect_identical(row$cla_status, "skipped")
+    expect_identical(row$amr_status, "skipped")
+    # Allele calling still recorded everything it knows.
+    expect_identical(row$cg_loci_found, 2350L)
+    expect_identical(row$pymlst_version, "2.2.2")
+  })
+})
