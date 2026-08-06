@@ -43,14 +43,14 @@ box::use(
   htmltools[attachDependencies, findDependencies],
 )
 box::use(
-  app / logic / functions[render_info],
-  app / logic / logging[log_event, start_session_log],
-  app / logic / paths[stat_json, app_local_share_path],
-  app / logic / pymlst[hash_database, hashes_pending],
   app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[migrate_species_name, sync_metadata_table],
   app / logic / db_events[bump_all, new_bus],
   app / logic / db_store[new_store],
+  app / logic / functions[render_info],
+  app / logic / logging[log_event, start_session_log],
+  app / logic / paths[stat_json, app_local_share_path],
+  app / logic / pymlst[hash_database, hashes_pending],
   app / view / landing_page,
   app / view / scheme_browser,
   app / view / database,

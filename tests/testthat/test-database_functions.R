@@ -1,6 +1,5 @@
 box::use(
   testthat[
-    expect_equal,
     expect_false,
     expect_identical,
     expect_null,
@@ -353,124 +352,124 @@ test_that("read_metadata_table does not backfill isolates mlst already has", {
 })
 
 # ---------------------------------------------------------------------------
-# save_metadata_table(): targeted per-cell UPDATE, not a whole-table overwrite
+# save_metadata_table(): a tidy isolate/column/value diff, one UPDATE per
+# cell - not a whole-table read-diff-overwrite.
 # ---------------------------------------------------------------------------
 
-test_that("save_metadata_table writes only the cells that actually changed", {
+# One row per cell, matching what database_browser.R's State$metadata_dirty
+# accumulates from individual DT cell edits.
+cell_edit <- function(isolate, column, value) {
+  data.frame(isolate = isolate, column = column, value = value, stringsAsFactors = FALSE)
+}
+
+test_that("save_metadata_table writes exactly the named cell", {
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  before <- read_metadata_table(path)
 
-  edit <- read_metadata_table(path)
-  edit$geo_loc_name_country[edit$isolate == "A"] <- "France"
-
-  n <- save_metadata_table(path, edit)
+  n <- save_metadata_table(
+    path,
+    cell_edit("A", "geo_loc_name_country", "France")
+  )
   expect_identical(n, 1L)
 
   after <- read_metadata_table(path)
   expect_identical(after$geo_loc_name_country[after$isolate == "A"], "France")
-  # B's row, and every other column of A's row, is untouched.
-  expect_identical(
-    after$sample_collection_date,
-    read_metadata_table(path)$sample_collection_date
-  )
+  # Every other cell, including B's whole row, is untouched.
+  a <- after$isolate == "A"
+  after$geo_loc_name_country[a] <- before$geo_loc_name_country[a]
+  expect_identical(after, before)
 })
 
-test_that("an isolate absent from data is left completely alone", {
+test_that("an isolate named in no edit is left completely alone", {
   # The actual fix: the old dbWriteTable(overwrite = TRUE) replaced the whole
-  # table with whatever was passed in, so an isolate simply not present in the
-  # snapshot being saved - typed by someone else after the grid was read, or
-  # never displayed in the first place - was deleted outright.
+  # table with whatever full snapshot was passed in, so an isolate simply not
+  # present in it - typed by someone else after the grid was read, or never
+  # displayed in the first place - was deleted outright. A tidy diff never
+  # names such an isolate at all, so there is nothing for it to delete.
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df(c("A", "B")))
-  before_b <- read_metadata_table(path)[read_metadata_table(path)$isolate == "B", ]
+  before_b <- read_metadata_table(path)
+  before_b <- before_b[before_b$isolate == "B", ]
 
-  # A snapshot naming only A - as if B had never been read into this session.
-  only_a <- meta_df("A")
-  only_a$geo_loc_name_country <- "France"
-  save_metadata_table(path, only_a)
+  save_metadata_table(path, cell_edit("A", "geo_loc_name_country", "France"))
 
   after <- read_metadata_table(path)
   expect_setequal(after$isolate, c("A", "B"))
-  after_b <- after[after$isolate == "B", ]
-  expect_identical(after_b[names(before_b)], before_b)
+  expect_identical(after[after$isolate == "B", ], before_b)
 })
 
 test_that("two sessions editing different isolates do not clobber each other", {
-  # The concurrency scenario the new implementation exists for: two open
-  # sessions, each holding a full snapshot from before the other saved, each
-  # editing a different isolate.
+  # The concurrency scenario the tidy-diff design exists for: two open
+  # sessions, each editing a different isolate, each unaware of the other.
+  # A whole-grid diff (comparing a full stale snapshot against the database)
+  # cannot tell "the user changed this" apart from "someone else changed this
+  # since I read it" - a tidy diff carries only what its own session actually
+  # edited, so the question never arises.
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df(c("A", "B")))
 
-  session1 <- read_metadata_table(path)
-  session2 <- read_metadata_table(path)
-
-  session1$geo_loc_name_country[session1$isolate == "A"] <- "France"
-  session2$geo_loc_name_country[session2$isolate == "B"] <- "Spain"
-
-  save_metadata_table(path, session1)
-  save_metadata_table(path, session2)
+  save_metadata_table(path, cell_edit("A", "geo_loc_name_country", "France"))
+  save_metadata_table(path, cell_edit("B", "geo_loc_name_country", "Spain"))
 
   final <- read_metadata_table(path)
   expect_identical(final$geo_loc_name_country[final$isolate == "A"], "France")
   expect_identical(final$geo_loc_name_country[final$isolate == "B"], "Spain")
 })
 
-test_that("an isolate named in data but absent from the database is skipped", {
+test_that("two sessions editing the same cell resolve as last-write-wins", {
+  # The one case a database with no per-cell locking cannot do better than -
+  # documented as the accepted limit in save_metadata_table()'s own docs.
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df("A"))
 
-  edit <- data.frame(
-    isolate = c("A", "ghost"),
-    geo_loc_name_country = c("France", "Nowhere"),
-    stringsAsFactors = FALSE
-  )
-  n <- save_metadata_table(path, edit)
-  expect_identical(n, 1L)
+  save_metadata_table(path, cell_edit("A", "geo_loc_name_country", "France"))
+  save_metadata_table(path, cell_edit("A", "geo_loc_name_country", "Spain"))
 
-  after <- read_metadata_table(path)
-  expect_identical(after$isolate, "A")
+  expect_identical(read_metadata_table(path)$geo_loc_name_country, "Spain")
 })
 
-test_that("columns absent from the database table are ignored", {
+test_that("an isolate named in an edit but absent from the database is skipped", {
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df("A"))
 
-  edit <- read_metadata_table(path)
-  edit$mlst_st <- "42"
+  n <- save_metadata_table(
+    path,
+    rbind(
+      cell_edit("A", "geo_loc_name_country", "France"),
+      cell_edit("ghost", "geo_loc_name_country", "Nowhere")
+    )
+  )
+  expect_identical(n, 1L)
+  expect_identical(read_metadata_table(path)$isolate, "A")
+})
 
-  n <- save_metadata_table(path, edit)
+test_that("a column absent from the database table is skipped", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  n <- save_metadata_table(path, cell_edit("A", "mlst_st", "42"))
   expect_identical(n, 0L)
   expect_false("mlst_st" %in% names(read_metadata_table(path)))
 })
 
-test_that("NA overwrites an existing value and counts as a change", {
+test_that("NA overwrites an existing value", {
   dir <- local_tempdir()
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = meta_df("A"))
 
-  edit <- read_metadata_table(path)
-  edit$geo_loc_name_country[edit$isolate == "A"] <- NA_character_
-
-  n <- save_metadata_table(path, edit)
+  n <- save_metadata_table(
+    path,
+    cell_edit("A", "geo_loc_name_country", NA_character_)
+  )
   expect_identical(n, 1L)
   expect_true(is.na(read_metadata_table(path)$geo_loc_name_country))
-})
-
-test_that("two NAs are not a change and cost no write", {
-  dir <- local_tempdir()
-  path <- file.path(dir, "db.sqlite")
-  # meta_df() does not set geo_loc_name_state_province, so it is NA already.
-  build_db(path, default_local(), metadata = meta_df("A"))
-
-  edit <- read_metadata_table(path)
-  n <- save_metadata_table(path, edit)
-  expect_identical(n, 0L)
 })
 
 test_that("save_metadata_table never creates the table, unlike the old overwrite", {
@@ -481,7 +480,7 @@ test_that("save_metadata_table never creates the table, unlike the old overwrite
   path <- file.path(dir, "db.sqlite")
   build_db(path, default_local(), metadata = NULL)
 
-  n <- save_metadata_table(path, meta_df("A"))
+  n <- save_metadata_table(path, cell_edit("A", "geo_loc_name_country", "France"))
   expect_identical(n, 0L)
   tables <- qdf(path, "SELECT name FROM sqlite_master WHERE type='table'")$name
   expect_false("metadata" %in% tables)
@@ -497,8 +496,9 @@ test_that("save_metadata_table tolerates empty or malformed input", {
     save_metadata_table(path, data.frame(isolate = character(0))),
     0L
   )
+  # Missing the `column` / `value` shape entirely.
   expect_identical(
-    save_metadata_table(path, data.frame(country = "France")),
+    save_metadata_table(path, data.frame(isolate = "A", country = "France")),
     0L
   )
 })
@@ -510,8 +510,8 @@ test_that("save_metadata_table is atomic: a mid-way failure writes nothing", {
   before <- read_metadata_table(path)
 
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
-  # Fires only on B's row, so A's UPDATE (which the column-major loop reaches
-  # first) has already run by the time this aborts the transaction.
+  # Fires only on B's row, so A's UPDATE (first in the edits data frame) has
+  # already run by the time this aborts the transaction.
   DBI::dbExecute(
     con,
     "CREATE TRIGGER boom BEFORE UPDATE ON metadata
@@ -520,10 +520,14 @@ test_that("save_metadata_table is atomic: a mid-way failure writes nothing", {
   )
   DBI::dbDisconnect(con)
 
-  edit <- before
-  edit$geo_loc_name_country <- c("France", "Spain")
+  n <- save_metadata_table(
+    path,
+    rbind(
+      cell_edit("A", "geo_loc_name_country", "France"),
+      cell_edit("B", "geo_loc_name_country", "Spain")
+    )
+  )
 
-  save_metadata_table(path, edit)
-
+  expect_identical(n, 0L)
   expect_identical(read_metadata_table(path), before)
 })

@@ -1500,9 +1500,13 @@ server <- function(
           export_bg()
         )
       },
-      # "visnetwork" mode makes vis.js redraw the whole network into a buffer
-      # `scale` times larger, rather than copying the pixels already on screen.
-      # See the handler in app/view/visualization.R.
+      # "visnetwork" mode makes vis.js redraw the whole network into a larger
+      # buffer, rather than copying the pixels already on screen. `targetPx`
+      # rather than a raw scale is what makes the result reproducible: the
+      # handler measures the widget's actual on-screen width itself and works
+      # out the multiplier from that, so the same target produces the same
+      # output whether the browser window is maximized or half that size. See
+      # effectiveScale() in app/view/visualization.R.
       capture = function(format, opts) {
         session$sendCustomMessage(
           "phylotrace_capture",
@@ -1510,7 +1514,7 @@ server <- function(
             selector = paste0("#", ns("mst_plot")),
             mode = "visnetwork",
             inputId = session$ns("export_capture"),
-            scale = opts$scale,
+            targetPx = opts$target_px,
             format = format,
             background = export_bg()
           )

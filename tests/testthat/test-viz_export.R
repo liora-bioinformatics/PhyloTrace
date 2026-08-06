@@ -124,8 +124,13 @@ test_that("the hint states what each format will actually produce", {
     "^1181 . 59[01] px at 300 dpi"
   )
   expect_match(viz_export$export_hint("ggplot", "pdf", 10, 300), "Vector")
-  expect_match(viz_export$export_hint("widget", "png", NA, 4), "4")
-  expect_match(viz_export$export_hint("widget", "html", NA, 4), "interactive")
+  expect_match(viz_export$export_hint("widget", "png", NA, 4000), "4,000")
+  expect_match(viz_export$export_hint("widget", "html", NA, 4000), "interactive")
+})
+
+test_that("the widget hint calls out low-detail targets", {
+  expect_match(viz_export$export_hint("widget", "png", NA, 6000), "enough for print")
+  expect_match(viz_export$export_hint("widget", "png", NA, 800), "raise for more detail")
 })
 
 test_that("export file names are date-stamped and filesystem-safe", {
@@ -148,21 +153,67 @@ test_that("an unknown format is refused rather than silently written", {
   expect_error(impl$.device_for("webp", 300), "Unsupported export format")
 })
 
+test_that("export_presets defines the same four use cases for both kinds", {
+  # Every preset must be able to drive either engine kind, since a preset id
+  # travels from the modal (which doesn't know the engine's kind) to whichever
+  # kind is actually open.
+  ids <- vapply(viz_export$export_presets, `[[`, character(1), "id")
+  expect_identical(anyDuplicated(ids), 0L)
+  for (p in viz_export$export_presets) {
+    expect_true(all(c("format", "width_cm", "dpi") %in% names(p$ggplot)), info = p$id)
+    expect_true(all(c("format", "target_px") %in% names(p$widget)), info = p$id)
+  }
+})
+
+test_that("export_preset looks up a preset by id, or returns NULL", {
+  found <- viz_export$export_preset("publication")
+  expect_identical(found$id, "publication")
+  expect_null(viz_export$export_preset("no-such-preset"))
+})
+
+test_that("preset ggplot widths stay within the exportable range", {
+  # numericInput's own min/max (4-60cm) would silently clamp a preset that
+  # asked for something outside it, quietly producing a different plot than
+  # the preset's name promises.
+  for (p in viz_export$export_presets) {
+    expect_true(p$ggplot$width_cm >= 4 && p$ggplot$width_cm <= 60, info = p$id)
+  }
+})
+
 test_that("the modal carries the controls that apply to each engine kind", {
   # A server-rendered plot is asked for in physical units and rasterised at a
   # chosen DPI; a browser-drawn widget has no physical size to ask for and can
-  # only be redrawn at a multiple of its on-screen pixels. Offering the wrong
-  # control means offering one that changes nothing.
+  # only be redrawn at a multiple of its on-screen pixels — it is asked for as
+  # a target pixel width instead. Offering the wrong control means offering
+  # one that changes nothing.
   ggplot_modal <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
   widget_modal <- as.character(viz_export$export_modal(identity, "e", "widget"))
 
   expect_true(grepl("e_width", ggplot_modal, fixed = TRUE))
   expect_true(grepl("e_dpi", ggplot_modal, fixed = TRUE))
-  expect_false(grepl("e_scale", ggplot_modal, fixed = TRUE))
+  expect_false(grepl("e_target_px", ggplot_modal, fixed = TRUE))
 
-  expect_true(grepl("e_scale", widget_modal, fixed = TRUE))
+  expect_true(grepl("e_target_px", widget_modal, fixed = TRUE))
   expect_false(grepl("e_dpi", widget_modal, fixed = TRUE))
   expect_false(grepl("e_width", widget_modal, fixed = TRUE))
+})
+
+test_that("every preset is offered as a choice in the modal", {
+  html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
+  for (p in viz_export$export_presets) {
+    expect_true(grepl(p$label, html, fixed = TRUE), info = p$id)
+  }
+})
+
+test_that("the Advanced panel starts collapsed", {
+  # bslib::accordion() only stays fully closed for `open = FALSE` exactly —
+  # `character(0)` or `NULL` both still trip its own "nothing named, so open
+  # the first panel" fallback, which would have defeated the whole point of
+  # tucking the raw numbers away from the primary preset picker.
+  html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
+  expect_false(grepl("accordion-collapse collapse show", html, fixed = TRUE))
+  expect_true(grepl("accordion-button collapsed", html, fixed = TRUE))
+  expect_true(grepl('aria-expanded="false"', html, fixed = TRUE))
 })
 
 test_that("the modal footer commits or abandons the export", {
@@ -183,11 +234,25 @@ test_that("reopening the modal restores the settings last chosen", {
     identity,
     "e",
     "ggplot",
-    values = list(filetype = "svg", width = 12, dpi = "600")
+    values = list(filetype = "svg", width = 12, dpi = "600", preset = "print")
   ))
   expect_true(grepl("value=\"12\"", html, fixed = TRUE))
   expect_true(grepl("<option value=\"svg\" selected>", html, fixed = TRUE))
   expect_true(grepl("<option value=\"600\" selected>", html, fixed = TRUE))
+  # The preset radio also remembers which one was last picked, not just the
+  # raw numbers — otherwise a reopen would silently jump back to the first
+  # preset in the list even though the numbers show something else was chosen.
+  expect_true(grepl('value="print" checked', html, fixed = TRUE))
+})
+
+test_that("the Advanced numbers default from the first preset, unseeded", {
+  # A first-ever open has no remembered values; what the Advanced controls
+  # show then must actually match the preset radio's own default selection,
+  # or opening Advanced would show numbers that contradict the preset that
+  # appears selected.
+  default <- viz_export$export_presets[[1]]
+  html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
+  expect_true(grepl(sprintf('value="%s"', default$ggplot$width_cm), html, fixed = TRUE))
 })
 
 test_that("the sidebar panel is just a trigger plus the download target", {

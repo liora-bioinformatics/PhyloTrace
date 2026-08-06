@@ -1458,10 +1458,26 @@ server <- function(
 
     # ---- Export contract ----------------------------------------------------
     # The tab's sidebar owns the export panel and the download; this engine only
-    # says what it can produce and how to write it. The canvas takes the aspect
-    # slider even in Square blocks mode, where coord_fixed centres the grid in
-    # it and plot.background fills the letterbox with the chosen colour.
-    export_aspect <- shiny$reactive(input$epi_aspect_ratio %||% ASPECT_DEFAULT)
+    # says what it can produce and how to write it.
+    #
+    # In Square blocks mode the export uses the same data-fitted ratio the
+    # on-screen renderImage falls back to (square_ratio()) rather than the
+    # plain aspect slider, so a cell is a true square in the exported file the
+    # same way it is on screen. This is deliberately not identical to the
+    # on-screen *pixel* shape: the preview's height formula also subtracts a
+    # fixed chrome offset for axis/legend room (see the renderImage block
+    # below), which matters at a ~900px preview but is a rounding error once
+    # the export is thousands of pixels wide — square_ratio() alone is the
+    # geometrically correct answer at export size. Every other mode has no
+    # shape the data imposes on it, so the slider governs both places exactly
+    # as before.
+    export_aspect <- shiny$reactive({
+      if (square_for()) {
+        square_ratio() %||% (input$epi_aspect_ratio %||% ASPECT_DEFAULT)
+      } else {
+        input$epi_aspect_ratio %||% ASPECT_DEFAULT
+      }
+    })
 
     export <- list(
       kind = "ggplot",

@@ -23,6 +23,7 @@
 
 box::use(
   base64enc[base64decode],
+  bslib[accordion, accordion_panel],
   ggplot2[ggsave],
   grDevices[cairo_pdf, jpeg, png, tiff],
   shiny[
@@ -32,11 +33,11 @@ box::use(
     icon,
     modalDialog,
     numericInput,
-    sliderInput,
     tagList,
+    tags,
     uiOutput,
   ],
-  shinyWidgets[pickerInput],
+  shinyWidgets[pickerInput, prettyRadioButtons],
   svglite[svglite],
 )
 
@@ -81,6 +82,68 @@ MAX_EXPORT_PX <- 20000L
 
 CM_PER_IN <- 2.54
 
+# --- Presets -------------------------------------------------------------
+
+#' Named export use-cases.
+#'
+#' Each entry carries the concrete settings that produce it for a "ggplot"
+#' engine (a physical width in cm plus a DPI) and for a "widget" engine (a
+#' target pixel width — see the deterministic-sizing note on the
+#' `phylotrace_capture` handler in app/view/visualization.R for why a widget's
+#' export size is asked for this way rather than as a relative scale factor).
+#' Order is presentation order, most common first.
+#'
+#' The width/DPI numbers are chosen for what each use case actually needs
+#' rather than rounded to the nearest familiar figure: 17 cm is a two-column
+#' journal figure; 50 cm is poster scale at ordinary print resolution; 25 cm
+#' and 14 cm are sized for a slide and for a quick attachment respectively,
+#' both at screen resolution since neither is ever viewed at arm's length.
+#' @export
+export_presets <- list(
+  list(
+    id = "publication",
+    label = "Publication figure",
+    hint = "600 dpi · journal-ready",
+    ggplot = list(format = "png", width_cm = 17, dpi = "600"),
+    widget = list(format = "png", target_px = 4000)
+  ),
+  list(
+    id = "print",
+    label = "Print / large format",
+    hint = "300 dpi · poster-scale",
+    ggplot = list(format = "png", width_cm = 50, dpi = "300"),
+    widget = list(format = "png", target_px = 6000)
+  ),
+  list(
+    id = "presentation",
+    label = "Presentation",
+    hint = "150 dpi · slide-sized",
+    ggplot = list(format = "png", width_cm = 25, dpi = "150"),
+    widget = list(format = "png", target_px = 2400)
+  ),
+  list(
+    id = "web",
+    label = "Web / general",
+    hint = "150 dpi · compact & quick",
+    ggplot = list(format = "png", width_cm = 14, dpi = "150"),
+    widget = list(format = "png", target_px = 1600)
+  )
+)
+
+#' Look up one export preset by id.
+#'
+#' @param id Character. A value from `export_presets[[i]]$id`.
+#' @return The matching preset list, or NULL if `id` matches none.
+#' @export
+export_preset <- function(id) {
+  for (p in export_presets) {
+    if (identical(p$id, id)) {
+      return(p)
+    }
+  }
+  NULL
+}
+
 # --- UI ----------------------------------------------------------------------
 
 #' Shared Visualization Export Panel UI
@@ -119,12 +182,23 @@ export_panel <- function(ns, prefix) {
 
 #' Export Settings Modal
 #'
-#' Every export control, plus a footer that commits or abandons the export.
+#' A named preset ("Publication figure", "Presentation", ...) is the primary
+#' control — most exports need nothing else. The exact numbers a preset sets
+#' (width/DPI, or a widget's target pixel size) are reachable but tucked into
+#' a collapsed "Advanced" section, so picking one is not a dead end for a user
+#' who does need to fine-tune it.
+#'
+#' File format is asked for separately, above the presets: it is a different
+#' kind of choice (an intended destination — a document, a print shop, a
+#' browser) than "how big and how sharp," and collapsing it into the preset
+#' would mean adding a second axis of preset (`format` × `use case`) for no
+#' real gain, since most formats make sense for most use cases.
 #'
 #' Re-created on each open, so the caller passes the values the controls last
 #' held — Shiny keeps an input's value after its UI is removed, but re-rendering
-#' the control resets it to whatever the declaration says. Seeding them is what
-#' stops the modal from forgetting the settings between exports.
+#' the control resets it to whatever the declaration says. Seeding them (and the
+#' preset radio) is what stops the modal from forgetting the last choice between
+#' exports, however it was dismissed.
 #'
 #' @param ns Function. Module namespace function (`session$ns`).
 #' @param prefix Character. ID prefix unique to the calling module.
@@ -136,9 +210,10 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
   id <- function(suffix) ns(paste0(prefix, "_", suffix))
   widget <- identical(kind, "widget")
   held <- function(name, default) values[[name]] %||% default
+  default_preset <- export_presets[[1]]
 
   div(
-    class = "info-modal",
+    class = "export-modal",
     modalDialog(
       title = "Export plot",
       pickerInput(
@@ -147,45 +222,70 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         choices = as.list(export_formats[[kind]]),
         selected = held("filetype", "png")
       ),
-      # The two kinds measure size and quality differently, and neither reading
-      # transfers to the other. A server-rendered plot is laid out in inches and
-      # rasterised at a chosen DPI, so it is asked for in physical units. A
-      # widget is laid out in CSS pixels by the browser and can only be redrawn
-      # at a multiple of them — there is no physical size to ask for, so
-      # offering one would be offering a control that changes nothing.
-      if (widget) {
-        sliderInput(
-          id("scale"),
-          "Render scale",
-          min = 1,
-          max = 6,
-          value = as.numeric(held("scale", 3)),
-          step = 1,
-          ticks = FALSE
-        )
-      } else {
-        tagList(
-          numericInput(
-            id("width"),
-            "Width (cm)",
-            value = as.numeric(held("width", 25)),
-            min = 4,
-            max = 60,
-            step = 1
-          ),
-          pickerInput(
-            id("dpi"),
-            "Resolution",
-            choices = list(
-              "150 dpi (screen)" = "150",
-              "300 dpi (print)" = "300",
-              "600 dpi (high)" = "600",
-              "1200 dpi (line art)" = "1200"
-            ),
-            selected = held("dpi", "300")
+      prettyRadioButtons(
+        id("preset"),
+        "Export for",
+        choiceNames = lapply(export_presets, function(p) {
+          tagList(
+            tags$strong(p$label),
+            tags$br(),
+            tags$span(class = "text-muted small", p$hint)
           )
+        }),
+        choiceValues = vapply(export_presets, `[[`, character(1), "id"),
+        selected = held("preset", default_preset$id)
+      ),
+      accordion(
+        id = id("advanced_wrap"),
+        # accordion() only stays closed for `open = FALSE` exactly — anything
+        # else that names no open panel (character(0), NULL) still triggers
+        # its own "nothing was opened, so open the first one" fallback.
+        open = FALSE,
+        accordion_panel(
+          "Advanced",
+          icon = icon("sliders"),
+          # The two kinds measure size and quality differently, and neither
+          # reading transfers to the other. A server-rendered plot is laid out
+          # in inches and rasterised at a chosen DPI, so it is asked for in
+          # physical units. A widget is laid out in CSS pixels by the browser
+          # and can only be redrawn at a multiple of them — it is asked for as
+          # a target pixel width instead, which the capture handler turns into
+          # that multiple itself (see visualization.R's effectiveScale()), so
+          # the number means the same thing regardless of the current window.
+          if (widget) {
+            numericInput(
+              id("target_px"),
+              "Target width (px)",
+              value = as.numeric(held("target_px", default_preset$widget$target_px)),
+              min = 400,
+              max = 8000,
+              step = 100
+            )
+          } else {
+            tagList(
+              numericInput(
+                id("width"),
+                "Width (cm)",
+                value = as.numeric(held("width", default_preset$ggplot$width_cm)),
+                min = 4,
+                max = 60,
+                step = 1
+              ),
+              pickerInput(
+                id("dpi"),
+                "Resolution",
+                choices = list(
+                  "150 dpi (screen)" = "150",
+                  "300 dpi (print)" = "300",
+                  "600 dpi (high)" = "600",
+                  "1200 dpi (line art)" = "1200"
+                ),
+                selected = held("dpi", default_preset$ggplot$dpi)
+              )
+            )
+          }
         )
-      },
+      ),
       uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
       footer = tagList(
         actionButton(id("cancel"), "Cancel"),
@@ -210,7 +310,7 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
 #' @param kind Character. "ggplot" or "widget".
 #' @param format Character. Selected file format.
 #' @param width_cm Numeric. Requested width in centimetres (ggplot only).
-#' @param quality Numeric. DPI (ggplot) or scale factor (widget).
+#' @param quality Numeric. DPI (ggplot) or target pixel width (widget).
 #' @param aspect Numeric. Height-to-width ratio of the plot.
 #' @return A single-line character description.
 #' @export
@@ -222,11 +322,11 @@ export_hint <- function(kind, format, width_cm, quality, aspect = 0.62) {
     return("Vector output — resolution-independent at any print size.")
   }
   if (identical(kind, "widget")) {
-    n <- as.integer(quality)
+    px <- round(as.numeric(quality))
     return(sprintf(
-      "Redrawn at %d× the on-screen size%s",
-      n,
-      if (n >= 3) ", enough for print." else " — raise for print."
+      "%s px wide, at any window size%s",
+      prettyNum(px, big.mark = ","),
+      if (px >= 2000) ", enough for print." else " — raise for more detail."
     ))
   }
   dpi <- resolved_dpi(width_cm, aspect, quality)

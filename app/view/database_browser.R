@@ -1055,11 +1055,15 @@ server <- function(
     # Apply cell edit to in-memory state and push to table without full re-render.
     #
     # Two destinations behind one table: a metadata column is edited in place in
-    # State$data and written by save_metadata_table(), while a custom-variable
-    # column is validated against its declared type first and buffered in
-    # State$custom_dirty for save_custom_values(). Mirrors the same flow in
-    # database_custom.R, which is why the rejection and no-op handling below
-    # read the same.
+    # State$data and buffered in State$metadata_dirty for save_metadata_table(),
+    # while a custom-variable column is validated against its declared type
+    # first and buffered in State$custom_dirty for save_custom_values(). Both
+    # dirty buffers are tidy one-row-per-cell diffs, isolate/column/value, so a
+    # save writes exactly the cells the user touched rather than a whole
+    # snapshot - see save_metadata_table()'s docs for why that distinction is
+    # what keeps two sessions editing the same database from clobbering each
+    # other. Mirrors the same flow in database_custom.R, which is why the
+    # rejection and no-op handling below read the same.
     #
     # replaceData() is skipped for a genuine no-op: DT's own blur handler fires
     # cell_edit for a no-op click on an empty cell too (JS null vs. the
@@ -1101,6 +1105,26 @@ server <- function(
         if (isTRUE(unchanged)) {
           return()
         }
+
+        entry <- data.frame(
+          isolate = State$data$isolate[[info$row]],
+          column = col,
+          value = new_value,
+          stringsAsFactors = FALSE
+        )
+        # One row per cell: re-editing a cell before saving replaces its
+        # pending value rather than queuing a second write for it.
+        keep <- if (is.null(State$metadata_dirty)) {
+          NULL
+        } else {
+          State$metadata_dirty[
+            !(State$metadata_dirty$isolate == entry$isolate &
+              State$metadata_dirty$column == entry$column),
+            ,
+            drop = FALSE
+          ]
+        }
+        State$metadata_dirty <- rbind(keep, entry)
 
         State$pending <- TRUE
         replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
@@ -1194,32 +1218,32 @@ server <- function(
     })
 
     observeEvent(input$save, {
-      # Two destinations. The MLST / AMR columns are derived and never written
-      # back; the custom columns are user data but live in
-      # phylotrace_custom_values, so they are stripped from the metadata write
-      # and sent through save_custom_values() instead.
-      strip <- c(mlst_cols(), amr_cols(), custom_cols())
-      edited <- State$data[,
-        setdiff(names(State$data), strip),
-        drop = FALSE
-      ]
-
-      # This grid deliberately does not refresh while edits are pending, so
-      # between the read that filled it and this save, typing may have added
-      # isolates and a removal may have taken some away. Re-basing onto the
-      # current table first (rather than writing the grid's snapshot as-is)
-      # means an isolate that appeared meanwhile keeps its own fresh row
-      # instead of being absent from the write, and one that disappeared is
-      # not resurrected by it. save_metadata_table() itself only touches cells
-      # that actually differ from the database, so this reconciliation is not
-      # what stands between the grid and clobbering someone else's isolates
-      # (that would be true even for `edited` on its own) - it exists so the
-      # save reflects the isolate pool as it stands now, not as it stood when
-      # this tab last read it. observeEvent() handlers run isolated, so this
-      # read of the shared store does not add a reactive dependency here.
+      # observeEvent() handlers run isolated, so this read of the shared store
+      # does not add a reactive dependency here. Used below only to decide
+      # which pending edits still name a real isolate and to report how the
+      # isolate list moved while this grid's edits were pending - the writes
+      # themselves no longer need a fresh full table (see save_metadata_table()).
       current <- store$metadata()
-      to_save <- .reconcile_metadata(edited, current)
-      save_metadata_table(db_path(), to_save)
+
+      # An isolate removed elsewhere while its edit was still pending is
+      # dropped rather than sent to save_metadata_table() (which would ignore
+      # it anyway), so it can be reported below the same way a dropped custom
+      # edit already is.
+      dirty_meta <- State$metadata_dirty
+      n_meta <- 0L
+      if (is.data.frame(dirty_meta) && nrow(dirty_meta)) {
+        live <- db_events$reconcile_names(dirty_meta$isolate, current$isolate)
+        dirty_meta <- dirty_meta[
+          !(dirty_meta$isolate %in% live$dropped),
+          ,
+          drop = FALSE
+        ]
+        n_meta <- nrow(dirty_meta)
+        if (n_meta) {
+          save_metadata_table(db_path(), dirty_meta)
+        }
+      }
+      State$metadata_dirty <- NULL
 
       wrote_custom <- is.data.frame(State$custom_dirty) &&
         nrow(State$custom_dirty)
@@ -1234,13 +1258,22 @@ server <- function(
 
       State$pending <- FALSE
 
-      # Announce before reporting: `metadata` always, `custom_fields` only when
-      # the second write actually ran. Clearing State$pending first means this
-      # grid's own observer above now accepts the re-read it has been skipping,
-      # so a save also catches the grid up on whatever it ignored meanwhile.
-      domains <- c("metadata", if (wrote_custom) "custom_fields")
-      do.call(db_events$bump, c(list(db_rev), as.list(domains)))
+      # Announce before reporting: only the domains actually written to.
+      # Clearing State$pending first means this grid's own observer above now
+      # accepts the re-read it has been skipping, so a save also catches the
+      # grid up on whatever it ignored meanwhile.
+      domains <- c(if (n_meta) "metadata", if (wrote_custom) "custom_fields")
+      if (length(domains)) {
+        do.call(db_events$bump, c(list(db_rev), as.list(domains)))
+      }
 
+      # The isolate list may have moved elsewhere while these edits were
+      # pending; report it the same way a reconciled write used to require,
+      # even though the write itself no longer needs the reconciled table -
+      # .reconcile_metadata() is reused here purely to compute that delta.
+      strip <- c(mlst_cols(), amr_cols(), custom_cols())
+      edited <- State$data[, setdiff(names(State$data), strip), drop = FALSE]
+      to_save <- .reconcile_metadata(edited, current)
       dropped <- setdiff(edited$isolate, to_save$isolate)
       appeared <- setdiff(to_save$isolate, edited$isolate)
       showNotification(

@@ -3008,10 +3008,15 @@ server <- function(
         }
         htmlwidgets::saveWidget(m, file, selfcontained = TRUE)
       },
-      # html2canvas re-rasterises the DOM at `scale`, so the overlays that carry
-      # the data — markers, labels, legend, choropleth polygons — are redrawn
-      # crisply. The basemap tiles are fixed-resolution images and can only be
-      # upscaled, which is why HTML is offered alongside.
+      # html2canvas re-rasterises the DOM at a multiple, so the overlays that
+      # carry the data — markers, labels, legend, choropleth polygons — are
+      # redrawn crisply. The basemap tiles are fixed-resolution images and can
+      # only be upscaled, which is why HTML is offered alongside. `targetPx`
+      # rather than a raw scale is what makes the result reproducible: the
+      # handler measures the map's actual on-screen width itself (the Map has
+      # no fixed aspect and fills whatever box it is given, so this matters
+      # more here than anywhere else) and works out the multiplier from that.
+      # See effectiveScale() in app/view/visualization.R.
       capture = function(format, opts) {
         session$sendCustomMessage(
           "phylotrace_capture",
@@ -3019,7 +3024,7 @@ server <- function(
             selector = paste0("#", ns("map")),
             mode = "html2canvas",
             inputId = session$ns("export_capture"),
-            scale = opts$scale,
+            targetPx = opts$target_px,
             format = format,
             background = "#ffffff"
           )

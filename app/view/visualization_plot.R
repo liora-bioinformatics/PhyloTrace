@@ -45,6 +45,7 @@ box::use(
     uiOutput,
     renderUI,
     outputOptions,
+    updateNumericInput,
   ],
   bslib[
     sidebar,
@@ -76,6 +77,7 @@ box::use(
       export_hint,
       export_modal,
       export_panel,
+      export_preset,
       vector_formats,
       write_data_uri
     ],
@@ -1225,10 +1227,14 @@ server <- function(
       if (!isTRUE(is.finite(width))) {
         width <- 25
       }
+      target_px <- suppressWarnings(as.numeric(input$export_target_px %||% 2400))
+      if (!isTRUE(is.finite(target_px))) {
+        target_px <- 2400
+      }
       list(
         width_cm = max(4, min(60, width)),
         dpi = suppressWarnings(as.numeric(input$export_dpi %||% 300)),
-        scale = suppressWarnings(as.integer(input$export_scale %||% 3))
+        target_px = max(400, min(8000, target_px))
       )
     })
 
@@ -1242,11 +1248,31 @@ server <- function(
         Negate(is.null),
         list(
           filetype = input$export_filetype,
+          preset = input$export_preset,
           width = input$export_width,
           dpi = input$export_dpi,
-          scale = input$export_scale
+          target_px = input$export_target_px
         )
       ))
+    }))
+
+    # Picking a preset fills the Advanced controls with its numbers; it is not
+    # itself a persistent mode. Editing a filled-in value afterwards is simply
+    # editing it — there is no separate "custom" state to track, and the values
+    # actually used at Export time always come straight from these controls
+    # (see export_opts() and export_format() above), never from which preset
+    # last happened to be clicked.
+    reg(observeEvent(input$export_preset, {
+      preset <- export_preset(input$export_preset)
+      req(preset)
+      vals <- preset[[spec$export_kind]]
+      updatePickerInput(session, "export_filetype", selected = vals$format)
+      if (export_widget) {
+        updateNumericInput(session, "export_target_px", value = vals$target_px)
+      } else {
+        updateNumericInput(session, "export_width", value = vals$width_cm)
+        updatePickerInput(session, "export_dpi", selected = vals$dpi)
+      }
     }))
 
     # The settings the confirmed export is running with, captured the moment
@@ -1281,7 +1307,7 @@ server <- function(
       fmt <- export_format()
       if (export_widget) {
         shinyjs::toggleState(
-          "export_scale",
+          "export_target_px",
           condition = !identical(fmt, "html")
         )
       } else {
@@ -1300,7 +1326,7 @@ server <- function(
         exporter$kind,
         export_format(),
         opts$width_cm,
-        if (export_widget) opts$scale else opts$dpi,
+        if (export_widget) opts$target_px else opts$dpi,
         aspect
       ))
     })
@@ -1383,7 +1409,7 @@ server <- function(
           if (!write_data_uri(exporter$capture_data(), f)) {
             unlink(f)
             showNotification(
-              "The browser could not capture this plot. Try a lower render scale.",
+              "The browser could not capture this plot. Try a smaller target width.",
               type = "error"
             )
             return()

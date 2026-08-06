@@ -3826,6 +3826,29 @@ label {
     color: var(--bs-secondary-color);
 }
 
+// Plot export modal: a format picker, a small set of named presets, and the
+// exact numbers tucked into a collapsed "Advanced" panel. Wider than
+// .info-modal, which is sized for a paragraph of prose rather than real form
+// controls, but still far short of .selection-modal's near-viewport sizing —
+// this is a short, one-screen form with nothing to scroll.
+.export-modal .modal-dialog {
+    width: auto;
+    max-width: 560px;
+    margin: 1.75rem auto;
+}
+
+.export-modal .modal-body > * + * {
+    margin-top: 1rem;
+}
+
+// Each preset choice is a name plus a one-line description; shinyWidgets'
+// default radio spacing (a hardcoded few px between choices) is tuned for
+// single-line labels and crowds the two lines together without this.
+.export-modal .shiny-options-group .pretty {
+    margin-bottom: 0.5rem;
+    align-items: flex-start;
+}
+
 // Isolate-preselection modal: sized to use most of the viewport (the metadata
 // table can carry a lot of columns, and a time filter benefits from showing
 // many rows at once) but still clamped to it by `min()`, so on a small display

@@ -503,6 +503,43 @@ test_that("the 'square' mode choice folds to the stacked curve with squares on",
   )
 })
 
+test_that("export aspect matches square_ratio() in square mode", {
+  # The exported file has to be a genuine square-cell layout whenever the
+  # on-screen preview is one — using the plain aspect slider instead (the bug
+  # this replaces) drew an exported file whose cells were not squares at all.
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(epi_aspect_ratio = 0.9)
+      generate(1L)
+      session$flushReact()
+
+      session$setInputs(epi_plot_mode = "square")
+      session$flushReact()
+      expect_true(square_for())
+      ratio <- square_ratio()
+      expect_true(!is.null(ratio))
+      expect_identical(export$aspect(), ratio)
+      # Not merely non-NULL — genuinely not the slider's value, or this would
+      # pass by coincidence whenever the two happened to be close.
+      expect_false(isTRUE(all.equal(export$aspect(), 0.9)))
+
+      # Every other mode still uses the plain slider, exactly as before.
+      session$setInputs(epi_plot_mode = "stacked")
+      session$flushReact()
+      expect_identical(export$aspect(), 0.9)
+    }
+  )
+})
+
 test_that("show_cumulative_for is guarded off once Cumulative is picked", {
   # The switch itself is hidden by a conditionalPanel once Cumulative is
   # picked, but its last value survives underneath — guard it server-side too

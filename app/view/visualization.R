@@ -205,26 +205,32 @@ box::use(
     tags$script(src = "static/js/html2canvas.min.js"),
     # Widget capture, serving both the dashboard's "Save Analysis" thumbnails
     # and the sidebar's image export. The engine sends
-    # {selector, mode, inputId, scale, format, background}; the resulting data
-    # URI (or "" on any failure — tainted canvas, missing library, a widget that
-    # has not drawn yet) comes back through Shiny.setInputValue(inputId).
-    # Selector and input id are both namespaced by the sending engine, so one
-    # handler serves every plot tab.
+    # {selector, mode, inputId, targetPx, scale, format, background}; the
+    # resulting data URI (or "" on any failure — tainted canvas, missing
+    # library, a widget that has not drawn yet) comes back through
+    # Shiny.setInputValue(inputId). Selector and input id are both namespaced
+    # by the sending engine, so one handler serves every plot tab.
     #
-    # `scale` is what makes this an export rather than a screenshot. Both modes
-    # redraw the widget at that multiple of its on-screen size instead of
-    # copying the pixels already on screen, so text and strokes are rasterised
-    # afresh at the higher resolution:
+    # Both raster modes redraw the widget at a multiple of its on-screen size
+    # instead of copying the pixels already on screen, so text and strokes are
+    # rasterised afresh at the higher resolution rather than scaled up:
     #
     #   "visnetwork" — vis.js derives its canvas backing store from
     #     canvas._determinePixelRatio(). Overriding that and re-running
     #     setSize() makes it redraw the entire network into a larger buffer, so
     #     a 4x export of a 960px widget is a true 3840px render.
-    #   "html2canvas" — rasterises a DOM subtree at `scale`. Leaflet's overlays
-    #     (markers, labels, legend, choropleth polygons) are DOM/SVG and are
-    #     redrawn crisply; the basemap tiles are 256px rasters and can only be
-    #     upscaled, which is why the Map also offers interactive HTML.
+    #   "html2canvas" — rasterises a DOM subtree at a multiple. Leaflet's
+    #     overlays (markers, labels, legend, choropleth polygons) are DOM/SVG
+    #     and are redrawn crisply; the basemap tiles are 256px rasters and can
+    #     only be upscaled, which is why the Map also offers interactive HTML.
     #   "canvas" — the original 1:1 read, still used for cheap thumbnails.
+    #
+    # `targetPx` (preferred) names a physical export width in pixels rather
+    # than a bare multiplier: effectiveScale() measures the widget's current
+    # on-screen width and divides, so a target survives being asked for from a
+    # maximized window or a half-width one and produces the same output either
+    # way — a raw `scale` is what the multiplier meant before this existed, and
+    # still works as a fallback for anything that sends one directly.
     tags$script(
       HTML("(function(){
          if(window.__phylotraceCaptureRegistered) return;
@@ -260,12 +266,29 @@ box::use(
            return (init&&init.network)?init.network:null;
          }
 
+         // The multiplier to redraw at, worked out from the widget's actual
+         // current on-screen width rather than trusted blind — a `scale`
+         // meant something different on a maximized window than on a small
+         // one, and `targetPx` is what fixes that. Clamped well past the
+         // 1-6x range this app tests at, as a guard against a corrupted or
+         // absurd request rather than an expected ceiling.
+         function effectiveScale(currentPx, msg){
+           var s = msg.targetPx ? (msg.targetPx / currentPx) : (msg.scale || 1);
+           if (!isFinite(s) || s <= 0) s = 1;
+           return Math.min(Math.max(s, 0.25), 10);
+         }
+
          function grabVis(root,msg){
            var net=visNet(root);
            if(!net||!net.canvas) return null;
            var cv=net.canvas, orig=cv._determinePixelRatio, url=null;
+           // Falls back to the widget's own clientData default (see
+           // visualization_mst.R's canvas_px()) if the canvas has not laid
+           // out yet — a hidden tab, most likely.
+           var current=(cv.frame&&cv.frame.canvas&&cv.frame.canvas.clientWidth)||960;
+           var scale=effectiveScale(current,msg);
            try{
-             cv._determinePixelRatio=function(){return msg.scale;};
+             cv._determinePixelRatio=function(){return scale;};
              cv.setSize(); net.redraw();
              url=encode(cv.frame.canvas,msg.format,msg.background);
            } finally {
@@ -278,7 +301,7 @@ box::use(
          }
 
          Shiny.addCustomMessageHandler('phylotrace_capture', function(msg){
-           msg.scale=msg.scale||1; msg.format=msg.format||'png';
+           msg.format=msg.format||'png';
            try{
              var root=document.querySelector(msg.selector);
              if(!root){send(msg.inputId,'');return;}
@@ -292,7 +315,10 @@ box::use(
                send(msg.inputId,url);
              } else if(msg.mode==='html2canvas'){
                if(typeof html2canvas!=='function'){send(msg.inputId,'');return;}
-               html2canvas(root,{useCORS:true,logging:false,scale:msg.scale,
+               var current=root.clientWidth||
+                 (root.getBoundingClientRect&&root.getBoundingClientRect().width)||960;
+               var scale=effectiveScale(current,msg);
+               html2canvas(root,{useCORS:true,logging:false,scale:scale,
                                  backgroundColor:isClear(msg.background)
                                    ?'#ffffff':msg.background})
                  .then(function(canvas){

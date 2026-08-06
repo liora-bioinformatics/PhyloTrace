@@ -1,4 +1,9 @@
 box::use(
+  shiny[reactive, testServer],
+  withr[local_tempdir],
+)
+box::use(
+  app / logic / database_functions[read_metadata_table],
   app / view / database_browser,
 )
 
@@ -32,9 +37,11 @@ test_that("an unchanged pool keeps every edit", {
 })
 
 test_that("an isolate added since the grid was filled survives the save", {
-  # The regression this guards: save_metadata_table() overwrites the whole
-  # table, so writing the grid's snapshot unreconciled would delete the
-  # metadata row of an isolate typed while the user was editing.
+  # save_metadata_table() itself now writes only the cells a tidy edit diff
+  # names, so it no longer depends on this reconciliation for safety - but the
+  # save handler still calls it to report "N added, M removed elsewhere" to
+  # the user, and that report has to be right: an isolate typed while the grid
+  # sat with pending edits must show up as added, not silently vanish from it.
   got <- impl$.reconcile_metadata(
     edited_frame(c("a", "b")),
     current_frame(c("a", "b", "typed_meanwhile"))
@@ -125,4 +132,125 @@ test_that("an empty snapshot yields the current table unchanged", {
   got <- impl$.reconcile_metadata(edited_frame(character(0)), current_frame("a"))
   expect_identical(got$isolate, "a")
   expect_identical(got$host, "db-a")
+})
+
+# ---------------------------------------------------------------------------
+# The cell-edit -> State$metadata_dirty -> save_metadata_table() flow
+# ---------------------------------------------------------------------------
+
+# 0-based, matching what DT's cell_edit input and editData() both expect.
+.col_idx <- function(state, column) match(column, names(state$data)) - 1L
+
+test_that("editing a cell buffers a tidy diff entry and marks the grid pending", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "France")
+    )
+    session$flushReact()
+
+    expect_identical(State$metadata_dirty$isolate, "A")
+    expect_identical(State$metadata_dirty$column, "geo_loc_name_country")
+    expect_identical(State$metadata_dirty$value, "France")
+    expect_true(State$pending)
+  })
+})
+
+test_that("re-editing the same cell replaces its pending value, not queues a second one", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "France")
+    )
+    session$flushReact()
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "Spain")
+    )
+    session$flushReact()
+
+    expect_identical(nrow(State$metadata_dirty), 1L)
+    expect_identical(State$metadata_dirty$value, "Spain")
+  })
+})
+
+test_that("editing back to the original value is a no-op, not a dirty entry", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "Germany")
+    )
+    session$flushReact()
+
+    expect_null(State$metadata_dirty)
+    expect_false(isTRUE(State$pending))
+  })
+})
+
+test_that("Save writes the buffered cell and clears the dirty state", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "France")
+    )
+    session$flushReact()
+
+    session$setInputs(save = 1)
+    session$flushReact()
+
+    expect_null(State$metadata_dirty)
+    expect_false(State$pending)
+  })
+
+  after <- read_metadata_table(path)
+  expect_identical(after$geo_loc_name_country[after$isolate == "A"], "France")
+  # B, which the user never touched, keeps its original value.
+  expect_identical(after$geo_loc_name_country[after$isolate == "B"], "Germany")
+})
+
+test_that("Discard drops the buffered cell edit without writing it", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "France")
+    )
+    session$flushReact()
+
+    session$setInputs(discard = 1)
+    session$flushReact()
+
+    expect_null(State$metadata_dirty)
+    expect_false(State$pending)
+  })
+
+  expect_identical(read_metadata_table(path)$geo_loc_name_country, "Germany")
 })

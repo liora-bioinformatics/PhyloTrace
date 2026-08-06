@@ -269,6 +269,28 @@ test_that("an unusable width falls back instead of reaching the device", {
   }))
 })
 
+test_that("an unusable target width falls back instead of reaching the capture handler", {
+  # A blown-out request would mean asking the browser to redraw a widget at an
+  # absurd multiple of its on-screen size; an empty one would leave the
+  # capture handler with nothing to divide by.
+  with_tab(c("A", "B"), quote({
+    session$setInputs(export_target_px = 50000)
+    expect_identical(isolate(export_opts()$target_px), 8000)
+
+    session$setInputs(export_target_px = NA)
+    expect_identical(isolate(export_opts()$target_px), 2400)
+
+    session$setInputs(export_target_px = 3000)
+    expect_identical(isolate(export_opts()$target_px), 3000)
+  }))
+})
+
+# Selecting a preset fills the Advanced controls via updateNumericInput() /
+# updatePickerInput(), which round-trip through the browser in a real session
+# but are no-ops under testServer (it does not simulate the client-side JS
+# those functions rely on) — so that behavior is covered by a real-browser
+# check instead. See the export section of the manual verification notes.
+
 test_that("the export defaults to PNG so the button works untouched", {
   with_tab(c("A", "B"), quote({
     expect_identical(isolate(export_format()), "png")
