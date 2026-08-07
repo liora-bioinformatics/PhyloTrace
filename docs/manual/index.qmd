@@ -1,0 +1,100 @@
+# Preface {.unnumbered}
+
+**PhyloTrace** is a platform for bacterial pathogen monitoring on a genomic
+level. It turns whole-genome assemblies into allele profiles by core-genome
+multilocus sequence typing (cgMLST), screens them for antimicrobial-resistance
+determinants, and enables exploration of the relationships between isolates
+through interactive minimum spanning trees, phylogenetic trees, epidemic
+curves, maps and heatmaps — all from a local, portable database under your
+full control.
+
+This manual is the **user's reference** for that system. It explains what each
+part of the app does, the science behind it, and how to use it in practice.
+
+## Who this manual is for
+
+Epidemiologists, microbiologists and laboratory staff who want to run genomic
+surveillance work in PhyloTrace. It assumes **no programming background**: there
+is no R to read, no code to write, and no command line to use.
+
+::: {.callout-note title="Looking for the code?"}
+Everything about how PhyloTrace is *built* — its module structure, database
+schema, the exact functions behind each pipeline, and the conventions for
+extending it — lives in the separate **technical manual** under
+`docs/technical/`. This book deliberately leaves that material out so it can stay
+about using the app.
+:::
+
+## How to read it {#sec-conventions}
+
+The manual uses a small, consistent set of conventions so you can find your way
+through it.
+
+::: {.callout-tip title="Concept"}
+Boxes like this explain an idea — what a minimum spanning tree is, why allelic
+distance measures relatedness — at an abstract level and in plain language.
+:::
+
+::: {.callout-important title="Good to know"}
+Boxes like this flag something about the app's behaviour that is easy to
+misread: what a control actually does, when a result is a genotype rather than a
+phenotype, or when a number should not be over-interpreted.
+:::
+
+Cross-references such as @sec-typing are clickable, as are figure references (for
+example @fig-preface-workflow below) and citations such as the original MLST
+description [@maiden1998mlst]. The full bibliography is on the
+[References](references.qmd) page, and @sec-glossary defines every term the
+manual uses.
+
+## The workflow at a glance
+
+Although PhyloTrace is fully interactive, the work it supports can be broken
+down into a linear workflow. Each stage is a chapter of this manual.
+
+```{mermaid}
+%%| label: fig-preface-workflow
+%%| fig-cap: "The PhyloTrace workflow. Each stage maps to a chapter in this manual. Dashed edges show the database's portability (export/import between labs); the solid loop back from the Analysis Dashboard shows that saved plots persist inside the same database file."
+flowchart LR
+  A["Whole-genome<br/>assemblies (FASTA)"] --> B["Scheme<br/>management"]
+  B --> C1["cgMLST typing<br/>(core genome)"]
+  B --> C2["Classical MLST<br/>(7-gene ST)"]
+  B --> E["AMR<br/>screening"]
+  C1 --> D[("Local database<br/>(one portable file)")]
+  C2 --> D
+  E --> D
+  D -. "export" .-> P[("Peer lab's<br/>database")]
+  P -. "import" .-> D
+  D --> F["Browse &amp;<br/>curate"]
+  D --> G["Visualize<br/>(MST · Tree · Epi · Map · Heatmap)"]
+  G --> H["Analysis Dashboard<br/>(saved plots)"]
+  H --> D
+```
+
+## Structure of this manual {#sec-roadmap}
+
+**Part I · Orientation** — what PhyloTrace is (@sec-intro) and the scientific
+concepts behind it (@sec-concepts): assemblies, loci and alleles, the core
+genome, allelic profiles and sequence types, allelic distance, minimum spanning
+trees, phylogenetic trees, AMR markers, epidemic curves and content hashing.
+
+**Part II · The App & Your Data** — how the application behaves as you work in it
+(@sec-app-basics), and what your database file contains and how to look after it
+(@sec-data).
+
+**Part III · Components** — the parts of the app you work through, in the order a
+new dataset passes through them: scheme management (@sec-schemes), allelic typing
+(@sec-typing), AMR screening (@sec-amr), the database browser and custom
+variables (@sec-browser), and sharing data with other labs (@sec-interop). Taken
+together these form the app's pipelines.
+
+**Part IV · Visualization & Analysis** — the plot workspace (@sec-visualization),
+minimum spanning trees (@sec-mst), phylogenetic trees (@sec-trees), epidemic
+curves (@sec-epicurve), maps (@sec-map), AMR heatmaps (@sec-amr-heatmap), and the
+Analysis Dashboard where finished work is saved (@sec-dashboard).
+
+**Appendices** — the external tools and data sources PhyloTrace uses
+(@sec-appendix-tools), a glossary (@sec-glossary), and the
+[References](references.qmd).
+
+*PhyloTrace is intended for research and academic purposes only.*

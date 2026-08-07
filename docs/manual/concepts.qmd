@@ -1,0 +1,284 @@
+# Key Concepts for Epidemiologists & Microbiologists {#sec-concepts}
+
+This chapter explains the science PhyloTrace implements, in plain language. It is
+the reference the later chapters point back to: when @sec-mst describes the
+controls of the minimum spanning tree, this is where "what a minimum spanning
+tree *is*" was explained. Read it once and the rest of the manual reads more
+easily.
+
+## From an assembly to an allele profile {#sec-concepts-assembly}
+
+### Whole-genome assemblies
+
+The starting point is a **whole-genome assembly**: the reconstructed DNA
+sequence of one bacterial isolate, produced by sequencing its genome and
+stitching the reads into contiguous stretches ("contigs"). In PhyloTrace an
+assembly is a FASTA file (`.fasta`, `.fa` or `.fna`), and it is the *only*
+input the workflow needs (@sec-typing).
+
+### Loci, alleles and the core genome
+
+A **locus** (plural *loci*) is a defined position in the genome — in practice a
+specific gene. An **allele** is one observed DNA sequence at that locus. Two
+isolates carry the *same* allele at a locus when their sequence there is
+identical, and *different* alleles when it differs by even a single base.
+
+The **core genome** is the set of loci present in essentially all members of a
+species. **Core-genome MLST (cgMLST)** types an isolate by reading its allele at
+every locus in a standardized core-genome scheme — typically 1,500–3,000 loci —
+and recording *which* allele it carries at each. This generalizes classical
+**MLST** [@maiden1998mlst], which used only ~7 housekeeping genes.
+
+::: {.callout-tip title="Concept — why alleles instead of raw DNA differences?"}
+cgMLST records only *whether* two alleles differ, not *how much*. A locus is
+either the same allele or a different one; a one-base change and a fifty-base
+change both count as "different." This discards information relative to raw
+sequence comparison, but it is what makes results **portable and stable**:
+every lab that types the same isolate against the same scheme gets the same
+allele call, so allele numbers can be compared across labs, instruments and
+years — which raw SNP counts, sensitive to read depth and alignment, cannot.
+It is the same logic that made 7-gene MLST a *portable* method
+[@maiden1998mlst], scaled up to the whole core genome.
+:::
+
+### Allele profiles and sequence types
+
+An isolate's **allele profile** is the vector of its allele calls — one entry
+per locus. It corresponds to a row in a table with isolates as rows, loci as
+columns, and each cell holding an allele identifier.
+
+A **sequence type (ST)** is a name for a profile that has been seen before and
+registered in a nomenclature. In classical 7-gene MLST every distinct
+combination of the 7 alleles gets an ST number; PhyloTrace resolves these
+against public repositories (@sec-typing). At cgMLST resolution, profiles are so
+specific that most are unique, so relatedness is judged by *distance* between
+profiles rather than by shared ST names.
+
+::: {.callout-important title="Allele numbers are local; allele *content* is universal"}
+PhyloTrace gives every distinct allele sequence two identities: a short local
+number, convenient inside one database, and a **content fingerprint** derived
+from the DNA sequence itself. Only the fingerprint is meaningful outside the file
+— two databases will assign different numbers to the same allele simply because
+they encountered it at different times. This is why comparing or merging
+databases always works from the fingerprint (@sec-concepts-hashing,
+@sec-interop), and why an allele number you see in one database should never be
+quoted to a colleague working in another.
+:::
+
+## Measuring relatedness: allelic distance {#sec-concepts-distance}
+
+### The Hamming distance
+
+Given two allele profiles, their **allelic distance** is simply the number of
+loci at which they carry different alleles. This is the **Hamming distance**
+[@hamming1950]: count the mismatching columns. Two isolates that differ at 3 of
+2,000 loci are 3 apart; two that differ at 800 are 800 apart.
+
+::: {.callout-tip title="Concept — distance as a proxy for time and transmission"}
+Bacteria accumulate genetic change roughly with time and replication, so a
+*small* allelic distance between two isolates indicates a very recent common
+ancestor — consistent with direct transmission or a common source — while a
+*large* distance indicates divergence long ago. Allelic distance is therefore
+the quantitative basis of outbreak analysis: it converts the question of
+relatedness between isolates into a number that can be thresholded, clustered
+and plotted.
+:::
+
+### The missing-data problem
+
+Real assemblies do not always yield a clean call at every locus: a locus may be
+absent, fragmented across contigs, or fail quality thresholds, leaving a
+**missing** value. How you treat missing calls when comparing two profiles
+changes the distance, so PhyloTrace makes the policy explicit. Three options are
+offered:
+
+| Policy | Rule | When to use |
+|---|---|---|
+| **Ignore missing** (`ignore_na`) | Compare only loci called in *both* isolates | Default; robust to patchy assemblies |
+| **Missing as category** (`category`) | "missing" is itself a value: missing vs called counts as a difference, missing vs missing does not | When absence is biologically meaningful |
+| **Omit loci** (`omit`) | Drop any locus missing in *any* isolate, then compare the rest | Strictest; a common column set for all |
+
+The choice appears as the **NA handling** control on every distance-based plot,
+and the same policy feeds both the tree and the MST, so the two views of one
+dataset always agree about how far apart two isolates are (@sec-mst, @sec-trees).
+
+## Minimum spanning trees {#sec-concepts-mst}
+
+### What a minimum spanning tree is
+
+Represent each isolate as a node, and every pair of isolates as a potential edge
+whose length is their allelic distance. A **spanning tree** connects all nodes
+with edges such that everything is joined and no loops form. The **minimum**
+spanning tree (MST) is the spanning tree whose total edge length is smallest —
+the most economical set of connections that still links every isolate
+[@prim1957; @kruskal1956].
+
+```{mermaid}
+%%| label: fig-concepts-mst
+%%| fig-cap: "A minimum spanning tree over five isolates. Edge numbers are allelic distances; the MST keeps the cheapest set of links that connects all nodes."
+flowchart LR
+  A((A)) ---|2| B((B))
+  B ---|3| C((C))
+  B ---|1| D((D))
+  D ---|4| E((E))
+```
+
+### Why epidemiologists use them
+
+For allelic-profile data the MST has become the standard representation for
+outbreak analysis, popularized by goeBURST and PHYLOViZ
+[@francisco2009goeburst; @nascimento2017phyloviz]. It offers three properties
+that make it well suited to this use:
+
+- **Every isolate is a visible node** — unlike a phylogenetic tree, where
+  isolates sit at the tips and internal branch points are hypothetical
+  ancestors, the MST draws the *actual* isolates and joins the closest ones.
+- **Edge labels are directly interpretable** — "these two isolates differ by
+  2 alleles" is written on the line between them.
+- **Clusters are visually distinct** — tightly-linked groups (say, all within
+  10 alleles) form dense subgraphs, and a threshold turns them into named
+  clusters.
+
+::: {.callout-important title="Identical isolates share a node"}
+Before the tree is drawn, isolates that are **zero alleles apart** are merged
+into a single node — chains of identical profiles collapse together — and that
+node is drawn larger to show how many isolates it stands for. So a "node" in a
+PhyloTrace MST is a *set* of indistinguishable isolates, not necessarily one
+isolate, and the count matters when you read cluster sizes off the plot
+(@sec-mst).
+:::
+
+::: {.callout-tip title="Concept — the MST is a summary, not a proven history"}
+An MST shows *one* cheapest way to connect the isolates. When several links are
+tied, the choice among them is arbitrary, and the MST cannot represent
+reticulation (a bacterium's history is not always tree-shaped). It provides an
+accurate summary of pairwise closeness, useful for identifying clusters and
+plausible transmission chains, but it is not a proven genealogy.
+:::
+
+## Phylogenetic trees {#sec-concepts-trees}
+
+Where the MST connects the observed isolates directly, a **phylogenetic tree**
+reconstructs a branching genealogy: isolates sit at the tips, and internal
+branch points represent inferred common ancestors. PhyloTrace builds trees from
+the same allelic distance matrix, using two classic algorithms with different
+assumptions.
+
+### Neighbour-Joining (NJ)
+
+**Neighbour-Joining** [@saitou1987nj] builds the tree by repeatedly joining the
+pair of isolates that are closest *after* correcting for how far each is from
+everything else. It does **not** assume a constant rate of change, so branch
+lengths can vary freely — a fast-evolving lineage gets a long branch. This makes
+NJ a good default for showing structure without imposing a clock.
+
+### UPGMA
+
+**UPGMA** [@sokal1958upgma] joins the closest clusters and places their common
+ancestor at their average distance, assuming a roughly **constant rate of
+change** (a molecular clock). The result is an *ultrametric* tree — every tip
+ends level, at the same distance from the root — which represents nested
+clustering directly but can misrepresent relationships when lineages evolve at
+different rates.
+
+::: {.callout-tip title="Concept — choosing between UPGMA and Neighbour-Joining"}
+Use **UPGMA** for a hierarchical clustering representation when the isolates
+are expected to evolve at similar rates. Use **Neighbour-Joining** when some
+lineages may be more divergent than others and should not be forced level. If
+the two trees disagree substantially, the disagreement is itself informative:
+it usually indicates uneven rates of change, in which case NJ is the more
+reliable interpretation.
+:::
+
+::: {.callout-important title="Branch lengths are allele differences, in every view"}
+Both trees are built from the *same* distances the MST uses — raw allele
+differences — so a pair shown "3272 apart" reads identically wherever you look at
+it. Neighbour-Joining can occasionally compute a very slightly negative branch,
+which has no biological meaning; those are set to zero, the standard fix, rather
+than the whole tree being rescaled. Whether a branch is long enough to have its
+number *printed* on it is a separate, purely visual decision (@sec-trees).
+:::
+
+## Antimicrobial resistance, virulence and stress markers {#sec-concepts-amr}
+
+Beyond relatedness, PhyloTrace screens each assembly for **genes of clinical
+interest**: acquired antimicrobial-resistance (AMR) determinants, virulence
+factors, and stress/biocide/metal-tolerance elements. This uses NCBI's
+**AMRFinderPlus** [@feldgarden2021amrfinderplus] through the curation wrapper
+**abritamr** [@sherry2023abritamr] (@sec-amr).
+
+::: {.callout-tip title="Concept — what an 'AMR determinant' is, and is not"}
+A detected AMR gene means the isolate *carries a sequence known to confer, or
+contribute to, resistance* to a drug class. It is a **genotype**, not a measured
+phenotype: it does not by itself prove the isolate is clinically resistant
+(expression, regulation and combinations matter). For point mutations —
+resistance caused by a single base change in a core gene rather than an acquired
+gene — AMRFinderPlus can only call them when it knows the organism, which is why
+PhyloTrace passes the scheme's species where the tool supports it and silently
+falls back where it does not.
+:::
+
+PhyloTrace keeps two complementary views of the result: a **granular** one with
+one entry per detected element, and a **curated per-isolate roll-up** by drug
+class. The heatmaps in @sec-amr-heatmap read both back to show presence/absence
+across isolates, alongside the same metadata used to annotate trees and maps.
+
+## Epidemic curves {#sec-concepts-epi}
+
+An **epidemic curve** (epi curve) plots the number of cases against their date
+of collection, and is among the oldest methods used in outbreak investigation.
+Its shape distinguishes a point-source outbreak (a sharp peak) from
+person-to-person spread (successive waves) and shows when an outbreak began
+and whether it is waning.
+
+::: {.callout-important title="Reading a PhyloTrace epi curve"}
+Collection dates are binned into intervals (day, week, month…) chosen to keep the
+number of bars readable; the vertical axis counts whole cases, so it carries only
+integer ticks; and every bar is exactly one interval wide. That last point
+matters when you read the plot: **a gap in the curve is a genuine gap in the
+data**, not a drawing artefact. Cases can be stratified and coloured by any
+metadata field or custom variable (@sec-epicurve).
+:::
+
+## Content hashing: identity that travels {#sec-concepts-hashing}
+
+Two labs can only compare or merge data if they agree on what counts as "the
+same" allele and "the same" isolate. PhyloTrace secures both with cryptographic
+hashing.
+
+- **Allele identity.** Every allele is identified by a cryptographic hash of its
+  DNA sequence. The same sequence hashes to the same value wherever it is
+  computed, so two databases can recognise a shared allele **by content**, with
+  no shared numbering scheme. This is what makes merging databases safe
+  (@sec-interop), and it is the same approach chewBBACA takes with its hash-based
+  profiles [@silva2018chewbbaca].
+- **Assembly identity.** Every typed assembly is fingerprinted with a GA4GH-style
+  sequence digest [@ga4gh_refget] and the fingerprint is stored against the
+  isolate. A match proves two typing runs consumed the byte-identical assembly; a
+  mismatch proves nothing, so PhyloTrace uses it to *flag* a possible duplicate
+  and never to block work (@sec-typing).
+
+::: {.callout-tip title="Concept — why a hash is better than a name"}
+Names are fragile: renaming an assembly file and re-typing it creates a second,
+unrelated isolate record in a naive system; giving two different assemblies the
+same name silently merges them into one. A **content hash** ignores names
+entirely and evaluates only whether the underlying sequence is identical. This
+is what allows PhyloTrace databases to be copied, renamed, exported and
+re-imported across labs while still agreeing, byte-for-byte, on which alleles
+and assemblies are genuinely shared.
+:::
+
+## Where each concept is used
+
+| Concept | Where it shows up in the app | Chapter |
+|---|---|---|
+| Allele profiles; local numbers vs content fingerprints | Import, export and merging | @sec-interop |
+| Allelic distance and the NA-handling choice | Every distance-based plot | @sec-mst, @sec-trees |
+| Minimum spanning tree | The MST plot type | @sec-mst |
+| Neighbour-Joining / UPGMA | The Tree plot type | @sec-trees |
+| AMR, virulence and stress determinants | AMR screening and its heatmaps | @sec-amr, @sec-amr-heatmap |
+| Epidemic curve | The Epi plot type | @sec-epicurve |
+| Content hashing of alleles and assemblies | Typing and inter-lab sharing | @sec-typing, @sec-interop |
+
+With these concepts established, @sec-app-basics turns to the application itself,
+and Part III follows the data from a raw assembly into the database.

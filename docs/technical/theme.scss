@@ -1,0 +1,38 @@
+/*-- scss:defaults --*/
+
+// PhyloTrace brand tint (teal family, from the app's palette/badges).
+$primary:        #4f8a90 !default;
+$link-color:     #3f7a80 !default;
+$code-color:     #2c6e73 !default;
+
+// Comfortable reading measure and typography.
+$font-size-root:      17px !default;
+$toc-font-size:       0.85rem !default;
+$headings-font-weight: 600 !default;
+
+/*-- scss:rules --*/
+
+// Give the two-audience callouts a clear identity.
+.callout.callout-style-default {
+  border-left-width: 4px;
+}
+
+// A little more air around Mermaid diagrams so the module trees breathe.
+.cell-output-display > svg,
+figure.quarto-figure svg {
+  max-width: 100%;
+  height: auto;
+}
+
+// Code-block filename headers — make the file path scannable, since the manual
+// leans on citing exact source locations.
+.code-with-filename .code-with-filename-file {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+// Tighten the docked sidebar TOC so the long chapter list stays navigable.
+.sidebar-item-container .sidebar-item-text {
+  line-height: 1.25;
+}

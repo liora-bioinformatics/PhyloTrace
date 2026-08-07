@@ -1,0 +1,80 @@
+# AMR Heatmaps {#sec-amr-heatmap}
+
+The AMR plot type reads back the findings of the resistance screen (@sec-amr) and
+turns them into presence/absence and drug-class views across a collection. This
+chapter covers the three views, how to organise them, and what each one is good
+for.
+
+## Local isolates only {#sec-amr-hm-scope}
+
+Like the map and the epi curve, this plot type involves no pairwise comparison,
+so its controls take effect live (@sec-viz-generate). It shows only isolates
+typed in *this* database: a partner's staged profile table carries allele
+identifiers and nothing else, so no AMR screen exists for those isolates
+(@sec-interop-staging).
+
+## Three views {#sec-amr-hm-views}
+
+| View | What it shows | Use it for |
+|---|---|---|
+| **Gene heatmap** | Isolates × individual genes, present or absent | Seeing exactly which determinants each isolate carries |
+| **Drug-class matrix** | Isolates × drug class, with call confidence | Summarising a collection's resistance profile |
+| **Prevalence bars** | The most common genes or classes | A quick overview of what dominates the collection |
+
+::: {.callout-important title="Confidence is preserved in the drug-class matrix"}
+The drug-class view distinguishes a confident **match** from a **partial** call by
+colour, and where several hits fall in the same cell the more confident one is
+shown. Reading a partial as confident would overstate an isolate's resistance,
+which is exactly the mistake the matrix is designed to prevent (@sec-amr-results).
+:::
+
+## Organising the columns {#sec-amr-hm-organise}
+
+Genes can be grouped by **element type** (AMR / virulence / stress) or by **drug
+class**, or clustered so that genes co-occurring across isolates sit together —
+optionally with a dendrogram above the matrix. Grouping by drug class is usually
+the more readable choice for a report; clustering is the more informative one
+when you are looking for co-carried elements, since genes that travel together on
+the same mobile element cluster together.
+
+Rows and columns can carry annotation strips for the grouping and for any
+metadata field or custom variable (@sec-viz-mapping) — so a gene heatmap can show
+ward or origin alongside the genotype, and a co-carriage pattern that follows one
+ward becomes visible immediately.
+
+```{mermaid}
+%%| label: fig-amr-hm
+%%| fig-cap: "The AMR plot type reads the two views of the screen's output into three figures."
+flowchart LR
+  R[("Detailed findings<br/>(per element)")] --> H1["Gene heatmap<br/>isolates × genes"]
+  S[("Curated summary<br/>(per drug class)")] --> H2["Drug-class matrix<br/>isolates × class"]
+  R --> H3["Prevalence bars"]
+  S --> H3
+```
+
+::: {.callout-important title="Absence in a heatmap is absence of a *finding*"}
+An empty cell means the screen did not detect that determinant in that isolate —
+not that the isolate is susceptible. A fragmented assembly can lose a gene that is
+really there, and point mutations are only called for supported species
+(@sec-amr-scope). Read empty cells as "not found", and check the isolate's
+completeness (@sec-typing-results) before treating an absence as meaningful.
+:::
+
+## Export {#sec-amr-hm-export}
+
+The heatmaps export as a **vector PDF or SVG**, or as a raster at the DPI you
+request (@sec-viz-export) — the same publication-quality route as the tree and
+the epi curve.
+
+## Chapter summary
+
+- Three views: a gene presence/absence heatmap, a drug-class confidence matrix,
+  and prevalence bars.
+- Only locally typed isolates appear; staged partner profiles have no AMR data.
+- Genes can be grouped by element type or drug class, or clustered to reveal
+  co-carriage; rows and columns take metadata annotations.
+- Partial calls stay visually distinct from confident ones.
+- An empty cell means "not detected", not "susceptible".
+- Export is vector or high-DPI raster.
+
+All plot types can be saved into an Analysis — that is @sec-dashboard.

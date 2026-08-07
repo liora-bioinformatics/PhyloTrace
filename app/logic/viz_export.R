@@ -37,7 +37,7 @@ box::use(
     tags,
     uiOutput,
   ],
-  shinyWidgets[pickerInput, prettyRadioButtons],
+  shinyWidgets[pickerInput, radioGroupButtons],
   svglite[svglite],
 )
 
@@ -222,7 +222,14 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         choices = as.list(export_formats[[kind]]),
         selected = held("filetype", "png")
       ),
-      prettyRadioButtons(
+      # A plain radioGroupButtons rather than prettyRadioButtons: pretty-checkbox
+      # positions its checkmark assuming a single-line, fixed-height label
+      # (`.pretty { white-space: nowrap; line-height: 1 }` in its own CSS) and
+      # visibly breaks — the indicator detaches from its row — once a choice
+      # holds two lines of text. A button group has no such assumption; each
+      # choice is a real <button> that lays out multi-line content like any
+      # other block content.
+      radioGroupButtons(
         id("preset"),
         "Export for",
         choiceNames = lapply(export_presets, function(p) {
@@ -233,7 +240,9 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
           )
         }),
         choiceValues = vapply(export_presets, `[[`, character(1), "id"),
-        selected = held("preset", default_preset$id)
+        selected = held("preset", default_preset$id),
+        direction = "vertical",
+        justified = TRUE
       ),
       accordion(
         id = id("advanced_wrap"),

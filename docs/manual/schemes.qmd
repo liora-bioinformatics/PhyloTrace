@@ -1,0 +1,109 @@
+# Scheme Management {#sec-schemes}
+
+Before an isolate can be typed, PhyloTrace needs a **scheme**: the definition of
+which loci to read, what to call them, and what allele sequences are already
+known. This chapter covers choosing and downloading a scheme into a new database,
+what a scheme contains, and how to inspect the one your database was built from.
+
+::: {.callout-tip title="Concept — what a cgMLST scheme is"}
+A cgMLST **scheme** is a species-specific catalogue with three parts: the **set
+of core-genome loci** to type (often 1,500–3,000 genes), a **nomenclature** that
+gives every known allele at each locus a stable identifier, and a **reference
+(seed) genome** the loci are defined against. Public repositories curate these
+so that everyone typing, say, *Listeria monocytogenes* uses the same targets and
+the same allele numbers — which is what makes results comparable between labs.
+PhyloTrace downloads cgMLST schemes from cgMLST.org [@cgmlstorg]. The
+accompanying classical 7-gene MLST scheme is resolved separately, against
+PubMLST and Institut Pasteur [@pubmlst] (@sec-typing-classical).
+:::
+
+## The Scheme Browser {#sec-schemes-browser}
+
+The **Scheme Browser** tab is where you pick a species, review the scheme
+available for it, and download that scheme into a **new** database. It presents
+each supported species with its taxonomy, a short description and artwork, so you
+can confirm you are looking at the right organism before committing to a
+download.
+
+::: {.callout-important title="The Scheme Browser creates databases; it does not open them"}
+The only database the Scheme Browser can hand over to the rest of the app is the
+one it has *just downloaded* — its **Load Database** button becomes available
+after a successful download and opens that new file. To open a database that
+already exists, use the **Load Database** panel instead (@sec-app-panels); that
+is the only place an arbitrary existing file can be selected.
+:::
+
+## Creating a database from a scheme {#sec-schemes-download}
+
+Downloading is what creates the database, in three steps you drive from the
+panel:
+
+1. **Choose the species** and review the scheme details shown alongside it.
+2. **Choose where the database goes** — a target folder and a name. The name is
+   restricted to letters, digits, hyphens and underscores (@sec-data-naming), and
+   PhyloTrace will warn you rather than overwrite an existing file.
+3. **Download Scheme.** The alleles are fetched, together with the scheme's
+   published summary — locus count, seed genome, and the repository's own
+   cluster-distance threshold — and the target locus list. All of it is written
+   into the new database file, so no later step ever needs the network again.
+
+When the download reports success, **Load Database** opens the new file and the
+workspace panels appear.
+
+```{mermaid}
+%%| label: fig-scheme-download
+%%| fig-cap: "Creating a database: pick a species, download its scheme, and open the resulting file."
+flowchart LR
+  S["Pick a species"] --> T["Choose folder + name"]
+  T --> D["Download Scheme<br/>alleles · scheme summary · target loci"]
+  D --> DB[("New database file")]
+  DB --> L["Load Database<br/>→ workspace opens"]
+```
+
+::: {.callout-important title="One database per scheme"}
+A database is created around one scheme and keeps it for life (@sec-data-scheme).
+Working on a second species means creating a second database — there is no way to
+add a different scheme to an existing file, and no reason to want one, since
+allele profiles from different schemes are not comparable.
+:::
+
+## Inspecting the scheme: the cgMLST Overview panel {#sec-schemes-inspect}
+
+Inside the Database Browser, the **cgMLST Overview** panel gives two read-only
+views of the scheme your database was built from:
+
+- **Scheme Info** — the published summary: organism, number of loci, the seed
+  genome the scheme is defined against, and the repository's cluster-distance
+  threshold. That last number is the default PhyloTrace offers when you cluster a
+  minimum spanning tree (@sec-mst), which is what makes your cluster calls
+  comparable with published nomenclatures.
+- **Loci Info** — one row per target locus, with the number of distinct alleles
+  seen for it *in your database*. You can drill into a locus to list its
+  individual alleles and their sequences, and export all the sequences for a
+  locus as FASTA without leaving the app.
+
+Loci Info is the quickest way to see how much diversity your collection actually
+carries at a given gene, and to pull a locus's sequences out for use elsewhere.
+
+::: {.callout-important title="The species name shown is the scheme's, not a taxonomic call"}
+The organism shown in Scheme Info comes from the scheme you downloaded. It
+describes the *reference data* your isolates were typed against — it is not an
+identification of the isolates themselves. If you type an assembly of a different
+species against this scheme, the scheme name will not change to reflect it, but
+the allele calls will be poor; the completeness figures reported after typing are
+the signal to watch (@sec-typing).
+:::
+
+## Chapter summary
+
+- A scheme defines the loci, the allele nomenclature and the reference genome for
+  a species; PhyloTrace pulls cgMLST schemes from cgMLST.org, and resolves the
+  classical MLST scheme separately, from PubMLST and Institut Pasteur.
+- Downloading a scheme is what creates a database; the scheme summary and target
+  loci are stored inside the file so later work needs no network.
+- The Scheme Browser can open only the database it has just created; existing
+  databases are opened from the Load Database panel.
+- The cgMLST Overview panel shows the scheme summary and per-locus allele counts,
+  and exports a locus's alleles as FASTA.
+
+@sec-typing describes what happens when assemblies are typed against the scheme.

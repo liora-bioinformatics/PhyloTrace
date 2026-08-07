@@ -272,13 +272,18 @@ results_header <- tags$table(
   ))
 )
 
-# Attach a Bootstrap tooltip to every header cell that carries an explanation.
-# Runs once per render (the header survives replaceData, so the live polling
-# updates never re-trigger it). `container: body` keeps the tooltip out of the
-# accordion body, which scrolls and would otherwise clip it. Falls back to the
-# native title tooltip if Bootstrap's JS is unavailable.
+# Attach a Bootstrap tooltip to every header cell that carries an explanation,
+# and release the tab-navigation lock a run engages at launch (see
+# app/js/typing-nav-lock.js) - DataTables fires initComplete exactly once,
+# right after this first render's own construction finishes, which is the
+# earliest safe point to let the user switch away. Runs once per render (the
+# header survives replaceData, so the live polling updates never re-trigger
+# it). `container: body` keeps the tooltip out of the accordion body, which
+# scrolls and would otherwise clip it. Falls back to the native title tooltip
+# if Bootstrap's JS is unavailable.
 header_tooltips <- JS(
   "function(settings, json) {",
+  "  if (window.__ptReleaseTypingNavLock) window.__ptReleaseTypingNavLock();",
   "  if (!window.bootstrap || !window.bootstrap.Tooltip) return;",
   "  $(this.api().table().header())",
   "    .find('th[data-bs-toggle=\"tooltip\"]')",
@@ -514,7 +519,11 @@ ui <- function(id) {
         # click would never see an idle gap to release on and would stay up for
         # the whole pass - covering Terminate. Nothing needs shielding here
         # anyway: every other control is disabled while a run owns the queue.
-        class = "pt-no-lock"
+        #
+        # pt-typing-start: opts *in* to the separate, narrower tab-navigation
+        # lock (app/js/typing-nav-lock.js), engaged on click rather than via a
+        # server round trip so it holds the whole checking phase too.
+        class = "pt-no-lock pt-typing-start"
       )),
       disabled(actionButton(
         ns("terminate"),
@@ -1841,6 +1850,14 @@ server <- function(
     outputOptions(output, "log", suspendWhenHidden = FALSE)
     outputOptions(output, "status_line", suspendWhenHidden = FALSE)
 
+    # Releases the tab-navigation lock a click on Start engages (see
+    # app/js/typing-nav-lock.js). The Results table's own initComplete
+    # callback (header_tooltips) releases it on the normal path; this is for
+    # every path from here that stops short of that first render.
+    release_nav_lock <- function() {
+      runjs("if (window.__ptReleaseTypingNavLock) window.__ptReleaseTypingNavLock();")
+    }
+
     # Start typing
     observeEvent(input$start, {
       req(valid_db(), length(Typing$strains) > 0)
@@ -1891,6 +1908,7 @@ server <- function(
           type = "warning",
           duration = 5
         )
+        release_nav_lock()
         return()
       }
 
@@ -1981,6 +1999,7 @@ server <- function(
           type = "warning",
           duration = 4
         )
+        release_nav_lock()
         return(NULL)
       }
 

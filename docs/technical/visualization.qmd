@@ -1,0 +1,125 @@
+# The Visualization Coordinator {#sec-tech-visualization}
+
+`app/view/visualization.R` hosts a navset with a permanent **New plot** tab (the
+creator form) plus one tab per live plot. Each plot tab is an instance of
+`app/view/visualization_plot.R` that owns its own setup sidebar and its own engine
+submodule server:
+
+```{.r filename="app/view/visualization.R"}
+# Visualization coordinator. Hosts a navset of plot tabs: a permanent "New plot"
+# tab carrying the creator form, plus one tab per live plot. Each plot tab is an
+# app/view/visualization_plot.R instance that owns its own setup sidebar and its
+# own engine submodule server, so several plots — including several of the same
+# type — run independently ...
+```
+
+## The multi-tab model {#sec-tech-viz-tabs}
+
+`visualization_plot.R` holds the registry that binds a plot type to its engine
+module, its distance requirement and its export route:
+
+```{.r filename="app/view/visualization_plot.R"}
+MST  = list(mod = visualization_mst,  distance = TRUE,  export_kind = "widget"),
+Tree = list(mod = visualization_tree, distance = TRUE,  export_kind = "ggplot"),
+Map  = list(mod = visualization_map,  distance = FALSE, export_kind = "widget"),
+Epi  = list(mod = visualization_epi,  distance = FALSE, export_kind = "ggplot"),
+AMR  = list(mod = visualization_amr,  distance = FALSE, export_kind = "ggplot")
+```
+
+::: {.callout-important title="Plot type is fixed for a tab's lifetime"}
+The plot type is chosen on the New-plot form and never changes for that tab — it
+is a plain character scalar, not a reactive. Nothing downstream may assume it can
+change: the type decides both which controls the sidebar emits and which of the
+five engine submodules is instantiated. This is what lets the coordinator run five
+different engines through one tab abstraction without them interfering.
+:::
+
+What stays in the coordinator is only what is genuinely shared: the cached
+per-isolate metadata read (the `store`, @sec-arch-signals), the staged import sets
+(@sec-tech-interop-staging), the Save picker's grouped choices, the page-level
+scripts that must be registered exactly once (including the high-resolution export
+capture, @sec-tech-viz-export), and the tab registry itself — create, close,
+teardown, and the dashboard's Add Plot / open-saved-plot hand-offs
+(@sec-tech-dashboard).
+
+```{mermaid}
+%%| label: fig-tech-viz
+%%| fig-cap: "The visualization workspace: one coordinator, one visualization_plot instance per open tab, one of five engine servers per instance."
+flowchart TD
+  C["visualization.R<br/><i>coordinator · shared store · tab registry</i>"]
+  C --> NP["New plot tab<br/>(creator form)"]
+  C -- "1 per open tab" --> T1["visualization_plot"]
+  C -- "1 per open tab" --> T2["visualization_plot"]
+  T1 --> E1["exactly one engine server:<br/>visualization_mst · _tree · _epi · _map · _amr"]
+  T2 --> E2["exactly one engine server"]
+```
+
+## Compute once, draw many times {#sec-tech-viz-generate}
+
+Every distance-based engine follows the same performance split: the **expensive**
+step (reading profiles, building the distance matrix, computing the tree/MST) runs
+only when the user presses **Generate**; the **cheap** steps (colour, layout,
+labels) redraw live as controls change. The logic modules embody this split —
+`phylo.R` computes, `mst_plot.R`/`tree_plot.R` draw — so a control change never
+recomputes a distance matrix (@sec-tech-engines).
+
+## Mapping variables to aesthetics {#sec-tech-viz-mapping}
+
+`app/logic/mapping_engine.R` decides which aesthetic a chosen variable is drawn
+onto, from the variable's profile and from what the other layers already occupy:
+
+```{.r filename="app/logic/mapping_engine.R"}
+# Here the user picks the *variable* and this module picks the rest, from the
+# variable's profile (app/logic/field_profile.R) and from what the other layers
+# already occupy. Every rule below is a rule about legibility, and each one names
+# the failure it exists to prevent.
+```
+
+::: {.callout-important title="Each rule names the failure it prevents"}
+A 46-level variable sent to a colour-brewer palette drew nine categories in colour
+and the rest in grey; a variable with more than six levels sent to *shape* had its
+surplus categories vanish from the plot. Both failed **silently**. The rules — "a
+shape cannot show a continuum", "a tabulated palette cannot show 46 countries" —
+exist to make those states unreachable. `eligible_aesthetics()`,
+`assign_mapping_layer()` and `rebalance_layers()` implement the ranking, and the
+same rules serve both media: a **tree** draws onto tip points, labels and tile
+strips; an **MST** draws onto node fill alone (a merged node's pie is the one
+channel that can show all its members' values). A new engine adds its medium to
+`MAPPING_MEDIA` rather than inventing its own selection logic.
+:::
+
+## Exporting a plot {#sec-tech-viz-export}
+
+`app/logic/viz_export.R` owns the shared **Export Plot** panel and the
+size/resolution arithmetic behind every format. Two export routes, distinguished
+by the `kind` argument:
+
+- **`ggplot`** (Tree, Epi, AMR) — the plot object lives on the server, so export
+  re-renders it at the requested physical size and DPI. A vector PDF/SVG has no
+  resolution to lose, and a raster is drawn at the requested DPI, not scraped off
+  the screen (`save_plot_export()`, `resolved_dpi()`).
+- **`widget`** (MST, Map) — drawn by the browser, so the image must come back from
+  the client. The capture is **not** a screenshot: `visualization.R`'s
+  `phylotrace_capture` handler makes the widget redraw itself into a larger buffer
+  first, so a 4× export is a genuine re-render at four times the linear resolution
+  (`write_data_uri()`). Both widget engines also offer self-contained interactive
+  HTML.
+
+## Saving to the dashboard {#sec-tech-viz-save}
+
+Each plot tab can save its full input snapshot (plus a thumbnail) into an Analysis
+in the loaded database. The coordinator builds the grouped Save picker and routes
+the two dashboard hand-offs — "Add Plot" for an Analysis and "open a saved plot" —
+into preselecting or restoring the right tab (@sec-tech-dashboard). The
+persistence lives in `app/logic/analysis_store.R`, inside the `.db` itself.
+
+## Chapter summary
+
+- One coordinator, one `visualization_plot` instance per tab, one engine server
+  per instance; the type/engine binding lives in `plot_type_meta`.
+- Plot type is fixed per tab and is not a reactive.
+- Distance engines compute on Generate and redraw cheaply on control changes.
+- `mapping_engine.R` centralizes aesthetic selection; every rule in it prevents a
+  specific silent-failure mode.
+- `viz_export.R` exports ggplot engines by server re-render and widget engines by
+  a genuine high-resolution client redraw.

@@ -1,0 +1,91 @@
+# Geographic Mapping {#sec-map}
+
+The map places isolates in space. Where they were collected is metadata, so —
+like the epi curve — the map needs no genetics; its work is turning place names
+into coordinates and presenting them in four different ways.
+
+## From place names to coordinates {#sec-map-geocode}
+
+Isolate locations come from the metadata's spatial fields — city,
+state/province and country. Those are names, not coordinates, so PhyloTrace
+**geocodes** them: each distinct place is looked up once, when you press
+Generate, using the OpenStreetMap / Nominatim service.
+
+::: {.callout-tip title="Concept — why geocoding happens once per distinct place"}
+Two hundred isolates from the same city share one location. Looking each isolate
+up separately would be two hundred identical requests to a public, rate-limited
+service. PhyloTrace looks up each *distinct* place once and reuses the coordinate
+for every isolate there — faster for you, and considerate of a free service.
+:::
+
+::: {.callout-important title="What is sent, and what a failed lookup means"}
+Geocoding is the only part of the map that leaves your machine, and it sends only
+a place name — never isolate identifiers, profiles or any other metadata
+(@sec-app-local).
+
+A place that cannot be resolved is left off the map. The usual causes are
+spelling variants, an ambiguous name, or a field filled in with something that is
+not a place. Consistent, resolvable place names in the metadata are what make the
+map useful; the Browse Entries panel is where you fix them (@sec-browser).
+:::
+
+## Four modes {#sec-map-modes}
+
+| Mode | What it shows | Use it for |
+|---|---|---|
+| **Markers** | Styled points, clustered per location | Seeing individual collection sites |
+| **Choropleth** | Countries shaded by isolate count | Country-level surveillance overviews |
+| **Heatmap** | A point-density surface | Where sampling is concentrated |
+| **Charts** | A mini-chart per location | Composition at each site — the split by ward, source or ST |
+
+All four are drawn by the same underlying builder, so they stay visually
+consistent with one another and with the map you export.
+
+::: {.callout-important title="A map shows where isolates were collected, not where infection occurred"}
+Collection place is a sampling artefact as much as an epidemiological fact: it
+reflects which laboratory submitted the isolate, not necessarily where exposure
+happened. A dense spot on the map may mean an outbreak, or may mean one
+well-sequencing hospital. Read the map alongside the MST — geography plus
+relatedness is informative in a way geography alone is not.
+:::
+
+## Colouring and variables {#sec-map-vars}
+
+Markers and charts can encode any metadata field or custom variable — colouring
+the points, or splitting each location's mini-chart by category
+(@sec-viz-mapping). The choropleth shades by isolate count using standard
+country polygons.
+
+```{mermaid}
+%%| label: fig-map
+%%| fig-cap: "Mapping: each distinct place is geocoded once on Generate, then drawn in one of four modes."
+flowchart LR
+  MD["Metadata place fields<br/>(city · state/province · country)"] --> GC["Geocode each distinct place<br/><i>once, on Generate</i>"]
+  GC --> BM["Map builder"]
+  BM --> M1["Markers"]
+  BM --> M2["Choropleth"]
+  BM --> M3["Heatmap"]
+  BM --> M4["Charts"]
+```
+
+## Export {#sec-map-export}
+
+Like the MST, the map is drawn in the browser, so it exports as a
+high-resolution raster or as **self-contained interactive HTML** — a live,
+pannable map in a single file that a colleague can open without PhyloTrace
+(@sec-viz-export). For circulating a geographic picture, the HTML export is
+usually the more useful of the two.
+
+## Chapter summary
+
+- Place names from the metadata are geocoded once per distinct place, on
+  Generate; only the name leaves your machine.
+- Unresolvable places are omitted — consistent place names in the metadata are
+  what make the map work.
+- Four modes: Markers, Choropleth, Heatmap and Charts, all visually consistent.
+- Markers and charts can encode any metadata field or custom variable.
+- Collection place reflects sampling as well as epidemiology; read the map with
+  the MST.
+- Export is a high-resolution raster or interactive HTML.
+
+The last plot type reads the AMR findings back as heatmaps — @sec-amr-heatmap.

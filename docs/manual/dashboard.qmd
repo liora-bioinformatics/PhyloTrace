@@ -1,0 +1,84 @@
+# The Analysis Dashboard {#sec-dashboard}
+
+The Analysis Dashboard is where finished work is organised. An **Analysis** is a
+named container of saved **Plots**, each holding everything needed to reproduce a
+visualization, plus a thumbnail so you can find it at a glance. This chapter
+covers how to use it and what saving actually preserves.
+
+::: {.callout-tip title="Concept — an Analysis is a saved investigation"}
+A completed visualization — an MST coloured by ward and restricted to a subset of
+isolates, say — can be saved as a Plot inside an Analysis under a descriptive
+name such as "Ward-B outbreak, June". Reopening it later restores the exact
+controls and selection that produced it.
+
+Because Analyses are stored *inside the database file* (@sec-data), a saved
+investigation travels with the data whenever the database is shared. A colleague
+who receives your database receives your analyses with it.
+:::
+
+## Analyses and plots {#sec-dash-structure}
+
+The dashboard shows your Analyses, each holding its saved plots as a grid of
+tiles with live thumbnails. From here you can:
+
+- **Create an Analysis** and give it a name and description.
+- **Add a plot** to an Analysis — which takes you to the Visualization tab with
+  that Analysis preselected as the save target (@sec-viz-save).
+- **Open a saved plot**, which restores it into a Visualization tab.
+- **Rename, duplicate or delete** plots and Analyses. Deleting an Analysis
+  deletes the plots inside it.
+
+```{mermaid}
+%%| label: fig-dash
+%%| fig-cap: "The dashboard organises saved plots into named Analyses, all stored inside the database file; opening a plot restores it into a Visualization tab."
+flowchart TD
+  D["Analysis Dashboard"] --> A1["Analysis<br/><i>e.g. 'Ward-B outbreak, June'</i>"]
+  A1 --> P1["Saved plot<br/>(thumbnail)"]
+  A1 --> P2["Saved plot<br/>(thumbnail)"]
+  D -. stored in .-> DB[("Your database file")]
+  P1 -. "open" .-> V["Visualization tab<br/>restored as saved"]
+```
+
+## What a saved plot preserves {#sec-dash-saved}
+
+Saving a plot stores its type, the complete set of settings behind it, and a
+thumbnail image.
+
+::: {.callout-important title="What is saved is the recipe, not the picture"}
+The stored settings are what make a plot **restorable**: reopening it feeds them
+back into a fresh Visualization tab and rebuilds the figure from your current
+data. The thumbnail is only for finding it in the dashboard.
+
+The practical consequence: if isolates have been added, edited or deleted since
+you saved, reopening the plot draws the *current* data with your saved settings —
+so a saved MST may gain nodes. That is usually what you want. If you need a frozen
+picture of a figure exactly as it looked on a given day, export it
+(@sec-viz-export) and keep the file.
+:::
+
+## Selections that outgrow their Analysis {#sec-dash-selection}
+
+An Analysis records both the isolate selection you made and the pool of isolates
+that existed when you made it. That is how PhyloTrace can tell when the database
+has grown or changed underneath a saved Analysis, and reconcile the selection
+rather than silently plotting the wrong set.
+
+The dashboard also keeps itself current: saving a plot from the Visualization
+tab, or importing new isolates, updates it without a manual reload
+(@sec-app-live).
+
+## Chapter summary
+
+- An Analysis is a named container of saved plots, stored inside the database
+  file and shared with it.
+- Add a plot from the dashboard to jump to Visualization with the Analysis
+  preselected; open one to restore it into a tab.
+- Saving preserves the settings, not the rendered image — a reopened plot uses
+  your current data.
+- Export a figure if you need a frozen record of exactly how it looked.
+- An Analysis remembers the isolate pool it was made against, so a grown database
+  does not silently change what a saved plot shows.
+
+That completes the tour of the application. The appendices list the external
+tools and data sources PhyloTrace relies on (@sec-appendix-tools) and define the
+terms used throughout (@sec-glossary).

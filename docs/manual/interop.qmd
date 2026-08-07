@@ -1,0 +1,159 @@
+# Import, Export & Working with Other Labs {#sec-interop}
+
+A PhyloTrace database is a document: copying the file copies everything, and two
+labs can compare or pool their isolates by exchanging files. This chapter covers
+what you can share, what happens when you merge a colleague's database into
+yours, how to export only part of your own, and what to do when a partner sends
+allele profiles rather than a database.
+
+::: {.callout-tip title="Concept — why sharing is hard, and how PhyloTrace solves it"}
+Two databases can only be combined if they agree on what "the same allele" means.
+They cannot rely on allele *numbers*: each database numbered its alleles in the
+order it happened to encounter them, so allele 5 of a given locus in one file is
+almost never allele 5 in another.
+
+PhyloTrace sidesteps this entirely by identifying every allele by a fingerprint
+of its DNA sequence (@sec-concepts-hashing). A merge never trusts an incoming
+number — it matches alleles by content and assigns fresh local numbers only to
+sequences your database has genuinely never seen. This is why a merge is safe
+even between databases that have never met.
+:::
+
+## What can be shared {#sec-interop-what}
+
+| You receive | What you can do with it |
+|---|---|
+| A **PhyloTrace database** built from the same scheme | Merge it into yours — the isolates become full members of your database |
+| A **PhyloTrace database** built from a different scheme | Open it on its own; it cannot be merged |
+| A **profile table** (allele identifiers, no sequences) | Stage it for distance comparison only (@sec-interop-staging) |
+
+## Merging a colleague's database {#sec-interop-import}
+
+The **Import** panel merges another PhyloTrace database into the one you have
+open.
+
+### The compatibility check {#sec-interop-compat}
+
+Before a merge is offered at all, PhyloTrace checks that both databases were
+built from the **same scheme**: same organism, same scheme identity, same set of
+loci — and, the strongest test, the **same reference genome**.
+
+::: {.callout-important title="Why the reference genome is checked too"}
+Two schemes can use the same locus names and still be incompatible, because the
+loci were defined against different reference genomes. Comparing locus names
+alone would let such a pair merge and produce silently meaningless distances.
+PhyloTrace therefore compares the reference alleles themselves, which is a direct
+test of whether the two files really are measuring the same thing.
+
+If the check fails, the merge is simply not offered. This is not something to
+work around — the two datasets are not comparable.
+:::
+
+### Resolving collisions {#sec-interop-collisions}
+
+Once the databases are known to be compatible, every incoming isolate is
+classified:
+
+- **Novel** — not present in your database; imported straightforwardly.
+- **Duplicate** — the same isolate you already have.
+- **Clash** — a different isolate that happens to carry a name you already use.
+
+You then decide, per isolate, whether to **import**, **skip** or **rename** it —
+PhyloTrace suggests a free name for the rename case. A preview reports exactly
+what the merge would do, in counts, **before anything is written**.
+
+Custom variables from the incoming database are adopted only where you say so and
+where the declared types are compatible with your own.
+
+::: {.callout-important title="A merge cannot corrupt your database"}
+Nothing is written to your live database during a merge. The work happens on a
+copy, in a single transaction, and the copy takes the place of the original only
+after it has completed cleanly. Your original file is kept alongside it as a
+timestamped backup, so a merge is always reversible.
+
+When the merge finishes, PhyloTrace offers to reload the database so every panel
+picks up the new isolates.
+:::
+
+```{mermaid}
+%%| label: fig-import
+%%| fig-cap: "Importing a peer database. Nothing touches your live file until the merge has completed successfully, and the original is kept as a timestamped backup."
+flowchart TD
+  A["Colleague's database"] --> G{"Same scheme?"}
+  G -- no --> X["Merge not offered"]
+  G -- yes --> C["Classify each isolate:<br/>novel · duplicate · clash"]
+  C --> P["Preview: what would happen<br/><i>nothing written yet</i>"]
+  P --> R["You decide per isolate:<br/>import · skip · rename"]
+  R --> M["Merge on a copy"]
+  M --> S["Copy takes the place<br/>of your database"]
+  S --> B["Original kept as<br/>a timestamped backup"]
+```
+
+## Where each isolate came from {#sec-interop-sources}
+
+After a merge, isolates keep a record of their origin — locally typed, or
+imported from a named partner. Those labels are stable: repeated imports from the
+same partner keep the same label even if they rename their file, and two
+different partners who happen to use the same filename are given distinguishable
+labels. Because origin is an ordinary field, you can colour, stratify and filter
+by it like any other (@sec-visualization) — which is exactly what you want when
+you are asking whether a cluster spans two labs.
+
+## Exporting a subset {#sec-interop-export}
+
+The **Export** panel writes a **new** database containing a chosen set of
+isolates and a chosen set of metadata columns — for a colleague to import, or as
+a trimmed working copy. A preview reports the isolate, allele and locus counts
+before anything is written. Result tables such as classical MLST and AMR are
+included when they exist and you select them.
+
+::: {.callout-important title="Columns you withhold are never written"}
+The exported file is **built fresh**, not copied and then pruned. Isolates you did
+not select and metadata columns you withheld are never written to the output at
+any point, not even temporarily. That matters, because the reason for choosing
+columns is usually that some of them are confidential.
+:::
+
+The exported file is a complete, standalone PhyloTrace database: the recipient
+opens it like any other, and it can equally be used directly by the underlying
+typing toolchain.
+
+## Staging: profiles for comparison only {#sec-interop-staging}
+
+Sometimes a partner sends a **profile table** — allele identifiers, without the
+underlying sequences. PhyloTrace can use these, but only in a limited way.
+
+::: {.callout-important title="Staged isolates can be compared, not typed against"}
+Allelic distance only asks whether two alleles are the *same*, not what they
+are, so isolates known by identifier alone can legitimately take part in a
+distance matrix, an MST or a tree. But they cannot become full members of your
+database: without the DNA behind each call, they cannot contribute alleles, be
+re-typed, or be exported as a typing database.
+
+PhyloTrace therefore keeps them separate from your typed isolates. They appear in
+distance-based plots and nowhere else — not in the AMR views, which need a screen
+that was never run on them (@sec-amr-heatmap).
+:::
+
+Whether a partner's identifiers can be used at all depends on what they are.
+Content fingerprints are universal and work immediately. Plain numbers are
+meaningful only within the database that assigned them, so PhyloTrace checks
+whether they can be anchored to alleles in your file and flags them when they
+cannot. Profile tables from other tools are also accepted, with common
+conventions — such as chewBBACA's markers for novel alleles — recognised on the
+way in.
+
+## Chapter summary
+
+- Allele identity travels as a content fingerprint, so databases that have never
+  met can still be merged safely; allele numbers never travel.
+- A merge is offered only between databases built from the same scheme, verified
+  down to the reference genome.
+- Collisions are previewed and resolved per isolate; the merge runs on a copy and
+  leaves your original as a timestamped backup.
+- Export builds a new database containing only the isolates and columns you
+  select — withheld data is never written.
+- Profile tables from partners can be staged for distance comparison but never
+  become typed isolates.
+
+Part IV turns to what all this data is for: the plots.

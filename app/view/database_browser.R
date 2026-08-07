@@ -381,6 +381,14 @@ server <- function(
     baseline_key <- NULL
     baseline_isolates <- character(0)
 
+    # All picker choice values (raw column names plus AMR group tokens) the
+    # column picker has ever offered, tracked outside the reactive graph for
+    # the same reason as baseline_isolates above: col_picker_ui reruns on
+    # every metadata_base() refresh and needs to tell a genuinely new field -
+    # which should get the normal start-visible/start-hidden default - apart
+    # from one the user deliberately hid. Written and read only there.
+    col_picker_seen <- character(0)
+
     session_added <- reactive({
       df <- metadata_base()
       path <- db_path()
@@ -596,6 +604,23 @@ server <- function(
     })
 
     output$col_picker_ui <- renderUI({
+      # This output reruns on every metadata_base() refresh - including a
+      # Discard, which bumps reload_token() precisely to catch this grid up
+      # with the database (see the discard observer) - and virtualSelectInput
+      # has no incremental "choices changed" path through renderUI: each
+      # rerun re-sends the widget's full markup, which the browser treats as
+      # a fresh element and re-initializes to whatever `selected=` says here.
+      # Anchoring on the field's *current* picker value rather than always
+      # falling back to the fixed default is what keeps a Discard from also
+      # wiping out the user's field visibility choices. isolate(): reading
+      # input$col_picker must not itself become a dependency of this output -
+      # col_picker has updateOn = "close" so it usually only changes when the
+      # dropdown closes anyway, but making the read reactive would still wire
+      # this renderUI to rerun (and rebuild the whole widget, closing it) on
+      # every value it sends - exactly the bug this caused on remove_picker,
+      # which has no updateOn and so updates live on every click.
+      prev_selected <- isolate(input$col_picker)
+
       cols <- optional_cols()
       mlst <- mlst_cols()
       amr <- amr_cols()
@@ -651,8 +676,24 @@ server <- function(
         # Derived MLST / AMR columns start hidden - the user opts into the
         # category to show them. Custom variables, being the user's own data,
         # start visible. Keep this consistent with the DT's initial column
-        # visibility.
-        selected = setdiff(cols, c(mlst, amr)),
+        # visibility. That default only applies the first time this renders
+        # (prev_selected is NULL then) and to any field appearing for the
+        # first time on a later rerun (a new custom variable, say); every
+        # other field keeps whatever the user had picked, dropping only
+        # choices that stopped existing (see prev_selected above).
+        selected = {
+          all_values <- unlist(choices, use.names = FALSE)
+          default_visible <- setdiff(cols, c(mlst, amr))
+          sel <- if (is.null(prev_selected)) {
+            default_visible
+          } else {
+            kept <- intersect(prev_selected, all_values)
+            new_fields <- setdiff(all_values, col_picker_seen)
+            union(kept, intersect(new_fields, default_visible))
+          }
+          col_picker_seen <<- all_values
+          sel
+        },
         multiple = TRUE,
         search = TRUE,
         searchPlaceholderText = "Search fields ...",
@@ -679,6 +720,16 @@ server <- function(
     })
 
     output$remove_picker_ui <- renderUI({
+      # Reruns on every metadata_base() refresh, including a Discard - see
+      # the matching comment on col_picker_ui above for why that means this
+      # widget gets fully re-initialized in the browser, and why `selected=`
+      # has to be seeded from the picker's own current value rather than a
+      # fixed default. isolate(): remove_picker has no updateOn = "close", so
+      # input$remove_picker updates live on every click - reading it
+      # reactively here would rerun (and so rebuild and close) this widget on
+      # every single click, making multi-select impossible.
+      prev_selected <- isolate(input$remove_picker)
+
       df <- metadata_base()
       choices <- if (!is.null(df)) df$isolate else character(0)
       # virtualSelectInput rather than pickerInput, same as col_picker above:
@@ -689,7 +740,7 @@ server <- function(
         ns("remove_picker"),
         label = NULL,
         choices = choices,
-        selected = NULL,
+        selected = intersect(prev_selected, choices),
         multiple = TRUE,
         search = TRUE,
         searchPlaceholderText = "Search isolates ...",
@@ -1332,6 +1383,20 @@ server <- function(
         title = "Remove isolates",
         div(
           class = "custom-modal",
+          # Removing reloads the grid from the database (see confirm_remove),
+          # which - unlike a save or an explicit discard - wipes any edit still
+          # sitting unsaved in it. Warn here rather than after the fact, the
+          # same way main.R warns before "Reload Database".
+          if (isTRUE(State$pending)) {
+            div(
+              class = "alert alert-warning p-2 mb-2 small",
+              icon("triangle-exclamation"),
+              " ",
+              tags$strong("Unsaved edits will be lost."),
+              " Removing isolates reloads this table from the database;",
+              " save or discard your changes first if you want to keep them."
+            )
+          },
           if (length(isolates) == 1) {
             div(
               div('Permanently remove'),

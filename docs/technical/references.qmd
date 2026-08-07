@@ -1,0 +1,7 @@
+# References {.unnumbered}
+
+The bibliography below is generated from `references.bib`. Every `@key` citation
+in this book links here, and each entry links back to the citing passages.
+
+::: {#refs}
+:::

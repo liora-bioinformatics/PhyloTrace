@@ -1,0 +1,81 @@
+# Module Reference {#sec-appendix-modules}
+
+A one-line description of every application module. Logic modules
+(`app/logic/`) are Shiny-free; view modules (`app/view/`) are Shiny modules with
+`ui`/`server` (@sec-arch-modules).
+
+## `app/logic` — application logic
+
+| Module | Purpose | Chapter |
+|---|---|---|
+| `app_meta.R` | Single source of the application version (`APP_VERSION`) | @sec-architecture |
+| `paths.R` | Local-share directory and `state.json` loading | @sec-install |
+| `logging.R` | Session log sink; structured event logging | @sec-install |
+| `db_connect.R` | The one connection opener; arms the busy timeout | @sec-database |
+| `db_events.R` | Per-domain revision bus (writers bump, readers depend) | @sec-architecture |
+| `db_store.R` | The single shared reactive read of the `metadata` table | @sec-architecture |
+| `database_functions.R` | Schema migration, metadata sync, MLST/AMR pivots, deletes | @sec-database |
+| `db_sources.R` | Stable source labels for imported peers (`phylotrace_sources`) | @sec-tech-interop |
+| `provenance.R` | Per-isolate `typing_provenance` row | @sec-tech-typing |
+| `genome_hash.R` | Assembly content digest; duplicate classification | @sec-tech-typing |
+| `pymlst.R` | pyMLST toolchain wrapper (download, type, parse, store) | @sec-tech-typing |
+| `mlst_repo.R` | Deterministic classical-MLST scheme resolution | @sec-tech-typing |
+| `amr.R` | AMR screening via abritamr/AMRFinderPlus; two AMR tables | @sec-tech-amr |
+| `scheme_browser.R` | Species metadata, scheme identity, download orchestration | @sec-tech-schemes |
+| `schemes.R` | Catalogue of supported schemes | @sec-tech-schemes |
+| `profile_io.R` | Read/write cgMLST profile tables; export bundles | @sec-tech-interop |
+| `db_compat.R` | Read-only compatibility gate for a merge | @sec-tech-interop |
+| `db_import.R` | Content-mapped merge on a copy; atomic swap; backups | @sec-tech-interop |
+| `db_export.R` | Fresh-built subset export | @sec-tech-interop |
+| `db_staging.R` | `imported_*` staging for distance-only peer profiles | @sec-tech-interop |
+| `custom_fields.R` | User-defined typed variables (`phylotrace_custom_*`) | @sec-tech-browser |
+| `field_types.R` | Column type lookup (fixed/derived/custom) | @sec-tech-browser |
+| `field_profile.R` | Column cardinality/coverage profiling for mapping | @sec-tech-visualization |
+| `field_labels.R` | Display labels for arbitrary/imported metadata columns | @sec-database |
+| `analysis_store.R` | Dashboard persistence (`phylotrace_analyses`/`_plots`) | @sec-tech-dashboard |
+| `phylo.R` | Distance matrix, MST graph, NJ/UPGMA trees | @sec-tech-engines-mst, @sec-tech-engines-tree |
+| `mst_plot.R` | MST drawing (layout, clustering, nodes) → visNetwork | @sec-tech-engines-mst |
+| `tree_plot.R` | Tree rendering (layout, axis, annotation) → ggtree | @sec-tech-engines-tree |
+| `epi_plot.R` | Epidemic-curve binning and construction | @sec-tech-engines-epi |
+| `amr_plot.R` | AMR matrix reshaping and heatmap/bar building | @sec-tech-engines-amr |
+| `mapping_engine.R` | Picks aesthetic + palette from a variable's profile | @sec-tech-visualization |
+| `viz_helpers.R` | Shared namespace-agnostic UI helpers; reset checklist | @sec-tech-visualization |
+| `viz_export.R` | Shared plot export (ggplot re-render vs widget capture) | @sec-tech-visualization |
+| `functions.R` | Small shared UI helpers (`sidebar_menu`, `stat_tile`, …) | @sec-architecture |
+
+## `app/view` — Shiny modules
+
+| Module | Panel / role | Chapter |
+|---|---|---|
+| `main.R` | Root module: navbar, dynamic panels, signal bus | @sec-architecture |
+| `landing_page.R` | Load or create a database | @sec-architecture |
+| `scheme_browser.R` | Download cgMLST schemes | @sec-tech-schemes |
+| `typing.R` | Add Isolates (typing UI) | @sec-tech-typing |
+| `database.R` | Database menu coordinator (5 panels) | @sec-tech-browser |
+| `database_browser.R` | Browse Entries (edit, delete, distance matrix) | @sec-tech-browser |
+| `database_custom.R` | Custom Variables | @sec-tech-browser |
+| `database_cgmlst.R` | cgMLST Overview (Scheme + Loci info) | @sec-tech-schemes |
+| `database_import.R` | Import panel | @sec-tech-interop |
+| `database_export.R` | Export panel | @sec-tech-interop |
+| `visualization.R` | Plot workspace coordinator (tab registry) | @sec-tech-visualization |
+| `visualization_plot.R` | One plot tab (sidebar + one engine) | @sec-tech-visualization |
+| `visualization_mst.R` | MST engine (visNetwork) | @sec-tech-engines-mst |
+| `visualization_tree.R` | Tree engine (ggtree; NJ/UPGMA picker) | @sec-tech-engines-tree |
+| `visualization_epi.R` | Epidemic-curve engine | @sec-tech-engines-epi |
+| `visualization_map.R` | Map engine (leaflet; four modes) | @sec-tech-engines-map |
+| `visualization_amr.R` | AMR heatmap engine | @sec-tech-engines-amr |
+| `analysis_dashboard.R` | Dashboard (Tier 3) | @sec-tech-dashboard |
+| `analysis_dashboard/group.R` | One Analysis (Tier 2) | @sec-tech-dashboard |
+| `analysis_dashboard/item.R` | One saved Plot (Tier 1) | @sec-tech-dashboard |
+
+## Module dependency graph
+
+The `box::use` graph fans out from `main.R` to the six top-level view modules
+(@fig-module-tree), each pulling the `app/logic` modules it needs. The
+load-bearing shared logic modules — imported by many views — are
+`db_connect`, `db_events`, `db_store`, `database_functions`, `field_*`,
+`phylo`, `viz_helpers`, `viz_export` and `functions`. The `logic`→`logic`
+edges form a shallow tree (for example
+`phylo.R` uses `db_connect` and `db_staging`; `db_import` uses `db_compat`,
+`custom_fields`, `profile_io`), with no `view` module imported by a `logic`
+module — the dependency direction is always view → logic.

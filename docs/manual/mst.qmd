@@ -1,0 +1,116 @@
+# Minimum Spanning Trees {#sec-mst}
+
+The minimum spanning tree is PhyloTrace's principal network representation of
+isolate relatedness and, for allelic-profile data, the standard representation
+for outbreak analysis (@sec-concepts-mst). This chapter covers how to read one,
+what each control does, and the choices that determine whether the picture you
+get is a fair summary of the data.
+
+## Reading an MST {#sec-mst-read}
+
+Each **node** is a set of isolates that are indistinguishable from one another;
+each **edge** joins the two closest nodes not already connected, and carries the
+allelic distance between them. Together they form the most economical set of
+links that still connects everything.
+
+::: {.callout-important title="A node is a set of isolates, not always one isolate"}
+Isolates that are **zero alleles apart** are drawn as a single node — and this is
+transitive, so a chain of identical profiles collapses into one dot. The node is
+drawn larger to show how many isolates it stands for (its area, not its width, is
+proportional to the count), and hovering over it lists the members.
+
+This matters when you read cluster sizes: a small MST with five nodes may
+represent fifty isolates. When a variable is mapped onto colour, a multi-isolate
+node is drawn as a **pie**, so a node containing isolates from three wards shows
+all three rather than picking one.
+:::
+
+## Generating the tree {#sec-mst-generate}
+
+Building an MST requires comparing every pair of isolates, so it runs on
+**Generate** (@sec-viz-generate). Two settings feed that computation and
+therefore require a new Generate when changed:
+
+- **The isolate selection** — which isolates are in the plot.
+- **NA handling** — how missing allele calls are treated when computing distances
+  (@sec-concepts-distance). This choice matters: with patchy assemblies, "ignore
+  missing" and "omit loci" can give visibly different pictures. The same policy
+  feeds the tree view, so the two always agree.
+
+Everything else — colour, labels, node size, layout, clustering — redraws
+instantly.
+
+## Layout and edge length {#sec-mst-layout}
+
+::: {.callout-important title="Positions are computed, not simulated"}
+Node positions are calculated deterministically rather than settled by a physics
+simulation in the browser. This matters for more than speed: in a spring-and-
+repulsion layout the drawn distance between two isolates is a compromise between
+their real distance and the crowding around them, so the picture is not a
+faithful rendering of the data. Deterministic positions also mean the same
+selection produces the same layout every time, so a figure you export today
+matches the one you exported last week.
+:::
+
+Edge *length* on screen is a deliberate transform of allelic distance rather than
+a raw proportion. Perfect proportionality fails in practice: a collection with
+one distant outlier at 3,000 alleles would compress everything else into a single
+point. PhyloTrace holds the typical edge at a legible length and uses
+proportional lengths only while the longest edge stays within a readable ratio.
+**Read the numbers on the edges, not the pixels between the nodes.**
+
+## Clustering {#sec-mst-cluster}
+
+Nodes within a chosen allelic distance of each other can be grouped into
+clusters, drawn either as shaded blobs around the members or collapsed into a
+single node per cluster.
+
+::: {.callout-important title="The default threshold comes from the scheme"}
+The cluster threshold defaults to the **cluster distance published with your
+scheme**, where the repository provides one. That is what makes the clusters you
+call comparable with standard cluster nomenclatures rather than being a number
+you invented.
+
+You can of course change it — a different threshold is a legitimate analytical
+choice — but if you report clusters, report the threshold you used with them.
+:::
+
+## Colouring and labelling {#sec-mst-colour}
+
+Node fill is the MST's mapping channel: pick a variable and PhyloTrace chooses a
+palette that can represent it (@sec-viz-mapping). Categorical variables become
+discrete colours, with multi-isolate nodes drawn as pies; continuous variables
+become a gradient.
+
+Node labels show a few member isolates and then "+N more" when a node holds many,
+so labels stay readable on dense graphs; the hover tooltip gives the full
+membership.
+
+## Export {#sec-mst-export}
+
+The MST is drawn in the browser, so it exports as a high-resolution raster or as
+**self-contained interactive HTML** — a single file a colleague can open, pan,
+zoom and hover in without PhyloTrace. The raster export is a genuine re-render at
+the larger size rather than a screenshot (@sec-viz-export).
+
+::: {.callout-tip title="Concept — the MST is a summary, not a proven history"}
+An MST shows *one* cheapest way to connect the isolates. When several links are
+tied — which is common — the choice among them is arbitrary, and the MST cannot
+represent reticulation (a bacterium's history is not always tree-shaped). It is
+an accurate summary of pairwise closeness, useful for identifying clusters and
+plausible transmission chains, but it is not a proven genealogy.
+:::
+
+## Chapter summary
+
+- Nodes are sets of zero-distance isolates, sized by membership and drawn as pies
+  when coloured; edges carry allelic distances.
+- The isolate selection and the NA-handling policy require a Generate; everything
+  visual redraws instantly.
+- Positions are deterministic, and edge length is a legible transform of distance
+  — read the edge numbers, not the pixel gaps.
+- Clustering defaults to the threshold published with your scheme; report the
+  threshold alongside any clusters you call.
+- Export is a genuine high-resolution redraw, or interactive HTML.
+
+The same distances, drawn as a branching genealogy, are @sec-trees.

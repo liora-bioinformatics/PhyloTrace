@@ -1,0 +1,141 @@
+# The Visualization Workspace {#sec-visualization}
+
+The Visualization tab is a workspace, not a single plot. It lets several plots —
+including several of the same kind — live side by side, each with its own
+controls, its own isolate selection and its own Save target. This chapter covers
+what every plot has in common: how tabs work, when a plot recomputes, how a
+variable becomes a colour, and how to get a publication-quality figure out. The
+five plot types themselves are @sec-mst, @sec-trees, @sec-epicurve, @sec-map and
+@sec-amr-heatmap.
+
+## Plot tabs {#sec-viz-tabs}
+
+The workspace has a permanent **New plot** tab carrying the creator form, plus
+one tab per plot you have made. Each plot tab is fully independent: its own
+setup sidebar, its own isolate selection, its own settings.
+
+::: {.callout-important title="A tab's plot type is fixed when you create it"}
+The plot type is chosen on the New-plot form and cannot be changed afterwards —
+it determines which controls the sidebar offers. To look at the same isolates a
+different way, create a second tab. That is the intended workflow, not a
+limitation: having the MST and the tree of one selection open side by side is
+usually more useful than switching one view back and forth.
+:::
+
+Because tabs are independent, running the same plot type twice with different
+settings is the normal way to compare — an MST coloured by ward next to the same
+MST coloured by source, both live.
+
+## Choosing which isolates to plot {#sec-viz-selection}
+
+Every plot works on a selection of isolates you make in its sidebar. The
+selection is per tab, so narrowing one plot to a suspected cluster leaves the
+others untouched.
+
+Isolates staged from a partner's profile table (@sec-interop-staging) are offered
+alongside your own for the distance-based plot types, and not for the others.
+
+## When a plot recomputes {#sec-viz-generate}
+
+Plot types split into two groups by cost:
+
+- **Distance-based** (MST, Tree) — comparing every pair of isolates is the
+  expensive part, so it happens only when you press **Generate**. After that,
+  changing colours, labels, layout or clustering redraws instantly without
+  recomputing anything. Change the isolate selection or the NA handling and you
+  need to Generate again.
+- **The rest** (Epi curve, Map, AMR heatmap) — no pairwise comparison is
+  involved, so controls take effect live.
+
+::: {.callout-important title="What Generate covers, and what it does not"}
+Generate is about the *data* behind a plot, not its appearance. Anything that
+changes which numbers are being drawn — the isolate selection, the NA-handling
+policy, the tree algorithm — needs a Generate. Anything that changes how those
+numbers look — colour, labels, node size, layout, cluster threshold — does not.
+:::
+
+## Mapping variables onto plots {#sec-viz-mapping}
+
+The point of the visualizations is to lay metadata over relatedness: colour an
+MST by ward, an epi curve by source, a tree by outbreak. Rather than asking you
+to assign each visual channel by hand, PhyloTrace asks you which **variable** you
+want to show and works out how to show it.
+
+::: {.callout-tip title="Concept — why the app picks the visual channel for you"}
+Some mappings simply cannot work, and the failures are silent ones. A variable
+with 46 levels sent to a colour palette that holds nine draws nine categories in
+colour and the rest in grey. A variable with more than a handful of levels sent
+to *shape* loses the surplus categories from the plot entirely. In both cases the
+plot still looks fine — it is just wrong.
+
+PhyloTrace instead looks at the variable itself: how many distinct values it has,
+how completely it is filled in, and whether it is categorical or continuous. From
+that it chooses a channel that can actually represent it, and a palette sized to
+the number of categories. You choose *what* to show; the app takes
+responsibility for showing it legibly.
+:::
+
+What the channels are depends on the plot:
+
+| Plot type | Channels a variable can be drawn onto |
+|---|---|
+| **Tree** | Tip-label colour, tip-point colour, tip-point shape, tile strips beside the tree |
+| **MST** | Node fill — including a pie chart when a node stands for several isolates |
+| **Epi curve** | Stratification and fill colour of the bars |
+| **Map** | Marker colour, or the segments of a per-location mini-chart |
+| **AMR heatmap** | Row annotations beside the matrix |
+
+Any field can be used: standard metadata, classical MLST results, AMR findings,
+the isolate's origin, or a custom variable of your own (@sec-browser).
+
+## Exporting a plot {#sec-viz-export}
+
+Every plot has an **Export Plot** panel offering a choice of format, physical
+size and resolution.
+
+| Plot type | Raster (PNG/JPEG) | Vector (PDF/SVG) | Interactive HTML |
+|---|---|---|---|
+| Tree, Epi curve, AMR heatmap | ✓ | ✓ | — |
+| MST, Map | ✓ | — | ✓ |
+
+::: {.callout-important title="An export is a genuine re-render, not a screenshot"}
+Whatever you export is drawn again at the size and resolution you ask for — it is
+never a capture of what is on your screen. For the tree, epi curve and heatmap
+that means a vector PDF or SVG has no resolution to lose at all, and a raster is
+drawn at the DPI you request. For the MST and the map, the plot is redrawn in the
+browser at the larger size before the image is handed back, so a 4× export really
+does carry four times the linear detail.
+
+This is what makes the figures usable in a publication straight out of the app,
+and it is why the export dialogue asks for physical size and DPI rather than
+pixels.
+:::
+
+For the MST and the map, the **self-contained interactive HTML** option is the
+lossless one: a single file a colleague can open in any browser and pan, zoom and
+hover in, with no PhyloTrace installation needed.
+
+## Saving a plot {#sec-viz-save}
+
+Any plot can be saved into an **Analysis** — a named container in your database
+(@sec-dashboard). Saving stores the full set of settings behind the plot along
+with a thumbnail, so reopening it later restores exactly the figure you saved,
+not an approximation of it. Because Analyses live inside the database file, saved
+work travels with the data when it is shared (@sec-data).
+
+## Chapter summary
+
+- Visualization is a workspace of independent plot tabs; a tab's plot type is
+  fixed when it is created.
+- Isolate selection is per tab; staged partner profiles are available to the
+  distance-based plot types only.
+- MST and Tree recompute on **Generate**; the other three respond to controls
+  live. Generate covers data changes, not appearance changes.
+- You pick the variable to show and the app picks a legible channel and palette
+  for it.
+- Exports are genuine re-renders at the requested size and resolution; MST and
+  Map also export as interactive HTML.
+- Saving a plot into an Analysis stores its full settings inside the database.
+
+The next five chapters take each plot type in turn, beginning with the minimum
+spanning tree.

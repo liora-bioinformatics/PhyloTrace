@@ -58,6 +58,18 @@ html.pt-busy-visible .pt-shield {
     cursor: wait;
 }
 
+// Typing "first render" nav lock -----------------------------------------------
+// Engaged by app/js/typing-nav-lock.js for the brief window between starting a
+// typing run and the Results table's first paint - switching tabs away before
+// that first paint lands can leave the table stuck showing no rows even once
+// the run finishes and the tab is revisited. Scoped to the tab bar only (not a
+// full-page shield like .pt-shield above): everything else on the page,
+// Terminate included, stays interactive through this window.
+#tabs.pt-nav-locked .nav-link {
+    pointer-events: none;
+    cursor: wait;
+}
+
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
 
 @keyframes waiter-fade-in {
@@ -2704,12 +2716,12 @@ table.dataTable thead>tr>th.sorting {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 1.35rem;
-        height: 1.35rem;
+        width: 16px;
+        height: 16px;
         border-radius: 50%;
         background: var(--bs-secondary-bg);
         color: var(--bs-secondary-color);
-        font-size: 0.75rem;
+        font-size: 0.7em;
         font-weight: 600;
         line-height: 1;
     }
@@ -3837,16 +3849,23 @@ label {
     margin: 1.75rem auto;
 }
 
-.export-modal .modal-body > * + * {
+.export-modal .modal-body>*+* {
     margin-top: 1rem;
 }
 
-// Each preset choice is a name plus a one-line description; shinyWidgets'
-// default radio spacing (a hardcoded few px between choices) is tuned for
-// single-line labels and crowds the two lines together without this.
-.export-modal .shiny-options-group .pretty {
-    margin-bottom: 0.5rem;
-    align-items: flex-start;
+// Each preset choice is a name plus a one-line description. Bootstrap's
+// vertical button group joins its buttons edge-to-edge with shared borders
+// and centred text, both tuned for short, single-line, unrelated actions —
+// wrong for a stack of two-line descriptions that read as one list. A small
+// gap and its own rounded corners per button turn the group into a stack of
+// separate, left-aligned cards instead.
+.export-modal .btn-group-vertical.btn-group-container-sw {
+    gap: 0.5rem;
+}
+
+.export-modal .btn-group-vertical.btn-group-container-sw .btn {
+    border-radius: var(--bs-border-radius) !important;
+    text-align: left;
 }
 
 // Isolate-preselection modal: sized to use most of the viewport (the metadata

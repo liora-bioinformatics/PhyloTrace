@@ -1,0 +1,109 @@
+# Epidemiological Curves {#sec-epicurve}
+
+The epidemic curve is the oldest tool in outbreak investigation and the one plot
+type here that uses no genetics at all: it counts cases over time. This chapter
+covers how PhyloTrace bins dates, what the derived series show, how to stratify a
+curve, and the playback feature. The concept is in @sec-concepts-epi.
+
+## Dates, not distances {#sec-epi-nodist}
+
+The epi curve reads each isolate's collection date from its metadata and counts
+cases per interval. No pairwise comparison is involved, so — unlike the MST and
+the tree — every control takes effect **live**, with no Generate step
+(@sec-viz-generate). It uses your own typed isolates; staged partner profiles
+(@sec-interop-staging) carry no metadata dates and do not appear.
+
+::: {.callout-important title="Undated isolates are dropped, and the count is reported"}
+An isolate with a missing or unreadable collection date cannot be placed on a
+time axis, so it is left out of the curve — and PhyloTrace tells you how many
+were dropped. Treat a large dropped count as a data-quality signal: a curve built
+from half your collection is not the epidemic curve of your outbreak.
+:::
+
+## Binning and the shape of the curve {#sec-epi-build}
+
+Cases are grouped into intervals — day, week, month and so on. PhyloTrace picks
+the finest interval that keeps the number of bars readable, and you can override
+it. Weeks follow the ISO-8601 convention, starting on Monday.
+
+::: {.callout-important title="The conventions that keep the curve honest"}
+Two drawing rules follow standard epi-curve practice and matter for
+interpretation:
+
+- **The vertical axis counts whole cases**, so it carries only integer ticks. A
+  curve never suggests half a case.
+- **Every bar is exactly one interval wide**, and bars touch. That means a gap in
+  the curve is a **genuine gap in the data** — an interval with no cases — and
+  never a drawing artefact.
+
+Changing the interval changes the shape of the curve, sometimes considerably. A
+daily curve of a slow outbreak looks like scattered noise; a monthly curve of a
+point-source outbreak hides the sharp peak that identifies it. Try more than one
+interval before concluding anything about shape.
+:::
+
+## Cumulative view and moving average {#sec-epi-derived}
+
+Two derived series can be laid over or shown instead of the bars:
+
+- **Cumulative** — the running total of cases, useful for judging whether an
+  outbreak is still growing.
+- **Moving average** — a smoothed trend line over the bars, labelled with its
+  window (for example "7-day moving average"). Intervals with no cases are
+  counted as zero rather than skipped, so the average is not inflated by gaps.
+
+## Stratifying and colouring {#sec-epi-strata}
+
+Cases can be split and coloured by any metadata field or custom variable — by
+source, by ward, by isolate origin, by sequence type. Combining two variables
+produces composite strata.
+
+::: {.callout-important title="Palettes are sized to the number of groups"}
+PhyloTrace offers only palettes that can actually represent the number of groups
+you have, and interpolates where a request exceeds a palette's native size. A
+12-group stratification therefore never silently drops groups into an
+undifferentiated grey — the failure mode that makes a stratified curve look fine
+while omitting half its categories (@sec-viz-mapping).
+:::
+
+Labelled points and periods can be annotated onto the curve — an index case, an
+intervention date, a closure period. Annotation labels are laid out so they do
+not collide with one another.
+
+## Playback {#sec-epi-playback}
+
+The curve can animate its own build-up, revealing one interval at a time. This is
+useful in a briefing: it shows *when* the outbreak was recognisable, and it makes
+the difference between a point-source peak and successive person-to-person waves
+much easier to convey than a static figure does.
+
+```{mermaid}
+%%| label: fig-epi
+%%| fig-cap: "The epi curve counts cases per interval from the collection dates; derived series and stratification layer on top, and all controls take effect live."
+flowchart LR
+  MD["Collection dates<br/>(+ optional stratifying variable)"] --> B["Count cases per interval"]
+  B --> C["Cumulative series"]
+  B --> MA["Moving average"]
+  B --> R["The curve"]
+  C --> R
+  MA --> R
+```
+
+## Export {#sec-epi-export}
+
+The epi curve exports as a **vector PDF or SVG**, or as a raster at the DPI you
+request (@sec-viz-export) — publication quality directly out of the app.
+
+## Chapter summary
+
+- The curve counts cases per interval from collection dates; controls take effect
+  live, with no Generate.
+- Undated isolates are dropped and counted — check that number.
+- Integer axes and one-interval-wide touching bars mean a gap is a real gap;
+  the chosen interval strongly affects the apparent shape.
+- Cumulative and moving-average series are available, and cases can be stratified
+  and annotated.
+- Playback reveals the curve interval by interval; export is vector or high-DPI
+  raster.
+
+Geographic mapping — the other genetics-free plot type — is @sec-map.

@@ -1,0 +1,100 @@
+# Phylogenetic Trees (Neighbour-Joining & UPGMA) {#sec-trees}
+
+The tree view draws the same allelic distances as a branching genealogy rather
+than a network. This chapter covers the choice between the two algorithms, how to
+read the resulting figure, and how to annotate it with metadata. The conceptual
+difference between the algorithms is in @sec-concepts-trees.
+
+## Choosing an algorithm {#sec-trees-algo}
+
+The sidebar offers **Neighbour-Joining** [@saitou1987nj] and **UPGMA**
+[@sokal1958upgma]. Both are built from the same distance matrix the MST uses
+(@sec-mst), so the two views of one dataset never disagree about how far apart
+two isolates are.
+
+| | Neighbour-Joining | UPGMA |
+|---|---|---|
+| Assumes a constant rate of change | No | Yes |
+| Tip alignment | Tips end at different depths | All tips end level (ultrametric) |
+| Best for | Lineages that may be unevenly divergent | Showing nested clustering |
+
+::: {.callout-tip title="Concept — which to use, and what disagreement means"}
+Use **UPGMA** when you want a hierarchical clustering picture and the isolates
+are expected to evolve at similar rates. Use **Neighbour-Joining** when some
+lineages may be more divergent than others and should not be forced level.
+
+If the two trees disagree substantially, that disagreement is itself informative:
+it usually indicates uneven rates of change, in which case the
+Neighbour-Joining tree is the more reliable interpretation.
+:::
+
+Switching algorithm changes the computation, so it requires a **Generate**
+(@sec-viz-generate) — as do the isolate selection and the NA-handling policy.
+
+## Reading the tree {#sec-trees-read}
+
+::: {.callout-important title="Branch lengths are allele differences"}
+Branch lengths are in the raw units of the distance matrix — numbers of differing
+alleles — the same units the MST writes on its edges. A pair reported "3272
+apart" reads identically in both views.
+
+A **distance axis** is drawn to the same scale as the branches, so you can measure
+relatedness off the figure rather than estimating it. Branch lengths are also
+printed as numbers where a branch is wide enough on screen to carry one legibly;
+short branches are left unlabelled to keep the figure readable, not because their
+length is unknown.
+:::
+
+Two layouts are available: **rectangular**, the conventional form, and
+**inward-circular**, which packs large trees into a much smaller area at the cost
+of some readability at the tips. Font sizes, spacing and element scaling adapt
+automatically to the number of tips, so a 12-tip and a 400-tip tree are both
+legible without manual adjustment.
+
+## Annotating with metadata {#sec-trees-annotate}
+
+The tree provides its greatest analytical value when metadata is laid over it.
+It offers four channels, assigned automatically from the variable you pick
+(@sec-viz-mapping):
+
+- **Tip-label colour**
+- **Tip-point colour**
+- **Tip-point shape**
+- **Tile strips** beside the tips
+
+Beyond those, whole **panels** can sit alongside the tree in register with its
+tips — a categorical strip per variable, or an AMR gene matrix — turning the tree
+into a compact figure that pairs relatedness with phenotype in one image. This is
+usually the figure worth putting in a report: the tree shows who is related to
+whom, and the panel beside it shows what that means clinically.
+
+```{mermaid}
+%%| label: fig-tree
+%%| fig-cap: "The tree combines the allelic distances with metadata: the branching structure comes from the profiles, the colours, shapes and side panels from the metadata and custom variables."
+flowchart LR
+  D["Allelic distances<br/>(same as the MST)"] --> B["Neighbour-Joining<br/>or UPGMA"]
+  B --> R["Tree figure"]
+  M["Metadata +<br/>custom variables"] --> A["Tip colour · shape ·<br/>tile strips · panels"]
+  A --> R
+```
+
+## Export {#sec-trees-export}
+
+The tree is drawn on the server, so it exports as a **vector PDF or SVG** — with
+no resolution to lose — or as a raster at whatever DPI you request
+(@sec-viz-export). This is the export route that goes straight into a manuscript.
+
+## Chapter summary
+
+- Neighbour-Joining and UPGMA are built from the same distances as the MST;
+  switching between them requires a Generate.
+- Branch lengths are allele differences, with a distance axis drawn to the same
+  scale; only branches wide enough to be legible carry a printed number.
+- Rectangular and inward-circular layouts are available, and sizing adapts to the
+  tip count.
+- Metadata maps onto tip colour, shape and labels, plus tile strips and adjacent
+  panels including AMR matrices.
+- Export is vector or high-DPI raster — publication quality directly.
+
+Next: the two plot types that need no genetics at all — the epidemic curve
+(@sec-epicurve) and the map (@sec-map).

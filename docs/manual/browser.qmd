@@ -1,0 +1,127 @@
+# Database Browser & Custom Variables {#sec-browser}
+
+The Database Browser is where you read and curate the isolate table: browsing and
+editing metadata, deleting isolates, and — the part that lets PhyloTrace answer
+questions its standard fields cannot — defining variables of your own. This
+chapter covers the **Browse Entries** and **Custom Variables** panels; the other
+three panels of the same menu are covered in @sec-schemes (cgMLST Overview) and
+@sec-interop (Import and Export).
+
+The Database Browser is organised as a sidebar menu with five panels:
+
+| Panel | What it does | Chapter |
+|---|---|---|
+| **Browse Entries** | View, edit and delete isolates | this chapter |
+| **Custom Variables** | Define and fill in your own fields | this chapter |
+| **cgMLST Overview** | Inspect the scheme and its loci | @sec-schemes |
+| **Import** | Merge a colleague's database, or stage their profiles | @sec-interop |
+| **Export** | Write out a chosen subset as a new database | @sec-interop |
+
+## Browse Entries {#sec-browser-browse}
+
+Browse Entries shows one row per isolate. Alongside the standard metadata fields
+you will see, merged in and **read-only**, the columns produced by the app
+itself:
+
+- the classical MLST sequence type and its allele calls (@sec-typing),
+- the AMR findings (@sec-amr),
+- the values of any custom variables you have defined.
+
+Those columns are read-only here because they are owned elsewhere: MLST and AMR
+are results of a typing run, and custom values are edited in the Custom Variables
+panel. The metadata fields are the ones you edit directly, in the grid.
+
+::: {.callout-important title="Saving your edits"}
+Edits in the grid are held until you save them, and they are written as a single
+transaction — either all of the changes land, or none do.
+
+If something changes the database while you have unsaved edits — a typing run
+finishing, an import completing — PhyloTrace marks the view as out of date rather
+than reloading over your work (@sec-app-live). Reloading is the explicit action
+that discards unsaved edits, and you will be asked to confirm first.
+:::
+
+### Deleting isolates {#sec-browser-delete}
+
+Isolates can be removed from the database from this panel. Deletion is
+transactional and asks one question first: whether to **keep or drop the allele
+sequences** the deleted isolates contributed.
+
+::: {.callout-important title="Keep the alleles unless you have a reason not to"}
+Keeping them costs a little space but preserves the allele nomenclature your
+database has built up, so a later re-type of the same or a related isolate lands
+on the same allele identifiers. Dropping them reclaims the space but discards
+sequences that no isolate currently references. When in doubt, keep them.
+:::
+
+## Custom Variables {#sec-browser-custom}
+
+The standard metadata field set follows the GenEpiO vocabulary [@genepio] and
+covers the universals — collection date, place, source and so on. Investigations
+routinely need one more field it does not have: a ward, a sampling site, an
+outbreak identifier, a CT value. The **Custom Variables** panel is where you
+define those and fill them in.
+
+::: {.callout-tip title="Concept — why custom variables matter for outbreak work"}
+PhyloTrace's visualizations derive their explanatory value from *mapping metadata
+onto relatedness*: colouring an MST by ward, an epi curve by source, a map by
+outbreak. The standard fields cover what every investigation has, but every
+investigation also has variables of its own. A custom variable enters the same
+visualization system as any standard field — define "Ward" once, fill it in, and
+it becomes available to colour, shape, stratify and filter by everywhere
+(@sec-visualization).
+:::
+
+Custom Variables is the only place custom values are entered; everywhere else
+they appear read-only, merged into the view alongside the standard fields.
+Filling in values works the same way as Browse Entries: edits sit in the grid
+until you save them, and if the database changes elsewhere while you have
+unsaved edits, PhyloTrace marks the view as out of date rather than discarding
+your work (@sec-app-live).
+
+### Typed variables {#sec-browser-types}
+
+A custom variable is not just a name — it has a **type**, declared when you
+create it, and PhyloTrace enforces it as values are entered:
+
+| Type | What is accepted | How it is stored |
+|---|---|---|
+| **Date** | A calendar date | Normalised to ISO format |
+| **Yes/No** | A boolean | `yes` / `no` |
+| **Number** | A numeric value | As entered |
+| **Category** | One of the levels you declare | The chosen level |
+| **Text** | Free text | As entered |
+
+The type matters beyond data hygiene: it is what the visualization layer reads to
+decide how the variable may be drawn. A categorical variable with a handful of
+levels can be shown as colour *or* shape; one with fifty levels cannot legibly be
+shown as either, and a numeric variable gets a continuous gradient rather than a
+palette of discrete colours (@sec-viz-mapping). Declaring the right type is
+therefore what makes a variable usable in a plot.
+
+::: {.callout-important title="Naming a variable"}
+Variable names follow the same rule as database and isolate names — letters,
+digits, hyphens and underscores (@sec-data-naming) — and cannot collide with an
+existing field. Renaming a variable later is safe and keeps all its values; the
+*type* is the part worth getting right up front.
+:::
+
+Deleting a variable removes its definition and all of its values together, in one
+step. Custom variables live inside the database file, so they travel with it when
+it is shared or exported (@sec-data).
+
+## Chapter summary
+
+- The Database Browser is a five-panel menu; Browse Entries and Custom Variables
+  are covered here.
+- Browse Entries edits metadata values transactionally and shows MLST, AMR and
+  custom columns read-only alongside them; unsaved edits are protected from
+  automatic reloads.
+- Deleting isolates asks whether to keep the allele sequences they contributed —
+  usually you should.
+- Custom Variables are your own typed fields; the declared type governs both
+  validation and how the variable can be mapped in a plot.
+- Custom variables live inside the database file and travel with it.
+
+@sec-interop covers sharing databases between labs; @sec-visualization uses these
+variables to build plots.

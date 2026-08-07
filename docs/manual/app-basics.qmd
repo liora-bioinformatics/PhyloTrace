@@ -1,0 +1,137 @@
+# How PhyloTrace Works {#sec-app-basics}
+
+Before the individual panels, it helps to know a few things about the
+application as a whole: where it runs, what it does and does not send over the
+network, how its screens appear and disappear as you work, and why the tables and
+plots you are looking at keep themselves up to date. Everything in this chapter
+is about behaviour you will notice while using the app.
+
+## A web app that runs on your own machine {#sec-app-local}
+
+PhyloTrace opens in a browser tab, but it is **not a website**. Launching it
+starts a small server on your own computer and points the browser at it. The
+browser draws the buttons, tables and plots; the program behind the tab does the
+work — typing genomes, querying your database, building trees — and sends the
+results back to the tab.
+
+::: {.callout-important title="Nothing leaves your machine unless you send it"}
+The server, your database and the analysis toolchain all run locally, and the
+browser tab talks only to your own computer. Assemblies, isolates and metadata
+never leave the machine unless *you* export or share a database file.
+
+PhyloTrace makes only three kinds of outbound request, and none of them carries
+your data:
+
+- downloading a cgMLST scheme when you create a database (@sec-schemes),
+- looking up the matching classical MLST scheme while typing (@sec-typing),
+- turning place names into map coordinates (@sec-map).
+
+The first two request public reference data; the third sends only a place name.
+:::
+
+Because the tab is just a viewer, closing it does not end your work — but closing
+the application does. Installing and launching PhyloTrace is described in the
+project's `README`.
+
+## The panels, and when they appear {#sec-app-panels}
+
+PhyloTrace does not show all of its screens at once. When it starts, the
+navigation bar carries only two:
+
+| Panel | What it is for |
+|---|---|
+| **Load Database** | Open an existing database, or pick up the one you used last |
+| **Scheme Browser** | Choose a species, review its cgMLST scheme, and download it into a **new** database (@sec-schemes) |
+
+The moment a database is loaded, four more panels appear and the two starting
+panels step aside:
+
+| Panel | What it is for |
+|---|---|
+| **Database Browser** | Browse and edit isolates, define custom variables, inspect the scheme, import and export (@sec-browser, @sec-interop) |
+| **Add Isolates** | Type new assemblies into the open database (@sec-typing) |
+| **Visualization** | Build plots — MSTs, trees, epi curves, maps, AMR heatmaps (@sec-visualization) |
+| **Analysis Dashboard** | Organise and reopen the plots you have saved (@sec-dashboard) |
+
+This is deliberate: every one of those four panels works *on* a database, so none
+of them is offered until there is one open.
+
+```{mermaid}
+%%| label: fig-app-panels
+%%| fig-cap: "The navigation bar changes when a database is loaded: the two starting panels give way to the four workspace panels."
+flowchart LR
+  subgraph START["On startup"]
+    L["Load Database"]
+    S["Scheme Browser"]
+  end
+  START -- "a database is loaded" --> WORK
+  subgraph WORK["Workspace"]
+    DB["Database Browser"]
+    AI["Add Isolates"]
+    VZ["Visualization"]
+    AD["Analysis Dashboard"]
+  end
+  WORK -. "return to the start screen" .-> START
+```
+
+## Everything keeps itself up to date {#sec-app-live}
+
+PhyloTrace behaves like a spreadsheet rather than a document: when something
+changes, everything that depends on it recalculates. Type a batch of isolates and
+the Database Browser, the Visualization sidebars and the Analysis Dashboard all
+see the new isolates without being told to. Import a peer's database and the same
+thing happens. You never have to press a refresh button to make one screen agree
+with another.
+
+::: {.callout-important title="The exception: unsaved edits are never overwritten"}
+Two screens hold an editable grid where *you* are the one changing data: Browse
+Entries (metadata values, @sec-browser-browse) and Custom Variables (the values
+you assign to your own fields, @sec-browser-custom). Both are exceptions to
+automatic refresh — if new data arrives while you have unsaved edits in the grid,
+PhyloTrace marks the view as out of date rather than discarding your work.
+Reloading the database is the explicit action that replaces it, and you will be
+warned first.
+:::
+
+Two further actions are available once a database is open:
+
+- **Reload Database** re-reads the file from disk. Use it after something outside
+  the app has changed the file, or after an import.
+- The **return arrow** in the navigation bar ("Return to the start screen")
+  closes the database and puts you back at Load Database. Nothing is lost —
+  everything you have done is already in the file (@sec-data).
+
+## Working on several things at once {#sec-app-parallel}
+
+Two parts of the app are workspaces rather than single screens:
+
+- **Visualization** holds as many plot tabs as you like, including several of the
+  same kind. Each tab keeps its own controls, its own isolate selection and its
+  own export settings, so you can compare an MST coloured by ward against the
+  same MST coloured by source without rebuilding either (@sec-visualization).
+- **The Analysis Dashboard** groups saved plots into named Analyses, so a
+  finished investigation stays together and can be reopened exactly as you left
+  it (@sec-dashboard).
+
+## While typing runs {#sec-app-typing-parallel}
+
+Typing assemblies is the one genuinely long-running job in PhyloTrace, and it
+runs alongside the rest of the app rather than blocking it. You can keep browsing
+and plotting while it works; screens that read the database will simply wait for
+the moment when new isolates are being written, then show them. Progress and
+per-isolate outcomes are reported live in the Add Isolates panel (@sec-typing).
+
+## Chapter summary
+
+- PhyloTrace is a local application that happens to use a browser tab; your data
+  stays on your machine.
+- The only outbound requests are scheme downloads, classical-MLST scheme lookup
+  and map geocoding — none of them sends your isolates.
+- The four workspace panels appear only once a database is loaded, and disappear
+  again when you return to the start screen.
+- Screens refresh themselves when the data changes; the only exception is the
+  edit grid, which protects unsaved work.
+- Visualization and the Analysis Dashboard are workspaces: many plots, many
+  saved Analyses, all independent.
+
+@sec-data describes the file all of this operates on.
