@@ -127,6 +127,7 @@ content fingerprints so the data stays comparable with other labs
 ```{mermaid}
 %%| label: fig-typing
 %%| fig-cap: "What happens to one assembly. Solid arrows are the order in which steps run; dotted arrows show what each step adds to your database. Steps 1–3 run one after another on the same file — none of them starts the next."
+%%{init: {'flowchart': {'subGraphTitleMargin': {'top': 8, 'bottom': 16}}}}%%
 flowchart TB
   subgraph PREP["Before the run"]
     F["Assembly file<br/>(.fasta / .fa / .fna)"] --> H["Fingerprint the assembly"]
@@ -134,18 +135,21 @@ flowchart TB
     CK --> CC["Resolve and build the<br/>classical MLST reference<br/><i>(once per run)</i>"]
   end
 
-  CC --> S1
+  %% Linked cluster-to-cluster, not node-to-node: an edge aimed at a node
+  %% *inside* a subgraph is drawn straight through the subgraph's title text.
+  %% Targeting the cluster stops the arrow at its boundary instead.
+  PREP --> RUN
 
   subgraph RUN["For each assembly, in order"]
     S1["Step 1 · cgMLST allele calling"]
+    S1 -. adds .-> T1[("Allele profile<br/>+ new allele sequences")]
     S2["Step 2 · Classical MLST search<br/><i>best-effort</i>"]
     S3["Step 3 · AMR screening<br/><i>best-effort</i>"]
     S1 --> S2 --> S3
   end
 
-  S3 --> RB["Results read back<br/>and stored"]
+  RUN --> RB["Results read back<br/>and stored"]
 
-  S1 -. adds .-> T1[("Allele profile<br/>+ new allele sequences")]
   RB -. adds .-> T2[("Sequence type (ST)")]
   RB -. adds .-> T3[("AMR / virulence / stress findings")]
   RB -. adds .-> T4[("Assembly fingerprint")]

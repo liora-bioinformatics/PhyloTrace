@@ -37,6 +37,13 @@ figure.quarto-figure svg {
   --mermaid-fg-color--lightest: #f4f7f8;
   --mermaid-fg-color--lighter: #c7ced0;
   --mermaid-label-fg-color: #{$code-color};
+
+  // Must stay equal to Mermaid's own default `fontFamily`. Mermaid measures
+  // every label in that font to size the box around it, but Quarto's CSS
+  // repoints the *rendered* font at the theme's body face — so labels were
+  // drawn wider than the boxes measured for them and clipped ("Before the ru",
+  // "in ord"). Matching the two is what keeps text inside its node.
+  --mermaid-font-family: "trebuchet ms", verdana, arial, sans-serif;
 }
 
 // UI screenshots get a frame so they read as a captured window rather than
