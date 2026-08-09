@@ -29,14 +29,36 @@ even between databases that have never met.
 
 ## Merging a colleague's database {#sec-interop-import}
 
-The **Import** panel merges another PhyloTrace database into the one you have
-open.
+**Database Browser > Import** merges another PhyloTrace database into the one you
+have open. Its right-hand sidebar is a checklist you work down from the top.
+
+The first control, **Source**, decides what everything below it means:
+
+| Source | What it accepts | What happens |
+|---|---|---|
+| **PhyloTrace database (.db)** | A peer's whole database | A full merge — the isolates become yours (this section) |
+| **Typing results (table)** | A profile table, optionally with sequences and metadata | Staging for distance comparison only (@sec-interop-staging) |
+
+With the database source chosen, **Select database …** opens a file chooser, and
+the main area fills with a pass / warn / fail grid of compatibility checks. The
+remaining sidebar groups — **Metadata fields**, **Custom variables**, **Analysis
+results** — decide what comes across, and **Merge into database** at the bottom
+performs it. It stays disabled until the checks pass.
+
+![The Import panel with a peer database selected: the compatibility checks in the main area, the what-to-carry pickers in the sidebar.](images/ui/import.png){#fig-ui-import}
+
+Metadata fields and custom variables both default to *everything the peer has*,
+so the usual case needs no decisions. The **Analysis results** group offers
+**Classical MLST results** and **AMR results** as checkboxes, and appears only
+for the tables the incoming database actually carries.
 
 ### The compatibility check {#sec-interop-compat}
 
 Before a merge is offered at all, PhyloTrace checks that both databases were
 built from the **same scheme**: same organism, same scheme identity, same set of
-loci — and, the strongest test, the **same reference genome**.
+loci — and, the strongest test, the **same reference genome**. Each check is one
+badge in the grid, so a failure names itself rather than leaving you with a
+button that will not light up.
 
 ::: {.callout-important title="Why the reference genome is checked too"}
 Two schemes can use the same locus names and still be incompatible, because the
@@ -58,12 +80,21 @@ classified:
 - **Duplicate** — the same isolate you already have.
 - **Clash** — a different isolate that happens to carry a name you already use.
 
-You then decide, per isolate, whether to **import**, **skip** or **rename** it —
-PhyloTrace suggests a free name for the rename case. A preview reports exactly
-what the merge would do, in counts, **before anything is written**.
+Novel and duplicate isolates need no attention: they default to *import* and
+*skip* respectively, and are reported only as counts. **Only the clashes get a
+row of their own**, each with a dropdown offering **import**, **skip** or
+**rename**, and a text field pre-filled with a free name — the original with
+`_ext` appended — for the rename case.
 
-Custom variables from the incoming database are adopted only where you say so and
-where the declared types are compatible with your own.
+![A name clash during import. Only the isolates that actually collide need a decision.](images/ui/import-collisions.png){#fig-ui-import-clash}
+
+A preview reports exactly what the merge would do, in counts, **before anything
+is written**.
+
+Custom variables from the incoming database are adopted only where you selected
+them in the sidebar *and* where the declared types are compatible with your own.
+A variable the peer defines with a different type than yours cannot be merged;
+the panel says so by name rather than dropping it silently.
 
 ::: {.callout-important title="A merge cannot corrupt your database"}
 Nothing is written to your live database during a merge. The work happens on a
@@ -71,8 +102,10 @@ copy, in a single transaction, and the copy takes the place of the original only
 after it has completed cleanly. Your original file is kept alongside it as a
 timestamped backup, so a merge is always reversible.
 
-When the merge finishes, PhyloTrace offers to reload the database so every panel
-picks up the new isolates.
+The sidebar's last group, **Rollback**, is where that backup is used: it lists
+the timestamped copies and restores the one you pick. When a merge finishes,
+PhyloTrace also offers a **Reload Database** notification so every panel picks up
+the new isolates.
 :::
 
 ```{mermaid}
@@ -101,11 +134,36 @@ you are asking whether a cluster spans two labs.
 
 ## Exporting a subset {#sec-interop-export}
 
-The **Export** panel writes a **new** database containing a chosen set of
-isolates and a chosen set of metadata columns — for a colleague to import, or as
-a trimmed working copy. A preview reports the isolate, allele and locus counts
-before anything is written. Result tables such as classical MLST and AMR are
-included when they exist and you select them.
+**Database Browser > Export** is Import's mirror image: the same right-hand
+sidebar shape, worked down from the top. **Export type** is again the control
+that decides what everything below it means:
+
+| Export type | Output | For |
+|---|---|---|
+| **PhyloTrace database (.db)** | A complete, standalone database | A colleague to import, or a trimmed working copy |
+| **Typing results (table)** | A profile table, with the sequences optionally alongside | A partner using other tools, or an analysis outside PhyloTrace |
+
+![The Export panel. The summary in the main area reports what the current selection would write, before anything is written.](images/ui/export.png){#fig-ui-export}
+
+The groups below it are:
+
+- **Isolates** and **Metadata** — searchable multi-selects over what to include.
+  Both default to everything, so trimming is opt-in.
+- **Custom variables** — the same, for your own fields.
+- **Sequence data** *(table export only)* — **None**, a **single FASTA**
+  (`>locus|hash`), or **one FASTA per locus** in a zip. This is what turns a bare
+  profile table into something a partner can anchor against their own alleles
+  (@sec-interop-staging).
+- **Table format** *(table export only)* — Excel workbook, tab-separated or
+  comma-separated.
+- **Analysis results** — **Classical MLST results** and **AMR results** as
+  checkboxes.
+- **Destination** — a save dialogue, offering the extension the current settings
+  will actually produce.
+- **Export** — disabled until a destination is set.
+
+The main area shows a live summary of what the current selection would write —
+isolate, allele and locus counts — before anything is written.
 
 ::: {.callout-important title="Columns you withhold are never written"}
 The exported file is **built fresh**, not copied and then pruned. Isolates you did
@@ -114,7 +172,7 @@ any point, not even temporarily. That matters, because the reason for choosing
 columns is usually that some of them are confidential.
 :::
 
-The exported file is a complete, standalone PhyloTrace database: the recipient
+The exported `.db` is a complete, standalone PhyloTrace database: the recipient
 opens it like any other, and it can equally be used directly by the underlying
 typing toolchain.
 
@@ -122,6 +180,21 @@ typing toolchain.
 
 Sometimes a partner sends a **profile table** — allele identifiers, without the
 underlying sequences. PhyloTrace can use these, but only in a limited way.
+
+To bring one in, set **Import > Source** to **Typing results (table)**. Three
+file buttons appear in place of the database chooser:
+
+| Button | Required? | What it takes |
+|---|---|---|
+| **Profile table …** | yes | The allele calls, as `.tsv`, `.csv` or `.xlsx` |
+| **Sequences …** | optional | The matching allele FASTA |
+| **Metadata …** | optional | A metadata table for these isolates |
+
+Below them, **Set name** gives the batch a label — something like
+`partner-lab-2026`. That name is what you will pick the set by later, in a plot's
+**Imported typing results** dropdown (@sec-viz-staged), so make it recognisable.
+The action button reads **Add typing results** rather than *Merge into database*,
+which is the difference in a nutshell.
 
 ::: {.callout-important title="Staged isolates can be compared, not typed against"}
 Allelic distance only asks whether two alleles are the *same*, not what they
@@ -147,13 +220,17 @@ way in.
 
 - Allele identity travels as a content fingerprint, so databases that have never
   met can still be merged safely; allele numbers never travel.
+- **Import > Source** and **Export > Export type** are the controls that decide
+  whether you are working with a whole database or a profile table.
 - A merge is offered only between databases built from the same scheme, verified
-  down to the reference genome.
-- Collisions are previewed and resolved per isolate; the merge runs on a copy and
-  leaves your original as a timestamped backup.
-- Export builds a new database containing only the isolates and columns you
-  select — withheld data is never written.
-- Profile tables from partners can be staged for distance comparison but never
-  become typed isolates.
+  down to the reference genome, and reported as a grid of named checks.
+- Only genuine **name clashes** need a per-isolate decision — import, skip or
+  rename; the merge runs on a copy and leaves your original as a timestamped
+  backup, restorable from the **Rollback** group.
+- Export builds a new database — or a profile table, with or without sequences —
+  containing only the isolates and columns you select; withheld data is never
+  written.
+- Profile tables from partners are staged under a **Set name** for distance
+  comparison, and never become typed isolates.
 
 Part IV turns to what all this data is for: the plots.

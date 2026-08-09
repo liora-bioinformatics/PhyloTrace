@@ -41,11 +41,34 @@ misread: what a control actually does, when a result is a genotype rather than a
 phenotype, or when a number should not be over-interpreted.
 :::
 
+### Finding a control in the app {#sec-conventions-ui}
+
+Everything you can click is named in the manual exactly as it is labelled on
+screen, in **bold**. Where a control is buried more than one level deep, the
+whole route is written out with `>` between the steps, from the navigation tab
+inwards:
+
+> **Visualization > Options > Clustering > Threshold (allelic distance)**
+
+reads as: the Visualization tab, the **Options** tab of the plot's own control
+panel, the **Clustering** section inside it, and the numeric field labelled
+*Threshold (allelic distance)*. Screenshots of each panel accompany the text, so
+a route can always be checked against the picture.
+
 Cross-references such as @sec-typing are clickable, as are figure references (for
 example @fig-preface-workflow below) and citations such as the original MLST
 description [@maiden1998mlst]. The full bibliography is on the
 [References](references.qmd) page, and @sec-glossary defines every term the
 manual uses.
+
+::: {.callout-important title="Every statement about the data has a control behind it"}
+Wherever the manual says that PhyloTrace does something to your data — merges
+identical isolates, picks a cluster threshold, bins dates into weeks, drops
+undated cases — it also names the control that governs it, because almost none
+of those behaviours is fixed. Defaults are chosen to be defensible, not to be
+permanent, and a figure you publish should be described by the settings you
+actually used rather than by the ones the app opened with.
+:::
 
 ## The workflow at a glance
 

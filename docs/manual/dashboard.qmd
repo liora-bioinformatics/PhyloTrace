@@ -18,15 +18,48 @@ who receives your database receives your analyses with it.
 
 ## Analyses and plots {#sec-dash-structure}
 
-The dashboard shows your Analyses, each holding its saved plots as a grid of
-tiles with live thumbnails. From here you can:
+The dashboard is a stack of cards, one per Analysis, with a sidebar on the left
+carrying **Add Analysis** and a list for jumping between them. Each card's header
+shows the Analysis name, when it was created and last modified, and — where the
+Analysis fixes an isolate set — a padlock badge reading "*n* fixed isolates".
+Inside it, the saved plots sit as a row of tiles with live thumbnails, ending in
+an **Add Plot** placeholder.
 
-- **Create an Analysis** and give it a name and description.
-- **Add a plot** to an Analysis — which takes you to the Visualization tab with
-  that Analysis preselected as the save target (@sec-viz-save).
-- **Open a saved plot**, which restores it into a Visualization tab.
-- **Rename, duplicate or delete** plots and Analyses. Deleting an Analysis
-  deletes the plots inside it.
+![The Analysis Dashboard. Each card is an Analysis; each tile inside it is a saved plot.](images/ui/dashboard.png){#fig-ui-dashboard}
+
+### Creating an Analysis {#sec-dash-create}
+
+**Add Analysis** opens a two-step dialogue:
+
+1. **Analysis name** and an optional **Description**, then **Next**.
+2. The isolate table, ticked as you like, with **Select all** / **Select none**
+   and the same date filter as the plot selection dialogue (@sec-viz-selection).
+   **Create Analysis** finishes.
+
+![Step one of the New Analysis dialogue.](images/ui/analysis-wizard.png){#fig-ui-dash-wizard}
+
+The pencil icon in a card header reopens the same dialogue to change the name,
+description or isolate set. If the Analysis already holds saved plots, step two
+warns you — "*n* saved plots built from this set" — because changing the set
+re-bases them (@sec-dash-selection).
+
+### Working with saved plots {#sec-dash-plots}
+
+Each plot tile carries three buttons in its corner, and one large invisible one:
+
+| Action | How |
+|---|---|
+| **Open** | Click the thumbnail. The plot is restored into a Visualization tab |
+| **Duplicate** | The copy icon. Adds a copy at the end of the row, no confirmation |
+| **Rename** | The pencil icon. Turns the title into a text field; the icon becomes a tick |
+| **Delete** | The bin icon. Asks first |
+
+**Add Plot**, at the end of the row, takes you to the Visualization tab with that
+Analysis already preselected as the save target (@sec-viz-save) — the quickest
+route from "this investigation needs one more figure" to having it.
+
+At the card level, **Delete Analysis** removes the Analysis and every plot inside
+it; its confirmation dialogue says so explicitly.
 
 ```{mermaid}
 %%| label: fig-dash
@@ -63,6 +96,12 @@ that existed when you made it. That is how PhyloTrace can tell when the database
 has grown or changed underneath a saved Analysis, and reconcile the selection
 rather than silently plotting the wrong set.
 
+When a plot no longer matches the isolate set its Analysis now uses, its tile is
+flagged in place — an orange warning reading **"Isolates changed (+3 −1)"**,
+counting what has been added and removed. The plot is not broken and nothing has
+been lost; reopening it rebuilds the figure against the current selection, and
+saving it again clears the flag.
+
 The dashboard also keeps itself current: saving a plot from the Visualization
 tab, or importing new isolates, updates it without a manual reload
 (@sec-app-live).
@@ -70,14 +109,17 @@ tab, or importing new isolates, updates it without a manual reload
 ## Chapter summary
 
 - An Analysis is a named container of saved plots, stored inside the database
-  file and shared with it.
-- Add a plot from the dashboard to jump to Visualization with the Analysis
-  preselected; open one to restore it into a tab.
+  file and shared with it; **Add Analysis** creates one in two steps, name then
+  isolate set.
+- **Add Plot** jumps to Visualization with the Analysis preselected; clicking a
+  thumbnail restores that plot into a tab. Tiles can also be duplicated, renamed
+  and deleted.
 - Saving preserves the settings, not the rendered image — a reopened plot uses
   your current data.
 - Export a figure if you need a frozen record of exactly how it looked.
-- An Analysis remembers the isolate pool it was made against, so a grown database
-  does not silently change what a saved plot shows.
+- An Analysis remembers the isolate pool it was made against, and flags any plot
+  whose set has drifted, so a grown database does not silently change what a
+  saved plot shows.
 
 That completes the tour of the application. The appendices list the external
 tools and data sources PhyloTrace relies on (@sec-appendix-tools) and define the

@@ -36,3 +36,39 @@ figure.quarto-figure svg {
 .sidebar-item-container .sidebar-item-text {
   line-height: 1.25;
 }
+
+// Chapter list scrolls in its own box rather than pushing the relocated logo
+// (below, sidebar-footer.html) off the bottom of a short viewport.
+.sidebar-menu-container {
+  overflow: auto;
+}
+
+// sidebar-footer.html moves the logo out of the header and here, after the
+// chapter list; margin-top: auto pins it (and the copyright below it) to the
+// bottom of the docked sidebar's flex column.
+.sidebar-logo {
+  max-width: 66%;
+  padding-bottom: 0.5rem;
+}
+
+.sidebar-logo-link {
+  padding: 1rem 1rem 0rem 0rem;
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  /* padding-left: 0; */
+}
+
+.sidebar-copyright {
+  padding: 0rem 1rem 1rem 0rem;
+  font-size: 0.75rem;
+  color: #6c757d;
+  text-align: center;
+  /* padding-left: 0; */
+}
+
+@media (max-width: 991.98px) {
+  .sidebar-copyright {
+    display: none;
+  }
+}

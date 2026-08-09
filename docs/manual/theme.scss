@@ -24,6 +24,31 @@ figure.quarto-figure svg {
   height: auto;
 }
 
+// Quarto derives Mermaid's palette from the Bootstrap theme, and the result is
+// low-contrast with this teal $primary: node fill is only a 10%-opacity teal
+// wash, so any node nested in a subgraph sits on the mid grey-blue cluster
+// background instead of white and the teal label text nearly disappears into
+// it (~1.3:1 contrast, measured). Plain nodes fare little better (~3.5:1,
+// under the 4.5:1 minimum). Overriding with solid (non-transparent) light
+// fills and the theme's darker $code-color for label text fixes both cases —
+// contrast is ~5.2:1+ regardless of nesting.
+:root {
+  --mermaid-node-bg-color: #eaf3f4;
+  --mermaid-fg-color--lightest: #f4f7f8;
+  --mermaid-fg-color--lighter: #c7ced0;
+  --mermaid-label-fg-color: #{$code-color};
+}
+
+// UI screenshots get a frame so they read as a captured window rather than
+// bleeding into the page background.
+.figure-img {
+  margin-bottom: .5rem;
+  line-height: 1;
+  border: 1px solid black;
+  border-radius: 4px;
+  box-shadow: 2px 3px 0px 1px darkgrey;
+}
+
 // Code-block filename headers — make the file path scannable, since the manual
 // leans on citing exact source locations.
 .code-with-filename .code-with-filename-file {
@@ -35,4 +60,40 @@ figure.quarto-figure svg {
 // Tighten the docked sidebar TOC so the long chapter list stays navigable.
 .sidebar-item-container .sidebar-item-text {
   line-height: 1.25;
+}
+
+// Chapter list scrolls in its own box rather than pushing the relocated logo
+// (below, sidebar-footer.html) off the bottom of a short viewport.
+.sidebar-menu-container {
+  overflow: auto;
+}
+
+// sidebar-footer.html moves the logo out of the header and here, after the
+// chapter list; margin-top: auto pins it (and the copyright below it) to the
+// bottom of the docked sidebar's flex column.
+.sidebar-logo {
+  max-width: 66%;
+  padding-bottom: 0.5rem;
+}
+
+.sidebar-logo-link {
+  padding: 1rem 1rem 0rem 0rem;
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  /* padding-left: 0; */
+}
+
+.sidebar-copyright {
+  padding: 0rem 1rem 1rem 0rem;
+  font-size: 0.75rem;
+  color: #6c757d;
+  text-align: center;
+  /* padding-left: 0; */
+}
+
+@media (max-width: 991.98px) {
+  .sidebar-copyright {
+    display: none;
+  }
 }

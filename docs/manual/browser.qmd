@@ -17,41 +17,76 @@ The Database Browser is organised as a sidebar menu with five panels:
 | **Import** | Merge a colleague's database, or stage their profiles | @sec-interop |
 | **Export** | Write out a chosen subset as a new database | @sec-interop |
 
+The five panels are buttons in the left sidebar; the one you are on stays
+highlighted.
+
 ## Browse Entries {#sec-browser-browse}
 
-Browse Entries shows one row per isolate. Alongside the standard metadata fields
-you will see, merged in and **read-only**, the columns produced by the app
-itself:
+Browse Entries shows one row per isolate in an editable grid, with a control
+sidebar on the **right** holding three groups.
 
-- the classical MLST sequence type and its allele calls (@sec-typing),
-- the AMR findings (@sec-amr),
-- the values of any custom variables you have defined.
+![Browse Entries: the metadata grid, with Column Selection, Edit and Remove isolates in the right sidebar.](images/ui/browse-entries.png){#fig-ui-browse-entries}
 
-Those columns are read-only here because they are owned elsewhere: MLST and AMR
-are results of a typing run, and custom values are edited in the Custom Variables
-panel. The metadata fields are the ones you edit directly, in the grid.
+### Choosing which columns to show {#sec-browser-columns}
 
-::: {.callout-important title="Saving your edits"}
-Edits in the grid are held until you save them, and they are written as a single
-transaction — either all of the changes land, or none do.
+A database of any size has far more columns than fit on a screen, so
+**Column Selection** governs what is drawn. Its dropdown groups the available
+fields into four categories, each with a checkbox on the group header that ticks
+or clears the whole category at once:
 
+| Category | Contents | Shown by default |
+|---|---|---|
+| **Sample metadata** | The standard GenEpiO field set | yes |
+| **Classical MLST** | The sequence type and its per-locus alleles | no |
+| **AMR screening** | One entry per drug class / virulence-stress group, each covering all the gene columns beneath it | no |
+| **Custom variables** | The fields you defined yourself | yes |
+
+MLST and AMR start hidden because they are wide and derived; tick the category
+when you need them. There is a search box in the dropdown for finding a single
+field by name.
+
+::: {.callout-important title="Derived columns are read-only here"}
+The MLST, AMR and custom-variable columns appear merged into the grid but cannot
+be edited in it, because they are owned elsewhere: MLST and AMR are results of a
+typing run (@sec-typing), and custom values are edited in the **Custom
+Variables** panel. The standard metadata fields are the ones you type into
+directly.
+:::
+
+### Saving your edits {#sec-browser-edit}
+
+The **Edit** group holds two buttons, both disabled until the grid actually has
+an unsaved change:
+
+- **Save Changes** writes them as a single transaction — either all of the
+  changes land, or none do.
+- **Discard** throws the pending edits away and re-reads the database.
+
+::: {.callout-important title="Unsaved edits are never overwritten"}
 If something changes the database while you have unsaved edits — a typing run
 finishing, an import completing — PhyloTrace marks the view as out of date rather
-than reloading over your work (@sec-app-live). Reloading is the explicit action
-that discards unsaved edits, and you will be asked to confirm first.
+than reloading over your work (@sec-app-live). The reload notification will even
+warn you, in orange, that unsaved edits exist. Reloading is the explicit action
+that discards them.
 :::
 
 ### Deleting isolates {#sec-browser-delete}
 
-Isolates can be removed from the database from this panel. Deletion is
-transactional and asks one question first: whether to **keep or drop the allele
-sequences** the deleted isolates contributed.
+The **Remove isolates** group is a searchable multi-select over the isolate
+names, plus a red **Remove** button that stays disabled until at least one is
+picked. Confirmation is a dialogue, and it asks one question before doing
+anything: whether to **keep or delete the allele sequences** the removed isolates
+contributed.
 
 ::: {.callout-important title="Keep the alleles unless you have a reason not to"}
-Keeping them costs a little space but preserves the allele nomenclature your
-database has built up, so a later re-type of the same or a related isolate lands
-on the same allele identifiers. Dropping them reclaims the space but discards
-sequences that no isolate currently references. When in doubt, keep them.
+**Keep allele sequences** is preselected. Keeping them costs a little space but
+preserves the allele nomenclature your database has built up, so a later re-type
+of the same or a related isolate lands on the same allele identifiers. **Delete
+allele sequences** reclaims the space by dropping the sequences no remaining
+isolate references. When in doubt, keep them.
+
+The dialogue says "This cannot be undone", and means it — unlike an import
+(@sec-interop-import), a removal leaves no backup behind.
 :::
 
 ## Custom Variables {#sec-browser-custom}
@@ -72,24 +107,52 @@ it becomes available to colour, shape, stratify and filter by everywhere
 (@sec-visualization).
 :::
 
+### The two tabs {#sec-browser-custom-tabs}
+
+The panel splits the work in two, because defining a variable and filling it in
+are different jobs:
+
+- **Variables** — one row per definition: its name, type, description, and how
+  many isolates have a value. This is where variables are created, edited and
+  deleted.
+- **Values** — a grid of isolates × your variables, which is where the values
+  themselves are entered.
+
+![Custom Variables. The Variables tab defines the fields; the Values tab is where they are filled in.](images/ui/custom-variables.png){#fig-ui-custom-variables}
+
+The right sidebar mirrors Browse Entries: **New Variable** at the top,
+**Discard** / **Save Changes** in the middle, and a **Removal** picker with a red
+**Remove** button at the bottom.
+
 Custom Variables is the only place custom values are entered; everywhere else
 they appear read-only, merged into the view alongside the standard fields.
 Filling in values works the same way as Browse Entries: edits sit in the grid
-until you save them, and if the database changes elsewhere while you have
-unsaved edits, PhyloTrace marks the view as out of date rather than discarding
-your work (@sec-app-live).
+until you press **Save Changes**, and if the database changes elsewhere while you
+have unsaved edits, PhyloTrace marks the view as out of date rather than
+discarding your work (@sec-app-live).
 
-### Typed variables {#sec-browser-types}
+### Creating a variable {#sec-browser-types}
 
-A custom variable is not just a name — it has a **type**, declared when you
-create it, and PhyloTrace enforces it as values are entered:
+**New Variable** opens a dialogue with four fields:
+
+| Field | Notes |
+|---|---|
+| **Name** | Letters, digits, `_` and `-` only. Shown prettified, so `sampling_site` reads as "Sampling Site" — and used as the column name on export |
+| **Type** | One of the five below; **it cannot be changed later** |
+| **Allowed values** | Appears for the *Category* type only: the permitted levels, comma-separated |
+| **Description (optional)** | What the variable records and how it is filled in |
+
+![The New custom variable dialogue. The Allowed values field appears only for a Category variable.](images/ui/custom-variable-modal.png){#fig-ui-custom-modal}
+
+A custom variable is not just a name — it has a **type**, and PhyloTrace enforces
+it as values are entered:
 
 | Type | What is accepted | How it is stored |
 |---|---|---|
 | **Date** | A calendar date | Normalised to ISO format |
 | **Yes/No** | A boolean | `yes` / `no` |
 | **Number** | A numeric value | As entered |
-| **Category** | One of the levels you declare | The chosen level |
+| **Category** | One of the levels you declared | The chosen level |
 | **Text** | Free text | As entered |
 
 The type matters beyond data hygiene: it is what the visualization layer reads to
@@ -99,11 +162,17 @@ shown as either, and a numeric variable gets a continuous gradient rather than a
 palette of discrete colours (@sec-viz-mapping). Declaring the right type is
 therefore what makes a variable usable in a plot.
 
-::: {.callout-important title="Naming a variable"}
-Variable names follow the same rule as database and isolate names — letters,
-digits, hyphens and underscores (@sec-data-naming) — and cannot collide with an
-existing field. Renaming a variable later is safe and keeps all its values; the
-*type* is the part worth getting right up front.
+::: {.callout-important title="The type is fixed; the name is not"}
+Reopening a variable for editing shows its type as plain text with the note "The
+type cannot be changed — create a new variable instead." Everything else — name,
+description, and a category's allowed values — can be changed at any time, and
+renaming keeps all existing values.
+
+So the type is the one decision worth getting right up front. If you are unsure
+whether a field is a **Category** or free **Text**, prefer Category with the
+levels you expect: it is the type that can be coloured, stratified and filtered
+by, whereas a Text field with dozens of distinct values cannot be drawn legibly
+at all.
 :::
 
 Deleting a variable removes its definition and all of its values together, in one
@@ -114,13 +183,16 @@ it is shared or exported (@sec-data).
 
 - The Database Browser is a five-panel menu; Browse Entries and Custom Variables
   are covered here.
-- Browse Entries edits metadata values transactionally and shows MLST, AMR and
-  custom columns read-only alongside them; unsaved edits are protected from
-  automatic reloads.
-- Deleting isolates asks whether to keep the allele sequences they contributed —
-  usually you should.
-- Custom Variables are your own typed fields; the declared type governs both
-  validation and how the variable can be mapped in a plot.
+- **Column Selection** decides what the grid shows; MLST and AMR columns are
+  hidden until you tick their category.
+- Browse Entries edits metadata values transactionally — **Save Changes** or
+  **Discard** — and shows MLST, AMR and custom columns read-only alongside them;
+  unsaved edits are protected from automatic reloads.
+- **Remove isolates** asks whether to keep the allele sequences they contributed
+  — usually you should — and cannot be undone.
+- Custom Variables splits into a **Variables** tab (definitions) and a
+  **Values** tab (the data); the declared type governs both validation and how
+  the variable can be mapped in a plot, and it cannot be changed afterwards.
 - Custom variables live inside the database file and travel with it.
 
 @sec-interop covers sharing databases between labs; @sec-visualization uses these

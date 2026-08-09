@@ -50,10 +50,25 @@ in isolates typed against a different one would be meaningless.
 
 ## Opening a database {#sec-data-open}
 
-Loading a file is the moment the app comes to life: the four workspace panels
-appear (@sec-app-panels) and every view starts reading from it. Before that
-happens, PhyloTrace runs a short set of housekeeping checks on the file so that
-every panel is guaranteed to be looking at the same, current picture:
+The **Load Database** tab is a single screen with two buttons under a line of
+instructions:
+
+- **Select Database** opens a file chooser rooted at your home folder. Pick a
+  `.db` file and PhyloTrace shows its path, then a small table of the file's own
+  details — size and modification date — so you can confirm you have the right
+  one before committing.
+- **Create New** takes you to the Scheme Browser instead, which is where a
+  database is brought into existence (@sec-schemes).
+
+**Load Database**, the button below the table, stays greyed out until a file is
+actually selected. Clicking it opens the file.
+
+![The Load Database panel. The file details appear only once a database has been selected; the Load Database button is disabled until then.](images/ui/landing.png){#fig-ui-landing}
+
+Loading is the moment the app comes to life: the four workspace tabs appear
+(@sec-app-panels) and every view starts reading from the file. Before that
+happens, PhyloTrace runs a short set of housekeeping checks on it so that every
+panel is guaranteed to be looking at the same, current picture:
 
 - the scheme's species name is brought to its correct spelling,
 - any allele that has not yet had its content fingerprint computed gets one
@@ -74,13 +89,19 @@ Anything you type that becomes a **name** — a database, an isolate, a custom
 variable — is restricted to letters, digits, hyphens and underscores. Spaces and
 punctuation are not accepted in those fields.
 
-This is not an arbitrary restriction: those names are used as filenames when you
+This is enforced as you type: in a restricted field, a disallowed character
+simply does not appear, rather than being rejected later with an error. If a key
+seems not to work in a name field, that is why.
+
+The restriction is not arbitrary: those names are used as filenames when you
 export, and as identifiers inside the database, so keeping them simple is what
 lets a database be copied between machines and operating systems without
 anything breaking.
 
-Free text *is* allowed where a value is only ever displayed — plot titles,
-analysis names, descriptions, and metadata values such as a collection site.
+Free text *is* allowed where a value is only ever displayed — plot names,
+analysis names and descriptions, legend and annotation labels, custom-variable
+levels, and metadata values such as a collection site. Those fields take spaces
+and punctuation normally.
 
 ## Looking after your data {#sec-data-care}
 
@@ -92,9 +113,10 @@ analysis names, descriptions, and metadata values such as a collection site.
 - **Importing is reversible.** Merging a colleague's database leaves your
   original file untouched as a timestamped backup alongside the merged one, and
   nothing is changed until the merge has completed successfully (@sec-interop).
-- **Deleting isolates is deliberate and immediate.** The Browse Entries panel
-  removes them from the database, and asks whether the allele sequences they
-  contributed should be kept for future comparisons (@sec-browser).
+- **Deleting isolates is deliberate and immediate.** **Database Browser >
+  Browse Entries > Remove isolates** removes them from the database, and asks
+  whether the allele sequences they contributed should be kept for future
+  comparisons (@sec-browser-delete).
 
 ## Chapter summary
 

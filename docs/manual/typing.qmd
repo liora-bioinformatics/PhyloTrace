@@ -24,6 +24,70 @@ per isolate. The isolate's name is taken from the filename, so name your files
 the way you want the isolates to be named — using letters, digits, hyphens and
 underscores only (@sec-data-naming).
 
+### The sidebar: the pipeline, one step at a time {#sec-typing-steps}
+
+The left sidebar *is* the pipeline. It holds four numbered sections in the order
+a genome runs through them, and each carries a **ⓘ icon** that opens a full
+explanation of that step in a dialogue.
+
+| Step | Controls | Default |
+|---|---|---|
+| **1 · Genome input** | **File** (one assembly) and **Folder** (a whole directory of them) | — |
+| **2 · cgMLST** | **Min. identity**, **Min. coverage**; the scheme's locus count is shown above them | 0.95 / 0.9 |
+| **3 · Classical MLST** | **Scheme source**: PubMLST or Pasteur | PubMLST |
+| **4 · AMR screening** | **Run screening** | on |
+
+![The Add Isolates sidebar. The four steps are the pipeline in order; Start Analysis sits below them and Terminate below that.](images/ui/typing-sidebar.png){#fig-ui-typing-sidebar}
+
+::: {.callout-important title="The two thresholds in step 2 belong to allele calling"}
+**Min. identity** and **Min. coverage** are fractions between 0 and 1, and they
+govern when a match to a locus counts as a call at all. Lowering them recovers
+loci from a fragmented assembly at the risk of accepting a poor match; raising
+them is stricter and will lower completeness (@sec-typing-results). They are
+recorded per isolate in the provenance record (@sec-typing-provenance), so a
+batch typed at non-default thresholds stays identifiable later.
+
+Both apply to **cgMLST only**. Classical MLST and the AMR screen have their own
+internal criteria and are unaffected.
+:::
+
+The **Scheme source** in step 3 chooses which public repository the 7-gene scheme
+is resolved against. PubMLST is the default; Pasteur maintains the authoritative
+scheme for a number of organisms (notably *Listeria* and *Klebsiella*), so pick
+whichever your reporting context expects — the two number their sequence types
+differently and the numbers are not interchangeable.
+
+### Running a batch {#sec-typing-run}
+
+**Start Analysis** is disabled until at least one assembly is selected. Pressing
+it first runs a quick checking pass over the files — fingerprinting each and
+comparing it with the database (@sec-typing-hashing) — and then begins typing.
+**Terminate**, in red below it, stops a run in progress and stays clickable even
+while everything else is locked (@sec-app-typing-parallel).
+
+Under the buttons, a **Typing progress** bar reports percentage complete, and a
+status line beneath it names what the run is currently doing.
+
+### Choosing which of the selected genomes actually run {#sec-typing-selection}
+
+The main area holds three collapsible sections, one open at a time.
+
+**Selected Genomes** lists the assemblies you picked, with a toolbar above them:
+
+| Button | Effect |
+|---|---|
+| **All** / **None** | Tick or clear every row in the list |
+| **Exclude selected** | Drop the ticked rows from this run without re-picking the folder |
+| **Include selected** | Put excluded rows back |
+
+This is how you type a folder minus a few files: point step 1 at the folder, then
+exclude what you do not want. Excluded genomes stay visible, marked in their
+status column, rather than disappearing.
+
+**Process Log** is the raw output of the underlying tools — the place to look
+when something failed and the summary does not say enough. **Results** is the
+table described below.
+
 Typing runs alongside the rest of the app, so you can keep browsing and plotting
 while it works, and new isolates appear in the other panels as they land
 (@sec-app-typing-parallel).
@@ -90,9 +154,29 @@ flowchart TB
 
 ## Reading the results {#sec-typing-results}
 
-For every isolate the panel reports how the run went — how many loci were found,
-how many new alleles were added, how many calls were partial, and the resulting
-**completeness**: the share of the scheme's loci that got a confident call.
+The **Results** section fills in row by row as the run proceeds — one row per
+assembly, thirteen columns. Every column header carries a hover tooltip
+explaining it; the table below is the same information, gathered.
+
+| Column | What it reports |
+|---|---|
+| **Strain** | The assembly's filename without its extension — the isolate's name |
+| **cgMLST** | How allele calling ended: *Added*, *Duplicate*, *Incompatible* (no core gene matched) or *Error* |
+| **Loci found** | Scheme loci located in the assembly |
+| **Alleles added** | Loci whose allele was stored for this isolate |
+| **Partial** | Loci matched over less than their full length |
+| **Filled** | Partial loci completed from the assembly and kept |
+| **Removed** | Loci dropped for low coverage or a failed coding-sequence test |
+| **Completeness** | Share of the scheme's loci called — see below |
+| **MLST** | The classical sequence type, or *Novel* / *Partial* / *Ambiguous* |
+| **AMR** | The resistance screen's outcome and its number of hits |
+| **Finished**, **Elapsed** | When the isolate's last step ended, and how long all three took |
+| **Detail** | What the isolate is doing now, or why it was not added |
+
+![The Results table filling in during a run, with the progress bar above it.](images/ui/typing-results.png){#fig-ui-typing-results}
+
+Completeness is colour-coded as a badge so a bad isolate is visible at a glance:
+**green at 99 % and above**, **amber from 90 %**, and **red below 90 %**.
 
 ::: {.callout-important title="Completeness is your first quality check"}
 A good assembly of the right species typically calls the great majority of the
@@ -112,8 +196,9 @@ ST is low resolution — many unrelated isolates share one — but it is the cur
 most of the older literature and many national reporting schemes are written in,
 so having it alongside the cgMLST profile is useful for communicating results.
 
-The 7-gene scheme is looked up against PubMLST and Institut Pasteur [@pubmlst],
-matched to the genus of your cgMLST scheme, and downloaded once per typing run.
+The 7-gene scheme is looked up against the repository chosen in **step 3 ·
+Classical MLST** [@pubmlst], matched to the genus of your cgMLST scheme, and
+downloaded once per typing run.
 
 ::: {.callout-important title="When there is no ST"}
 An isolate can end up with no sequence type for legitimate reasons: the species
@@ -121,6 +206,12 @@ may have no classical scheme in the public repositories, the isolate may carry a
 new allele combination that has not been assigned an ST yet, or a locus may be
 genuinely absent. A missing ST is not a failed typing run — the cgMLST profile,
 which is what the analyses in Part IV use, is unaffected.
+
+The **MLST** column distinguishes these outcomes rather than leaving the cell
+blank. *Novel* means a complete but unregistered profile; *Partial* means some
+loci were not called; *Ambiguous* means several STs fit the profile. A sequence
+type shown with a **star** comes from the scheme's own profile table, where the
+uncalled locus is recorded as genuinely absent.
 :::
 
 ## Duplicate detection {#sec-typing-hashing}
@@ -167,9 +258,15 @@ so refreshing a scheme later can never rewrite the history of an earlier call.
 
 - **Add Isolates** types FASTA assemblies while the rest of the app stays usable;
   isolate names come from the filenames.
+- The sidebar is the pipeline: **Genome input**, **cgMLST** (Min. identity /
+  Min. coverage), **Classical MLST** (PubMLST or Pasteur) and **AMR screening**,
+  then **Start Analysis**. **Terminate** stays available throughout.
+- **Selected Genomes** lets you exclude individual files from a folder before
+  running; **Process Log** and **Results** report what happened.
 - Each assembly goes through three sequential steps — cgMLST allele calling, then
   classical MLST, then AMR screening — with the last two best-effort.
-- Completeness is the first quality signal to check on a new isolate.
+- Completeness is the first quality signal to check on a new isolate; its badge
+  turns amber below 99 % and red below 90 %.
 - Assemblies are fingerprinted so duplicates and re-types are flagged, never
   blocked.
 - Every isolate gets a provenance record naming the scheme, thresholds and tool

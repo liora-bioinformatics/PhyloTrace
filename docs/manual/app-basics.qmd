@@ -36,43 +36,45 @@ project's `README`.
 ## The panels, and when they appear {#sec-app-panels}
 
 PhyloTrace does not show all of its screens at once. When it starts, the
-navigation bar carries only two:
+navigation bar carries only two tabs:
 
-| Panel | What it is for |
+| Tab | What it is for |
 |---|---|
-| **Load Database** | Open an existing database, or pick up the one you used last |
+| **Load Database** | Open an existing database, or pick up the one you used last (@sec-data-open) |
 | **Scheme Browser** | Choose a species, review its cgMLST scheme, and download it into a **new** database (@sec-schemes) |
 
-The moment a database is loaded, four more panels appear and the two starting
-panels step aside:
+![The navigation bar at startup: two tabs on the left, and on the right the version number, the light/dark toggle and the power button that shuts PhyloTrace down.](images/ui/navbar-start.png){#fig-ui-navbar-start}
 
-| Panel | What it is for |
+At the far right of the bar, whatever else is on screen, sit three items that
+never move:
+
+- the **version number** of the running build — quote it in a bug report;
+- a **moon / sun button** that switches the whole interface between light and
+  dark mode;
+- a **power button** that closes PhyloTrace. This ends the program, not just the
+  tab (@sec-app-local).
+
+The moment a database is loaded, four more tabs appear — in this order — and the
+two starting tabs step aside:
+
+| Tab | What it is for |
 |---|---|
 | **Database Browser** | Browse and edit isolates, define custom variables, inspect the scheme, import and export (@sec-browser, @sec-interop) |
-| **Add Isolates** | Type new assemblies into the open database (@sec-typing) |
-| **Visualization** | Build plots — MSTs, trees, epi curves, maps, AMR heatmaps (@sec-visualization) |
 | **Analysis Dashboard** | Organise and reopen the plots you have saved (@sec-dashboard) |
+| **Visualization** | Build plots — MSTs, trees, epi curves, maps, AMR heatmaps (@sec-visualization) |
+| **Add Isolates** | Type new assemblies into the open database (@sec-typing) |
 
-This is deliberate: every one of those four panels works *on* a database, so none
-of them is offered until there is one open.
+Two further items join them: a **return arrow** that closes the database, and,
+pushed to the right, the **filename of the open database** — hover it to see the
+full path. That label is the quickest way to confirm which file you are working
+in when several are on the machine.
 
-```{mermaid}
-%%| label: fig-app-panels
-%%| fig-cap: "The navigation bar changes when a database is loaded: the two starting panels give way to the four workspace panels."
-flowchart LR
-  subgraph START["On startup"]
-    L["Load Database"]
-    S["Scheme Browser"]
-  end
-  START -- "a database is loaded" --> WORK
-  subgraph WORK["Workspace"]
-    DB["Database Browser"]
-    AI["Add Isolates"]
-    VZ["Visualization"]
-    AD["Analysis Dashboard"]
-  end
-  WORK -. "return to the start screen" .-> START
-```
+![With a database open the bar carries the four workspace tabs, the return arrow, and the name of the loaded file.](images/ui/navbar-workspace.png){#fig-ui-navbar-workspace}
+
+This staging is deliberate: every one of those four tabs works *on* a database,
+so none of them is offered until there is one open. Closing the database with
+the return arrow reverses it exactly: the four workspace tabs step aside again
+and Load Database and Scheme Browser return.
 
 ## Everything keeps itself up to date {#sec-app-live}
 
@@ -95,11 +97,36 @@ warned first.
 
 Two further actions are available once a database is open:
 
-- **Reload Database** re-reads the file from disk. Use it after something outside
-  the app has changed the file, or after an import.
+- **Reload Database** re-reads the file from disk. It is not a permanent button:
+  it arrives inside a **notification in the bottom-right corner** whenever
+  something has changed the file — a typing run finishing, an import completing —
+  and the notification stays until you dismiss it. If you have unsaved edits in
+  an editing grid at that moment, the notification says so in an orange warning
+  before offering the button.
 - The **return arrow** in the navigation bar ("Return to the start screen")
-  closes the database and puts you back at Load Database. Nothing is lost —
+  closes the database and puts you back at **Load Database**. Nothing is lost —
   everything you have done is already in the file (@sec-data).
+
+## How the screens are laid out {#sec-app-layout}
+
+Almost every panel in PhyloTrace follows the same two-part shape, and knowing
+which side you are on saves a lot of hunting:
+
+- **A sidebar of controls**, either on the left (Database Browser, Add Isolates,
+  Analysis Dashboard) or on the right (Import, Export, and every plot). Controls
+  are gathered into labelled groups, and longer sidebars use **accordion
+  sections** you click to open and close, or **tabs** across the top.
+- **A main area** holding the table, plot or map the controls act on.
+
+Two conventions recur throughout:
+
+- A small **ⓘ icon** beside a label opens a fuller explanation — usually as a
+  hover tooltip, and for the typing steps as a dialogue with a paragraph or two.
+  Where the manual says a control "explains itself in the app", that is the icon
+  it means.
+- A **Reset settings** button sits at the bottom of every plot's control panel,
+  and returns that plot's appearance to its defaults without touching the
+  isolate selection or the computed data.
 
 ## Working on several things at once {#sec-app-parallel}
 
@@ -121,14 +148,21 @@ and plotting while it works; screens that read the database will simply wait for
 the moment when new isolates are being written, then show them. Progress and
 per-isolate outcomes are reported live in the Add Isolates panel (@sec-typing).
 
+While a run is in progress the controls that would interfere with it are
+disabled — with one deliberate exception. **Terminate** stays clickable
+throughout, so a run can always be stopped (@sec-typing-ui).
+
 ## Chapter summary
 
 - PhyloTrace is a local application that happens to use a browser tab; your data
   stays on your machine.
 - The only outbound requests are scheme downloads, classical-MLST scheme lookup
   and map geocoding — none of them sends your isolates.
-- The four workspace panels appear only once a database is loaded, and disappear
-  again when you return to the start screen.
+- The four workspace tabs appear only once a database is loaded, and disappear
+  again when you return to the start screen; the navigation bar also carries the
+  version, the light/dark toggle, the power button and the open file's name.
+- Nearly every panel is a control sidebar plus a main area; ⓘ icons explain
+  individual controls and **Reset settings** restores a plot's defaults.
 - Screens refresh themselves when the data changes; the only exception is the
   edit grid, which protects unsaved work.
 - Visualization and the Analysis Dashboard are workspaces: many plots, many

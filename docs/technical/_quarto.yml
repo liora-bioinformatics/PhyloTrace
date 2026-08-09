@@ -31,9 +31,6 @@ book:
     collapse-level: 1
     pinned: true
     logo: images/phylotrace-logo.png
-  page-footer:
-    left: "PhyloTrace Technical Manual"
-    right: "Built with Quarto"
   chapters:
     - index.qmd
 
@@ -77,6 +74,7 @@ format:
     theme:
       - cosmo
       - theme.scss
+    include-after-body: sidebar-footer.html
     toc: true
     toc-depth: 3
     toc-title: "On this page"

@@ -98,9 +98,11 @@ offered:
 | **Missing as category** (`category`) | "missing" is itself a value: missing vs called counts as a difference, missing vs missing does not | When absence is biologically meaningful |
 | **Omit loci** (`omit`) | Drop any locus missing in *any* isolate, then compare the rest | Strictest; a common column set for all |
 
-The choice appears as the **NA handling** control on every distance-based plot,
+The choice appears as **Options > Missing values** on every distance-based plot,
 and the same policy feeds both the tree and the MST, so the two views of one
 dataset always agree about how far apart two isolates are (@sec-mst, @sec-trees).
+Changing it is one of the few controls that needs a **Generate**
+(@sec-viz-generate).
 
 ## Minimum spanning trees {#sec-concepts-mst}
 
@@ -139,13 +141,17 @@ that make it well suited to this use:
   10 alleles) form dense subgraphs, and a threshold turns them into named
   clusters.
 
-::: {.callout-important title="Identical isolates share a node"}
+::: {.callout-important title="Identical isolates share a node — and the bar can be raised"}
 Before the tree is drawn, isolates that are **zero alleles apart** are merged
 into a single node — chains of identical profiles collapse together — and that
 node is drawn larger to show how many isolates it stands for. So a "node" in a
 PhyloTrace MST is a *set* of indistinguishable isolates, not necessarily one
 isolate, and the count matters when you read cluster sizes off the plot
-(@sec-mst).
+(@sec-mst-read).
+
+Zero is the default, not a fixed rule: the **Collapsing** control raises the
+merging threshold to any allelic distance, which is how a cgMLST MST of several
+hundred isolates is made readable (@sec-mst-collapse).
 :::
 
 ::: {.callout-tip title="Concept — the MST is a summary, not a proven history"}

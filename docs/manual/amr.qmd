@@ -43,11 +43,27 @@ species is supported**. If you are working on an unsupported species, absence of
 point-mutation findings tells you nothing.
 :::
 
-## When it runs {#sec-amr-when}
+## When it runs, and the one control over it {#sec-amr-when}
 
 The screen is step 3 of the typing run (@sec-typing-pipeline) — it happens
 automatically for each assembly, right after that assembly has been typed. There
-is no separate "run AMR" action.
+is no separate "run AMR" action anywhere in the app.
+
+::: {.callout-important title="Screening is optional, and the switch is in the typing sidebar"}
+**Add Isolates > 4 · AMR screening > Run screening** turns the screen on and off
+for the whole run. It is **on by default**, and leaving it on is almost always
+right: screening costs a fraction of the allele-calling time, and an isolate
+typed without it has no AMR data at all — no gene heatmap, no drug-class matrix,
+no annotation strips (@sec-amr-heatmap).
+
+The only way to fill that gap afterwards is to type the assembly again. If you
+find isolates missing from an AMR heatmap, this switch during their original run
+is the first thing to check.
+:::
+
+The **AMR** column of the Results table (@sec-typing-results) reports how the
+screen went for each isolate and how many elements it found, counting acquired
+resistance, virulence and stress genes together.
 
 If the screen fails or exceeds its time limit for a particular isolate, that is
 recorded and the run moves on; the isolate's allele profile and sequence type are
@@ -65,6 +81,10 @@ PhyloTrace keeps two complementary views of the result for each isolate.
 - the drug class and subclass the element is associated with,
 - how good the match was (percent identity and percent coverage),
 - where in the assembly it was found.
+
+Those last two are not just provenance: the gene heatmap exposes them as the
+**Minimum % identity** and **Minimum % coverage** sliders, so you can raise the
+bar on which hits are drawn (@sec-amr-hm-filter).
 
 **The curated summary** — a per-isolate roll-up by drug class, which is what the
 drug-class heatmap draws (@sec-amr-heatmap). It distinguishes three categories:
@@ -107,10 +127,21 @@ that they were screened against the same database version — the provenance rec
 is where that is written down.
 :::
 
+Where these results turn up in the rest of the app:
+
+| Where | What you see | Chapter |
+|---|---|---|
+| **Add Isolates > Results > AMR** | Per-isolate outcome and hit count during the run | @sec-typing-results |
+| **Database Browser > Browse Entries** | Read-only AMR columns, hidden until you switch the category on in **Column Selection** | @sec-browser-browse |
+| **Visualization > AMR** plot type | Gene heatmap, drug-class matrix, prevalence bars | @sec-amr-heatmap |
+| **Visualization > Tree > Mapping > Heatmaps** | Gene or drug-class panels beside a phylogenetic tree | @sec-trees-panels |
+| **Database Browser > Export / Import** | The **AMR results** checkbox that carries the findings between databases | @sec-interop |
+
 ## Chapter summary
 
 - Screening runs automatically with typing and reports acquired AMR genes,
-  virulence factors and stress elements together.
+  virulence factors and stress elements together; **Run screening** in the typing
+  sidebar is the only switch over it.
 - Point mutations require a supported species; everything else is always
   detected.
 - A failed screen never costs you the allele profile; re-typing replaces previous

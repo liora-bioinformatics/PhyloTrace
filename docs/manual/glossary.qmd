@@ -28,8 +28,12 @@ a standardized core-genome scheme (@sec-concepts).
 [@maiden1998mlst].
 
 **Cluster threshold** — the allelic distance within which isolates are grouped
-into one cluster on an MST; defaults to the value published with your scheme
-(@sec-mst-cluster).
+into one cluster on an MST; set under **Options > Clustering**, and defaulting to
+the value published with your scheme (@sec-mst-cluster).
+
+**Collapse threshold** — the allelic distance at or below which an MST merges the
+nodes a branch joins, set under **Options > Collapsing**. Zero by default, which
+merges only identical profiles (@sec-mst-collapse).
 
 **Completeness** — the share of a scheme's loci that received a confident allele
 call for an isolate; the first quality check on a typing run
@@ -46,6 +50,10 @@ database alongside the standard metadata (@sec-browser-custom).
 
 **Epidemic curve** — cases plotted against date of collection (@sec-concepts-epi).
 
+**Generate** — the button at the top of a plot's left sidebar that recomputes the
+data behind it. Needed only for the isolate selection, the **Missing values**
+policy, a Tree's **Algorithm**, and the Map's geocoding pass (@sec-viz-generate).
+
 **Hamming distance** — the count of positions at which two equal-length vectors
 differ [@hamming1950].
 
@@ -58,8 +66,12 @@ all isolates, with each isolate a visible node (@sec-concepts-mst)
 [@prim1957; @kruskal1956].
 
 **Missing call (NA)** — a locus with no confident allele call; handled by one of
-three policies (ignore / category / omit) when computing distance
-(@sec-concepts-distance).
+three policies (ignore / category / omit) chosen under **Options > Missing
+values** when computing distance (@sec-concepts-distance).
+
+**Plot tab** — one independent figure in the Visualization workspace, with its
+own isolate selection, controls and save target. Its type is fixed at creation
+(@sec-viz-tabs).
 
 **Neighbour-Joining (NJ)** — a tree method that does not assume a constant rate of
 change; branch lengths vary freely [@saitou1987nj].

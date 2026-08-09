@@ -20,11 +20,25 @@ were dropped. Treat a large dropped count as a data-quality signal: a curve buil
 from half your collection is not the epidemic curve of your outbreak.
 :::
 
+## The control panel {#sec-epi-controls}
+
+The epi curve's right-hand sidebar has four tabs.
+
+| Tab | What it holds |
+|---|---|
+| **Layout** | **Plot Mode** and its derived series, **Stratification**, **Axes & Sizing** |
+| **Time** | The date-range slider, the **Interval** buttons, and playback |
+| **Colors** | The palette when stratified, or a single series colour; text, background, and one swatch per derived line |
+| **Annotations** | Milestones and shaded periods |
+
 ## Binning and the shape of the curve {#sec-epi-build}
 
-Cases are grouped into intervals — day, week, month and so on. PhyloTrace picks
-the finest interval that keeps the number of bars readable, and you can override
-it. Weeks follow the ISO-8601 convention, starting on Monday.
+Cases are grouped into intervals, chosen under **Time > Interval**: **Day**,
+**Week**, **Month** or **Year**. PhyloTrace preselects the finest interval that
+keeps the number of bars readable — under about 150 — and you can override it at
+any time. Weeks follow the ISO-8601 convention, starting on Monday.
+
+![The Time tab: the date-range slider, the interval buttons, and the step and Play controls.](images/ui/epi-time-tab.png){#fig-ui-epi-time}
 
 ::: {.callout-important title="The conventions that keep the curve honest"}
 Two drawing rules follow standard epi-curve practice and matter for
@@ -42,21 +56,49 @@ point-source outbreak hides the sharp peak that identifies it. Try more than one
 interval before concluding anything about shape.
 :::
 
-## Cumulative view and moving average {#sec-epi-derived}
+## Plot mode, cumulative view and moving average {#sec-epi-derived}
 
-Two derived series can be laid over or shown instead of the bars:
+**Layout > Plot Mode** chooses between three ways of drawing the same counts:
 
-- **Cumulative** — the running total of cases, useful for judging whether an
-  outbreak is still growing.
-- **Moving average** — a smoothed trend line over the bars, labelled with its
-  window (for example "7-day moving average"). Intervals with no cases are
-  counted as zero rather than skipped, so the average is not inflated by gaps.
+| Mode | What it draws |
+|---|---|
+| **Stacked** | The conventional solid bars, stacked by stratum. The default |
+| **Square blocks** | The same bars drawn as one square per case — the classic hand-drawn epi curve, and the most readable form for small outbreaks |
+| **Cumulative** | The running total as a curve, rather than per-interval bars |
+
+In the two bar modes, two derived series can be laid over the bars:
+
+- **Show cumulative curve** — the running total, on a secondary axis. Offered
+  only in the bar modes, since Cumulative mode *is* that total.
+- **Show moving average** — a smoothed trend line, labelled with its window (for
+  example "7-day moving average"). Switching it on reveals two more controls: a
+  **Moving average window** slider, counted in whatever interval is currently
+  selected, and a **Window alignment** of **Centered** or **Trailing**. Intervals
+  with no cases are counted as zero rather than skipped, so the average is not
+  inflated by gaps.
+
+In Cumulative mode a **Label lines** switch names each line where it ends,
+instead of leaving the legend to say which colour is which.
+
+::: {.callout-important title="Trailing or centred is an analytical choice"}
+A **centred** window is the more honest summary of a completed outbreak: each
+point sits in the middle of the data that produced it. A **trailing** window is
+what real-time surveillance uses, because it only ever looks backwards — but it
+lags the true peak by roughly half its width. If you are annotating a curve with
+"the peak was here", make sure the alignment is not the reason it moved.
+:::
 
 ## Stratifying and colouring {#sec-epi-strata}
 
-Cases can be split and coloured by any metadata field or custom variable — by
-source, by ward, by isolate origin, by sequence type. Combining two variables
-produces composite strata.
+**Layout > Stratification** splits and colours the cases by any metadata field or
+custom variable — by source, by ward, by isolate origin, by sequence type.
+Combining two variables produces composite strata.
+
+The **Colors** tab follows what you did there. With a stratification in place it
+offers a **palette**; with none, a single **Series** colour instead. Text and
+background swatches are always present, and one more appears for each derived
+line that is currently switched on — **Cumulative line** and **Moving average
+line** — so nothing is left to guess.
 
 ::: {.callout-important title="Palettes are sized to the number of groups"}
 PhyloTrace offers only palettes that can actually represent the number of groups
@@ -66,16 +108,34 @@ undifferentiated grey — the failure mode that makes a stratified curve look fi
 while omitting half its categories (@sec-viz-mapping).
 :::
 
-Labelled points and periods can be annotated onto the curve — an index case, an
-intervention date, a closure period. Annotation labels are laid out so they do
-not collide with one another.
+## Annotations {#sec-epi-anno}
+
+The **Annotations** tab marks events on the timeline. Pick a **Type** —
+**Milestone (line)** for a single date, **Time period (shaded)** for a span,
+which reveals a second date field — then a **Start date** (and end date), a free-text
+**Label** and a **Color**, and press **Add to timeline**.
+
+Annotations accumulate: each is listed below the button so it can be removed
+individually, and **Clear all** removes them together. Their labels are laid out
+so they do not collide with one another. An index case, an intervention date, a
+ward closure — this is where the epidemiology goes onto the figure.
 
 ## Playback {#sec-epi-playback}
 
-The curve can animate its own build-up, revealing one interval at a time. This is
-useful in a briefing: it shows *when* the outbreak was recognisable, and it makes
-the difference between a point-source peak and successive person-to-person waves
-much easier to convey than a static figure does.
+The **Time** tab's date-range slider windows the curve to a span you drag out,
+and **Play** animates it: the window sweeps forward from the start handle, one
+interval at a time. The angle buttons on either side step the start and end
+handles by exactly one interval, for stepping through a story rather than
+watching it run.
+
+**Zoom axis to selection**, off by default, decides what the axis does while this
+happens. Left off, the axis stays fixed to the dataset's whole span, so the
+window moves inside a stable frame and the growth is visible; switched on, the
+axis follows the window instead.
+
+Playback is useful in a briefing: it shows *when* the outbreak was recognisable,
+and it makes the difference between a point-source peak and successive
+person-to-person waves much easier to convey than a static figure does.
 
 ```{mermaid}
 %%| label: fig-epi
@@ -89,10 +149,13 @@ flowchart LR
   MA --> R
 ```
 
+![A stratified epidemic curve with a moving-average line and a shaded intervention period.](images/ui/epi-plot.png){#fig-ui-epi}
+
 ## Export {#sec-epi-export}
 
-The epi curve exports as a **vector PDF or SVG**, or as a raster at the DPI you
-request (@sec-viz-export) — publication quality directly out of the app.
+The epi curve exports as a **vector PDF or SVG**, or as a raster (PNG, JPEG,
+TIFF) at the DPI you request (@sec-viz-export) — publication quality directly out
+of the app.
 
 ## Chapter summary
 
@@ -100,10 +163,13 @@ request (@sec-viz-export) — publication quality directly out of the app.
   live, with no Generate.
 - Undated isolates are dropped and counted — check that number.
 - Integer axes and one-interval-wide touching bars mean a gap is a real gap;
-  the chosen interval strongly affects the apparent shape.
-- Cumulative and moving-average series are available, and cases can be stratified
-  and annotated.
-- Playback reveals the curve interval by interval; export is vector or high-DPI
-  raster.
+  **Time > Interval** strongly affects the apparent shape.
+- **Layout > Plot Mode** offers Stacked, Square blocks and Cumulative; the two
+  bar modes can carry a cumulative overlay and a moving average whose window and
+  alignment you set.
+- **Layout > Stratification** splits the cases; the **Colors** tab follows that
+  choice, and **Annotations** marks milestones and periods on the timeline.
+- **Play** on the Time tab reveals the curve interval by interval; export is
+  vector or high-DPI raster.
 
 Geographic mapping — the other genetics-free plot type — is @sec-map.
