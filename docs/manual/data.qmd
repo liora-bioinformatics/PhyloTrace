@@ -56,7 +56,7 @@ instructions:
 - **Select Database** opens a file chooser rooted at your home folder. Pick a
   `.db` file and PhyloTrace shows its path, then a small table of the file's own
   details — size and modification date — so you can confirm you have the right
-  one before committing.
+  one before committing (@fig-ui-landing).
 - **Create New** takes you to the Scheme Browser instead, which is where a
   database is brought into existence (@sec-schemes).
 

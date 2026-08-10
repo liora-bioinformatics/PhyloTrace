@@ -23,7 +23,7 @@
 
 box::use(
   base64enc[base64decode],
-  bslib[accordion, accordion_panel],
+  digest[digest],
   ggplot2[ggsave],
   grDevices[cairo_pdf, jpeg, png, tiff],
   shiny[
@@ -32,7 +32,6 @@ box::use(
     downloadButton,
     icon,
     modalDialog,
-    numericInput,
     tagList,
     tags,
     uiOutput,
@@ -208,7 +207,6 @@ export_panel <- function(ns, prefix) {
 #' @export
 export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
   id <- function(suffix) ns(paste0(prefix, "_", suffix))
-  widget <- identical(kind, "widget")
   held <- function(name, default) values[[name]] %||% default
   default_preset <- export_presets[[1]]
 
@@ -220,7 +218,8 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         id("filetype"),
         "File format",
         choices = as.list(export_formats[[kind]]),
-        selected = held("filetype", "png")
+        selected = held("filetype", "png"),
+        width = "100%"
       ),
       # A plain radioGroupButtons rather than prettyRadioButtons: pretty-checkbox
       # positions its checkmark assuming a single-line, fixed-height label
@@ -229,6 +228,12 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
       # holds two lines of text. A button group has no such assumption; each
       # choice is a real <button> that lays out multi-line content like any
       # other block content.
+      #
+      # No raw width/DPI/scale controls beside it: an earlier version tucked
+      # them into a collapsed "Advanced" section, but a second, freely-typed
+      # size control next to four pre-vetted ones added a decision without
+      # adding a use case — every real one is already a preset. The preset
+      # alone decides width/DPI (ggplot) or target pixel width (widget).
       radioGroupButtons(
         id("preset"),
         "Export for",
@@ -242,58 +247,7 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         choiceValues = vapply(export_presets, `[[`, character(1), "id"),
         selected = held("preset", default_preset$id),
         direction = "vertical",
-        justified = TRUE
-      ),
-      accordion(
-        id = id("advanced_wrap"),
-        # accordion() only stays closed for `open = FALSE` exactly — anything
-        # else that names no open panel (character(0), NULL) still triggers
-        # its own "nothing was opened, so open the first one" fallback.
-        open = FALSE,
-        accordion_panel(
-          "Advanced",
-          icon = icon("sliders"),
-          # The two kinds measure size and quality differently, and neither
-          # reading transfers to the other. A server-rendered plot is laid out
-          # in inches and rasterised at a chosen DPI, so it is asked for in
-          # physical units. A widget is laid out in CSS pixels by the browser
-          # and can only be redrawn at a multiple of them — it is asked for as
-          # a target pixel width instead, which the capture handler turns into
-          # that multiple itself (see visualization.R's effectiveScale()), so
-          # the number means the same thing regardless of the current window.
-          if (widget) {
-            numericInput(
-              id("target_px"),
-              "Target width (px)",
-              value = as.numeric(held("target_px", default_preset$widget$target_px)),
-              min = 400,
-              max = 8000,
-              step = 100
-            )
-          } else {
-            tagList(
-              numericInput(
-                id("width"),
-                "Width (cm)",
-                value = as.numeric(held("width", default_preset$ggplot$width_cm)),
-                min = 4,
-                max = 60,
-                step = 1
-              ),
-              pickerInput(
-                id("dpi"),
-                "Resolution",
-                choices = list(
-                  "150 dpi (screen)" = "150",
-                  "300 dpi (print)" = "300",
-                  "600 dpi (high)" = "600",
-                  "1200 dpi (line art)" = "1200"
-                ),
-                selected = held("dpi", default_preset$ggplot$dpi)
-              )
-            )
-          }
-        )
+        width = "100%"
       ),
       uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
       footer = tagList(
@@ -434,6 +388,60 @@ save_plot_export <- function(
     height = width_in * aspect,
     limitsize = FALSE
   )
+  # png(res=) sizes the pixel grid correctly but writes no record of what that
+  # resolution *was* — verified against a stock ggsave PNG with both
+  # `identify -verbose` (reports "Units: Undefined") and Pillow
+  # (`Image.info["dpi"]` absent). JPEG and TIFF do not have this gap: their own
+  # devices already write it (checked against the JFIF APP0 segment and the
+  # TIFF XResolution/YResolution tags respectively), so only PNG needs help.
+  if (identical(format, "png")) {
+    .write_png_dpi(file, dpi)
+  }
+}
+
+# Insert a pHYs chunk recording pixels-per-metre, so the file itself carries
+# the resolution a viewer, print shop or journal submission checker would
+# otherwise have no way to read. Written by hand rather than pulled from a
+# package: pHYs is nine bytes laid out by a decades-stable spec (two
+# big-endian pixels-per-unit uint32s plus a unit byte, 1 = metre), and the only
+# non-trivial part — the chunk's CRC32 — is exactly what `digest`'s "crc32"
+# algorithm computes (verified against the RFC 1952 test vector, CRC-32("123456789")
+# == 0xCBF43926, before relying on it here).
+#
+# Spliced in right after IHDR, which is always the PNG's first chunk. The PNG
+# spec allows an ancillary chunk anywhere between IHDR and IDAT, so this does
+# not need to know or care what else — gAMA, sRGB — the encoder already wrote.
+.write_png_dpi <- function(file, dpi) {
+  raw <- readBin(file, "raw", file.info(file)$size)
+  ihdr_len <- .be_u32(raw[9:12])
+  # 8 (signature) + 4 (length field) + 4 (type field) + IHDR's own data + 4 (CRC field).
+  ihdr_end <- 8L + 12L + ihdr_len
+
+  ppm <- as.integer(round(dpi / 0.0254)) # pixels per metre; 1 in = 0.0254 m
+  type <- charToRaw("pHYs")
+  data <- c(.u32_be(ppm), .u32_be(ppm), as.raw(1L))
+  chunk <- c(.u32_be(length(data)), type, data, .crc32_be(c(type, data)))
+
+  writeBin(c(raw[seq_len(ihdr_end)], chunk, raw[(ihdr_end + 1L):length(raw)]), file)
+}
+
+.be_u32 <- function(b4) {
+  as.integer(sum(as.numeric(b4) * 256^(3:0)))
+}
+
+.u32_be <- function(x) {
+  x <- as.integer(x)
+  as.raw(c(
+    bitwAnd(bitwShiftR(x, 24L), 255L),
+    bitwAnd(bitwShiftR(x, 16L), 255L),
+    bitwAnd(bitwShiftR(x, 8L), 255L),
+    bitwAnd(x, 255L)
+  ))
+}
+
+.crc32_be <- function(bytes) {
+  hex <- digest(bytes, algo = "crc32", serialize = FALSE)
+  as.raw(strtoi(substring(hex, c(1L, 3L, 5L, 7L), c(2L, 4L, 6L, 8L)), base = 16L))
 }
 
 #' Decode a browser-captured data URI into an image file.

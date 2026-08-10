@@ -34,7 +34,7 @@ values**.
 
 ## The control panel {#sec-trees-controls}
 
-The Tree's right-hand sidebar has six tabs.
+The Tree's right-hand sidebar has six tabs (@fig-ui-tree-controls).
 
 | Tab | What it holds |
 |---|---|
@@ -53,6 +53,9 @@ controls set — the way to read a several-hundred-tip tree without shrinking it
 labels to nothing.
 
 ## Reading the tree {#sec-trees-read}
+
+@fig-ui-tree shows a rectangular tree annotated with tip points, a colour
+mapping and a gene heatmap panel beside the tips.
 
 ![A rectangular tree with tip points, a colour mapping and a gene heatmap panel beside the tips.](images/ui/tree-plot.png){#fig-ui-tree}
 
@@ -125,7 +128,7 @@ with its tips, under **Mapping > Heatmaps**. Two are offered:
 Each has its own column picker, so you can restrict a panel to the classes or
 genes that matter rather than drawing all of them. This is usually the figure
 worth putting in a report: the tree shows who is related to whom, and the panel
-beside it shows what that means clinically.
+beside it shows what that means clinically (@fig-tree).
 
 ```{mermaid}
 %%| label: fig-tree

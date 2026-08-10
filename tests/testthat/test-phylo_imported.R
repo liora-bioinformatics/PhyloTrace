@@ -84,6 +84,36 @@ test_that("with no staged sets the profile is byte-for-byte what it always was",
   expect_false("ref" %in% rownames(base))
 })
 
+test_that("a NULL isolate list resolves against the database, not the caller", {
+  # Documents the contract that made the app's tree leak. NULL is legitimate
+  # here - "every isolate in this database" is a reasonable library default -
+  # but it is resolved from `mlst` at call time, so it is only ever as current
+  # as the file. An isolate written by another process a moment ago is in it.
+  #
+  # That is why app/view/visualization_plot.R resolves "all isolates" to a
+  # concrete vector before calling in (see its `engine_isolates`): during a
+  # typing run the two answers differ, and the UI's is the one the plot's
+  # labels come from.
+  dir <- local_tempdir()
+  db <- fixture(dir)
+
+  before <- rownames(load_allele_profile(db))
+
+  # Another writer adds an isolate to `mlst` behind our back.
+  con <- DBI::dbConnect(RSQLite::SQLite(), db)
+  DBI::dbExecute(
+    con,
+    "INSERT INTO mlst (souche, gene, seqid)
+       SELECT 'MID_RUN', gene, seqid FROM mlst WHERE souche = 'A'"
+  )
+  DBI::dbDisconnect(con)
+
+  # NULL picks it up immediately...
+  expect_true("MID_RUN" %in% rownames(load_allele_profile(db)))
+  # ...while an explicit list is bounded by what the caller asked for.
+  expect_setequal(rownames(load_allele_profile(db, isolates = before)), before)
+})
+
 test_that("staging a set does not disturb the local profile or its distances", {
   dir <- local_tempdir()
   db <- fixture(dir)

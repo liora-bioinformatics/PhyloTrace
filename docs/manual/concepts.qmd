@@ -25,9 +25,10 @@ identical, and *different* alleles when it differs by even a single base.
 
 The **core genome** is the set of loci present in essentially all members of a
 species. **Core-genome MLST (cgMLST)** types an isolate by reading its allele at
-every locus in a standardized core-genome scheme — typically 1,500–3,000 loci —
-and recording *which* allele it carries at each. This generalizes classical
-**MLST** [@maiden1998mlst], which used only ~7 housekeeping genes.
+every locus in a standardized core-genome scheme — a few hundred to a few
+thousand loci, depending on the species — and recording *which* allele it
+carries at each. This generalizes classical **MLST** [@maiden1998mlst], which
+used only ~7 housekeeping genes.
 
 ::: {.callout-tip title="Concept — why alleles instead of raw DNA differences?"}
 cgMLST records only *whether* two alleles differ, not *how much*. A locus is
@@ -113,7 +114,7 @@ whose length is their allelic distance. A **spanning tree** connects all nodes
 with edges such that everything is joined and no loops form. The **minimum**
 spanning tree (MST) is the spanning tree whose total edge length is smallest —
 the most economical set of connections that still links every isolate
-[@prim1957; @kruskal1956].
+[@prim1957; @kruskal1956], as in @fig-concepts-mst.
 
 ```{mermaid}
 %%| label: fig-concepts-mst
@@ -260,9 +261,11 @@ hashing.
   profiles [@silva2018chewbbaca].
 - **Assembly identity.** Every typed assembly is fingerprinted with a GA4GH-style
   sequence digest [@ga4gh_refget] and the fingerprint is stored against the
-  isolate. A match proves two typing runs consumed the byte-identical assembly; a
-  mismatch proves nothing, so PhyloTrace uses it to *flag* a possible duplicate
-  and never to block work (@sec-typing).
+  isolate. A match proves two typing runs consumed assemblies with the same
+  content — the same set of contig sequences, independent of file formatting,
+  header names, contig order or letter case; a mismatch proves nothing, so
+  PhyloTrace uses it to *flag* a possible duplicate and never to block work
+  (@sec-typing).
 
 ::: {.callout-tip title="Concept — why a hash is better than a name"}
 Names are fragile: renaming an assembly file and re-typing it creates a second,

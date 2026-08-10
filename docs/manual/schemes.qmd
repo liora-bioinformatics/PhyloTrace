@@ -7,7 +7,8 @@ what a scheme contains, and how to inspect the one your database was built from.
 
 ::: {.callout-tip title="Concept — what a cgMLST scheme is"}
 A cgMLST **scheme** is a species-specific catalogue with three parts: the **set
-of core-genome loci** to type (often 1,500–3,000 genes), a **nomenclature** that
+of core-genome loci** to type (often several hundred to a few thousand genes,
+depending on the species), a **nomenclature** that
 gives every known allele at each locus a stable identifier, and a **reference
 (seed) genome** the loci are defined against. Public repositories curate these
 so that everyone typing, say, *Listeria monocytogenes* uses the same targets and
@@ -32,7 +33,8 @@ feature still to come — and lays that screen out in four regions:
 | **Details** (bottom right) | A photograph, the taxonomy and a short description of the organism |
 
 The Details card is there so you can confirm you are looking at the right
-organism before committing to a download of several thousand allele sequences.
+organism before committing to a download of several thousand allele sequences
+(@fig-ui-scheme-browser).
 
 ![The Scheme Browser. Pick a species on the left, confirm it in the Details card, and set the destination on the right.](images/ui/scheme-browser.png){#fig-ui-scheme-browser}
 
@@ -47,7 +49,7 @@ the only place an arbitrary existing file can be selected.
 ## Creating a database from a scheme {#sec-schemes-download}
 
 Downloading is what creates the database, in three steps you drive from the
-panel:
+panel (@fig-scheme-download):
 
 1. **Choose the species** in **Select Scheme**. The list is long, so type into
    the search box at the top of the dropdown rather than scrolling. Scheme
@@ -103,18 +105,18 @@ threshold. That last number is the default PhyloTrace offers when you cluster a
 minimum spanning tree (**Visualization > Options > Clustering > Threshold**,
 @sec-mst-cluster), which is what makes your cluster calls comparable with
 published nomenclatures. Beside it, the same species photograph and **Details**
-card you saw in the Scheme Browser.
+card you saw in the Scheme Browser (@fig-ui-scheme-info).
 
 ![cgMLST Overview > Scheme Info: the scheme summary stored in your database, with the organism description beside it.](images/ui/cgmlst-scheme-info.png){#fig-ui-scheme-info}
 
 ### Loci Info {#sec-schemes-loci-info}
 
 The **Loci Table** lists one row per target locus with six columns — *Locus*,
-*Gene*, *Start*, *Length*, *Product* and *Allele Count*. The allele count is the
-number of distinct alleles seen for that locus **in your database**, not in the
-public scheme, so it is a direct measure of how much diversity your own
-collection carries at that gene. **Export CSV** in the card header writes the
-whole table out.
+*Gene*, *Start*, *Length*, *Product* and *Allele Count* (@fig-ui-loci-info). The
+allele count is the number of distinct alleles seen for that locus **in your
+database**, not in the public scheme, so it is a direct measure of how much
+diversity your own collection carries at that gene. **Export CSV** in the card
+header writes the whole table out.
 
 Selecting a row, or picking one from the **Select locus from table** dropdown
 below the table, loads that locus's alleles into the panel on the right, with the

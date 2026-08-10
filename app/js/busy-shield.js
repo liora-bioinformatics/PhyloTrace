@@ -49,7 +49,15 @@ function isExemptFromShield(el) {
     el.closest(".pickr") ||                    // Color picker dragging
     el.closest("table.dataTable tbody") ||     // Row selection and dblclick inline edits
     isMultiSelectMenu(el) ||
-    (el.tagName === "INPUT" && el.type === "number") // Stepper arrows
+    (el.tagName === "INPUT" && el.type === "number") || // Stepper arrows
+    // Tab/pill navigation (e.g. the top-level nav bar, bslib accordions):
+    // switching away must stay possible even while a long-running,
+    // continuously-busy operation (e.g. typing's pre-run genome check) has
+    // Shiny too busy to ever fire shiny:idle - without this, clicking the
+    // trigger arms the shield on the resulting input change and it cannot
+    // release until that operation finally ends.
+    el.closest('[data-bs-toggle="tab"]') ||
+    el.closest('[data-bs-toggle="collapse"]')
   );
 }
 

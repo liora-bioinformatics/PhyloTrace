@@ -29,7 +29,7 @@ book:
   date: today
   search: true
   page-navigation: true
-  favicon: images/phylotrace-logo.png
+  favicon: images/pt-small-icon.png
   sidebar:
     style: docked
     collapse-level: 1

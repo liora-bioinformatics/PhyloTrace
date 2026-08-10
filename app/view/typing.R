@@ -22,6 +22,7 @@ box::use(
     p,
     span,
     tags,
+    tagList,
     icon,
     actionButton,
     numericInput,
@@ -29,6 +30,7 @@ box::use(
     checkboxInput,
     showNotification,
     showModal,
+    removeModal,
     modalDialog,
     modalButton,
     HTML
@@ -80,7 +82,14 @@ box::use(
   app / logic / functions[render_info],
   app / logic / logging[typing_log_file, log_event],
   app / logic / provenance[scheme_provenance, store_provenance],
-  app / logic / mlst_repo[REPO_URLS, resolve_mlst_scheme, write_scheme_spec],
+  app /
+    logic /
+    mlst_repo[
+      REPO_URLS,
+      describe_resolution,
+      resolve_mlst_scheme,
+      write_scheme_spec,
+    ],
   app /
     logic /
     pymlst[
@@ -122,12 +131,40 @@ genome_pattern <- "\\.(fasta|fa|fna)$"
 # stays at 0% while the status line reads "Checking genomes ...".
 check_progress_min <- 10L
 
+# Above this many rows, a name-conflict advisory ("these will be skipped as
+# duplicates") is enough potential data loss to pause the run for a look
+# before committing, rather than auto-proceeding past a wall of toast text -
+# below it the existing inline warning is legible enough on its own.
+name_conflict_gate_min <- 5L
+
 # Logger for the typing module: a thin "TYPING"-tagged wrapper over the central
 # log_event() (app/logic/logging.R), so every line lands in the active session
 # log file as well as the console. `event` is a short phrase naming what
 # happened; `detail` (optional) carries the specifics (counts, paths, params).
 log_typing <- function(event, detail = NULL) {
   log_event("TYPING", event, detail)
+}
+
+# Small standalone DT for a duplicate-advisory table (same_genome or
+# name_conflict rows out of the pre-run check). Built with datatable()
+# directly rather than renderDT so it drops into a modal or a static panel
+# without output-id wiring of its own; paging/search only kick in once the
+# list is long enough to need them, so a 2-row table still reads as a plain
+# list rather than a padded-out widget.
+duplicate_dt <- function(df, cols, headers) {
+  datatable(
+    df[, cols, drop = FALSE],
+    colnames = headers,
+    rownames = FALSE,
+    selection = "none",
+    class = "compact stripe hover",
+    options = list(
+      dom = if (nrow(df) > 10) "ftp" else "t",
+      paging = nrow(df) > 10,
+      searching = nrow(df) > 10,
+      ordering = FALSE
+    )
+  )
 }
 
 # Bootstrap badge class per typing outcome. Bootstrap 5 (shipped with bslib)
@@ -272,18 +309,13 @@ results_header <- tags$table(
   ))
 )
 
-# Attach a Bootstrap tooltip to every header cell that carries an explanation,
-# and release the tab-navigation lock a run engages at launch (see
-# app/js/typing-nav-lock.js) - DataTables fires initComplete exactly once,
-# right after this first render's own construction finishes, which is the
-# earliest safe point to let the user switch away. Runs once per render (the
-# header survives replaceData, so the live polling updates never re-trigger
-# it). `container: body` keeps the tooltip out of the accordion body, which
-# scrolls and would otherwise clip it. Falls back to the native title tooltip
-# if Bootstrap's JS is unavailable.
+# Attach a Bootstrap tooltip to every header cell that carries an explanation.
+# Runs once per render (the header survives replaceData, so the live polling
+# updates never re-trigger it). `container: body` keeps the tooltip out of the
+# accordion body, which scrolls and would otherwise clip it. Falls back to the
+# native title tooltip if Bootstrap's JS is unavailable.
 header_tooltips <- JS(
   "function(settings, json) {",
-  "  if (window.__ptReleaseTypingNavLock) window.__ptReleaseTypingNavLock();",
   "  if (!window.bootstrap || !window.bootstrap.Tooltip) return;",
   "  $(this.api().table().header())",
   "    .find('th[data-bs-toggle=\"tooltip\"]')",
@@ -607,6 +639,19 @@ ui <- function(id) {
             class = "typing-scrollpane",
             DTOutput(ns("results_table"))
           )
+        ),
+        accordion_panel(
+          title = tags$span(
+            class = "typing-accordion-title",
+            span("Duplicate Advisories"),
+            uiOutput(ns("duplicate_advisories_badge"), inline = TRUE)
+          ),
+          value = "Duplicate Advisories",
+          icon = icon("clone"),
+          div(
+            class = "typing-scrollpane",
+            DTOutput(ns("duplicate_advisories_table"))
+          )
         )
       )
     )
@@ -635,6 +680,11 @@ server <- function(
       # Strains manually excluded from typing via the selection table, on top of
       # the automatic "already present" exclusion.
       excluded_strains = character(0),
+      # same_genome rows (strain, other) from the last pre-run check: assemblies
+      # already stored under a different isolate name. Drives the "Duplicate
+      # Advisories" panel - unlike name_conflict these are typed normally, so
+      # without this they would leave no record once the summary toast dismisses.
+      same_genome_dup = NULL,
       proc = NULL,
       log_file = NULL,
       # Path to this run's interim claMLST reference DB (built by the typing
@@ -1333,6 +1383,45 @@ server <- function(
     })
     outputOptions(output, "selection_summary", suspendWhenHidden = FALSE)
 
+    # Row-count badge on the "Duplicate Advisories" tab title, mirroring
+    # selection_summary - lets a same_genome hit be noticed even after its
+    # summary toast has auto-dismissed, without opening the panel.
+    output$duplicate_advisories_badge <- renderUI({
+      dup <- Typing$same_genome_dup
+      n <- if (is.null(dup)) 0L else nrow(dup)
+      if (n == 0L) {
+        return(NULL)
+      }
+      tags$span(
+        class = "typing-accordion-summary",
+        tags$span(class = "badge text-bg-warning", paste(n, "Duplicate"))
+      )
+    })
+    outputOptions(output, "duplicate_advisories_badge", suspendWhenHidden = FALSE)
+
+    # Full same_genome list from the last check pass (see launch_typing).
+    output$duplicate_advisories_table <- renderDT({
+      render_info("output$duplicate_advisories_table")
+      dup <- Typing$same_genome_dup
+      if (is.null(dup) || nrow(dup) == 0) {
+        return(datatable(
+          data.frame(
+            " " = "No duplicate assemblies flagged in the last check.",
+            check.names = FALSE
+          ),
+          rownames = FALSE,
+          selection = "none",
+          options = list(dom = "t", ordering = FALSE)
+        ))
+      }
+      duplicate_dt(
+        dup,
+        c("strain", "other"),
+        c("Selected assembly", "Already stored as")
+      )
+    })
+    outputOptions(output, "duplicate_advisories_table", suspendWhenHidden = FALSE)
+
     # Enable/disable controls based on current status.
     # While running: lock file/folder pickers (needs both disable() + CSS class
     # because shinyFiles buttons are not standard inputs) and parameter inputs.
@@ -1875,21 +1964,23 @@ server <- function(
         return()
       }
 
-      # Type only assemblies that are not already in the database (their
-      # `wgMLST add` would otherwise be rejected as a duplicate, wasting time)
-      # and not manually excluded via the selection table.
-      keep <- !(Typing$strains %in% existing()) &
-        !(Typing$strains %in% Typing$excluded_strains)
+      # Only manual exclusions are filtered here. A name already in the
+      # database is NOT dropped at this point any more: it might be a genuine
+      # no-op retype (same digest, safe to skip) or a real name collision
+      # (different digest under a taken name), and only the digest check below
+      # can tell those apart - dropping by name alone made every name-conflict
+      # or retype classification below unreachable, since it never let a known
+      # name survive into `checked`. See launch_typing(), which narrows the
+      # queue down to what actually gets typed once that check is in.
+      keep <- !(Typing$strains %in% Typing$excluded_strains)
       Typing$queued_files <- Typing$files[keep]
       Typing$queued_strains <- Typing$strains[keep]
       log_typing(
         "Queue filtered",
         sprintf(
-          "%d queued, %d already present, %d excluded",
+          "%d queued, %d excluded",
           length(Typing$queued_strains),
-          sum(Typing$strains %in% existing()),
-          sum(Typing$strains %in% Typing$excluded_strains &
-            !(Typing$strains %in% existing()))
+          sum(Typing$strains %in% Typing$excluded_strains)
         )
       )
 
@@ -1900,10 +1991,7 @@ server <- function(
       if (length(Typing$queued_files) == 0) {
         log_typing("Start aborted: nothing queued after filter")
         showNotification(
-          paste(
-            "All selected genomes are either already present in the",
-            "database or excluded."
-          ),
+          "All selected genomes are excluded.",
           id = ns("empty_queue"),
           type = "warning",
           duration = 5
@@ -1981,25 +2069,13 @@ server <- function(
 
       if (isTRUE(Typing$terminated)) {
         log_typing("Checking phase terminated", sprintf("%d/%d done", chk$i, chk$n))
-        Typing$status <- "idle"
-        updateProgressBar(
-          session,
-          "progress",
-          value = 0,
-          total = 1,
-          status = "primary"
-        )
-        runjs(sprintf(
-          "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
-          ns("progress")
-        ))
+        reset_to_idle()
         showNotification(
           "Genome check terminated.",
           id = ns("check_terminated"),
           type = "warning",
           duration = 4
         )
-        release_nav_lock()
         return(NULL)
       }
 
@@ -2039,13 +2115,34 @@ server <- function(
       invalidateLater(0, session)
     })
 
+    # Shared reset back to idle once a run is abandoned after the progress bar
+    # has already started animating: the checking-terminated path above and the
+    # name-conflict gate's Cancel button below both need it.
+    reset_to_idle <- function() {
+      Typing$status <- "idle"
+      updateProgressBar(session, "progress", value = 0, total = 1, status = "primary")
+      runjs(sprintf(
+        "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
+        ns("progress")
+      ))
+      release_nav_lock()
+    }
+
     # Kick off the typing run once its selection has been checked. `checked` is
     # the classification table from the checking phase; its advisory verdicts are
-    # surfaced as notifications here (nothing blocks the run). Split out of the
-    # Start handler so the checking phase can call it asynchronously on
-    # completion rather than everything running in one blocking event.
+    # surfaced here. same_genome never blocks (pyMLST types it fine under the new
+    # name) - its full list is handed to the "Duplicate Advisories" panel, since
+    # unlike name_conflict it leaves no trace in results_table afterwards. A
+    # small name_conflict batch is likewise let through with just a heads-up
+    # (pyMLST rejects those itself), but a batch bigger than
+    # name_conflict_gate_min is treated as a signal something is off with the
+    # whole selection (e.g. an accidental re-run of an already-typed batch), so
+    # it pauses for an explicit Continue/Cancel before any process starts. Split
+    # out of the Start handler so the checking phase can call it asynchronously
+    # on completion rather than everything running in one blocking event.
     launch_typing <- function(checked) {
       same_genome <- checked[checked$status == "same_genome", , drop = FALSE]
+      Typing$same_genome_dup <- if (nrow(same_genome)) same_genome else NULL
       if (nrow(same_genome)) {
         log_typing(
           "Advisory: assemblies already in DB under another name",
@@ -2055,19 +2152,14 @@ server <- function(
           HTML(paste0(
             "<strong>",
             nrow(same_genome),
-            " selected assembly/assemblies ",
-            "already in the database under another name:</strong><br>",
-            paste0(
-              htmlEscape(same_genome$strain),
-              " &rarr; stored as ",
-              htmlEscape(same_genome$other),
-              collapse = "<br>"
-            ),
-            "<br><em>Identical assembly, not necessarily the same isolate - ",
-            "check the metadata before treating these as duplicates.</em>"
+            " selected assembly/assemblies already in the database under ",
+            "another name.</strong><br>",
+            "<em>Identical assembly, not necessarily the same isolate - see ",
+            "the \"Duplicate Advisories\" panel for the full list before ",
+            "treating these as duplicates.</em>"
           )),
           type = "warning",
-          duration = NULL
+          duration = 8
         )
       }
 
@@ -2076,6 +2168,40 @@ server <- function(
         ,
         drop = FALSE
       ]
+      if (nrow(name_conflict) > name_conflict_gate_min) {
+        log_typing(
+          "Advisory: name conflicts require confirmation",
+          sprintf("%d (gate threshold %d)", nrow(name_conflict), name_conflict_gate_min)
+        )
+        showModal(modalDialog(
+          title = "Name conflicts detected",
+          size = "l",
+          easyClose = FALSE,
+          tags$p(sprintf(
+            paste(
+              "%d selected assembly/assemblies share a name with a different",
+              "assembly already typed. These will be skipped as duplicates and",
+              "will NOT be typed - rename them to type them, or continue to",
+              "type the rest of the selection."
+            ),
+            nrow(name_conflict)
+          )),
+          div(
+            class = "typing-scrollpane",
+            duplicate_dt(name_conflict, "strain", "Skipped as duplicate")
+          ),
+          footer = tagList(
+            actionButton(ns("cancel_typing_gate"), "Cancel"),
+            actionButton(
+              ns("confirm_typing_gate"),
+              "Continue typing",
+              class = "btn-warning"
+            )
+          )
+        ))
+        return()
+      }
+
       if (nrow(name_conflict)) {
         log_typing(
           "Advisory: name conflicts skipped as duplicates",
@@ -2096,6 +2222,29 @@ server <- function(
         )
       }
 
+      begin_typing_run()
+    }
+
+    # Resume from the name-conflict confirmation gate: dismiss the modal and
+    # either abandon the run (back to idle, as if Start was never clicked) or
+    # proceed exactly as a sub-threshold batch would have.
+    observeEvent(input$cancel_typing_gate, {
+      removeModal()
+      log_typing("Name-conflict gate cancelled")
+      reset_to_idle()
+    })
+
+    observeEvent(input$confirm_typing_gate, {
+      removeModal()
+      log_typing("Name-conflict gate confirmed - proceeding")
+      begin_typing_run()
+    })
+
+    # Second half of launch_typing(): actually starts the background typing
+    # process against the already-queued, already-checked selection. Reached
+    # either straight from launch_typing() or, once a name-conflict gate was
+    # shown, from the "Continue typing" button above.
+    begin_typing_run <- function() {
       # Click the "Results" accordion button
       runjs(sprintf(
         "(function(){
@@ -2144,14 +2293,14 @@ server <- function(
           repos = union(or_default(input$cla_repo, "pubmlst"), names(REPO_URLS))
         )
       } else {
-        NULL
+        list(resolved = FALSE, species = NA_character_, attempts = character(0))
       }
-      Typing$cla_db <- if (!is.null(cla_scheme)) {
+      Typing$cla_db <- if (isTRUE(cla_scheme$resolved)) {
         tempfile(fileext = ".clamlst.db")
       } else {
         NULL
       }
-      Typing$cla_spec <- if (!is.null(cla_scheme)) {
+      Typing$cla_spec <- if (isTRUE(cla_scheme$resolved)) {
         write_scheme_spec(cla_scheme, tempfile(fileext = ".clamlst.spec"))
       } else {
         NULL
@@ -2159,12 +2308,20 @@ server <- function(
       live_cla_db <<- Typing$cla_db
       Typing$cla_enabled <- !is.null(Typing$cla_db)
 
-      if (!is.na(species) && is.null(cla_scheme)) {
-        log_typing(
-          "No classical MLST scheme",
-          sprintf("%s: no single scheme in PubMLST or Pasteur", species)
-        )
-      }
+      # Why classical MLST will or won't run this time, worded for the run's own
+      # transcript rather than the internal session log - the only log a user
+      # inspecting a finished run actually has open. Written straight into the
+      # log file now, before the subprocess launches: start_typing() connects
+      # the subprocess's stdout to this same path in *append* mode precisely so
+      # a note written here survives instead of being raced by the child's own
+      # first write.
+      cat(
+        strrep("-", 48), "\n",
+        describe_resolution(cla_scheme), "\n",
+        sep = "",
+        file = Typing$log_file,
+        append = TRUE
+      )
 
       # AMR screening rides along too (opt-out via the sidebar checkbox). Each
       # genome is screened into a per-strain subdir of this run's temp AMR dir,
@@ -2192,10 +2349,10 @@ server <- function(
           or_default(input$identity, 0.95),
           or_default(input$coverage, 0.9),
           if (Typing$cla_enabled) "on" else "off",
-          if (is.null(cla_scheme)) {
-            "no scheme"
-          } else {
+          if (isTRUE(cla_scheme$resolved)) {
             sprintf("%s: %s", cla_scheme$repository, cla_scheme$scheme)
+          } else {
+            "no scheme"
           },
           if (run_amr) "on" else "off",
           if (is.na(amr_sp)) "acquired-only" else amr_sp
@@ -2564,6 +2721,20 @@ server <- function(
       )
     })
 
-    list(db_updated = db_updated)
+    # TRUE while a run is under way, for modules that must not read the
+    # database as if it were settled.
+    #
+    # "checking" as well as "running": the genome-hash pass is the last moment
+    # before pyMLST starts writing, and a distance computation begun there
+    # would still be in flight when it does. `db_updated` says "new isolates
+    # have landed, and the database is consistent again"; this says the
+    # opposite, for the window in between - during a run pyMLST writes `mlst`
+    # from a separate process, and nothing bumps db_rev until finalize, so a
+    # reader that queried `mlst` directly right now would see half a run.
+    typing_active <- reactive(
+      Typing$status %in% c("checking", "running")
+    )
+
+    list(db_updated = db_updated, typing_active = typing_active)
   })
 }

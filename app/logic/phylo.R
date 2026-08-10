@@ -36,12 +36,23 @@ box::use(
 #'
 #' Queries the SQLite database for allele profiles (excluding synthetic reference entries)
 #' and reshapes them into a matrix (isolates x loci). Staged imported peer profiles can
-#' optionally be folded in and mapped into the local integer seqid code space[cite: 12].
+#' optionally be folded in and mapped into the local integer seqid code space.
 #'
-#' @param db_path File path to SQLite database[cite: 12].
-#' @param isolates Vector of isolate IDs to filter, or NULL for all[cite: 12].
-#' @param imported_sets Optional list of staged imported peer profile datasets[cite: 12].
-#' @return Integer matrix of allele profiles with isolate names as row names[cite: 12].
+#' `isolates = NULL` means "every isolate in the database", resolved from
+#' `mlst` at call time. That is a fine default for a library function, but it
+#' makes the result only as current as the file: an isolate another process
+#' wrote a moment ago is in it. A caller that has already shown the user a set
+#' of isolates must therefore pass that set explicitly rather than rely on
+#' NULL, or the two will disagree - which is exactly what happened when a tree
+#' generated during a typing run came back with tips for half-written isolates
+#' that the sidebar, the selection modal and the tip labels knew nothing
+#' about. See `engine_isolates` in app/view/visualization_plot.R.
+#'
+#' @param db_path File path to SQLite database.
+#' @param isolates Vector of isolate IDs to filter, or NULL for every isolate
+#'   the database holds at call time (see above).
+#' @param imported_sets Optional list of staged imported peer profile datasets.
+#' @return Integer matrix of allele profiles with isolate names as row names.
 #' @export
 load_allele_profile <- function(
   db_path,
@@ -112,27 +123,27 @@ load_allele_profile <- function(
 # --- 2. Pairwise Distance Kernels --------------------------------------------
 
 #' Standard Hamming Distance Kernel
-#' @param x Vector of allele values[cite: 12].
-#' @param y Vector of allele values[cite: 12].
-#' @return Integer count of differing positions[cite: 12].
+#' @param x Vector of allele values.
+#' @param y Vector of allele values.
+#' @return Integer count of differing positions.
 #' @export
 hamming_dist <- function(x, y) {
   sum(x != y)
 }
 
 #' Missing-Value Pairwise Ignore Hamming Distance Kernel
-#' @param x Vector of allele values[cite: 12].
-#' @param y Vector of allele values[cite: 12].
-#' @return Integer count of mismatches excluding positions where either value is NA[cite: 12].
+#' @param x Vector of allele values.
+#' @param y Vector of allele values.
+#' @return Integer count of mismatches excluding positions where either value is NA.
 #' @export
 hamming_dist_ignore <- function(x, y) {
   sum((x != y) & !is.na(x) & !is.na(y))
 }
 
 #' NA-as-Category Hamming Distance Kernel
-#' @param x Vector of allele values[cite: 12].
-#' @param y Vector of allele values[cite: 12].
-#' @return Integer count where NA vs value is a mismatch, but NA vs NA is a match[cite: 12].
+#' @param x Vector of allele values.
+#' @param y Vector of allele values.
+#' @return Integer count where NA vs value is a mismatch, but NA vs NA is a match.
 #' @export
 hamming_dist_category <- function(x, y) {
   sum((x != y | xor(is.na(x), is.na(y))) & !(is.na(x) & is.na(y)))
@@ -142,11 +153,11 @@ hamming_dist_category <- function(x, y) {
 
 #' Compute Distance Matrix Across Profiles
 #'
-#' Applies a distance metric function across all pairwise isolate profile combinations[cite: 12].
+#' Applies a distance metric function across all pairwise isolate profile combinations.
 #'
-#' @param profile Matrix of allele profiles[cite: 12].
-#' @param hamming_method Distance function kernel to apply[cite: 12].
-#' @return Symmetric distance matrix[cite: 12].
+#' @param profile Matrix of allele profiles.
+#' @param hamming_method Distance function kernel to apply.
+#' @return Symmetric distance matrix.
 #' @export
 compute_dist_matrix <- function(profile, hamming_method) {
   mat <- as.matrix(profile)
@@ -168,11 +179,11 @@ compute_dist_matrix <- function(profile, hamming_method) {
 
 #' Construct Phylogenetic Tree Object
 #'
-#' Builds an ape `phylo` object using Neighbor-Joining (NJ) or UPGMA[cite: 12].
+#' Builds an ape `phylo` object using Neighbor-Joining (NJ) or UPGMA.
 #' Branch lengths are left in the units of `dist_mat` (raw allelic distance),
 #' the same units the MST draws its edge weights in — a plot that shows one
 #' isolate as "3272 alleles apart" and another view of the same pair a
-#' different number for the same data is a bug, not a rendering choice[cite: 12].
+#' different number for the same data is a bug, not a rendering choice.
 #'
 #' NJ's least-squares estimate can come out slightly negative for a very short
 #' branch, which has no biological reading (a negative number of allele
@@ -182,12 +193,12 @@ compute_dist_matrix <- function(profile, hamming_method) {
 #' as the data says: which of those branches is legible enough to carry a
 #' printed number is a rendering decision, handled downstream in
 #' `tree_plot.R` (`tree_branch_keep`) from the drawn geometry rather than by
-#' silently rescaling what a branch means[cite: 12].
+#' silently rescaling what a branch means.
 #'
-#' @param dist_mat Distance matrix[cite: 12].
-#' @param labels Tip label vector matching distance matrix ordering[cite: 12].
-#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA")[cite: 12].
-#' @return An ape `phylo` object[cite: 12].
+#' @param dist_mat Distance matrix.
+#' @param labels Tip label vector matching distance matrix ordering.
+#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA").
+#' @return An ape `phylo` object.
 #' @export
 build_tree <- function(dist_mat, labels, algo) {
   d <- as.dist(dist_mat)
@@ -242,14 +253,14 @@ prepare_distance <- function(
 
 #' Compute Phylogenetic Tree
 #'
-#' High-level wrapper to calculate distances and return a phylogenetic tree[cite: 12].
+#' High-level wrapper to calculate distances and return a phylogenetic tree.
 #'
-#' @param db_path Database path[cite: 12].
-#' @param na_handling Strategy for missing values ("ignore_na", "omit", or "category")[cite: 12].
-#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA")[cite: 12].
-#' @param isolates Optional list of isolate IDs[cite: 12].
-#' @param imported_sets Optional list of staged imported peer profiles[cite: 12].
-#' @return A `phylo` object, or NULL if insufficient isolates are provided[cite: 12].
+#' @param db_path Database path.
+#' @param na_handling Strategy for missing values ("ignore_na", "omit", or "category").
+#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA").
+#' @param isolates Optional list of isolate IDs.
+#' @param imported_sets Optional list of staged imported peer profiles.
+#' @return A `phylo` object, or NULL if insufficient isolates are provided.
 #' @export
 compute_phylo_tree <- function(
   db_path,
@@ -274,14 +285,14 @@ compute_phylo_tree <- function(
 
 #' Compute Minimum Spanning Tree Graph
 #'
-#' Builds an igraph MST representation from isolate allele profiles[cite: 12].
-#' Zero-distance isolates are merged into single representative nodes[cite: 12].
+#' Builds an igraph MST representation from isolate allele profiles.
+#' Zero-distance isolates are merged into single representative nodes.
 #'
-#' @param db_path Database path[cite: 12].
-#' @param na_handling Strategy for handling missing values[cite: 12].
-#' @param isolates Optional list of isolate IDs[cite: 12].
-#' @param imported_sets Optional list of staged imported peer profiles[cite: 12].
-#' @return An `igraph` object, or NULL if insufficient isolates exist[cite: 12].
+#' @param db_path Database path.
+#' @param na_handling Strategy for handling missing values.
+#' @param isolates Optional list of isolate IDs.
+#' @param imported_sets Optional list of staged imported peer profiles.
+#' @return An `igraph` object, or NULL if insufficient isolates exist.
 #' @export
 compute_mst <- function(
   db_path,

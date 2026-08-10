@@ -10,8 +10,8 @@ get is a fair summary of the data.
 
 Each **node** is a set of isolates that are indistinguishable from one another;
 each **edge** joins the two closest nodes not already connected, and carries the
-allelic distance between them. Together they form the most economical set of
-links that still connects everything.
+allelic distance between them (@fig-ui-mst). Together they form the most
+economical set of links that still connects everything.
 
 ![A minimum spanning tree with clusters shaded, node fill mapped to a variable, and allelic distances on the edges.](images/ui/mst-plot.png){#fig-ui-mst}
 
@@ -63,7 +63,7 @@ redraws instantly.
 
 ## The control panel {#sec-mst-controls}
 
-The MST's right-hand sidebar has six tabs.
+The MST's right-hand sidebar has six tabs (@fig-ui-mst-options).
 
 | Tab | What it holds |
 |---|---|
@@ -109,10 +109,11 @@ Four controls sit in that section:
 | **Length** | The transform itself — whether edge length carries the distance at all |
 | **Spread** | How far apart the whole graph is drawn |
 | **Shorten long branches** | Caps outlier branches instead of drawing them to scale. Applies only while length carries the distance |
-| **Cap at (× median)** | Where that cap falls. A branch longer than this multiple of the median is drawn **dashed** at the capped length, with its true distance still on the label |
+| **Cap at (x median)** | Where that cap falls. A branch longer than this multiple of the median is drawn **dashed** at the capped length, with its true distance still on the label |
 
 **Read the numbers on the edges, not the pixels between the nodes** — and treat a
-dashed edge as an explicit statement that its drawn length is not to scale.
+dashed edge as an explicit statement that its drawn length is not to scale
+(@fig-ui-mst-nodes-edges).
 
 ![The Nodes and Edges tabs: labels and sizing on one, the length transform and its cap on the other.](images/ui/mst-nodes-edges.png){#fig-ui-mst-nodes-edges}
 
@@ -128,8 +129,8 @@ of each other, and shades each group as a blob behind its members.
 | Palette | Which colour scale the cluster blobs take |
 
 **Cluster Options**, the section below, governs how the blobs are drawn —
-**Width**, **Opacity (%)**, **Label size** (0 turns cluster labels off) and
-**Label Colors**, which tints each label to match its blob.
+**Width**, **Opacity (%)**, **Label size (0 = off)** and **Label Colors**, which
+tints each label to match its blob.
 
 ::: {.callout-important title="The default threshold comes from the scheme"}
 The threshold defaults to the **cluster distance published with your scheme**,

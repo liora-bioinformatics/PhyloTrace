@@ -19,17 +19,17 @@ who receives your database receives your analyses with it.
 ## Analyses and plots {#sec-dash-structure}
 
 The dashboard is a stack of cards, one per Analysis, with a sidebar on the left
-carrying **Add Analysis** and a list for jumping between them. Each card's header
-shows the Analysis name, when it was created and last modified, and — where the
-Analysis fixes an isolate set — a padlock badge reading "*n* fixed isolates".
-Inside it, the saved plots sit as a row of tiles with live thumbnails, ending in
-an **Add Plot** placeholder.
+carrying **Add Analysis** and a list for jumping between them (@fig-ui-dashboard).
+Each card's header shows the Analysis name, when it was created and last
+modified, and — where the Analysis fixes an isolate set — a padlock badge
+reading "*n* fixed isolates". Inside it, the saved plots sit as a row of tiles
+with live thumbnails, ending in an **Add Plot** placeholder.
 
 ![The Analysis Dashboard. Each card is an Analysis; each tile inside it is a saved plot.](images/ui/dashboard.png){#fig-ui-dashboard}
 
 ### Creating an Analysis {#sec-dash-create}
 
-**Add Analysis** opens a two-step dialogue:
+**Add Analysis** opens a two-step dialogue (@fig-ui-dash-wizard):
 
 1. **Analysis name** and an optional **Description**, then **Next**.
 2. The isolate table, ticked as you like, with **Select all** / **Select none**
@@ -59,7 +59,8 @@ Analysis already preselected as the save target (@sec-viz-save) — the quickest
 route from "this investigation needs one more figure" to having it.
 
 At the card level, **Delete Analysis** removes the Analysis and every plot inside
-it; its confirmation dialogue says so explicitly.
+it; its confirmation dialogue says so explicitly. @fig-dash summarises how the
+pieces relate.
 
 ```{mermaid}
 %%| label: fig-dash
@@ -97,7 +98,7 @@ has grown or changed underneath a saved Analysis, and reconcile the selection
 rather than silently plotting the wrong set.
 
 When a plot no longer matches the isolate set its Analysis now uses, its tile is
-flagged in place — an orange warning reading **"Isolates changed (+3 −1)"**,
+flagged in place — an orange warning reading **"Isolates changed (+3 -1)"**,
 counting what has been added and removed. The plot is not broken and nothing has
 been lost; reopening it rebuilds the figure against the current selection, and
 saving it again clears the flag.

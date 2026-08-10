@@ -29,13 +29,31 @@ quote in a methods section rather than "the latest".
 | **PubMLST** / **Institut Pasteur** [@pubmlst] | The matching classical 7-gene MLST scheme | @sec-typing |
 | **NCBI AMRFinderPlus database** | The AMR/virulence/stress reference sequences | @sec-amr |
 | **OpenStreetMap / Nominatim** | Coordinates for a place name | @sec-map |
-| **Natural Earth** | Country outlines for the choropleth map | @sec-map |
+| **Map tile providers** (OpenStreetMap, Carto, Esri, OpenTopoMap) | Basemap tiles for the interactive map, fetched continuously as you pan and zoom | @sec-map |
+
+**Natural Earth** country polygons are the one exception: they ship inside the
+`rnaturalearthdata` R package installed with PhyloTrace and are read from disk,
+so no network request backs the choropleth map's country outlines.
 
 ::: {.callout-important title="No isolate data is sent to any of these"}
-Every one of these requests either downloads public reference data or resolves a
-place name. Your assemblies, allele profiles and metadata never leave your
-machine (@sec-app-local).
+Every request above either downloads public reference data, resolves a place
+name, or fetches a map tile for the area currently on screen. Your assemblies,
+allele profiles and metadata never leave your machine (@sec-app-local).
 :::
+
+## The application framework
+
+PhyloTrace itself is a Shiny [@shiny] application built on the Rhino [@rhino]
+framework, and its figures are drawn with a handful of R visualization packages
+worth naming alongside the analysis toolchain if a plot from the app appears in
+a publication:
+
+| Package | Draws | Chapter |
+|---|---|---|
+| **ggtree** / **ape** [@yu2017ggtree; @ape] | The phylogenetic tree | @sec-trees |
+| **visNetwork** [@visnetwork] | The minimum spanning tree | @sec-mst |
+| **igraph** [@igraph] | The MST's underlying graph and its clusters | @sec-mst |
+| **leaflet** [@leaflet] | The interactive map | @sec-map |
 
 ## Methods-section wording
 

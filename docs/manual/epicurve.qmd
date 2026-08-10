@@ -33,10 +33,11 @@ The epi curve's right-hand sidebar has four tabs.
 
 ## Binning and the shape of the curve {#sec-epi-build}
 
-Cases are grouped into intervals, chosen under **Time > Interval**: **Day**,
-**Week**, **Month** or **Year**. PhyloTrace preselects the finest interval that
-keeps the number of bars readable — under about 150 — and you can override it at
-any time. Weeks follow the ISO-8601 convention, starting on Monday.
+Cases are grouped into intervals, chosen under **Time > Interval**
+(@fig-ui-epi-time): **Day**, **Week**, **Month** or **Year**. PhyloTrace
+preselects the finest interval that keeps the number of bars readable — under
+about 150 — and you can override it at any time. Weeks follow the ISO-8601
+convention, starting on Monday.
 
 ![The Time tab: the date-range slider, the interval buttons, and the step and Play controls.](images/ui/epi-time-tab.png){#fig-ui-epi-time}
 
@@ -136,6 +137,9 @@ axis follows the window instead.
 Playback is useful in a briefing: it shows *when* the outbreak was recognisable,
 and it makes the difference between a point-source peak and successive
 person-to-person waves much easier to convey than a static figure does.
+
+@fig-epi summarises how the curve is built; @fig-ui-epi shows a finished one,
+stratified with a moving-average line and a shaded intervention period.
 
 ```{mermaid}
 %%| label: fig-epi

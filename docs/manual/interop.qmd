@@ -40,10 +40,10 @@ The first control, **Source**, decides what everything below it means:
 | **Typing results (table)** | A profile table, optionally with sequences and metadata | Staging for distance comparison only (@sec-interop-staging) |
 
 With the database source chosen, **Select database …** opens a file chooser, and
-the main area fills with a pass / warn / fail grid of compatibility checks. The
-remaining sidebar groups — **Metadata fields**, **Custom variables**, **Analysis
-results** — decide what comes across, and **Merge into database** at the bottom
-performs it. It stays disabled until the checks pass.
+the main area fills with a pass / warn / fail grid of compatibility checks
+(@fig-ui-import). The remaining sidebar groups — **Metadata fields**, **Custom
+variables**, **Analysis results** — decide what comes across, and **Merge into
+database** at the bottom performs it. It stays disabled until the checks pass.
 
 ![The Import panel with a peer database selected: the compatibility checks in the main area, the what-to-carry pickers in the sidebar.](images/ui/import.png){#fig-ui-import}
 
@@ -82,9 +82,9 @@ classified:
 
 Novel and duplicate isolates need no attention: they default to *import* and
 *skip* respectively, and are reported only as counts. **Only the clashes get a
-row of their own**, each with a dropdown offering **import**, **skip** or
-**rename**, and a text field pre-filled with a free name — the original with
-`_ext` appended — for the rename case.
+row of their own** (@fig-ui-import-clash), each with a dropdown offering
+**import**, **skip** or **rename**, and a text field pre-filled with a free
+name — the original with `_ext` appended — for the rename case.
 
 ![A name clash during import. Only the isolates that actually collide need a decision.](images/ui/import-collisions.png){#fig-ui-import-clash}
 
@@ -107,6 +107,8 @@ the timestamped copies and restores the one you pick. When a merge finishes,
 PhyloTrace also offers a **Reload Database** notification so every panel picks up
 the new isolates.
 :::
+
+@fig-import walks through the whole merge, end to end.
 
 ```{mermaid}
 %%| label: fig-import
@@ -134,9 +136,9 @@ you are asking whether a cluster spans two labs.
 
 ## Exporting a subset {#sec-interop-export}
 
-**Database Browser > Export** is Import's mirror image: the same right-hand
-sidebar shape, worked down from the top. **Export type** is again the control
-that decides what everything below it means:
+**Database Browser > Export** is Import's mirror image (@fig-ui-export): the
+same right-hand sidebar shape, worked down from the top. **Export type** is
+again the control that decides what everything below it means:
 
 | Export type | Output | For |
 |---|---|---|

@@ -26,9 +26,9 @@ underscores only (@sec-data-naming).
 
 ### The sidebar: the pipeline, one step at a time {#sec-typing-steps}
 
-The left sidebar *is* the pipeline. It holds four numbered sections in the order
-a genome runs through them, and each carries a **ⓘ icon** that opens a full
-explanation of that step in a dialogue.
+The left sidebar *is* the pipeline (@fig-ui-typing-sidebar). It holds four
+numbered sections in the order a genome runs through them, and each carries a
+**ⓘ icon** that opens a full explanation of that step in a dialogue.
 
 | Step | Controls | Default |
 |---|---|---|
@@ -47,8 +47,10 @@ them is stricter and will lower completeness (@sec-typing-results). They are
 recorded per isolate in the provenance record (@sec-typing-provenance), so a
 batch typed at non-default thresholds stays identifiable later.
 
-Both apply to **cgMLST only**. Classical MLST and the AMR screen have their own
-internal criteria and are unaffected.
+Both feed **cgMLST and classical MLST alike** — the classical-MLST search runs
+with the same identity and coverage values as the cgMLST call
+(@sec-typing-classical), so raising or lowering them moves both together. Only
+the **AMR screen** has its own internal criteria and is unaffected.
 :::
 
 The **Scheme source** in step 3 chooses which public repository the 7-gene scheme
@@ -94,9 +96,10 @@ while it works, and new isolates appear in the other panels as they land
 
 ## What happens to each assembly {#sec-typing-pipeline}
 
-Each file goes through the same sequence of steps, in order. They are genuinely
-sequential — the cgMLST call does not launch the classical MLST call, and neither
-launches the AMR screen; each simply follows the previous one on the same file.
+Each file goes through the same sequence of steps, in order (@fig-typing). They
+are genuinely sequential — the cgMLST call does not launch the classical MLST
+call, and neither launches the AMR screen; each simply follows the previous one
+on the same file.
 
 **Before the run starts,** PhyloTrace fingerprints each assembly and compares it
 against what is already in the database, so that duplicates are caught before any
@@ -158,9 +161,10 @@ flowchart TB
 
 ## Reading the results {#sec-typing-results}
 
-The **Results** section fills in row by row as the run proceeds — one row per
-assembly, thirteen columns. Every column header carries a hover tooltip
-explaining it; the table below is the same information, gathered.
+The **Results** section fills in row by row as the run proceeds
+(@fig-ui-typing-results) — one row per assembly, thirteen columns. Every column
+header carries a hover tooltip explaining it; the table below is the same
+information, gathered.
 
 | Column | What it reports |
 |---|---|
@@ -231,12 +235,14 @@ as:
   that is already taken.
 
 ::: {.callout-tip title="Concept — a fingerprint that flags, never blocks"}
-The assembly fingerprint is a *one-way* indicator. A match proves two runs used
-the byte-identical file; a mismatch proves nothing — re-assembling the same reads
-with a different assembler produces a different file and therefore a different
-fingerprint. PhyloTrace therefore uses it to *flag* likely duplicates for your
-attention, and never as a hard rule that could block a legitimate re-analysis
-(@sec-concepts-hashing).
+The assembly fingerprint is a *one-way* indicator. A match proves two runs
+consumed assemblies with content-identical sequence — the fingerprint ignores
+headers, contig order and letter case, so a renamed or reformatted copy of the
+same assembly still matches; a mismatch proves nothing — re-assembling the same
+reads with a different assembler produces different contigs and therefore a
+different fingerprint. PhyloTrace therefore uses it to *flag* likely duplicates
+for your attention, and never as a hard rule that could block a legitimate
+re-analysis (@sec-concepts-hashing).
 :::
 
 ## Provenance: how each isolate was typed {#sec-typing-provenance}

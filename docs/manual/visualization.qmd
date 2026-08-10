@@ -11,8 +11,8 @@ five plot types themselves are @sec-mst, @sec-trees, @sec-epicurve, @sec-map and
 ## Creating a plot {#sec-viz-tabs}
 
 The workspace has a permanent **New** tab — a plus sign, at the far left of the
-tab strip — plus one tab per plot you have made. The New tab is the creator form,
-and it has three parts:
+tab strip — plus one tab per plot you have made (@fig-ui-viz-new). The New tab
+is the creator form, and it has three parts:
 
 1. **A row of five tiles** across the top, one per plot type, in this order:
    **MST**, **Tree**, **Map**, **Epi** and **AMR**. Clicking one selects it.
@@ -47,8 +47,8 @@ dialogue offers **Save and close** as well as **Close anyway**.
 
 ## The two sidebars {#sec-viz-sidebars}
 
-Every plot tab has a control sidebar on each side, and which side a control is on
-tells you how it behaves:
+Every plot tab has a control sidebar on each side (@fig-ui-viz-layout), and
+which side a control is on tells you how it behaves:
 
 | Sidebar | Holds | Behaviour |
 |---|---|---|
@@ -66,7 +66,7 @@ touching the selection or the computed data.
 ## Choosing which isolates to plot {#sec-viz-selection}
 
 **Selection > Choose isolates** opens a dialogue holding the isolate table, one
-row per isolate with a tick box. It carries:
+row per isolate with a tick box (@fig-ui-viz-selection). It carries:
 
 - **Select all** / **Select none**, and a live count of what is ticked;
 - a **time filter** in the footer — pick a date column, then a date range, and
@@ -150,7 +150,7 @@ same: **one picker over the variables**, and the app decides the rest.
 | **Tree** | **Mapping > Map a variable** | Tip-label colour, tip-point colour, tip-point shape, tile strips beside the tree |
 | **MST** | **Mapping > Map a variable** | Node fill — including a pie chart when a node stands for several isolates |
 | **Epi curve** | **Layout > Stratification** | Stratification and fill colour of the bars |
-| **Map** | **Color > Variable Mapping** | Marker colour, or the segments of a per-location mini-chart |
+| **Map** | **Color > Variable Mapping**; **Charts > Variable** in Charts mode | Marker colour, or the segments of a per-location mini-chart |
 | **AMR heatmap** | **Annotation** | Row annotation strips beside the matrix |
 
 On the MST and the Tree, picking a variable adds a **layer**, listed under the
@@ -164,8 +164,8 @@ the isolate's origin, or a custom variable of your own (@sec-browser).
 
 ## Exporting a plot {#sec-viz-export}
 
-**Export Plot > Save plot** opens the export dialogue. It asks two questions and
-hides a third.
+**Export Plot > Save plot** opens the export dialogue (@fig-ui-viz-export). It
+asks two questions and hides a third.
 
 **File format**, at the top, differs by plot type:
 
@@ -213,10 +213,10 @@ no PhyloTrace installation needed.
 
 **Save Analysis**, the last panel of the left sidebar, holds a **Save in analysis
 group** dropdown and a **Save** button. The dropdown lists your Analyses
-(@sec-dashboard), and under each one both a **New plot** entry and the plots
+(@sec-dashboard), and under each one both a **+ New plot** entry and the plots
 already saved there:
 
-- picking **New plot** under an Analysis adds this figure to it;
+- picking **+ New plot** under an Analysis adds this figure to it;
 - picking an existing plot **overwrites** that plot — you will be asked to
   confirm.
 

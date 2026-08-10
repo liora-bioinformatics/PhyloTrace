@@ -204,32 +204,6 @@ selection_differs <- function(a, b) {
   !setequal(a, b)
 }
 
-#' List Isolate Names from Database
-#'
-#' Queries distinct non-reference isolate identifiers from the MLST table.
-#'
-#' @param db_path Character path to the SQLite database file.
-#' @return Character vector of sorted isolate names.
-#' @export
-list_isolates <- function(db_path) {
-  if (!.usable(db_path)) {
-    return(character(0))
-  }
-
-  con <- connect(db_path)
-  on.exit(dbDisconnect(con))
-
-  if (!"mlst" %in% dbListTables(con)) {
-    return(character(0))
-  }
-
-  res <- dbGetQuery(
-    con,
-    "SELECT DISTINCT souche FROM mlst WHERE souche != 'ref' ORDER BY souche"
-  )
-  as.character(res$souche)
-}
-
 #' Retrieve Analysis Record by ID
 #'
 #' @param db_path Character path to the SQLite database file.

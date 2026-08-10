@@ -203,42 +203,72 @@ match_species_db <- function(descriptions, species) {
 #'   7-locus scheme plus an 8-locus revision, Escherichia the 7-locus Achtman
 #'   scheme next to the 8-locus Pasteur one - so the repository's own plain
 #'   "MLST" wins, then the seven-locus scheme classical MLST is defined as, then
-#'   one named after the species. An undecidable set is reported, never guessed.
+#'   one named after the species. Some species carry two *equally* classical
+#'   7-locus schemes under different naming conventions (Acinetobacter
+#'   baumannii: "MLST (Oxford)" next to "MLST (Pasteur)"), which the structural
+#'   rules above cannot break - `prefer` settles those by convention name, and
+#'   anything still undecidable is reported, never guessed.
 #'
 #' @param descriptions Character vector of scheme descriptions.
 #' @param loci Integer vector of locus counts, parallel to `descriptions`.
 #' @param species Character string. Canonical scheme species.
+#' @param prefer Character string (optional). `"pasteur"` keeps only tied
+#'   candidates naming the Pasteur convention; anything else keeps the rest -
+#'   applied only when it narrows a tie to exactly one.
 #'
 #' @return Integer index into `descriptions`, or `NA_integer_` with a `"reason"`.
 #' @export
-match_mlst_scheme <- function(descriptions, loci, species) {
+match_mlst_scheme <- function(descriptions, loci, species, prefer = NA_character_) {
   if (!length(descriptions)) {
     return(structure(NA_integer_, reason = "no classical MLST scheme in this database"))
   }
   normalized <- trimws(tolower(descriptions))
+  has_preference <- !is.null(prefer) && length(prefer) == 1 && !is.na(prefer) && nzchar(prefer)
+
+  narrow_by_convention <- function(idx) {
+    if (length(idx) <= 1 || !has_preference) {
+      return(idx)
+    }
+    is_pasteur <- grepl("pasteur", normalized[idx], fixed = TRUE)
+    kept <- if (identical(tolower(prefer), "pasteur")) idx[is_pasteur] else idx[!is_pasteur]
+    if (length(kept) == 1) kept else idx
+  }
 
   plain <- unname(which(normalized == "mlst"))
   if (length(plain)) {
     return(plain[1])
   }
-  seven <- unname(which(loci == 7L))
+
+  seven <- narrow_by_convention(unname(which(loci == 7L)))
   if (length(seven) == 1) {
     return(seven)
   }
+
   epithets <- species_parts(species)$epithets
+  named <- integer(0)
   if (length(epithets)) {
-    named <- unname(which(vapply(
+    named <- narrow_by_convention(unname(which(vapply(
       normalized,
       function(d) any(vapply(epithets, grepl, logical(1), x = d, fixed = TRUE)),
       logical(1)
-    )))
+    ))))
     if (length(named) == 1) {
       return(named)
     }
   }
+
   if (length(descriptions) == 1) {
     return(1L)
   }
+
+  # A last pass across everything: settles a tie the structural rules never
+  # even narrowed (e.g. two schemes that share both locus count and a species
+  # mention).
+  all_idx <- narrow_by_convention(seq_along(descriptions))
+  if (length(all_idx) == 1) {
+    return(all_idx)
+  }
+
   structure(
     NA_integer_,
     reason = sprintf(
@@ -312,12 +342,26 @@ mlst_schemes <- function(db_href, fetch) {
 #'   Network or API failures are treated as "not found" for that repository, so
 #'   typing continues without classical MLST rather than failing.
 #'
+#' @details
+#' Where a repository's own naming decides nothing (Acinetobacter baumannii
+#' carries an equally classical "MLST (Oxford)" and "MLST (Pasteur)" scheme,
+#' tied on locus count and neither named for the species), `repos[1]` - the
+#' repository the caller put first, i.e. what the "Scheme source" selection
+#' already means - breaks the tie: picking "pasteur" keeps the Pasteur-named
+#' convention wherever it is hosted, picking "pubmlst" keeps the other one. It
+#' is applied against every repository tried, not just the one currently being
+#' queried, since it expresses a naming preference rather than a repository
+#' choice once a database has been found.
+#'
 #' @param species Character string. Scheme species (repaired via `canonical_species()`).
 #' @param repos Character vector of repository names, in preference order.
 #' @param fetch Function taking a URL and returning parsed JSON. Injectable for tests.
 #'
-#' @return A list with `repository`, `species`, `database`, `scheme`,
-#'   `scheme_url`, `profiles_url`, `loci` and `version`, or `NULL`.
+#' @return A list, always. On success: `resolved = TRUE` plus `repository`,
+#'   `species`, `database`, `scheme`, `scheme_url`, `profiles_url`, `loci` and
+#'   `version`. On failure: `resolved = FALSE`, `species` (canonical when
+#'   resolvable, otherwise the raw input) and `attempts` - a character vector of
+#'   per-repository failure reasons, named by repository.
 #' @export
 resolve_mlst_scheme <- function(
   species,
@@ -326,9 +370,11 @@ resolve_mlst_scheme <- function(
 ) {
   canonical <- canonical_species(species)
   if (is.na(canonical)) {
-    return(NULL)
+    return(list(resolved = FALSE, species = species, attempts = character(0)))
   }
   repos <- intersect(repos, names(REPO_URLS))
+  prefer <- if (length(repos)) repos[1] else NA_character_
+  attempts <- character(0)
 
   for (repo in repos) {
     hit <- tryCatch(
@@ -336,24 +382,26 @@ resolve_mlst_scheme <- function(
         dbs <- repo_databases(repo, fetch)
         idx <- match_species_db(vapply(dbs, function(d) d$description, character(1)), canonical)
         if (is.na(idx)) {
-          log_event("MLST", "scheme lookup", sprintf(
-            "%s / %s: %s", repo, canonical, attr(idx, "reason")
-          ))
+          reason <- attr(idx, "reason")
+          attempts[repo] <- reason
+          log_event("MLST", "scheme lookup", sprintf("%s / %s: %s", repo, canonical, reason))
           NULL
         } else {
           schemes <- mlst_schemes(dbs[[idx]]$href, fetch)
           pick <- match_mlst_scheme(
             vapply(schemes, function(s) s$description, character(1)),
             vapply(schemes, function(s) length(s$loci), integer(1)),
-            canonical
+            canonical,
+            prefer = prefer
           )
           if (is.na(pick)) {
-            log_event("MLST", "scheme lookup", sprintf(
-              "%s / %s: %s", repo, canonical, attr(pick, "reason")
-            ))
+            reason <- attr(pick, "reason")
+            attempts[repo] <- reason
+            log_event("MLST", "scheme lookup", sprintf("%s / %s: %s", repo, canonical, reason))
             NULL
           } else {
             list(
+              resolved = TRUE,
               repository = repo,
               species = canonical,
               database = dbs[[idx]]$description,
@@ -367,6 +415,7 @@ resolve_mlst_scheme <- function(
         }
       },
       error = function(e) {
+        attempts[repo] <<- conditionMessage(e)
         log_event("MLST", "scheme lookup failed", sprintf("%s: %s", repo, conditionMessage(e)))
         NULL
       }
@@ -379,7 +428,7 @@ resolve_mlst_scheme <- function(
       return(hit)
     }
   }
-  NULL
+  list(resolved = FALSE, species = canonical, attempts = attempts)
 }
 
 #' Write a Scheme Specification File
@@ -405,4 +454,44 @@ write_scheme_spec <- function(spec, path) {
   )
   writeLines(lines, path)
   invisible(path)
+}
+
+#' Describe a Classical MLST Scheme Resolution
+#'
+#' @description Formats the outcome of `resolve_mlst_scheme()` as a line (or a
+#'   few) for a typing run's own transcript - the place a user reviewing a
+#'   finished run actually looks, unlike the app's internal event log, which
+#'   `resolve_mlst_scheme()` already reports the same events to as they happen.
+#'
+#' @param cla_scheme List from `resolve_mlst_scheme()`. `NULL`, or a `species`
+#'   of `NA`, both read as "no species was available to resolve at all".
+#'
+#' @return Character string, one or more lines separated by `"\n"`.
+#' @export
+describe_resolution <- function(cla_scheme) {
+  no_species <- is.null(cla_scheme) ||
+    is.null(cla_scheme$species) ||
+    is.na(cla_scheme$species)
+  if (no_species) {
+    return("Classical MLST: no resolvable species for this scheme (skipping ST calls for this run).")
+  }
+  if (isTRUE(cla_scheme$resolved)) {
+    return(sprintf(
+      "Classical MLST scheme resolved: %s / %s (%s), %d loci",
+      cla_scheme$repository,
+      cla_scheme$database,
+      cla_scheme$scheme,
+      length(cla_scheme$loci)
+    ))
+  }
+  paste(
+    c(
+      sprintf(
+        "Classical MLST: no single scheme resolved for '%s' (skipping ST calls for this run).",
+        cla_scheme$species
+      ),
+      sprintf("  %s: %s", names(cla_scheme$attempts), cla_scheme$attempts)
+    ),
+    collapse = "\n"
+  )
 }

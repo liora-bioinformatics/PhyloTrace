@@ -45,7 +45,6 @@ box::use(
     uiOutput,
     renderUI,
     outputOptions,
-    updateNumericInput,
   ],
   bslib[
     sidebar,
@@ -62,6 +61,7 @@ box::use(
     pickerInput,
     updatePickerInput,
     pickerOptions,
+    updateRadioGroupButtons,
   ],
   DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
 )
@@ -78,7 +78,7 @@ box::use(
       export_modal,
       export_panel,
       export_preset,
-      vector_formats,
+      export_presets,
       write_data_uri
     ],
   app / logic / analysis_store,
@@ -135,9 +135,9 @@ plot_types <- names(.ENGINES)
     about = paste(
       "The minimum-spanning tree over the pairwise allelic distance matrix:",
       "every isolate is a node, every edge is labelled with the number of",
-      "differing loci. Nodes can be dragged, zoomed and clicked to select",
-      "isolates, and single-linkage clusters below a chosen threshold are",
-      "shaded behind the network."
+      "differing loci. Positions are computed, not dragged; pan and zoom the",
+      "canvas and hover a node to see its members, and single-linkage",
+      "clusters below a chosen threshold are shaded behind the network."
     ),
     technical = c(
       "visNetwork (vis.js) over a distance matrix built in app/logic/phylo.R",
@@ -285,7 +285,7 @@ ui <- function(id, plot_type) {
           ),
           accordion(
             id = ns("setup_accordion"),
-            open = "Selection",
+            open = c("Selection", "Export Plot"),
             accordion_panel(
               "Selection",
               icon = icon("list-check"),
@@ -407,6 +407,8 @@ server <- function(
   # Grouped Save-target choices, kept current by the coordinator.
   picker_choices = shiny::reactive(list()),
   db_rev = db_events$new_bus(),
+  # TRUE while a typing run is writing the database - see the Generate gate.
+  typing_active = shiny::reactive(FALSE),
   # TRUE while this tab is the selected nav panel. Only the Map needs it (to
   # nudge Leaflet into recomputing its size), but it costs nothing to thread.
   is_active = shiny::reactive(TRUE),
@@ -627,6 +629,25 @@ server <- function(
         .subset_meta(viz_metadata_all(), applied_selection())
     })
 
+    # The isolate set handed to the engines: always concrete, never NULL.
+    #
+    # Read only by the two distance engines, which pass it straight to
+    # compute_phylo_tree() / compute_mst(). It must not be NULL there. NULL
+    # means "all isolates" everywhere in this sidebar, but load_allele_profile()
+    # resolves NULL with a live `SELECT ... FROM mlst` of its own - a different
+    # question, answered at a different moment, against a different table. Mid
+    # typing run that query sees isolates pyMLST has only half-written, which
+    # the sidebar count, the selection modal and the tip labels all know nothing
+    # about, so the tree came back with more tips than there were labels for.
+    #
+    # Deriving the list from the very frame that supplies those labels is what
+    # makes topology and labels agree by construction rather than by two
+    # separate reads happening to land on the same answer.
+    engine_isolates <- reactive({
+      meta <- viz_metadata_selected_all()
+      if (is.null(meta)) NULL else meta$isolate
+    })
+
     # How the drawn plot differs from the database as it stands now.
     #
     # `plot_missing` is what makes the plot wrong rather than merely dated: those
@@ -690,8 +711,17 @@ server <- function(
     # Generate is the only way to apply them, so it is only offered when there is
     # something to apply — and says so, rather than looking pressable and doing
     # nothing.
+    #
+    # Also withheld outright while a typing run is under way. The distance
+    # engines are the one place that reads allele profiles straight from `mlst`
+    # rather than through the store, and during a run that table is being
+    # written by pyMLST from another process: a tree built from it would be
+    # computed from isolates whose profiles are still only partly written, so
+    # their distances would be wrong rather than merely incomplete. Declining
+    # for the minute or two a run lasts is the honest answer.
     reg(observe({
-      pending <- isTRUE(pending_changes())
+      busy <- isTRUE(typing_active())
+      pending <- isTRUE(pending_changes()) && !busy
       shinyjs::toggleState("generate", condition = pending)
       shinyjs::toggleClass("generate", "is-pending", condition = pending)
       shinyjs::toggleClass("generate", "btn-primary", condition = pending)
@@ -1121,11 +1151,19 @@ server <- function(
         )
       }
 
-      if (is.null(staleness) && is.null(restriction)) {
-        base
-      } else {
-        tagList(base, restriction, staleness)
+      # Says why Generate is greyed out, so a run in another tab does not read
+      # as the button being broken.
+      busy <- if (isTRUE(typing_active())) {
+        div(
+          class = "small mt-1 text-info",
+          icon("hourglass-half"),
+          " Typing in progress — Generate is available once the run finishes."
+        )
       }
+
+      parts <- list(base, restriction, staleness, busy)
+      parts <- parts[!vapply(parts, is.null, logical(1))]
+      if (length(parts) == 1L) parts[[1]] else do.call(tagList, parts)
     })
 
     # "Missing values" help: a modal rather than a tooltip since the
@@ -1173,7 +1211,9 @@ server <- function(
         # overview) need it to know when those reads went stale.
         db_rev = db_rev,
         session_reset = gate(session_reset),
-        selected_isolates = gate(selected_isolates),
+        # Resolved, never NULL - see engine_isolates. Declared by every engine
+        # but read only by the two that compute a distance matrix.
+        selected_isolates = gate(engine_isolates),
         na_handling = gate(reactive(input$na_handling %||% "ignore_na")),
         generate = gate(reactive(input$generate)),
         plot_type = gate(reactive(plot_type)),
@@ -1222,19 +1262,17 @@ server <- function(
 
     export_format <- reactive(input$export_filetype %||% "png")
 
+    # No raw width/DPI/target-width controls: the preset alone decides them.
+    # Falls back to the first preset if the picker hasn't reported a selection
+    # yet (its own `selected=` default), so this never has to represent "no
+    # settings chosen."
     export_opts <- reactive({
-      width <- suppressWarnings(as.numeric(input$export_width %||% 25))
-      if (!isTRUE(is.finite(width))) {
-        width <- 25
-      }
-      target_px <- suppressWarnings(as.numeric(input$export_target_px %||% 2400))
-      if (!isTRUE(is.finite(target_px))) {
-        target_px <- 2400
-      }
+      preset <- export_preset(input$export_preset) %||% export_presets[[1]]
+      vals <- preset[[spec$export_kind]]
       list(
-        width_cm = max(4, min(60, width)),
-        dpi = suppressWarnings(as.numeric(input$export_dpi %||% 300)),
-        target_px = max(400, min(8000, target_px))
+        width_cm = vals$width_cm,
+        dpi = suppressWarnings(as.numeric(vals$dpi)),
+        target_px = vals$target_px
       )
     })
 
@@ -1248,31 +1286,9 @@ server <- function(
         Negate(is.null),
         list(
           filetype = input$export_filetype,
-          preset = input$export_preset,
-          width = input$export_width,
-          dpi = input$export_dpi,
-          target_px = input$export_target_px
+          preset = input$export_preset
         )
       ))
-    }))
-
-    # Picking a preset fills the Advanced controls with its numbers; it is not
-    # itself a persistent mode. Editing a filled-in value afterwards is simply
-    # editing it — there is no separate "custom" state to track, and the values
-    # actually used at Export time always come straight from these controls
-    # (see export_opts() and export_format() above), never from which preset
-    # last happened to be clicked.
-    reg(observeEvent(input$export_preset, {
-      preset <- export_preset(input$export_preset)
-      req(preset)
-      vals <- preset[[spec$export_kind]]
-      updatePickerInput(session, "export_filetype", selected = vals$format)
-      if (export_widget) {
-        updateNumericInput(session, "export_target_px", value = vals$target_px)
-      } else {
-        updateNumericInput(session, "export_width", value = vals$width_cm)
-        updatePickerInput(session, "export_dpi", selected = vals$dpi)
-      }
     }))
 
     # The settings the confirmed export is running with, captured the moment
@@ -1300,20 +1316,20 @@ server <- function(
 
     reg(observeEvent(input$export_cancel, removeModal()))
 
-    # Grey out the quality control when the chosen format has no use for it,
-    # rather than leaving a live-looking slider that changes nothing: vector art
-    # has no resolution, and the interactive HTML is not rendered at all.
-    reg(observe({
-      fmt <- export_format()
-      if (export_widget) {
-        shinyjs::toggleState(
-          "export_target_px",
-          condition = !identical(fmt, "html")
+    # HTML has no width/DPI or target pixel size of its own — it is the
+    # self-contained widget as-is, not a re-render at a chosen size — so a
+    # widget engine's presets do nothing while it is the selected format.
+    # Disabled rather than hidden, so the layout doesn't jump when switching
+    # format back and forth.
+    if (export_widget) {
+      reg(observe({
+        updateRadioGroupButtons(
+          session,
+          "export_preset",
+          disabled = identical(export_format(), "html")
         )
-      } else {
-        shinyjs::toggleState("export_dpi", condition = !fmt %in% vector_formats)
-      }
-    }))
+      }))
+    }
 
     output$export_hint <- renderUI({
       aspect <- if (is.null(exporter$aspect)) {

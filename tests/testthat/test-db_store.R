@@ -121,3 +121,73 @@ test_that("a fresh database path is picked up without a bump", {
   path(second)
   isolate(expect_identical(store$metadata()$isolate, "Z"))
 })
+
+# ---------------------------------------------------------------------------
+# isolates(): the shared answer to "which isolates exist?"
+# ---------------------------------------------------------------------------
+
+test_that("isolates() lists the pool from mlst, excluding the reference", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  store <- db_store$new_store(db_path = reactive(path))
+  isolate(expect_identical(sort(store$isolates()), c("A", "B")))
+})
+
+test_that("isolates() sees a new isolate in mlst that metadata does not have yet", {
+  # Exactly the mid-typing-run state: pyMLST has written allele calls for an
+  # isolate, but the metadata sync that gives it a row has not run. The pool
+  # is read from `mlst`, so it reports the isolate; the metadata table does
+  # not. Both are correct - what matters is that each answer has one source.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  bus <- db_events$new_bus()
+  store <- db_store$new_store(db_path = reactive(path), db_rev = bus)
+  isolate(expect_identical(sort(store$isolates()), c("A", "B")))
+  isolate(expect_identical(store$metadata()$isolate, "A"))
+})
+
+test_that("isolates() re-reads when the isolates domain is bumped", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  bus <- db_events$new_bus()
+  store <- db_store$new_store(db_path = reactive(path), db_rev = bus)
+  isolate(expect_identical(sort(store$isolates()), c("A", "B")))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  DBI::dbExecute(
+    con,
+    "INSERT INTO mlst (souche, gene, seqid)
+       SELECT 'C', gene, seqid FROM mlst WHERE souche = 'A'"
+  )
+  DBI::dbDisconnect(con)
+
+  db_events$bump(bus, "isolates")
+  isolate(expect_identical(sort(store$isolates()), c("A", "B", "C")))
+})
+
+test_that("isolates() does not re-read on an unrelated domain", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  bus <- db_events$new_bus()
+  store <- db_store$new_store(db_path = reactive(path), db_rev = bus)
+
+  runs <- 0L
+  r <- reactive({
+    store$isolates()
+    runs <<- runs + 1L
+  })
+  isolate(r())
+  expect_identical(runs, 1L)
+
+  db_events$bump(bus, "metadata", "amr", "analyses", "custom_fields", "schema")
+  isolate(r())
+  expect_identical(runs, 1L)
+})

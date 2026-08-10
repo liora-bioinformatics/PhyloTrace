@@ -19,24 +19,32 @@ The server, your database and the analysis toolchain all run locally, and the
 browser tab talks only to your own computer. Assemblies, isolates and metadata
 never leave the machine unless *you* export or share a database file.
 
-PhyloTrace makes only three kinds of outbound request, and none of them carries
-your data:
+PhyloTrace makes four kinds of outbound request, and none of them carries your
+data:
 
 - downloading a cgMLST scheme when you create a database (@sec-schemes),
 - looking up the matching classical MLST scheme while typing (@sec-typing),
-- turning place names into map coordinates (@sec-map).
+- turning place names into map coordinates (@sec-map),
+- loading basemap tiles while the map is open (@sec-map).
 
-The first two request public reference data; the third sends only a place name.
+The first two request public reference data; the third sends only a place
+name; the fourth sends only the map's current viewport, as you pan and zoom —
+never isolate identifiers or metadata.
 :::
 
-Because the tab is just a viewer, closing it does not end your work — but closing
-the application does. Installing and launching PhyloTrace is described in the
-project's `README`.
+The tab is a viewer, but it is not a *disconnected* one: closing it drops the
+connection the server was using, and PhyloTrace ends the session — stopping
+the server — the moment that happens, the same as pressing the power button
+below. The difference is that the power button asks you to confirm first;
+closing the tab does not, so an accidental close (or a stray `Ctrl+W`) can end
+a run in progress without warning. If you only want to check something else,
+open a second tab rather than closing this one. Installing and launching
+PhyloTrace is described in the project's `README`.
 
 ## The panels, and when they appear {#sec-app-panels}
 
 PhyloTrace does not show all of its screens at once. When it starts, the
-navigation bar carries only two tabs:
+navigation bar carries only two tabs (@fig-ui-navbar-start):
 
 | Tab | What it is for |
 |---|---|
@@ -51,8 +59,9 @@ never move:
 - the **version number** of the running build — quote it in a bug report;
 - a **moon / sun button** that switches the whole interface between light and
   dark mode;
-- a **power button** that closes PhyloTrace. This ends the program, not just the
-  tab (@sec-app-local).
+- a **power button** that closes PhyloTrace, with a confirmation prompt first —
+  closing the tab itself ends the session the same way, but without asking
+  (@sec-app-local).
 
 The moment a database is loaded, four more tabs appear — in this order — and the
 two starting tabs step aside:
@@ -67,7 +76,7 @@ two starting tabs step aside:
 Two further items join them: a **return arrow** that closes the database, and,
 pushed to the right, the **filename of the open database** — hover it to see the
 full path. That label is the quickest way to confirm which file you are working
-in when several are on the machine.
+in when several are on the machine (@fig-ui-navbar-workspace).
 
 ![With a database open the bar carries the four workspace tabs, the return arrow, and the name of the loaded file.](images/ui/navbar-workspace.png){#fig-ui-navbar-workspace}
 

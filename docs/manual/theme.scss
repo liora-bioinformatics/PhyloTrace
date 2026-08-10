@@ -1,13 +1,13 @@
 /*-- scss:defaults --*/
 
 // PhyloTrace brand tint (teal family, from the app's palette/badges).
-$primary:        #4f8a90 !default;
-$link-color:     #3f7a80 !default;
-$code-color:     #2c6e73 !default;
+$primary: #4f8a90 !default;
+$link-color: #3f7a80 !default;
+$code-color: #2c6e73 !default;
 
 // Comfortable reading measure and typography.
-$font-size-root:      17px !default;
-$toc-font-size:       0.85rem !default;
+$font-size-root: 17px !default;
+$toc-font-size: 0.85rem !default;
 $headings-font-weight: 600 !default;
 
 /*-- scss:rules --*/
@@ -18,7 +18,7 @@ $headings-font-weight: 600 !default;
 }
 
 // A little more air around Mermaid diagrams so the module trees breathe.
-.cell-output-display > svg,
+.cell-output-display>svg,
 figure.quarto-figure svg {
   max-width: 100%;
   height: auto;
@@ -53,7 +53,7 @@ figure.quarto-figure svg {
   line-height: 1;
   border: 1px solid black;
   border-radius: 4px;
-  box-shadow: 2px 3px 0px 1px darkgrey;
+  box-shadow: 2px 3px 0px 1px #666666;
 }
 
 // Code-block filename headers — make the file path scannable, since the manual

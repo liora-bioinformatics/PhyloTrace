@@ -359,3 +359,86 @@ test_that("steps switched off for a run are recorded as skipped", {
     expect_identical(row$pymlst_version, "2.2.2")
   })
 })
+
+test_that("a large name-conflict batch pauses for confirmation instead of running", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genomes <- vapply(
+    paste0("S", 1:8),
+    function(s) {
+      f <- file.path(dir, paste0(s, ".fna"))
+      writeLines(c(paste0(">", s, "_contig1"), "ATGCATGCATGCATGCATGC"), f)
+      f
+    },
+    character(1)
+  )
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    # 2 same-genome hits (never gate - typed fine under the new name) and 6
+    # name conflicts, past name_conflict_gate_min: real, silent data loss if
+    # the run went ahead unnoticed.
+    checked <- data.frame(
+      strain = names(genomes),
+      file = unname(genomes),
+      digest = "deadbeef",
+      status = c(rep("same_genome", 2L), rep("name_conflict", 6L)),
+      other = c("Renamed1", "Renamed2", rep(NA_character_, 6L)),
+      stringsAsFactors = FALSE
+    )
+    Typing$queued_strains <- checked$strain
+    Typing$queued_files <- checked$file
+
+    launch_typing(checked)
+
+    # same_genome rows reach the advisory panel regardless of the gate.
+    expect_identical(nrow(Typing$same_genome_dup), 2L)
+    expect_setequal(Typing$same_genome_dup$strain, c("S1", "S2"))
+
+    # The name-conflict batch (6 rows) exceeds the gate threshold, so
+    # begin_typing_run() was never reached - it is the first thing that would
+    # set Typing$log_file.
+    expect_identical(Typing$log_file, NULL)
+
+    # Cancelling backs out to idle without ever starting a process.
+    session$setInputs(cancel_typing_gate = 1)
+    expect_identical(Typing$status, "idle")
+    expect_identical(Typing$log_file, NULL)
+  })
+})
+
+test_that("an unresolvable scheme is announced in the run's own transcript", {
+  # This is the actual failure mode reported against a real database
+  # (Acinetobacter baumannii, whose PubMLST database hosts two equally
+  # classical 7-locus schemes with nothing to break the tie): before this,
+  # resolve_mlst_scheme() failing left no trace anywhere in the log a user
+  # inspects, only in the app's internal event log. No species is configured
+  # here, which is the same code path with no network dependency.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local(), species = NA_character_)
+  repo_root <- normalizePath(file.path(getwd(), "..", ".."))
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- character(0)
+    Typing$queued_files <- character(0)
+
+    withr::with_dir(repo_root, begin_typing_run())
+    on.exit(
+      if (!is.null(Typing$proc)) Typing$proc$wait(timeout = 5000),
+      add = TRUE
+    )
+
+    expect_false(is.null(Typing$log_file))
+    lines <- readLines(Typing$log_file)
+    expect_true(any(grepl(
+      "no resolvable species for this scheme",
+      lines,
+      fixed = TRUE
+    )))
+    # It leads the transcript, ahead of anything the subprocess itself writes -
+    # append mode preserves it rather than racing the child's own first write.
+    expect_identical(lines[2], "Classical MLST: no resolvable species for this scheme (skipping ST calls for this run).")
+  })
+})

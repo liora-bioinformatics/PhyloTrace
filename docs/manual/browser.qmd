@@ -23,7 +23,7 @@ highlighted.
 ## Browse Entries {#sec-browser-browse}
 
 Browse Entries shows one row per isolate in an editable grid, with a control
-sidebar on the **right** holding three groups.
+sidebar on the **right** holding three groups (@fig-ui-browse-entries).
 
 ![Browse Entries: the metadata grid, with Column Selection, Edit and Remove isolates in the right sidebar.](images/ui/browse-entries.png){#fig-ui-browse-entries}
 
@@ -45,12 +45,16 @@ MLST and AMR start hidden because they are wide and derived; tick the category
 when you need them. There is a search box in the dropdown for finding a single
 field by name.
 
-::: {.callout-important title="Derived columns are read-only here"}
-The MLST, AMR and custom-variable columns appear merged into the grid but cannot
-be edited in it, because they are owned elsewhere: MLST and AMR are results of a
-typing run (@sec-typing), and custom values are edited in the **Custom
-Variables** panel. The standard metadata fields are the ones you type into
-directly.
+::: {.callout-important title="Derived columns are read-only here — with one exception"}
+The MLST and AMR columns appear merged into the grid but cannot be edited in it,
+because they are results of a typing run (@sec-typing) rather than something you
+fill in. Custom variables are different: a **Date** or **Number** variable can be
+edited directly in this grid, exactly like a standard metadata field, with the
+edit routed to the same validated write path the Custom Variables panel uses. A
+**Category**, **Yes/No** or **Text** variable stays read-only here and can only
+be changed on the **Custom Variables** panel (@sec-browser-custom), because those
+types need their own editor — a level picker, a toggle — that this grid does not
+offer.
 :::
 
 ### Saving your edits {#sec-browser-edit}
@@ -116,7 +120,7 @@ are different jobs:
   many isolates have a value. This is where variables are created, edited and
   deleted.
 - **Values** — a grid of isolates × your variables, which is where the values
-  themselves are entered.
+  themselves are entered (@fig-ui-custom-variables).
 
 ![Custom Variables. The Variables tab defines the fields; the Values tab is where they are filled in.](images/ui/custom-variables.png){#fig-ui-custom-variables}
 
@@ -124,16 +128,17 @@ The right sidebar mirrors Browse Entries: **New Variable** at the top,
 **Discard** / **Save Changes** in the middle, and a **Removal** picker with a red
 **Remove** button at the bottom.
 
-Custom Variables is the only place custom values are entered; everywhere else
-they appear read-only, merged into the view alongside the standard fields.
-Filling in values works the same way as Browse Entries: edits sit in the grid
-until you press **Save Changes**, and if the database changes elsewhere while you
-have unsaved edits, PhyloTrace marks the view as out of date rather than
-discarding your work (@sec-app-live).
+Custom Variables is where every type of custom value can be entered — **Date**
+and **Number** variables can also be edited from Browse Entries directly
+(@sec-browser-columns), but **Category**, **Yes/No** and **Text** variables are
+only ever editable here. Filling in values works the same way as Browse
+Entries: edits sit in the grid until you press **Save Changes**, and if the
+database changes elsewhere while you have unsaved edits, PhyloTrace marks the
+view as out of date rather than discarding your work (@sec-app-live).
 
 ### Creating a variable {#sec-browser-types}
 
-**New Variable** opens a dialogue with four fields:
+**New Variable** opens a dialogue with four fields (@fig-ui-custom-modal):
 
 | Field | Notes |
 |---|---|
@@ -186,8 +191,9 @@ it is shared or exported (@sec-data).
 - **Column Selection** decides what the grid shows; MLST and AMR columns are
   hidden until you tick their category.
 - Browse Entries edits metadata values transactionally — **Save Changes** or
-  **Discard** — and shows MLST, AMR and custom columns read-only alongside them;
-  unsaved edits are protected from automatic reloads.
+  **Discard** — and shows MLST and AMR columns read-only alongside them; Date and
+  Number custom variables are also editable here, but Category, Yes/No and Text
+  ones are not; unsaved edits are protected from automatic reloads.
 - **Remove isolates** asks whether to keep the allele sequences they contributed
   — usually you should — and cannot be undone.
 - Custom Variables splits into a **Variables** tab (definitions) and a

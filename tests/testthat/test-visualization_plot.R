@@ -4,11 +4,13 @@ box::use(
     expect_false,
     expect_identical,
     expect_null,
+    expect_setequal,
     expect_true,
     test_that
   ],
 )
 box::use(
+  app / logic / viz_export,
   app / view / visualization_plot,
 )
 
@@ -25,17 +27,23 @@ meta_for <- function(isolates) {
 # A tab wired to a metadata table the test controls, standing in for the
 # coordinator's shared read. `plot_type = "AMR"` because it needs no distance
 # computation and no database file to instantiate.
+#
+# `typing` is the reactiveVal behind typing_active, so a test can start or end
+# a simulated typing run with `typing_is(TRUE/FALSE)`.
 with_tab <- function(pool, expr) {
   meta <- reactiveVal(meta_for(pool))
+  typing <- reactiveVal(FALSE)
   testServer(
     visualization_plot$server,
     args = list(
       plot_type = "AMR",
       viz_metadata = reactive(meta()),
-      db_path = reactive(NULL)
+      db_path = reactive(NULL),
+      typing_active = typing
     ),
     {
       pool_is <- function(isolates) meta(meta_for(isolates))
+      typing_is <- function(x) typing(x)
       # Settle the module before any test touches it. The Generate observers
       # carry ignoreInit, so without this their first run coincides with the
       # flush that sets `generate` and the click is swallowed as the initial
@@ -254,45 +262,150 @@ test_that("the sidebar panel holds only the trigger and the download target", {
   expect_false(grepl("t-export_dpi", html, fixed = TRUE))
 })
 
-test_that("an unusable width falls back instead of reaching the device", {
-  # ggsave would fail on a cleared numeric input, and a 500 cm canvas would
-  # allocate until it did.
+test_that("export_opts() reads straight from the selected preset", {
+  # No raw width/DPI/target-width inputs exist any more — the preset radio is
+  # the only thing that decides them, read directly rather than through an
+  # update*Input() round-trip (which testServer can't simulate anyway; see
+  # [[shiny-testing-gotchas]] and the real-browser check this is paired with).
   with_tab(c("A", "B"), quote({
-    session$setInputs(export_width = 500)
-    expect_identical(isolate(export_opts()$width_cm), 60)
+    print_preset <- viz_export$export_preset("print")
+    session$setInputs(export_preset = "print")
+    expect_identical(isolate(export_opts()$width_cm), print_preset$ggplot$width_cm)
+    expect_identical(
+      isolate(export_opts()$dpi),
+      as.numeric(print_preset$ggplot$dpi)
+    )
 
-    session$setInputs(export_width = NA)
-    expect_identical(isolate(export_opts()$width_cm), 25)
-
-    session$setInputs(export_width = 18)
-    expect_identical(isolate(export_opts()$width_cm), 18)
+    web_preset <- viz_export$export_preset("web")
+    session$setInputs(export_preset = "web")
+    expect_identical(isolate(export_opts()$width_cm), web_preset$ggplot$width_cm)
   }))
 })
 
-test_that("an unusable target width falls back instead of reaching the capture handler", {
-  # A blown-out request would mean asking the browser to redraw a widget at an
-  # absurd multiple of its on-screen size; an empty one would leave the
-  # capture handler with nothing to divide by.
+test_that("export_opts() falls back to the first preset with nothing selected", {
   with_tab(c("A", "B"), quote({
-    session$setInputs(export_target_px = 50000)
-    expect_identical(isolate(export_opts()$target_px), 8000)
-
-    session$setInputs(export_target_px = NA)
-    expect_identical(isolate(export_opts()$target_px), 2400)
-
-    session$setInputs(export_target_px = 3000)
-    expect_identical(isolate(export_opts()$target_px), 3000)
+    default <- viz_export$export_presets[[1]]
+    expect_identical(isolate(export_opts()$width_cm), default$ggplot$width_cm)
   }))
 })
-
-# Selecting a preset fills the Advanced controls via updateNumericInput() /
-# updatePickerInput(), which round-trip through the browser in a real session
-# but are no-ops under testServer (it does not simulate the client-side JS
-# those functions rely on) — so that behavior is covered by a real-browser
-# check instead. See the export section of the manual verification notes.
 
 test_that("the export defaults to PNG so the button works untouched", {
   with_tab(c("A", "B"), quote({
     expect_identical(isolate(export_format()), "png")
+  }))
+})
+
+# ---------------------------------------------------------------------------
+# The isolate list handed to the distance engines
+# ---------------------------------------------------------------------------
+
+test_that("engine_isolates is concrete even when the selection is 'all'", {
+  # The invariant behind the leak: NULL must never reach the engines, because
+  # load_allele_profile() would resolve it with its own live `mlst` query
+  # rather than against what the UI is showing.
+  with_tab(c("A", "B", "C"), quote({
+    expect_null(isolate(selected_isolates()))
+    expect_setequal(isolate(engine_isolates()), c("A", "B", "C"))
+  }))
+})
+
+test_that("engine_isolates matches the frame the tip labels come from", {
+  # Topology and labels agree by construction only if they are derived from
+  # one object. This is that claim, checked directly.
+  with_tab(c("A", "B", "C"), quote({
+    session$setInputs(generate = 1)
+    session$flushReact()
+    expect_identical(
+      isolate(engine_isolates()),
+      isolate(viz_metadata_selected_all()$isolate)
+    )
+  }))
+})
+
+test_that("engine_isolates honours an explicit selection", {
+  with_tab(c("A", "B", "C"), quote({
+    selected_isolates(c("A", "C"))
+    session$setInputs(generate = 1)
+    session$flushReact()
+    expect_setequal(isolate(engine_isolates()), c("A", "C"))
+  }))
+})
+
+test_that("engine_isolates stays on the generated snapshot when the pool moves", {
+  # The mid-typing-run shape: isolates appear in the database that this tab has
+  # not been told about. The engines must keep computing from what the plot
+  # actually shows, not from whatever `mlst` happens to hold.
+  with_tab(c("A", "B"), quote({
+    session$setInputs(generate = 1)
+    session$flushReact()
+
+    pool_is(c("A", "B", "MID_RUN"))
+    session$flushReact()
+
+    expect_false("MID_RUN" %in% isolate(engine_isolates()))
+    expect_setequal(isolate(engine_isolates()), c("A", "B"))
+  }))
+})
+
+# ---------------------------------------------------------------------------
+# Generate is withheld while typing writes the database
+# ---------------------------------------------------------------------------
+
+test_that("the engines are actually handed engine_isolates, not the raw selection", {
+  # Asserted against the source, because the two behavioural tests above pass
+  # whether or not the resolved list is the one that reaches the engines -
+  # they exercise the reactive, and reverting the hand-off leaves the reactive
+  # perfectly correct and simply unused. The wiring is the defect.
+  find_named_arg <- function(x, name) {
+    if (is.expression(x) || is.list(x)) {
+      return(unlist(lapply(as.list(x), find_named_arg, name = name), FALSE))
+    }
+    if (!is.call(x)) {
+      return(list())
+    }
+    args <- as.list(x)
+    hit <- if (name %in% names(args)) list(args[[name]]) else list()
+    c(hit, unlist(lapply(args, find_named_arg, name = name), FALSE))
+  }
+
+  src <- parse("../../app/view/visualization_plot.R")
+  passed <- find_named_arg(src, "selected_isolates")
+  # One in the server signature's default, one in engine_args.
+  handed_to_engine <- Filter(
+    function(e) is.call(e) && identical(as.character(e[[1]]), "gate"),
+    passed
+  )
+  expect_identical(length(handed_to_engine), 1L)
+  expect_identical(
+    handed_to_engine[[1]],
+    quote(gate(engine_isolates))
+  )
+})
+
+test_that("a typing run withholds Generate even with changes pending", {
+  with_tab(c("A", "B"), quote({
+    selected_isolates(c("A"))
+    session$flushReact()
+    expect_true(isolate(pending_changes()))
+
+    typing_is(TRUE)
+    session$flushReact()
+    # The pending state itself is unchanged - it is the button that is
+    # withheld, so the user's selection survives the run.
+    expect_true(isolate(pending_changes()))
+    expect_true(isolate(typing_active()))
+  }))
+})
+
+test_that("Generate returns once the run finishes", {
+  with_tab(c("A", "B"), quote({
+    selected_isolates(c("A"))
+    typing_is(TRUE)
+    session$flushReact()
+
+    typing_is(FALSE)
+    session$flushReact()
+    expect_false(isolate(typing_active()))
+    expect_true(isolate(pending_changes()))
   }))
 })

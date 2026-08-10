@@ -174,6 +174,7 @@ server <- function(
               analysis_id = this_aid,
               db_path = db_path,
               db_rev = db_rev,
+              store = store,
               on_add_plot = handle_add_plot,
               on_open_plot = handle_open_plot,
               on_edit_settings = handle_edit_settings,

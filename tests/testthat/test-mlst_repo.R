@@ -1,5 +1,5 @@
 box::use(
-  testthat[expect_equal, expect_identical, expect_null, expect_true, test_that],
+  testthat[expect_equal, expect_false, expect_identical, expect_setequal, expect_true, test_that],
   utils[read.csv],
 )
 box::use(
@@ -199,6 +199,55 @@ test_that("match_mlst_scheme reports an undecidable or empty set", {
   expect_true(grepl("2 schemes match", attr(tie, "reason")))
 })
 
+test_that("match_mlst_scheme breaks a naming-convention tie by preference", {
+  # Acinetobacter baumannii: two equally classical 7-locus schemes under
+  # PubMLST, tied on locus count and neither named for the species - nothing
+  # structural picks between them.
+  descriptions <- c("MLST (Oxford)", "MLST (Pasteur)")
+  loci <- c(7L, 7L)
+
+  # Without a preference, the tie is reported rather than guessed.
+  none <- mlst_repo$match_mlst_scheme(descriptions, loci, "Acinetobacter baumannii")
+  expect_true(is.na(none))
+
+  expect_identical(
+    mlst_repo$match_mlst_scheme(
+      descriptions, loci, "Acinetobacter baumannii",
+      prefer = "pubmlst"
+    ),
+    1L
+  )
+  expect_identical(
+    mlst_repo$match_mlst_scheme(
+      descriptions, loci, "Acinetobacter baumannii",
+      prefer = "pasteur"
+    ),
+    2L
+  )
+})
+
+test_that("a preference that does not narrow the tie changes nothing", {
+  # Both candidates would name the Pasteur convention, or neither does - the
+  # preference then has no work to do and the tie is still reported.
+  same <- mlst_repo$match_mlst_scheme(
+    c("MLST (Pasteur, v1)", "MLST (Pasteur, v2)"), c(7L, 7L), "Genus species",
+    prefer = "pasteur"
+  )
+  expect_true(is.na(same))
+})
+
+test_that("a structural tiebreak is never overridden by preference", {
+  # Escherichia coli: Achtman (7 loci) vs Pasteur (8 loci) - the locus count
+  # alone already decides this, regardless of which repository was preferred.
+  expect_identical(
+    mlst_repo$match_mlst_scheme(
+      c("MLST (Achtman)", "MLST (Pasteur)"), c(7L, 8L), "Escherichia coli",
+      prefer = "pasteur"
+    ),
+    1L
+  )
+})
+
 # A stand-in repository: one genus database holding two MLST schemes plus a
 # cgMLST scheme, wired the way both REST APIs shape their responses.
 fake_fetch <- function(host = "https://rest.pubmlst.org/db") {
@@ -242,6 +291,7 @@ fake_fetch <- function(host = "https://rest.pubmlst.org/db") {
 
 test_that("resolve_mlst_scheme returns one downloadable scheme", {
   hit <- mlst_repo$resolve_mlst_scheme("Enterococcus faecium", fetch = fake_fetch())
+  expect_true(hit$resolved)
   expect_identical(hit$repository, "pubmlst")
   expect_identical(hit$database, "Enterococcus faecium")
   expect_identical(hit$scheme, "MLST")
@@ -255,15 +305,129 @@ test_that("resolve_mlst_scheme normalizes the species before looking it up", {
   expect_identical(hit$species, "Enterococcus faecium")
 })
 
-test_that("resolve_mlst_scheme gives up quietly when nothing resolves", {
-  expect_null(mlst_repo$resolve_mlst_scheme("Escherichia coli", fetch = fake_fetch()))
-  expect_null(mlst_repo$resolve_mlst_scheme(NA_character_, fetch = fake_fetch()))
-  # A repository that is down must not fail the typing run.
-  expect_null(
-    mlst_repo$resolve_mlst_scheme(
-      "Enterococcus faecium",
-      fetch = function(endpoint) stop("connection refused")
+# A stand-in repository shaped like Acinetobacter baumannii on the real
+# PubMLST: one genus database, two equally classical 7-locus schemes, no
+# structural signal to prefer either.
+fake_fetch_tied <- function() {
+  function(endpoint) {
+    if (endpoint == "https://rest.pubmlst.org/db") {
+      return(list(list(name = "bacteria", databases = list(
+        list(name = "x_abaumannii_seqdef",
+             description = "Acinetobacter baumannii sequence/profile definitions",
+             href = "https://x/abaumannii")
+      ))))
+    }
+    if (endpoint == "https://bigsdb.pasteur.fr/api/db") {
+      return(list(list(name = "bacteria", databases = list())))
+    }
+    if (endpoint == "https://x/abaumannii/schemes") {
+      return(list(schemes = list(
+        list(scheme = "https://x/oxford", description = "MLST (Oxford)"),
+        list(scheme = "https://x/pasteur", description = "MLST (Pasteur)")
+      )))
+    }
+    if (endpoint == "https://x/oxford") {
+      return(list(
+        profiles_csv = "https://x/oxford/profiles_csv",
+        last_added = "2026-07-24",
+        loci = as.list(paste0("https://x/loci/", c("gltA", "gyrB", "gdhB", "recA", "cpn60", "gpi", "rpoD")))
+      ))
+    }
+    if (endpoint == "https://x/pasteur") {
+      return(list(
+        profiles_csv = "https://x/pasteur/profiles_csv",
+        last_added = "2026-07-13",
+        loci = as.list(paste0("https://x/loci/", c("cpn60", "fusA", "gltA", "pyrG", "recA", "rplB", "rpoB")))
+      ))
+    }
+    stop("unexpected endpoint: ", endpoint)
+  }
+}
+
+test_that("resolve_mlst_scheme breaks a same-database naming tie by scheme source", {
+  # The default "Scheme source" (PubMLST) keeps the non-Pasteur convention.
+  default_pick <- mlst_repo$resolve_mlst_scheme(
+    "Acinetobacter baumannii",
+    repos = c("pubmlst", "pasteur"),
+    fetch = fake_fetch_tied()
+  )
+  expect_true(default_pick$resolved)
+  expect_identical(default_pick$scheme, "MLST (Oxford)")
+
+  # Choosing "Pasteur" as scheme source picks the Pasteur-named scheme even
+  # though it is hosted inside the PubMLST database, not a separate one.
+  pasteur_pick <- mlst_repo$resolve_mlst_scheme(
+    "Acinetobacter baumannii",
+    repos = c("pasteur", "pubmlst"),
+    fetch = fake_fetch_tied()
+  )
+  expect_true(pasteur_pick$resolved)
+  expect_identical(pasteur_pick$repository, "pubmlst")
+  expect_identical(pasteur_pick$scheme, "MLST (Pasteur)")
+})
+
+test_that("resolve_mlst_scheme reports failure rather than returning NULL", {
+  # Escherichia coli is not part of the fake repository fixture at all, so both
+  # repositories come back with "no database for this species".
+  miss <- mlst_repo$resolve_mlst_scheme("Escherichia coli", fetch = fake_fetch())
+  expect_false(miss$resolved)
+  expect_identical(miss$species, "Escherichia coli")
+  expect_true(all(nzchar(miss$attempts)))
+  expect_setequal(names(miss$attempts), c("pubmlst", "pasteur"))
+
+  none <- mlst_repo$resolve_mlst_scheme(NA_character_, fetch = fake_fetch())
+  expect_false(none$resolved)
+  expect_identical(none$attempts, character(0))
+
+  # A repository that is down must not fail the typing run - it becomes an
+  # attempt reason instead of an error escaping the call.
+  down <- mlst_repo$resolve_mlst_scheme(
+    "Enterococcus faecium",
+    fetch = function(endpoint) stop("connection refused")
+  )
+  expect_false(down$resolved)
+  expect_true(any(grepl("connection refused", down$attempts, fixed = TRUE)))
+})
+
+test_that("describe_resolution reports a resolved scheme", {
+  note <- mlst_repo$describe_resolution(list(
+    resolved = TRUE,
+    species = "Enterococcus faecium",
+    repository = "pubmlst",
+    database = "Enterococcus faecium",
+    scheme = "MLST",
+    loci = c("atpA", "ddl", "gdh")
+  ))
+  expect_identical(
+    note,
+    "Classical MLST scheme resolved: pubmlst / Enterococcus faecium (MLST), 3 loci"
+  )
+})
+
+test_that("describe_resolution lists every attempt behind an unresolved species", {
+  # This is the failure the internal event log already carries per repository -
+  # formatted here for the run's own transcript, where a user actually looks.
+  note <- mlst_repo$describe_resolution(list(
+    resolved = FALSE,
+    species = "Acinetobacter baumannii",
+    attempts = c(
+      pubmlst = "2 schemes match: MLST (Oxford) (7 loci); MLST (Pasteur) (7 loci)",
+      pasteur = "no database for this species"
     )
+  ))
+  expect_true(grepl("no single scheme resolved for 'Acinetobacter baumannii'", note, fixed = TRUE))
+  expect_true(grepl("pubmlst: 2 schemes match", note, fixed = TRUE))
+  expect_true(grepl("pasteur: no database for this species", note, fixed = TRUE))
+})
+
+test_that("describe_resolution reports a species that never got looked up", {
+  expect_identical(
+    mlst_repo$describe_resolution(list(resolved = FALSE, species = NA_character_, attempts = character(0))),
+    "Classical MLST: no resolvable species for this scheme (skipping ST calls for this run)."
+  )
+  expect_identical(
+    mlst_repo$describe_resolution(NULL),
+    "Classical MLST: no resolvable species for this scheme (skipping ST calls for this run)."
   )
 })
 

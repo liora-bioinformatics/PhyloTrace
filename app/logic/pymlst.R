@@ -288,7 +288,11 @@ start_typing <- function(
       )
     ),
     wd = dirname(db_path),
-    stdout = log_file,
+    # Append rather than truncate: the caller may already have written a note
+    # (e.g. why classical MLST is being skipped this run) into a fresh log_file
+    # before launching, and a plain path here would silently erase it the
+    # instant the child's stdout is connected.
+    stdout = paste0(">>", log_file),
     stderr = "2>&1",
     # cleanup_tree terminates child Python subprocesses to prevent orphaned locks on the SQLite database
     cleanup_tree = TRUE

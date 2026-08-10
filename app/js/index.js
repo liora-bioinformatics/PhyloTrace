@@ -2,7 +2,6 @@ import "./busy-shield";
 import "./dt-column-sizing";
 import "./dt-column-visibility";
 import "./dt-visibility-resync";
-import "./typing-nav-lock";
 import "./virtual-select-popup-confirm";
 import "./viz-scale-swatch";
 

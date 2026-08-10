@@ -15,8 +15,8 @@ identifiers and nothing else, so no AMR screen exists for those isolates
 
 ## Three views {#sec-amr-hm-views}
 
-**Data > View** is the control that switches between them, and — like the map's
-mode picker — it changes which of the other controls apply.
+**Data > View** is the control that switches between them (@fig-ui-amr-heatmap),
+and — like the map's mode picker — it changes which of the other controls apply.
 
 | View | What it shows | Use it for |
 |---|---|---|
@@ -43,8 +43,8 @@ sections** ticks matches, partials and virulence groups independently.
 
 ## Filtering which hits are drawn {#sec-amr-hm-filter}
 
-For the gene heatmap and gene-level prevalence bars, **Data > Elements** decides
-what reaches the plot:
+For the gene heatmap and gene-level prevalence bars, **Data > Elements**
+(@fig-ui-amr-data) decides what reaches the plot:
 
 | Control | Effect |
 |---|---|
@@ -86,7 +86,8 @@ sliders set how much space each dendrogram gets, in centimetres.
 custom variable of your choice for the rows (@sec-viz-mapping), and, on the gene
 heatmap, a **drug-class strip** above the columns showing which class each gene
 belongs to. So a gene heatmap can show ward or origin alongside the genotype, and
-a co-carriage pattern that follows one ward becomes visible immediately.
+a co-carriage pattern that follows one ward becomes visible immediately
+(@fig-amr-hm).
 
 ```{mermaid}
 %%| label: fig-amr-hm

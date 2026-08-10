@@ -427,7 +427,12 @@ server <- function(id) {
       launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,
       open_ctx = ANALYSIS_DASHBOARD_vals$request_open_plot,
       db_rev = db_rev,
-      store = store
+      store = store,
+      # Blocks Generate while a typing run is writing the database. The plot
+      # engines are the only readers that go to `mlst` for allele profiles
+      # instead of through the store, so they are the only ones that can see a
+      # run half-written.
+      typing_active = TYPING_vals$typing_active
     )
 
     # Dashboard buttons that hand off to the Visualization tab.

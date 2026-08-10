@@ -42,6 +42,7 @@ box::use(
   app / view / analysis_dashboard / item,
   app / logic / analysis_store,
   app / logic / db_events,
+  app / logic / db_store,
   jsonlite[fromJSON],
 )
 
@@ -67,6 +68,7 @@ server <- function(
   analysis_id,
   db_path = shiny::reactive(NULL),
   db_rev = db_events$new_bus(),
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev),
   on_add_plot = function(analysis_id) NULL,
   on_open_plot = function(plot_id) NULL,
   on_edit_settings = function(analysis_id) NULL,
@@ -91,6 +93,13 @@ server <- function(
     # once here and handed to each plot card, so a card can tell whether it was
     # built from a different set (changed restriction, or isolates added to the
     # database since) without each one re-querying.
+    # `analyses` for the restriction (which lives on the Analysis row);
+    # store$isolates() supplies the fallback and carries its own dependency on
+    # the `isolates` domain. Reading the pool through the store rather than
+    # querying `mlst` here is what keeps this in step with the rest of the app:
+    # the direct query this used to make declared `analyses` only, so a typing
+    # run - which bumps `isolates`, never `analyses` - left it holding the
+    # pre-run pool.
     current_isolates <- reactive({
       db_events$depend(db_rev, "analyses")
       row <- analysis_row()
@@ -99,11 +108,15 @@ server <- function(
       } else {
         .parse_selection(row$isolate_selection)
       }
-      restriction %||% analysis_store$list_isolates(db_path())
+      restriction %||% store$isolates()
     })
 
     # Isolates added to (or removed from) the database since this Analysis was
     # set up. Only meaningful once a universe was recorded.
+    #
+    # Same dependency correction as above, and it matters more here: reporting
+    # drift is this reactive's entire purpose, so missing the one signal that
+    # says the isolate pool moved made it silently useless after a typing run.
     universe_drift <- reactive({
       db_events$depend(db_rev, "analyses")
       row <- analysis_row()
@@ -115,7 +128,7 @@ server <- function(
       if (is.null(recorded)) {
         return(NULL)
       }
-      now <- analysis_store$list_isolates(db_path())
+      now <- store$isolates()
       added <- setdiff(now, recorded)
       removed <- setdiff(recorded, now)
       if (!length(added) && !length(removed)) {

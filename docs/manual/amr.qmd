@@ -102,6 +102,8 @@ Reading a partial as confident would overstate an isolate's resistance, so the
 distinction is worth attending to when you read a heatmap.
 :::
 
+@fig-amr summarises the pipeline: one screen, two views of its output.
+
 ```{mermaid}
 %%| label: fig-amr
 %%| fig-cap: "AMR screening produces a detailed per-element view and a curated per-isolate roll-up; the tool and reference-database versions are recorded with the isolate's typing provenance."

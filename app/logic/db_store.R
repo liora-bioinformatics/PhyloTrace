@@ -15,20 +15,23 @@
 # that can get the dependency list wrong, and every consumer is, by
 # construction, looking at the same cached value in the same reactive flush.
 #
-# Scope is deliberately narrow: only the `metadata` table is cached here. It
-# is the one shared dataset with a write hidden behind it historically (see
-# `read_metadata_table()`'s docs) and hence the one that actually went stale
-# inconsistently across modules. Classical MLST, AMR and custom-variable data
-# are also read by more than one module, but every one of those reads is a
-# plain query with no write side effect and no shared risk of disagreeing -
-# and the four modules compose them differently (Visualization wants the AMR
-# drug-class summary, the Database Browser wants the per-gene call matrix), so
-# unifying them here would trade simple, independent, already-correct code
-# for a shared abstraction that does not actually remove a bug. Large,
-# rarely-read data - allele profiles, sequences, allele FASTAs - is
-# deliberately not cached anywhere: it is read only when a distance
-# computation actually runs, and caching it would mean paying to hold it in
-# memory for every session regardless of whether anyone ever presses Generate.
+# Scope is deliberately narrow: the `metadata` table and the isolate *name*
+# pool. Those are the two shared answers that modules were resolving
+# independently and could therefore disagree about. Classical MLST, AMR and
+# custom-variable data are also read by more than one module, but every one of
+# those reads is a plain query with no write side effect and no shared risk of
+# disagreeing - and the four modules compose them differently (Visualization
+# wants the AMR drug-class summary, the Database Browser wants the per-gene
+# call matrix), so unifying them here would trade simple, independent,
+# already-correct code for a shared abstraction that does not remove a bug.
+#
+# Allele *profiles* stay uncached on purpose: they are large, and they are read
+# only when a distance computation actually runs, so caching them would cost
+# memory in every session regardless of whether anyone presses Generate. That
+# is fine - what is not fine is letting a `NULL` ("all isolates") selection
+# reach the live profile query and be resolved there, because then the UI and
+# the computation answer "which isolates?" from different tables at different
+# moments. See `isolates()` below.
 
 box::use(
   shiny[reactive, req],
@@ -36,6 +39,7 @@ box::use(
 box::use(
   app / logic / database_functions[read_metadata_table],
   app / logic / db_events,
+  app / logic / pymlst[existing_strains],
 )
 
 #' Create the Shared Database Store
@@ -47,7 +51,8 @@ box::use(
 #'
 #' @param db_path Reactive character scalar - the loaded database's path.
 #' @param db_rev A bus from `db_events::new_bus()`.
-#' @return List of reactives. Currently just `metadata`.
+#' @return List of reactives: `metadata` (the whole table) and `isolates` (the
+#'   isolate name pool).
 #' @export
 new_store <- function(db_path = reactive(NULL), db_rev = db_events$new_bus()) {
   # `isolates` and `metadata`: without both, this reactive would keep serving
@@ -62,5 +67,25 @@ new_store <- function(db_path = reactive(NULL), db_rev = db_events$new_bus()) {
     read_metadata_table(db_path())
   })
 
-  list(metadata = metadata)
+  # The isolate pool: which isolates exist at all, read from `mlst` (the table
+  # typing actually writes) rather than from `metadata` (which only catches up
+  # at the next sync).
+  #
+  # Cached here because "which isolates exist?" is the question the app was
+  # answering inconsistently. A `NULL` selection means "all of them" throughout
+  # the UI, and every place that has to turn that back into a concrete list
+  # must get the same list. Resolving it separately - as
+  # `load_allele_profile()` does, with its own live `mlst` query - is what let
+  # a tree computed during a typing run pick up half-written isolates that the
+  # sidebar, the selection modal and the tip labels all knew nothing about.
+  #
+  # Names only, never profiles: a few hundred short strings, so caching costs
+  # nothing, and this deliberately does not pull the allele matrix into memory.
+  isolates <- reactive({
+    db_events$depend(db_rev, "isolates")
+    req(db_path())
+    existing_strains(db_path())
+  })
+
+  list(metadata = metadata, isolates = isolates)
 }

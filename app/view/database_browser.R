@@ -233,7 +233,13 @@ ui <- function(id) {
         ),
         as_fill_carrier(
           div(
-            class = "db-page_body edit-table",
+            # allow-free-text: every editable cell here is either a metadata
+            # value or a custom-variable value, and both are display text
+            # (@sec-data-naming), not an identifier - unlike the Custom
+            # Variables Values grid, this one was missing the opt-out from the
+            # global charset filter (app/js/index.js), so a place name typed
+            # here silently lost its spaces and punctuation on entry.
+            class = "db-page_body edit-table allow-free-text",
             autoWaiter(ns("metadata_table")),
             uiOutput(ns("table_ui"), fill = TRUE)
           )

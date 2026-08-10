@@ -35,6 +35,33 @@ png_corner <- function(file) {
   as.integer(memDecompress(idat, "gzip")[2:(1 + 3)])
 }
 
+# Reads a PNG's own pHYs chunk (if any) and reports it as DPI, independent of
+# save_plot_export()'s own chunk-writing code — a test that called the same
+# helper the implementation uses to build the chunk would only prove the two
+# agree with each other, not that either is right against the PNG spec (unit
+# 1 = pixels/metre; 1 in = 0.0254 m). NULL means no pHYs chunk was found,
+# which is exactly the state a stock ggsave() PNG is in.
+png_dpi <- function(file) {
+  raw_bytes <- readBin(file, "raw", file.size(file))
+  i <- 9L
+  while (i < length(raw_bytes)) {
+    len <- sum(as.integer(raw_bytes[i:(i + 3)]) * 256^(3:0))
+    type <- rawToChar(raw_bytes[(i + 4):(i + 7)])
+    if (identical(type, "pHYs")) {
+      data <- raw_bytes[(i + 8):(i + 7 + len)]
+      ppux <- sum(as.integer(data[1:4]) * 256^(3:0))
+      ppuy <- sum(as.integer(data[5:8]) * 256^(3:0))
+      unit <- as.integer(data[9])
+      if (unit != 1L) {
+        return(NULL) # not metres; DPI is not what this chunk records
+      }
+      return(list(x = round(ppux * 0.0254), y = round(ppuy * 0.0254)))
+    }
+    i <- i + 12L + len
+  }
+  NULL
+}
+
 test_that("every offered format is written by a device that can produce it", {
   plot <- fixture_plot()
   for (format in viz_export$export_formats$ggplot) {
@@ -91,6 +118,61 @@ test_that("vector formats really are vector", {
   viz_export$save_plot_export(fixture_plot(), file, "svg", width_cm = 12)
   head <- paste(readLines(file, n = 2, warn = FALSE), collapse = "")
   expect_true(grepl("<svg", head, fixed = TRUE))
+})
+
+test_that("a PNG records its own resolution, not just its pixel count", {
+  # png(res=)/ggsave() size the pixel grid correctly but write no pHYs chunk at
+  # all — confirmed independently with ImageMagick's `identify -verbose`
+  # ("Units: Undefined") and Pillow (`Image.info["dpi"]` absent) before this
+  # existed. Without it, a raster's physical size is implied only by comparing
+  # pixel count to a size no one downstream is told — a print shop, a journal
+  # submission checker, or a generic "what DPI is this" tool reads exactly this
+  # chunk and nothing else.
+  for (dpi in c(150, 300, 600)) {
+    file <- withr::local_tempfile(fileext = ".png")
+    viz_export$save_plot_export(
+      fixture_plot(),
+      file,
+      "png",
+      width_cm = 12,
+      aspect = 0.6,
+      dpi = dpi
+    )
+    found <- png_dpi(file)
+    expect_false(is.null(found), info = dpi)
+    # The pHYs chunk only stores an integer pixels-per-metre value, so the
+    # round trip back to DPI is exact to within rounding, not bit-for-bit.
+    expect_lt(abs(found$x - dpi), 1)
+    expect_lt(abs(found$y - dpi), 1)
+  }
+})
+
+test_that("a PNG's resolution chunk survives real-world readers", {
+  skip_if_not(nzchar(Sys.which("identify")), "ImageMagick not installed")
+  file <- withr::local_tempfile(fileext = ".png")
+  viz_export$save_plot_export(
+    fixture_plot(),
+    file,
+    "png",
+    width_cm = 10,
+    aspect = 0.6,
+    dpi = 300
+  )
+  out <- system2("identify", c("-format", "%x", file), stdout = TRUE)
+  # ImageMagick reports in its own default unit (pixels/cm here); 300 dpi is
+  # 300/2.54 px/cm.
+  expect_lt(abs(as.numeric(out) - 300 / 2.54), 0.5)
+})
+
+test_that("vector and non-PNG raster formats are left untouched", {
+  # The pHYs fix is PNG-specific: JPEG/TIFF already write their own resolution
+  # metadata (JFIF density, XResolution/YResolution — confirmed independently),
+  # and vector formats have no pixel grid to attach one to.
+  for (format in c("jpeg", "tiff", "pdf", "svg")) {
+    file <- withr::local_tempfile(fileext = paste0(".", format))
+    viz_export$save_plot_export(fixture_plot(), file, format, width_cm = 10, dpi = 300)
+    expect_true(file.exists(file) && file.size(file) > 0, info = format)
+  }
 })
 
 test_that("resolved_dpi caps a request that would not fit in memory", {
@@ -180,22 +262,20 @@ test_that("preset ggplot widths stay within the exportable range", {
   }
 })
 
-test_that("the modal carries the controls that apply to each engine kind", {
-  # A server-rendered plot is asked for in physical units and rasterised at a
-  # chosen DPI; a browser-drawn widget has no physical size to ask for and can
-  # only be redrawn at a multiple of its on-screen pixels — it is asked for as
-  # a target pixel width instead. Offering the wrong control means offering
-  # one that changes nothing.
+test_that("the modal offers no raw size/quality controls, only presets", {
+  # A preset is the only thing that decides width/DPI (ggplot) or target pixel
+  # width (widget) — an earlier version tucked a second, freely-typed size
+  # control into a collapsed "Advanced" section beside the four preset
+  # choices, which added a decision without adding a use case.
   ggplot_modal <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
   widget_modal <- as.character(viz_export$export_modal(identity, "e", "widget"))
 
-  expect_true(grepl("e_width", ggplot_modal, fixed = TRUE))
-  expect_true(grepl("e_dpi", ggplot_modal, fixed = TRUE))
+  expect_false(grepl("e_width", ggplot_modal, fixed = TRUE))
+  expect_false(grepl("e_dpi", ggplot_modal, fixed = TRUE))
   expect_false(grepl("e_target_px", ggplot_modal, fixed = TRUE))
-
-  expect_true(grepl("e_target_px", widget_modal, fixed = TRUE))
-  expect_false(grepl("e_dpi", widget_modal, fixed = TRUE))
+  expect_false(grepl("e_target_px", widget_modal, fixed = TRUE))
   expect_false(grepl("e_width", widget_modal, fixed = TRUE))
+  expect_false(grepl("e_dpi", widget_modal, fixed = TRUE))
 })
 
 test_that("every preset is offered as a choice in the modal", {
@@ -205,15 +285,19 @@ test_that("every preset is offered as a choice in the modal", {
   }
 })
 
-test_that("the Advanced panel starts collapsed", {
-  # bslib::accordion() only stays fully closed for `open = FALSE` exactly —
-  # `character(0)` or `NULL` both still trip its own "nothing named, so open
-  # the first panel" fallback, which would have defeated the whole point of
-  # tucking the raw numbers away from the primary preset picker.
+test_that("the format picker spans the same width as the preset row", {
+  # pickerInput's own container is a fixed-width form-group by default
+  # (bootstrap-select's stock CSS caps it at 220px) unless told otherwise, so
+  # without an explicit width it renders narrower than the preset buttons
+  # beneath it — the two rows visibly disagreeing on how wide "full width"
+  # is. `width=` here reaches the same .form-group wrapper the preset row's
+  # own `width=` reaches on its outer div, so both actually agree.
   html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
-  expect_false(grepl("accordion-collapse collapse show", html, fixed = TRUE))
-  expect_true(grepl("accordion-button collapsed", html, fixed = TRUE))
-  expect_true(grepl('aria-expanded="false"', html, fixed = TRUE))
+  expect_true(grepl(
+    '<div class="form-group shiny-input-container" style="width:100%;">',
+    html,
+    fixed = TRUE
+  ))
 })
 
 test_that("the modal footer commits or abandons the export", {
@@ -226,7 +310,7 @@ test_that("the modal footer commits or abandons the export", {
   expect_false(grepl("id=\"e_file\"", html, fixed = TRUE))
 })
 
-test_that("reopening the modal restores the settings last chosen", {
+test_that("reopening the modal restores the format and preset last chosen", {
   # Shiny keeps an input's value after its UI is removed, but re-rendering the
   # control resets it to its declaration — so the values have to be handed back
   # in, or every export would start from the defaults again.
@@ -234,25 +318,10 @@ test_that("reopening the modal restores the settings last chosen", {
     identity,
     "e",
     "ggplot",
-    values = list(filetype = "svg", width = 12, dpi = "600", preset = "print")
+    values = list(filetype = "svg", preset = "print")
   ))
-  expect_true(grepl("value=\"12\"", html, fixed = TRUE))
   expect_true(grepl("<option value=\"svg\" selected>", html, fixed = TRUE))
-  expect_true(grepl("<option value=\"600\" selected>", html, fixed = TRUE))
-  # The preset radio also remembers which one was last picked, not just the
-  # raw numbers — otherwise a reopen would silently jump back to the first
-  # preset in the list even though the numbers show something else was chosen.
   expect_true(grepl('value="print" checked', html, fixed = TRUE))
-})
-
-test_that("the Advanced numbers default from the first preset, unseeded", {
-  # A first-ever open has no remembered values; what the Advanced controls
-  # show then must actually match the preset radio's own default selection,
-  # or opening Advanced would show numbers that contradict the preset that
-  # appears selected.
-  default <- viz_export$export_presets[[1]]
-  html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
-  expect_true(grepl(sprintf('value="%s"', default$ggplot$width_cm), html, fixed = TRUE))
 })
 
 test_that("the sidebar panel is just a trigger plus the download target", {

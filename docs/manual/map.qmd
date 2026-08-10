@@ -25,9 +25,11 @@ for every isolate there — faster for you, and considerate of a free service.
 :::
 
 ::: {.callout-important title="What is sent, and what a failed lookup means"}
-Geocoding is the only part of the map that leaves your machine, and it sends only
-a place name — never isolate identifiers, profiles or any other metadata
-(@sec-app-local).
+Two things about the map leave your machine, and neither carries isolate data
+(@sec-app-local): geocoding, which sends only a place name; and the basemap
+tiles themselves, fetched continuously from the tile provider as you pan and
+zoom, which send only the visible map area. Neither ever sends an isolate
+identifier, a profile, or any other metadata.
 
 A place that cannot be resolved is left off the map — and named in the status
 line. The usual causes are spelling variants, an ambiguous name, or a field
@@ -51,11 +53,12 @@ control tabs are offered.
 
 ![The map in Markers mode. The Map mode picker sits below the control tabs, with the geocoding status line under it.](images/ui/map-plot.png){#fig-ui-map}
 
-Each mode also switches to a base map suited to it — a plain grey canvas under a
-choropleth, a light one under a heatmap — which you can override under
-**Basemap > Base map**. Choropleth mode draws no base tiles at all, only place
-labels, because a textured background reads through a partly transparent fill;
-the Base map picker is hidden there for that reason.
+Each mode also switches to a base map suited to it (@fig-ui-map shows the
+default for Markers) — a plain grey canvas under a choropleth, a light one under
+a heatmap — which you can override under **Basemap > Base map**. Choropleth
+mode draws no base tiles at all, only place labels, because a textured
+background reads through a partly transparent fill; the Base map picker is
+hidden there for that reason.
 
 All four are drawn by the same underlying builder, so they stay visually
 consistent with one another and with the map you export.
@@ -70,7 +73,8 @@ relatedness is informative in a way geography alone is not.
 
 ## The control panel {#sec-map-controls}
 
-The map's tabs change with the mode, but the full set is:
+The map's tabs change with the mode (@fig-ui-map-modes). Six tabs are always
+present:
 
 | Tab | What it holds |
 |---|---|
@@ -80,6 +84,14 @@ The map's tabs change with the mode, but the full set is:
 | **Legend** | Show, position, title, opacity, number digits |
 | **Labels** | **Popup fields** (shown on click) and **Hover field(s)** |
 | **Time** | A date-range slider with the same step and **Play** controls as the epi curve |
+
+Three further tabs appear only in the mode they belong to:
+
+| Tab | Mode | What it holds |
+|---|---|---|
+| **Region** | Choropleth | **Count scale** (Raw or Log), **Fill opacity**, **Border color**, and switches for always showing labels or only labelling areas with isolates |
+| **Density** | Heatmap | **Radius** and **Max intensity (isolates)** — the two knobs that change what the surface communicates |
+| **Charts** | Charts | **Chart type** (Pie, Bar or Polar area), the mini-chart's own **Variable** picker, **Chart size** and **Opacity** |
 
 ![The map's control tabs and the mode picker beneath them.](images/ui/map-mode-picker.png){#fig-ui-map-modes}
 
@@ -97,11 +109,13 @@ animate it forward — the geographic counterpart of the epi curve's playback
 
 ## Colouring and variables {#sec-map-vars}
 
-**Color > Variable Mapping** encodes any metadata field or custom variable: switch
-on **Color by variable** and pick one under **Variable** (@sec-viz-mapping). In
-Charts mode the same variable splits each location's mini-chart by category
-instead of colouring a point. The choropleth shades by isolate count using
-standard country polygons.
+**Color > Variable Mapping** encodes any metadata field or custom variable onto
+marker colour: switch on **Color by variable** and pick one under **Variable**
+(@sec-viz-mapping). In Charts mode marker colour is replaced by the mini-charts
+themselves, so colouring by variable no longer applies — instead, the **Charts**
+tab carries its own **Variable** picker, which splits each location's chart by
+category. The choropleth shades by isolate count using standard country
+polygons and has no variable to pick.
 
 The **Scale** section below governs how values become colours. **Scale type** is
 normally best left on **Auto**, which reads the variable's type; the explicit
@@ -109,7 +123,8 @@ alternatives — **Factor**, **Numeric**, **Bin**, **Quantile** — are there fo
 case where a number should be treated as a category, or a continuous variable
 banded rather than shaded smoothly. **Bins (numeric)** sets how many bands, and
 **Missing color** decides what an isolate with no value looks like rather than
-letting it vanish.
+letting it vanish. @fig-map summarises the whole pipeline, from metadata to the
+four modes.
 
 ```{mermaid}
 %%| label: fig-map

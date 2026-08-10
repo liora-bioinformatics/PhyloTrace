@@ -58,18 +58,6 @@ html.pt-busy-visible .pt-shield {
     cursor: wait;
 }
 
-// Typing "first render" nav lock -----------------------------------------------
-// Engaged by app/js/typing-nav-lock.js for the brief window between starting a
-// typing run and the Results table's first paint - switching tabs away before
-// that first paint lands can leave the table stuck showing no rows even once
-// the run finishes and the tab is revisited. Scoped to the tab bar only (not a
-// full-page shield like .pt-shield above): everything else on the page,
-// Terminate included, stays interactive through this window.
-#tabs.pt-nav-locked .nav-link {
-    pointer-events: none;
-    cursor: wait;
-}
-
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
 
 @keyframes waiter-fade-in {
@@ -3838,14 +3826,15 @@ label {
     color: var(--bs-secondary-color);
 }
 
-// Plot export modal: a format picker, a small set of named presets, and the
-// exact numbers tucked into a collapsed "Advanced" panel. Wider than
-// .info-modal, which is sized for a paragraph of prose rather than real form
-// controls, but still far short of .selection-modal's near-viewport sizing —
-// this is a short, one-screen form with nothing to scroll.
+// Plot export modal: a format picker plus a small set of named presets,
+// nothing else. A fixed `width` rather than `width: auto` is load-bearing:
+// auto sizes the dialog to its widest line of content, so the hint text below
+// the presets — whose length varies with which preset and format are picked —
+// was resizing the whole modal on every selection. A fixed width can't do
+// that; `max-width` only steps in as a safety cap on a narrow screen.
 .export-modal .modal-dialog {
-    width: auto;
-    max-width: 560px;
+    width: 460px;
+    max-width: 90vw;
     margin: 1.75rem auto;
 }
 
@@ -3858,12 +3847,21 @@ label {
 // and centred text, both tuned for short, single-line, unrelated actions —
 // wrong for a stack of two-line descriptions that read as one list. A small
 // gap and its own rounded corners per button turn the group into a stack of
-// separate, left-aligned cards instead.
+// separate, left-aligned cards instead. Width is set explicitly on both the
+// row and the button: radioGroupButtons' own `width=` reaches only the
+// outermost wrapper, and Bootstrap's `.btn` is inline-block by default, so
+// without this each button stays exactly as wide as its own text.
 .export-modal .btn-group-vertical.btn-group-container-sw {
     gap: 0.5rem;
+    width: 100%;
+}
+
+.export-modal .btn-group-vertical.btn-group-container-sw .btn-group {
+    width: 100%;
 }
 
 .export-modal .btn-group-vertical.btn-group-container-sw .btn {
+    width: 100%;
     border-radius: var(--bs-border-radius) !important;
     text-align: left;
 }
