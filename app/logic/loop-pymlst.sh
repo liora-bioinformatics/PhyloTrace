@@ -15,6 +15,10 @@ env=PhyloTrace
 SPECIES=""
 CLA_DB=""
 CLA_SPEC=""
+# Classical MLST search thresholds. Empty means "not given": the cgMLST pair is
+# used instead, so the script keeps working when called without -I/-C.
+CLA_IDENTITY=""
+CLA_COVERAGE=""
 
 # AMR screening configurations (abritamr / AMRFinderPlus)
 AMR_ENV=""
@@ -27,7 +31,7 @@ AMR_OUT=""
 
 #' Display command-line usage and option flags.
 usage() {
-    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-m <cla_db_path>] [-M <cla_scheme_spec>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
+    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-m <cla_db_path>] [-M <cla_scheme_spec>] [-I <cla_identity>] [-C <cla_coverage>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
     exit 1
 }
 
@@ -60,9 +64,13 @@ process_genome() {
         --coverage "$cov"
 
     # --- Step 2: Classical MLST (Best-Effort) ---
+    # Searched at its own thresholds, not the allele-calling pair: seven loci
+    # sought from one fixed reference allele each tolerate a divergent reference
+    # far worse than cgMLST's thousands of loci do.
     if [[ -n "$CLA_DB" && -f "$CLA_DB" ]]; then
         local cla_out st alleles
-        cla_out=$("$CONDA" run -n "$env" claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" 2>/dev/null)
+        cla_out=$("$CONDA" run -n "$env" claMLST search \
+            -i "$CLA_IDENTITY" -c "$CLA_COVERAGE" "$CLA_DB" "$file" 2>/dev/null)
         st=$(echo "$cla_out" | awk -F'\t' 'NR==2{print $2}')
         alleles=$(echo "$cla_out" | awk -F'\t' \
             'NR==1{for (i=3;i<=NF;i++) g[i]=$i}
@@ -105,7 +113,7 @@ process_genome() {
 # Option Parsing and Validation
 # ==============================================================================
 
-while getopts "d:i:c:e:s:m:M:A:p:o:" opt; do
+while getopts "d:i:c:e:s:m:M:I:C:A:p:o:" opt; do
     case "$opt" in
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
@@ -114,6 +122,8 @@ while getopts "d:i:c:e:s:m:M:A:p:o:" opt; do
         s) SPECIES="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
         M) CLA_SPEC="$OPTARG" ;;
+        I) CLA_IDENTITY="$OPTARG" ;;
+        C) CLA_COVERAGE="$OPTARG" ;;
         A) AMR_ENV="$OPTARG" ;;
         p) AMR_SPECIES="$OPTARG" ;;
         o) AMR_OUT="$OPTARG" ;;
@@ -128,6 +138,11 @@ if [[ -z "$DB_PATH" ]] || [[ $# -eq 0 ]]; then
     echo "Error: Missing required arguments."
     usage
 fi
+
+# Classical MLST falls back to the allele-calling thresholds when it was given
+# none of its own, so every later use can read the two variables unconditionally.
+: "${CLA_IDENTITY:=$IDENTITY}"
+: "${CLA_COVERAGE:=$COVERAGE}"
 
 # ==============================================================================
 # Pipeline Execution Setup
@@ -208,6 +223,7 @@ if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
         echo "Classical MLST repository: $CLA_REPO"
         echo "Classical MLST scheme: $CLA_DATABASE ($CLA_SCHEME)"
         echo "Classical MLST scheme version: $CLA_VERSION"
+        echo "Classical MLST thresholds: identity $CLA_IDENTITY, coverage $CLA_COVERAGE"
     else
         CLA_DB=""
         echo "Classical MLST: reference build failed for '$SPECIES' (skipping ST calls)"

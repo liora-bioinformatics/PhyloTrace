@@ -41,6 +41,7 @@ box::use(
   viridisLite[viridis],
 )
 box::use(
+  app / logic / date_bins[bin_date_values, floor_date_bin, parse_dates],
   app / logic / viz_helpers[color_scales],
 )
 
@@ -75,27 +76,6 @@ EPI_MAX_BARS <- 150L
 #' Default interval when no valid collection dates are available.
 #' @export
 EPI_INTERVAL_FALLBACK <- "week"
-
-#' Floor Collection Dates to Interval Starts
-#'
-#' Truncates input dates to the start of the specified temporal interval.
-#' ISO-8601 week starts on Monday. Unparseable dates return NA.
-#'
-#' @param dates Vector of dates or date-like character strings.
-#' @param interval String; target bin width ("day", "week", "month", "year").
-#' @return Date vector floored to interval bounds.
-#' @export
-floor_date_bin <- function(dates, interval = "day") {
-  d <- as.Date(dates)
-  switch(
-    tolower(interval),
-    day = d,
-    week = d - (as.numeric(format(d, "%u")) - 1),
-    month = as.Date(format(d, "%Y-%m-01")),
-    year = as.Date(format(d, "%Y-01-01")),
-    stop("Unknown interval: ", interval, call. = FALSE)
-  )
-}
 
 #' Nominal Bin Width in Days
 #'
@@ -155,7 +135,7 @@ exact_bin_widths <- function(dates, interval) {
 #' @return String representing selected interval name.
 #' @export
 epi_default_interval <- function(dates, max_bars = EPI_MAX_BARS) {
-  d <- .parse_dates(dates)
+  d <- parse_dates(dates)
   d <- d[!is.na(d)]
   if (!length(d)) {
     return(EPI_INTERVAL_FALLBACK)
@@ -168,16 +148,6 @@ epi_default_interval <- function(dates, max_bars = EPI_MAX_BARS) {
     }
   }
   intervals[length(intervals)]
-}
-
-.parse_dates <- function(x) {
-  if (inherits(x, "Date")) {
-    return(x)
-  }
-  tryCatch(
-    suppressWarnings(as.Date(as.character(x))),
-    error = function(e) rep(as.Date(NA), length(x))
-  )
 }
 
 # --- Data Reshaping ----------------------------------------------------------
@@ -235,7 +205,7 @@ build_epi_data <- function(
   }
 
   # Filter out rows with unparseable dates
-  parsed <- .parse_dates(meta[[date_field]])
+  parsed <- parse_dates(meta[[date_field]])
   keep <- !is.na(parsed)
   dropped <- sum(!keep)
   if (!any(keep)) {
@@ -499,6 +469,67 @@ empty_epi_annotations <- function() {
     color = character(),
     stringsAsFactors = FALSE
   )
+}
+
+#' Coerce Restored Annotations To The Schema
+#'
+#' Rebuilds `empty_epi_annotations()`'s shape from whatever a saved snapshot
+#' hands back. JSON has no date type, so `start` and `end` return as ISO
+#' strings; assigning those straight into the annotations reactiveVal leaves the
+#' plot code holding character columns where it expects Dates, and the damage
+#' surfaces far from here — `Summary.Date` re-classes the character result of
+#' `min()`/`max()` as a Date, so `.x_limits` produces a Date whose storage is
+#' text and any arithmetic on it fails. Rows with no readable start are dropped:
+#' an annotation that cannot be placed on the axis has nothing to draw.
+#'
+#' @param x Annotations as restored (a data.frame, or NULL).
+#' @return A data.frame in the annotations schema, possibly with zero rows.
+#' @export
+as_epi_annotations <- function(x) {
+  empty <- empty_epi_annotations()
+  if (is.null(x) || !is.data.frame(x) || !nrow(x)) {
+    return(empty)
+  }
+
+  chr <- function(col, default = NA_character_) {
+    v <- if (col %in% names(x)) as.character(x[[col]]) else default
+    rep_len(v, nrow(x))
+  }
+  # A live frame arrives with real Dates and is handed straight back. Anything
+  # else is parsed as the ISO text jsonlite writes — via `format`, because bare
+  # as.Date() on an unreadable string throws where a dropped row is wanted. The
+  # storage check catches the corrupt in-between state: text carrying the Date
+  # class, which is what a restored frame turns into once it reaches min()/max().
+  dt <- function(col) {
+    if (!col %in% names(x)) {
+      return(rep_len(as.Date(NA), nrow(x)))
+    }
+    v <- x[[col]]
+    if (inherits(v, "Date") && is.numeric(unclass(v))) {
+      return(v)
+    }
+    if (is.numeric(v)) {
+      return(as.Date(v, origin = "1970-01-01"))
+    }
+    suppressWarnings(as.Date(as.character(v), format = "%Y-%m-%d"))
+  }
+
+  out <- data.frame(
+    id = chr("id"),
+    type = chr("type", ANNO_PERIOD),
+    start = dt("start"),
+    end = dt("end"),
+    label = chr("label", ""),
+    color = chr("color", EPI_ANNO_COLOR_DEFAULT),
+    stringsAsFactors = FALSE
+  )
+  out$color[is.na(out$color) | !nzchar(out$color)] <- EPI_ANNO_COLOR_DEFAULT
+  out$label[is.na(out$label)] <- ""
+  # Ids only have to be unique within the frame — they key the delete buttons.
+  missing_id <- is.na(out$id) | !nzchar(out$id)
+  out$id[missing_id] <- paste0("a_restored_", which(missing_id))
+
+  out[!is.na(out$start), , drop = FALSE]
 }
 
 .blend <- function(fg, bg, alpha) {

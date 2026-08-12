@@ -93,6 +93,10 @@ box::use(
   app /
     logic /
     pymlst[
+      CG_COVERAGE_DEFAULT,
+      CG_IDENTITY_DEFAULT,
+      CLA_COVERAGE_DEFAULT,
+      CLA_IDENTITY_DEFAULT,
       conda_env,
       start_typing,
       parse_typing_log,
@@ -426,8 +430,25 @@ format_elapsed <- function(secs) {
 ui <- function(id) {
   ns <- NS(id)
 
+  # Reports back whenever this module's panel becomes visible again, so the
+  # server can rebuild the results table (see render_nonce). The tab bar lives
+  # outside this module, so the trigger is a document-level listener that
+  # simply checks whether our own table is on screen once a tab has been
+  # shown - `offsetParent` is null for anything inside a hidden pane.
+  panel_shown_script <- tags$script(HTML(sprintf(
+    "$(document).on('shown.bs.tab', function() {
+       var el = document.getElementById('%s');
+       if (!el || el.offsetParent === null) return;
+       if (!window.Shiny || !Shiny.setInputValue) return;
+       Shiny.setInputValue('%s', Date.now(), {priority: 'event'});
+     });",
+    ns("results_table"),
+    ns("panel_shown")
+  )))
+
   page_sidebar(
     useShinyjs(),
+    panel_shown_script,
     fillable = TRUE,
     sidebar = sidebar(
       title = NULL,
@@ -496,7 +517,7 @@ ui <- function(id) {
               numericInput(
                 ns("identity"),
                 "Min. identity",
-                value = 0.95,
+                value = CG_IDENTITY_DEFAULT,
                 min = 0,
                 max = 1,
                 step = 0.01,
@@ -508,7 +529,7 @@ ui <- function(id) {
               numericInput(
                 ns("coverage"),
                 "Min. coverage",
-                value = 0.9,
+                value = CG_COVERAGE_DEFAULT,
                 min = 0,
                 max = 1,
                 step = 0.01,
@@ -527,6 +548,39 @@ ui <- function(id) {
             choices = c("PubMLST" = "pubmlst", "Pasteur" = "pasteur"),
             selected = "pubmlst",
             inline = TRUE
+          ),
+          # Thresholds of their own rather than the cgMLST pair: the searches
+          # differ in kind, and pyMLST itself defaults `claMLST search` to a
+          # looser identity (0.9) than `wgMLST add` (0.95). The seven classical
+          # loci are searched from one fixed reference allele each, so a locus
+          # whose reference happens to be divergent can miss a cutoff that suits
+          # cgMLST's thousands of loci perfectly well.
+          div(
+            class = "row g-2",
+            div(
+              class = "col-6",
+              numericInput(
+                ns("cla_identity"),
+                "Min. identity",
+                value = CLA_IDENTITY_DEFAULT,
+                min = 0,
+                max = 1,
+                step = 0.01,
+                width = "100%"
+              )
+            ),
+            div(
+              class = "col-6",
+              numericInput(
+                ns("cla_coverage"),
+                "Min. coverage",
+                value = CLA_COVERAGE_DEFAULT,
+                min = 0,
+                max = 1,
+                step = 0.01,
+                width = "100%"
+              )
+            )
           )
         ),
         step_panel(
@@ -551,11 +605,7 @@ ui <- function(id) {
         # click would never see an idle gap to release on and would stay up for
         # the whole pass - covering Terminate. Nothing needs shielding here
         # anyway: every other control is disabled while a run owns the queue.
-        #
-        # pt-typing-start: opts *in* to the separate, narrower tab-navigation
-        # lock (app/js/typing-nav-lock.js), engaged on click rather than via a
-        # server round trip so it holds the whole checking phase too.
-        class = "pt-no-lock pt-typing-start"
+        class = "pt-no-lock"
       )),
       disabled(actionButton(
         ns("terminate"),
@@ -832,8 +882,8 @@ server <- function(
               } else {
                 Typing$cla_db
               },
-              identity = or_default(input$identity, 0.95),
-              coverage = or_default(input$coverage, 0.9),
+              identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
+              coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
               repository = meta$repository,
               scheme = meta$scheme,
               scheme_version = meta$scheme_version,
@@ -967,8 +1017,8 @@ server <- function(
                   },
                   elapsed_seconds = results$elapsed[i],
                   phylotrace_version = APP_VERSION,
-                  cg_identity = or_default(input$identity, 0.95),
-                  cg_coverage = or_default(input$coverage, 0.9),
+                  cg_identity = or_default(input$identity, CG_IDENTITY_DEFAULT),
+                  cg_coverage = or_default(input$coverage, CG_COVERAGE_DEFAULT),
                   cg_loci_found = results$found[i],
                   cg_alleles_added = results$added[i],
                   cg_partial_genes = results$partial[i],
@@ -990,8 +1040,8 @@ server <- function(
                   cla_scheme_version = cla_meta$scheme_version,
                   cla_alembic_version = Typing$cla_refs$alembic,
                   cla_repository = cla_meta$repository,
-                  cla_identity = or_default(input$identity, 0.95),
-                  cla_coverage = or_default(input$coverage, 0.9),
+                  cla_identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
+                  cla_coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
                   amr_status = step_status(
                     Typing$amr_enabled,
                     amr_observed,
@@ -1303,19 +1353,33 @@ server <- function(
         "Classical MLST",
         tags$dt("Sequence Type"),
         tags$dd(
-          "Derived per genome right after allele calling (claMLST search),",
-          "using the same identity / coverage thresholds as cgMLST. A number is",
-          "shown only when exactly one ST matches; otherwise the profile is",
-          "flagged Novel, Partial or Ambiguous. Where a scheme records a locus",
-          "as absent (allele 0, e.g. pstS in Enterococcus faecium), the ST is",
-          "read from its profile table and shown starred."
+          "Derived per genome right after allele calling (claMLST search).",
+          "A number is shown only when exactly one ST matches; otherwise the",
+          "profile is flagged Novel, Partial or Ambiguous. Where a scheme",
+          "records a locus as absent (allele 0, e.g. pstS in Enterococcus",
+          "faecium), the ST is read from its profile table and shown starred."
         ),
         tags$dt("Scheme source"),
         tags$dd(
           "Repository the 7-gene scheme is fetched from. The species is",
           "resolved to exactly one database and one scheme; if the chosen",
           "repository cannot do that, the other is tried, and if neither can,",
-          "classical MLST is skipped for the run."
+          "classical MLST is skipped for the run. Where one database holds two",
+          "equally classical schemes (Acinetobacter baumannii's Oxford and",
+          "Pasteur schemes are both on PubMLST), this choice also picks between",
+          "them by name."
+        ),
+        tags$dt("Min. identity / Min. coverage"),
+        tags$dd(
+          "The same BLAT cutoffs as cgMLST, but for the seven classical loci",
+          "and set separately - pyMLST itself defaults this search to a looser",
+          "identity (0.9) than allele calling (0.95). Each locus is sought from",
+          "one fixed reference allele, so a locus whose reference happens to be",
+          "divergent can miss a strict cutoff and be reported uncalled while",
+          "the other six type normally. A looser cutoff only affects whether a",
+          "locus is found at all: the allele number still comes from an exact",
+          "sequence match, so it cannot produce a wrong allele - an unmatched",
+          "hit is reported as a new allele instead."
         ),
         tags$dt("When it's skipped"),
         tags$dd(
@@ -1445,6 +1509,8 @@ server <- function(
         disable("identity")
         disable("coverage")
         disable("cla_repo")
+        disable("cla_identity")
+        disable("cla_coverage")
         disable("run_amr")
       } else {
         enable("genome_file")
@@ -1454,6 +1520,8 @@ server <- function(
         enable("identity")
         enable("coverage")
         enable("cla_repo")
+        enable("cla_identity")
+        enable("cla_coverage")
         enable("run_amr")
       }
     })
@@ -1873,12 +1941,15 @@ server <- function(
     })
 
     # Per-strain results — structural render only.
-    # Fires exactly twice per typing run: once when results are first seeded
-    # (results_initialized flips TRUE) to build the correct column layout, and
-    # once on reset (flips FALSE) to show the placeholder. Live data is pushed
-    # via replaceData below, which preserves scroll position.
+    # Fires when results are first seeded (results_initialized flips TRUE) to
+    # build the correct column layout, on reset (flips FALSE) to show the
+    # placeholder, and whenever the panel is revealed again (render_nonce), so
+    # a first render that landed in a hidden pane is rebuilt on a visible one.
+    # Live data is pushed via replaceData below, which preserves scroll
+    # position.
     output$results_table <- renderDT({
       render_info("output$results_table")
+      render_nonce()
 
       if (!results_initialized()) {
         return(datatable(
@@ -1939,13 +2010,28 @@ server <- function(
     outputOptions(output, "log", suspendWhenHidden = FALSE)
     outputOptions(output, "status_line", suspendWhenHidden = FALSE)
 
-    # Releases the tab-navigation lock a click on Start engages (see
-    # app/js/typing-nav-lock.js). The Results table's own initComplete
-    # callback (header_tooltips) releases it on the normal path; this is for
-    # every path from here that stops short of that first render.
-    release_nav_lock <- function() {
-      runjs("if (window.__ptReleaseTypingNavLock) window.__ptReleaseTypingNavLock();")
-    }
+    # Rebuild the results table from scratch whenever the panel is revealed
+    # again (input$panel_shown, fired by the script in ui()).
+    #
+    # A run seeds its first results row - and so triggers the table's one
+    # structural render - while the user may already have switched to another
+    # tab. That first render lands in a hidden pane and can end up without its
+    # rows; the live replaceData updates that follow only replace data in a
+    # table that was built correctly, so they never repair it, and the table
+    # still reads empty when the tab is revisited. Re-rendering on reveal is
+    # what makes that recoverable: it rebuilds against the current data on a
+    # pane that is actually visible, which is the same path that always works
+    # when the user simply stays put.
+    render_nonce <- reactiveVal(0L)
+    observeEvent(
+      input$panel_shown,
+      {
+        if (isTRUE(results_initialized())) {
+          render_nonce(isolate(render_nonce()) + 1L)
+        }
+      },
+      ignoreInit = TRUE
+    )
 
     # Start typing
     observeEvent(input$start, {
@@ -1996,19 +2082,17 @@ server <- function(
           type = "warning",
           duration = 5
         )
-        release_nav_lock()
         return()
       }
 
       # Content digests of every selected assembly (see app/logic/genome_hash.R).
-      # The filter above matches on strain *name* only, which hides two things
-      # the digest can see: an assembly already stored under a different isolate
-      # (typing it again enters one isolate twice), and an isolate whose stored
-      # assembly differs from the file selected now (pyMLST rejects the file as
-      # a duplicate, so its data is silently dropped). Both are reported and
-      # neither blocks the run - re-typing an assembly under a new name is
+      # This is what actually distinguishes a harmless retype (name known,
+      # digest identical - dropped silently in launch_typing()) from a real
+      # name_conflict (name known, digest differs - gated or reported there)
+      # from a same_genome hit (new name, digest matches something else -
+      # reported but never blocks; re-typing an assembly under a new name is
       # legitimate, and only the metadata can settle whether two records are
-      # really the same epidemiological isolate.
+      # really the same epidemiological isolate).
       #
       # Hashing several hundred assemblies takes long enough that doing it inline
       # would freeze the event loop for the whole pass and could not be
@@ -2084,10 +2168,12 @@ server <- function(
         log_typing(
           "Checking phase complete",
           sprintf(
-            "%d new, %d same-genome, %d name-conflict",
+            "%d new, %d same-genome, %d retype, %d name-conflict, %d unknown",
             sum(chk$out$status == "new"),
             sum(chk$out$status == "same_genome"),
-            sum(chk$out$status == "name_conflict")
+            sum(chk$out$status == "retype"),
+            sum(chk$out$status == "name_conflict"),
+            sum(chk$out$status == "unknown")
           )
         )
         launch_typing(chk$out)
@@ -2125,7 +2211,6 @@ server <- function(
         "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
         ns("progress")
       ))
-      release_nav_lock()
     }
 
     # Kick off the typing run once its selection has been checked. `checked` is
@@ -2163,15 +2248,46 @@ server <- function(
         )
       }
 
-      name_conflict <- checked[
-        checked$status == "name_conflict",
+      # Narrow the queue to what actually gets typed: "new" and "same_genome"
+      # only. "retype" (name known, digest identical - a genuine no-op) and
+      # name_taken rows (below) are dropped, now that the digest check has told
+      # them apart - see the Start handler, which used to make this call by
+      # name alone before any of this was known. Set unconditionally, before
+      # the gate below can return early: begin_typing_run() reads these back
+      # whether it is called from here directly or later from "Continue typing".
+      to_type <- checked[checked$status %in% c("new", "same_genome"), , drop = FALSE]
+      Typing$queued_files <- to_type$file
+      Typing$queued_strains <- to_type$strain
+
+      if (nrow(to_type) == 0) {
+        log_typing("Start aborted: nothing left to type after the check")
+        showNotification(
+          paste(
+            "Every selected genome was already present (unchanged or",
+            "name-conflicting) - nothing left to type."
+          ),
+          id = ns("empty_queue"),
+          type = "warning",
+          duration = 5
+        )
+        reset_to_idle()
+        return()
+      }
+
+      # "unknown" (name taken, no recorded hash to compare against - e.g. an
+      # isolate typed before genome hashing existed) gets the same treatment as
+      # a confirmed name_conflict: either way the name is already taken, so
+      # pyMLST's `wgMLST add` rejects the file regardless of what its content
+      # turns out to be.
+      name_taken <- checked[
+        checked$status %in% c("name_conflict", "unknown"),
         ,
         drop = FALSE
       ]
-      if (nrow(name_conflict) > name_conflict_gate_min) {
+      if (nrow(name_taken) > name_conflict_gate_min) {
         log_typing(
           "Advisory: name conflicts require confirmation",
-          sprintf("%d (gate threshold %d)", nrow(name_conflict), name_conflict_gate_min)
+          sprintf("%d (gate threshold %d)", nrow(name_taken), name_conflict_gate_min)
         )
         showModal(modalDialog(
           title = "Name conflicts detected",
@@ -2179,16 +2295,16 @@ server <- function(
           easyClose = FALSE,
           tags$p(sprintf(
             paste(
-              "%d selected assembly/assemblies share a name with a different",
-              "assembly already typed. These will be skipped as duplicates and",
-              "will NOT be typed - rename them to type them, or continue to",
-              "type the rest of the selection."
+              "%d selected assembly/assemblies already share a name with an",
+              "isolate in the database. These will be skipped as duplicates",
+              "and will NOT be typed - rename them to type them, or continue",
+              "to type the rest of the selection."
             ),
-            nrow(name_conflict)
+            nrow(name_taken)
           )),
           div(
             class = "typing-scrollpane",
-            duplicate_dt(name_conflict, "strain", "Skipped as duplicate")
+            duplicate_dt(name_taken, "strain", "Skipped as duplicate")
           ),
           footer = tagList(
             actionButton(ns("cancel_typing_gate"), "Cancel"),
@@ -2202,18 +2318,18 @@ server <- function(
         return()
       }
 
-      if (nrow(name_conflict)) {
+      if (nrow(name_taken)) {
         log_typing(
           "Advisory: name conflicts skipped as duplicates",
-          sprintf("%d", nrow(name_conflict))
+          sprintf("%d", nrow(name_taken))
         )
         showNotification(
           HTML(paste0(
             "<strong>",
-            nrow(name_conflict),
+            nrow(name_taken),
             " selected assembly/assemblies ",
-            "share a name with a different assembly already typed:</strong><br>",
-            paste(htmlEscape(name_conflict$strain), collapse = "<br>"),
+            "already share a name with an isolate in the database:</strong><br>",
+            paste(htmlEscape(name_taken$strain), collapse = "<br>"),
             "<br><em>These are skipped as duplicates and will NOT be typed. ",
             "Rename them to type them.</em>"
           )),
@@ -2343,17 +2459,22 @@ server <- function(
       log_typing(
         "Launching typing run",
         sprintf(
-          "%d genome(s) | species=%s | cgMLST id=%s cov=%s | claMLST=%s (%s) | AMR=%s (%s)",
+          paste(
+            "%d genome(s) | species=%s | cgMLST id=%s cov=%s |",
+            "claMLST=%s (%s) id=%s cov=%s | AMR=%s (%s)"
+          ),
           length(Typing$queued_files),
           if (is.na(species)) "NA" else species,
-          or_default(input$identity, 0.95),
-          or_default(input$coverage, 0.9),
+          or_default(input$identity, CG_IDENTITY_DEFAULT),
+          or_default(input$coverage, CG_COVERAGE_DEFAULT),
           if (Typing$cla_enabled) "on" else "off",
           if (isTRUE(cla_scheme$resolved)) {
             sprintf("%s: %s", cla_scheme$repository, cla_scheme$scheme)
           } else {
             "no scheme"
           },
+          or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
+          or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
           if (run_amr) "on" else "off",
           if (is.na(amr_sp)) "acquired-only" else amr_sp
         )
@@ -2364,10 +2485,12 @@ server <- function(
           db_path = db_path(),
           genome_files = Typing$queued_files,
           log_file = Typing$log_file,
-          identity = or_default(input$identity, 0.95),
-          coverage = or_default(input$coverage, 0.9),
+          identity = or_default(input$identity, CG_IDENTITY_DEFAULT),
+          coverage = or_default(input$coverage, CG_COVERAGE_DEFAULT),
           env = conda_env,
           species = species,
+          cla_identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
+          cla_coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
           cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db,
           cla_spec = if (is.null(Typing$cla_spec)) {
             NA_character_

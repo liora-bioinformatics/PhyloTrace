@@ -451,6 +451,44 @@ test_that("a value nobody recorded is its own level, not a gap", {
   expect_true("Not recorded" %in% vals$levels)
 })
 
+# A date column the way SQLite hands it over: character, not Date.
+date_meta <- function() {
+  data.frame(
+    isolate = c("a", "b", "c", "d", "e", "f"),
+    collected = c("2024-01-05", "2024-01-20", "2024-02-11", "2024-02-28",
+                  "2024-03-03", NA),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("a mapped date is no longer one slice per distinct date string", {
+  # It arrives as character, so without the transform it fell to the discrete
+  # branch and drew a level per date — the MST never honoured the layer.
+  layer <- list(field = "collected", transform = "as_date",
+                granularity = "month")
+  vals <- mst_plot$mst_node_values(c("a", "b\nc"), date_meta(), "collected",
+                                   layer)
+
+  # Levels come from the whole column, so every month present is one.
+  expect_identical(
+    vals$levels,
+    c("2024-01", "2024-02", "2024-03", "Not recorded")
+  )
+  # The merged node splits across the two months it actually spans.
+  expect_equal(sum(vals$shares[[2]]), 1)
+  expect_identical(sort(names(vals$shares[[2]])), c("2024-01", "2024-02"))
+})
+
+test_that("an unbinned date drives the gradient rather than a pie", {
+  layer <- list(field = "collected", transform = "as_date")
+  vals <- mst_plot$mst_node_values(c("a", "f"), date_meta(), "collected", layer)
+
+  expect_null(vals$levels)
+  expect_true(vals$date)
+  expect_equal(vals$value[[1]], as.numeric(as.Date("2024-01-05")))
+  expect_true(is.na(vals$value[[2]]))
+})
+
 test_that("a continuous variable collapses to the node's mean", {
   vals <- mst_plot$mst_node_values(c("b\nc", "f"), demo_meta(), "year")
   expect_identical(vals$levels, NULL)

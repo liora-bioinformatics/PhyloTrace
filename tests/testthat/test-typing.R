@@ -7,6 +7,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / genome_hash[store_genome_hash],
   app / logic / provenance[scheme_provenance],
   app / logic / pymlst[cg_outcome, parse_typing_log],
   app / view / typing,
@@ -272,6 +273,53 @@ test_that("every isolate gets a provenance row as it is typed", {
   })
 })
 
+test_that("the two searches record their own thresholds, not one shared pair", {
+  # The classical search runs at its own cutoffs (pyMLST defaults it looser than
+  # allele calling), so provenance has to keep the two pairs apart - reading
+  # cg_identity off a classical row would misreport how the ST was called.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- genome
+    Typing$cla_enabled <- TRUE
+    Typing$scheme_context <- scheme_provenance(path)
+    session$setInputs(
+      identity = 0.99,
+      coverage = 0.95,
+      cla_identity = 0.9,
+      cla_coverage = 0.8
+    )
+
+    lines <- c(RUN_PREAMBLE, strain_section("A", amr = FALSE), "Done!")
+    results <- parse_typing_log(lines, Typing$queued_strains)
+    persist_results(results, lines, retry = TRUE)
+
+    con <- DBI::dbConnect(RSQLite::SQLite(), path)
+    on.exit(DBI::dbDisconnect(con), add = TRUE)
+    row <- DBI::dbGetQuery(con, "SELECT * FROM typing_provenance")
+
+    expect_identical(row$cg_identity, 0.99)
+    expect_identical(row$cg_coverage, 0.95)
+    expect_identical(row$cla_identity, 0.9)
+    expect_identical(row$cla_coverage, 0.8)
+
+    # The classical_mlst rows carry the classical pair too - they describe that
+    # search, not allele calling.
+    cla <- DBI::dbGetQuery(
+      con,
+      "SELECT DISTINCT identity, coverage FROM classical_mlst"
+    )
+    expect_identical(cla$identity, 0.9)
+    expect_identical(cla$coverage, 0.8)
+  })
+})
+
 test_that("a provenance row says which steps failed, ran, or never ran", {
   dir <- local_tempdir()
   path <- file.path(dir, "db.db")
@@ -439,6 +487,57 @@ test_that("an unresolvable scheme is announced in the run's own transcript", {
     )))
     # It leads the transcript, ahead of anything the subprocess itself writes -
     # append mode preserves it rather than racing the child's own first write.
-    expect_identical(lines[2], "Classical MLST: no resolvable species for this scheme (skipping ST calls for this run).")
+    expect_identical(
+      lines[2],
+      paste(
+        "Classical MLST: no resolvable species for this scheme",
+        "(skipping ST calls for this run)."
+      )
+    )
+  })
+})
+
+test_that("a name already in the database is queued into the check, not dropped by name", {
+  # Regression test: the Start handler used to drop any selected file whose
+  # *name* matched an existing isolate before the digest check ever ran, which
+  # made name_conflict (and retype) unreachable - a same-name file was
+  # indistinguishable from a harmless already-typed duplicate. Driving the real
+  # Start -> checking pipeline (not calling launch_typing() directly) is the
+  # point of this test.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())   # isolates A, B already fully in `mlst`
+
+  a_orig <- file.path(dir, "A_orig.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGCAAAA"), a_orig)
+  store_genome_hash(path, "A", a_orig)
+
+  # Same isolate name, genuinely different content.
+  a_conflict <- file.path(dir, "A_conflict.fna")
+  writeLines(c(">A_contig1", "TTTTGGGGCCCCAAAATTTTGGGGCCCC"), a_conflict)
+
+  # Same isolate name, byte-identical content -> a harmless retype.
+  a_retype <- file.path(dir, "A_retype.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGCAAAA"), a_retype)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$files <- c(a_conflict, a_retype)
+    Typing$strains <- c("A", "A")
+    session$setInputs(start = 1)
+
+    # Right after the Start click: both survive into the queue - neither was
+    # silently dropped for sharing a name with an existing isolate.
+    expect_setequal(Typing$queued_strains, c("A", "A"))
+
+    # Let the checking phase's invalidateLater(0) ticks run to completion.
+    for (i in 1:5) session$elapse(50)
+
+    expect_setequal(chk$out$status, c("name_conflict", "retype"))
+
+    # Neither belongs in an actual typing run: the conflict is real data loss
+    # if typed, and the retype is a no-op pyMLST would reject anyway. With
+    # nothing else in the selection, the run never starts.
+    expect_identical(Typing$queued_strains, character(0))
+    expect_identical(Typing$status, "idle")
   })
 })

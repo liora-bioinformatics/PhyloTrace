@@ -17,9 +17,9 @@ box::use(
   ],
   bslib[update_switch],
   RColorBrewer[brewer.pal, brewer.pal.info],
+  stats[setNames],
   shinyWidgets[
     colorPickr,
-    prepare_choices,
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
@@ -31,6 +31,7 @@ box::use(
 )
 
 box::use(
+  app / logic / date_bins[DATE_GRANULARITIES, DATE_GRANULARITY_NONE],
   app / logic / field_profile[profile_description],
 )
 
@@ -232,37 +233,40 @@ viz_color <- function(ns, id, label, value) {
 # Turn a profile frame into virtual-select choices, optionally prefixed with a
 # sentinel entry ("No stratification", "No annotation") that is not a field.
 #
-# prepare_choices() captures its arguments as bare expressions and evaluates
-# them against the frame alone, so anything computed has to be a column of the
-# frame before it gets there — a call would be looked up inside shinyWidgets
-# and not found.
+# Assembled in virtual-select's own nested format rather than through
+# prepare_choices(): that helper puts *every* row in a group, so the sentinel
+# could only travel as a one-entry group of its own, and virtual-select draws a
+# title row for every group it is given. A blank group label therefore rendered
+# as a blank, unselectable row above the sentinel. Here the sentinel is a
+# plain top-level option and only the profile rows carry groups.
+#
+# The structure reaches the widget untouched (an unrecognised `type` is passed
+# through verbatim by the JS binding), so each option has to be a complete
+# object rather than the column-wise form prepare_choices() emits.
 .field_choices <- function(profiles, extra = NULL) {
-  rows <- data.frame(
-    label = profiles$label,
-    value = profiles$field,
-    group = profiles$group,
-    description = profile_description(profiles),
-    stringsAsFactors = FALSE
-  )
-  if (length(extra)) {
-    rows <- rbind(
-      data.frame(
-        label = names(extra),
-        value = unname(extra),
-        # Its own group, so it does not read as one of the database's fields.
-        group = " ",
-        description = "",
-        stringsAsFactors = FALSE
-      ),
-      rows
-    )
+  option <- function(label, value, description) {
+    list(label = label, value = value, description = description)
   }
-  prepare_choices(
-    rows,
-    label = label,
-    value = value,
-    group_by = group,
-    description = description
+  description <- profile_description(profiles)
+  groups <- unique(as.character(profiles$group))
+  choices <- lapply(groups, function(name) {
+    rows <- which(profiles$group == name)
+    list(
+      label = name,
+      options = lapply(rows, function(i) {
+        option(profiles$label[[i]], profiles$field[[i]], description[[i]])
+      })
+    )
+  })
+  if (length(extra)) {
+    sentinels <- lapply(seq_along(extra), function(i) {
+      option(names(extra)[[i]], unname(extra)[[i]], "")
+    })
+    choices <- c(sentinels, choices)
+  }
+  structure(
+    list(choices = choices, type = "formatted"),
+    class = c("list", "vs_choices")
   )
 }
 
@@ -374,6 +378,42 @@ scale_select <- function(ns, id, categories = names(color_scales), selected = NU
       # Rendered into <body> (see main.scss's "Dropdown overflow" rules) so the
       # long option list is capped and scrolled against the viewport instead
       # of expanding whatever small container (often a modal) it opens in.
+      options = list(container = "body"),
+      width = "100%"
+    )
+  )
+}
+
+#' Calendar-interval selector for a mapped date variable.
+#'
+#' A collection date is near-unique per isolate, so raw it groups nothing.
+#' This is the control that coarsens it into something a legend, a pie or a
+#' palette can carry. Shown only for date columns; every engine uses this one
+#' control so the option reads the same wherever a date can be mapped.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Input ID.
+#' @param selected Character. Granularity to preselect, or NULL for "none".
+#' @param label Character. Control label.
+#' @param allow_none Logical. Offer the ungrouped option (a continuous scale).
+#' @return Shiny UI tag.
+#' @export
+granularity_select <- function(ns, id, selected = NULL, label = "Group dates by",
+                               allow_none = TRUE) {
+  choices <- as.list(DATE_GRANULARITIES)
+  if (allow_none) {
+    choices <- c(setNames(list(DATE_GRANULARITY_NONE), "Exact date"), choices)
+  }
+  if (is.null(selected)) {
+    selected <- DATE_GRANULARITY_NONE
+  }
+  div(
+    class = "viz-granularity-select",
+    pickerInput(
+      ns(id),
+      label,
+      choices = choices,
+      selected = selected,
       options = list(container = "body"),
       width = "100%"
     )

@@ -56,9 +56,9 @@ box::use(
 )
 
 box::use(
+  app / logic / date_bins[bin_date_values],
   app / logic / field_labels[field_labels_for],
   app / logic / field_profile[field_levels],
-  app / logic / field_types[as_date_safe],
 )
 
 # Scale classification definitions
@@ -1119,9 +1119,14 @@ layer_for <- function(opts, aesthetic) {
 # The column a layer maps, parsed if its declared type says so. A date arrives
 # from SQLite as character, and a discrete scale over 300 distinct dates is 300
 # unordered colours — this is the one place a declared type changes the draw.
+# With a granularity set, the date comes back as an ordered factor of interval
+# labels instead, which every discrete path below then handles unchanged.
 .layer_values <- function(layer, md) {
   v <- md[[layer$field]]
-  if (identical(layer$transform, "as_date")) as_date_safe(v) else mapped_values(v)
+  if (!identical(layer$transform, "as_date")) {
+    return(mapped_values(v))
+  }
+  bin_date_values(v, layer$granularity)
 }
 
 # The mapped column as the plot must see it. The aes() references md[[field]]

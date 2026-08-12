@@ -10,6 +10,7 @@ box::use(
 
 box::use(
   app / logic / custom_fields[custom_col, CUSTOM_TYPES, list_custom_fields],
+  app / logic / date_bins[parse_dates],
 )
 
 #' Map of fixed schema column names to their declared type slugs.
@@ -95,18 +96,8 @@ date_fields <- function(db_path, cols, types = c("date", "datetime")) {
 
 #' Safely Parse Input to Date Vector
 #'
-#' Converts character or raw metadata vectors into `Date` objects. Returns an
-#' all-NA Date vector if parsing fails completely, avoiding execution errors.
+#' Alias of `date_bins$parse_dates()`, kept here because the date-aware callers
+#' already import this module. One implementation, two names.
 #'
-#' @param x Vector of date strings, timestamps, or raw input.
-#' @return Vector of `Date` values with unparseable entries set to NA.
 #' @export
-as_date_safe <- function(x) {
-  if (inherits(x, "Date")) {
-    return(x)
-  }
-  tryCatch(
-    suppressWarnings(as.Date(as.character(x))),
-    error = function(e) rep(as.Date(NA), length(x))
-  )
-}
+as_date_safe <- parse_dates

@@ -22,12 +22,13 @@ meta_fixture <- function(n = 40) {
 
 # --- Level counting ----------------------------------------------------------
 
-test_that("only columns that can group are offered for a mapping", {
+test_that("only a fully unique column is excluded from a mapping", {
   fields <- field_profile$mapping_fields(meta_fixture())
 
-  # A constant column and a per-isolate one group nothing, and `isolate` is
-  # never a mapping.
-  expect_false("organism" %in% fields)
+  # A per-isolate column groups nothing (every row is its own bucket), and
+  # `isolate` is never a mapping. A constant column still groups, trivially,
+  # into one bucket, so it stays offered rather than being hidden outright.
+  expect_true("organism" %in% fields)
   expect_false("collected_by" %in% fields)
   expect_false("isolate" %in% fields)
   expect_true(all(c("purpose", "country", "source") %in% fields))
@@ -89,7 +90,7 @@ profiled <- function(...) {
   field_profile$field_profiles(meta_fixture(), ...)
 }
 
-test_that("every column is profiled, including the ones that cannot group", {
+test_that("every column is profiled, including the one that cannot group", {
   p <- profiled()
 
   # This is the whole point of the rewrite: the old shape picker *hid* the
@@ -97,7 +98,9 @@ test_that("every column is profiled, including the ones that cannot group", {
   # nothing and no reason why. Now every column is listed and says what it is.
   expect_setequal(p$field, names(meta_fixture()))
 
-  expect_false(field_profile$profile_for(p, "organism")$groupable)
+  # A constant column still groups, trivially, into a single bucket.
+  expect_true(field_profile$profile_for(p, "organism")$groupable)
+  # A column with a different value per isolate cannot group at all.
   expect_false(field_profile$profile_for(p, "collected_by")$groupable)
   expect_true(field_profile$profile_for(p, "purpose")$groupable)
 })
@@ -209,8 +212,8 @@ test_that("the option sub-text names the count and the type", {
   desc <- field_profile$profile_description(p)
 
   expect_identical(desc[p$field == "country"], "20 values · Text")
-  # Singular, and it says why picking it would do nothing.
-  expect_identical(desc[p$field == "organism"], "1 value · Text — cannot group")
+  # Singular, and no caveat — a constant column still groups, trivially.
+  expect_identical(desc[p$field == "organism"], "1 value · Text")
 })
 
 test_that("an empty metadata table profiles to an empty frame", {

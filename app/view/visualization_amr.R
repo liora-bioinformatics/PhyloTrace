@@ -53,15 +53,18 @@ box::use(
 )
 box::use(
   app / logic / amr_plot,
+  app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles],
+  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
   app / logic / functions[render_info],
+  app / logic / mapping_engine[is_date_profile],
   app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
       field_select,
+      granularity_select,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -420,6 +423,7 @@ amr_controls <- function(ns) {
           # Server-rendered for the same reason as the gene picker: the choices
           # are this database's metadata columns.
           shiny$uiOutput(ns("anno_ui")),
+          shiny$uiOutput(ns("anno_granularity_ui")),
           scale_select(ns, "amr_anno_scale", categories = "Qualitative"),
           shiny$hr(),
           shiny$conditionalPanel(
@@ -761,9 +765,34 @@ server <- function(
       )
     })
 
+    # Profile of whatever the annotation picker currently holds.
+    anno_profile <- shiny$reactive({
+      field <- input$amr_anno_field
+      if (is.null(field) || identical(field, NO_ANNOTATION)) {
+        return(NULL)
+      }
+      meta <- viz_metadata()
+      profile_for(field_profiles() %||% field_profiles_of(meta), field)
+    })
+
+    # Only a date can be grouped by a calendar interval, so the control appears
+    # only for one. Without it a collection date is one colour per isolate.
+    output$anno_granularity_ui <- shiny$renderUI({
+      render_info("visualization_amr anno_granularity_ui")
+      if (!is_date_profile(anno_profile())) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "amr_anno_granularity",
+        shiny$isolate(input$amr_anno_granularity)
+      )
+    })
+
     # The chosen field's values, keyed by isolate, or NULL when nothing is
     # mapped. Isolates the field is empty for are labelled rather than dropped
-    # (see .row_annotation in amr_plot.R).
+    # (see .row_annotation in amr_plot.R). A date is grouped first, so the
+    # annotation carries as many colours as there are intervals, not isolates.
     anno_values <- shiny$reactive({
       field <- input$amr_anno_field
       if (is.null(field) || identical(field, NO_ANNOTATION)) {
@@ -773,7 +802,11 @@ server <- function(
       if (is.null(meta) || !field %in% names(meta)) {
         return(NULL)
       }
-      setNames(as.character(meta[[field]]), meta$isolate)
+      vals <- meta[[field]]
+      if (is_date_profile(anno_profile())) {
+        vals <- bin_date_values(vals, input$amr_anno_granularity)
+      }
+      setNames(as.character(vals), meta$isolate)
     })
 
     anno_label <- shiny$reactive({

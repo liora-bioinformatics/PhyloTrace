@@ -1087,19 +1087,30 @@ server <- function(
 
     reg(observeEvent(input$sel_confirm, do_sel_confirm()))
 
-    # Applies the selection exactly like Confirm, then synthesizes a click on
-    # Generate so the plot redraws without a second click. The Generate button
-    # is disabled whenever nothing is pending; the toggleState observer that
-    # would flip it back on only fires on the next reactive flush, after this
-    # message is already queued, so the click's own JS also clears `disabled`
-    # first rather than trusting the button's client-side state to have caught
-    # up yet.
+    # Draws the plot when the app itself decides one is due rather than the user
+    # pressing the button. It goes through the DOM instead of writing the input
+    # directly because the click is also what the engines' loading overlays
+    # listen for.
+    #
+    # Clearing `disabled` first is what makes it land at all. Generate is
+    # disabled exactly when nothing is pending, and both callers have just made
+    # this tab not-pending: the confirm path a flush too recently for the
+    # toggleState observer to have caught up, the restore path deliberately and
+    # for good — a tab filled from its snapshot has nothing left to apply. The
+    # browser swallows a click on a disabled button, so without this the plot is
+    # simply never drawn.
+    click_generate <- function() {
+      shinyjs::runjs(sprintf(
+        "var b=document.getElementById('%s'); if(b){b.disabled=false; b.click();}",
+        ns("generate")
+      ))
+    }
+
+    # Applies the selection exactly like Confirm, then redraws without a second
+    # click.
     reg(observeEvent(input$sel_confirm_generate, {
       if (isTRUE(do_sel_confirm())) {
-        shinyjs::runjs(sprintf(
-          "var b=document.getElementById('%s'); if(b){b.disabled=false; b.click();}",
-          ns("generate")
-        ))
+        click_generate()
       }
     }))
 
@@ -1876,9 +1887,10 @@ server <- function(
       if (!is.null(snap$algo)) {
         updatePrettyRadioButtons(session, "algo", selected = snap$algo)
       }
-      # Both, because a restored plot is drawn from the snapshot rather than
-      # waiting for the user to press Generate — the synthetic Generate below
-      # would otherwise find nothing pending and be disabled.
+      # Both, because a restored plot is not waiting on the user to press
+      # Generate: the tab is complete the moment the snapshot is in it, and
+      # nothing about it is pending. That is also why the redraw below has to go
+      # through click_generate() — it leaves Generate disabled, correctly.
       selected_isolates(snap$selection)
       applied_selection(snap$selection)
       generated_once(TRUE)
@@ -1889,13 +1901,7 @@ server <- function(
 
       # Booked as already-saved when the click below lands; see restore_pending.
       restore_pending(TRUE)
-      shinyjs::delay(
-        500,
-        shinyjs::runjs(sprintf(
-          "var b=document.getElementById('%s'); if(b){b.click();}",
-          ns("generate")
-        ))
-      )
+      shinyjs::delay(500, click_generate())
       invisible(NULL)
     }
 

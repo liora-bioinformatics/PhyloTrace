@@ -34,6 +34,7 @@ box::use(
   stats[setNames],
 )
 box::use(
+  app / logic / date_bins[granularity_label],
   app / logic / db_events,
   app / logic / field_labels[field_labels_for, grouped_field_choices],
   app /
@@ -53,8 +54,11 @@ box::use(
       assign_mapping_layer,
       COLOR_AESTHETICS,
       eligible_aesthetics,
+      granularity_profile,
+      is_date_profile,
       MAX_LAYERS,
-      rebalance_layers
+      rebalance_layers,
+      set_layer_granularity
     ],
   app / logic / functions[render_info],
   app /
@@ -79,6 +83,7 @@ box::use(
       point_shapes,
       viz_color,
       field_select,
+      granularity_select,
       update_field_select,
       scale_select,
       color_scales,
@@ -105,6 +110,7 @@ LAYER_DEFAULTS <- list(
   n_levels = 1L,
   continuous = FALSE,
   transform = NULL,
+  granularity = NULL,
   auto = TRUE
 )
 
@@ -1610,7 +1616,12 @@ server <- function(
         return()
       }
       prof <- profile_for(profiles(), field)
-      layer <- assign_mapping_layer(prof, layers, id = next_layer_id())
+      layer <- assign_mapping_layer(
+        prof,
+        layers,
+        id = next_layer_id(),
+        values = viz_metadata()[[field]]
+      )
       if (is.null(layer)) {
         shiny$showNotification(
           aesthetic_block_reason(prof, NULL) %||%
@@ -1630,7 +1641,7 @@ server <- function(
         function(l) !identical(l$id, input$nj_layer_delete),
         nj_layers()
       )
-      nj_layers(rebalance_layers(keep, profiles()))
+      nj_layers(rebalance_layers(keep, profiles(), "tree", viz_metadata()))
     })
 
     output$nj_layers_ui <- shiny$renderUI({
@@ -1655,6 +1666,9 @@ server <- function(
                   AESTHETIC_LABELS[[l$aesthetic]],
                   "·",
                   sprintf("%d values", l$n_levels),
+                  if (!is.null(granularity_label(l$granularity))) {
+                    paste("· by", tolower(granularity_label(l$granularity)))
+                  },
                   if (!is.null(l$palette)) paste("·", l$palette)
                 )
               )
@@ -1684,18 +1698,23 @@ server <- function(
         function(x) x$aesthetic,
         character(1)
       )
-      free <- union(l$aesthetic, eligible_aesthetics(prof, taken))
+      # Which aesthetics fit depends on the variable as its granularity leaves
+      # it: a date grouped by year is six levels and can take a shape, where
+      # the raw column is a continuum and cannot.
+      values <- viz_metadata()[[l$field]]
+      binned <- granularity_profile(prof, values, l$granularity)
+      free <- union(l$aesthetic, eligible_aesthetics(binned, taken))
       blocked <- setdiff(names(AESTHETIC_LABELS), free)
       reasons <- Filter(
         Negate(is.null),
-        lapply(blocked, function(a) aesthetic_block_reason(prof, a))
+        lapply(blocked, function(a) aesthetic_block_reason(binned, a))
       )
 
       cats <- scale_categories_for(
-        viz_metadata()[[l$field]],
+        if (isTRUE(binned$continuous)) values else as.character(values),
         suitable_scale_categories(
-          if (isTRUE(prof$continuous)) "Numeric" else "Factor",
-          viz_metadata()[[l$field]]
+          if (isTRUE(binned$continuous)) "Numeric" else "Factor",
+          values
         )
       )
 
@@ -1703,6 +1722,9 @@ server <- function(
         title = paste("Mapping:", l$title),
         size = "s",
         easyClose = TRUE,
+        if (is_date_profile(prof)) {
+          granularity_select(ns, "nj_layer_granularity", l$granularity)
+        },
         pickerInput(
           ns("nj_layer_aesthetic"),
           "Show as",
@@ -1740,13 +1762,18 @@ server <- function(
         } else {
           l$palette <- NULL
         }
+        l <- set_layer_granularity(
+          l,
+          input$nj_layer_granularity,
+          viz_metadata()[[l$field]]
+        )
         # Pinned: rebalance_layers() must not undo a deliberate choice.
         l$auto <- FALSE
         l
       })
       # A pinned layer may now hold an aesthetic an automatic one had, so the
       # automatic ones move out of its way.
-      nj_layers(rebalance_layers(layers, profiles()))
+      nj_layers(rebalance_layers(layers, profiles(), "tree", viz_metadata()))
       editing(NULL)
       shiny$removeModal()
     })
@@ -1893,6 +1920,15 @@ server <- function(
       stringsAsFactors = FALSE
     )
 
+    # A named-attribute lookup answers NA for a column the attribute does not
+    # cover, and abritamr itself can hand over an empty drug class or gene name.
+    # Both have to fall back: virtual-select draws a row per group whatever its
+    # label says, so a blank one reaches the dropdown as an empty, unselectable
+    # line.
+    .or_default <- function(x, default) {
+      unname(ifelse(is.na(x) | !nzchar(trimws(x)), default, x))
+    }
+
     gene_catalog <- shiny$reactive({
       mat <- amr_matrix()
       if (is.null(mat)) {
@@ -1908,14 +1944,14 @@ server <- function(
       hits <- vapply(cols, function(c) sum(!is.na(mat[[c]])), integer(1))
       data.frame(
         col = cols,
-        label = unname(ifelse(is.na(genes), cols, genes)),
+        label = .or_default(genes, cols),
         # Filed under the drug class, which is how a reader looks for a gene.
-        group = unname(ifelse(is.na(groups), "Other", groups)),
+        group = .or_default(groups, "Other"),
         description = sprintf(
           "%d isolate%s · %s",
           hits,
           ifelse(hits == 1L, "", "s"),
-          unname(ifelse(is.na(sections), "Resistance", sections))
+          .or_default(sections, "Resistance")
         ),
         stringsAsFactors = FALSE
       )
@@ -1942,7 +1978,7 @@ server <- function(
       data.frame(
         col = cols,
         label = field_labels_for(cols),
-        group = unname(ifelse(is.na(sections), "Resistance", sections)),
+        group = .or_default(sections, "Resistance"),
         description = sprintf(
           "%d isolate%s",
           hits,

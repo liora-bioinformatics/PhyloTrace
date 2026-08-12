@@ -1,6 +1,13 @@
 box::use(
   shiny[MockShinySession],
-  testthat[expect_match, expect_no_error, expect_true, test_that],
+  testthat[
+    expect_equal,
+    expect_false,
+    expect_match,
+    expect_no_error,
+    expect_true,
+    test_that
+  ],
 )
 box::use(
   app / logic / field_profile[field_profiles],
@@ -47,6 +54,34 @@ test_that("a field picker builds with a sentinel entry", {
       extra = c(`No stratification` = "")
     )
   )
+})
+
+test_that("the sentinel entry is not a group of its own", {
+  # virtual-select draws a title row for every group it is handed, so carrying
+  # the sentinel as a one-entry group put a blank, unselectable line above
+  # "No annotation". It belongs at the top level, ungrouped.
+  choices <- impl$.field_choices(
+    field_profiles(meta()),
+    extra = c(`No annotation` = "__none__")
+  )
+  first <- choices$choices[[1]]
+  expect_equal(first$value, "__none__")
+  expect_false("options" %in% names(first))
+  groups <- vapply(
+    choices$choices,
+    function(x) if (is.null(x$options)) "" else x$label,
+    character(1)
+  )
+  expect_false(any(!nzchar(trimws(groups[nzchar(groups)]))))
+  expect_true("Sample metadata" %in% groups)
+})
+
+test_that("every field lands in the group its profile names", {
+  choices <- impl$.field_choices(field_profiles(meta()))
+  labelled <- vapply(choices$choices, function(x) x$label, character(1))
+  expect_equal(labelled, "Sample metadata")
+  values <- vapply(choices$choices[[1]]$options, function(o) o$value, character(1))
+  expect_true(all(c("organism", "purpose", "isolate") %in% values))
 })
 
 test_that("a field picker builds before any database is loaded", {

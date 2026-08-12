@@ -56,9 +56,14 @@ field_coverage <- function(values) {
   length(v) / length(values)
 }
 
-# Rank field suitability based on coverage band and distinct cardinality
+# Rank field suitability based on coverage band and distinct cardinality. A
+# constant column groups (trivially, into one bucket) but carries no
+# discriminating information, so it is ranked last among groupable fields
+# rather than recommended alongside ones that actually vary.
 .field_rank <- function(levels, coverage) {
-  band <- if (coverage < MIN_COVERAGE) {
+  band <- if (levels <= 1L) {
+    4L
+  } else if (coverage < MIN_COVERAGE) {
     3L
   } else if (levels <= MAX_QUAL_LEVELS) {
     1L
@@ -70,8 +75,10 @@ field_coverage <- function(values) {
 
 #' Recommend Best Grouping Fields for Visual Mapping
 #'
-#' Identifies candidate metadata columns that effectively partition isolates,
-#' excluding uninformative fields (e.g. single-value or unique-per-isolate).
+#' Identifies candidate metadata columns that can partition isolates,
+#' excluding only fields with no data or one distinct value per isolate (both
+#' of which cannot group at all). A constant column is still included — it
+#' groups trivially into a single bucket — but ranks last.
 #'
 #' @param metadata Data frame of isolate metadata.
 #' @param max_levels Upper limit on acceptable distinct values.
@@ -91,9 +98,10 @@ mapping_fields <- function(metadata, max_levels = Inf) {
       coverage = field_coverage(metadata[[f]])
     )
   })
-  # Exclude fields with no variance (1 level), non-grouping (n levels), or over limit
+  # Exclude fields with no data (0 levels), unique-per-isolate (n levels), or
+  # over the caller's limit.
   info <- Filter(
-    function(i) i$levels > 1 && i$levels < n && i$levels <= max_levels,
+    function(i) i$levels >= 1 && i$levels < n && i$levels <= max_levels,
     info
   )
   if (!length(info)) {
@@ -170,7 +178,10 @@ field_profiles <- function(
   group <- group_of(cols, mlst_cols, amr_cols, custom_cols)
 
   continuous <- numeric | type %in% CONTINUOUS_TYPES
-  groupable <- levels > 1L & levels < n
+  # A constant column (1 level) still groups, trivially, into a single bucket —
+  # only an empty column (0 levels, nothing to show) or one unique per isolate
+  # (n levels, every bucket a singleton) genuinely cannot group.
+  groupable <- levels >= 1L & levels < n
 
   out <- data.frame(
     field = cols,

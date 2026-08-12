@@ -32,6 +32,55 @@ test_that("typing_args asks for classical MLST only with a resolved scheme", {
   expect_identical(tail(with_scheme, 2), c("--", "/genomes/a.fna"))
 })
 
+test_that("typing_args passes the classical search its own thresholds", {
+  args <- impl$typing_args(
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    species = "Acinetobacter baumannii",
+    cla_identity = 0.9,
+    cla_coverage = 0.85,
+    cla_db = "/tmp/c.db",
+    cla_spec = "/tmp/c.spec"
+  )
+
+  # The allele-calling pair and the classical pair travel under separate flags,
+  # so the script can search the seven classical loci at its own cutoffs.
+  expect_identical(args[match("-i", args) + 1L], "0.95")
+  expect_identical(args[match("-c", args) + 1L], "0.9")
+  expect_identical(args[match("-I", args) + 1L], "0.9")
+  expect_identical(args[match("-C", args) + 1L], "0.85")
+})
+
+test_that("typing_args defaults the classical thresholds to pyMLST's own", {
+  args <- impl$typing_args(
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    species = "Acinetobacter baumannii",
+    cla_db = "/tmp/c.db",
+    cla_spec = "/tmp/c.spec"
+  )
+  expect_identical(
+    args[match("-I", args) + 1L],
+    as.character(pymlst$CLA_IDENTITY_DEFAULT)
+  )
+  expect_identical(
+    args[match("-C", args) + 1L],
+    as.character(pymlst$CLA_COVERAGE_DEFAULT)
+  )
+  # pyMLST's own CLI defaults: looser identity for the classical search than for
+  # allele calling, same coverage.
+  expect_identical(pymlst$CLA_IDENTITY_DEFAULT, 0.9)
+  expect_identical(pymlst$CG_IDENTITY_DEFAULT, 0.95)
+})
+
+test_that("typing_args omits classical thresholds when no scheme is built", {
+  # Nothing to search, so the flags would be meaningless - and their absence is
+  # what makes the script fall back to the allele-calling pair.
+  args <- impl$typing_args(
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    species = "Acinetobacter baumannii"
+  )
+  expect_false(any(c("-I", "-C") %in% args))
+})
+
 test_that("clamlst_status reports a single ST with a complete profile as known", {
   expect_identical(
     pymlst$clamlst_status("11", "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"),

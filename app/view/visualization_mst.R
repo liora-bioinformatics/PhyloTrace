@@ -47,6 +47,7 @@ box::use(
 )
 box::use(
   app / logic / database_functions[load_db_scheme_overview],
+  app / logic / date_bins[granularity_label],
   app / logic / db_events,
   app /
     logic /
@@ -62,9 +63,12 @@ box::use(
       aesthetic_block_reason,
       aesthetic_labels,
       assign_mapping_layer,
+      granularity_profile,
+      is_date_profile,
       max_layers,
       normalize_layer_records,
       rebalance_layers,
+      set_layer_granularity,
     ],
   app /
     logic /
@@ -85,6 +89,7 @@ box::use(
       apply_input_snapshot,
       collect_input_snapshot,
       field_select,
+      granularity_select,
       layer_action_btn,
       reset_viz_colors,
       scale_select,
@@ -112,6 +117,7 @@ LAYER_DEFAULTS <- list(
   n_levels = 1L,
   continuous = FALSE,
   transform = NULL,
+  granularity = NULL,
   auto = TRUE
 )
 
@@ -915,7 +921,13 @@ server <- function(
         return()
       }
       prof <- profile_for(profiles(), field)
-      layer <- assign_mapping_layer(prof, layers, next_layer_id(), MEDIUM)
+      layer <- assign_mapping_layer(
+        prof,
+        layers,
+        next_layer_id(),
+        MEDIUM,
+        viz_metadata()[[field]]
+      )
       if (is.null(layer)) {
         shiny$showNotification(
           aesthetic_block_reason(prof, NULL, MEDIUM) %||%
@@ -935,7 +947,7 @@ server <- function(
         function(l) !identical(l$id, input$mst_layer_delete),
         mst_layers()
       )
-      mst_layers(rebalance_layers(keep, profiles(), MEDIUM))
+      mst_layers(rebalance_layers(keep, profiles(), MEDIUM, viz_metadata()))
     })
 
     output$mst_layers_ui <- shiny$renderUI({
@@ -961,6 +973,9 @@ server <- function(
                   labels[[l$aesthetic]] %||% l$aesthetic,
                   "·",
                   sprintf("%d values", l$n_levels),
+                  if (!is.null(granularity_label(l$granularity))) {
+                    paste("· by", tolower(granularity_label(l$granularity)))
+                  },
                   if (!is.null(l$palette)) paste("·", l$palette)
                 )
               )
@@ -990,20 +1005,26 @@ server <- function(
       editing(l$id)
 
       values <- viz_metadata()[[l$field]]
+      # The palette has to suit the variable as the chosen granularity leaves
+      # it: binned to months it is a category, not a continuum.
+      binned <- granularity_profile(prof, values, l$granularity)
       cats <- scale_categories_for(
-        values,
+        if (isTRUE(binned$continuous)) values else as.character(values),
         suitable_scale_categories(
-          if (isTRUE(prof$continuous)) "Numeric" else "Factor",
+          if (isTRUE(binned$continuous)) "Numeric" else "Factor",
           values
         )
       )
 
       # No "Show as" picker: node fill is the medium's only channel, so what
-      # is left to decide is the palette.
+      # is left to decide is the palette and, for a date, its grouping.
       shiny$showModal(shiny$modalDialog(
         title = paste("Mapping:", l$title),
         size = "s",
         easyClose = TRUE,
+        if (is_date_profile(prof)) {
+          granularity_select(ns, "mst_layer_granularity", l$granularity)
+        },
         scale_select(
           ns,
           "mst_layer_palette",
@@ -1025,12 +1046,17 @@ server <- function(
           return(l)
         }
         l$palette <- input$mst_layer_palette %||% l$palette
+        l <- set_layer_granularity(
+          l,
+          input$mst_layer_granularity,
+          viz_metadata()[[l$field]]
+        )
         # Pinned: rebalance_layers() rebuilds automatic layers from scratch and
         # would discard the palette just chosen.
         l$auto <- FALSE
         l
       })
-      mst_layers(rebalance_layers(layers, profiles(), MEDIUM))
+      mst_layers(rebalance_layers(layers, profiles(), MEDIUM, viz_metadata()))
       editing(NULL)
       shiny$removeModal()
     })

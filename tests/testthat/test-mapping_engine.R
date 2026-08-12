@@ -68,9 +68,16 @@ test_that("a continuous variable never lands on shape", {
   expect_identical(l$family, "Gradient")
 })
 
-test_that("a variable that cannot group is offered no aesthetic at all", {
-  expect_length(mapping_engine$eligible_aesthetics(prof(1)), 0L)
-  expect_null(mapping_engine$assign_mapping_layer(prof(1)))
+test_that("a variable unique to every isolate is offered no aesthetic at all", {
+  expect_length(mapping_engine$eligible_aesthetics(prof(40, n = 40)), 0L)
+  expect_null(mapping_engine$assign_mapping_layer(prof(40, n = 40)))
+})
+
+test_that("a constant variable still takes an aesthetic", {
+  # It groups trivially into one bucket rather than being hidden outright —
+  # useful to confirm a trait every isolate here shares.
+  l <- mapping_engine$assign_mapping_layer(prof(1))
+  expect_identical(l$aesthetic, "tippoint_shape")
 })
 
 test_that("each exclusive aesthetic is claimed at most once", {
@@ -191,6 +198,119 @@ test_that("an unavailable aesthetic says why", {
     "tippoint_shape")
   expect_true(grepl("46", msg))
   expect_null(mapping_engine$aesthetic_block_reason(prof(4), "tippoint_shape"))
+})
+
+# --- Grouping a date -----------------------------------------------------
+
+# A date column spanning `days` at one isolate per step, profiled as a date.
+date_prof <- function(n = 40, by = 9, field = "sample_collection_date") {
+  vals <- as.character(
+    seq(as.Date("2024-01-01"), by = paste(by, "days"), length.out = n)
+  )
+  md <- data.frame(isolate = sprintf("i%03d", seq_len(n)),
+    stringsAsFactors = FALSE)
+  md[[field]] <- vals
+  p <- field_profile$field_profiles(md)
+  list(profile = p[p$field == field, , drop = FALSE], values = vals, meta = md)
+}
+
+test_that("a raw collection date groups nothing, which is the reported bug", {
+  d <- date_prof()
+  # One distinct date per isolate, so every group is a singleton.
+  expect_false(d$profile$groupable)
+  expect_true(d$profile$continuous)
+})
+
+test_that("binning turns a date into the discrete variable it now is", {
+  d <- date_prof()
+  g <- mapping_engine$granularity_profile(d$profile, d$values, "month")
+
+  expect_identical(g$levels, 12L)
+  expect_false(g$continuous)
+  expect_true(g$groupable)
+  # Twelve months is past the six-shape ceiling.
+  expect_false(g$shapeable)
+
+  # A year collapses them far enough to take a shape.
+  y <- mapping_engine$granularity_profile(d$profile, d$values, "year")
+  expect_true(y$shapeable)
+})
+
+test_that("granularity_profile leaves a non-date, or an unbinned date, alone", {
+  d <- date_prof()
+  expect_identical(mapping_engine$granularity_profile(d$profile, d$values, NULL),
+    d$profile)
+  expect_identical(
+    mapping_engine$granularity_profile(d$profile, d$values, "none"),
+    d$profile
+  )
+  # A text column is not a date however it is labelled.
+  expect_identical(mapping_engine$granularity_profile(prof(4), NULL, "month"),
+    prof(4))
+})
+
+test_that("picking a date produces a mapping instead of a dead end", {
+  # Without a granularity the raw column is refused outright, which is what
+  # made every date variable unusable.
+  d <- date_prof()
+  expect_null(mapping_engine$assign_mapping_layer(d$profile))
+
+  l <- mapping_engine$assign_mapping_layer(d$profile, values = d$values)
+  expect_identical(l$granularity, "month")
+  expect_identical(l$n_levels, 12L)
+  expect_false(l$continuous)
+  expect_identical(l$transform, "as_date")
+})
+
+test_that("changing the granularity re-derives what binning changes", {
+  d <- date_prof()
+  l <- mapping_engine$assign_mapping_layer(d$profile, values = d$values)
+
+  y <- mapping_engine$set_layer_granularity(l, "year", d$values)
+  expect_identical(y$granularity, "year")
+  expect_identical(y$n_levels, 1L)
+  expect_false(y$continuous)
+
+  # Back to the exact date: continuous again, and no granularity recorded.
+  none <- mapping_engine$set_layer_granularity(l, "none", d$values)
+  expect_null(none$granularity)
+  expect_true(none$continuous)
+})
+
+test_that("a palette follows the variable across the continuous boundary", {
+  d <- date_prof()
+  l <- mapping_engine$assign_mapping_layer(d$profile, values = d$values)
+  l$aesthetic <- "tiplab_color"
+  l$palette <- "viridis"
+  l$family <- "Gradient"
+
+  # A year is one level, which a qualitative palette can carry.
+  y <- mapping_engine$set_layer_granularity(l, "year", d$values)
+  expect_identical(y$family, "Qualitative")
+  expect_true(y$palette %in% mapping_engine$PALETTE_RINGS$Qualitative)
+})
+
+test_that("set_layer_granularity ignores a variable that is not a date", {
+  l <- mapping_engine$assign_mapping_layer(prof(4))
+  expect_identical(mapping_engine$set_layer_granularity(l, "month", NULL), l)
+})
+
+test_that("a rebalance keeps the granularity the user chose", {
+  # rebalance_layers() rebuilds automatic layers from the profile, and the
+  # granularity is the one thing on them that the profile cannot supply.
+  d <- date_prof()
+  l <- mapping_engine$assign_mapping_layer(d$profile, values = d$values)
+  p <- field_profile$field_profiles(d$meta)
+
+  out <- mapping_engine$rebalance_layers(list(l), p, "tree", d$meta)
+  expect_identical(out[[1]]$granularity, "month")
+  expect_identical(out[[1]]$n_levels, 12L)
+})
+
+test_that("a refused date says how to make it work", {
+  d <- date_prof()
+  msg <- mapping_engine$aesthetic_block_reason(d$profile, "tippoint_shape")
+  expect_true(grepl("month", msg))
 })
 
 `%||%` <- function(x, y) if (is.null(x)) y else x

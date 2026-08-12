@@ -81,6 +81,7 @@ box::use(
     logic /
     viz_helpers[
       field_select,
+      granularity_select,
       update_field_select,
       scale_select,
       color_scales,
@@ -91,11 +92,13 @@ box::use(
       collect_input_snapshot,
       apply_input_snapshot,
     ],
+  app / logic / date_bins[bin_date_values, is_binned],
   app / logic / db_events,
   app / logic / functions[render_info],
+  app / logic / mapping_engine[is_date_profile],
   app / logic / paths[app_local_share_path],
   app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles],
+  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
@@ -633,6 +636,17 @@ make_palette <- function(scale_type, palette, vals, reverse, na_color, bins) {
 
 # Styled point markers. layerId = isolate keeps each marker individually
 # addressable (e.g. for a future click-driven cross-filter).
+# A date variable coarsened to the interval the user picked. Applied inside the
+# two builders that read a mapped variable rather than upstream, so it happens
+# exactly once however the builder was reached — binning an already-binned
+# column would parse "2026-01" as a date and yield all-NA.
+granular_vals <- function(vals, granularity) {
+  if (!is_binned(granularity)) {
+    return(vals)
+  }
+  as.character(bin_date_values(vals, granularity))
+}
+
 build_markers <- function(m, coords, o, full_coords = NULL) {
   cluster_opts <- if (o$cluster) {
     markerClusterOptions(
@@ -672,7 +686,10 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     fixed <- isTRUE(o$region_fixed_scale) &&
       !is.null(full_coords) &&
       o$col_var %in% names(full_coords)
-    ref_vals <- if (fixed) full_coords[[o$col_var]] else coords[[o$col_var]]
+    ref_vals <- granular_vals(
+      if (fixed) full_coords[[o$col_var]] else coords[[o$col_var]],
+      o$col_granularity
+    )
     pal_info <- make_palette(
       o$scale_type,
       o$col_scale,
@@ -683,7 +700,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     )
     # Mirror make_palette()'s own numeric coercion so the fill maps the visible
     # values through the same space the palette domain was built in.
-    apply_vals <- coords[[o$col_var]]
+    apply_vals <- granular_vals(coords[[o$col_var]], o$col_granularity)
     if (pal_info$type %in% c("Numeric", "Bin", "Quantile")) {
       apply_vals <- suppressWarnings(as.numeric(apply_vals))
     }
@@ -949,7 +966,10 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   fixed <- isTRUE(o$region_fixed_scale) &&
     !is.null(full_coords) &&
     var %in% names(full_coords)
-  ref_vals <- if (fixed) full_coords[[var]] else coords[[var]]
+  ref_vals <- granular_vals(
+    if (fixed) full_coords[[var]] else coords[[var]],
+    o$chart_granularity
+  )
   ref_freq <- sort(table(ref_vals), decreasing = TRUE)
   folded <- length(ref_freq) > max_categories
   top <- if (folded) {
@@ -960,7 +980,7 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # Master column/legend order; "Other" (the fold bucket) always last.
   cats <- if (folded) c(top, "Other") else top
 
-  vals <- coords[[var]]
+  vals <- granular_vals(coords[[var]], o$chart_granularity)
   if (folded) {
     vals <- ifelse(vals %in% top, vals, "Other")
   }
@@ -1440,7 +1460,8 @@ map_controls <- function(ns) {
             "Variable Mapping",
             icon = shiny$icon("layer-group"),
             input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            field_select(ns, "map_col_var", "Variable")
+            field_select(ns, "map_col_var", "Variable"),
+            shiny$uiOutput(ns("col_granularity_ui"))
           ),
           accordion_panel(
             "Scale",
@@ -1767,6 +1788,7 @@ map_controls <- function(ns) {
           choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
         ),
         field_select(ns, "map_chart_var", "Variable"),
+        shiny$uiOutput(ns("chart_granularity_ui")),
         # Each chart shows the composition of a categorical variable (see
         # build_charts()'s max_categories folding below), so — like
         # map_heat_scale above — this is a static restriction rather than a
@@ -2456,6 +2478,7 @@ server <- function(
           weight = input$map_weight %||% 0,
           color_var = isTRUE(input$map_color_var),
           col_var = input$map_col_var,
+          col_granularity = input$map_col_granularity,
           col_scale = input$map_col_scale %||% "viridis",
           scale_type = input$map_scale_type %||% "Auto",
           bins = input$map_bins %||% 5,
@@ -2492,6 +2515,7 @@ server <- function(
           heat_scale = input$map_heat_scale %||% "viridis",
           chart_type = input$map_chart_type %||% "pie",
           chart_var = input$map_chart_var,
+          chart_granularity = input$map_chart_granularity,
           chart_scale = input$map_chart_scale %||% "Set1",
           chart_size = input$map_chart_size %||% 40,
           chart_opacity = input$map_chart_opacity %||% 1,
@@ -2744,6 +2768,42 @@ server <- function(
       },
       ignoreInit = TRUE
     )
+
+    # Profile of whichever column a variable picker currently holds.
+    picked_profile <- function(field) {
+      if (is.null(field) || !nzchar(field)) {
+        return(NULL)
+      }
+      meta <- viz_metadata()
+      profile_for(field_profiles() %||% field_profiles_of(meta), field)
+    }
+
+    # Only a date can be grouped by a calendar interval. Without it a
+    # collection date is one colour per isolate on the markers, and on the
+    # charts it is the near-unique field the top-N fold was written to survive.
+    output$col_granularity_ui <- shiny$renderUI({
+      render_info("visualization_map col_granularity_ui")
+      if (!is_date_profile(picked_profile(input$map_col_var))) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "map_col_granularity",
+        shiny$isolate(input$map_col_granularity)
+      )
+    })
+
+    output$chart_granularity_ui <- shiny$renderUI({
+      render_info("visualization_map chart_granularity_ui")
+      if (!is_date_profile(picked_profile(input$map_chart_var))) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "map_chart_granularity",
+        shiny$isolate(input$map_chart_granularity)
+      )
+    })
 
     # Geocode + populate the metadata-backed selects and the date slider, only
     # when Map is the active engine and Generate is clicked (mirrors the MST/Tree

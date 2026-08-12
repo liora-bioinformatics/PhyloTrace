@@ -45,6 +45,7 @@ box::use(
 )
 
 box::use(
+  app / logic / date_bins[bin_date_values],
   app /
     logic /
     tree_plot[
@@ -1036,15 +1037,25 @@ mst_node_radii <- function(counts, size_range) {
 #'   numeric vectors per node, names being levels) and `value` (numeric per
 #'   node, continuous only).
 #' @export
-mst_node_values <- function(ids, metadata, field) {
-  vals <- metadata[[field]]
-  continuous <- is.numeric(vals) || inherits(vals, "Date")
+mst_node_values <- function(ids, metadata, field, layer = NULL) {
+  # A declared date arrives from SQLite as character, so without this it fell
+  # to the discrete branch and drew one pie slice per distinct date string. A
+  # granularity turns it into an ordered factor of intervals; without one it
+  # parses to Date and drives the gradient.
+  vals <- if (identical(layer$transform, "as_date")) {
+    bin_date_values(metadata[[field]], layer$granularity)
+  } else {
+    metadata[[field]]
+  }
+  is_date <- inherits(vals, "Date")
+  continuous <- is.numeric(vals) || is_date
   rows <- lapply(.members(ids), function(m) match(m, metadata$isolate))
 
   if (continuous) {
     num <- suppressWarnings(as.numeric(vals))
     return(list(
       levels = NULL,
+      date = is_date,
       shares = vector("list", length(ids)),
       value = vapply(
         rows,
@@ -1066,7 +1077,12 @@ mst_node_values <- function(ids, metadata, field) {
     tab <- tab[tab > 0]
     setNames(as.numeric(tab) / sum(tab), names(tab))
   })
-  list(levels = lev, shares = shares, value = rep(NA_real_, length(ids)))
+  list(
+    levels = lev,
+    date = FALSE,
+    shares = shares,
+    value = rep(NA_real_, length(ids))
+  )
 }
 
 #' Colours for a continuous variable's node values.
@@ -1805,28 +1821,27 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
 # Legend record + the per-node values for one mapping layer. Returns the layer's
 # contribution to each channel; the caller decides which channel it lands in.
 .layer_channel <- function(layer, ids, metadata, node_color) {
-  vals <- mst_node_values(ids, metadata, layer$field)
+  vals <- mst_node_values(ids, metadata, layer$field, layer)
   continuous <- is.null(vals$levels)
 
   if (continuous) {
     finite <- vals$value[is.finite(vals$value)]
-    keys <- if (length(finite)) {
-      format(
-        quantile(finite, c(0, 0.5, 1), names = FALSE),
-        digits = 3,
-        trim = TRUE
-      )
+    breaks <- if (length(finite)) {
+      quantile(finite, c(0, 0.5, 1), names = FALSE)
     } else {
-      character(0)
+      numeric(0)
     }
-    colors <- if (length(finite)) {
-      setNames(
-        mst_gradient_colors(
-          quantile(finite, c(0, 0.5, 1), names = FALSE),
-          layer$palette
-        ),
-        keys
-      )
+    # An unbinned date is carried as days since the epoch, which is meaningless
+    # in a legend — it has to read back out as a date.
+    keys <- if (!length(breaks)) {
+      character(0)
+    } else if (isTRUE(vals$date)) {
+      format(as.Date(round(breaks), origin = "1970-01-01"), "%Y-%m-%d")
+    } else {
+      format(breaks, digits = 3, trim = TRUE)
+    }
+    colors <- if (length(breaks)) {
+      setNames(mst_gradient_colors(breaks, layer$palette), keys)
     } else {
       character(0)
     }

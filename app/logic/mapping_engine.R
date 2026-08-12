@@ -26,6 +26,12 @@
 # Pure: no shiny, no database, no ggplot.
 
 box::use(
+  app / logic / date_bins[
+    binned_levels,
+    DATE_TYPES,
+    default_granularity,
+    is_binned
+  ],
   app / logic / field_profile[MAX_QUAL_LEVELS, MAX_SHAPE_LEVELS],
 )
 
@@ -201,6 +207,52 @@ next_palette <- function(family, taken = character(0)) {
   if (length(free)) free[[1]] else ring[[1]]
 }
 
+#' Whether a variable is a date, and so can be grouped by a calendar interval.
+#'
+#' @param profile One-row profile frame.
+#' @return TRUE for a declared date or datetime column.
+#' @export
+is_date_profile <- function(profile) {
+  !is.null(profile) &&
+    !is.null(profile$type) &&
+    isTRUE(profile$type %in% DATE_TYPES)
+}
+
+#' Re-profile a date variable as the grouping a granularity turns it into.
+#'
+#' Binning changes what the variable *is*: six hundred distinct collection
+#' dates become twelve months, and a continuum becomes a category. Every rule
+#' downstream — which aesthetics are eligible, whether shape can carry it,
+#' which palette family fits — reads those two properties off the profile, so
+#' re-deriving them here is what makes a binned date behave like the discrete
+#' variable it now is, in one place rather than at each decision.
+#'
+#' Returns the profile unchanged when nothing is binned.
+#'
+#' @param profile One-row profile frame.
+#' @param values The variable's raw column values, for the binned level count.
+#' @param granularity One of `date_bins$DATE_GRANULARITIES`, or NULL/"none".
+#' @return A one-row profile frame.
+#' @export
+granularity_profile <- function(profile, values, granularity) {
+  if (is.null(profile) || !is_binned(granularity) || !is_date_profile(profile)) {
+    return(profile)
+  }
+  # Without the column to count, the variable is still no longer a continuum —
+  # only its level count is unknown, so the profile's own count stands in.
+  levels <- if (is.null(values)) {
+    as.integer(profile$levels)
+  } else {
+    as.integer(binned_levels(values, granularity))
+  }
+  profile$levels <- levels
+  profile$continuous <- FALSE
+  profile$numeric <- FALSE
+  profile$groupable <- levels >= 1L && levels < profile$n
+  profile$shapeable <- profile$groupable && levels <= MAX_SHAPE_LEVELS
+  profile
+}
+
 #' Aesthetics this variable could drive, best first.
 #'
 #' The order is the recommendation, and it turns on the level count:
@@ -256,6 +308,17 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
     return("No such variable.")
   }
   if (!isTRUE(profile$groupable)) {
+    # A raw collection date is the usual way to land here, and it has a fix the
+    # user can act on rather than a dead end.
+    if (is_date_profile(profile)) {
+      return(sprintf(
+        paste(
+          "%s has %d distinct dates across %d isolates, so it cannot group",
+          "them. Group it by week, month or year to use it here."
+        ),
+        profile$label, profile$levels, profile$n
+      ))
+    }
     return(sprintf(
       "%s has %d distinct value%s across %d isolates, so it cannot group them.",
       profile$label, profile$levels,
@@ -264,6 +327,12 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
   }
   if (!is.null(aesthetic) && identical(aesthetic, .medium(medium)$shape)) {
     if (isTRUE(profile$continuous)) {
+      if (is_date_profile(profile)) {
+        return(paste(
+          "A shape cannot show a continuous variable.",
+          "Group this date by year to use it here."
+        ))
+      }
       return("A shape cannot show a continuous variable.")
     }
     if (profile$levels > MAX_SHAPE_LEVELS) {
@@ -278,30 +347,44 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
 
 #' Build the layer a variable should become, given what is already mapped.
 #'
+#' A date that groups nothing raw is binned rather than refused: picking
+#' "Collection Date" should produce a mapping, not a dead end, and the finest
+#' readable interval is a better opening move than making the user find the
+#' setting first. A date that already groups on its own is left continuous.
+#'
 #' @param profile One-row profile frame.
 #' @param existing List of layer records already present.
 #' @param id Stable identifier for the new layer.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
+#' @param values The variable's raw column values, for the date default.
 #' @return A layer record, or NULL when no aesthetic is free.
 #' @export
 assign_mapping_layer <- function(
   profile,
   existing = list(),
   id = "L1",
-  medium = "tree"
+  medium = "tree",
+  values = NULL
 ) {
+  granularity <- NULL
+  if (
+    is_date_profile(profile) && !isTRUE(profile$groupable) && !is.null(values)
+  ) {
+    granularity <- default_granularity(values)
+    profile <- granularity_profile(profile, values, granularity)
+  }
   taken <- vapply(existing, function(l) l$aesthetic, character(1))
   choice <- eligible_aesthetics(profile, taken, medium)
   if (!length(choice)) {
     return(NULL)
   }
-  .layer(profile, choice[[1]], existing, id)
+  .layer(profile, choice[[1]], existing, id, granularity = granularity)
 }
 
 # One layer record. `auto` records that the engine chose this layout rather
 # than the user, which is what lets rebalance_layers() revisit it later.
 .layer <- function(profile, aesthetic, others, id, auto = TRUE,
-                   palette = NULL) {
+                   palette = NULL, granularity = NULL) {
   colour_layer <- aesthetic %in% COLOR_AESTHETICS
   family <- palette_family(profile)
   if (is.null(palette) && colour_layer) {
@@ -324,9 +407,49 @@ assign_mapping_layer <- function(
     # A declared date arrives as character, so the renderer has to be told to
     # parse it before it reaches a continuous scale. The one place a declared
     # type changes what is drawn.
-    transform = if (profile$type %in% c("date", "datetime")) "as_date",
+    transform = if (profile$type %in% DATE_TYPES) "as_date",
+    # Calendar interval a date is grouped by, NULL for none. A raw collection
+    # date is near-unique per isolate, so it only becomes a usable grouping
+    # once the user coarsens it.
+    granularity = if (is_binned(granularity)) as.character(granularity),
     auto = auto
   )
+}
+
+#' Set a date layer's granularity, re-deriving everything binning changes.
+#'
+#' Grouping by month does not just relabel the values: the variable stops being
+#' a continuum and its level count collapses, which decides whether a
+#' qualitative palette fits. The edit dialogs call this so those three stay
+#' consistent with each other instead of drifting apart.
+#'
+#' A layer that is not a date is returned untouched.
+#'
+#' @param layer A layer record.
+#' @param granularity One of `date_bins$DATE_GRANULARITIES`, or NULL/"none".
+#' @param values The variable's raw column values.
+#' @return The layer, updated.
+#' @export
+set_layer_granularity <- function(layer, granularity, values) {
+  if (!identical(layer$transform, "as_date")) {
+    return(layer)
+  }
+  binned <- is_binned(granularity)
+  layer$granularity <- if (binned) as.character(granularity)
+  layer$continuous <- !binned
+  layer$n_levels <- as.integer(binned_levels(values, layer$granularity))
+  if (!is.null(layer$palette)) {
+    family <- palette_family(
+      list(continuous = layer$continuous, levels = layer$n_levels)
+    )
+    # Only re-pick the palette when the family it belongs to has changed;
+    # otherwise a deliberate choice would be reset by an unrelated edit.
+    if (!identical(family, layer$family)) {
+      layer$family <- family
+      layer$palette <- next_palette(family)
+    }
+  }
+  layer
 }
 
 #' Re-derive the automatic layers after the set has changed.
@@ -341,9 +464,10 @@ assign_mapping_layer <- function(
 #' @param layers List of layer records, in draw order.
 #' @param profiles Profile frame, for the current level counts.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
+#' @param values Metadata frame, needed only to count a binned date's groups.
 #' @return The list, same length and order, automatic entries re-derived.
 #' @export
-rebalance_layers <- function(layers, profiles, medium = "tree") {
+rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL) {
   if (!length(layers)) {
     return(layers)
   }
@@ -363,11 +487,16 @@ rebalance_layers <- function(layers, profiles, medium = "tree") {
       out[[i]] <- l
       next
     }
+    # A granularity is a user choice on a layer the engine still lays out
+    # automatically, so it has to survive the rebuild — and it has to be
+    # applied before the aesthetic is picked, since binning is what makes a
+    # date discrete enough for one.
+    prof <- granularity_profile(prof, values[[l$field]], l$granularity)
     choice <- eligible_aesthetics(prof, taken, medium)
     # Nothing free: keep what it had rather than dropping the layer, so a
     # rebalance can never lose a mapping the user asked for.
     aesthetic <- if (length(choice)) choice[[1]] else l$aesthetic
-    fresh <- .layer(prof, aesthetic, settled, l$id)
+    fresh <- .layer(prof, aesthetic, settled, l$id, granularity = l$granularity)
     out[[i]] <- fresh
     taken <- c(taken, aesthetic)
     settled <- c(settled, list(fresh))

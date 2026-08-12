@@ -137,7 +137,7 @@ test_that("adding a mapping layer redraws once, and only when it changes", {
   # echo; this test pins that property to the new shape.
   meta <- data.frame(
     isolate = sprintf("ISO-%02d", 1:8),
-    organism = rep("P. aeruginosa", 8),
+    ward = sprintf("W-%02d", 1:8),
     purpose = rep(c("outbreak", "surveillance"), 4),
     stringsAsFactors = FALSE
   )
@@ -173,9 +173,9 @@ test_that("adding a mapping layer redraws once, and only when it changes", {
       session$flushReact()
       expect_identical(draws, 1L)
 
-      # A column that groups nothing has no aesthetic to take, so it adds no
-      # layer — and still must not redraw.
-      session$setInputs(nj_layer_add = "organism")
+      # A column with a different value per isolate groups nothing, so it has
+      # no aesthetic to take and adds no layer — and still must not redraw.
+      session$setInputs(nj_layer_add = "ward")
       session$flushReact()
       expect_identical(draws, 1L)
       expect_identical(length(tree_opts()$layers), 1L)

@@ -32,6 +32,39 @@ box::use(
 #' @export
 conda_env <- "PhyloTrace"
 
+# BLAT search thresholds, kept as pyMLST's own CLI defaults rather than one
+# shared pair: `wgMLST add` defaults to 0.95 identity, `claMLST search` to 0.9,
+# and the looser classical cutoff is deliberate. Allele calling searches
+# thousands of loci, so a strict identity costs little; the classical search has
+# seven, each sought from one fixed reference allele (pyMLST's `open_cla(ref=1)`
+# always seeds from allele 1), so a locus whose allele 1 happens to be divergent
+# - Oxf_gpi in the Acinetobacter baumannii Oxford scheme sits at ~93% against
+# typical genomes - misses a 0.95 cutoff and is reported uncalled.
+
+#' Default cgMLST Allele Calling Identity
+#'
+#' @description Minimum BLAT identity for `wgMLST add`, as pyMLST defaults it.
+#' @export
+CG_IDENTITY_DEFAULT <- 0.95
+
+#' Default cgMLST Allele Calling Coverage
+#'
+#' @description Minimum BLAT coverage for `wgMLST add`, as pyMLST defaults it.
+#' @export
+CG_COVERAGE_DEFAULT <- 0.9
+
+#' Default Classical MLST Search Identity
+#'
+#' @description Minimum BLAT identity for `claMLST search`, as pyMLST defaults it.
+#' @export
+CLA_IDENTITY_DEFAULT <- 0.9
+
+#' Default Classical MLST Search Coverage
+#'
+#' @description Minimum BLAT coverage for `claMLST search`, as pyMLST defaults it.
+#' @export
+CLA_COVERAGE_DEFAULT <- 0.9
+
 #' Resolve Base Conda Executable Path
 #'
 #' @description Resolves the system path for the Conda binary. Prefers `CONDA_EXE`
@@ -113,6 +146,8 @@ typing_args <- function(
   coverage,
   env,
   species = NA_character_,
+  cla_identity = CLA_IDENTITY_DEFAULT,
+  cla_coverage = CLA_COVERAGE_DEFAULT,
   cla_db = NA_character_,
   cla_spec = NA_character_,
   amr_env = NA_character_,
@@ -132,10 +167,21 @@ typing_args <- function(
   scalar_chr <- function(x) {
     !is.null(x) && length(x) == 1 && !is.na(x) && nzchar(x)
   }
+  scalar_num <- function(x) {
+    !is.null(x) && length(x) == 1 && !is.na(x) && is.finite(as.numeric(x))
+  }
   if (scalar_chr(species)) {
     args <- c(args, "-s", species)
     if (scalar_chr(cla_db) && scalar_chr(cla_spec)) {
       args <- c(args, "-m", cla_db, "-M", cla_spec)
+      # The classical search has thresholds of its own; the script falls back to
+      # the cgMLST pair only when they are not given.
+      if (scalar_num(cla_identity)) {
+        args <- c(args, "-I", as.character(cla_identity))
+      }
+      if (scalar_num(cla_coverage)) {
+        args <- c(args, "-C", as.character(cla_coverage))
+      }
     }
   }
   if (scalar_chr(amr_out) && scalar_chr(amr_env)) {
@@ -242,10 +288,14 @@ type_genomes <- function(
 #' @param genome_files Character vector. Input genome assembly file paths.
 #' @param log_file Character string. Output log destination file path.
 #' @param script_path Character string. Path to `loop-pymlst.sh`. Defaults to `"app/logic/loop-pymlst.sh"`.
-#' @param identity Numeric. BLAT sequence identity cutoff (0 to 1). Defaults to `0.95`.
-#' @param coverage Numeric. BLAT target coverage cutoff (0 to 1). Defaults to `0.9`.
+#' @param identity Numeric. cgMLST BLAT identity cutoff (0 to 1). Defaults to `CG_IDENTITY_DEFAULT`.
+#' @param coverage Numeric. cgMLST BLAT coverage cutoff (0 to 1). Defaults to `CG_COVERAGE_DEFAULT`.
 #' @param env Character string. Conda environment name. Defaults to `conda_env`.
 #' @param species Character string (optional). Species name for classical MLST lookup.
+#' @param cla_identity Numeric. Classical MLST BLAT identity cutoff.
+#'   Defaults to `CLA_IDENTITY_DEFAULT`.
+#' @param cla_coverage Numeric. Classical MLST BLAT coverage cutoff.
+#'   Defaults to `CLA_COVERAGE_DEFAULT`.
 #' @param cla_db Character string (optional). File path for intermediate classical MLST database.
 #' @param cla_spec Character string (optional). Scheme spec file from `write_scheme_spec()`.
 #' @param amr_env Character string (optional). Conda environment for AMR screening tools.
@@ -259,10 +309,12 @@ start_typing <- function(
   genome_files,
   log_file,
   script_path = "app/logic/loop-pymlst.sh",
-  identity = 0.95,
-  coverage = 0.9,
+  identity = CG_IDENTITY_DEFAULT,
+  coverage = CG_COVERAGE_DEFAULT,
   env = conda_env,
   species = NA_character_,
+  cla_identity = CLA_IDENTITY_DEFAULT,
+  cla_coverage = CLA_COVERAGE_DEFAULT,
   cla_db = NA_character_,
   cla_spec = NA_character_,
   amr_env = NA_character_,
@@ -280,6 +332,8 @@ start_typing <- function(
         coverage,
         env,
         species,
+        cla_identity,
+        cla_coverage,
         cla_db,
         cla_spec,
         amr_env,

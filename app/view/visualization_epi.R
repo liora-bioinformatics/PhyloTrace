@@ -43,16 +43,19 @@ box::use(
   ],
 )
 box::use(
+  app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app / logic / epi_plot,
   app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles],
+  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
   app / logic / functions[render_info],
+  app / logic / mapping_engine[is_date_profile],
   app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
       field_select,
+      granularity_select,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -210,7 +213,8 @@ epi_controls <- function(ns) {
             # being declared empty here and back-filled (an empty <select>
             # initialises bootstrap-select in its disabled state). Same pattern
             # as the staged peers picker in visualization.R.
-            shiny$uiOutput(ns("stratify_ui"))
+            shiny$uiOutput(ns("stratify_ui")),
+            shiny$uiOutput(ns("stratify_granularity_ui"))
           ),
           # Axes & Sizing ------------------------------------------------------
           accordion_panel(
@@ -774,6 +778,45 @@ server <- function(
       if (is.null(s) || identical(s, "")) character() else s
     }
 
+    # Profile of the field the stratify picker currently holds.
+    stratify_profile <- shiny$reactive({
+      f <- stratify_selected()
+      if (!length(f)) {
+        return(NULL)
+      }
+      meta <- viz_metadata()
+      profile_for(field_profiles() %||% field_profiles_of(meta), f)
+    })
+
+    # Only a date can be grouped by a calendar interval. Stratifying by a raw
+    # collection date would draw one series per isolate.
+    output$stratify_granularity_ui <- shiny$renderUI({
+      render_info("visualization_epi stratify_granularity_ui")
+      if (!is_date_profile(stratify_profile())) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "epi_stratify_granularity",
+        shiny$isolate(input$epi_stratify_granularity),
+        label = "Group stratifier dates by"
+      )
+    })
+
+    # The metadata as the builder should see it: a date stratifier grouped into
+    # the chosen interval, everything else untouched. The plotted date axis has
+    # its own interval control and is not affected.
+    stratified_meta <- function(meta) {
+      f <- stratify_selected()
+      if (!length(f) || !is_date_profile(stratify_profile())) {
+        return(meta)
+      }
+      meta[[f]] <- as.character(
+        bin_date_values(meta[[f]], input$epi_stratify_granularity)
+      )
+      meta
+    }
+
     # Restrict the colour-scale picker to the scales that can actually carry the
     # current number of strata, and move the selection if it no longer can.
     # Mirrors filter_scale_choices() in visualization_tree.R, but keyed on how
@@ -997,7 +1040,7 @@ server <- function(
       meta <- viz_metadata()
       shiny$req(!is.null(meta), nrow(meta) > 0)
       epi_plot$build_epi_data(
-        meta,
+        stratified_meta(meta),
         epi_plot$EPI_DATE_FIELD,
         stratify_selected(),
         input$epi_interval %||% fitted_interval()
@@ -1039,7 +1082,7 @@ server <- function(
 
       binned <- tryCatch(
         epi_plot$build_epi_data(
-          meta,
+          stratified_meta(meta),
           epi_plot$EPI_DATE_FIELD,
           stratify_selected(),
           input$epi_interval %||% fitted_interval()
@@ -1545,9 +1588,12 @@ server <- function(
         pickers = "epi_stratify"
       )
 
+      # Through as_epi_annotations() rather than straight in: the snapshot came
+      # back through JSON, which has no date type, so `start`/`end` arrive as
+      # strings the plot code cannot do date arithmetic on.
       if (!is.null(vals$.annotations)) {
-        a <- vals$.annotations
-        if (is.data.frame(a) && nrow(a)) {
+        a <- epi_plot$as_epi_annotations(vals$.annotations)
+        if (nrow(a)) {
           try(annotations(a), silent = TRUE)
         }
       }

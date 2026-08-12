@@ -846,3 +846,52 @@ test_that("the grown panel leaves the tree exactly its budget", {
 
   expect_equal(tree_and_labels, 5.5, tolerance = 0.02)
 })
+
+# --- Grouping a mapped date --------------------------------------------------
+
+date_md <- function(n = 24) {
+  data.frame(
+    isolate = sprintf("ISO-%02d", seq_len(n)),
+    sample_collection_date = as.character(
+      seq(as.Date("2024-01-01"), by = "15 days", length.out = n)
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("an unbinned date still reaches the plot as a continuous Date", {
+  md <- date_md()
+  layer <- list(field = "sample_collection_date", transform = "as_date")
+
+  expect_s3_class(impl$.layer_values(layer, md), "Date")
+})
+
+test_that("a binned date reaches the plot as its interval labels", {
+  # The whole point: 24 distinct dates would be 24 unordered colours, where
+  # twelve months is a legend a reader can follow.
+  md <- date_md()
+  layer <- list(
+    field = "sample_collection_date",
+    transform = "as_date",
+    granularity = "month"
+  )
+  out <- impl$.layer_values(layer, md)
+
+  expect_s3_class(out, "factor")
+  expect_identical(levels(out)[1], "2024-01")
+  expect_identical(length(levels(out)), 12L)
+})
+
+test_that("the binned column is written back, so scale and data agree", {
+  # aes() references md[[field]] directly, so a scale built from binned levels
+  # over raw dates is exactly the mismatch that errored.
+  md <- date_md()
+  opts <- list(layers = list(list(
+    field = "sample_collection_date",
+    transform = "as_date",
+    granularity = "year"
+  )))
+  out <- impl$.normalize_mapped_columns(opts, md)
+
+  expect_identical(as.character(unique(out$sample_collection_date)), "2024")
+})
