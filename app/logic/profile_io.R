@@ -34,12 +34,18 @@ box::use(
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
-# `targets` spells a locus "PA0195_1" where `mlst` spells it "PA0195-1".
+#' Normalize Locus Names Across Formats
+#'
+#' Replaces hyphens and underscores with uniform hyphens (e.g., converts "PA0195_1" to "PA0195-1")[cite: 12].
+#'
+#' @param x Vector of locus/gene identifier strings[cite: 12].
+#' @return Vector with hyphens and underscores replaced by hyphens[cite: 12].
 #' @export
 norm_locus <- function(x) gsub("[-_]", "-", x)
 
 # Dialects of the same table. `missing` is what we WRITE for an absent call;
 # the parser accepts every sentinel in MISSING_TOKENS regardless of preset.
+#' Format specification presets for external typing export dialects[cite: 12].
 #' @export
 PROFILE_PRESETS <- list(
   phylotrace = list(
@@ -71,6 +77,7 @@ PROFILE_PRESETS <- list(
 # Everything the ecosystem uses to say "no call". chewBBACA's codes describe *why*
 # the call failed; for a distance matrix the reason is irrelevant — all of them
 # mean "unknown allele". "0"/"-1"/"-" cover GrapeTree and pyMLST's grapetree form.
+#' Vector of standard missing-call missing tokens across external tools[cite: 12].
 #' @export
 MISSING_TOKENS <- c(
   "",
@@ -96,9 +103,12 @@ MISSING_TOKENS <- c(
 # Reading the database
 # ---------------------------------------------------------------------------
 
-#' The scheme's loci, in the order the reference genome defines them (which is
-#' the order pyMLST emits). Every locus of the scheme, not merely those seen in
-#' the selected isolates — a profile table is a fixed-width view of the scheme.
+#' Retrieve Loci Order Defined by Reference Genome
+#'
+#' Returns all loci in the scheme in reference genome sequence order[cite: 12].
+#'
+#' @param db_path File path to SQLite database[cite: 12].
+#' @return Vector of gene identifiers[cite: 12].
 #' @export
 scheme_loci <- function(db_path) {
   con <- connect_ro(db_path)
@@ -111,11 +121,15 @@ scheme_loci <- function(db_path) {
   )$gene
 }
 
-#' Wide profile table for `isolates`: an `isolate` column followed by one column
-#' per locus of the scheme. Cells hold the allele identifier as a character
-#' string, or NA where the isolate has no call for that locus.
+#' Construct Wide Profile Matrix Table for Selected Isolates
 #'
-#' `value_kind` is "hash" (sha256, portable) or "index" (local `sequences.id`).
+#' Fetches allele profile identifiers for specified isolates across all scheme loci[cite: 12].
+#' Missing calls are populated as NA[cite: 12].
+#'
+#' @param db_path File path to SQLite database[cite: 12].
+#' @param isolates Vector of isolate identifiers[cite: 12].
+#' @param value_kind Identifier type: "hash" (sha256) or "index" (local sequence id)[cite: 12].
+#' @return Data frame with `isolate` column followed by scheme locus columns[cite: 12].
 #' @export
 build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   value_kind <- match.arg(value_kind, c("hash", "index"))
@@ -124,14 +138,18 @@ build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   on.exit(dbDisconnect(con), add = TRUE)
 
   if (identical(value_kind, "hash") && !"hashes" %in% dbListTables(con)) {
-    stop("This database has no `hashes` table; reload it to hash the sequences.")
+    stop(
+      "This database has no `hashes` table; reload it to hash the sequences."
+    )
   }
 
   isolates <- setdiff(unique(isolates), REF_SOUCHE)
   loci <- scheme_loci(db_path)
 
   empty <- data.frame(isolate = character(0), stringsAsFactors = FALSE)
-  for (locus in loci) empty[[locus]] <- character(0)
+  for (locus in loci) {
+    empty[[locus]] <- character(0)
+  }
   if (!length(isolates) || !length(loci)) {
     return(empty)
   }
@@ -144,32 +162,36 @@ build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   sql <- if (identical(value_kind, "hash")) {
     "SELECT m.souche AS isolate, m.gene AS gene, h.hash AS value
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche
+       JOIN sel ON sel.isolate = m.souche
        JOIN hashes h ON h.id = m.seqid"
   } else {
     "SELECT m.souche AS isolate, m.gene AS gene, CAST(m.seqid AS TEXT) AS value
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche"
+       JOIN sel ON sel.isolate = m.souche"
   }
 
   long_to_wide(dbGetQuery(con, sql), isolates, loci)
 }
 
-# Join-in selection: no SQLITE_MAX_VARIABLE_NUMBER ceiling, same query plan.
+# Write isolate list into temporary selection table to prevent SQLite parameter caps
 write_selection <- function(con, isolates) {
   dbWriteTable(
     con,
     "sel",
-    data.frame(souche = isolates, stringsAsFactors = FALSE),
+    data.frame(isolate = isolates, stringsAsFactors = FALSE),
     temporary = TRUE,
     overwrite = TRUE
   )
 }
 
-#' Pivot a long (isolate, gene, value) frame into the fixed-width table.
-#' Implemented by indexing rather than `pivot_wider` so the column set is
-#' exactly `loci` and the row order exactly `isolates`, even when a locus or an
-#' isolate has no calls at all.
+#' Pivot Long-Format Profile Query Frame to Fixed-Width Grid
+#'
+#' Reshapes database long profile table to wide format aligned against loci and isolates[cite: 12].
+#'
+#' @param long Data frame with columns `isolate`, `gene`, `value`[cite: 12].
+#' @param isolates Target isolate vector[cite: 12].
+#' @param loci Target locus vector[cite: 12].
+#' @return Reshaped wide data frame[cite: 12].
 #' @export
 long_to_wide <- function(long, isolates, loci) {
   mat <- matrix(
@@ -193,14 +215,13 @@ long_to_wide <- function(long, isolates, loci) {
   cbind(out, as.data.frame(mat, stringsAsFactors = FALSE), row.names = NULL)
 }
 
-#' The distinct alleles used by `isolates`, as FASTA records.
+#' Extract Allele Sequences as FASTA Header Vector
 #'
-#' Header is `>{locus}|{sha256}` — pyMLST's `SequenceExtractor` convention
-#' (`>gene|seqid strains`) but keyed on the portable identity, so the records
-#' join back to a hash profile without any database-local state.
+#' Queries distinct allele sequences for isolates using portable `>locus|sha256` headers[cite: 12].
 #'
-#' Returns a character vector, one element per record (the idiom already used by
-#' `locus_fasta()` in database_functions.R).
+#' @param db_path File path to SQLite database[cite: 12].
+#' @param isolates Vector of isolate identifiers[cite: 12].
+#' @return Character vector of FASTA entries[cite: 12].
 #' @export
 allele_fasta <- function(db_path, isolates) {
   con <- connect_ro(db_path)
@@ -217,7 +238,7 @@ allele_fasta <- function(db_path, isolates) {
     con,
     "SELECT DISTINCT m.gene AS gene, h.hash AS hash, s.sequence AS sequence
        FROM mlst m
-       JOIN sel ON sel.souche = m.souche
+       JOIN sel ON sel.isolate = m.souche
        JOIN hashes h ON h.id = m.seqid
        JOIN sequences s ON s.id = m.seqid
       ORDER BY m.gene, h.hash"
@@ -230,9 +251,13 @@ allele_fasta <- function(db_path, isolates) {
   paste0(">", res$gene, "|", res$hash, "\n", res$sequence)
 }
 
-#' The same alleles grouped per locus, for the "zip of per-locus FASTA" layout
-#' (the chewBBACA / cgMLST.org schema convention). Returns a named list: locus ->
-#' character vector of FASTA records.
+#' Extract Allele FASTA Records Grouped per Locus
+#'
+#' Organizes FASTA allele sequences into a named list split by locus[cite: 12].
+#'
+#' @param db_path File path to SQLite database[cite: 12].
+#' @param isolates Vector of isolate identifiers[cite: 12].
+#' @return Named list of locus -> FASTA character strings[cite: 12].
 #' @export
 allele_fasta_per_locus <- function(db_path, isolates) {
   records <- allele_fasta(db_path, isolates)
@@ -247,9 +272,13 @@ allele_fasta_per_locus <- function(db_path, isolates) {
 # Formatting
 # ---------------------------------------------------------------------------
 
-#' Render the wide table into the character frame that gets written: missing
-#' cells become the preset's sentinel and the ID column takes the preset's
-#' header. `loci_as_rows` transposes (pyMLST's default form).
+#' Format Profile Grid into Tool Specification Preset
+#'
+#' Transforms wide profile matrix into target tool export format and handles transposing[cite: 12].
+#'
+#' @param profile Wide profile data frame[cite: 12].
+#' @param preset Target scheme dialect preset name[cite: 12].
+#' @return Formatted character data frame[cite: 12].
 #' @export
 format_profile <- function(profile, preset = "phylotrace") {
   spec <- PROFILE_PRESETS[[preset]]
@@ -284,6 +313,14 @@ format_profile <- function(profile, preset = "phylotrace") {
   )
 }
 
+#' Write Delimited Data Frame File
+#'
+#' Writes unquoted data frame to disk with specified delimiter[cite: 12].
+#'
+#' @param df Target data frame[cite: 12].
+#' @param path Destination file path[cite: 12].
+#' @param sep Field separator character[cite: 12].
+#' @return Invalidation path invisibly[cite: 12].
 #' @export
 write_delim_table <- function(df, path, sep = "\t") {
   write.table(
@@ -301,6 +338,13 @@ write_delim_table <- function(df, path, sep = "\t") {
 # Excel caps a sheet at 16,384 columns; a wgMLST scheme can exceed that.
 XLSX_MAX_COLS <- 16384L
 
+#' Export Multi-Sheet Data Frames to Excel Workbook
+#'
+#' Writes named data frames into tabs while enforcing Excel column maximum limits[cite: 12].
+#'
+#' @param sheets Named list of data frames[cite: 12].
+#' @param path Destination xlsx file path[cite: 12].
+#' @return Invalidation path invisibly[cite: 12].
 #' @export
 write_xlsx_sheets <- function(sheets, path) {
   wide <- vapply(sheets, ncol, integer(1))
@@ -328,9 +372,13 @@ write_xlsx_sheets <- function(sheets, path) {
 # Export orchestration
 # ---------------------------------------------------------------------------
 
-#' Counts for the Export panel, without building the (potentially 1.1 M cell)
-#' table. Unlike the `.db` preview these exclude the synthetic `ref` souche,
-#' which never appears in a profile table.
+#' Fast Typing Profile Summary Statistics Calculation
+#'
+#' Calculates typing call counts and missing space metrics without building profile matrix[cite: 12].
+#'
+#' @param db_path File path to SQLite database[cite: 12].
+#' @param isolates Selected isolate identifier vector[cite: 12].
+#' @return List of typing call summary integers[cite: 12].
 #' @export
 typing_preview <- function(db_path, isolates) {
   con <- connect_ro(db_path)
@@ -354,7 +402,7 @@ typing_preview <- function(db_path, isolates) {
   counts <- dbGetQuery(
     con,
     "SELECT COUNT(*) AS calls, COUNT(DISTINCT m.seqid) AS alleles
-       FROM mlst m JOIN sel ON sel.souche = m.souche"
+       FROM mlst m JOIN sel ON sel.isolate = m.souche"
   )
 
   cells <- length(isolates) * n_loci
@@ -368,11 +416,15 @@ typing_preview <- function(db_path, isolates) {
   )
 }
 
-#' What file will `export_typing_results()` actually produce?
+#' Resolve Target Export Filenames and Archival Bundle Strategy
 #'
-#' The deliverable is always a single artefact: the bare table when that is all
-#' there is, otherwise a zip bundling the pieces. Exposed separately so the UI
-#' can show the destination before anything is written.
+#' Determines output paths and whether multiple components require zip packaging[cite: 12].
+#'
+#' @param dest_path Base destination file path[cite: 12].
+#' @param format File format ("xlsx", "tsv", or "csv")[cite: 12].
+#' @param include_metadata Boolean flag for metadata inclusion[cite: 12].
+#' @param sequences FASTA output structure ("none", "fasta", or "per_locus")[cite: 12].
+#' @return Named list describing path structure, packaging mode, and included parts[cite: 12].
 #' @export
 typing_export_target <- function(
   dest_path,
@@ -410,16 +462,32 @@ typing_export_target <- function(
   )
 }
 
+#' Replace Extension of Output File Path
+#'
+#' Helper function to swap string file extensions safely[cite: 12].
+#'
+#' @param path Original path string[cite: 12].
+#' @param ext Replacement extension string[cite: 12].
+#' @return String with modified extension[cite: 12].
 #' @export
 replace_ext <- function(path, ext) {
   paste0(sub("\\.[A-Za-z0-9]{1,5}$", "", path), ".", ext)
 }
 
-#' Write the typing results for `isolates`.
+#' Execute Typing Profile Export Pipeline
 #'
-#' `metadata` is the already-subset metadata data.frame (the Export panel builds
-#' it from its existing column picker), or NULL. Returns a description of what
-#' was written.
+#' Assembles profile, metadata, and FASTA files into staging directory and packages to destination[cite: 12].
+#'
+#' @param db_path Path to SQLite database[cite: 12].
+#' @param dest_path Destination file path[cite: 12].
+#' @param isolates Target isolate identifiers[cite: 12].
+#' @param metadata Optional metadata data frame[cite: 12].
+#' @param format Export format ("xlsx", "tsv", "csv")[cite: 12].
+#' @param value_kind Identifier mode ("hash" or "index")[cite: 12].
+#' @param preset Format specification preset name[cite: 12].
+#' @param sequences FASTA output layout ("none", "fasta", "per_locus")[cite: 12].
+#' @param progress Progress callback function[cite: 12].
+#' @return Summary list detailing exported archive characteristics[cite: 12].
 #' @export
 export_typing_results <- function(
   db_path,
@@ -493,7 +561,10 @@ export_typing_results <- function(
     per <- allele_fasta_per_locus(db_path, isolates)
     dir.create(file.path(stage, "alleles"))
     for (locus in names(per)) {
-      writeLines(per[[locus]], file.path(stage, "alleles", paste0(locus, ".fasta")))
+      writeLines(
+        per[[locus]],
+        file.path(stage, "alleles", paste0(locus, ".fasta"))
+      )
     }
     written <- c(written, file.path(stage, "alleles"))
   }
@@ -508,7 +579,9 @@ export_typing_results <- function(
       mode = "cherry-pick"
     )
   } else {
-    if (file.exists(target$path)) unlink(target$path)
+    if (file.exists(target$path)) {
+      unlink(target$path)
+    }
     if (!file.copy(written[[1]], target$path)) {
       stop("Could not write to ", target$path)
     }
@@ -531,9 +604,12 @@ export_typing_results <- function(
 # Parsing (import side)
 # ---------------------------------------------------------------------------
 
-#' Is this cell a real allele call, or one of the ecosystem's many ways of
-#' saying "no call"? chewBBACA's `INF-2` marks an inferred allele — a real call,
-#' with the prefix stripped.
+#' Clean and Normalize Allele Cell Values
+#'
+#' Strips whitespace and prefixes (e.g. chewBBACA `INF-`) and converts tokens to NA[cite: 12].
+#'
+#' @param x Vector of raw string values[cite: 12].
+#' @return Vector of cleaned allele identifiers with NAs[cite: 12].
 #' @export
 clean_cell <- function(x) {
   x <- trimws(as.character(x))
@@ -542,11 +618,12 @@ clean_cell <- function(x) {
   x
 }
 
-#' Classify the identifier kind of a vector of cleaned cells.
-#'   "hash"    64 hex chars (sha256) — what we and chewBBACA's --hash-profiles use
-#'   "hash_other" hex, but not 64 chars (crc32/md5/sha1): a hash we cannot
-#'             recompute against, so it is only linkable via a sequence file
-#'   "index"   integers
+#' Classify Allele Identifier Kind
+#'
+#' Evaluates whether allele values represent SHA256 hashes, integers, or mixed tokens[cite: 12].
+#'
+#' @param values Vector of non-missing allele identifier strings[cite: 12].
+#' @return Kind string: "empty", "hash", "index", "hash_other", or "mixed"[cite: 12].
 #' @export
 detect_value_kind <- function(values) {
   v <- values[!is.na(values)]
@@ -565,16 +642,13 @@ detect_value_kind <- function(values) {
   "mixed"
 }
 
-#' Read a profile table from TSV / CSV / Excel and normalise it to long form.
+#' Parse External Profile File into Long Format Table
 #'
-#' Sniffs the delimiter, the orientation (loci as columns or — pyMLST's default
-#' form — as rows) and the identifier kind. `loci` is the local scheme's locus
-#' list, used to decide the orientation: whichever axis matches the scheme is
-#' the locus axis.
+#' Auto-detects layout structure (loci as columns/rows) and standardizes profile entries[cite: 12].
 #'
-#' Returns `list(long, value_kind, loci_as_rows, isolates, loci_seen,
-#' loci_unknown, n_missing)` where `long` is a data.frame of
-#' (isolate, gene, value) with no-call rows dropped.
+#' @param path Target input profile file path[cite: 12].
+#' @param loci Known scheme locus names for alignment[cite: 12].
+#' @return List describing parsed long data frame, value kinds, and locus stats[cite: 12].
 #' @export
 parse_profile_file <- function(path, loci) {
   raw <- read_table_any(path)
@@ -639,9 +713,13 @@ parse_profile_file <- function(path, loci) {
   )
 }
 
-#' Read a table from .tsv/.csv/.txt (delimiter sniffed) or .xlsx (first sheet,
-#' or the sheet named "profile"/"metadata" when present). Everything comes back
-#' as character — allele identifiers must never be coerced to numeric.
+#' Generic Table Reader for TSV, CSV, and Excel Formats
+#'
+#' Sniffs table delimiter or loads Excel sheets while preserving character data types[cite: 12].
+#'
+#' @param path Target table path[cite: 12].
+#' @param sheet Optional sheet identifier for Excel files[cite: 12].
+#' @return Character data frame of target table[cite: 12].
 #' @export
 read_table_any <- function(path, sheet = NULL) {
   ext <- tolower(tools::file_ext(path))
@@ -650,7 +728,12 @@ read_table_any <- function(path, sheet = NULL) {
     sheets <- openxlsx::getSheetNames(path)
     pick <- sheet %||% sheets[[1]]
     if (!pick %in% sheets) {
-      stop("Sheet '", pick, "' not found. Sheets: ", paste(sheets, collapse = ", "))
+      stop(
+        "Sheet '",
+        pick,
+        "' not found. Sheets: ",
+        paste(sheets, collapse = ", ")
+      )
     }
     df <- openxlsx::read.xlsx(
       path,
@@ -685,10 +768,12 @@ read_table_any <- function(path, sheet = NULL) {
   )
 }
 
-#' Read a FASTA file into a data.frame of (header, sequence).
+#' Read Input FASTA File into Data Frame
 #'
-#' Plain reader — the app has no Biostrings dependency, and the counterpart
-#' writer is just `paste0(">", id, "\n", seq)`.
+#' Parses FASTA file records into a data frame with header and sequence columns[cite: 12].
+#'
+#' @param path Target FASTA file path[cite: 12].
+#' @return Data frame with `header` and `sequence` columns[cite: 12].
 #' @export
 read_fasta <- function(path) {
   lines <- readLines(path, warn = FALSE)
@@ -725,14 +810,13 @@ read_fasta <- function(path) {
   out[nzchar(out$sequence), , drop = FALSE]
 }
 
-#' Interpret FASTA headers as (locus, allele-id) pairs.
+#' Parse FASTA Header Annotations to Gene/Allele Pairs
 #'
-#' Accepted conventions:
-#'   `>locus|hash`            our own export
-#'   `>locus|allele_id`       pyMLST-ish
-#'   `>locus_allele_id`       chewBBACA / cgMLST.org schema files
-#' When `locus_hint` is given (a per-locus FASTA whose *filename* names the
-#' locus), the header only needs to carry the allele id.
+#' Extracts locus and allele identification details from standard FASTA headers[cite: 12].
+#'
+#' @param headers Character vector of FASTA line headers[cite: 12].
+#' @param locus_hint Optional locus name override (e.g., from filename)[cite: 12].
+#' @return Data frame containing normalized `gene` and `allele` columns[cite: 12].
 #' @export
 parse_fasta_headers <- function(headers, locus_hint = NULL) {
   h <- sub("\\s.*$", "", headers) # drop anything after the first space

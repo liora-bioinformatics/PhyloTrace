@@ -1,8 +1,7 @@
-# app/view/database_import.R
+# path/to/app/view/database_import.R
 #
-# "Import" interface of the Database menu. UI and backend live here so
-# the panel computes its own state independently of the other menu entries.
-#
+# "Import" interface of the Database menu.
+
 # Merges a peer `.db` into the loaded one. The gate in app/logic/db_compat.R
 # must pass before the Merge button unlocks; isolate name collisions are
 # resolved per-isolate; the peer's metadata columns are adopted only where the
@@ -11,81 +10,89 @@
 # point behind (see app/logic/db_import.R).
 
 box::use(
+  bslib[as_fill_carrier, layout_sidebar, sidebar, tooltip],
+  fs[path_home],
+  openxlsx[getSheetNames],
   shiny[
-    NS,
+    actionButton,
+    checkboxInput,
+    div,
+    h5,
+    icon,
+    modalButton,
+    modalDialog,
     moduleServer,
-    observeEvent,
+    NS,
     observe,
+    observeEvent,
     reactive,
     reactiveVal,
+    removeModal,
+    renderUI,
     req,
-    div,
+    showModal,
+    showNotification,
     span,
-    h5,
     strong,
+    tagList,
     tags,
-    icon,
-    actionButton,
-    selectInput,
     textInput,
     uiOutput,
-    renderUI,
-    showNotification,
-    showModal,
-    modalDialog,
-    modalButton,
-    removeModal,
-    withProgress,
-    tagList
+    withProgress
   ],
-  bslib[as_fill_carrier, layout_columns, tooltip],
-  shinyjs[disabled, disable, enable],
+  shinyFiles[parseFilePaths, shinyFileChoose, shinyFilesButton],
+  shinyjs[disable, disabled, enable, hidden, runjs, toggle],
   shinyWidgets[pickerInput, pickerOptions],
-  shinyFiles[shinyFilesButton, shinyFileChoose, parseFilePaths],
-  waiter[Waiter, spin_flower, useWaiter],
-  fs[path_home],
+  stats[setNames],
+  utils[head],
+  waiter[spin_flower, useWaiter, Waiter],
 )
 
 box::use(
+  app / logic / custom_fields[CUSTOM_TYPES],
+  app / logic / database_functions[metadata_columns],
   app / logic / db_compat[check_import_compatibility],
+  app / logic / db_events,
+  app / logic / db_export[available_result_tables],
   app /
     logic /
     db_import[
+      classify_isolate_collisions,
+      default_resolutions,
+      import_preview,
+      importable_custom_fields,
+      list_backups,
+      merge_databases,
       prepare_source,
       release_source,
-      classify_isolate_collisions,
-      import_preview,
-      default_resolutions,
-      suggest_rename,
-      merge_databases,
-      list_backups,
       restore_backup,
+      suggest_rename,
       METADATA_RESERVED
-    ],
-  app / logic / database_functions[metadata_columns],
-  app / logic / pymlst[existing_strains],
-  app / logic / field_labels[field_labels_for],
-  app / logic / functions[panel_card, stat_tile],
-  app /
-    logic /
-    profile_io[
-      parse_profile_file,
-      scheme_loci,
-      read_fasta,
-      parse_fasta_headers,
-      read_table_any
     ],
   app /
     logic /
     db_staging[
+      delete_imported_set,
+      list_imported_sets,
       resolve_profile,
       stage_profile_set,
-      list_imported_sets,
-      delete_imported_set,
       taken_isolate_names
     ],
+  app / logic / field_labels[field_labels_for],
+  app / logic / functions[panel_card, stat_tile, transfer_cards],
+  app /
+    logic /
+    profile_io[
+      parse_fasta_headers,
+      parse_profile_file,
+      read_fasta,
+      read_table_any,
+      scheme_loci
+    ],
+  app / logic / pymlst[existing_strains],
 )
 
+# Returns default value b if a is NULL
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 # A `.db` carries real sequences and can be merged into the typing database. A
@@ -96,10 +103,10 @@ SOURCE_TYPES <- c(
   "Typing results (table)" = "typing"
 )
 
+# Helper function to define root directories for file choosers
 .roots <- function() c(Home = path_home(), Root = "/")
 
-# shinyFiles renders a Root-relative pick as "//tmp/x.db"; collapse the leading
-# slashes so the path displays cleanly and compares equal to the real one.
+# Clean leading slashes from file paths outputted by shinyFiles
 .clean_path <- function(p) sub("^/{2,}", "/", as.character(p))
 
 .ACTION_CHOICES <- c(
@@ -108,14 +115,12 @@ SOURCE_TYPES <- c(
   "Import under new name" = "rename"
 )
 
+# Helper function to render status badges
 .badge <- function(status) {
   span(class = paste0("compat-badge is-", status), status)
 }
 
-# Overlay shown while a selected `.db` is read in. The read is one long blocking
-# stretch with nothing to report against: prepare_source() hashes the peer's
-# alleles, and the body then runs the compatibility, collision and preview
-# passes on top of that — so the message names the work rather than a step.
+# Renders HTML template for reading database waiter screen
 import_waiter_html <- function() {
   div(
     class = "db-waiter",
@@ -125,9 +130,27 @@ import_waiter_html <- function() {
   )
 }
 
-# First free `<name>_ext`, `<name>_ext2`, … A staged isolate that shares a name
-# with a local one is a *different observation*, so it is renamed rather than
-# skipped or overwritten — there is nothing here to overwrite.
+# Renders conflict notice for custom variables that cannot be imported
+conflict_note <- function(conflicts) {
+  # Helper to fetch human-readable custom type label
+  label <- function(type) {
+    lab <- unname(CUSTOM_TYPES[type])
+    if (is.na(lab)) type else lab
+  }
+  div(
+    class = "dest-label is-empty",
+    lapply(seq_len(nrow(conflicts)), function(i) {
+      div(sprintf(
+        "'%s' is %s here but %s in the external file — not imported.",
+        conflicts$name[[i]],
+        label(conflicts$local_type[[i]]),
+        label(conflicts$ext_type[[i]])
+      ))
+    })
+  )
+}
+
+# Suggests next available isolate name candidate with _ext suffix
 suggest_rename_ext <- function(name, taken) {
   candidate <- paste0(name, "_ext")
   i <- 1L
@@ -145,119 +168,123 @@ ui <- function(id) {
   as_fill_carrier(
     div(
       id = ns("module-container"),
-      useWaiter(),
-      div(
-        class = "db-page_header help-header",
-        div(
-          class = "db-browse-controls import-export-controls",
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Source"),
+      layout_sidebar(
+        padding = 0,
+        border = FALSE,
+        sidebar = sidebar(
+          id = ns("controls_sidebar"),
+          position = "right",
+          width = 350,
+          open = TRUE,
+          fillable = TRUE,
+          as_fill_carrier(
             div(
-              class = "control-group-items",
-              selectInput(
-                ns("source_type"),
-                label = NULL,
-                choices = SOURCE_TYPES
+              class = "io-control",
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Source"),
+                pickerInput(
+                  ns("source_type"),
+                  label = NULL,
+                  choices = SOURCE_TYPES
+                )
+              ),
+              # --- merge a whole PhyloTrace database ------------------------------
+              div(
+                id = ns("db_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "External database"),
+                shinyFilesButton(
+                  ns("ext_db"),
+                  "Select database …",
+                  title = "Choose a PhyloTrace database to import",
+                  icon = icon("file-import"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                uiOutput(ns("ext_db_label"), inline = TRUE)
+              ),
+              # --- stage a profile table ------------------------------------------
+              hidden(div(
+                id = ns("typing_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Typing results"),
+                shinyFilesButton(
+                  ns("profile_file"),
+                  "Profile table …",
+                  title = "Choose a profile table (.tsv / .csv / .xlsx)",
+                  icon = icon("table"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                shinyFilesButton(
+                  ns("seq_file"),
+                  "Sequences …",
+                  title = "Optional: the matching allele FASTA",
+                  icon = icon("dna"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                ),
+                shinyFilesButton(
+                  ns("meta_file"),
+                  "Metadata …",
+                  title = "Optional: a metadata table for these isolates",
+                  icon = icon("table-list"),
+                  buttonType = "default",
+                  multiple = FALSE,
+                  root = path_home()
+                )
+              )),
+              hidden(div(
+                id = ns("set_name_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Set name"),
+                textInput(
+                  ns("set_name"),
+                  label = NULL,
+                  placeholder = "e.g. partner-lab-2026"
+                )
+              )),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Metadata fields"),
+                uiOutput(ns("meta_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Custom variables"),
+                uiOutput(ns("custom_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Analysis results"),
+                uiOutput(ns("results_picker_ui"))
+              ),
+              div(
+                class = "io-control-group",
+                div(class = "control-group-label", "Import"),
+                uiOutput(ns("action_button_ui"), inline = TRUE)
+              ),
+              div(
+                id = ns("rollback_group"),
+                class = "io-control-group",
+                div(class = "control-group-label", "Rollback"),
+                uiOutput(ns("restore_ui"))
               )
             )
-          ),
-
-          # --- merge a whole PhyloTrace database ------------------------------
+          )
+        ),
+        as_fill_carrier(
           div(
-            id = ns("db_group"),
-            class = "control-group",
-            div(class = "control-group-label", "External database"),
-            div(
-              class = "control-group-items",
-              shinyFilesButton(
-                ns("ext_db"),
-                "Select database …",
-                title = "Choose a PhyloTrace database to import",
-                icon = icon("file-import"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              uiOutput(ns("ext_db_label"), inline = TRUE)
-            )
-          ),
-
-          # --- stage a profile table ------------------------------------------
-          shinyjs::hidden(div(
-            id = ns("typing_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Typing results"),
-            div(
-              class = "control-group-items",
-              shinyFilesButton(
-                ns("profile_file"),
-                "Profile table …",
-                title = "Choose a profile table (.tsv / .csv / .xlsx)",
-                icon = icon("table"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              shinyFilesButton(
-                ns("seq_file"),
-                "Sequences …",
-                title = "Optional: the matching allele FASTA",
-                icon = icon("dna"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              ),
-              shinyFilesButton(
-                ns("meta_file"),
-                "Metadata …",
-                title = "Optional: a metadata table for these isolates",
-                icon = icon("table-list"),
-                buttonType = "default",
-                multiple = FALSE,
-                root = path_home()
-              )
-            )
-          )),
-          shinyjs::hidden(div(
-            id = ns("set_name_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Set name"),
-            div(
-              class = "control-group-items",
-              textInput(
-                ns("set_name"),
-                label = NULL,
-                placeholder = "e.g. partner-lab-2026"
-              )
-            )
-          )),
-
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Metadata fields"),
-            div(class = "control-group-items", uiOutput(ns("meta_picker_ui")))
-          ),
-          div(
-            class = "control-group",
-            div(class = "control-group-label", "Import"),
-            div(
-              class = "control-group-items",
-              uiOutput(ns("action_button_ui"), inline = TRUE)
-            )
-          ),
-          div(
-            id = ns("rollback_group"),
-            class = "control-group",
-            div(class = "control-group-label", "Rollback"),
-            div(class = "control-group-items", uiOutput(ns("restore_ui")))
+            class = "db-page_body db-transfer-body",
+            useWaiter(),
+            uiOutput(ns("body"), fill = TRUE)
           )
         )
-      ),
-      as_fill_carrier(div(
-        class = "db-page_body db-transfer-body",
-        uiOutput(ns("body"))
-      ))
+      )
     )
   )
 }
@@ -265,8 +292,14 @@ ui <- function(id) {
 #' @export
 server <- function(
   id,
-  db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L)
+  db_path = reactive(NULL),
+  session_reset = reactive(0L),
+  db_rev = db_events$new_bus(),
+  # Advances every time this panel's markup is (re)inserted into the page. The
+  # Database panel is rebuilt on every database load while this server keeps
+  # running, and DOM state applied from here does not survive that rebuild —
+  # see main.R's ui_mounted.
+  ui_mounted = reactive(0L)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -281,6 +314,7 @@ server <- function(
     local_token <- reactiveVal(0L)
     imported <- reactiveVal(0L)
 
+    # Updates source file selection and prepares staged database copy
     set_source <- function(path) {
       release_source(prep())
       prep(NULL)
@@ -296,6 +330,23 @@ server <- function(
         }
         prep(staged)
       }
+    }
+
+    # Drop the chosen external database: release its staged copy and put the
+    # panel back into its "no source chosen" state.
+    #
+    # The client-side value has to go too. shinyFiles reports a selection with
+    # Shiny.onInputChange, and Shiny drops an input update whose value equals
+    # the last one it sent - so with the button still holding the old file,
+    # re-choosing that same file would not register as a change and the panel
+    # would sit empty. Setting the input to NULL makes the next selection
+    # differ; the observer above ignores the NULL itself (ignoreNULL).
+    clear_ext_db <- function() {
+      set_source(NULL)
+      runjs(sprintf(
+        "if (window.Shiny) Shiny.setInputValue('%s', null);",
+        ns("ext_db")
+      ))
     }
 
     session$onSessionEnded(function() release_source(shiny::isolate(prep())))
@@ -319,6 +370,7 @@ server <- function(
       session = session
     )
 
+    # Handle selection of external database file
     observeEvent(input$ext_db, {
       path <- parseFilePaths(.roots(), input$ext_db)$datapath
       req(length(path), is.character(path), file.exists(path))
@@ -348,20 +400,23 @@ server <- function(
     # Typing-results branch: stage a profile table
     # =======================================================================
 
+    # Reactive flag indicating if typing source mode is active
     typing <- reactive(identical(input$source_type, "typing"))
 
     # Show only the controls the chosen source needs. shinyjs rather than
     # conditionalPanel: the Database panels are injected into a navset_hidden
     # after the database loads, and Shiny's conditional-panel binding does not
     # take there — the panels would simply stay visible. Same pattern as
-    # visualization.R.
+    # visualization.R. Also fires on ui_mounted(), because a rebuilt sidebar
+    # comes back in its static state — the controls for whichever source is
+    # currently selected would otherwise stay hidden.
     observeEvent(
-      input$source_type,
+      list(input$source_type, ui_mounted()),
       {
-        shinyjs::toggle("db_group", condition = !typing())
-        shinyjs::toggle("rollback_group", condition = !typing())
-        shinyjs::toggle("typing_group", condition = typing())
-        shinyjs::toggle("set_name_group", condition = typing())
+        toggle("db_group", condition = !typing())
+        toggle("rollback_group", condition = !typing())
+        toggle("typing_group", condition = typing())
+        toggle("set_name_group", condition = typing())
       },
       ignoreInit = FALSE
     )
@@ -385,6 +440,7 @@ server <- function(
       )
     }
 
+    # Helper function to assign selected file paths to target reactive values
     pick <- function(input_value, target) {
       path <- parseFilePaths(.roots(), input_value)$datapath
       req(length(path), is.character(path), file.exists(path))
@@ -394,6 +450,7 @@ server <- function(
     observeEvent(input$seq_file, pick(input$seq_file, seq_path))
     observeEvent(input$meta_file, pick(input$meta_file, meta_path))
 
+    # Parse selected profile file using current database scheme
     parsed <- reactive({
       req(typing())
       p <- profile_path()
@@ -436,7 +493,7 @@ server <- function(
         return(NULL)
       }
       sheets <- tryCatch(
-        openxlsx::getSheetNames(p),
+        getSheetNames(p),
         error = function(e) character(0)
       )
       if (!"metadata" %in% sheets) {
@@ -445,16 +502,18 @@ server <- function(
       tryCatch(read_table_any(p, sheet = "metadata"), error = function(e) NULL)
     })
 
+    # Resolves profile allele links against database
     resolved <- reactive({
       req(typing())
       resolve_profile(db_path(), parsed(), supplied_sequences())
     })
 
+    # Checks whether staging typing results is blocked
     typing_blocked <- reactive({
       isTRUE(attr(resolved()$checks, "blocked"))
     })
 
-    # Staged isolates must not collide with a local souche or another set.
+    # Staged isolates must not collide with a local isolate or another set.
     typing_clashes <- reactive({
       r <- resolved()
       if (!isTRUE(r$linkable)) {
@@ -463,6 +522,7 @@ server <- function(
       intersect(r$isolates, taken_isolate_names(db_path()))
     })
 
+    # Extracts list of metadata columns provided in typing inputs
     typing_meta_cols <- reactive({
       md <- supplied_metadata()
       if (is.null(md) || !"isolate" %in% names(md)) {
@@ -471,15 +531,19 @@ server <- function(
       setdiff(names(md), "isolate")
     })
 
+    # Fetches list of currently staged sets
     staged_sets <- reactive({
       local_token()
+      db_events$depend(db_rev, "staged")
       list_imported_sets(db_path())
     })
 
     # -- Compatibility -------------------------------------------------------
 
+    # Evaluates database compatibility between local and external sources
     compat <- reactive({
       local_token()
+      db_events$depend(db_rev, "schema", "isolates")
       local <- db_path()
       ext <- selected()
       req(!is.null(local), !is.na(local), !is.null(ext))
@@ -488,22 +552,27 @@ server <- function(
       check_import_compatibility(local, staged$path)
     })
 
+    # Returns TRUE if database import compatibility is blocked
     blocked <- reactive(isTRUE(attr(compat(), "blocked")))
 
     # -- Collisions ----------------------------------------------------------
 
+    # Classifies isolate collision status between local and external databases
     classification <- reactive({
       req(!blocked())
       classify_isolate_collisions(db_path(), prep()$path)
     })
 
+    # Returns names of isolates with name conflicts
     clashes <- reactive({
       cl <- classification()
       cl$isolate[cl$status == "name_clash"]
     })
 
+    # Returns list of existing local isolate names
     local_isolates <- reactive({
       local_token()
+      db_events$depend(db_rev, "isolates")
       existing_strains(db_path())
     })
 
@@ -512,22 +581,24 @@ server <- function(
     resolutions <- reactive({
       res <- default_resolutions(classification())
       for (i in seq_len(nrow(res))) {
-        if (res$ext_souche[i] %in% clashes()) {
+        if (res$ext_isolate[i] %in% clashes()) {
           action <- input[[paste0("action_", i)]] %||% "skip"
           res$action[i] <- action
           if (identical(action, "rename")) {
             nm <- input[[paste0("rename_", i)]] %||% ""
-            res$final_souche[i] <- trimws(nm)
+            res$final_isolate[i] <- trimws(nm)
           }
         }
       }
       res
     })
 
+    # Counts number of non-skipped isolate resolutions
     accepted <- reactive(sum(resolutions()$action != "skip"))
 
     # -- Metadata ------------------------------------------------------------
 
+    # Returns available external metadata columns
     ext_meta_cols <- reactive({
       staged <- prep()
       req(!is.null(staged))
@@ -540,12 +611,12 @@ server <- function(
         error = function(e) character(0)
       )
       if (!length(cols)) {
-        return(div(class = "text-muted small", "No metadata to import"))
+        return(div(class = "dest-label is-empty", "No metadata to import"))
       }
       pickerInput(
         ns("meta_cols"),
         label = NULL,
-        choices = stats::setNames(cols, field_labels_for(cols)),
+        choices = setNames(cols, field_labels_for(cols)),
         selected = cols,
         multiple = TRUE,
         options = pickerOptions(
@@ -554,8 +625,91 @@ server <- function(
           selectedTextFormat = "count > 3",
           countSelectedText = paste0("{0} / ", length(cols), " fields"),
           liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+          liveSearchPlaceholder = "Search fields ...",
+          container = "body"
         )
+      )
+    })
+
+    # -- Custom variables ----------------------------------------------------
+
+    # What the peer defines, split into what can be merged and what clashes.
+    # A `.db` merge only: a profile file has no custom-variable tables.
+    custom_split <- reactive({
+      # Re-check whenever a local definition changes — its type governs which
+      # of the peer's variables clash (see importable_custom_fields()), and that
+      # can flip while an external database is already selected.
+      db_events$depend(db_rev, "custom_fields")
+      staged <- prep()
+      req(!is.null(staged), !typing())
+      importable_custom_fields(db_path(), staged$path)
+    })
+
+    output$custom_picker_ui <- renderUI({
+      split <- tryCatch(custom_split(), error = function(e) NULL)
+      if (is.null(split) || !length(split$importable)) {
+        # A clash is the interesting case: say so rather than reporting nothing
+        # to import and leaving the user to wonder where their variable went.
+        if (!is.null(split) && nrow(split$conflicts)) {
+          return(conflict_note(split$conflicts))
+        }
+        return(div(
+          class = "dest-label is-empty",
+          "No custom variables to import"
+        ))
+      }
+
+      cols <- split$importable
+      tagList(
+        pickerInput(
+          ns("custom_fields"),
+          label = NULL,
+          choices = setNames(cols, field_labels_for(cols)),
+          selected = cols,
+          multiple = TRUE,
+          options = pickerOptions(
+            actionsBox = TRUE,
+            title = "Select variables …",
+            selectedTextFormat = "count > 3",
+            countSelectedText = paste0("{0} / ", length(cols), " variables"),
+            liveSearch = TRUE,
+            liveSearchPlaceholder = "Search variables ...",
+            container = "body"
+          )
+        ),
+        if (nrow(split$conflicts)) conflict_note(split$conflicts)
+      )
+    })
+
+    # Optional analysis-result tables, offered only for a `.db` merge and only
+    # for the tables the external database actually carries. When a checkbox is
+    # not rendered, its input is NULL, so the merge simply does not carry it.
+    output$results_picker_ui <- renderUI({
+      staged <- prep()
+      if (typing() || is.null(staged)) {
+        return(div(class = "dest-label is-empty", "—"))
+      }
+      present <- tryCatch(
+        available_result_tables(staged$path),
+        error = function(e) list(classical = FALSE, amr = FALSE)
+      )
+      if (!present$classical && !present$amr) {
+        return(div(
+          class = "dest-label is-empty",
+          "No analysis results to import"
+        ))
+      }
+      tagList(
+        if (present$classical) {
+          checkboxInput(
+            ns("include_classical"),
+            "Classical MLST results",
+            value = TRUE
+          )
+        },
+        if (present$amr) {
+          checkboxInput(ns("include_amr"), "AMR results", value = TRUE)
+        }
       )
     })
 
@@ -574,21 +728,26 @@ server <- function(
           ns("merge_btn"),
           "Merge into database",
           class = "btn-success",
-          icon = icon("code-merge")
+          icon = icon("code-merge"),
+          width = "100%"
         ))
       }
     })
 
     # -- Body ----------------------------------------------------------------
 
-    # The pass/warn/fail grid, shared by both source types.
+    # The pass/warn/fail grid, shared by both source types. Each check is one
+    # item (badge + inline name/detail), and items run two to a row via a CSS
+    # multi-column layout — a six-check list reads as three rows, not six.
     check_grid <- function(checks) {
       div(
         class = "compat-check",
         lapply(seq_len(nrow(checks)), function(i) {
-          tagList(
+          div(
+            class = "compat-check_item",
             .badge(checks$status[i]),
             div(
+              class = "compat-check_row",
               div(class = "compat-check_name", checks$check[i]),
               div(class = "compat-check_detail", checks$detail[i])
             )
@@ -597,15 +756,20 @@ server <- function(
       )
     }
 
-    # The gate and what it lets through are read against each other, so they sit
-    # side by side rather than stacked: the checks on the left, the tally of what
-    # they leave to import on the right.
+    # The gate and what it lets through are read in order, top to bottom: the
+    # checks first, then the tally of what they leave to import. This is a
+    # flex column, not a grid: a `layout_column_wrap()` grid gives every row an
+    # equal `1fr` share of the fillable height regardless of content, which
+    # stretched the short check list and the tall summary to match and left
+    # the shorter card padded with dead space. A plain fill carrier instead
+    # lets the compatibility card size to its own content and only the
+    # summary card grow into whatever height is left.
     transfer_row <- function(checks, summary_title, ...) {
-      layout_columns(
-        col_widths = c(5, 7),
+      as_fill_carrier(div(
+        class = "transfer-row",
         panel_card("Compatibility", check_grid(checks)),
-        panel_card(summary_title, ...)
-      )
+        panel_card(summary_title, ..., fill = TRUE)
+      ))
     }
 
     # Already-staged sets, with a Remove button each.
@@ -617,7 +781,7 @@ server <- function(
       panel_card(
         "Staged typing results",
         div(
-          class = "text-muted small mb-2",
+          class = "dest-label is-empty mb-2",
           "These isolates have allele profiles but no sequences, so they are",
           " available in the Tree and MST views only."
         ),
@@ -668,8 +832,7 @@ server <- function(
       checks <- compat()
 
       if (blocked()) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           transfer_row(
             checks,
             "Import summary",
@@ -690,8 +853,7 @@ server <- function(
       # resolution dropdown moves — seconds of lag on a real database.
       p <- import_preview(db_path(), prep()$path, resolutions(), cl)
 
-      div(
-        class = "transfer-cards",
+      transfer_cards(
         transfer_row(
           checks,
           "Import summary",
@@ -713,7 +875,7 @@ server <- function(
           ),
           if (p$n_identical_dupes > 0) {
             div(
-              class = "text-muted small",
+              class = "dest-label is-empty",
               icon("circle-info"),
               sprintf(
                 " %d isolate(s) are already in the database with an identical allele profile and will be skipped.",
@@ -736,7 +898,7 @@ server <- function(
           panel_card(
             "Resolve name conflicts",
             div(
-              class = "text-muted small mb-2",
+              class = "dest-label is-empty mb-2",
               "These isolates already exist locally under the same name but carry a different allele profile."
             ),
             lapply(seq_len(nrow(cl)), function(i) {
@@ -749,7 +911,7 @@ server <- function(
                 div(class = "clash-row_name", cl$isolate[i]),
                 div(
                   class = "clash-row_action",
-                  selectInput(
+                  pickerInput(
                     ns(paste0("action_", i)),
                     label = NULL,
                     choices = .ACTION_CHOICES,
@@ -776,10 +938,10 @@ server <- function(
 
     # -- Typing-results body -------------------------------------------------
 
+    # Renders the UI body content when typing-results source mode is active
     typing_body <- function() {
       if (is.null(profile_path())) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           div(
             class = "db-empty-hint",
             "Select a profile table (.tsv / .csv / .xlsx) of typing results.",
@@ -798,8 +960,7 @@ server <- function(
       p <- parsed()
 
       if (typing_blocked()) {
-        return(div(
-          class = "transfer-cards",
+        return(transfer_cards(
           transfer_row(
             r$checks,
             "Staging summary",
@@ -818,8 +979,7 @@ server <- function(
 
       clash <- typing_clashes()
 
-      div(
-        class = "transfer-cards",
+      transfer_cards(
         transfer_row(
           r$checks,
           "Staging summary",
@@ -844,7 +1004,7 @@ server <- function(
             )
           ),
           div(
-            class = "text-muted small",
+            class = "dest-label is-empty",
             icon("circle-info"),
             " These isolates are staged beside the database, not merged into it:",
             " a profile table carries no sequences, so they can contribute allele",
@@ -859,7 +1019,7 @@ server <- function(
                 "%d isolate name(s) already in use: ",
                 length(clash)
               )),
-              paste(utils::head(clash, 5), collapse = ", "),
+              paste(head(clash, 5), collapse = ", "),
               if (length(clash) > 5) ", …",
               tags$br(),
               "They will be imported with an \"_ext\" suffix."
@@ -881,11 +1041,12 @@ server <- function(
       out <- character(0)
       for (nm in clash) {
         new <- suggest_rename_ext(nm, c(taken, out))
-        out <- c(out, stats::setNames(new, nm))
+        out <- c(out, setNames(new, nm))
       }
       out
     })
 
+    # Toggles state (enable/disable) of action buttons based on input validity
     observe({
       if (typing()) {
         ok <- tryCatch(
@@ -910,6 +1071,7 @@ server <- function(
       if (isTRUE(ok)) enable("merge_btn") else disable("merge_btn")
     })
 
+    # Handles staging profile set submission
     observeEvent(input$stage_btn, {
       req(typing(), !typing_blocked())
 
@@ -955,7 +1117,12 @@ server <- function(
       seq_path(NULL)
       meta_path(NULL)
       local_token(local_token() + 1L)
-      imported(imported() + 1L)
+      # Staging adds a set alongside the local isolates without touching them,
+      # so the only reader affected is the Visualization module's staged-set
+      # picker, which follows this revision. Deliberately not `imported` - that
+      # raises main.R's "reload the database" prompt, which is the right
+      # response to a merge or a restore and far too heavy for this.
+      db_events$bump(db_rev, "staged")
 
       showNotification(
         tagList(
@@ -984,7 +1151,7 @@ server <- function(
             {
               delete_imported_set(db_path(), this)
               local_token(local_token() + 1L)
-              imported(imported() + 1L)
+              db_events$bump(db_rev, "staged")
               showNotification(
                 "Staged typing results removed.",
                 type = "message",
@@ -1000,6 +1167,7 @@ server <- function(
 
     # -- Merge ---------------------------------------------------------------
 
+    # Displays merge confirmation modal popup
     observeEvent(input$merge_btn, {
       req(accepted() > 0)
       res <- resolutions()
@@ -1025,17 +1193,19 @@ server <- function(
             )
           },
           tags$p(
-            class = "text-muted small",
+            class = "dest-label is-empty",
             "The current database is saved as a timestamped backup first, so this can be rolled back."
           )
         ),
         footer = tagList(
           modalButton("Cancel"),
           actionButton(ns("confirm_merge"), "Merge", class = "btn-success")
-        )
+        ),
+        easyClose = TRUE
       ))
     })
 
+    # Executes database merge operation on confirmation
     observeEvent(input$confirm_merge, {
       removeModal()
       local <- db_path()
@@ -1064,8 +1234,14 @@ server <- function(
           ext_path = staged$path,
           resolutions = resolutions(),
           metadata_cols = input$meta_cols %||% character(0),
+          include_classical = isTRUE(input$include_classical),
+          include_amr = isTRUE(input$include_amr),
+          custom_fields = input$custom_fields %||% character(0),
           backup = TRUE,
-          progress = step
+          progress = step,
+          # `staged$path` can be a temp copy; the label written into
+          # metadata.source has to name the file the user actually picked.
+          source_file = selected()
         ),
         error = function(e) e
       )
@@ -1084,7 +1260,21 @@ server <- function(
         return()
       }
 
+      # Let go of the source before anything recomputes. What the panel was
+      # showing - compatibility, collisions, import summary - described the
+      # database as it was *before* this merge; every accepted isolate is local
+      # now, so recomputing it would re-hash both sides only to arrive at an
+      # empty diff, and it would do so while main.R's reload prompt is already
+      # up. Clearing first means local_token() below only refreshes the backup
+      # list, and the body falls straight through to its empty state.
+      clear_ext_db()
+
       local_token(local_token() + 1L)
+      # A merge rewrites the database wholesale, so every domain moves. The
+      # `imported` signal stays as well: main.R turns it into the reload prompt,
+      # which is what re-runs the hash backfill and releases the modules that
+      # hold back automatic refresh while they carry unsaved edits.
+      db_events$bump_all(db_rev)
       imported(imported() + 1L)
 
       showNotification(
@@ -1100,7 +1290,9 @@ server <- function(
             result$renamed,
             result$skipped,
             result$new_alleles
-          )
+          ),
+          tags$br(),
+          sprintf("Recorded under Source “%s”.", result$source)
         ),
         type = "message",
         duration = 10
@@ -1109,6 +1301,7 @@ server <- function(
 
     # -- Rollback ------------------------------------------------------------
 
+    # Fetches available database backups
     backups <- reactive({
       local_token()
       list_backups(db_path())
@@ -1117,13 +1310,13 @@ server <- function(
     output$restore_ui <- renderUI({
       files <- backups()
       if (!length(files)) {
-        return(div(class = "text-muted small", "No backups yet"))
+        return(div(class = "dest-label is-empty", "No backups yet"))
       }
       tagList(
-        selectInput(
+        pickerInput(
           ns("backup_pick"),
           label = NULL,
-          choices = stats::setNames(files, basename(files))
+          choices = setNames(files, basename(files))
         ),
         actionButton(
           ns("restore_btn"),
@@ -1134,6 +1327,7 @@ server <- function(
       )
     })
 
+    # Displays rollback backup confirmation modal popup
     observeEvent(input$restore_btn, {
       req(input$backup_pick)
       showModal(modalDialog(
@@ -1144,16 +1338,18 @@ server <- function(
           "?"
         )),
         tags$p(
-          class = "text-muted small",
+          class = "dest-label is-empty",
           "The database being replaced is itself backed up first."
         ),
         footer = tagList(
           modalButton("Cancel"),
           actionButton(ns("confirm_restore"), "Restore", class = "btn-danger")
-        )
+        ),
+        easyClose = TRUE
       ))
     })
 
+    # Executes database backup restoration operation on confirmation
     observeEvent(input$confirm_restore, {
       removeModal()
 
@@ -1189,6 +1385,8 @@ server <- function(
       }
 
       local_token(local_token() + 1L)
+      # A restore replaces the file; same reasoning as the merge above.
+      db_events$bump_all(db_rev)
       imported(imported() + 1L)
 
       showNotification(
@@ -1202,9 +1400,7 @@ server <- function(
     observeEvent(
       session_reset(),
       {
-        release_source(prep())
-        prep(NULL)
-        selected(NULL)
+        clear_ext_db()
         profile_path(NULL)
         seq_path(NULL)
         meta_path(NULL)

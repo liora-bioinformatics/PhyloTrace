@@ -11,7 +11,10 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
-  app / logic / db_export[export_preview, export_database],
+  app /
+    logic /
+    db_export[export_preview, export_database, exportable_custom_fields],
+  app / logic / provenance[store_provenance],
   app / logic / db_compat[check_import_compatibility],
 )
 
@@ -225,4 +228,95 @@ test_that("a failed export leaves no partial file behind", {
   expect_error(export_database(src, dest, "nope"))
   expect_identical(list.files(dir, pattern = "\\.part$"), character(0))
   expect_false(file.exists(dest))
+})
+
+# --- Analysis-result tables (classical_mlst / amr_*) -----------------------
+
+test_that("result tables travel only when requested, filtered to the selection", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, c("A", "B")) # both isolates get classical + AMR rows
+  dest <- file.path(dir, "out.db")
+
+  export_database(
+    src,
+    dest,
+    "A",
+    include_classical = TRUE,
+    include_amr = TRUE
+  )
+
+  # Only the selected isolate's rows travel; B's are left behind.
+  for (tbl in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_setequal(
+      q1(dest, sprintf("SELECT DISTINCT isolate FROM %s", tbl)),
+      "A"
+    )
+  }
+})
+
+test_that("result tables are omitted by default", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A")
+  dest <- file.path(dir, "out.db")
+
+  export_database(src, dest, "A")
+
+  tbls <- qdf(dest, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_false("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+  expect_false("amr_summary" %in% tbls)
+})
+
+test_that("requesting a result table the source lacks is a no-op, not an error", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A", classical = TRUE, amr = FALSE) # no AMR tables
+  dest <- file.path(dir, "out.db")
+
+  expect_error(
+    export_database(src, dest, "A", include_classical = TRUE, include_amr = TRUE),
+    NA
+  )
+
+  tbls <- qdf(dest, "SELECT name FROM sqlite_master WHERE type='table'")$name
+  expect_true("classical_mlst" %in% tbls)
+  expect_false("amr_results" %in% tbls)
+})
+
+test_that("exported result-table DDL matches the source verbatim", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A")
+  dest <- file.path(dir, "out.db")
+
+  export_database(src, dest, "A", include_classical = TRUE, include_amr = TRUE)
+
+  for (nm in c("classical_mlst", "amr_results", "amr_summary")) {
+    expect_identical(
+      q1(dest, "SELECT sql FROM sqlite_master WHERE name = ?", list(nm)),
+      q1(src, "SELECT sql FROM sqlite_master WHERE name = ?", list(nm)),
+      info = nm
+    )
+  }
+})
+
+test_that("an export carries the provenance of the isolates it contains", {
+  dir <- local_tempdir()
+  src <- file.path(dir, "src.db")
+  build_db(src, default_local(), metadata = meta_df(c("A", "B")))
+  store_provenance(src, "A", list(genome_digest = "digestA", pymlst_version = "2.2.2"))
+  store_provenance(src, "B", list(genome_digest = "digestB", pymlst_version = "2.2.2"))
+
+  out <- file.path(dir, "out.db")
+  export_database(src, out, "A")
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), out)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  rows <- DBI::dbGetQuery(con, "SELECT isolate, genome_digest FROM typing_provenance")
+
+  # Only the exported isolate's row travels, exactly like its results.
+  expect_identical(rows$isolate, "A")
+  expect_identical(rows$genome_digest, "digestA")
 })

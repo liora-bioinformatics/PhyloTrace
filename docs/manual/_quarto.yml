@@ -1,0 +1,113 @@
+# =============================================================================
+# PhyloTrace — User Manual (Quarto book)
+#
+# The manual for people using PhyloTrace: what it does, what the science behind
+# it means, and how to drive every panel. It assumes no programming background.
+# Implementation detail belongs in the companion technical manual under
+# docs/technical/, not here.
+#
+# Rendering requires the Quarto CLI (installed at ~/.local/bin/quarto). The same
+# engine is intended to back the in-app report function, so keep this project
+# self-contained and dependency-light.
+#
+#   quarto render        # HTML site (+ PDF) into docs/manual/_book/
+#   quarto preview       # live-reload while editing
+# =============================================================================
+
+project:
+  type: book
+  output-dir: _book
+
+book:
+  title: "PhyloTrace"
+  subtitle: "User Manual"
+  description: >
+    A guide to PhyloTrace — a platform for bacterial pathogen monitoring built
+    around core-genome MLST (cgMLST) typing, antimicrobial-resistance screening,
+    and interactive genomic-epidemiology visualization.
+  author: "Liora Bioinformatics"
+  date: today
+  search: true
+  page-navigation: true
+  favicon: images/pt-small-icon.png
+  sidebar:
+    style: docked
+    collapse-level: 1
+    pinned: true
+    logo: images/phylotrace-logo.png
+  chapters:
+    - index.qmd
+
+    - part: "I · Orientation"
+      chapters:
+        - intro.qmd
+        - concepts.qmd
+
+    - part: "II · The App & Your Data"
+      chapters:
+        - app-basics.qmd
+        - data.qmd
+
+    - part: "III · Components"
+      chapters:
+        - schemes.qmd
+        - typing.qmd
+        - amr.qmd
+        - browser.qmd
+        - interop.qmd
+
+    - part: "IV · Visualization & Analysis"
+      chapters:
+        - visualization.qmd
+        - mst.qmd
+        - trees.qmd
+        - epicurve.qmd
+        - map.qmd
+        - amr-heatmap.qmd
+        - dashboard.qmd
+
+    - references.qmd
+
+  appendices:
+    - appendix-tools.qmd
+    - glossary.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    theme:
+      - cosmo
+      - theme.scss
+    include-after-body: sidebar-footer.html
+    toc: true
+    toc-depth: 3
+    toc-title: "On this page"
+    number-sections: true
+    number-depth: 3
+    code-copy: true
+    code-overflow: wrap
+    fig-responsive: true
+    link-external-icon: true
+    link-external-newwindow: true
+    citations-hover: true
+    # crossrefs-hover is off: its popover fetches the target page's raw
+    # pre-JS HTML, so a @fig-* pointing at a Mermaid diagram previews as
+    # unrendered flowchart source rather than the diagram. The link still
+    # navigates correctly; only the hover preview is affected.
+    crossrefs-hover: false
+    grid:
+      sidebar-width: 340px
+      body-width: 1150px
+      margin-width: 300px
+      gutter-width: 1.5rem
+
+  pdf:
+    documentclass: scrreprt
+    papersize: a4
+    toc: true
+    number-sections: true
+    colorlinks: true
+    fig-pos: "H"
+    geometry:
+      - margin=1in

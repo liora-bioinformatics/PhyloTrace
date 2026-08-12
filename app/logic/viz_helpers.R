@@ -1,134 +1,61 @@
 # app/logic/viz_helpers.R
 #
-# Namespace-agnostic UI helpers and option-set constants shared by the two
-# visualization submodules (app/view/visualization_tree.R and
-# app/view/visualization_mst.R). Every helper takes the caller's `ns` and
-# returns tags, so it is safe to reuse across module namespaces (same pattern
-# as `sidebar_menu` in app/logic/functions.R).
-#
-# --- adding a new plot control input: reset checklist -----------------------
-#
-# Every control in visualization_map.R / _tree.R / _mst.R's sidebars must
-# come back to a known default when its "Reset settings" button is clicked.
-# Each of those three modules wires this via one shinyjs::reset(id =
-# "controls_wrap") call in its `reset_settings` observer, PLUS explicit
-# patch-up code for whatever shinyjs::reset() can't handle correctly. When
-# you add or change a control, work out which bucket it's in — it is NOT safe
-# to assume shinyjs::reset() alone covers it:
-#
-#  1. Plain input, static default (sliderInput/textInput/numericInput/
-#     checkboxInput/input_switch, or a selectInput/radioButtons whose
-#     `choices` are fixed at UI-declaration time and never swapped out by an
-#     update*Input() call elsewhere): shinyjs::reset() already handles this
-#     correctly and synchronously. Nothing to add.
-#
-#  2. A viz_color() swatch (colorPickr): shinyjs::reset() doesn't even
-#     recognize colorPickr as a resettable input (it only knows the unrelated
-#     `colourpicker` package's widget) — it's silently skipped. Add
-#     your_id = "#default" to that module's reset_viz_colors(session, ...)
-#     call. (See reset_viz_colors() below for the deeper reason this can't
-#     just be a plain shinyWidgets::updateColorPickr() call either — pickr's
-#     own setColor() doesn't fire the "changestop" event the widget is
-#     configured to update on.)
-#
-#  3. A shinyWidgets::radioGroupButtons(): shinyjs::reset() *does* detect
-#     these (they share a CSS class with plain radioButtons) and attempts to
-#     restore them, but via shiny::updateRadioButtons(), which messages a
-#     "value" key — the widget's own JS binding only reacts to "selected", so
-#     the attempt is a silent no-op. Add your_id = "default_choice" to that
-#     module's reset_viz_radio_buttons(session, ...) call.
-#
-#  4. A selectInput/pickerInput whose `choices` (and often `selected`) get
-#     swapped out at Generate time for data loaded at runtime (metadata
-#     columns, isolate names, a date range fitted to the data, etc.) rather
-#     than being fixed at UI-declaration time: add it to that module's
-#     populate_metadata_selects() (map.R: also reset_data_fitted_controls())
-#     — always computing the SAME default Generate itself would use for data
-#     it's never seen a selection for, not the UI's placeholder default.
-#     Critically, the call into that function from `reset_settings` MUST stay
-#     wrapped in shinyjs::delay(400, ...), not called immediately after
-#     shinyjs::reset(): these ARE plain <select>s/sliderInputs, so
-#     shinyjs::reset() also recognizes and restores them — but only
-#     asynchronously, via a client round-trip. An immediate, same-tick
-#     correction gets silently overwritten a moment later when that delayed,
-#     stale (pre-Generate) restoration lands. This is why the reset observer
-#     in each module is NOT simply "shinyjs::reset() then fix up the rest" —
-#     order and timing both matter. See the comment on that observer in
-#     whichever module you're editing for the full trace of this failure
-#     mode.
-#
-#  5. A control the server *renders* (shiny::renderUI + uiOutput, e.g. the Epi
-#     engine's "Time interval" and "Stratify by" pickers, whose value/choices
-#     are fitted to the loaded database): shinyjs::reset() restores an input to
-#     the value it had at *page load*, and a server-rendered control had no
-#     existence then — so there is nothing for it to restore and it is skipped.
-#     Rebuild the control instead: have its renderUI depend on a reactiveVal
-#     counter and bump that from `reset_settings` (see visualization_epi.R's
-#     interval_rebuild / stratify_rebuild). Note this bucket exists precisely
-#     because bucket 4's update*Input() route is *unusable* for these: this
-#     engine's panel is only inserted into the DOM once a database loads, which
-#     is the same moment the fitted value becomes known, so the update fires at
-#     a control the browser has not built yet and is dropped on the floor.
-#     Rendering the control already carrying the right value has nothing to
-#     lose.
-#
-#  6. State that is not an input at all (the Epi engine's annotation list and
-#     playback position — plain reactiveVals): shinyjs::reset() cannot see it,
-#     no update*Input() addresses it. Reset it by hand in `reset_settings`.
-#
-# When in doubt, prefer testing the actual "Reset settings" button over
-# reasoning about it — bucket 1 is easy to get wrong by assuming it applies
-# to something that's actually bucket 4 (any control whose value is ever set
-# by an update*Input() call outside the UI declaration is a strong hint it's
-# NOT bucket 1).
+# Shared, namespace-agnostic UI helpers and option-set constants for visualization
+# modules (app/view/visualization_tree.R and app/view/visualization_mst.R).
 
 box::use(
   shiny[
     div,
-    selectInput,
-    actionButton,
     icon,
-    hr,
     tags,
     HTML,
     singleton,
     reactiveValuesToList,
-    updateSelectInput,
     updateSliderInput,
     updateNumericInput,
     updateTextInput,
   ],
-  bslib[nav_panel, update_switch],
+  bslib[update_switch],
+  RColorBrewer[brewer.pal, brewer.pal.info],
+  stats[setNames],
   shinyWidgets[
     colorPickr,
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
+    updateVirtualSelect,
+    pickerInput,
+    virtualSelectInput
   ],
+  viridisLite[viridis],
 )
 
-# --- shared option sets ------------------------------------------------------
+box::use(
+  app / logic / date_bins[DATE_GRANULARITIES, DATE_GRANULARITY_NONE],
+  app / logic / field_profile[profile_description],
+)
 
-# Metadata columns mappable to plot aesthetics.
+# --- Control Reset Handling Reference ----------------------------------------
+# Sidebar controls require specific reset handlers when triggering "Reset settings":
+# 1. Static inputs (slider/text/numeric/switch): Handled natively by shinyjs::reset().
+# 2. Color pickers (colorPickr): Handled via reset_viz_colors() to trigger JS 'changestop'.
+# 3. Radio group buttons: Handled via reset_viz_radio_buttons() (updateRadioGroupButtons).
+# 4. Dynamic metadata selects: Reset via populate_metadata_selects() in shinyjs::delay(400)
+#    to prevent race conditions with async shinyjs::reset() client round-trips.
+# 5. Server-rendered UI (renderUI): Must bump a reactiveVal counter to re-render.
+# 6. Non-input reactive state: Reset manually inside the module's reset observer.
+
+# --- Shared Option Sets ------------------------------------------------------
+
+#' Metadata Column Options for Plot Aesthetic Mapping
 #' @export
 meta_vars <- c("Isolation Date", "Host", "Country", "City", "Database")
 
-# Sources for the isolate (tip) label.
+#' Metadata/ID Options for Tip Labeling
 #' @export
 label_vars <- c("Assembly Name", "Assembly ID", meta_vars)
 
-# Sources for branch labels (allelic distance is the numeric default).
-#' @export
-branch_vars <- c("Allelic Distance", meta_vars)
-
-#' @export
-fontfaces <- c(
-  Plain = "plain",
-  Bold = "bold",
-  Italic = "italic",
-  `Bold Italic` = "bold.italic"
-)
-
+#' Point Shape Mapping Definitions
 #' @export
 point_shapes <- c(
   Circle = "circle",
@@ -139,7 +66,7 @@ point_shapes <- c(
   Asterisk = "asterisk"
 )
 
-# ColorBrewer / viridis palettes grouped for the color-scale selects.
+#' Color Palette Definitions Grouped by Scale Category
 #' @export
 color_scales <- list(
   Qualitative = c(
@@ -172,16 +99,52 @@ color_scales <- list(
   Diverging = c("Spectral", "RdYlGn", "RdBu", "PuOr", "PRGn", "PiYG", "BrBG")
 )
 
-# Which color_scales categories (Qualitative/Sequential/Gradient/Diverging)
-# make sense for a variable resolved to the given type. Categorical data only
-# suits Qualitative; numeric data suits Sequential and Gradient (both are
-# "ordered, single direction" families) and additionally Diverging only when
-# the values genuinely straddle zero — a real domain-meaningful threshold
-# (centering on the mean/median instead would make almost any numeric column
-# look "diverging" by construction, which would defeat the filter). Shared by
-# every submodule that dynamically restricts a color-scale picker's choices to
-# whatever suits the variable currently driving it (map's map_col_scale, tree's
-# variable-mapping scales), so they all agree on what a variable "is".
+# Inline `style` swatch for one palette's <option>, previewing the actual
+# colours it renders (RColorBrewer's tabulated stops, or a sampled viridis
+# ramp) rather than a value hardcoded separately from the plotting code. Brewer
+# families get hard-edged bands (they're discrete palettes); viridis families
+# blend smoothly (they're continuous ones). Passed through pickerInput's
+# `style` choicesOpt, which bootstrap-select sets as the `style` attribute of
+# the rendered <a class="dropdown-item">) itself — the option row's real,
+# full-width box — rather than on some nested span that would only ever cover
+# its own shrink-wrapped content. The picker's toggle button doesn't inherit
+# an option's style this way, so app/js/viz-scale-swatch.js mirrors it across
+# on selection.
+.scale_swatch_style <- function(name) {
+  gradient <- name %in% color_scales$Gradient
+  cols <- if (gradient) {
+    viridis(20, option = name)
+  } else {
+    brewer.pal(brewer.pal.info[name, "maxcolors"], name)
+  }
+  stops <- if (gradient) {
+    paste(cols, collapse = ", ")
+  } else {
+    n <- length(cols)
+    step <- 100 / n
+    paste(
+      vapply(seq_len(n), function(i) {
+        sprintf("%s %g%%, %s %g%%", cols[i], (i - 1) * step, cols[i], i * step)
+      }, character(1)),
+      collapse = ", "
+    )
+  }
+  sprintf(
+    "background: linear-gradient(to right, %s); color: %s;",
+    stops,
+    if (gradient) "white" else "black"
+  )
+}
+
+#' Determine Suitable Color Scale Categories
+#'
+#' Filters available color scale families based on variable type and value distribution.
+#' Categorical data defaults to Qualitative; continuous data defaults to Sequential/Gradient,
+#' adding Diverging only when values cross zero.
+#'
+#' @param resolved_type Character. Data type classification ("Factor", "Numeric", etc.).
+#' @param vals Vector. Data values for the mapped variable.
+#' @return Character vector of suitable palette category names.
 #' @export
 suitable_scale_categories <- function(resolved_type, vals) {
   if (identical(resolved_type, "Factor")) {
@@ -197,32 +160,23 @@ suitable_scale_categories <- function(resolved_type, vals) {
   }
 }
 
-# shiny$dateInput's text box is freely user-editable — typing something the
-# client's date parser can't make sense of (e.g. "20152-07-17") does not
-# reject the keystrokes; it round-trips to the server as Date(NA), silently
-# emitting an "not in a standard unambiguous format" warning. Any comparison
-# on that NA (e.g. `end < start`) then throws "missing value where TRUE/FALSE
-# needed" out of the `if`, which crashes the whole app rather than just the
-# observer. Every dateInput() value MUST be checked with this before it's
-# compared, arithmetic'd, or stored — show a notification and bail instead.
+#' Validate Input Dates
+#'
+#' Evaluates date inputs to ensure they are single, non-NA Date objects, avoiding
+#' runtime evaluation crashes.
+#'
+#' @param ... Date inputs or vectors to evaluate.
+#' @return Logical scalar; TRUE if any input date is invalid or NA, FALSE otherwise.
 #' @export
 any_invalid_date <- function(...) {
   any(vapply(list(...), function(x) length(x) != 1 || is.na(x), logical(1)))
 }
 
-# --- small UI helpers --------------------------------------------------------
+# --- UI Components -----------------------------------------------------------
 
-# colorPickr is configured update = "changestop" below, which is pickr's
-# "user finished dragging/typing" event — the *only* event both pickr's own
-# swatch repaint and Shiny's own subscribe() (the thing that pushes a new
-# value into input$<id>) are wired to. Programmatic updates
-# (shinyWidgets::updateColorPickr(), i.e. pickr.setColor()) never fire it —
-# setColor() internally emits "save" instead — so a server-side reset changes
-# pickr's internal color but leaves the swatch unpainted *and* input$<id>
-# stale. singleton() below registers a message handler, once no matter how
-# many viz_color() calls render it, that does what a real user interaction
-# would: set the color, then force-emit "changestop" so both the repaint and
-# the input push happen. See reset_viz_colors().
+# Custom JS handler emitting 'changestop' events for pickr color inputs.
+# Programmatic pickr.setColor() calls emit 'save' rather than 'changestop', which
+# leaves Shiny bindings and UI swatch state out of sync without this listener.
 viz_color_reset_script <- singleton(tags$script(HTML(
   "if (!window.__vizColorResetHandlerRegistered) {
     window.__vizColorResetHandlerRegistered = true;
@@ -239,11 +193,24 @@ viz_color_reset_script <- singleton(tags$script(HTML(
   }"
 )))
 
-# A labelled color picker laid out as one row (label left, swatch right).
+#' Labelled Color Picker UI Row
+#'
+#' Renders a single-row color picker widget paired with a label.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Input ID.
+#' @param label Character. Field label display text.
+#' @param value Character. Initial hex color string.
+#' @return Shiny UI tag list.
 #' @export
 viz_color <- function(ns, id, label, value) {
   div(
     class = "viz-color-row",
+    # The row carries an id so a module can grey out a swatch whose element is
+    # switched off. It has to be the *row*: colorPickr puts `id` on a hidden
+    # input and renders the swatch as a sibling, so shinyjs::toggleState() on
+    # the input disables nothing the user can see or click.
+    id = ns(paste0(id, "_row")),
     tags$label(label, class = "viz-color-label"),
     div(
       class = "viz-color-pick",
@@ -261,57 +228,235 @@ viz_color <- function(ns, id, label, value) {
   )
 }
 
-# Grouped color-scale select used by every variable mapping. `categories`
-# statically restricts the offered groups (e.g. a heatmap's intensity scale,
-# which is always non-negative numeric and so never needs Qualitative or
-# Diverging); leave it at the default to offer every group, or update the
-# choices dynamically at runtime for pickers whose suitable groups depend on
-# whichever variable is currently mapped (see suitable_scale_categories()).
+# --- Metadata field pickers ---------------------------------------------------
+
+# Turn a profile frame into virtual-select choices, optionally prefixed with a
+# sentinel entry ("No stratification", "No annotation") that is not a field.
+#
+# Assembled in virtual-select's own nested format rather than through
+# prepare_choices(): that helper puts *every* row in a group, so the sentinel
+# could only travel as a one-entry group of its own, and virtual-select draws a
+# title row for every group it is given. A blank group label therefore rendered
+# as a blank, unselectable row above the sentinel. Here the sentinel is a
+# plain top-level option and only the profile rows carry groups.
+#
+# The structure reaches the widget untouched (an unrecognised `type` is passed
+# through verbatim by the JS binding), so each option has to be a complete
+# object rather than the column-wise form prepare_choices() emits.
+.field_choices <- function(profiles, extra = NULL) {
+  option <- function(label, value, description) {
+    list(label = label, value = value, description = description)
+  }
+  description <- profile_description(profiles)
+  groups <- unique(as.character(profiles$group))
+  choices <- lapply(groups, function(name) {
+    rows <- which(profiles$group == name)
+    list(
+      label = name,
+      options = lapply(rows, function(i) {
+        option(profiles$label[[i]], profiles$field[[i]], description[[i]])
+      })
+    )
+  })
+  if (length(extra)) {
+    sentinels <- lapply(seq_along(extra), function(i) {
+      option(names(extra)[[i]], unname(extra)[[i]], "")
+    })
+    choices <- c(sentinels, choices)
+  }
+  structure(
+    list(choices = choices, type = "formatted"),
+    class = c("list", "vs_choices")
+  )
+}
+
+#' Metadata Field Picker
+#'
+#' A grouped, searchable single-select over the database's own columns, each
+#' option carrying its distinct-value count and declared type as a second line
+#' ("46 values · Text"). Shared by every visualization engine so a variable
+#' describes itself identically wherever it is offered.
+#'
+#' Columns that cannot group the isolates are listed but disabled, with the
+#' reason in their sub-text — hiding them is what left users hunting for a
+#' variable that was simply absent.
+#'
+#' @param ns Function. Module namespace function.
+#' @param id Character. Input ID.
+#' @param label Character. Control label.
+#' @param profiles Data frame from `field_profile$field_profiles()`, or NULL.
+#' @param selected Character. Initially selected value.
+#' @param extra Named character vector of sentinel entries (name = label).
+#' @param placeholder Character. Empty-state text.
+#' @return A `virtualSelectInput`.
 #' @export
-scale_select <- function(ns, id, categories = names(color_scales)) {
-  selectInput(
+field_select <- function(
+  ns,
+  id,
+  label,
+  profiles = NULL,
+  selected = NULL,
+  extra = NULL,
+  placeholder = "Pick a variable ..."
+) {
+  has <- !is.null(profiles) && nrow(profiles) > 0L
+  virtualSelectInput(
     ns(id),
-    "Color scale",
-    choices = color_scales[categories],
+    label,
+    choices = if (has) .field_choices(profiles, extra) else as.list(extra),
+    selected = selected %||% character(0),
+    multiple = FALSE,
+    search = TRUE,
+    searchPlaceholderText = "Search variables ...",
+    placeholder = placeholder,
+    # Not a formal — reaches the widget config through `...`. Turns on the
+    # second line of each option.
+    hasOptionDescription = TRUE,
+    # Defaults to TRUE for a single select, which would silently pick whatever
+    # sorts first the moment the choices land.
+    autoSelectFirstOption = FALSE,
+    optionsCount = 5,
+    dropboxWrapper = "body",
+    showDropboxAsPopup = TRUE,
+    popupDropboxBreakpoint = "10000px",
     width = "100%"
   )
 }
 
-# Export tab, shared by both engines (prefix keeps input ids unique per engine).
+#' Refill a `field_select()` from a profile frame.
+#'
+#' @param session Shiny session object.
+#' @param id Character. Input ID (unnamespaced).
+#' @param profiles Data frame from `field_profile$field_profiles()`.
+#' @param selected Character. Value to select.
+#' @param extra Named character vector of sentinel entries.
 #' @export
-export_panel <- function(ns, prefix, formats) {
-  nav_panel(
-    "Export",
-    icon = icon("download"),
-    div(
-      class = "viz-export",
-      selectInput(ns(paste0(prefix, "_filetype")), "File format", formats),
-      actionButton(
-        ns(paste0(prefix, "_download")),
-        "Save plot",
-        icon = icon("download")
-      ),
-      hr(),
-      actionButton(
-        ns(paste0(prefix, "_report")),
-        "Print report",
-        icon = icon("file-lines")
-      )
+update_field_select <- function(
+  session,
+  id,
+  profiles,
+  selected = NULL,
+  extra = NULL
+) {
+  if (is.null(profiles) || !nrow(profiles)) {
+    return(invisible(NULL))
+  }
+  # Note the argument order: updateVirtualSelect() takes `inputId` first and
+  # `session` last, the opposite of updatePickerInput(). Naming both is what
+  # keeps a copy-paste from the picker version from silently passing the
+  # session in as an id.
+  updateVirtualSelect(
+    inputId = id,
+    session = session,
+    choices = .field_choices(profiles, extra),
+    selected = selected %||% character(0),
+    disabledChoices = profiles$field[!profiles$groupable]
+  )
+}
+
+#' Grouped Palette Selector UI Component
+#'
+#' Renders a dropdown picker for selecting grouped visual color scales, each
+#' option previewing its own colours via an inline gradient swatch.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Input ID.
+#' @param categories Character vector. Palette categories to expose (default: all).
+#' @param selected Character. Palette to preselect (default: none, first choice wins).
+#' @return Shiny UI tag list.
+#' @export
+scale_select <- function(ns, id, categories = names(color_scales), selected = NULL) {
+  palettes <- unlist(color_scales[categories], use.names = FALSE)
+  div(
+    class = "viz-scale-select",
+    pickerInput(
+      ns(id),
+      "Color scale",
+      choices = color_scales[categories],
+      selected = selected,
+      choicesOpt = list(style = vapply(palettes, .scale_swatch_style, character(1))),
+      # Rendered into <body> (see main.scss's "Dropdown overflow" rules) so the
+      # long option list is capped and scrolled against the viewport instead
+      # of expanding whatever small container (often a modal) it opens in.
+      options = list(container = "body"),
+      width = "100%"
     )
   )
 }
 
-# --- reset-settings helpers ---------------------------------------------
+#' Calendar-interval selector for a mapped date variable.
+#'
+#' A collection date is near-unique per isolate, so raw it groups nothing.
+#' This is the control that coarsens it into something a legend, a pie or a
+#' palette can carry. Shown only for date columns; every engine uses this one
+#' control so the option reads the same wherever a date can be mapped.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Input ID.
+#' @param selected Character. Granularity to preselect, or NULL for "none".
+#' @param label Character. Control label.
+#' @param allow_none Logical. Offer the ungrouped option (a continuous scale).
+#' @return Shiny UI tag.
+#' @export
+granularity_select <- function(ns, id, selected = NULL, label = "Group dates by",
+                               allow_none = TRUE) {
+  choices <- as.list(DATE_GRANULARITIES)
+  if (allow_none) {
+    choices <- c(setNames(list(DATE_GRANULARITY_NONE), "Exact date"), choices)
+  }
+  if (is.null(selected)) {
+    selected <- DATE_GRANULARITY_NONE
+  }
+  div(
+    class = "viz-granularity-select",
+    pickerInput(
+      ns(id),
+      label,
+      choices = choices,
+      selected = selected,
+      options = list(container = "body"),
+      width = "100%"
+    )
+  )
+}
 
-# colorPickr (see viz_color() above) ships a custom JS input binding with no
-# ".shiny-input-container" subclass shinyjs::reset() knows how to read — it's
-# silently skipped by a blanket shinyjs::reset(), so every color needs restoring
-# by id here after that call. Goes through the "viz-reset-color" message
-# handler (registered by viz_color()) rather than
-# shinyWidgets::updateColorPickr() directly — see the comment on
-# viz_color_reset_script for why updateColorPickr() alone isn't enough. Call as
-# reset_viz_colors(session, some_id = "#rrggbb", other_id = "#rrggbb", ...),
-# with each default matching the corresponding viz_color() call's `value`.
+#' Row-action button that reports which record it belongs to.
+#'
+#' The record id travels in the *value* rather than in the button's own input id,
+#' so one observer serves every row however many times the list re-renders — an
+#' observeEvent created inside renderUI is re-registered on every render, which
+#' is how a two-click delete happens.
+#'
+#' @param ns Function. Module namespace function.
+#' @param input_id Character. Shared input the click writes to.
+#' @param record_id Character. Value the click writes.
+#' @param icon_name Character. Font Awesome icon name.
+#' @param title Character. Tooltip and accessible label.
+#' @return A `<button>` tag.
+#' @export
+layer_action_btn <- function(ns, input_id, record_id, icon_name, title) {
+  tags$button(
+    type = "button",
+    class = "btn btn-sm tree-layer_btn",
+    title = title,
+    `aria-label` = title,
+    onclick = sprintf(
+      "Shiny.setInputValue('%s', '%s', {priority: 'event'})",
+      ns(input_id),
+      record_id
+    ),
+    icon(icon_name)
+  )
+}
+
+# --- State Reset Helpers -----------------------------------------------------
+
+#' Reset Color Pickers to Default Hex Values
+#'
+#' Emits custom JS messages to reset colorPickr elements and force-emit `changestop`.
+#'
+#' @param session Shiny session object.
+#' @param ... Named hex values where parameter names match input IDs.
 #' @export
 reset_viz_colors <- function(session, ...) {
   defaults <- list(...)
@@ -323,13 +468,12 @@ reset_viz_colors <- function(session, ...) {
   }
 }
 
-# shinyWidgets::radioGroupButtons() *is* picked up by shinyjs::reset() (it
-# shares shiny's "shiny-input-radiogroup" class), but that then calls
-# shiny::updateRadioButtons(), which messages a "value" key — the widget's own
-# JS binding only reacts to "selected", so the call is a silent no-op. Must be
-# restored via shinyWidgets::updateRadioGroupButtons() instead. Call as
-# reset_viz_radio_buttons(session, some_id = "default_choice", ...), with each
-# default matching the corresponding radioGroupButtons() call's `selected`.
+#' Reset Radio Group Buttons to Default Selection
+#'
+#' Restores radioGroupButtons widgets using their native Shiny binding update path.
+#'
+#' @param session Shiny session object.
+#' @param ... Named choice strings where parameter names match input IDs.
 #' @export
 reset_viz_radio_buttons <- function(session, ...) {
   defaults <- list(...)
@@ -338,27 +482,38 @@ reset_viz_radio_buttons <- function(session, ...) {
   }
 }
 
-# --- plot snapshot / restore (dashboard "Save Analysis") --------------------
+# --- Plot Snapshot & Restoration Helpers ------------------------------------
 
-# A plain named list of an engine's control inputs (keyed by namespace-relative
-# id), restricted to ids beginning with `prefix`. This is the reproduction
-# payload the dashboard stores per saved plot; call it reactively so it reads
-# the live control values at save time. Button/trigger inputs sharing the prefix
-# come along harmlessly — restore only touches the ids it is told about.
+#' Collect Module Input Snapshot
+#'
+#' Filters and captures current values of all inputs sharing a specified prefix
+#' for session saving/restoration.
+#'
+#' @param input Shiny input object.
+#' @param prefix Character. Prefix filtering relevant input IDs.
+#' @return Named list of matching input values.
 #' @export
 collect_input_snapshot <- function(input, prefix) {
   vals <- reactiveValuesToList(input)
   vals[startsWith(names(vals), prefix)]
 }
 
-# Restore an engine's controls from a snapshot produced by
-# collect_input_snapshot(). Each widget family needs its own update path (see
-# the reset checklist at the top of this file for why a blanket approach fails);
-# callers pass the ids grouped by family. `colors` is a named vector of ids used
-# only to select which snapshot colors to push — the values come from the
-# snapshot, applied through the same changestop-emitting handler reset uses so
-# both the swatch and input$<id> update. Missing ids in `vals` are skipped, so a
-# snapshot from before a control existed restores everything else cleanly.
+#' Apply Saved Input Snapshot to Restore UI State
+#'
+#' Restores saved input state across multiple Shiny widget types using their
+#' respective specific update procedures.
+#'
+#' @param session Shiny session object.
+#' @param vals Named list. Input values captured by `collect_input_snapshot()`.
+#' @param switches Character vector of switch input IDs.
+#' @param selects Character vector of standard select input IDs.
+#' @param sliders Character vector of slider input IDs.
+#' @param numerics Character vector of numeric input IDs.
+#' @param texts Character vector of text input IDs.
+#' @param colors Character vector of color pickr input IDs.
+#' @param radio_groups Character vector of radio group button input IDs.
+#' @param pretty_radios Character vector of pretty radio button input IDs.
+#' @param pickers Character vector of picker input IDs.
 #' @export
 apply_input_snapshot <- function(
   session,
@@ -384,7 +539,7 @@ apply_input_snapshot <- function(
   }
   for (id in selects) {
     v <- get(id)
-    if (!is.null(v)) updateSelectInput(session, id, selected = v)
+    if (!is.null(v)) updatePickerInput(session, id, selected = v)
   }
   for (id in sliders) {
     v <- get(id)

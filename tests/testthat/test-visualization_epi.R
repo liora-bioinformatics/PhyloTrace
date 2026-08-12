@@ -11,6 +11,7 @@ box::use(
 )
 box::use(
   app / logic / epi_plot,
+  app / logic / field_profile,
   app / view / visualization_epi,
 )
 
@@ -410,6 +411,9 @@ test_that("the stratify picker offers the metadata fields but not the date", {
     ),
     {
       set_default_inputs(session)
+      # virtualSelectInput carries its options as JSON in a data attribute
+      # rather than as <option> tags, so the assertions look for the field
+      # names and the sentinel's value in that payload.
       html <- as.character(output$stratify_ui$html)
 
       expect_true(grepl("organism", html, fixed = TRUE))
@@ -418,7 +422,10 @@ test_that("the stratify picker offers the metadata fields but not the date", {
       expect_false(grepl("sample_collection_date", html, fixed = TRUE))
       # The "No stratification" sentinel is always offered, and is what an
       # empty selection actually means to stratify_selected().
-      expect_true(grepl('value=""', html, fixed = TRUE))
+      expect_true(grepl("No stratification", html, fixed = TRUE))
+      # And each option carries its distinct-value count and declared type.
+      expect_true(grepl("values &middot;", html, fixed = TRUE) ||
+        grepl("values ·", html, fixed = TRUE))
     }
   )
 })
@@ -493,6 +500,43 @@ test_that("the 'square' mode choice folds to the stacked curve with squares on",
       session$setInputs(epi_plot_mode = "cumulative")
       expect_identical(mode_for(), "cumulative")
       expect_false(square_for())
+    }
+  )
+})
+
+test_that("export aspect matches square_ratio() in square mode", {
+  # The exported file has to be a genuine square-cell layout whenever the
+  # on-screen preview is one — using the plain aspect slider instead (the bug
+  # this replaces) drew an exported file whose cells were not squares at all.
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(epi_aspect_ratio = 0.9)
+      generate(1L)
+      session$flushReact()
+
+      session$setInputs(epi_plot_mode = "square")
+      session$flushReact()
+      expect_true(square_for())
+      ratio <- square_ratio()
+      expect_true(!is.null(ratio))
+      expect_identical(export$aspect(), ratio)
+      # Not merely non-NULL — genuinely not the slider's value, or this would
+      # pass by coincidence whenever the two happened to be close.
+      expect_false(isTRUE(all.equal(export$aspect(), 0.9)))
+
+      # Every other mode still uses the plain slider, exactly as before.
+      session$setInputs(epi_plot_mode = "stacked")
+      session$flushReact()
+      expect_identical(export$aspect(), 0.9)
     }
   )
 })
@@ -794,8 +838,6 @@ test_that("plot_area renders the stage with the shared overlay classes", {
       # Ids carry the module's namespace, whatever testServer mocks it as.
       expect_true(grepl(session$ns("epi_plot"), html, fixed = TRUE))
       expect_true(grepl(session$ns("plot_stage"), html, fixed = TRUE))
-      # The export action button clicks this hidden download target.
-      expect_true(grepl(session$ns("download_epi"), html, fixed = TRUE))
       # Keeps .viz-plot-stage so the shared .viz-plot-prompt overlay and the
       # `.viz-plot-stage.is-loading .viz-loading` toggle still reach it, and
       # adds .epi-stage to undo that class's flex centering.
@@ -812,4 +854,149 @@ test_that("ui() mounts the controls and the loading overlay under the id", {
   expect_true(grepl("epi-controls_sidebar", html, fixed = TRUE))
   # The overlay script has to hook the *parent's* Generate button id.
   expect_true(grepl("viz-generate", html, fixed = TRUE))
+})
+
+# --- restore(): saved stratification -----------------------------------------
+# epi_stratify is a field_select() (virtualSelectInput) rendered by renderUI,
+# and restore() used to hand it to apply_input_snapshot()'s `pickers=` bucket.
+# That was wrong twice over: updatePickerInput() sends a message the
+# virtualSelectInput binding never listens for, and even the right update
+# message would not have survived, because restoring a plot writes the tab's
+# selection reactiveVals and so re-renders this control in the same flush,
+# replacing whatever the update had been applied to. Either way a saved
+# stratification silently never came back on reopen.
+#
+# So these assert on what the *rendered control* carries, not on which updater
+# restore() happened to call - the rendered markup is what the browser
+# actually receives, and is the only form of the answer that cannot be
+# clobbered a moment later.
+selected_value <- function(ui) {
+  html <- paste(as.character(ui), collapse = "")
+  hit <- regmatches(html, regexpr('"selectedValue":"[^"]*"', html))
+  if (!length(hit)) {
+    return(NA_character_)
+  }
+  sub('^"selectedValue":"(.*)"$', "\\1", hit)
+}
+
+stratify_meta_fixture <- function() {
+  meta <- meta_fixture()
+  meta$enrollment_date <- c(
+    "2026-01-05",
+    "2026-01-06",
+    "2026-01-20",
+    "2026-01-21",
+    "2026-02-01",
+    "2026-02-02"
+  )
+  meta
+}
+
+stratify_profiles_fixture <- function(meta) {
+  field_profile$field_profiles(
+    meta,
+    types = c(
+      isolate = "text",
+      sample_collection_date = "date",
+      organism = "category",
+      geo_loc_name_country = "category",
+      enrollment_date = "date"
+    )
+  )
+}
+
+test_that("restore() brings a saved stratification back onto the control", {
+  meta <- stratify_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(stratify_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(epi_stratify = "geo_loc_name_country"))
+      session$flushReact()
+
+      expect_identical(
+        selected_value(output$stratify_ui),
+        "geo_loc_name_country"
+      )
+    }
+  )
+})
+
+test_that("restore() ignores a saved field the current database no longer has", {
+  meta <- stratify_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(stratify_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(epi_stratify = "no_such_column"))
+      session$flushReact()
+
+      # The sentinel, not a control left pinned to a column that is not there.
+      expect_identical(selected_value(output$stratify_ui), "")
+    }
+  )
+})
+
+test_that("a restore carrying no stratification leaves the control alone", {
+  meta <- stratify_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(stratify_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(epi_plot_mode = "stacked"))
+      session$flushReact()
+
+      expect_identical(selected_value(output$stratify_ui), "")
+    }
+  )
+})
+
+test_that("restore() applies a saved stratifier's granularity once it exists", {
+  meta <- stratify_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(stratify_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      # epi_stratify_granularity never appeared in restore()'s own
+      # apply_input_snapshot() bucket at all, so it was previously dropped
+      # unconditionally, whatever happened to the field itself.
+      restore(list(
+        epi_stratify = "enrollment_date",
+        epi_stratify_granularity = "month"
+      ))
+      session$flushReact()
+
+      expect_identical(selected_value(output$stratify_ui), "enrollment_date")
+
+      # The granularity control is gated on the *echoed* field: it exists only
+      # once epi_stratify reports back as a date, which is a later flush than
+      # the one restore() runs in.
+      session$setInputs(epi_stratify = "enrollment_date")
+      html <- paste(
+        as.character(output$stratify_granularity_ui),
+        collapse = ""
+      )
+      expect_true(grepl('value="month" selected', html, fixed = TRUE))
+    }
+  )
 })

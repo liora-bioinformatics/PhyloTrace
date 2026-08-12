@@ -28,6 +28,7 @@ box::use(
     showNotification,
     tags,
     tagList,
+    HTML,
     span,
     showModal,
     modalDialog,
@@ -37,6 +38,8 @@ box::use(
     renderUI,
     textInput,
     updateTextInput,
+    h4,
+    p,
   ],
   bslib[
     navset_card_tab,
@@ -44,15 +47,23 @@ box::use(
     nav_insert,
     nav_remove,
     nav_select,
+    card,
+    card_header,
     card_body,
+    layout_columns,
     as_fill_carrier,
   ],
   shinyWidgets[radioGroupButtons],
 )
 box::use(
-  app / logic / database_functions[make_metadata_table, append_classical_mlst],
-  app / logic / db_staging[list_imported_sets],
   app / logic / analysis_store,
+  app / logic / custom_fields[append_custom],
+  app / logic / database_functions[append_amr, append_classical_mlst],
+  app / logic / db_events,
+  app / logic / db_staging[list_imported_sets],
+  app / logic / db_store,
+  app / logic / field_profile[field_profiles],
+  app / logic / field_types[field_types],
   app / view / visualization_plot,
   jsonlite[fromJSON],
 )
@@ -63,31 +74,87 @@ box::use(
 # the first plot tab lands directly after it.
 .NEW_TAB <- "new_plot"
 
+# One plot type's tile, used as a radio button's label. The preview sits in its
+# own layer rather than on the button itself: the caption then keeps a solid
+# background and stays legible without a scrim washing out the image. Preview
+# URLs come from visualization_plot$plot_type_meta and are resolved against the
+# app root by the browser, the same way app/main.R's logos are.
+.type_tile <- function(m) {
+  div(
+    class = "viz-type-tile",
+    div(
+      class = "viz-type-tile-preview",
+      style = sprintf("background-image: url('%s');", m$image)
+    ),
+    div(
+      class = "viz-type-tile-caption",
+      span(class = "viz-type-tile-icon", icon(m$icon)),
+      span(class = "viz-type-tile-name", m$key),
+      span(class = "viz-type-tile-tagline", m$tagline)
+    )
+  )
+}
+
 # The creator form. Emitted exactly once, in the permanent first tab — the
 # whole point of keeping that tab rather than inserting a fresh copy of the
 # form per "Add", which would put duplicate input ids in the page.
 .creator_ui <- function(ns) {
+  meta <- visualization_plot$plot_type_meta
   div(
-    class = "viz-creator p-3",
-    radioGroupButtons(
-      ns("plot_type"),
-      label = "Plot type",
-      choices = visualization_plot$plot_types,
-      selected = "MST",
-      justified = TRUE
+    # html-fill-container/-item: the creator sits in a fillable, height="100%"
+    # card_body (see the caller below), but a plain div doesn't join bslib's
+    # fill system on its own. Tagging it both roles lets it claim the card's
+    # full height *and* hand that height down to its own children — see
+    # viz-type-picker below, and .viz-creator-cols' layout_columns() which
+    # already carries html-fill-item but had no fill-container parent to act on.
+    class = "viz-creator html-fill-container html-fill-item",
+    div(
+      # html-fill-item: without this the picker takes only its natural content
+      # height and every byte of the card's leftover height goes to the
+      # sibling form card instead — see .viz-type-tile-preview's CSS for the
+      # rest of the chain this feeds.
+      class = "viz-type-picker html-fill-item",
+      radioGroupButtons(
+        ns("plot_type"),
+        label = NULL,
+        # choiceNames/choiceValues rather than `choices`: the label of each
+        # button is a whole tile, while the input's value stays the bare plot
+        # type the rest of the module keys on.
+        choiceNames = unname(lapply(meta, .type_tile)),
+        choiceValues = names(meta),
+        selected = "MST",
+        justified = TRUE
+      )
     ),
-    textInput(
-      ns("plot_name"),
-      "Plot name",
-      value = "Plot 1",
-      width = "100%"
-    ),
-    uiOutput(ns("preset_info")),
-    actionButton(
-      ns("initiate"),
-      "Initiate",
-      icon = icon("plus"),
-      class = "btn-primary"
+    layout_columns(
+      class = "viz-creator-cols",
+      col_widths = c(7, 5),
+      uiOutput(ns("type_info")),
+      card(
+        class = "viz-creator-form",
+        card_header(uiOutput(ns("create_header"), inline = TRUE)),
+        card_body(
+          div(
+            # Plot names are display text, not identifiers: opt out of the
+            # global charset filter in app/js/index.js so spaces and
+            # punctuation survive typing.
+            class = "allow-free-text",
+            textInput(
+              ns("plot_name"),
+              "Plot name",
+              value = "Plot 1",
+              width = "100%"
+            )
+          ),
+          uiOutput(ns("preset_info")),
+          actionButton(
+            ns("initiate"),
+            "Initiate plot",
+            icon = icon("plus"),
+            class = "btn-primary btn-lg w-100"
+          )
+        )
+      )
     )
   )
 }
@@ -105,8 +172,12 @@ box::use(
     # engine's control panel is inserted with its tab, long after page load),
     # copy each icon-only tab's text content to its title attribute so the
     # browser shows a native hover tooltip.
+    # HTML() is not optional on any of the inline scripts below. htmltools
+    # escapes a script body like ordinary text, so a bare `&&` reaches the
+    # browser as `&amp;&amp;` and the whole block dies on a SyntaxError —
+    # silently, since a script that fails to parse simply never runs.
     tags$script(
-      "(function(){
+      HTML("(function(){
          if(window.__phylotraceTabLabelerRegistered) return;
          window.__phylotraceTabLabelerRegistered = true;
          function labelTabs(wrap){
@@ -124,50 +195,141 @@ box::use(
            });
          });
          mo.observe(document.body,{childList:true,subtree:true});
-       })();"
+       })();")
     ),
-    # html2canvas powers the Map (Leaflet) thumbnail capture below. Loaded from
-    # a CDN — the app already reaches the network at runtime (Nominatim
-    # geocoding), and if it is unavailable the capture handler falls back to a
-    # placeholder. For a fully offline build, vendor html2canvas.min.js into
-    # app/static/js and point this <script> at it instead.
+    # html2canvas rasterises the Leaflet map, for both its thumbnail and its
+    # image export. Vendored into app/static/js rather than pulled from a CDN:
+    # export has to work on a machine that never reaches the network, and the
+    # bundled copy inside visNetwork is 0.5.0-alpha1, which has no `scale`
+    # option and so cannot render above screen resolution.
+    tags$script(src = "static/js/html2canvas.min.js"),
+    # Widget capture, serving both the dashboard's "Save Analysis" thumbnails
+    # and the sidebar's image export. The engine sends
+    # {selector, mode, inputId, targetPx, scale, format, background}; the
+    # resulting data URI (or "" on any failure — tainted canvas, missing
+    # library, a widget that has not drawn yet) comes back through
+    # Shiny.setInputValue(inputId). Selector and input id are both namespaced
+    # by the sending engine, so one handler serves every plot tab.
+    #
+    # Both raster modes redraw the widget at a multiple of its on-screen size
+    # instead of copying the pixels already on screen, so text and strokes are
+    # rasterised afresh at the higher resolution rather than scaled up:
+    #
+    #   "visnetwork" — vis.js derives its canvas backing store from
+    #     canvas._determinePixelRatio(). Overriding that and re-running
+    #     setSize() makes it redraw the entire network into a larger buffer, so
+    #     a 4x export of a 960px widget is a true 3840px render.
+    #   "html2canvas" — rasterises a DOM subtree at a multiple. Leaflet's
+    #     overlays (markers, labels, legend, choropleth polygons) are DOM/SVG
+    #     and are redrawn crisply; the basemap tiles are 256px rasters and can
+    #     only be upscaled, which is why the Map also offers interactive HTML.
+    #   "canvas" — the original 1:1 read, still used for cheap thumbnails.
+    #
+    # `targetPx` (preferred) names a physical export width in pixels rather
+    # than a bare multiplier: effectiveScale() measures the widget's current
+    # on-screen width and divides, so a target survives being asked for from a
+    # maximized window or a half-width one and produces the same output either
+    # way — a raw `scale` is what the multiplier meant before this existed, and
+    # still works as a fallback for anything that sends one directly.
     tags$script(
-      src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
-    ),
-    # Plot-thumbnail capture for the dashboard "Save Analysis" feature. The
-    # engine sends {selector, mode, inputId}: "canvas" reads a widget's own
-    # <canvas> (MST/visNetwork) via toDataURL; "html2canvas" rasterises a DOM
-    # subtree (the Leaflet map) if the html2canvas library is present. Either
-    # way the PNG data URI (or "" on any failure — tainted canvas, missing lib)
-    # is returned through Shiny.setInputValue(inputId), which the engine's
-    # thumb_data() reactive observes to finish the save with a placeholder.
-    # The selector and the input id are both namespaced by the sending engine,
-    # so one handler serves every plot tab.
-    tags$script(
-      "(function(){
+      HTML("(function(){
          if(window.__phylotraceCaptureRegistered) return;
          window.__phylotraceCaptureRegistered = true;
          function send(id,val){Shiny.setInputValue(id,val,{priority:'event'});}
+
+         function isClear(bg){
+           return !bg || bg==='transparent' ||
+                  /rgba\\(\\s*0\\s*,\\s*0\\s*,\\s*0\\s*,\\s*0\\s*\\)/.test(bg);
+         }
+
+         // A widget canvas holds only what was drawn on it, so the sidebar's
+         // background colour has to be laid down underneath here. JPEG has no
+         // alpha channel and would otherwise come back black.
+         function encode(src,format,bg){
+           var type=(format==='jpeg')?'image/jpeg':'image/png';
+           if(isClear(bg)&&type==='image/png') return src.toDataURL(type);
+           var out=document.createElement('canvas');
+           out.width=src.width; out.height=src.height;
+           var ctx=out.getContext('2d');
+           ctx.fillStyle=isClear(bg)?'#ffffff':bg;
+           ctx.fillRect(0,0,out.width,out.height);
+           ctx.drawImage(src,0,0);
+           var url=out.toDataURL(type,type==='image/jpeg'?0.98:undefined);
+           out.width=out.height=0;
+           return url;
+         }
+
+         function visNet(root){
+           var host=root.classList.contains('visNetwork')?root
+                    :root.querySelector('.visNetwork');
+           var init=host&&host.htmlwidget_data_init_result;
+           return (init&&init.network)?init.network:null;
+         }
+
+         // The multiplier to redraw at, worked out from the widget's actual
+         // current on-screen width rather than trusted blind — a `scale`
+         // meant something different on a maximized window than on a small
+         // one, and `targetPx` is what fixes that. Clamped well past the
+         // 1-6x range this app tests at, as a guard against a corrupted or
+         // absurd request rather than an expected ceiling.
+         function effectiveScale(currentPx, msg){
+           var s = msg.targetPx ? (msg.targetPx / currentPx) : (msg.scale || 1);
+           if (!isFinite(s) || s <= 0) s = 1;
+           return Math.min(Math.max(s, 0.25), 10);
+         }
+
+         function grabVis(root,msg){
+           var net=visNet(root);
+           if(!net||!net.canvas) return null;
+           var cv=net.canvas, orig=cv._determinePixelRatio, url=null;
+           // Falls back to the widget's own clientData default (see
+           // visualization_mst.R's canvas_px()) if the canvas has not laid
+           // out yet — a hidden tab, most likely.
+           var current=(cv.frame&&cv.frame.canvas&&cv.frame.canvas.clientWidth)||960;
+           var scale=effectiveScale(current,msg);
+           try{
+             cv._determinePixelRatio=function(){return scale;};
+             cv.setSize(); net.redraw();
+             url=encode(cv.frame.canvas,msg.format,msg.background);
+           } finally {
+             // Always put the widget back at screen resolution, or the tab is
+             // left holding a buffer several times larger than it needs.
+             cv._determinePixelRatio=orig;
+             cv.setSize(); net.redraw();
+           }
+           return url;
+         }
+
          Shiny.addCustomMessageHandler('phylotrace_capture', function(msg){
+           msg.format=msg.format||'png';
            try{
              var root=document.querySelector(msg.selector);
              if(!root){send(msg.inputId,'');return;}
-             if(msg.mode==='canvas'){
+             if(msg.mode==='visnetwork'){
+               var u=grabVis(root,msg);
+               send(msg.inputId,u||'');
+             } else if(msg.mode==='canvas'){
                var cv=(root.tagName==='CANVAS')?root:root.querySelector('canvas');
                if(!cv){send(msg.inputId,'');return;}
                var url=''; try{url=cv.toDataURL('image/png');}catch(e){url='';}
                send(msg.inputId,url);
              } else if(msg.mode==='html2canvas'){
                if(typeof html2canvas!=='function'){send(msg.inputId,'');return;}
-               html2canvas(root,{useCORS:true,logging:false,backgroundColor:'#ffffff'})
+               var current=root.clientWidth||
+                 (root.getBoundingClientRect&&root.getBoundingClientRect().width)||960;
+               var scale=effectiveScale(current,msg);
+               html2canvas(root,{useCORS:true,logging:false,scale:scale,
+                                 backgroundColor:isClear(msg.background)
+                                   ?'#ffffff':msg.background})
                  .then(function(canvas){
-                   var url=''; try{url=canvas.toDataURL('image/png');}catch(e){url='';}
+                   var url='';
+                   try{url=encode(canvas,msg.format,msg.background);}catch(e){url='';}
                    send(msg.inputId,url);
                  }).catch(function(){send(msg.inputId,'');});
              } else {send(msg.inputId,'');}
            }catch(e){send(msg.inputId,'');}
          });
-       })();"
+       })();")
     )
   )
 }
@@ -201,15 +363,17 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  typing_status = shiny::reactive("idle"),
-  db_updated = shiny::reactiveVal(0L),
   # Dashboard integration: `launch_ctx` fires when "Add Plot" was clicked for an
   # Analysis (carries its id); `open_ctx` fires when a saved plot was clicked to
-  # reopen it (carries its plot id). `plots_changed` is the shared tick both
+  # reopen it (carries its plot id). `db_rev`'s `analyses` revision is what both
   # this module and the dashboard bump/observe to stay in sync.
   launch_ctx = shiny::reactive(NULL),
   open_ctx = shiny::reactive(NULL),
-  plots_changed = shiny::reactiveVal(0L)
+  db_rev = db_events$new_bus(),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -220,14 +384,54 @@ server <- function(
     # plots are open. Local isolates only — a staged peer isolate has no place
     # on a map it was never geocoded for.
     viz_metadata <- reactive({
+      # `custom_fields` and `amr` because append_custom()/append_amr() below
+      # read those tables directly, not through the store. `isolates` and
+      # `metadata` need no explicit dependency here: reading store$metadata()
+      # reactively (below) already carries that dependency transitively - the
+      # store invalidates on those two domains, and anything that reads it
+      # reactively invalidates right along with it.
+      db_events$depend(db_rev, "custom_fields", "amr")
       req(db_path())
-      # Surface the classical-MLST columns (ST + per-locus alleles) as ordinary
-      # metadata so every engine can label, colour and map by them. Display
-      # only — append_classical_mlst never writes them back to the database.
-      append_classical_mlst(make_metadata_table(db_path()), db_path())
+      # Surface the classical-MLST columns (ST + per-locus alleles), the
+      # AMR-screening columns (the resistance profile plus one per drug class)
+      # and the user-defined custom variables as ordinary metadata so every
+      # engine can label, colour and map by them. Display only — no appender
+      # writes anything back to the database. Each records what it added in its
+      # own attribute ("mlst_cols" / "amr_cols" / "custom_cols"), which
+      # grouped_field_choices() turns into the optgroups the engines' field
+      # pickers show; engines that pass no explicit sets get the same grouping
+      # from the columns' name prefixes.
+      append_custom(
+        append_amr(
+          append_classical_mlst(store$metadata(), db_path()),
+          db_path()
+        ),
+        db_path()
+      )
+    })
+
+    # What each of those columns *is* — its declared type, its distinct-value
+    # count, its coverage and which group it belongs to — as one frame every
+    # engine reads instead of working half of it out again.
+    #
+    # Computed here for the same reason viz_metadata is: field_types() reads the
+    # custom-variable table, so doing this per engine would multiply one small
+    # query by the number of open plots on every invalidation. The counts come
+    # off the full metadata table, not a tab's isolate selection, so a variable
+    # describes itself the same way in every tab.
+    viz_field_profiles <- reactive({
+      meta <- viz_metadata()
+      field_profiles(
+        meta,
+        types = field_types(db_path(), names(meta)),
+        mlst_cols = attr(meta, "mlst_cols"),
+        amr_cols = attr(meta, "amr_cols"),
+        custom_cols = attr(meta, "custom_cols")
+      )
     })
 
     staged_sets <- reactive({
+      db_events$depend(db_rev, "staged")
       req(db_path())
       list_imported_sets(db_path())
     })
@@ -238,7 +442,7 @@ server <- function(
     # saved plots (value "plot:<id>"). One read here feeds every tab's picker.
     NONE_TARGET <- "none"
     picker_choices <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       path <- db_path()
       none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       req(path)
@@ -282,6 +486,7 @@ server <- function(
         Tree = "sitemap",
         Map = "earth-europe",
         Epi = "chart-column",
+        AMR = "shield-virus",
         NULL
       )
       if (is.null(nm)) NULL else span(class = "viz-tab-type-icon", icon(nm))
@@ -351,9 +556,10 @@ server <- function(
         db_path = db_path,
         session_reset = session_reset,
         viz_metadata = viz_metadata,
+        viz_field_profiles = viz_field_profiles,
         staged_sets = staged_sets,
         picker_choices = picker_choices,
-        plots_changed = plots_changed,
+        db_rev = db_rev,
         is_active = reactive(identical(input$plot_set, tid)),
         alive = alive,
         preset = preset
@@ -423,6 +629,58 @@ server <- function(
     }
 
     # ---------------------------------------------------- creator form -----
+    # "Create <Plot Type>" — keeps the form header in sync with the picker
+    # without the header needing its own copy of the type-name lookup.
+    output$create_header <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      sprintf("Create %s", m$title)
+    })
+
+    # What the currently picked plot type draws, and what it needs to draw it.
+    # Copy and preview images come from the engine registry
+    # (visualization_plot$plot_type_meta), so this reacts to the picker without
+    # knowing anything about the engines itself.
+    output$type_info <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      # The two distance engines are the ones that can fold staged peer
+      # isolates in and that consume the missing-value handling; the other
+      # three read metadata straight off the local database.
+      badges <- if (isTRUE(m$distance)) {
+        list(
+          c("diagram-project", "Pairwise allelic distances"),
+          c("layer-group", "Staged peer isolates can be included")
+        )
+      } else {
+        list(
+          c("database", "Reads isolate metadata directly"),
+          c("house", "Local isolates only")
+        )
+      }
+
+      card(
+        class = "viz-type-info",
+        card_header(
+          span(class = "viz-type-info-icon", icon(m$icon)),
+          span(class = "viz-type-info-title", m$title)
+        ),
+        card_body(
+          p(class = "viz-type-info-about", m$about),
+          div(
+            class = "viz-type-badges",
+            lapply(badges, function(b) {
+              span(class = "viz-type-badge", icon(b[[1]]), span(b[[2]]))
+            })
+          ),
+          tags$ul(
+            class = "viz-type-tech",
+            lapply(m$technical, function(t) tags$li(t))
+          )
+        )
+      )
+    })
+
     # What the next created tab will be bound to, when the dashboard sent the
     # user here from an Analysis.
     output$preset_info <- renderUI({
@@ -470,29 +728,32 @@ server <- function(
       }
 
       closing_tab(tid)
-      showModal(modalDialog(
-        title = "Unsaved plot",
-        sprintf(
-          paste(
-            "'%s' has been generated but not saved to an Analysis.",
-            "Closing it discards the plot."
+      showModal(div(
+        class = "unsaved-plot-modal",
+        modalDialog(
+          title = "Unsaved plot",
+          sprintf(
+            paste(
+              "'%s' has been generated but not saved to an Analysis.",
+              "Closing it discards the plot."
+            ),
+            entry$handle$name()
           ),
-          entry$handle$name()
-        ),
-        footer = tagList(
-          modalButton("Cancel"),
-          actionButton(
-            ns("close_discard"),
-            "Close anyway",
-            class = "btn-danger"
+          footer = tagList(
+            modalButton("Cancel"),
+            actionButton(
+              ns("close_discard"),
+              "Close anyway",
+              class = "btn-danger"
+            ),
+            actionButton(
+              ns("close_save"),
+              "Save and close",
+              class = "btn-primary"
+            )
           ),
-          actionButton(
-            ns("close_save"),
-            "Save and close",
-            class = "btn-primary"
-          )
-        ),
-        easyClose = FALSE
+          easyClose = TRUE
+        )
       ))
     })
 
@@ -624,6 +885,15 @@ server <- function(
     # there is no nav to remove from — but the tab servers are still resident
     # here and have to be taken down explicitly. `tab_seq` deliberately keeps
     # counting, so ids from the old session are never handed out again.
+    #
+    # `remove_ui = FALSE` makes this a contract, not a preference: whatever is
+    # wired to `session_reset` MUST already have removed this module's panel.
+    # Raise it without doing so and every tab becomes a destroyed server behind
+    # nav markup that is still on screen — visibly a plot tab, but blank and
+    # inert, with even its close button dead. app/main.R's `data_reset` is the
+    # signal that looks right and is not: "Reload Database" raises it and leaves
+    # the panels standing. A reload needs no teardown here at all; the plots
+    # belong to the same database, and db_rev refreshes what they read.
     observeEvent(
       session_reset(),
       {

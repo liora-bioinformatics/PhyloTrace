@@ -3,7 +3,8 @@
 # `analysis_id` and offers "Add Plot" (which hands off to Visualization).
 #
 # Data-driven like the item tier: the plot list comes from the database and is
-# refreshed on the shared `plots_changed` tick. A plot's item server is created
+# refreshed when the `analyses` revision advances (app/logic/db_events.R).
+# A plot's item server is created
 # exactly once (tracked in `instantiated`); deleted plots simply stop rendering.
 # Servers persist across database reloads and re-read `db_path()` reactively, so
 # reusing a container id for a different database is safe.
@@ -40,6 +41,8 @@ box::use(
   ],
   app / view / analysis_dashboard / item,
   app / logic / analysis_store,
+  app / logic / db_events,
+  app / logic / db_store,
   jsonlite[fromJSON],
 )
 
@@ -64,7 +67,8 @@ server <- function(
   id,
   analysis_id,
   db_path = shiny::reactive(NULL),
-  plots_changed = shiny::reactiveVal(0L),
+  db_rev = db_events$new_bus(),
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev),
   on_add_plot = function(analysis_id) NULL,
   on_open_plot = function(plot_id) NULL,
   on_edit_settings = function(analysis_id) NULL,
@@ -75,12 +79,12 @@ server <- function(
 
     # This Analysis's row (for its name) and its plots, refreshed on any change.
     analysis_row <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$get_analysis(db_path(), analysis_id)
     })
 
     plots <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$list_plots(db_path(), analysis_id)
     })
 
@@ -89,21 +93,32 @@ server <- function(
     # once here and handed to each plot card, so a card can tell whether it was
     # built from a different set (changed restriction, or isolates added to the
     # database since) without each one re-querying.
+    # `analyses` for the restriction (which lives on the Analysis row);
+    # store$isolates() supplies the fallback and carries its own dependency on
+    # the `isolates` domain. Reading the pool through the store rather than
+    # querying `mlst` here is what keeps this in step with the rest of the app:
+    # the direct query this used to make declared `analyses` only, so a typing
+    # run - which bumps `isolates`, never `analyses` - left it holding the
+    # pre-run pool.
     current_isolates <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       row <- analysis_row()
       restriction <- if (is.null(row)) {
         NULL
       } else {
         .parse_selection(row$isolate_selection)
       }
-      restriction %||% analysis_store$list_isolates(db_path())
+      restriction %||% store$isolates()
     })
 
     # Isolates added to (or removed from) the database since this Analysis was
     # set up. Only meaningful once a universe was recorded.
+    #
+    # Same dependency correction as above, and it matters more here: reporting
+    # drift is this reactive's entire purpose, so missing the one signal that
+    # says the isolate pool moved made it silently useless after a typing run.
     universe_drift <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       row <- analysis_row()
       recorded <- if (is.null(row)) {
         NULL
@@ -113,7 +128,7 @@ server <- function(
       if (is.null(recorded)) {
         return(NULL)
       }
-      now <- analysis_store$list_isolates(db_path())
+      now <- store$isolates()
       added <- setdiff(now, recorded)
       removed <- setdiff(recorded, now)
       if (!length(added) && !length(removed)) {
@@ -135,7 +150,7 @@ server <- function(
               id = paste0("box_", this_pid),
               plot_id = this_pid,
               db_path = db_path,
-              plots_changed = plots_changed,
+              db_rev = db_rev,
               on_open = on_open_plot,
               analysis_isolates = current_isolates,
               session_reset = session_reset
@@ -183,7 +198,7 @@ server <- function(
     observeEvent(input$confirm_delete_group, {
       removeModal()
       analysis_store$delete_analysis(db_path(), analysis_id)
-      plots_changed(plots_changed() + 1L)
+      db_events$bump(db_rev, "analyses")
     })
 
     output$group_card_layout <- renderUI({

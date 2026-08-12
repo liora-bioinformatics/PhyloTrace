@@ -1,0 +1,98 @@
+# AMR Screening {#sec-tech-amr}
+
+AMR screening is step 3 of the typing run (@sec-tech-typing-order). This chapter
+documents `app/logic/amr.R`: how the screen is invoked, the two tables it writes,
+and the provenance it records. The visualization of the results is
+@sec-tech-engines-amr.
+
+## The toolchain {#sec-tech-amr-toolchain}
+
+Each freshly typed assembly is screened with **abritamr**
+[@sherry2023abritamr], a curation wrapper around NCBI **AMRFinderPlus**
+[@feldgarden2021amrfinderplus], installed in the same Conda environment
+(@sec-arch-conda). The screen always runs with `--plus`:
+
+```{.r filename="app/logic/amr.R"}
+# AMRFinderPlus always runs with `--plus`, so it reports acquired AMR genes,
+# virulence factors and stress/metal/biocide elements. Passing `--organism`
+# (via abritamr's `--species`) additionally calls resistance point mutations,
+# but only for a fixed set of supported species. When the loaded scheme's
+# species is not supported we fall back to running without it: everything except
+# point mutations is still detected.
+```
+
+::: {.callout-important title="Point mutations need the organism — and not every species is supported"}
+`amr_species()` maps the loaded scheme's species to a supported AMRFinderPlus
+organism where one exists, and screening falls back to organism-agnostic mode
+otherwise. Acquired genes, virulence and stress are therefore *always* detected;
+point mutations only when the species is supported. Do not make `--organism`
+mandatory: an unsupported value makes AMRFinderPlus fail outright rather than
+degrade.
+:::
+
+The screen runs under a `timeout -k 30 1200` guard in `loop-pymlst.sh` and its
+failure is non-fatal — a failed AMR screen leaves the cgMLST call intact and is
+recorded as such in provenance.
+
+## What gets written {#sec-tech-amr-tables}
+
+Both output tables are created lazily on first write and keyed on `isolate` (the
+same key as `metadata`; pyMLST's `mlst` spells it `souche`, @sec-db-key). The
+parsing and storage are `parse_amrfinder_out()`, `parse_abritamr_summary()` and
+`store_amr_results()`.
+
+**`amr_results`** — the granular source of truth, one row per detected element:
+
+```{.r filename="app/logic/amr.R"}
+"CREATE TABLE IF NOT EXISTS amr_results (
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+   isolate TEXT, gene_symbol TEXT, sequence_name TEXT,
+   element_type TEXT, element_subtype TEXT, class TEXT, subclass TEXT,
+   method TEXT, pct_coverage REAL, pct_identity REAL,
+   contig TEXT, start INTEGER, stop INTEGER, strand TEXT,
+   ref_accession TEXT, ref_name TEXT, organism TEXT, point_mutations INTEGER,
+   ... )"
+```
+
+**`amr_summary`** — abritamr's curated per-isolate roll-up, stored tidy/long so
+it pivots trivially to the classic matrix without dynamic columns:
+
+```{.r filename="app/logic/amr.R"}
+"CREATE TABLE IF NOT EXISTS amr_summary (
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+   isolate TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT )"
+```
+
+The `section` distinguishes confident **matches** from **partials** and from
+**virulence** — a distinction the heatmap preserves so a partial call is never
+shown as a confident one (@sec-tech-engines-amr). A re-screen of an isolate
+replaces its rows transactionally (delete-by-isolate then insert), so re-typing
+never duplicates AMR calls.
+
+```{mermaid}
+%%| label: fig-tech-amr
+%%| fig-cap: "AMR screening writes a granular table and a curated roll-up, both keyed on isolate; the tool and database versions go to typing_provenance."
+flowchart LR
+  A["assembly<br/>(typing step 3)"] --> B["abritamr → AMRFinderPlus --plus<br/>(conda run, ± --organism)"]
+  B --> P["parse_amrfinder_out()<br/>parse_abritamr_summary()"]
+  P --> R[("amr_results<br/>one row per element")]
+  P --> S[("amr_summary<br/>drug-class roll-up")]
+  B --> V["parse_amr_meta()<br/>→ typing_provenance"]
+```
+
+## Provenance {#sec-tech-amr-provenance}
+
+The AMR run's outcome and versions are recorded on the isolate's
+`typing_provenance` row (@sec-tech-typing-provenance): `amr_status`,
+`amr_organism`, `amr_point_mutations`, `amr_elements`, and the `abritamr` /
+AMRFinderPlus / AMRFinder-DB versions — parsed by `parse_amr_meta()`.
+
+## Chapter summary
+
+- The screen runs abritamr → AMRFinderPlus `--plus` in the Conda env as step 3 of
+  the typing loop; failure is non-fatal.
+- `--organism` is passed only for species AMRFinderPlus supports
+  (`amr_species()`); otherwise the run degrades to organism-agnostic mode.
+- `amr_results` is granular, `amr_summary` is the curated long roll-up; both are
+  replaced per isolate on re-screen.
+- Tool and database versions land in `typing_provenance`.

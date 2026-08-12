@@ -1,0 +1,108 @@
+# =============================================================================
+# PhyloTrace — Technical Manual (Quarto book)
+#
+# The developer-facing companion to the user manual in docs/manual/. Everything
+# about how PhyloTrace is built — module scaffold, reactive plumbing, database
+# schema, implementation notes per component, operations and extension — lives
+# here, so the user manual can stay about using the app.
+#
+#   quarto render        # HTML site (+ PDF) into docs/technical/_book/
+#   quarto preview       # live-reload while editing
+# =============================================================================
+
+project:
+  type: book
+  output-dir: _book
+
+book:
+  title: "PhyloTrace"
+  subtitle: "Technical Manual"
+  description: >
+    The engineering reference for PhyloTrace: how the application is assembled,
+    how its modules communicate, what the database file contains, and how each
+    component is implemented, tested and extended.
+  author: "Liora Bioinformatics"
+  date: today
+  search: true
+  page-navigation: true
+  favicon: images/pt-small-icon.png
+  sidebar:
+    style: docked
+    collapse-level: 1
+    pinned: true
+    logo: images/phylotrace-logo.png
+  chapters:
+    - index.qmd
+
+    - part: "I · The Scaffold"
+      chapters:
+        - architecture.qmd
+        - database.qmd
+
+    - part: "II · Component Internals"
+      chapters:
+        - schemes.qmd
+        - typing.qmd
+        - amr.qmd
+        - browser.qmd
+        - interop.qmd
+
+    - part: "III · Visualization Internals"
+      chapters:
+        - visualization.qmd
+        - engines.qmd
+        - dashboard.qmd
+
+    - part: "IV · Operations & Extension"
+      chapters:
+        - reporting.qmd
+        - install.qmd
+        - testing.qmd
+        - extending.qmd
+
+    - references.qmd
+
+  appendices:
+    - appendix-modules.qmd
+    - appendix-schema.qmd
+    - appendix-tools.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    theme:
+      - cosmo
+      - theme.scss
+    include-after-body: sidebar-footer.html
+    toc: true
+    toc-depth: 3
+    toc-title: "On this page"
+    number-sections: true
+    number-depth: 3
+    code-copy: true
+    code-overflow: wrap
+    fig-responsive: true
+    link-external-icon: true
+    link-external-newwindow: true
+    citations-hover: true
+    # crossrefs-hover is off: its popover fetches the target page's raw
+    # pre-JS HTML, so a @fig-* pointing at a Mermaid diagram previews as
+    # unrendered flowchart source rather than the diagram. The link still
+    # navigates correctly; only the hover preview is affected.
+    crossrefs-hover: false
+    grid:
+      sidebar-width: 340px
+      body-width: 1150px
+      margin-width: 300px
+      gutter-width: 1.5rem
+
+  pdf:
+    documentclass: scrreprt
+    papersize: a4
+    toc: true
+    number-sections: true
+    colorlinks: true
+    fig-pos: "H"
+    geometry:
+      - margin=1in

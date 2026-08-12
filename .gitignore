@@ -2,6 +2,7 @@
 .claude/
 .claude.json
 CLAUDE.local.md
+CLAUDE.md
 
 # --- R ---
 .Rproj.user/
@@ -25,3 +26,7 @@ Thumbs.db
 
 # --- Logs ---
 *.log
+
+# --- Other ---
+tests/testthat/Rplots.pdf
+Rplots.pdf

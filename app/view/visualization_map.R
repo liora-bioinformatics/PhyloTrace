@@ -80,6 +80,9 @@ box::use(
   app /
     logic /
     viz_helpers[
+      field_select,
+      granularity_select,
+      update_field_select,
       scale_select,
       color_scales,
       suitable_scale_categories,
@@ -89,9 +92,13 @@ box::use(
       collect_input_snapshot,
       apply_input_snapshot,
     ],
+  app / logic / date_bins[bin_date_values, is_binned],
+  app / logic / db_events,
   app / logic / functions[render_info],
+  app / logic / mapping_engine[is_date_profile],
   app / logic / paths[app_local_share_path],
   app / logic / field_labels[field_label],
+  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
@@ -201,6 +208,43 @@ build_place_strings <- function(meta) {
     },
     character(1)
   )
+}
+
+# Parse the free-text `geo_loc_coordinates` field into numeric lat/long. Accepts
+# "latitude, longitude" in decimal degrees (comma-, semicolon- or
+# whitespace-separated); anything that isn't exactly two in-range numbers
+# (|lat| <= 90, |lon| <= 180) yields NA, so a blank or malformed entry simply
+# falls back to geocoding the place string. Vectorised: returns a data.frame
+# with `latitude` and `longitude`, one row per input.
+parse_coordinates <- function(x) {
+  n <- length(x)
+  out <- data.frame(
+    latitude = rep(NA_real_, n),
+    longitude = rep(NA_real_, n),
+    stringsAsFactors = FALSE
+  )
+  if (!n) {
+    return(out)
+  }
+  raw <- trimws(as.character(x))
+  for (i in seq_len(n)) {
+    s <- raw[i]
+    if (is.na(s) || !nzchar(s)) {
+      next
+    }
+    parts <- suppressWarnings(as.numeric(trimws(strsplit(s, "[,;[:space:]]+")[[
+      1
+    ]])))
+    parts <- parts[!is.na(parts)]
+    if (length(parts) != 2L) {
+      next
+    }
+    if (abs(parts[1]) <= 90 && abs(parts[2]) <= 180) {
+      out$latitude[i] <- parts[1]
+      out$longitude[i] <- parts[2]
+    }
+  }
+  out
 }
 
 # --- persistent geocode cache -----------------------------------------------
@@ -334,7 +378,17 @@ geocode_pending_count <- function(meta, cache_path = geocode_cache_path()) {
   if (is.null(meta) || !nrow(meta)) {
     return(0L)
   }
-  places <- unique(build_place_strings(meta))
+  # Rows with explicit coordinates never reach Nominatim (see build_map_coords),
+  # so they don't count towards the wait.
+  explicit <- parse_coordinates(
+    if ("geo_loc_coordinates" %in% names(meta)) {
+      meta$geo_loc_coordinates
+    } else {
+      rep(NA_character_, nrow(meta))
+    }
+  )
+  has_explicit <- !is.na(explicit$latitude) & !is.na(explicit$longitude)
+  places <- unique(build_place_strings(meta)[!has_explicit])
   places <- places[nzchar(places)]
   cache <- read_geocode_cache(cache_path)
   length(setdiff(places, cache$place))
@@ -404,22 +458,45 @@ build_map_coords <- function(meta) {
     return(list(coords = NULL, status = empty_geocode_status()))
   }
 
-  place <- build_place_strings(meta)
-
   df <- meta
-  df$place <- place
-  df <- df[nzchar(df$place), , drop = FALSE]
+  df$place <- build_place_strings(meta)
+
+  # Explicit per-isolate coordinates (geo_loc_coordinates) win over geocoding:
+  # they are already point-precise, so those rows are used as-is and never sent
+  # to Nominatim.
+  explicit <- parse_coordinates(
+    if ("geo_loc_coordinates" %in% names(df)) {
+      df$geo_loc_coordinates
+    } else {
+      rep(NA_character_, nrow(df))
+    }
+  )
+  df$latitude <- explicit$latitude
+  df$longitude <- explicit$longitude
+
+  # Mappable = has explicit coordinates, or has a place string to geocode.
+  has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
+  df <- df[has_explicit | nzchar(df$place), , drop = FALSE]
   if (!nrow(df)) {
     return(list(coords = NULL, status = empty_geocode_status()))
   }
+  has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
 
-  geo <- geocode_places_cached(df$place)
+  # Geocode only the rows lacking explicit coordinates (and carrying a place).
+  geo <- geocode_places_cached(df$place[!has_explicit & nzchar(df$place)])
   located <- geo$located
   failed_places <- located$place[
     is.na(located$latitude) | is.na(located$longitude)
   ]
 
-  out <- merge(df, located, by = "place", all.x = TRUE)
+  if (nrow(located)) {
+    hit <- match(df$place, located$place)
+    fill <- !has_explicit & !is.na(hit)
+    df$latitude[fill] <- located$latitude[hit[fill]]
+    df$longitude[fill] <- located$longitude[hit[fill]]
+  }
+
+  out <- df
   n_isolates <- nrow(out)
   out <- out[!is.na(out$longitude) & !is.na(out$latitude), , drop = FALSE]
   status <- list(
@@ -559,6 +636,17 @@ make_palette <- function(scale_type, palette, vals, reverse, na_color, bins) {
 
 # Styled point markers. layerId = isolate keeps each marker individually
 # addressable (e.g. for a future click-driven cross-filter).
+# A date variable coarsened to the interval the user picked. Applied inside the
+# two builders that read a mapped variable rather than upstream, so it happens
+# exactly once however the builder was reached — binning an already-binned
+# column would parse "2026-01" as a date and yield all-NA.
+granular_vals <- function(vals, granularity) {
+  if (!is_binned(granularity)) {
+    return(vals)
+  }
+  as.character(bin_date_values(vals, granularity))
+}
+
 build_markers <- function(m, coords, o, full_coords = NULL) {
   cluster_opts <- if (o$cluster) {
     markerClusterOptions(
@@ -598,7 +686,10 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     fixed <- isTRUE(o$region_fixed_scale) &&
       !is.null(full_coords) &&
       o$col_var %in% names(full_coords)
-    ref_vals <- if (fixed) full_coords[[o$col_var]] else coords[[o$col_var]]
+    ref_vals <- granular_vals(
+      if (fixed) full_coords[[o$col_var]] else coords[[o$col_var]],
+      o$col_granularity
+    )
     pal_info <- make_palette(
       o$scale_type,
       o$col_scale,
@@ -609,7 +700,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     )
     # Mirror make_palette()'s own numeric coercion so the fill maps the visible
     # values through the same space the palette domain was built in.
-    apply_vals <- coords[[o$col_var]]
+    apply_vals <- granular_vals(coords[[o$col_var]], o$col_granularity)
     if (pal_info$type %in% c("Numeric", "Bin", "Quantile")) {
       apply_vals <- suppressWarnings(as.numeric(apply_vals))
     }
@@ -875,7 +966,10 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   fixed <- isTRUE(o$region_fixed_scale) &&
     !is.null(full_coords) &&
     var %in% names(full_coords)
-  ref_vals <- if (fixed) full_coords[[var]] else coords[[var]]
+  ref_vals <- granular_vals(
+    if (fixed) full_coords[[var]] else coords[[var]],
+    o$chart_granularity
+  )
   ref_freq <- sort(table(ref_vals), decreasing = TRUE)
   folded <- length(ref_freq) > max_categories
   top <- if (folded) {
@@ -886,7 +980,7 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # Master column/legend order; "Other" (the fold bucket) always last.
   cats <- if (folded) c(top, "Other") else top
 
-  vals <- coords[[var]]
+  vals <- granular_vals(coords[[var]], o$chart_granularity)
   if (folded) {
     vals <- ifelse(vals %in% top, vals, "Other")
   }
@@ -1181,7 +1275,7 @@ map_controls <- function(ns) {
         icon = shiny$icon("layer-group"),
         shiny$div(
           id = ns("wrap_map_tiles"),
-          shiny$selectInput(
+          pickerInput(
             ns("map_tiles"),
             "Base map",
             choices = map_providers,
@@ -1366,7 +1460,8 @@ map_controls <- function(ns) {
             "Variable Mapping",
             icon = shiny$icon("layer-group"),
             input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            shiny$selectInput(ns("map_col_var"), "Variable", choices = NULL)
+            field_select(ns, "map_col_var", "Variable"),
+            shiny$uiOutput(ns("col_granularity_ui"))
           ),
           accordion_panel(
             "Scale",
@@ -1410,7 +1505,7 @@ map_controls <- function(ns) {
         value = "legend",
         icon = shiny$icon("list"),
         input_switch(ns("map_legend"), "Show legend", TRUE),
-        shiny$selectInput(
+        pickerInput(
           ns("map_legend_pos"),
           "Position",
           choices = c(
@@ -1474,7 +1569,8 @@ map_controls <- function(ns) {
           options = pickerOptions(
             actionsBox = TRUE,
             liveSearch = TRUE,
-            selectedTextFormat = "count > 3"
+            selectedTextFormat = "count > 3",
+            container = "body"
           )
         ),
         pickerInput(
@@ -1485,7 +1581,8 @@ map_controls <- function(ns) {
           options = pickerOptions(
             actionsBox = TRUE,
             liveSearch = TRUE,
-            selectedTextFormat = "count > 3"
+            selectedTextFormat = "count > 3",
+            container = "body"
           )
         ),
         input_switch(ns("map_permanent"), "Always show labels", FALSE),
@@ -1685,12 +1782,13 @@ map_controls <- function(ns) {
         "Charts",
         value = "charts",
         icon = shiny$icon("chart-pie"),
-        shiny$selectInput(
+        pickerInput(
           ns("map_chart_type"),
           "Chart type",
           choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
         ),
-        shiny$selectInput(ns("map_chart_var"), "Variable", choices = NULL),
+        field_select(ns, "map_chart_var", "Variable"),
+        shiny$uiOutput(ns("chart_granularity_ui")),
         # Each chart shows the composition of a categorical variable (see
         # build_charts()'s max_categories folding below), so — like
         # map_heat_scale above — this is a static restriction rather than a
@@ -1739,30 +1837,11 @@ map_controls <- function(ns) {
             step = 10
           )
         )
-      ),
-      # Export -------------------------------------------------------------------
-      nav_panel(
-        "Export",
-        value = "export",
-        icon = shiny$icon("download"),
-        shiny$div(
-          class = "viz-export",
-          shiny$selectInput(
-            ns("map_filetype"),
-            "File format",
-            choices = c("HTML (interactive)" = "html")
-          ),
-          shiny$downloadButton(
-            ns("map_html"),
-            "Save map",
-            icon = shiny$icon("download")
-          )
-        )
       )
     ),
     shiny$div(
       class = "map-mode-dropup",
-      shiny$selectInput(
+      pickerInput(
         ns("map_mode"),
         "Map mode",
         choices = c("Markers", "Choropleth", "Heatmap", "Charts")
@@ -1881,7 +1960,9 @@ map_controls <- function(ns) {
 }
 
 #' @export
-ui <- function(id, generate_id) {
+# `options_ui` is accepted for one signature across all engines; this one has no
+# distance-computation controls, so the tab never passes any.
+ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -1991,8 +2072,14 @@ ui <- function(id, generate_id) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   # Accepted for a uniform `shared` bundle from the coordinator; the Map subsets
   # straight from the filtered viz_metadata(), so it needs no separate handling.
   selected_isolates = shiny$reactive(NULL),
@@ -2391,6 +2478,7 @@ server <- function(
           weight = input$map_weight %||% 0,
           color_var = isTRUE(input$map_color_var),
           col_var = input$map_col_var,
+          col_granularity = input$map_col_granularity,
           col_scale = input$map_col_scale %||% "viridis",
           scale_type = input$map_scale_type %||% "Auto",
           bins = input$map_bins %||% 5,
@@ -2427,6 +2515,7 @@ server <- function(
           heat_scale = input$map_heat_scale %||% "viridis",
           chart_type = input$map_chart_type %||% "pie",
           chart_var = input$map_chart_var,
+          chart_granularity = input$map_chart_granularity,
           chart_scale = input$map_chart_scale %||% "Set1",
           chart_size = input$map_chart_size %||% 40,
           chart_opacity = input$map_chart_opacity %||% 1,
@@ -2485,8 +2574,8 @@ server <- function(
           # neutral #ddd backing off, so it keeps working for every plot tab's
           # own map instance. See the .viz-map-canvas rule for why it exists.
           shiny$tagAppendAttributes(
-            leafletOutput(ns("map"), height = "100%"),
-            class = "viz-map-canvas"
+            leafletOutput(ns("map"), height = "100%")
+            # class = "viz-map-canvas"
           )
         )
       )
@@ -2612,7 +2701,7 @@ server <- function(
         mode <- input$map_mode %||% "Markers"
         default_tile <- mode_tile_defaults[[mode]]
         if (!is.null(default_tile)) {
-          shiny$updateSelectInput(session, "map_tiles", selected = default_tile)
+          updatePickerInput(session, "map_tiles", selected = default_tile)
         }
       },
       ignoreInit = TRUE
@@ -2670,7 +2759,7 @@ server <- function(
         } else {
           color_scales[[cats[1]]][1]
         }
-        shiny$updateSelectInput(
+        updatePickerInput(
           session,
           "map_col_scale",
           choices = color_scales[cats],
@@ -2679,6 +2768,42 @@ server <- function(
       },
       ignoreInit = TRUE
     )
+
+    # Profile of whichever column a variable picker currently holds.
+    picked_profile <- function(field) {
+      if (is.null(field) || !nzchar(field)) {
+        return(NULL)
+      }
+      meta <- viz_metadata()
+      profile_for(field_profiles() %||% field_profiles_of(meta), field)
+    }
+
+    # Only a date can be grouped by a calendar interval. Without it a
+    # collection date is one colour per isolate on the markers, and on the
+    # charts it is the near-unique field the top-N fold was written to survive.
+    output$col_granularity_ui <- shiny$renderUI({
+      render_info("visualization_map col_granularity_ui")
+      if (!is_date_profile(picked_profile(input$map_col_var))) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "map_col_granularity",
+        shiny$isolate(input$map_col_granularity)
+      )
+    })
+
+    output$chart_granularity_ui <- shiny$renderUI({
+      render_info("visualization_map chart_granularity_ui")
+      if (!is_date_profile(picked_profile(input$map_chart_var))) {
+        return(NULL)
+      }
+      granularity_select(
+        ns,
+        "map_chart_granularity",
+        shiny$isolate(input$map_chart_granularity)
+      )
+    })
 
     # Geocode + populate the metadata-backed selects and the date slider, only
     # when Map is the active engine and Generate is clicked (mirrors the MST/Tree
@@ -2707,22 +2832,34 @@ server <- function(
         return(invisible(NULL))
       }
 
-      keep <- function(id, choices, default) {
-        shiny$updateSelectInput(
+      # Profiles carry each column's value count and declared type, which the
+      # picker shows as the option's second line. Until this, Map's variable
+      # pickers were the only ones in the app offering raw, unlabelled and
+      # ungrouped column names.
+      prof <- field_profiles() %||%
+        field_profiles_of(
+          meta,
+          mlst_cols = attr(meta, "mlst_cols"),
+          amr_cols = attr(meta, "amr_cols"),
+          custom_cols = attr(meta, "custom_cols")
+        )
+      prof <- prof[prof$field %in% fields, , drop = FALSE]
+
+      keep <- function(id, default) {
+        update_field_select(
           session,
           id,
-          choices = choices,
-          selected = if (!force_default && isTRUE(input[[id]] %in% choices)) {
+          prof,
+          selected = if (!force_default && isTRUE(input[[id]] %in% fields)) {
             input[[id]]
           } else {
             default
           }
         )
       }
-      keep("map_col_var", fields, fields[1])
+      keep("map_col_var", fields[1])
       keep(
         "map_chart_var",
-        fields,
         if ("specimen_source_id" %in% fields) {
           "specimen_source_id"
         } else {
@@ -2835,8 +2972,17 @@ server <- function(
         # time-of-day component — filter_coords() floors to whole days, so an
         # Hour animation over date-only data would silently collapse back to
         # Day granularity and look broken rather than just under-precise.
-        ts <- suppressWarnings(
-          as.POSIXct(coords$sample_collection_date, tz = "UTC")
+        # `sample_collection_date` is free text (see field_types.R), so
+        # as.POSIXct's format guessing can throw a hard error (not just a
+        # warning) when it can't find one format that fits every value —
+        # suppressWarnings() doesn't catch that. Fall back to "no time
+        # component" rather than crashing this observer.
+        ts <- tryCatch(
+          suppressWarnings(as.POSIXct(
+            coords$sample_collection_date,
+            tz = "UTC"
+          )),
+          error = function(e) as.POSIXct(character(0), tz = "UTC")
         )
         has_time <- any(!is.na(ts) & format(ts, "%H:%M:%S") != "00:00:00")
         day_choices <- c("Day", "Week", "Month", "Year")
@@ -2895,12 +3041,16 @@ server <- function(
       frame_coords(leafletProxy("map"), coords, fly = TRUE)
     })
 
-    # HTML export: rebuild the current map with the shared builder and serialise
-    # it as a self-contained interactive HTML file (downloadButton triggers the
-    # browser download directly).
-    output$map_html <- shiny$downloadHandler(
-      filename = function() paste0(Sys.Date(), "_map.html"),
-      content = function(file) {
+    # ---- Export contract ----------------------------------------------------
+    # A browser-drawn engine: the tab's sidebar asks for a raster and the client
+    # answers through `capture_data`. HTML is the format the server writes
+    # itself, rebuilding the current map with the shared builder and serialising
+    # it as a self-contained interactive file.
+    export <- list(
+      kind = "widget",
+      label = "map",
+      ready = shiny$reactive(isTRUE(generated())),
+      save = function(file, format, opts) {
         o <- map_opts()
         base <- map_coords()
         coords <- filter_coords(base, o)
@@ -2917,7 +3067,30 @@ server <- function(
           m <- frame_coords(m, coords)
         }
         htmlwidgets::saveWidget(m, file, selfcontained = TRUE)
-      }
+      },
+      # html2canvas re-rasterises the DOM at a multiple, so the overlays that
+      # carry the data — markers, labels, legend, choropleth polygons — are
+      # redrawn crisply. The basemap tiles are fixed-resolution images and can
+      # only be upscaled, which is why HTML is offered alongside. `targetPx`
+      # rather than a raw scale is what makes the result reproducible: the
+      # handler measures the map's actual on-screen width itself (the Map has
+      # no fixed aspect and fills whatever box it is given, so this matters
+      # more here than anywhere else) and works out the multiplier from that.
+      # See effectiveScale() in app/view/visualization.R.
+      capture = function(format, opts) {
+        session$sendCustomMessage(
+          "phylotrace_capture",
+          list(
+            selector = paste0("#", ns("map")),
+            mode = "html2canvas",
+            inputId = session$ns("export_capture"),
+            targetPx = opts$target_px,
+            format = format,
+            background = "#ffffff"
+          )
+        )
+      },
+      capture_data = shiny$reactive(input$export_capture)
     )
 
     # On session reset (top-level app-reset), clear the markers and cached
@@ -3030,27 +3203,54 @@ server <- function(
         session,
         vals,
         switches = c(
-          "map_color_var", "map_coverage", "map_graticule", "map_legend",
-          "map_minimap", "map_permanent", "map_reverse", "map_scalebar",
-          "map_show_controls", "map_spiderfy", "map_chart_cluster",
-          "map_region_fixed_scale", "map_region_label_nonzero",
-          "map_region_permanent", "map_show_time_label", "map_zoom_to_bounds"
+          "map_color_var",
+          "map_coverage",
+          "map_graticule",
+          "map_legend",
+          "map_minimap",
+          "map_permanent",
+          "map_reverse",
+          "map_scalebar",
+          "map_show_controls",
+          "map_spiderfy",
+          "map_chart_cluster",
+          "map_region_fixed_scale",
+          "map_region_label_nonzero",
+          "map_region_permanent",
+          "map_show_time_label",
+          "map_zoom_to_bounds"
         ),
         selects = c(
-          "map_mode", "map_tiles", "map_legend_pos", "map_chart_type",
-          "map_col_scale", "map_chart_scale", "map_heat_scale"
+          "map_mode",
+          "map_tiles",
+          "map_legend_pos",
+          "map_chart_type",
+          "map_col_scale",
+          "map_chart_scale",
+          "map_heat_scale"
         ),
         sliders = c(
-          "map_radius", "map_opacity", "map_weight", "map_bins",
-          "map_legend_opacity", "map_label_size", "map_cluster_radius",
-          "map_cluster_zoom_level", "map_region_opacity", "map_heat_radius",
-          "map_heat_max", "map_chart_size", "map_chart_opacity",
+          "map_radius",
+          "map_opacity",
+          "map_weight",
+          "map_bins",
+          "map_legend_opacity",
+          "map_label_size",
+          "map_cluster_radius",
+          "map_cluster_zoom_level",
+          "map_region_opacity",
+          "map_heat_radius",
+          "map_heat_max",
+          "map_chart_size",
+          "map_chart_opacity",
           "map_chart_cluster_radius"
         ),
         numerics = "map_legend_digits",
         texts = "map_legend_title",
         colors = c(
-          "map_marker_color", "map_stroke_color", "map_na_color",
+          "map_marker_color",
+          "map_stroke_color",
+          "map_na_color",
           "map_region_border"
         ),
         radio_groups = "map_interval"
@@ -3058,17 +3258,26 @@ server <- function(
 
       # Base radioButtons (scale mode / region transform).
       if (!is.null(vals$map_scale_type)) {
-        shiny$updateRadioButtons(session, "map_scale_type",
-          selected = vals$map_scale_type)
+        shiny$updateRadioButtons(
+          session,
+          "map_scale_type",
+          selected = vals$map_scale_type
+        )
       }
       if (!is.null(vals$map_region_transform)) {
-        shiny$updateRadioButtons(session, "map_region_transform",
-          selected = vals$map_region_transform)
+        shiny$updateRadioButtons(
+          session,
+          "map_region_transform",
+          selected = vals$map_region_transform
+        )
       }
 
       # Date-range slider: restore as Dates.
       if (!is.null(vals$map_daterange)) {
-        dr <- tryCatch(as.Date(unlist(vals$map_daterange)), error = function(e) NULL)
+        dr <- tryCatch(
+          as.Date(unlist(vals$map_daterange)),
+          error = function(e) NULL
+        )
         if (!is.null(dr) && length(dr) == 2 && !any(is.na(dr))) {
           shiny$updateSliderInput(session, "map_daterange", value = dr)
         }
@@ -3079,29 +3288,44 @@ server <- function(
       if (!is.null(meta) && nrow(meta)) {
         fields <- setdiff(names(meta), "isolate")
         if (length(fields)) {
-          if (!is.null(vals$map_col_var)) {
-            shiny$updateSelectInput(session, "map_col_var", choices = fields,
-              selected = vals$map_col_var)
-          }
-          if (!is.null(vals$map_chart_var)) {
-            shiny$updateSelectInput(session, "map_chart_var", choices = fields,
-              selected = vals$map_chart_var)
+          prof <- field_profiles() %||%
+            field_profiles_of(
+              meta,
+              mlst_cols = attr(meta, "mlst_cols"),
+              amr_cols = attr(meta, "amr_cols"),
+              custom_cols = attr(meta, "custom_cols")
+            )
+          prof <- prof[prof$field %in% fields, , drop = FALSE]
+          for (id in c("map_col_var", "map_chart_var")) {
+            if (!is.null(vals[[id]])) {
+              update_field_select(session, id, prof, selected = vals[[id]])
+            }
           }
           popup_ids <- unique(c("isolate", "place", fields))
           popup_choices <- stats::setNames(
-            popup_ids, vapply(popup_ids, field_label, character(1))
+            popup_ids,
+            vapply(popup_ids, field_label, character(1))
           )
           if (!is.null(vals$map_popup)) {
-            updatePickerInput(session, "map_popup", choices = popup_choices,
-              selected = intersect(unlist(vals$map_popup), popup_ids))
+            updatePickerInput(
+              session,
+              "map_popup",
+              choices = popup_choices,
+              selected = intersect(unlist(vals$map_popup), popup_ids)
+            )
           }
           hover_ids <- unique(c("isolate", fields))
           hover_choices <- stats::setNames(
-            hover_ids, vapply(hover_ids, field_label, character(1))
+            hover_ids,
+            vapply(hover_ids, field_label, character(1))
           )
           if (!is.null(vals$map_hover_field)) {
-            updatePickerInput(session, "map_hover_field", choices = hover_choices,
-              selected = intersect(unlist(vals$map_hover_field), hover_ids))
+            updatePickerInput(
+              session,
+              "map_hover_field",
+              choices = hover_choices,
+              selected = intersect(unlist(vals$map_hover_field), hover_ids)
+            )
           }
         }
       }
@@ -3110,11 +3334,14 @@ server <- function(
     # Thumbnail: capture the Leaflet container in the browser (html2canvas),
     # returned via input$thumb_data.
     request_thumb <- function() {
-      session$sendCustomMessage("phylotrace_capture", list(
-        selector = paste0("#", ns("map")),
-        mode = "html2canvas",
-        inputId = session$ns("thumb_data")
-      ))
+      session$sendCustomMessage(
+        "phylotrace_capture",
+        list(
+          selector = paste0("#", ns("map")),
+          mode = "html2canvas",
+          inputId = session$ns("thumb_data")
+        )
+      )
     }
 
     list(
@@ -3122,7 +3349,8 @@ server <- function(
       restore = restore,
       save_thumb = NULL,
       request_thumb = request_thumb,
-      thumb_data = shiny$reactive(input$thumb_data)
+      thumb_data = shiny$reactive(input$thumb_data),
+      export = export
     )
   })
 }

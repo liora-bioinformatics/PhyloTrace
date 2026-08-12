@@ -2,18 +2,14 @@
 # Tier 3: the Analysis Dashboard. Lists the Analyses stored in the loaded
 # database and lets the user add/navigate them. Each Analysis is a persistent
 # container of saved Plots (see group.R / item.R).
-#
-# State is no longer in-memory: Analyses and their Plots live in the database
-# (app/logic/analysis_store.R) and are refreshed on the shared `plots_changed`
-# tick. The module bubbles two requests up to main.R, which routes them to the
-# Visualization module:
-#   * request_add_plot  — user clicked "Add Plot" in an Analysis
-#   * request_open_plot — user clicked a saved Plot to reopen/restore it
 
 box::use(
+  bslib[page_sidebar, sidebar, tooltip],
+  DT[datatable, dataTableProxy, DTOutput, JS, renderDT, selectRows],
+  jsonlite[fromJSON, toJSON],
   shiny[
-    NS,
     actionButton,
+    dateRangeInput,
     div,
     hr,
     icon,
@@ -21,6 +17,7 @@ box::use(
     modalButton,
     modalDialog,
     moduleServer,
+    NS,
     observe,
     observeEvent,
     outputOptions,
@@ -31,22 +28,25 @@ box::use(
     renderUI,
     req,
     showModal,
+    showNotification,
     span,
     tagList,
     textAreaInput,
     textInput,
     uiOutput,
+    updateDateRangeInput,
   ],
   shinyWidgets[pickerInput, pickerOptions],
-  bslib[
-    page_sidebar,
-    sidebar,
-  ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows],
-  app / view / analysis_dashboard / group,
+)
+
+box::use(
   app / logic / analysis_store,
-  app / logic / database_functions[make_metadata_table, append_classical_mlst],
-  jsonlite[toJSON, fromJSON],
+  app / logic / db_events,
+  app / logic / database_functions[append_classical_mlst],
+  app / logic / db_store,
+  app / logic / field_labels[field_labels_for],
+  app / logic / field_types[as_date_safe, date_fields],
+  app / view / analysis_dashboard / group,
 )
 
 #' @export
@@ -55,15 +55,16 @@ ui <- function(id) {
 
   page_sidebar(
     fillable = TRUE,
+    shinyjs::useShinyjs(),
     sidebar = sidebar(
       title = "Analysis Dashboard",
+      width = "280px",
       actionButton(
         ns("trigger_group_modal"),
         "Add Analysis",
         icon = icon("folder-plus"),
         class = "btn-success w-100 mb-3"
       ),
-      hr(),
       uiOutput(ns("sidebar_navigation"))
     ),
     div(
@@ -72,6 +73,9 @@ ui <- function(id) {
     )
   )
 }
+
+# Returns default value if a vector or list is NULL or empty
+`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # An Analysis's stored isolate_selection JSON as a character vector, or NULL
 # when it fixes nothing (i.e. all isolates).
@@ -82,6 +86,7 @@ ui <- function(id) {
   as.character(fromJSON(raw))
 }
 
+# Validates if a file path is a valid non-empty string referencing an existing file
 .usable_path <- function(path) {
   !is.null(path) &&
     length(path) == 1 &&
@@ -95,7 +100,11 @@ server <- function(
   id,
   db_path = shiny::reactive(NULL),
   session_reset = shiny::reactive(0L),
-  plots_changed = shiny::reactiveVal(0L)
+  db_rev = db_events$new_bus(),
+  # Wired to whatever db_path/db_rev this call actually received - see
+  # database.R's server() for why the default can't just be
+  # `db_store$new_store()`.
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -108,10 +117,14 @@ server <- function(
     request_open_plot <- reactiveVal(NULL)
     add_seq <- 0L
     open_seq <- 0L
+
+    # Handles user request to add a new plot to an analysis
     handle_add_plot <- function(analysis_id) {
       add_seq <<- add_seq + 1L
       request_add_plot(list(analysis_id = analysis_id, n = add_seq))
     }
+
+    # Handles user request to open an existing saved plot
     handle_open_plot <- function(plot_id) {
       open_seq <<- open_seq + 1L
       request_open_plot(list(plot_id = plot_id, n = open_seq))
@@ -119,7 +132,7 @@ server <- function(
 
     # Current Analyses, refreshed whenever the store changes or the DB reloads.
     analyses <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses")
       analysis_store$list_analyses(db_path())
     })
 
@@ -134,7 +147,7 @@ server <- function(
       if (nrow(analysis_store$list_analyses(path)) == 0L) {
         analysis_store$add_analysis(path, "Analysis 1")
       }
-      plots_changed(isolate(plots_changed()) + 1L)
+      db_events$bump(db_rev, "analyses")
     }
     observeEvent(db_path(), sync_db(), ignoreNULL = FALSE)
     observeEvent(
@@ -160,7 +173,8 @@ server <- function(
               id = paste0("group_instance_", this_aid),
               analysis_id = this_aid,
               db_path = db_path,
-              plots_changed = plots_changed,
+              db_rev = db_rev,
+              store = store,
               on_add_plot = handle_add_plot,
               on_open_plot = handle_open_plot,
               on_edit_settings = handle_edit_settings,
@@ -187,23 +201,80 @@ server <- function(
     wizard_desc <- reactiveVal("")
     wizard_selection <- reactiveVal(NULL)
 
+    # Isolate names ticked in the wizard's table right now — kept separately
+    # from input$wiz_table_rows_selected (row *indices*, which point at
+    # different isolates once the time window changes and the table
+    # re-renders) so a tick survives narrowing or widening the window. Seeded
+    # from wizard_selection() each time step 2 is (re)shown; see show_wizard().
+    wiz_checked <- reactiveVal(character(0))
+
     # Isolate metadata backing the selection step — the same table the
-    # Visualization module's isolate picker shows.
+    # Visualization module's isolate picker shows, drawn from the same shared
+    # store so the two never disagree about which isolates exist. NULL flows
+    # through unchanged (not req()'d away) because every reader below checks
+    # for it explicitly, the same as before this read moved to the store.
     settings_meta <- reactive({
       req(db_path())
-      append_classical_mlst(make_metadata_table(db_path()), db_path())
+      append_classical_mlst(store$metadata(), db_path())
     })
 
-    # Isolate names currently ticked in the wizard's table.
-    selected_from_table <- function() {
+    # The date-typed columns the time filter can work along: the fixed
+    # schema's collection date, the app-stamped add time, and any user-defined
+    # `date` custom variable. Mirrors the Visualization module's isolate
+    # picker (see app/view/visualization_plot.R, sel_date_choices).
+    wiz_date_choices <- reactive({
       meta <- settings_meta()
-      rows <- input$wiz_table_rows_selected
-      if (is.null(meta) || !length(rows)) {
+      if (is.null(meta)) {
+        return(character(0))
+      }
+      cols <- date_fields(db_path(), names(meta))
+      stats::setNames(cols, field_labels_for(cols))
+    })
+
+    # The chosen column parsed to Date, NA where the cell is empty or (for the
+    # free-text collection date) unreadable. NULL when no column is chosen.
+    wiz_dates <- reactive({
+      meta <- settings_meta()
+      col <- input$wiz_date_field
+      if (is.null(meta) || is.null(col) || !nzchar(col)) {
         return(NULL)
       }
-      meta$isolate[rows]
+      if (!col %in% names(meta)) {
+        return(NULL)
+      }
+      as_date_safe(meta[[col]])
+    })
+
+    # The rows the table shows. Without a chosen column, or before the range
+    # input has reported a complete window, that is every isolate.
+    wiz_filtered <- reactive({
+      meta <- settings_meta()
+      req(meta)
+      d <- wiz_dates()
+      rng <- input$wiz_date_range
+      if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
+        return(meta)
+      }
+      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      meta[keep, , drop = FALSE]
+    })
+
+    # Isolate names the wizard's table currently represents as "selected": the
+    # ticked set if anything is ticked, otherwise every isolate the active
+    # time window leaves (all of them, with no window) — the same "empty
+    # means everything visible" convention the Visualization module's isolate
+    # picker uses. NULL only when there is no metadata to select from at all.
+    selected_from_table <- function() {
+      meta <- settings_meta()
+      tbl <- wiz_filtered()
+      if (is.null(meta) || is.null(tbl)) {
+        return(NULL)
+      }
+      ticked <- intersect(wiz_checked(), tbl$isolate)
+      if (length(ticked)) ticked else tbl$isolate
     }
 
+    # Displays the multi-step analysis creation and editing wizard modal
     show_wizard <- function() {
       creating <- is.null(editing_analysis())
       if (identical(wizard_step(), 1L)) {
@@ -236,7 +307,7 @@ server <- function(
               class = "btn-primary"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         ))
       } else {
         # Editing an Analysis that already holds plots: warn up front that the
@@ -247,26 +318,40 @@ server <- function(
           nrow(analysis_store$list_plots(db_path(), editing_analysis()))
         }
         retro_warning <- if (n_saved > 0) {
-          div(
-            class = "ad-retro-warning",
-            icon("triangle-exclamation"),
+          plural <- if (n_saved == 1) "" else "s"
+          tooltip(
+            div(
+              class = "ad-retro-warning",
+              icon("triangle-exclamation"),
+              sprintf(" %d saved plot%s built from this set", n_saved, plural)
+            ),
             sprintf(
               paste(
-                " This Analysis already contains %d saved plot%s built from",
+                "This Analysis already contains %d saved plot%s built from",
                 "the current isolate set. Changing it re-bases them onto",
                 "different data — they will be flagged as out of date."
               ),
               n_saved,
-              if (n_saved == 1) "" else "s"
+              plural
             )
           )
         }
 
+        # Sticky across reopens, like the Visualization module's isolate
+        # picker: the ticked set carries over from wizard_selection() (the
+        # prior/persisted selection — from an edited Analysis, or from
+        # wiz_back on the way out of step 2) and the date controls come back
+        # holding whatever they were last set to rather than resetting, so
+        # neither Back nor reopening to edit discards a chosen time window.
+        wiz_checked(wizard_selection() %||% character(0))
+        dates <- wiz_date_choices()
+        field <- isolate(input$wiz_date_field) %||% ""
+        rng <- isolate(input$wiz_date_range)
+
         showModal(div(
           class = "selection-modal",
           modalDialog(
-            title = "Select isolates",
-            retro_warning,
+            title = NULL,
             div(
               class = "selection-modal-toolbar",
               actionButton(
@@ -281,13 +366,7 @@ server <- function(
                 label = "None",
                 icon = icon("xmark")
               ),
-              # Compact hint so the modal keeps the same footprint as
-              # Visualization's own isolate picker; leaving the selection empty
-              # is explained here rather than in a separate paragraph.
-              span(
-                class = "text-muted small ms-2",
-                "Empty = all isolates; every plot here uses this set."
-              ),
+              retro_warning,
               uiOutput(ns("wiz_sel_count"), class = "selection-modal-count")
             ),
             div(
@@ -295,6 +374,32 @@ server <- function(
               DTOutput(ns("wiz_table"), fill = FALSE)
             ),
             footer = tagList(
+              # Shares the footer row with the buttons (pushed to its left by
+              # .selection-modal-filter); omitted when the database has no
+              # date-typed column to filter along.
+              if (length(dates)) {
+                div(
+                  class = "selection-modal-filter",
+                  pickerInput(
+                    ns("wiz_date_field"),
+                    label = NULL,
+                    choices = c("No time filter" = "", dates),
+                    selected = if (field %in% dates) field else "",
+                    width = "fit"
+                  ),
+                  div(
+                    id = ns("wiz_date_range_wrap"),
+                    dateRangeInput(
+                      ns("wiz_date_range"),
+                      label = NULL,
+                      start = rng[1],
+                      end = rng[2],
+                      separator = "–",
+                      width = "17rem"
+                    )
+                  )
+                )
+              },
               modalButton("Cancel"),
               actionButton(ns("wiz_back"), "Back", icon = icon("arrow-left")),
               actionButton(
@@ -303,9 +408,16 @@ server <- function(
                 class = "btn-primary"
               )
             ),
-            easyClose = FALSE
+            easyClose = TRUE
           )
         ))
+        # The range input is created enabled; disable it right away when the
+        # modal opens with no column chosen (the observer on
+        # input$wiz_date_field owns it from then on).
+        shinyjs::toggleState(
+          "wiz_date_range",
+          condition = nzchar(field) && field %in% dates
+        )
       }
     }
 
@@ -347,35 +459,133 @@ server <- function(
       show_wizard()
     })
 
+    # Switching the time axis re-bases the window on the new column's own
+    # span, since a window tuned for the collection date is meaningless on,
+    # say, the date an isolate entered the database.
+    observeEvent(input$wiz_date_field, {
+      d <- wiz_dates()
+      shinyjs::toggleState("wiz_date_range", condition = !is.null(d))
+      if (is.null(d) || all(is.na(d))) {
+        return()
+      }
+      updateDateRangeInput(
+        session,
+        "wiz_date_range",
+        start = min(d, na.rm = TRUE),
+        end = max(d, na.rm = TRUE),
+        min = min(d, na.rm = TRUE),
+        max = max(d, na.rm = TRUE)
+      )
+    })
+
+    # Isolates ticked in the table, held by name rather than by row index so
+    # that changing the window — which re-renders the table and renumbers its
+    # rows — does not silently discard them.
+    observeEvent(
+      input$wiz_table_rows_selected,
+      {
+        rows <- input$wiz_table_rows_selected
+        tbl <- wiz_filtered()
+        wiz_checked(if (length(rows)) tbl$isolate[rows] else character(0))
+      },
+      ignoreNULL = FALSE
+    )
+
+    # Renders the interactive DataTables view for isolate selection in wizard step 2
     output$wiz_table <- renderDT(
       {
-        meta <- settings_meta()
-        req(meta)
-        pre <- wizard_selection()
-        sel_idx <- if (is.null(pre)) NULL else which(meta$isolate %in% pre)
+        tbl <- wiz_filtered()
+        req(tbl)
+
+        keep <- match(isolate(wiz_checked()), tbl$isolate)
+
+        # Pinned (FixedColumns) columns: `isolate` always, plus whatever date
+        # column the time filter is currently set to, moved to sit right
+        # after it — mirrors the Visualization module's isolate picker (see
+        # app/view/visualization_plot.R).
+        date_col <- input$wiz_date_field
+        pin_cols <- if (
+          !is.null(date_col) &&
+            nzchar(date_col) &&
+            !identical(date_col, "isolate") &&
+            date_col %in% names(tbl)
+        ) {
+          c("isolate", date_col)
+        } else {
+          "isolate"
+        }
+        tbl <- tbl[, c(pin_cols, setdiff(names(tbl), pin_cols)), drop = FALSE]
+
         datatable(
-          meta,
+          tbl,
           rownames = FALSE,
           filter = "top",
           class = "row-border hover order-column",
-          selection = list(mode = "multiple", selected = sel_idx),
+          selection = list(
+            mode = "multiple",
+            selected = keep[!is.na(keep)]
+          ),
+          extensions = "FixedColumns",
           options = list(
             dom = "tip",
-            pageLength = 10,
+            pageLength = 20,
             scrollX = TRUE,
-            scrollY = "42vh",
-            scrollCollapse = TRUE
+            scrollY = "1px",
+            scrollCollapse = TRUE,
+            fixedColumns = list(leftColumns = length(pin_cols)),
+            # FixedColumns pins each pinned column's header cell but not the
+            # filter = "top" row underneath (a plain <td> row DT bolts onto
+            # <thead> outside the header API) — copy the `left` offset
+            # FixedColumns already worked out for the matching header cell
+            # onto the filter cell, so it stays put too. See the identical
+            # comment in visualization_plot.R, where this first landed.
+            initComplete = JS(sprintf(
+              "function(settings) {
+                 var rows = $(this.api().table().header()).find('tr');
+                 var headerCells = rows.eq(0).find('th');
+                 var filterCells = rows.eq(1).find('td');
+                 for (var i = 0; i < %d; i++) {
+                   filterCells.eq(i).addClass('dtfc-fixed-left').css({
+                     position: 'sticky',
+                     left: headerCells.eq(i).css('left') || '0px',
+                     zIndex: 3
+                   });
+                 }
+               }",
+              length(pin_cols)
+            ))
           )
         )
       },
       server = FALSE
     )
 
+    # Renders selection summary text showing selected vs total count and filter info
     output$wiz_sel_count <- renderUI({
       meta <- settings_meta()
       req(meta)
+      shown <- nrow(wiz_filtered())
       n <- length(input$wiz_table_rows_selected)
-      span(sprintf("%d of %d selected", n, nrow(meta)))
+      if (shown == nrow(meta)) {
+        return(span(sprintf("%d of %d selected", n, shown)))
+      }
+      # A row leaves the table for one of two different reasons — its date
+      # falls outside the chosen window, or it has no usable date at all — see
+      # the identical breakdown in visualization_plot.R's sel_count.
+      d <- wiz_dates()
+      missing <- if (is.null(d)) 0L else sum(is.na(d))
+      outside <- nrow(meta) - shown - missing
+      detail <- if (missing > 0 && outside > 0) {
+        sprintf(" · %d outside window, %d missing date", outside, missing)
+      } else if (missing > 0) {
+        sprintf(" · %d missing date", missing)
+      } else {
+        sprintf(" · %d outside window", outside)
+      }
+      span(
+        sprintf("%d of %d selected", n, shown),
+        span(class = "selection-modal-count-total", detail)
+      )
     })
 
     # Select all / none act on the currently filtered rows, like the
@@ -430,11 +640,19 @@ server <- function(
           universe_json
         )
       }
-      plots_changed(isolate(plots_changed()) + 1L)
+      db_events$bump(db_rev, "analyses")
       removeModal()
     }
 
     observeEvent(input$wiz_confirm, {
+      if (!length(selected_from_table())) {
+        showNotification(
+          "No isolates left to select — widen the time filter.",
+          type = "warning"
+        )
+        return()
+      }
+
       aid <- editing_analysis()
 
       # Editing an existing Analysis that already holds plots: changing the
@@ -491,6 +709,7 @@ server <- function(
 
     observeEvent(input$confirm_selection_change, commit_settings())
 
+    # Renders the sidebar dropdown to switch view filter between analyses
     output$sidebar_navigation <- renderUI({
       df <- analyses()
       choices_list <- c("Show All Analyses" = "all")
@@ -524,6 +743,7 @@ server <- function(
       current_view(input$selected_group_view)
     })
 
+    # Renders the list of active analysis group UI modules
     output$groups_vertical_stack <- renderUI({
       df <- analyses()
 

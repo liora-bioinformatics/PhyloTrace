@@ -1,0 +1,305 @@
+# The Five Plot Engines {#sec-tech-engines}
+
+Each engine is a `app/view/visualization_<kind>.R` module plus one or two
+`app/logic` modules that do the computing and drawing. This chapter collects the
+implementation notes for all five; the coordinator that mounts them is
+@sec-tech-visualization.
+
+## Minimum spanning tree {#sec-tech-engines-mst}
+
+The split is strict: `phylo.R` computes the graph on **Generate**; `mst_plot.R`
+turns that graph into a `visNetwork` [@visnetwork] on every control change.
+
+```{mermaid}
+%%| label: fig-tech-mst
+%%| fig-cap: "MST pipeline. Everything above the line runs once per Generate; everything below redraws on control changes."
+flowchart TD
+  subgraph COMPUTE["app/logic/phylo.R — on Generate"]
+    P["allele profiles (mlst + staged)"] --> D["Hamming distance matrix"]
+    D --> Z["collapse zero-distance isolates<br/>(igraph components)"]
+    Z --> G["igraph mst()"]
+  end
+  subgraph DRAW["app/logic/mst_plot.R — on control change"]
+    G --> L["mst_layout(): fixed coordinates"]
+    L --> E["mst_edge_lengths()"]
+    E --> CL["mst_clusters() + blobs"]
+    CL --> N["node sizes · pies · labels"]
+    N --> V["visNetwork (visualization_mst.R)"]
+  end
+```
+
+### Building the graph {#sec-tech-engines-mst-compute}
+
+`compute_mst()` reads the profiles, applies the chosen NA policy, and builds the
+graph — but first it **collapses zero-distance isolates**, transitively:
+
+```{.r filename="app/logic/phylo.R"}
+# Collapse zero-distance samples into groups (transitive: chained identical
+# profiles merge into one node).
+zero_adj <- prep$dist == 0
+membership <- components(
+  graph_from_adjacency_matrix(zero_adj, mode = "undirected", diag = FALSE)
+)$membership
+...
+graph <- graph_from_adjacency_matrix(rep_dist, mode = "undirected",
+                                     weighted = TRUE, diag = FALSE)
+tree  <- mst(graph)
+```
+
+The result is an `igraph` MST [@igraph] whose vertices carry a `name` (the
+newline-joined member isolates) and `n` (the member count). `phylo.R` stops here,
+on purpose — everything about *drawing* is the other half.
+
+### The four load-bearing drawing decisions {#sec-tech-engines-mst-draw}
+
+`app/logic/mst_plot.R` owns geometry, colour, clustering and legend. Its header
+names four decisions that each replace a vis.js default that produced a *wrong*
+rendering, not merely a plain one:
+
+::: {.callout-important title="1 — Coordinates are computed on the server, not by browser physics"}
+Node positions come from `mst_layout()`, not from vis.js's force simulation. A
+Barnes-Hut simulation over a few hundred nodes was both the slowest part of the
+render (it re-stabilised from scratch on every control change — the reload lag) and
+the *least faithful*: springs treat allelic distance as a preference that repulsion
+overrules, so the drawn distance between two isolates was not their distance. Fixed
+coordinates with physics off is simultaneously the performance fix, the fidelity
+fix, and the fix for the previous densely tangled rendering under "Skeleton" mode.
+:::
+
+::: {.callout-important title="2 — Edge length is an explicit transform of allelic distance"}
+`mst_edge_lengths()` maps allele distance to pixels through a named transform
+(`mst_length_mode()`), so the median edge is a fixed length and proportional
+lengths are used only while the longest edge stays within a legible ratio — a graph
+with one 3000-allele outlier does not compress everything else into a single point.
+:::
+
+::: {.callout-important title="3 — Clustering uses the scheme's own published threshold"}
+`mst_clusters()` groups nodes within a distance **threshold**, defaulting to the
+scheme's published cluster distance where it has one (`mst_threshold_default()`
+reads it from `scheme_overview`). That default is what makes the number in the
+"cluster at" control comparable to standard cluster nomenclatures (e.g. EnteroBase
+HierCC). Clusters can be drawn as blobs (`mst_cluster_blobs()`) or contracted
+(`mst_collapse()` — a contraction of a tree is still a tree).
+:::
+
+::: {.callout-important title="4 — A node is a set of isolates"}
+Because zero-distance isolates merge, a node represents *several* isolates, and the
+drawing respects that: `mst_node_radii()` sizes a node by area proportional to its
+count (radius ∝ √count); `mst_node_values()` turns a categorical variable over the
+node's members into a **pie**, the one channel that can show all of them rather
+than collapsing to one; `mst_node_labels()` shows a few members then "+N more";
+`mst_node_titles()` builds the hover tooltip; `mst_gradient_colors()` handles a
+continuous variable.
+:::
+
+`app/view/visualization_mst.R` owns the `visNetwork` render, the control panel and
+all MST-specific reactive state, and exports via the **widget** route
+(@sec-tech-viz-export).
+
+## Phylogenetic trees {#sec-tech-engines-tree}
+
+`compute_phylo_tree()` prepares the distances (needing at least three isolates) and
+`build_tree()` runs one of two classic algorithms via `ape` [@ape]:
+
+```{.r filename="app/logic/phylo.R"}
+build_tree <- function(dist_mat, labels, algo) {
+  d <- as.dist(dist_mat)
+  tree <- if (identical(algo, "UPGMA")) {
+    as.phylo(hclust(d, method = "average"))         # UPGMA
+  } else {
+    nj_tree <- nj(d)                                # Neighbour-Joining
+    nj_tree[["edge.length"]] <- pmax(nj_tree[["edge.length"]], 0)
+    nj_tree
+  }
+  tree$tip.label <- labels
+  tree
+}
+```
+
+::: {.callout-important title="Branch lengths stay in allele units; negatives are clamped, not rescaled"}
+Branch lengths are left in the raw units of the distance matrix (allele
+differences), the same units the MST labels its edges in — a pair shown "3272
+apart" is reported identically in both views. NJ's least-squares fit can produce a
+slightly negative branch, which has no biological meaning, so those are clamped to
+zero — the standard fix other NJ viewers apply — rather than compressed. Rescaling
+here would silently desynchronise the tree from the MST.
+:::
+
+`app/logic/tree_plot.R` paints the tree as a `ggtree`/`ggplot` object
+[@yu2017ggtree] so control changes re-render cheaply. Most of it is layout
+arithmetic:
+
+- `tree_auto_layout()` derives aspect ratio, font sizes and element scaling from
+  the number of tips.
+- `tree_axis_breaks()` / `tree_axis_layer()` draw a ticked axis to the *same scale
+  as the branches*.
+- `tree_branch_keep()` decides, from the drawn geometry, which branches are wide
+  enough to legibly carry a printed length — a *rendering* decision, deliberately
+  separate from what a branch length means.
+- `tree_inward_xlim()` supports the inward-circular layout.
+- `tile_total()`, `heatmap_panels()`, `heatmap_header_frac()` lay out tile strips
+  and heatmap panels in register with the tips; `tree_legend_ncol()`,
+  `tree_legend_width_in()`, `tree_branch_format()`, `tree_branch_digits()` handle
+  legend and label formatting.
+
+```{mermaid}
+%%| label: fig-tech-tree
+%%| fig-cap: "Tree pipeline: one compute (NJ/UPGMA) feeds many cheap ggtree renders with auto layout and metadata annotation."
+flowchart LR
+  D["distance matrix<br/>(phylo.R)"] --> B["build_tree()<br/>NJ or UPGMA"]
+  B --> A["tree_auto_layout()"]
+  A --> R["ggtree render<br/>(tree_plot.R)"]
+  M["metadata + custom vars"] --> MAP["mapping_engine<br/>(tip colour/shape/tiles)"]
+  MAP --> R
+  R --> P["visualization_tree.R"]
+```
+
+`app/view/visualization_tree.R` carries the NJ/UPGMA picker and exports via the
+**ggplot** route.
+
+## Epidemic curve {#sec-tech-engines-epi}
+
+The epi engine computes no pairwise distances: it bins the metadata's collection
+dates straight into counts. Binning is cheap (a `group_by` over the metadata), so
+once a curve exists every control re-bins live rather than waiting for Generate. It
+takes local isolates only and ignores NA handling.
+
+```{.r filename="app/logic/epi_plot.R"}
+#' Parses dates, constructs composite stratifications, and calculates case
+#' [counts per interval].
+build_epi_data <- function(...) { ... }
+```
+
+`epi_default_interval()` picks the finest interval whose bar count stays under a
+cap; `floor_date_bin()` snaps each date to its interval (ISO-8601 weeks starting
+Monday). Unparseable dates return `NA` and are dropped with a reported count.
+
+::: {.callout-important title="Integer breaks and one-interval-wide bars are load-bearing"}
+Counts are whole cases, so the y-axis carries only **integer breaks**, and every bar
+is exactly **one interval wide** so a gap in the curve is a genuine gap in the data
+rather than a drawing artefact. These are not cosmetic defaults — changing either
+makes the reader misread the shape of the outbreak.
+:::
+
+Derived series: `epi_cumulate()` (running total) and `epi_moving_average()` (fills
+temporal gaps with zero, then a rolling mean; `epi_moving_avg_label()` names it).
+Stratification is `epi_stratum()`; palettes are constrained by
+`epi_scale_choices()` and interpolated by `epi_fit_scale()` / `epi_palette()` so a
+12-group stratification never silently drops groups to grey. Annotations are
+lane-packed so labels do not collide.
+
+Playback is driven by the view's own tick loop — each step rebuilds the curve with
+the reveal cut one interval further on — rather than `gganimate`, so it needs no
+special renderer.
+
+```{mermaid}
+%%| label: fig-tech-epi
+%%| fig-cap: "The epi curve bins dates into counts; derived series and strata layer on cheaply, so controls re-bin live."
+flowchart LR
+  MD["metadata dates<br/>(+ stratify var)"] --> B["build_epi_data()<br/>floor_date_bin · counts"]
+  B --> C["epi_cumulate()"]
+  B --> MA["epi_moving_average()"]
+  B --> R["ggplot render<br/>(visualization_epi.R)"]
+  C --> R
+  MA --> R
+```
+
+`app/view/visualization_epi.R` renders the `ggplot` through `renderImage` (via
+`ggsave`, so the whole frame takes the theme background) and exports via the
+**ggplot** route.
+
+## Map {#sec-tech-engines-map}
+
+Isolate locations come from the metadata's spatial fields — `geo_loc_name_city`,
+`geo_loc_name_state_province`, `geo_loc_name_country`. `app/view/visualization_map.R`
+geocodes each **distinct** place once, on Generate, via OpenStreetMap / Nominatim —
+not once per isolate, which would be hundreds of identical calls against a
+rate-limited public service.
+
+Four modes share a single builder (`build_map`), so they stay visually consistent
+and the same builder backs the HTML export:
+
+| Mode | What it shows |
+|---|---|
+| **Markers** | Styled points, one cluster per location |
+| **Choropleth** | Countries shaded by isolate count (Natural Earth polygons) |
+| **Heatmap** | Point-density surface |
+| **Charts** | A mini-chart per location (`leaflet.minicharts`) |
+
+Rendering is a single `renderLeaflet` reacting to the geocoded coordinates and a
+**debounced** bundle of all control inputs, so dragging a slider does not re-geocode
+or thrash the map. Labels for arbitrary and imported columns come from
+`app/logic/field_labels.R`; country polygons come from `rnaturalearth`. Export is
+the **widget** route.
+
+## AMR heatmaps {#sec-tech-engines-amr}
+
+Like the map and epi curve, this engine computes no pairwise distances and takes
+local isolates only — a staged peer's imported profile carries allele identity and
+nothing else (@sec-tech-interop-staging).
+
+`app/view/visualization_amr.R` offers three views:
+
+| View | Source | Shows |
+|---|---|---|
+| **Gene heatmap** | `amr_results` | isolates × genes presence/absence |
+| **Drug-class matrix** | `amr_summary` | isolates × drug class, call confidence |
+| **Prevalence bars** | either | most prevalent genes or classes |
+
+::: {.callout-important title="A partial call is never shown as a confident one"}
+The drug-class matrix preserves abritamr's `section` distinction: a confident
+**match** and a **partial** call are coloured differently, and when duplicate hits
+land in one cell the highest-confidence rank takes precedence (`amr_class_matrix()`,
+`.section_rank()`). Collapsing the distinction would overstate an isolate's
+resistance.
+:::
+
+`app/logic/amr_plot.R` does the database reads and matrix construction, keeping the
+view module thin and the pure parts unit-testable (@sec-testing):
+
+```{.r filename="app/logic/amr_plot.R"}
+#' Attaches gene metadata attributes to support heatmap annotations.
+amr_presence_matrix <- function(...) { ... }   # isolates x genes (0/1)
+#' Takes the highest confidence rank when duplicate hits exist per cell.
+amr_class_matrix    <- function(...) { ... }   # isolates x drug class
+#' Returns top `top_n` items ordered by prevalence.
+amr_prevalence      <- function(...) { ... }
+```
+
+Genes can be grouped by element type (AMR / VIRULENCE / STRESS) or drug class, or
+clustered (`amr_gene_meta()`, `amr_gene_choices()`, `.column_layout()` with an
+optional dendrogram). Rows and columns carry annotations for the grouping and for
+any mapped variable (`.row_annotation()`, `.class_annotation()`), with
+category-safe palettes shared with the epi engine (`amr_palette()` ≡
+`epi_palette()`).
+
+The heatmaps are built with `ComplexHeatmap` and converted to a `ggplot`
+(`build_amr_heatmap()`, `build_amr_class_heatmap()`, `amr_as_ggplot()`); the
+prevalence view is a native `ggplot` bar chart (`build_amr_prevalence()`). Export
+is therefore the **ggplot** route.
+
+```{mermaid}
+%%| label: fig-tech-amr-hm
+%%| fig-cap: "The AMR engine reshapes the two screen tables into three ggplot views."
+flowchart LR
+  R[("amr_results")] --> PM["amr_presence_matrix()"]
+  S[("amr_summary")] --> CM["amr_class_matrix()"]
+  R --> PV["amr_prevalence()"]
+  S --> PV
+  PM --> H1["gene heatmap"]
+  CM --> H2["drug-class matrix"]
+  PV --> H3["prevalence bars"]
+```
+
+## Chapter summary
+
+- MST: `phylo.R` computes (distance matrix → zero-distance collapse → `igraph`
+  MST), `mst_plot.R` draws (server coordinates, explicit edge-length transform,
+  scheme-threshold clustering, set-valued nodes).
+- Tree: `build_tree()` runs NJ or UPGMA on the same matrix, branch lengths in
+  allele units with NJ negatives clamped; `tree_plot.R` does the layout arithmetic.
+- Epi: date binning only, integer axes, one-interval bars; playback is a tick loop.
+- Map: geocode per distinct place on Generate, four modes through one `build_map`,
+  debounced render.
+- AMR: two tables reshaped into three views, preserving the match/partial
+  distinction.

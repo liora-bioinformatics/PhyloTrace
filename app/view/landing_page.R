@@ -201,6 +201,12 @@ server <- function(
 
     # Render selected database
     output$selected_database <- renderDT({
+      # Depend on db_location_trigger directly so this re-reads file.info()
+      # from disk after a session reset, even when db_location()'s value is
+      # unchanged (e.g. same db path, just modified on disk) and therefore
+      # would not otherwise invalidate this output.
+      db_location_trigger()
+
       render_info("output$selected_database")
 
       # Get database metadata
@@ -240,10 +246,22 @@ server <- function(
     })
 
     # Return values
+    #
+    # `db_path` is the *loaded* database, not merely the selected or remembered
+    # one. `db_location()` is populated at startup from state.json so the landing
+    # page can offer "Last used: …", and it moves as soon as the user picks a
+    # file - but neither of those means the database is open. Gating on
+    # `load_trigger()` (NULL until Load is pressed, NULL again after a session
+    # reset) keeps every downstream module from querying - or migrating - a file
+    # the user has not asked for yet. Without the gate the Database Browser and
+    # Custom Variables panels read the remembered database on the first reactive
+    # flush, i.e. before main.R has run its on-load migrations.
     list(
       create_scheme = shiny$reactive(input$create_new_db),
       load_database = shiny$reactive(load_trigger()),
-      db_path = shiny$reactive(db_location()[2])
+      db_path = shiny$reactive(
+        if (is.null(load_trigger())) NULL else db_location()[2]
+      )
     )
   })
 }

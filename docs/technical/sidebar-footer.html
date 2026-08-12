@@ -1,0 +1,24 @@
+<script>
+(function () {
+  function relocateSidebarBrand() {
+    var sidebar = document.getElementById("quarto-sidebar");
+    if (!sidebar) return;
+    var logoLink = sidebar.querySelector(".sidebar-logo-link");
+    var menuContainer = sidebar.querySelector(".sidebar-menu-container");
+    if (!logoLink || !menuContainer) return;
+
+    // Move the logo out of the header and dock it after the chapter list, so
+    // it sits pinned to the bottom of the sidebar via margin-top: auto (CSS).
+    menuContainer.insertAdjacentElement("afterend", logoLink);
+
+    if (!sidebar.querySelector(".sidebar-copyright")) {
+      var year = new Date().getFullYear();
+      var copyright = document.createElement("div");
+      copyright.className = "sidebar-copyright";
+      copyright.textContent = "© " + year + " Liora Bioinformatics";
+      logoLink.insertAdjacentElement("afterend", copyright);
+    }
+  }
+  relocateSidebarBrand();
+})();
+</script>

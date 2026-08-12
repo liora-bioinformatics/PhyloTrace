@@ -4,8 +4,8 @@
 3,Bordetella_pertussis,Bpertussis
 4,Brucella_melitensis,Bmelitensis
 5,Brucella_spp,Brucella
-6,Burkholderia_mallei_(RKI),Bmallei_fli
-7,Burkholderia_mallei_(FLI),Bmallei_rki
+6,Burkholderia_mallei_(RKI),Bmallei_rki
+7,Burkholderia_mallei_(FLI),Bmallei_fli
 8,Burkholderia_pseudomallei,Bpseudomallei
 9,Campylobacter_jejuni/coli,Cjejuni_complex
 10,Clostridioides_difficile,Cdifficile

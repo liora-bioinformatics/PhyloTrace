@@ -1,0 +1,210 @@
+# Allelic Typing (cgMLST) {#sec-tech-typing}
+
+Typing is the central pipeline: it turns a whole-genome assembly into an allele
+profile in the database. This chapter follows one assembly through the code — the
+view module that accepts it, the shell script that drives the external toolchain,
+how the results are parsed back, the classical 7-gene ST resolved alongside, and
+the provenance and hashing recorded so a call can be traced.
+
+## The typing view module {#sec-tech-typing-ui}
+
+`app/view/typing.R` accepts one or more assembly FASTA files (`.fasta`, `.fa` or
+`.fna`), shows live progress as each is typed, and reports per-isolate outcomes.
+Because typing is long-running and writes the same `.db` the rest of the app
+reads, it runs in a **separate process** and coordinates through the busy-timeout
+armed on every connection (@sec-db-connect) and the revision bus, which it bumps
+(`isolates`, `amr`) when new isolates land so every reader refreshes
+(@sec-arch-signals).
+
+## The external toolchain {#sec-tech-typing-toolchain}
+
+All computationally intensive work happens in the Conda environment
+(@sec-arch-conda), reached through `app/logic/pymlst.R`. The conda executable is
+resolved carefully (preferring `CONDA_EXE` over any env-local `conda`,
+`conda_exe()`), and the run is assembled and launched by:
+
+```{.r filename="app/logic/pymlst.R"}
+#' Execute Synchronous Genome Typing Pipeline
+type_genomes <- function(...) { ... }
+#' Launch Background Typing Process
+start_typing <- function(...) { ... }
+```
+
+The actual command sequence lives in the shell script `app/logic/loop-pymlst.sh`,
+which `start_typing()` launches as a background process and whose log
+`app/view/typing.R` tails for progress. `typing_args()` builds the arguments.
+
+### The order of operations {#sec-tech-typing-order}
+
+The three tool invocations are **sequential steps over the same assembly**, not a
+fan-out: `wgMLST add` does not trigger `claMLST search`, and neither triggers the
+AMR screen. `process_genome()` in `loop-pymlst.sh` runs them one after another
+for each file in turn, and steps 2 and 3 are best-effort — each is skipped
+silently if its prerequisites were not supplied, without affecting the cgMLST
+call:
+
+```{.bash filename="app/logic/loop-pymlst.sh"}
+# --- Step 1: cgMLST Allele Calling ---
+"$CONDA" run -n "$env" wgMLST add "$db" "$file" --strain "$strain_name" ...
+
+# --- Step 2: Classical MLST (Best-Effort) ---
+if [[ -n "$CLA_DB" && -f "$CLA_DB" ]]; then
+    cla_out=$("$CONDA" run -n "$env" claMLST search -i "$id" -c "$cov" "$CLA_DB" "$file" ...)
+fi
+
+# --- Step 3: AMR Screening (Best-Effort via abritamr / AMRFinderPlus) ---
+if [[ -n "$AMR_OUT" && -n "$AMR_ENV" ]]; then
+    timeout -k 30 1200 "$CONDA" run --no-capture-output -n "$AMR_ENV" \
+        abritamr run -c "$file" -px "$amr_prefix" ...
+fi
+```
+
+The classical reference database is built **once before the loop**, not per
+genome: R resolves the scheme (@sec-tech-typing-classical), writes a spec file,
+and the script downloads exactly the profile table and allele files that spec
+names and runs `claMLST create`.
+
+Only step 1 writes to the loaded `.db` directly, from inside the pyMLST process.
+Steps 2 and 3 write to the run log and to a temporary output directory; R parses
+those and performs the corresponding database writes itself once the isolate is
+finished.
+
+```{mermaid}
+%%| label: fig-tech-typing
+%%| fig-cap: "The typing pipeline for one assembly. Solid arrows are the order in which steps run; dotted arrows show which database table each step's results end up in. Steps 1–3 are strictly sequential over the same file — none of them launches the next."
+flowchart TB
+  subgraph PREP["Before the run · app/view/typing.R (R)"]
+    direction TB
+    F["assembly file<br/>(.fasta / .fa / .fna)"] --> H["genome_digest()<br/>content fingerprint"]
+    H --> CK["check_genomes()<br/>new · identical re-type · duplicate"]
+    CK --> RS["resolve_mlst_scheme() → scheme spec"]
+    RS --> CC["claMLST create<br/>classical reference · once per run"]
+  end
+
+  CC --> S1
+
+  subgraph RUN["Per assembly, in order · loop-pymlst.sh (conda run)"]
+    direction TB
+    S1["Step 1 · wgMLST add<br/>cgMLST allele calling (blat + mafft)"]
+    S2["Step 2 · claMLST search<br/>classical 7-gene ST · best-effort"]
+    S3["Step 3 · abritamr run<br/>AMR / virulence / stress · best-effort"]
+    S1 --> S2 --> S3
+  end
+
+  S3 --> PA["Parse the run · pymlst.R / amr.R (R)<br/>parse_typing_log() · parse_clamlst_meta() ·<br/>parse_amrfinder_out()"]
+  PA --> SW["store_clamlst_results() · store_amr_results() ·<br/>store_genome_hash() · store_provenance()"]
+  SW --> HD["hash_database()<br/>sha256 per new allele sequence"]
+
+  S1 -. writes .-> T1[("mlst · sequences")]
+  SW -. writes .-> T2[("classical_mlst")]
+  SW -. writes .-> T3[("amr_results · amr_summary")]
+  SW -. writes .-> T4[("genome_hashes")]
+  SW -. writes .-> T5[("typing_provenance")]
+  HD -. writes .-> T6[("hashes")]
+```
+
+## Reading the run: results and calls {#sec-tech-typing-results}
+
+pyMLST's output and logs are parsed into structured tables by `pymlst.R`. The
+cgMLST outcome per strain is summarised (`cg_outcome()`), and the log is turned
+into a per-isolate table (`parse_typing_log()`) recording loci found, alleles
+added, partial and filled genes, identity/coverage and completeness. These feed
+both the on-screen results and the provenance row
+(@sec-tech-typing-provenance).
+
+Helper queries expose the database's typing state to the UI: `existing_strains()`
+(what is already typed, so duplicates can be flagged), `scheme_size()` (total
+loci), `strain_gene_counts()` (called loci per isolate), and `hashes_pending()`
+(whether any typed sequence still lacks a hash — used to decide whether a reload
+needs to backfill, @sec-arch-nav).
+
+## Classical MLST alongside cgMLST {#sec-tech-typing-classical}
+
+Resolving *which* 7-gene scheme to use is non-trivial, and
+`app/logic/mlst_repo.R` exists to do it deterministically:
+
+```{.r filename="app/logic/mlst_repo.R"}
+# pyMLST's own `claMLST import` searches ... by fuzzy substring match and refuses
+# to guess whenever more than one hit comes back, which silently loses the ST for
+# species whose repository holds several schemes (Enterococcus faecium) and can
+# just as silently settle on the wrong genus. This module resolves the database
+# and the scheme itself - genus always enforced, never more than one candidate
+# accepted - and hands the exact download URLs to loop-pymlst.sh ...
+```
+
+`resolve_mlst_scheme()` queries the PubMLST and Institut Pasteur REST APIs,
+enforcing the genus and accepting exactly one scheme candidate; `claMLST create`
+then builds the reference locally from the URLs it names. Results are persisted
+by `store_clamlst_results()` into `classical_mlst` in one transaction.
+
+::: {.callout-important title="pyMLST mangles species names — so the resolver reproduces the damage"}
+`mlst_repo.R` contains `mangle_species()`, which deliberately *reproduces*
+pyMLST's letter-dropping so a database's stored (possibly mangled) species can
+still be matched, and `canonical_species()`, which repairs it. The ST call itself
+is resolved by `clamlst_status()`, `parse_allele_spec()`, `st_from_profile()` and
+`resolve_clamlst_call()` — the search's own call is authoritative whenever it
+settled on a single ST, with a profile-table fallback for edge cases such as the
+*pstS* deletion in *Enterococcus faecium*.
+:::
+
+## Assembly identity and duplicate detection {#sec-tech-typing-hashing}
+
+Every assembly is fingerprinted so silent duplicates can be caught.
+`genome_hash.R` computes a GA4GH-style content digest and records it against the
+isolate:
+
+```{.r filename="app/logic/genome_hash.R"}
+#' Normalizes sequence contigs, computes refget digests per contig, and hashes
+#' [them into a single genome digest].
+genome_digest <- function(path) { ... }   # sha512t24u, RFC 4648 §5 base64url
+store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) { ... }
+```
+
+Before typing, `check_genomes()` / `classify_genome()` compare the incoming
+assembly's digest and name against what is recorded and classify each as **new**,
+an **identical re-type** (same digest, same name), or a **duplicate** (same
+content, different name — or a name clash pyMLST would reject as
+`StrainAlreadyPresent`, surfaced as "Duplicate").
+
+::: {.callout-important title="The digest flags, it never blocks"}
+The genome digest is a *one-way indicator*. A match proves two runs consumed the
+byte-identical assembly; a mismatch proves nothing (re-assembling the same reads
+with a different assembler yields a different digest). It is therefore used to
+*flag* likely duplicates, never as a hard constraint that could incorrectly block
+a legitimate re-analysis. Do not promote it to a uniqueness constraint.
+:::
+
+## Provenance: how each isolate was typed {#sec-tech-typing-provenance}
+
+As the run proceeds, `app/logic/provenance.R` writes one wide row per isolate to
+`typing_provenance` — the single place a finished isolate can be traced back to
+the software and reference data that produced it:
+
+```{.r filename="app/logic/provenance.R"}
+#' Called once per isolate for every step that reports in, so the row grows as
+#' the run goes.
+store_provenance <- function(db_path, isolate, fields) { ... }
+```
+
+It records the assembly digest, the cgMLST scheme/version/seed genome and
+thresholds, the classical scheme, the AMR run, and the exact tool versions
+(`pymlst`, `blat`, `mafft`, AMRFinderPlus) — parsed from the logs by
+`parse_clamlst_meta()`, `parse_tool_meta()` and `parse_amr_meta()`. The scheme
+columns are denormalized on purpose: they snapshot what was true at typing time,
+so a later scheme refresh cannot rewrite a call's history (@sec-database).
+
+## Chapter summary
+
+- `typing.R` types in a separate process, coordinating through the busy timeout
+  and the revision bus.
+- `loop-pymlst.sh` runs three **sequential** steps per assembly — `wgMLST add`,
+  then `claMLST search`, then `abritamr run`; the classical reference is built
+  once before the loop.
+- Only step 1 writes the `.db` from inside pyMLST; R parses the log and performs
+  the classical/AMR/hash/provenance writes itself.
+- `mlst_repo.R` resolves the classical scheme deterministically (genus enforced,
+  one candidate), robust to pyMLST's species-name mangling.
+- Every assembly is content-hashed for duplicate detection; every isolate gets a
+  full `typing_provenance` row.
+
+AMR screening is step 3 of the same run — that is @sec-tech-amr.

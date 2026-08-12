@@ -1,4 +1,5 @@
 box::use(
+  jsonlite[fromJSON, toJSON],
   testthat[
     expect_equal,
     expect_error,
@@ -14,7 +15,7 @@ box::use(
   app / logic / epi_plot,
 )
 
-# A small metadata frame shaped like make_metadata_table()'s output: ISO date
+# A small metadata frame shaped like the `metadata` table's output: ISO date
 # strings (free text, so unparseable and NA values are expected).
 meta_fixture <- function() {
   data.frame(
@@ -40,48 +41,6 @@ meta_fixture <- function() {
     stringsAsFactors = FALSE
   )
 }
-
-# --- floor_date_bin ----------------------------------------------------------
-
-test_that("floor_date_bin rounds down to each interval's start", {
-  d <- as.Date(c("2026-01-14", "2026-02-03"))
-
-  expect_identical(epi_plot$floor_date_bin(d, "day"), d)
-  expect_identical(
-    epi_plot$floor_date_bin(d, "month"),
-    as.Date(c("2026-01-01", "2026-02-01"))
-  )
-  expect_identical(
-    epi_plot$floor_date_bin(d, "year"),
-    as.Date(c("2026-01-01", "2026-01-01"))
-  )
-})
-
-test_that("floor_date_bin weeks start on the ISO Monday", {
-  # Wednesday and the Sunday of the same ISO week collapse onto one Monday;
-  # the next day (Monday) must start a new bin rather than join it.
-  week <- epi_plot$floor_date_bin(
-    as.Date(c("2026-01-14", "2026-01-18", "2026-01-19")),
-    "week"
-  )
-
-  expect_identical(week, as.Date(c("2026-01-12", "2026-01-12", "2026-01-19")))
-  expect_identical(unique(format(week, "%u")), "1")
-})
-
-test_that("floor_date_bin is NA-safe for every interval", {
-  # The collection-date column is free text, so NA reaches the binner.
-  for (interval in c("day", "week", "month", "year")) {
-    binned <- epi_plot$floor_date_bin(as.Date(c("2026-01-14", NA)), interval)
-    expect_length(binned, 2L)
-    expect_false(is.na(binned[1]))
-    expect_true(is.na(binned[2]))
-  }
-})
-
-test_that("floor_date_bin rejects an unknown interval", {
-  expect_error(epi_plot$floor_date_bin(as.Date("2026-01-14"), "fortnight"), "fortnight")
-})
 
 # --- build_epi_data ----------------------------------------------------------
 
@@ -513,6 +472,71 @@ test_that("annotations are drawn onto the curve", {
   expect_true(n_layers(annos_fixture()) > n_layers(epi_plot$empty_epi_annotations()))
 })
 
+# --- as_epi_annotations ------------------------------------------------------
+# What a saved plot's annotations look like coming back out of its snapshot.
+restored_annos <- function(annos = annos_fixture()) {
+  fromJSON(toJSON(annos, auto_unbox = TRUE), simplifyVector = TRUE)
+}
+
+test_that("a JSON round trip loses the annotation dates' type", {
+  # The premise of everything below: JSON has no date type, so the frame comes
+  # back with text where the plot code expects Dates.
+  expect_identical(class(restored_annos()$start), "character")
+})
+
+test_that("as_epi_annotations puts a restored frame back in the schema", {
+  restored <- epi_plot$as_epi_annotations(restored_annos())
+
+  expect_s3_class(restored$start, "Date")
+  expect_s3_class(restored$end, "Date")
+  # Same annotations as went in - and byte-for-byte what the live frame would
+  # be, so re-saving a restored plot round trips rather than drifting.
+  expect_identical(restored$start, annos_fixture()$start)
+  expect_identical(restored, epi_plot$as_epi_annotations(annos_fixture()))
+})
+
+test_that("a restored plot draws the same curve as the one that was saved", {
+  # The regression: character dates reached .x_limits, whose min()/max() re-class
+  # the text as a Date (Summary.Date), and the curve died on date arithmetic
+  # over a Date that is really a string - "non-numeric argument to binary
+  # operator", with no annotation anywhere in the message.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  built <- function(annos) {
+    ggplot2::ggplot_build(
+      epi_plot$build_epi_ggplot(binned, list(interval = "week", annos = annos))
+    )
+  }
+
+  live <- built(annos_fixture())
+  restored <- built(epi_plot$as_epi_annotations(restored_annos()))
+
+  expect_length(restored$plot$layers, length(live$plot$layers))
+  expect_identical(
+    restored$layout$panel_params[[1]]$x.range,
+    live$layout$panel_params[[1]]$x.range
+  )
+})
+
+test_that("as_epi_annotations fills what a snapshot did not carry", {
+  # Colour post-dates annotations themselves, so plots saved before it exists
+  # restore without one; the fixture has no colour column at all.
+  restored <- epi_plot$as_epi_annotations(restored_annos())
+
+  expect_identical(unique(restored$color), epi_plot$EPI_ANNO_COLOR_DEFAULT)
+  expect_true(all(nzchar(restored$id)))
+})
+
+test_that("as_epi_annotations drops annotations it cannot place", {
+  broken <- annos_fixture()
+  broken$start <- c("not a date", "2026-02-10", NA)
+
+  kept <- epi_plot$as_epi_annotations(broken)
+
+  expect_identical(kept$label, "Outbreak window")
+  expect_identical(nrow(epi_plot$as_epi_annotations(NULL)), 0L)
+  expect_identical(nrow(epi_plot$as_epi_annotations(list(start = "2026-01-01"))), 0L)
+})
+
 # --- annotations lanes -------------------------------------------------------
 
 
@@ -577,12 +601,15 @@ test_that("every style renders to a real image", {
     interval = "week"
   )
 
+  # The on-screen path. File export across every offered format is
+  # save_plot_export()'s job — see test-viz_export.R.
   for (mode in c("stacked", "cumulative")) {
     file <- tempfile(fileext = ".png")
-    epi_plot$save_epi_plot(
+    epi_plot$render_epi_png(
       epi_plot$build_epi_ggplot(binned, list(mode = mode, interval = "week")),
       file,
-      "png"
+      width_px = 800,
+      height_px = 440
     )
     expect_true(file.exists(file))
     expect_true(file.size(file) > 0)
@@ -877,11 +904,14 @@ test_that("the cumulative overlay is scaled to reach the panel's top at its fina
       list(mode = "stacked", show_cumulative = TRUE, interval = "week")
     )
   )
+  # The overlay is drawn twice — a background halo pass plus the visible
+  # line, sharing the same data (see build_epi_ggplot) — so either match
+  # carries the same y values.
   step_layer <- which(vapply(
     built$plot$layers,
     function(l) inherits(l$geom, "GeomStep"),
     logical(1)
-  ))
+  ))[1]
   overlay_y <- built$data[[step_layer]]$y
 
   totals <- tapply(binned$count, binned$date_bin, sum)

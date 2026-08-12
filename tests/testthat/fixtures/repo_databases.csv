@@ -1,0 +1,159 @@
+repository,description
+pubmlst,Achromobacter spp.
+pubmlst,Acinetobacter baumannii
+pubmlst,Actinobacillus spp.
+pubmlst,Aeromonas spp.
+pubmlst,Aggregatibacter actinomycetemcomitans
+pubmlst,Anaplasma phagocytophilum
+pubmlst,Arcobacter spp.
+pubmlst,Aspergillus fumigatus
+pubmlst,Avibacterium paragallinarum
+pubmlst,Bacillus cereus
+pubmlst,Bacillus licheniformis
+pubmlst,Bacillus subtilis
+pubmlst,Lactococcus lactis 936-like bacteriophage
+pubmlst,Bacteroides fragilis
+pubmlst,Bartonella bacilliformis
+pubmlst,Bartonella henselae
+pubmlst,Bartonella washoensis
+pubmlst,Blastocystis spp.
+pubmlst,Borrelia spp.
+pubmlst,Brachyspira spp.
+pubmlst,Brucella spp.
+pubmlst,Burkholderia cepacia complex
+pubmlst,Burkholderia mallei
+pubmlst,Burkholderia pseudomallei
+pubmlst,Campylobacter non-jejuni/coli
+pubmlst,Campylobacter jejuni/coli
+pubmlst,Candida albicans
+pubmlst,Candida auris
+pubmlst,Candida glabrata
+pubmlst,Candida krusei
+pubmlst,Candida tropicalis
+pubmlst,Carnobacterium maltaromaticum
+pubmlst,Chlamydiales spp.
+pubmlst,Citrobacter spp.
+pubmlst,Clonorchis sinensis
+pubmlst,Clostridioides difficile
+pubmlst,Clostridium botulinum
+pubmlst,Clostridium chauvoei
+pubmlst,Clostridium perfringens
+pubmlst,Clostridium septicum
+pubmlst,Cronobacter spp.
+pubmlst,Cutibacterium avidum
+pubmlst,Cutibacterium acnes
+pubmlst,Dichelobacter nodosus
+pubmlst,Edwardsiella spp.
+pubmlst,Enterobacter spp.
+pubmlst,Enterococcus faecalis
+pubmlst,Enterococcus faecium
+pubmlst,Escherichia spp.
+pubmlst,Flavobacterium psychrophilum
+pubmlst,Gallibacterium anatis
+pubmlst,Geotrichum spp.
+pubmlst,Glaesserella parasuis
+pubmlst,Haemophilus influenzae
+pubmlst,Helicobacter cinaedi
+pubmlst,Helicobacter pylori
+pubmlst,Helicobacter suis
+pubmlst,Klebsiella aerogenes
+pubmlst,Klebsiella oxytoca
+pubmlst,Kudoa septempunctata
+pubmlst,Lactobacillus salivarius
+pubmlst,Lactococcus garvieae
+pubmlst,Leptospira spp.
+pubmlst,Candidatus Liberibacter solanacearum
+pubmlst,Macrococcus canis
+pubmlst,Macrococcus caseolyticus
+pubmlst,Mammaliicoccus sciuri
+pubmlst,Mannheimia haemolytica
+pubmlst,Melissococcus plutonius
+pubmlst,Mycobacteria spp.
+pubmlst,Mycobacteroides abscessus complex
+pubmlst,Mycoplasma agalactiae
+pubmlst,Mycoplasma anserisalpingitidis
+pubmlst,Mycoplasma bovis
+pubmlst,Mycoplasma flocculare
+pubmlst,Mycoplasma gallisepticum
+pubmlst,Mycoplasma genitalium
+pubmlst,Mycoplasma hominis
+pubmlst,Mycoplasma hyopneumoniae
+pubmlst,Mycoplasma hyorhinis
+pubmlst,Mycoplasma hyosynoviae
+pubmlst,Mycoplasma iowae
+pubmlst,Mycoplasma pneumoniae
+pubmlst,Mycoplasma synoviae
+pubmlst,Neisseria spp.
+pubmlst,Orientia tsutsugamushi
+pubmlst,Ornithobacterium rhinotracheale
+pubmlst,Paenibacillus larvae
+pubmlst,Pasteurella multocida
+pubmlst,Pediococcus pentosaceus
+pubmlst,Photobacterium damselae
+pubmlst,Piscirickettsia salmonis
+pubmlst,Plasmid MLST
+pubmlst,Porphyromonas gingivalis
+pubmlst,Proteus spp.
+pubmlst,Providencia spp.
+pubmlst,Pseudomonas aeruginosa
+pubmlst,Pseudomonas fluorescens
+pubmlst,Pseudomonas putida
+pubmlst,Riemerella anatipestifer
+pubmlst,Rhodococcus spp.
+pubmlst,Ribosomal MLST
+pubmlst,Salmonella spp.
+pubmlst,Saprolegnia parasitica
+pubmlst,Serratia spp.
+pubmlst,Shewanella spp.
+pubmlst,Sinorhizobium spp.
+pubmlst,Stenotrophomonas maltophilia
+pubmlst,Staphylococcus aureus
+pubmlst,Staphylococcus capitis
+pubmlst,Staphylococcus chromogenes
+pubmlst,Staphylococcus epidermidis
+pubmlst,Staphylococcus haemolyticus
+pubmlst,Staphylococcus hominis
+pubmlst,Staphylococcus pseudintermedius
+pubmlst,Oral Streptococcus spp.
+pubmlst,Streptococcus agalactiae
+pubmlst,Streptococcus bovis/equinus complex (SBSEC)
+pubmlst,Streptococcus canis
+pubmlst,Streptococcus dysgalactiae
+pubmlst,Streptococcus gallolyticus
+pubmlst,Streptococcus iniae
+pubmlst,Streptococcus mitis
+pubmlst,Streptococcus pneumoniae
+pubmlst,Streptococcus pyogenes
+pubmlst,Streptococcus suis
+pubmlst,Streptococcus thermophilus
+pubmlst,Streptococcus uberis
+pubmlst,Streptococcus zooepidemicus
+pubmlst,Streptomyces spp
+pubmlst,Taylorella spp.
+pubmlst,Tenacibaculum spp.
+pubmlst,Treponema pallidum
+pubmlst,Tricohomas vaginalis
+pubmlst,Trueperella pyogenes
+pubmlst,Ureaplasma spp.
+pubmlst,Vibrio cholerae
+pubmlst,Vibrio spp.
+pubmlst,Vibrio parahaemolyticus
+pubmlst,Vibrio tapetis
+pubmlst,Vibrio vulnificus
+pubmlst,Wolbachia spp.
+pubmlst,Xanthomonas citri
+pubmlst,Xylella fastidiosa
+pubmlst,Yersinia pseudotuberculosis
+pubmlst,Yersinia ruckeri
+pasteur,Bordetella
+pasteur,Corynebacterium
+pasteur,ecoli
+pasteur,elizabethkingia
+pasteur,epidermidis
+pasteur,kingella
+pasteur,REST API access to Klebsiella seqdef database
+pasteur,Leptospira
+pasteur,REST API access to Listeria seqdef database
+pasteur,morganella
+pasteur,staphlugdunensis
+pasteur,Yersinia

@@ -5,6 +5,14 @@
     --bs-card-border-radius: 8px;
 }
 
+// Shared "frosted glass" backing for anything overlaid on an image, so text
+// and controls stay legible over whatever colors sit underneath.
+@mixin frosted-glass-overlay {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    background-color: rgba(255, 255, 255, 0.55);
+}
+
 // Full-height anchor -----------------------------------------------------------
 // main.R emits page_navbar() inside a tagList, so bslib's `.bslib-page-fill`
 // (which is `height: 100%`) lands as a nested <div> rather than the document
@@ -17,6 +25,37 @@
 html,
 body {
     height: 100%;
+}
+
+// Input shield ----------------------------------------------------------------
+// Engaged by app/js/busy-shield.js for the duration of a user-triggered server
+// round trip, so clicks cannot pile up behind a blocked R process and replay in
+// a burst once it frees up. The shield re-enables pointer-events on itself
+// against the `body` rule below, so it is the hit target: it swallows the click
+// outright rather than letting it fall through, and can render the wait cursor.
+.pt-shield {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000; // above bslib modals (1055) and the waiter overlay
+    display: none;
+    background: transparent;
+    pointer-events: auto;
+}
+
+html.pt-busy {
+    body {
+        pointer-events: none;
+    }
+
+    .pt-shield {
+        display: block;
+    }
+}
+
+// Delayed by the shield's probe timer, so the many sub-250ms handlers cause no
+// cursor flicker. Blocking itself is immediate from millisecond zero.
+html.pt-busy-visible .pt-shield {
+    cursor: wait;
 }
 
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
@@ -129,8 +168,309 @@ body {
 
 // The creator form supplies its own padding: the navset's card body is
 // zero-padded so the plot tabs' full-bleed layouts sit flush.
+//
+// container-type lives here rather than on .viz-type-picker itself so the
+// picker can be *styled* by the container query below (a container can't
+// size itself off its own queried containment).
 .viz-creator {
-    max-width: 420px;
+    padding: 1rem;
+    container-type: inline-size;
+}
+
+.viz-creator-intro h4 {
+    margin-bottom: 0.25rem;
+}
+
+.viz-creator-intro p {
+    max-width: 68ch;
+    margin-bottom: 1.25rem;
+}
+
+// Plot-type picker.
+//
+// Style against the *live* DOM, not the markup radioGroupButtons() emits:
+// bslib rewrites that Bootstrap 3 button group on load into the Bootstrap 5
+// pattern, so by the time these rules run the per-choice `.btn-group` wrappers
+// are gone and each choice is an `input.btn-check` + `label.btn.radiobtn`
+// sibling pair sitting directly in `.btn-group-container-sw`. The rewrite also
+// hands every label `btn-outline-primary`, whose checked state would flood the
+// tile with solid primary — hence the explicit background/colour resets below.
+//
+// One tile row's height range. Growing .viz-type-picker's own min/max-height
+// per breakpoint (below) turned out to be the reliable way to size it: with
+// nothing but flex-grow + grid-auto-rows relying on content to propagate a
+// size up through the shinyWidgets/bslib wrapper chain, browsers reliably
+// under-computed it to ~0, collapsing every tile to the grid's bare row
+// floor regardless of how much room the card actually had.
+$viz-tile-row-min: 118px;
+$viz-tile-row-max: 222px;
+$viz-tile-row-gap: 0.85rem;
+
+// display:flex/column makes this a fill *container* for its own children,
+// same shape as bslib's .html-fill-container (see viz-creator's comment) —
+// shinyWidgets' generated wrappers below can't carry the html-fill-item class
+// themselves, so the flex/min-height chain has to be spelled out by hand down
+// to .btn-group-container-sw.
+//
+// min/max-height bound how tall the picker (and so the tiles in it, whose
+// preview + caption are both absolutely positioned and carry no intrinsic
+// height of their own — see .viz-type-tile) may grow. Sized here for one row
+// of five; the container queries below scale both up for the 2- and 3-row
+// layouts narrower widths fall back to, so a row is never starved just
+// because the flat number was written for a wider one.
+.viz-type-picker {
+    display: flex;
+    flex-direction: column;
+    min-height: $viz-tile-row-min;
+    max-height: $viz-tile-row-max;
+}
+
+// The two shinyWidgets/Shiny wrappers between .viz-type-picker and the grid
+// (a .form-group and the widget's own #id.radio-group-buttons div) are plain
+// blocks by default, so without this the fill height from .viz-type-picker
+// stops dead at the first one instead of reaching the grid.
+.viz-type-picker .form-group,
+.viz-type-picker .radio-group-buttons {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+// Grid rather than the inherited flex row: with wrapping flex the tiles size
+// off their caption text and break one-per-row. `!important` beats the `d-flex`
+// utility bslib leaves on the container. grid-auto-rows mirrors the picker's
+// own min/max so that once there's more than one row, the extra height the
+// picker claims (see the container queries below) is shared evenly between
+// rows instead of piling onto whichever row happens to size first.
+.viz-type-picker .btn-group-container-sw {
+    display: grid !important;
+    grid-template-columns: repeat(5, 1fr);
+    grid-auto-rows: minmax($viz-tile-row-min, $viz-tile-row-max);
+    gap: $viz-tile-row-gap;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+// One row of five while it fits, then a deliberate 3 + 2 (and 2 + 2 + 1 once
+// even that is cramped) rather than whatever a ragged wrap would give.
+@container (max-width: 1000px) {
+
+    // 3 columns of 5 tiles wrap to 2 rows.
+    .viz-type-picker {
+        min-height: calc(#{$viz-tile-row-min} * 2 + #{$viz-tile-row-gap});
+        max-height: calc(#{$viz-tile-row-max} * 2 + #{$viz-tile-row-gap});
+    }
+
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@container (max-width: 620px) {
+
+    // 2 columns of 5 tiles wrap to 3 rows.
+    .viz-type-picker {
+        min-height: calc(#{$viz-tile-row-min} * 3 + #{$viz-tile-row-gap} * 2);
+        max-height: calc(#{$viz-tile-row-max} * 3 + #{$viz-tile-row-gap} * 2);
+    }
+
+    .viz-type-picker .btn-group-container-sw {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+// The radio itself is never seen: the tile is the affordance. It stays in the
+// DOM, sized away rather than display:none, so it keeps taking focus and
+// shinyWidgets' own :checked lookup still finds it. Absolute positioning also
+// keeps it out of the grid's flow, so it claims no cell.
+.viz-type-picker .btn-check {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+}
+
+.viz-type-picker .radiobtn {
+    padding: 0;
+    overflow: hidden;
+    text-align: left;
+    white-space: normal;
+    border: 1px solid var(--bs-border-color);
+    // !important beats Bootstrap's connected-button-group corner rules
+    // (`.btn-group > .btn:not(:first-child)` etc.), which otherwise flatten
+    // every corner but the two outer ones on the group's end buttons.
+    border-radius: 4px !important;
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    transition: transform 0.15s ease, box-shadow 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.viz-type-picker .radiobtn:hover,
+.viz-type-picker .radiobtn:active,
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn,
+.viz-type-picker .btn-check:focus-visible+.radiobtn {
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border-color: var(--bs-primary);
+}
+
+.viz-type-picker .radiobtn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.viz-type-picker .radiobtn.active,
+.viz-type-picker .btn-check:checked+.radiobtn {
+    box-shadow: 0 0 0 2px rgba(var(--bs-primary-rgb), 0.35);
+}
+
+// `position: relative` anchors the preview and caption below, which both sit
+// on top of each other rather than stacking in flow — see .ad-plot-box, the
+// same pattern used for the dashboard's saved-plot thumbnails. `height: 100%`
+// matches whatever the grid's own row height resolves to (already clamped by
+// .btn-group-container-sw's grid-auto-rows), so there's no separate cap here.
+.viz-type-tile {
+    position: relative;
+    overflow: hidden;
+    height: 100%;
+}
+
+// Fills the whole tile now that the caption is an overlay rather than a
+// stacked block underneath it — nothing to reserve caption space for.
+// Unselected tiles are muted so the picked one reads at a glance.
+.viz-type-tile-preview {
+    position: absolute;
+    inset: 0;
+    background-color: var(--bs-secondary-bg);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: grayscale(0.5) opacity(0.8);
+    transition: filter 0.2s ease, transform 0.3s ease;
+}
+
+.viz-type-picker .radiobtn:hover .viz-type-tile-preview,
+.viz-type-picker .radiobtn.active .viz-type-tile-preview,
+.viz-type-picker .btn-check:checked+.radiobtn .viz-type-tile-preview {
+    filter: none;
+    transform: scale(1.04);
+}
+
+// Frosted-glass strip pinned over the bottom of the preview image, same
+// treatment as .ad-plot-overlay-info on the dashboard's plot thumbnails.
+// font-style is reset because bslib's rewrite makes each tile the content of
+// a <label>, which the app styles italic.
+.viz-type-tile-caption {
+    @include frosted-glass-overlay;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 0.55rem;
+    padding: 0.6rem 0.7rem;
+    font-style: normal;
+}
+
+[data-bs-theme="dark"] .viz-type-tile-caption {
+    background-color: rgba(30, 30, 30, 0.55);
+}
+
+.viz-type-tile-icon {
+    grid-row: 1 / span 2;
+    align-self: center;
+    font-size: 1.15rem;
+    color: var(--bs-primary);
+}
+
+.viz-type-tile-name {
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.viz-type-tile-tagline {
+    font-size: 0.75rem;
+    line-height: 1.3;
+    color: var(--bs-secondary-color);
+}
+
+// Details of the selected type, beside the name/Initiate card.
+.viz-creator-cols {
+    margin-top: 1.25rem;
+}
+
+.viz-type-info-icon {
+    margin-right: 0.5rem;
+    color: var(--bs-primary);
+    font-size: 1.5em;
+}
+
+.viz-type-info-title {
+    font-weight: 600;
+    font-size: 1.5em;
+}
+
+.viz-type-info-about {
+    margin-bottom: 0.85rem;
+}
+
+#app-visualization-type_info>.bslib-card {
+    padding-right: 1rem;
+}
+
+.viz-type-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.viz-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 999px;
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-tech li {
+    margin-bottom: 0.3rem;
+}
+
+.viz-type-tech li::marker {
+    color: var(--bs-primary);
+}
+
+.viz-creator-form .card-body {
+    gap: 0.75rem;
+}
+
+.viz-creator-form .card-header {
+    font-size: 1.5em;
+}
+
+// The preset banner is only rendered when the dashboard sent the user here, and
+// bslib's card gap would otherwise reserve a slot for the empty placeholder.
+.viz-creator-form .shiny-html-output:empty {
+    display: none;
+}
+
+.viz-creator-form .btn-lg {
+    margin-top: 0.25rem;
 }
 
 // Engine controls live directly in the right sidebar (no card). The wrapper is
@@ -196,7 +536,7 @@ body {
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
-    padding: .75rem 0.5rem;
+    padding-top: 1rem;
 }
 
 // Applied to an .accordion-item when it's the only panel left visible in its
@@ -337,6 +677,33 @@ body {
     background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.2) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.2) 75%, transparent 75%);
 }
 
+// MST canvas (see visualization_mst.R). The vis.js canvas is sized here rather
+// than in R: its width used to be computed from the height the browser reported
+// for the output, which meant every size report re-rendered the output, which
+// made the browser report a size again — a loop that re-created the whole
+// network several times per Generate.
+//
+// --mst-aspect is width/height, fixed at 16:9 — the shape a figure is expected
+// to be in once it leaves this panel (screenshotted, presented, dropped into a
+// document), which the downloaded HTML always will be. There used to be a
+// slider for this; a control only makes sense where there is a reason to want
+// something other than the shape the plot is headed for.
+.mst-canvas-wrap {
+    --mst-aspect: 16 / 9;
+
+    height: 100%;
+    aspect-ratio: var(--mst-aspect);
+    // Never wider than the stage: past that the canvas would overflow the card
+    // rather than the drawing shrinking to fit it.
+    max-width: 100%;
+}
+
+.mst-canvas-wrap .visNetwork,
+.mst-canvas-wrap .vis-network {
+    width: 100% !important;
+    height: 100% !important;
+}
+
 // Tree display modes (see visualization_tree.R). The ggtree image is rendered
 // at panel-width × aspect-ratio by renderPlot(); this only restyles how that
 // already-rendered image is presented in the stage — it never re-renders.
@@ -383,14 +750,15 @@ body {
     max-height: none;
 }
 
-// Epi plot stage (see visualization_epi.R). The curve is a ggplot image, so it
-// is presented the way the Tree's is: rendered at panel-width × aspect-ratio by
-// renderPlot(), then scaled down to fit the visible stage without distorting
-// its ratio. Keeps .viz-plot-stage for the shared `.viz-plot-prompt` overlay
-// and the `.viz-plot-stage.is-loading .viz-loading` toggle. The plotOutput div
-// carries an inline height (height="auto"), so the override needs !important to
-// win over it — same reason as .tree-stage.
-.epi-stage .shiny-plot-output {
+// Epi and AMR plot stages (see visualization_epi.R / visualization_amr.R).
+// Both are ggplot images, so they are presented the way the Tree's is: rendered
+// at panel-width × aspect-ratio, then scaled down to fit the visible stage
+// without distorting the ratio. Keeps .viz-plot-stage for the shared
+// `.viz-plot-prompt` overlay and the `.viz-plot-stage.is-loading .viz-loading`
+// toggle. The plotOutput div carries an inline height (height="auto"), so the
+// override needs !important to win over it — same reason as .tree-stage.
+.epi-stage .shiny-plot-output,
+.amr-stage .shiny-plot-output {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -398,7 +766,8 @@ body {
     height: 100% !important;
 }
 
-.epi-stage .shiny-plot-output img {
+.epi-stage .shiny-plot-output img,
+.amr-stage .shiny-plot-output img {
     width: auto !important;
     height: auto !important;
     max-width: 100%;
@@ -406,8 +775,9 @@ body {
     object-fit: contain;
 }
 
-// Guidance under the interval picker: secondary to the control it explains.
-.epi-help {
+// Guidance under a control: secondary to the control it explains.
+.epi-help,
+.amr-help {
     margin-top: -0.25rem;
     margin-bottom: 0.75rem;
     font-size: 0.8rem;
@@ -467,6 +837,106 @@ body {
     color: var(--bs-danger-text-emphasis);
 }
 
+// Mapping layers in the Tree sidebar's "Mapping" tab: one card per mapped
+// variable, showing which aesthetic and palette the engine gave it, with edit
+// and remove buttons. Deliberately the same shape as the Epi annotation list
+// above — both are "a list of removable things configured in a sidebar".
+.tree-layer-empty {
+    font-size: 0.9rem;
+}
+
+.tree-layer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+}
+
+.tree-layer-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    background-color: var(--bs-tertiary-bg);
+}
+
+// The title/meta column, kept clear of the two round buttons on its right.
+.tree-layer_body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tree-layer_title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-layer_meta {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-layer_btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background-color: var(--bs-secondary-bg);
+    color: var(--bs-secondary-color);
+}
+
+.tree-layer_btn:hover {
+    background-color: var(--bs-border-color);
+    color: var(--bs-body-color);
+}
+
+// The heatmap kinds, one card each.
+.tree-heatmap-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.tree-heatmap-card.is-empty {
+    opacity: 0.6;
+}
+
+// A colour swatch whose element is switched off, or whose aesthetic a mapping
+// layer has taken over — a fixed colour loses to a mapped one in ggplot2, so
+// the control is genuinely dead. Left inert rather than hidden, so the tab
+// keeps its shape and the user can see that the control exists.
+.viz-color-row.is-disabled {
+    opacity: 0.45;
+
+    .viz-color-pick {
+        pointer-events: none;
+    }
+
+    .viz-color-label {
+        cursor: not-allowed;
+    }
+}
+
+// A sliderInput whose control is disabled from the server: shinyjs dims the
+// ionRangeSlider track and handle on its own, but not the label above it.
+.viz-slider-row.is-disabled .control-label {
+    opacity: 0.5;
+}
+
 // Map plot stage: unlike .viz-plot-stage (which centers a fixed-size plot
 // image), the leaflet map is full-bleed and must keep filling 100% of its
 // html-fill-item box, so this only adds the positioning context .viz-plot-prompt
@@ -495,6 +965,10 @@ body {
 // every plot tab's own map instance (see visualization_map.R's leafletOutput).
 .viz-map-canvas {
     background-color: #ddd;
+}
+
+.test {
+    width: 100%;
 }
 
 // Unified backing for every floating Map control -----------------------------
@@ -850,14 +1324,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
-// Shared "frosted glass" backing for anything overlaid on the plot image, so
-// text and controls stay legible over any plot's colors.
-@mixin ad-plot-overlay-glass {
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    background-color: rgba(255, 255, 255, 0.55);
-}
-
 [data-bs-theme="dark"] {
     .ad-plot-overlay-info {
         background-color: rgba(30, 30, 30, 0.55);
@@ -927,13 +1393,73 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.5;
 }
 
-.accordion-body {
+.viz-nav-wrap .accordion-body,
+.plot-setup .accordion-body {
     padding: 0.5rem 0.75rem;
 }
 
-// Name / badge / "Saved: ..." strip, pinned over the bottom of the thumbnail.
+.viz-nav-wrap .accordion-button,
+.plot-setup .accordion-button {
+    padding: 0.5rem 1rem 0.5rem 1rem;
+}
+
+.plot-setup .form-group {
+    margin-bottom: 0.5rem;
+}
+
+// Generate, when the left sidebar is holding changes the plot has not been
+// redrawn with. The left sidebar is a form you submit, so the one control that
+// submits it has to say when there is something to submit — and Shiny's own
+// disabled styling is quiet enough that the enabled state needs to be the loud
+// one, not merely the not-grey one.
+#plot-setup .btn.is-pending,
+.plot-setup .btn.is-pending {
+    box-shadow: 0 0 0 0.2rem var(--bs-primary-bg-subtle);
+    animation: plot-generate-pending 1.6s ease-in-out infinite;
+}
+
+@keyframes plot-generate-pending {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0.15rem var(--bs-primary-bg-subtle);
+    }
+
+    50% {
+        box-shadow: 0 0 0 0.3rem var(--bs-primary-bg-subtle);
+    }
+}
+
+// A disabled Generate should read as "nothing to apply", not as "broken".
+#plot-setup .btn#generate:disabled,
+.plot-setup .btn:disabled {
+    opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    #plot-setup .btn.is-pending,
+    .plot-setup .btn.is-pending {
+        animation: none;
+    }
+}
+
+.selection-modal-filter .input-daterange .input-group-addon.input-group-prepend.input-group-append .input-group-text,
+.selection-modal-filter .input-daterange,
+.selection-modal-filter .shiny-date-range-input {
+    height: 100%;
+}
+
+.selection-modal-filter>div:nth-child(2) {
+    height: 47px;
+}
+
+.accordion-button:focus {
+    box-shadow: none !important;
+}
+
 .ad-plot-overlay-info {
-    @include ad-plot-overlay-glass;
+    @include frosted-glass-overlay;
     position: absolute;
     left: -1px;
     right: 0;
@@ -970,6 +1496,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     white-space: nowrap;
 }
 
+.visNetwork hr {
+    display: none;
+}
+
+.visNetwork>div {
+    height: 100% !important;
+}
+
 // "Fixed isolate selection" badge on an Analysis card.
 .ad-static-badge {
     color: var(--bs-info);
@@ -995,14 +1529,20 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // Retrospective-change warning inside the settings wizard's isolate step.
+// Collapsed to a hoverable icon badge; the full text lives in its tooltip.
 .ad-retro-warning {
-    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    font-size: .85rem;
     color: var(--bs-warning-text-emphasis, #997404);
     background-color: var(--bs-warning-bg-subtle, #fff3cd);
     border: 1px solid var(--bs-warning-border-subtle, #ffe69c);
     border-radius: var(--bs-border-radius);
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 0.75rem;
+    padding: .25rem 1rem;
+    cursor: default;
+    height: 47px;
+    gap: 1rem;
+    margin-left: auto;
 }
 
 // Badge pinned to a plot card whose isolate set no longer matches its Analysis.
@@ -1053,17 +1593,30 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: none !important;
 }
 
+// Prevent long cell values from wrapping into many lines and blowing up row
+// height. table-cell boxes ignore max-height/overflow clamping and
+// -webkit-line-clamp requires display: -webkit-box, which strips the td's
+// required table-cell display and collapses the whole table layout - so
+// instead of clamping lines, cells stay single-line and grow in width;
+// tables that opt into DT's scrollX already have the horizontal scroll
+// container to absorb that width.
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td,
+.isolate-selection-table table.dataTable th,
+.edit-table table.dataTable th {
+    white-space: nowrap;
+}
+
+.app-database-custom_fields-fields_table .dataTables_scrollBody {
+    border-left: none !important;
+}
+
 // Database Browser sub-page layout -------------------------------------------
 
 .tab-content>.tab-pane.html-fill-container,
 .tabbable,
 .tabbable .tab-content {
     height: 100%;
-}
-
-.db-page_header {
-    flex-shrink: 0;
-    padding: 0.5rem;
 }
 
 .db-page_body {
@@ -1080,23 +1633,12 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         flex-direction: column;
     }
 
+    // Takes the height left under the toolbar and scrolls internally. It is
+    // the table's only scrollport - see the shared rules under
+    // "One scrollport per table" below.
     .dataTables_scroll {
         flex: 1 1 auto;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .dataTables_scrollHead {
-        flex-shrink: 0;
-        overflow: hidden !important;
-    }
-
-    .dataTables_scrollBody {
-        flex: 1 1 auto !important;
-        min-height: 0 !important;
-        max-height: none !important;
-        overflow-y: auto !important;
     }
 
     .dataTables_info {
@@ -1106,92 +1648,308 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         color: var(--bs-secondary-color);
     }
 
-    table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
-        cursor: cell;
-
-        &:hover {
-            box-shadow: inset 0 0 0 1px #838383 !important;
-        }
-    }
-
 }
 
-.db-page_body table.dataTable {
-    cursor: not-allowed;
+// Per-cell "click to copy/edit" affordance for tables with client-side cell
+// editing. Scoped to .edit-table rather than .db-page_body: fields_table is a
+// .db-page_body table too, but its rows (not individual cells) are the click
+// target - see #app-database-custom_fields-fields_table below.
+.edit-table table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
+    cursor: copy;
+
+    &:hover {
+        box-shadow: inset 0 0 0 1px #838383 !important;
+    }
+}
+
+// FixedColumns fixes, scoped to .edit-table (every DT with client-side cell
+// editing) and .isolate-selection-table (the isolate-picker modals, which pin
+// isolate and — when a time filter is active — a date column too) rather than
+// .db-page_body: FixedColumns itself is a property of the table, not of
+// whichever page happens to host it, so any table that turns it on - not just
+// ones inside a .db-page_body pane - gets both fixes.
+.edit-table,
+.isolate-selection-table {
+
+    // FixedColumns ships with a hardcoded white background for the pinned
+    // column, gated on a `html.dark` class this app never sets (theming runs
+    // through bslib's `data-bs-theme` attribute instead) - swap in the
+    // bootstrap variable so the pinned column tracks light/dark automatically.
+    table.dataTable thead tr>.dtfc-fixed-left,
+    table.dataTable tbody tr>.dtfc-fixed-left {
+        background-color: var(--bs-body-bg);
+    }
+}
+
+// FixedColumns only pins the cell DataTables considers each column's
+// "header" (the sortable title row), so with filter = "top" the search-box
+// row underneath - a <tr> of <td>s DT bolts onto <thead> outside that API -
+// never gets sticky positioning and scrolls out from under its column.
+//
+// Matched on the cell being a <td>, not on the row's position: header rows
+// are <th> throughout and the filter row is the only <thead> row built from
+// <td>s, so this holds however many header rows the table has. (It was
+// `tr:nth-child(2)`, which silently stopped matching when the Browse table
+// grew a second header row and pushed the filter row to nth-child(3).)
+//
+// .edit-table only ever pins one column (`isolate`), so hardcoding `left: 0`
+// here is exact. .isolate-selection-table is excluded: its time filter can
+// pin a second column (a date field, picked by the user) whose width isn't
+// knowable in advance, so its `left` offset can't be a CSS constant — that
+// case is instead handled per-render by the `initComplete` JS in
+// visualization_plot.R, which reads the offset FixedColumns already worked
+// out for the matching header cell.
+.edit-table table.dataTable thead tr>td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background-color: var(--bs-body-bg);
+}
+
+// Rows whose isolate was typed into this database during the current session
+// (added, then brought in by a reload). A subtle success-tinted background that
+// blends into whatever the active theme's body colour is, so it stays quiet in
+// both light and dark mode. color-mix keeps the fill opaque - the pinned first
+// column is position: sticky, and a translucent fill would let other rows show
+// through it while scrolling horizontally.
+$session-new-tint: 20%;
+
+.db-page_body table.dataTable tbody tr.session-new-row>td {
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Repaint the pinned isolate cell with the same tint (it otherwise carries the
+// plain var(--bs-body-bg) fill set on .dtfc-fixed-left above), so the highlight
+// runs unbroken across the frozen first column. Higher specificity than that
+// rule, so it wins.
+.edit-table table.dataTable tbody tr.session-new-row>td.dtfc-fixed-left {
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Same idea for isolates a merge brought in this session, in the info hue - a
+// different provenance, so a different tint, at the same strength so neither
+// reads as more important than the other.
+.db-page_body table.dataTable tbody tr.session-import-row>td {
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+.edit-table table.dataTable tbody tr.session-import-row>td.dtfc-fixed-left {
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Legend explaining the .session-new-row highlight above, injected by
+// initComplete (database_browser.R) into DataTables' own "Showing x to y of z
+// entries" info div (dom: "ti") rather than as a separate line, so it reads as
+// one row instead of adding toolbar height.
+.session-legend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+// Wraps every legend appended to .dataTables_info (the AMR call legend and/or
+// the session-new-row legend) in a single flex item, so .session-legend-row's
+// space-between keeps them grouped together on the right regardless of how
+// many are present.
+.dt-legend-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+#plot-setup .bslib-sidebar-layout>.collapse-toggle {
+    top: unset;
+}
+
+.session-new-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+// Legend for the AMR call marks rendered in amr-gene-cell columns (see the
+// gene-column renderer in database_browser.R). Reuses the .amr-call colour
+// classes so each symbol here matches its cell exactly, and carries the same
+// title text so hovering the legend teaches the same thing hovering a cell
+// does.
+.amr-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+// Same tint as the row highlight it explains, so the swatch reads as a literal
+// preview rather than an unrelated colour.
+.session-new-swatch {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 2px;
+    background-color: color-mix(in srgb, var(--bs-success) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+// Its counterpart for merged-in rows; same rule, .session-import-row's hue.
+.session-import-swatch {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 2px;
+    background-color: color-mix(in srgb, var(--bs-info) #{$session-new-tint}, var(--bs-body-bg));
+}
+
+#app-database-custom_fields-fields_table td {
+    cursor: pointer;
+}
+
+// Filled ("2 / 15") must never break across the slash - the other columns
+// (Allowed values, Description) wrap intentionally, but this one is short
+// enough that a wrap only ever looks like a rendering bug.
+#app-database-custom_fields-fields_table td:last-child {
+    white-space: nowrap;
 }
 
 .db-page_body table.dataTable tbody .col-readonly {
-    pointer-events: none;
+    // Editing is already blocked server-side via DT's editable$disable$columns
+    // (see database_browser.R / database_custom.R) - pointer-events: none here
+    // would remove the cell from hit-testing, which stops `cursor` from ever
+    // applying on hover.
+    cursor: not-allowed;
     // Signal that these columns are not client-side editable
     color: #6c7a89;
     font-style: italic;
 }
 
-
-// Toolbar shared by Browse / Import / Export. Each control-group stacks a label
-// over its widget(s); the groups are stretched to a common height so that every
-// label sits on one baseline no matter which widget the group holds.
-.db-browse-controls {
-    // Floor for a group whose widget is shorter than a button (e.g. a bare text
-    // placeholder). The actual height is the tallest widget in the row.
-    --control-h: 2.375rem;
-
-    display: flex;
-    align-items: stretch;
-    flex-wrap: wrap;
-    gap: 1rem;
-    width: 100%;
-
-    .btn {
-        white-space: nowrap;
-    }
-
-    .shiny-input-container {
-        margin-bottom: 0;
-    }
-
-    // conditionalPanel() wraps its groups in a plain div, which would otherwise
-    // break the flex chain and stack the groups it holds vertically.
-    >.shiny-panel-conditional {
-        display: flex;
-        align-items: stretch;
-        column-gap: 1rem;
-    }
-
-    // label = NULL still emits an empty <label> that keeps Bootstrap's label
-    // margin, padding dead space above the widget. Collapse it.
-    .shiny-label-null {
-        display: none;
-    }
+[data-bs-theme="dark"] .db-page_body table.dataTable tbody .col-readonly {
+    color: #b2b8bf;
 }
 
-.control-group {
+.edit-table input {
+    background: inherit
+}
+
+// Row one of the Browse table's two-row header (see .grouped_header_sketch()):
+// the category a run of columns belongs to. Left-aligned over its span and
+// quieter than the column names below it, so the eye reads the columns first
+// and the grouping as context. `.dt-hdr-ungrouped` is the empty cell over the
+// frozen isolate column - it only exists to keep every header row the same
+// number of cells, and must not draw a separator of its own.
+.db-page_body table.dataTable thead th.dt-hdr-group {
+    text-align: left;
+    font-size: 0.72rem;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: #6c7a89;
+}
+
+// The frozen isolate column's header spans both rows (see
+// .grouped_header_sketch()); sit its label on the column names' line rather
+// than centered across the category row above them.
+.db-page_body table.dataTable thead th.dt-hdr-ungrouped {
+    vertical-align: bottom;
+}
+
+// Row two: the column names. `table.dataTable thead>tr>th.sorting` already
+// styles these, but only on the cell DataTables mapped to the column - which
+// for a one-column category is the row-one cell instead (see add_leaf() in
+// .grouped_header_sketch()). Restate it on the leaf itself so a lone gene reads
+// the same as one sitting in a multi-gene category.
+.edit-table table.dataTable thead th.dt-hdr-leaf {
+    text-transform: uppercase;
+    font-size: 0.8em;
+    padding-top: 0.5rem;
+}
+
+[data-bs-theme="dark"] .db-page_body table.dataTable thead th.dt-hdr-group {
+    color: var(--bs-secondary-color);
+}
+
+// DT's own Bootstrap5 stylesheet only paints the row-selection highlight
+// (`tr.selected`), not a column's - `row+column` selection (see the
+// `selection` argument on the datatable() call) adds `.selected` to each
+// cell in a picked column, but leaves it otherwise invisible. Reuse the same
+// CSS variable DT's row highlight uses, so column selection reads as the
+// same "selected" color in both themes.
+.db-page_body table.dataTable tbody td.selected {
+    box-shadow: inset 0 0 0 9999px rgba(var(--dt-row-selected), 0.6);
+}
+
+// AMR gene columns hold one of three call states, rendered as a mark (see the
+// renderer in database_browser.R). Centered: the column is a presence grid, not
+// text, and a centered mark under a gene name scans as a matrix.
+.db-page_body table.dataTable tbody td.amr-gene-cell {
+    text-align: center !important;
+}
+
+.amr-call {
+    font-style: normal;
+    cursor: help;
+}
+
+// A confident call reads at full strength; the two qualified ones are stepped
+// back so a column of plain checkmarks stands out from the flagged calls.
+.amr-call-match {
+    color: var(--bs-success);
+}
+
+.amr-call-inexact {
+    color: var(--bs-success);
+    opacity: 0.65;
+}
+
+.amr-call-partial {
+    color: var(--bs-warning-text-emphasis, #997404);
+    font-weight: 600;
+}
+
+
+.sidebar-control {
+    display: flex;
+    gap: 2rem;
+}
+
+#app-database-custom_fields-body>div {
+    justify-content: center;
+}
+
+.io-control {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.sidebar-control .form-group,
+.io-control .form-group {
+    margin-bottom: 0;
+}
+
+.sidebar-control>button,
+.io-control>button {
+    width: 100%;
+}
+
+.sidebar-control-group,
+.io-control-group {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 0.2rem;
 }
 
-.import-export-controls {
+.sidebar-control-group {
+    gap: 0.75rem;
+}
 
-    .control-group-items .dest-slot,
-    .control-group-items>div,
-    .control-group-items>span,
-    .control-group-items>.btn {
-        min-width: 300px;
-    }
+.io-control-group {
+    gap: 5px;
+}
 
-    .control-group-items .btn {
-        width: 100%;
-    }
+.btn-group>:not(.btn-check)+.btn {
+    white-space: nowrap;
+}
 
-    .control-group-items .shinySave {
-        width: 100% !important;
-    }
-
-    .control-group-items .btn-group .btn {
-        width: 50% !important;
-    }
+// Export's destination buttons are wrapped one per output extension in a slot
+// div (see DEST_BUTTONS in database_export.R), which absorbs the stretch the
+// column would otherwise pass to the button. Hand it on.
+.io-control-group .dest-slot .btn {
+    width: 100%;
 }
 
 .shiny-input-container .radio-inline input:checked[type="radio"] {
@@ -1226,83 +1984,9 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     display: unset !important;
 }
 
-.control-group-items {
-    display: flex;
-    align-items: stretch;
-    gap: 1rem;
-    flex: 1 1 auto;
-    min-height: var(--control-h);
-
-    // uiOutput() and conditionalPanel() wrappers are pass-through: hand the flex
-    // context down so the widget inside them still fills the band.
-    >.shiny-html-output,
-    >.shiny-panel-conditional {
-        display: flex;
-        align-items: stretch;
-        gap: 0.35rem;
-    }
-
-    // Whatever the widget and however deeply Shiny wraps it, it fills the band.
-    // selectInput is selectized at runtime, so the box is .selectize-input.
-    .shiny-input-container,
-    .selectize-control,
-    .selectize-input,
-    .bootstrap-select,
-    .bootstrap-select>.dropdown-toggle,
-    select.shiny-input-select,
-    .form-control,
-    .form-select,
-    .btn {
-        height: 47px;
-        margin-bottom: 0;
-    }
-
-    // Stretched controls need their content re-centred vertically.
-    .selectize-input,
-    .btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    // A checkbox is a box + caption, not a full-height control: keep it at its
-    // natural height and centre it in the band instead of stretching it.
-    .shiny-input-container:has(.checkbox, .form-check) {
-        height: auto;
-        align-self: center;
-    }
-
-    // Same for a switch, which bslib emits outside a .shiny-input-container.
-    // Its own layout depends on Bootstrap's .form-check internals, so centre it
-    // from the outside rather than making it a flex box itself.
-    .bslib-input-switch {
-        align-self: center;
-        margin-bottom: 0;
-        white-space: nowrap;
-    }
-
-    // Placeholders ("No metadata to import", "No backups yet") are copy, not
-    // controls: centre them in the band rather than letting them stretch.
-    .text-muted {
-        display: flex;
-        align-items: center;
-    }
-}
-
-// The chosen file, named in the toolbar next to the button that chose it.
+// The chosen file, named in the sidebar under the button that chose it.
 .dest-label {
-    display: inline-flex;
-    align-items: center;
-    gap: .4rem;
-    padding: 0 .7rem;
-    border-radius: 1rem;
-    background: var(--bs-tertiary-bg);
     font-size: .8rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    width: 100%;
-    justify-content: center;
     font-family: monospace;
 }
 
@@ -1311,6 +1995,42 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     background: transparent;
     color: var(--bs-secondary-color);
     font-style: italic;
+}
+
+// Browse Entries' "Selection" sidebar group (see selection_stats_ui in
+// database_browser.R) - a read-out of the metadata grid's row+column
+// selection.
+.selection-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+}
+
+.selection-stats-line strong {
+    font-weight: 600;
+}
+
+.selection-stats-empty {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--bs-secondary-color);
+}
+
+// The footer added to Browse Entries' table (see .grouped_header_sketch())
+// exists only to give row+column selection a clickable target per column;
+// keep it visually quiet rather than reading as a second header.
+.db-page_body table.dataTable tfoot th.dt-ftr-cell {
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--bs-secondary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.db-page_body table.dataTable tfoot th.dt-ftr-cell:hover {
+    color: var(--bs-body-color);
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.03));
 }
 
 .db-menu-item {
@@ -1363,27 +2083,32 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     opacity: 0.75;
 }
 
-// Import panel. Compatibility and the import summary are two halves of one
-// answer — "may this come in" and "what does that leave" — so they sit side by
-// side in cards rather than stacked. The row is set clear of the toolbar above
-// it, so the cards read as their own band of the page rather than as a caption
-// hanging off the controls.
+.vscomp-ele {
+    min-width: unset !important;
+}
+
+.vscomp-dropbox-container {
+    max-width: unset !important;
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button,
+.vscomp-wrapper:focus .vscomp-toggle-button {
+    box-shadow: unset !important;
+}
+
+// Import panel. Compatibility and the import summary are read in order, so
+// they stack — the checks first, then the tally of what they leave to
+// import. The row is set clear of the toolbar above it, so the cards read as
+// their own band of the page rather than as a caption hanging off the
+// controls. Layout is otherwise bslib's: transfer_cards()/transfer_row() wrap
+// this in as_fill_carrier() so a fill = TRUE card can grow into it.
 .transfer-cards {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding-top: 1.75rem;
+    padding: 1rem;
 
     // bslib hangs a margin-bottom off the grid and off each card within it. This
     // column already spaces its children with a flex gap, so the two compound.
     .bslib-mb-spacing {
         margin-bottom: 0;
-    }
-
-    // The compatibility list is the taller of the pair. Let both cards fill the
-    // row so it reads as one band rather than two cards of ragged height.
-    .bslib-grid-item>.bslib-card {
-        height: 100%;
     }
 
     // In a card, the closing whitespace of a section is the card's own padding.
@@ -1398,6 +2123,14 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     .clash-row:last-child {
         border-bottom: none;
     }
+}
+
+// One transfer-cards entry: the compatibility card sized to its own content,
+// the summary card below it filling whatever height is left in the stack
+// (see panel_card()'s `fill` argument). transfer_row() wraps this in
+// as_fill_carrier() for the flex/fill CSS; only the gap is ours to set.
+.transfer-row {
+    gap: 1rem;
 }
 
 // The headline figures of a summary card (bslib value boxes). Half a page is too
@@ -1462,13 +2195,32 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin-bottom: 0;
 }
 
-// Compatibility check table: one row per gate, colour-coded by outcome.
+// Compatibility check list: one item per gate, colour-coded by outcome, set
+// two to a row via a balanced multi-column layout rather than one long single
+// column — a six-check list reads as three rows, not six.
 .compat-check {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.35rem 0.75rem;
-    align-items: baseline;
+    column-count: 2;
+    column-gap: 1.5rem;
     margin-bottom: 1rem;
+}
+
+// break-inside keeps a check's badge and text together rather than splitting
+// across the column break.
+.compat-check_item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    break-inside: avoid;
+    margin-bottom: 0.5rem;
+}
+
+// Name and detail run inline on one line rather than stacked on two.
+.compat-check_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.4rem;
+    min-width: 0;
 }
 
 .compat-check_name {
@@ -1478,6 +2230,11 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .compat-check_detail {
     color: var(--bs-secondary-color);
     font-size: 0.9em;
+
+    &::before {
+        content: "—";
+        margin-right: 0.4rem;
+    }
 }
 
 .compat-badge {
@@ -1558,30 +2315,69 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // Sticky table headers inside the typing accordion panels.
-// .accordion-body (overflow-y: auto) is the scroll container. Bootstrap gives
-// it padding: 1rem by default. With padding-top > 0 the first tbody rows can
-// scroll into the padding area above the sticky thead before the sticky kicks
-// in — visually they appear above the header. Removing vertical padding
-// eliminates that gap so the table starts flush at top: 0 and nothing can
-// scroll above the header.
+//
+// The panel body cannot be the scroll container: Bootstrap gives it 1rem of
+// padding, and padding is *inside* the scrollport, so rows scrolled up into the
+// strip above the sticky thead stayed visible there — they appeared above the
+// header. Zeroing the body's padding fixes that but takes the panel's gutters
+// with it.
+//
+// So the scrolling moves one level down, onto .typing-scrollpane's table wrapper,
+// which carries the gutters everywhere except the top. The header then pins at
+// top: 0 of a scrollport whose first pixel is the table's own first pixel, and
+// nothing can render above it. Anything that must stay put while the list
+// scrolls (the Exclude / Include toolbar) sits in the pane outside that wrapper.
 .typing-accordion .accordion-body {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-
     table.dataTable {
         border-collapse: separate !important;
         border-spacing: 0;
+        // DT's own bootstrap5 CSS puts `margin-top/bottom: 6px !important` on
+        // every table.dataTable, as breathing room against the length/search/
+        // pagination controls that surround it in DT's default layout. Left
+        // in place, the table (and the sticky thead inside it) rests 6px
+        // below the scrollport's top edge until scrolled, then snaps up to
+        // top: 0 the moment sticky engages — visible as the header jumping
+        // upward over the first few pixels of scroll. Zeroing it removes
+        // both the jump and the matching gap after the last row.
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
     }
 
     thead {
         position: sticky;
-        top: -1px;
+        top: 0;
         z-index: 10;
     }
 
     thead th {
         background-color: var(--bs-body-bg) !important;
         box-shadow: 0 2px 0 var(--bs-border-color);
+    }
+}
+
+// Specificity has to clear `.typing-accordion .accordion-collapse.show
+// .accordion-body` below, which sets overflow-y: auto — hence the :has() rather
+// than a bare class (the :has() argument contributes its own class weight).
+.typing-accordion .accordion-collapse.show .accordion-body:has(> .typing-scrollpane) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+.typing-scrollpane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+
+    // DTOutput's own container — the scrollport the sticky header pins against.
+    >.datatables {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        // No top padding: that is the whole point of the split above.
+        padding: 0 1rem 1rem;
     }
 }
 
@@ -1628,12 +2424,391 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
         transition: none !important;
     }
 
+    // Fade the opened body in instead, since height can't be animated here.
+    .accordion-collapse.show .accordion-body {
+        animation: pt-accordion-fade 0.18s ease-out;
+    }
+
     // The header's title div only grows to fit its text by default (it's a
     // flex item alongside the chevron pseudo-element), so the custom title
     // below needs to claim the remaining width itself to push the summary
     // badges to the right, ahead of the chevron.
     .accordion-title {
         flex: 1 1 auto;
+    }
+}
+
+// The panel's own geometry cannot be animated (see transition: none above), so
+// the body slides down into the space instead - the opening reads as motion
+// even though the box itself snaps to its final size.
+@keyframes pt-accordion-fade {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.isolate-selection-table table.dataTable td,
+.edit-table table.dataTable td,
+.isolate-selection-table table.dataTable th,
+.edit-table table.dataTable th {
+    font-size: 0.8em !important;
+    border-bottom: 1px solid #ddd;
+    border-right: 1px solid #ddd;
+}
+
+.datatables {
+    font-size: 0.9em;
+}
+
+td {
+    padding: 5px !important;
+}
+
+#app-scheme_browser-scheme_overview {
+    .table {
+        margin: 0px !important;
+    }
+
+    .table>thead {
+        display: none;
+    }
+}
+
+.values-table table.dataTable th {
+    text-transform: uppercase;
+}
+
+.tab-pane[data-value="Variables"]>div,
+.tab-pane[data-value="Values"]>div,
+
+.tab-pane[data-value="typing_panel"] .bslib-sidebar-layout>.main {
+    overflow-y: hidden;
+}
+
+.tab-pane[data-value="scheme_browser_panel"] {
+    padding: 0 !important;
+}
+
+// The rule above loses to `table.dataTable thead>tr>th.sorting` further down
+// (four element selectors vs. two here, so it wins the specificity tie on
+// classes) — that's why only the body shrank and the sortable headers stayed
+// at its hard-coded 12px. Match its selector shape to take priority back.
+.isolate-selection-table table.dataTable thead>tr>th.sorting,
+.edit-table table.dataTable thead>tr>th.sorting {
+    font-size: 0.8em;
+}
+
+// Editable metadata tables auto-size columns to their content, so short
+// values ("City") end up too narrow to comfortably show or edit. Enforce a
+// floor on the column.
+//
+// It has to sit on the *body* cells, not the header ones. With scrollX the
+// header and the body are two separate <table>s, and DataTables sizes them by
+// measuring the body and then writing the result as an inline width onto the
+// header cells. A floor on the header alone therefore overrides DT's own
+// arithmetic on one table only: the header column renders at 6rem while the
+// body column keeps the narrower width DT computed, and the error accumulates
+// across the row. Measured from the body instead, DT arrives at a width that
+// already clears the floor and propagates the same number to both tables.
+.edit-table table.dataTable tbody td {
+    min-width: 6rem;
+}
+
+// Date columns need a floor that clears a native <input type="date">'s
+// rendered width (~144px in Chromium, incl. the calendar-icon affordance),
+// not just short text. At the 6rem floor above, opening the editor forces the
+// input past the column's width and DT widens the whole column to fit it,
+// which then reflows every column to its right. Reserving the room up front
+// means the editor never has to grow the column.
+//
+// Applied via a columnDef className rather than nth-child, because which
+// columns are dates is not fixed: besides the schema's sample_collection_date,
+// a user can define any number of date variables (phylotrace_custom_fields.type
+// == "date"). Both tables that render those columns tag them, and both carry
+// .edit-table, so one selector covers Browse Entries and Custom Variables.
+.edit-table table.dataTable tbody td.col-date {
+    min-width: 9rem;
+}
+
+// The <select> swapped in for a category/boolean cell's edit input (see
+// initComplete in database_custom.R) isn't sized by DT the way its own
+// <input> is, so it shrink-wraps to its selected option's text by default.
+.edit-table table.dataTable tbody td select.dt-category-select {
+    width: 100%;
+}
+
+// One scrollport per table -------------------------------------------------
+//
+// With scrollX, DataTables splits the table into two <table>s in two separate
+// scroll containers and keeps them aligned from JavaScript: it copies
+// scrollLeft from the body onto the header on every scroll, and pads the
+// header by the width it believes the body's vertical scrollbar to be, so the
+// two have the same scrollable extent.
+//
+// That padding is only applied while DT believes the body scrolls vertically,
+// and these tables override the body's height (scrollY is a placeholder — 1px
+// for the fill layouts — with the real height coming from CSS). After a
+// resize DT re-measures, concludes there is no scrollbar, drops the padding,
+// and the header can then no longer scroll as far as the body: the columns
+// come apart by a scrollbar's width at the right-hand end of the scroll. It
+// cannot be corrected from CSS either, because DT normalises the header
+// wrapper's border-box width — extra padding or border is subtracted straight
+// back out of its width.
+//
+// So don't keep two scrollports in sync: use one. The header and the body
+// scroll together as a single element and the header is pinned with
+// position: sticky rather than being held outside the scroller. There is then
+// only one scroll offset in play and drift is impossible. DT still runs its
+// scrollLeft sync, which is a no-op once neither child scrolls by itself.
+//
+// DT writes overflow, position and border inline on the header wrapper
+// (jQuery .css()), which is what the !important flags here are for.
+//
+// .db-page_body is included alongside .edit-table/.isolate-selection-table
+// because the split-table problem it fixes comes from DT's scrollX/scrollY,
+// not from whether the table is client-side editable — fields_table
+// (read-only; row click opens an edit dialog rather than editing cells
+// in-place) needs it exactly as much as an edit-table does.
+.edit-table,
+.isolate-selection-table,
+.db-page_body {
+
+    .dataTables_scroll {
+        overflow: auto;
+        // These wrappers are flex containers, and a flex item's automatic
+        // minimum size is its content's — the full uncollapsed table. Without
+        // this the scroller is stretched to the table's width and overflows
+        // the pane instead of scrolling inside it.
+        min-width: 0;
+        // FixedColumns draws the table's left edge on the body only; carrying
+        // it on the scroller keeps the body from being offset against the
+        // header by that border.
+        // border-left: 1px solid #ddd;
+    }
+
+    .dataTables_scrollHead {
+        position: sticky !important;
+        top: 0;
+        // Above the body's own sticky (FixedColumns) cells, which sit at 1.
+        z-index: 4;
+        overflow: visible !important;
+        // DT never gives the header its own background because the default
+        // two-scrollport layout keeps it out of the body's scroll area, so it
+        // is transparent by default. Sticky now holds it over that area, and
+        // without an opaque background the body's rows show through as they
+        // scroll underneath it.
+        background-color: var(--bs-body-bg);
+    }
+
+    // DT's scrollbar compensation, now that nothing is being compensated for.
+    .dataTables_scrollHeadInner {
+        padding-right: 0 !important;
+    }
+
+    .dataTables_scrollBody {
+        overflow: visible !important;
+        max-height: none !important;
+        height: auto !important;
+        border-left: 0 !important;
+    }
+}
+
+// DT's own bootstrap5 CSS puts a `margin-top/bottom: 6px !important` on every
+// table.dataTable, as breathing room against the length/search/pagination
+// controls that surround it in the default two-scrollport layout.
+// .dataTables_scrollHead has to stay overflow: visible (above) for the
+// horizontal scroll to reach the header at all, so that top margin is no
+// longer contained — it collapses straight through and shifts the sticky
+// header's resting position down by 6px, which then has to snap back up over
+// the first 6px of scroll. Zeroing it here removes both the shift and the
+// matching gap under the last body row.
+//
+// Scoped to plain .db-page_body tables (fields_table today) only: .edit-table
+// and .isolate-selection-table run their own, separately-tuned scroll setups
+// (FixedColumns, capped-height pickers) that this hasn't been verified
+// against, so they're deliberately excluded rather than assumed safe.
+.db-page_body:not(.edit-table) .dataTables_scroll table.dataTable {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+// The isolate pickers cap the table instead of filling a pane, so the cap
+// moves onto the scroller with the scrolling — a plain `max-height` on
+// `.dataTables_scroll` (which is `max-height`, not `height`: shorter content
+// still shrinks to fit rather than leaving blank space under it). calc()
+// rather than a flat vh fraction so it tracks the dialog's own size (see
+// .selection-modal .modal-content, now sized to most of the viewport rather
+// than a fixed modest width): the reservation is everything else sharing the
+// dialog with the table — its toolbar, the "Showing X of Y" / pagination
+// line, the footer, and the dialog's own margins — generously rounded up
+// rather than tightly measured, since modal-body's own overflow-y: auto (see
+// above) absorbs it if this runs a little short.
+.isolate-selection-table .dataTables_scroll {
+    max-height: calc(100vh - 300px);
+}
+
+.pop-comp-wrapper {
+    z-index: 5 !important;
+}
+
+.datatables .dataTables_wrapper div.dataTables_info {
+    padding-top: 1rem;
+}
+
+// Vertical space saving measures for isolate selection tables that are rendered within
+// a modal window
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info,
+.selection-modal .modal-footer {
+    padding-top: 0;
+}
+
+#app-database-menu_custom_fields {
+    .action-label {
+        white-space: nowrap;
+    }
+}
+
+.isolate-selection-table .datatables .dataTables_wrapper div.dataTables_info {
+    align-content: center;
+}
+
+table.dataTable thead>tr>th.sorting {
+    padding-top: 0;
+}
+
+// Typing Results: reserve horizontal space for the columns whose cell content
+// changes while a run is in progress. Their width would otherwise be set by
+// whichever badge is showing at that instant ("Pending" → "Running" → "Added",
+// "Screening …" → "24 hits"), so every column to the right of them jumped on
+// each polling tick. The minimum is applied to the header cell, which in an
+// auto-layout table raises the whole column's width, and is sized to the widest
+// badge the column can hold ("Incompatible", "Partial", "Screening …").
+.typing-accordion table.dataTable thead th {
+    &.pt-col-cgmlst {
+        min-width: 6rem;
+    }
+
+    &.pt-col-mlst {
+        min-width: 6rem;
+    }
+
+    &.pt-col-amr {
+        min-width: 6rem;
+    }
+
+    &.pt-col-time {
+        min-width: 6rem;
+    }
+}
+
+// Strain names are assembly file names and can run long enough to squeeze every
+// other column off the page, so they are clipped to a fixed width. The clip
+// lives on an inline-block inside the cell rather than on the cell itself, so
+// it caps the column without needing a width on the column. `vertical-align`
+// keeps the inline-block off its baseline, which would otherwise add a few
+// pixels of row height. The cell carries the full name as its title attribute.
+.typing-accordion .pt-strain {
+    display: inline-block;
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+// Add Isolates sidebar: the typing pipeline's four steps (genome input, then
+// the three analyses), one accordion panel each. Tightened from the default
+// accordion - the sidebar is only 320px wide, and the pipeline should read as
+// a compact list rather than as full-size cards. Bootstrap's own accordion
+// variables do the work.
+.typing-steps {
+    --bs-accordion-btn-padding-y: 0.5rem;
+    --bs-accordion-btn-padding-x: 0.7rem;
+    --bs-accordion-body-padding-y: 0.75rem;
+    --bs-accordion-body-padding-x: 0.7rem;
+    --bs-accordion-active-bg: var(--bs-tertiary-bg);
+    --bs-accordion-active-color: var(--bs-body-color);
+    --bs-accordion-btn-focus-box-shadow: none;
+
+    .accordion-button {
+        font-weight: 500;
+    }
+
+    // The step number replaces the panel icon: a small muted circle that keeps
+    // its width whether it holds "1" or a wider glyph, so the labels line up.
+    .accordion-icon {
+        display: flex;
+    }
+
+    .typing-step-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--bs-secondary-bg);
+        color: var(--bs-secondary-color);
+        font-size: 0.7em;
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    // An open step owns its number, so give it the accent treatment.
+    .accordion-button:not(.collapsed) .typing-step-num {
+        background: var(--bs-primary);
+        color: #fff;
+    }
+
+    // The title claims the row so its info icon lands at the far end, just
+    // ahead of the chevron the button draws as its ::after pseudo-element.
+    .accordion-title {
+        flex: 1 1 auto;
+    }
+
+    .typing-step-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        // Keep the info icon off the chevron it would otherwise butt against.
+        padding-right: 0.5rem;
+    }
+
+    // The info icon is a <span> rather than a real button (it lives inside
+    // bslib's toggle button, which cannot nest one), so it needs the
+    // pointer/hover affordances .tooltip-bttn's own rules give a .btn.
+    .typing-step-info {
+        cursor: pointer;
+        opacity: 0.75;
+        line-height: 1;
+
+        &:hover {
+            opacity: 1;
+        }
+    }
+
+    // Inputs inside a step are the step's detail, not headline content.
+    .form-label,
+    .control-label {
+        font-size: 0.85rem;
+        margin-bottom: 0.2rem;
+    }
+
+    .shiny-input-container:last-child {
+        margin-bottom: 0;
+    }
+
+    // The scheme-size line (step 1) reads as a fact about the step, sitting
+    // above its inputs rather than floating with the sidebar's usual spacing.
+    .text-muted.small {
+        margin-bottom: 0.6rem;
     }
 }
 
@@ -1646,6 +2821,26 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+}
+
+// Exclude/Include buttons above the Selected Genomes table. Sits outside the
+// pane's scrolling wrapper (see .typing-scrollpane), so it stays reachable
+// however far down a long selection the user has scrolled.
+.typing-selection-toolbar {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem 0.5rem;
+}
+
+// Plain-language summary pinned above a scrollpane's table (what a Start click
+// will actually do, what the Duplicate Check panel is reporting). Sits outside
+// the scrolling wrapper so it stays put while a long list scrolls under it.
+.typing-selection-caption {
+    flex: 0 0 auto;
+    padding: 0.75rem 1rem 0;
+    font-size: 0.875rem;
+    color: var(--bs-secondary-color, #6c757d);
 }
 
 .typing-accordion-summary {
@@ -1875,10 +3070,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     margin: 0 0 0 1.5rem;
 }
 
-.visNetwork {
-    border: 1px solid black;
-}
-
 // Scheme Info layout: metadata card fills the row, the species aside holds a
 // fixed (photo) width on the right. `as_fill_carrier` adds .html-fill-container
 // which forces flex-direction: column, so the row direction and child flex
@@ -1969,10 +3160,15 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     justify-content: space-between;
     gap: 1rem;
     margin-top: 1rem;
-}
 
-.reset-buttons .btn-default {
-    font-size: 12px;
+    .btn-default,
+    .btn-group>.btn {
+        font-size: 12px;
+    }
+
+    .btn-group {
+        width: 100%;
+    }
 }
 
 // Two arrow-pairs (start/end handle) flank Play. Five items in one row
@@ -2065,10 +3261,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     position: relative;
     height: 6px;
     margin-top: 2px;
-}
-
-.db-browse-controls .shiny-input-container>div {
-    height: 100%;
 }
 
 .db-empty-hint {
@@ -2466,7 +3658,7 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .species-details_summary {
     line-height: 1.55;
     color: var(--bs-body-color);
-    font-size: 0.92rem;
+    font-size: 0.8em;
     text-align: justify;
     margin: 0.5rem 0 0;
 }
@@ -2551,21 +3743,51 @@ label {
     gap: 2rem;
 }
 
-.tab-pane[data-value="scheme_browser_panel"] .bslib-card .card-header {
-    padding-bottom: 8px;
+.tab-pane[data-value="database_panel"] .sidebar-menu {
+    min-width: max-content;
+    width: 100%;
+}
+
+.tab-pane[data-value="custom_fields"],
+.tab-pane[data-value="visualization_panel"],
+.tab-pane[data-value="cgmlst_overview"],
+.tab-pane[data-value="scheme_browser_panel"] {
+    .bslib-card .card-header {
+        height: 49px;
+    }
+}
+
+.tab-pane[data-value="database_panel"] .bslib-sidebar-layout>.main {
+    padding: 0;
+}
+
+#app-database-custom_fields-body .bslib-card:first-child,
+.tab-pane[data-value="cgmlst_overview"]>div:first-child,
+#app-scheme_browser-scheme-download-container>.bslib-card:first-child {
+    border-radius: 0;
+    border: none;
 }
 
 .tab-pane[data-value="visualization_panel"] {
     padding: 0 !important;
 
+    .bslib-sidebar-layout>.sidebar {
+        padding: 2.5rem 0.75rem 1rem 0.75rem;
+    }
+
+    .bslib-sidebar-layout>.sidebar>.sidebar-content {
+        padding: 0;
+    }
+
+    .bslib-sidebar-layout>.sidebar>.sidebar-content>.accordion {
+        margin-left: unset;
+        margin-right: unset;
+    }
+
     .bslib-card {
         border-radius: 0;
         border: none;
         box-shadow: unset;
-    }
-
-    .bslib-card .card-header {
-        height: 49px;
     }
 
     // Inner plot navset (see visualization.R's `plot_set`). bslib gives its
@@ -2581,14 +3803,23 @@ label {
     >.bslib-card>.tab-content>.tab-pane.active {
         display: flex;
         flex-direction: column;
+        height: 100%;
 
         >* {
             flex: 1 1 auto;
             min-height: 0;
+            padding: 0.5rem 0 0.5rem 0 !important;
         }
     }
 }
 
+.accordion .accordion-icon:not(:empty) {
+    margin-right: 0.75rem;
+    display: flex;
+    height: 16px;
+    width: 16px;
+    justify-content: center;
+}
 
 .tab-pane[data-value="scheme_browser_panel"] .waiter-overlay,
 .tab-pane[data-value="import"] .waiter-overlay,
@@ -2598,12 +3829,21 @@ label {
     background-color: #ffffffde;
     background-color: rgb(51 62 72 / 71%) !important;
     backdrop-filter: blur(1px);
-    border-radius: 8px;
+    // border-radius: 8px;
 }
 
 
 .shinyFiles i {
     margin-right: 1ch;
+}
+
+#app-visualization-plot_set>li:first-child>.nav-link {
+    top: 1px;
+    position: relative
+}
+
+#app-visualization-plot_set>li:first-child>.nav-link.active {
+    cursor: auto !important;
 }
 
 .modal {
@@ -2629,8 +3869,27 @@ label {
 // bslib's tooltip() allows, for explanations too long to fit a hover bubble.
 .info-modal .modal-dialog {
     width: auto;
-    max-width: 480px;
+    max-width: 600px;
     margin: 1.75rem auto;
+}
+
+// `max-height`, not a forced `height` (contrast .selection-modal below): a
+// short entry (e.g. Genome input) should stay shrink-wrapped to its own
+// content, not stretch to fill the cap. Only a long entry (e.g. Classical
+// MLST's Min. identity/coverage paragraph) needs the clamp, so the body below
+// scrolls internally instead of growing the dialog past the viewport and
+// pushing a scrollbar onto the whole page.
+.info-modal .modal-content {
+    max-height: min(calc(100vh - 3.5rem), 700px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.info-modal .modal-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 .info-modal .modal-body dt {
@@ -2642,20 +3901,68 @@ label {
     color: var(--bs-secondary-color);
 }
 
-// Isolate-preselection modal: wide enough to host the metadata DT but kept
-// clear of the viewport edges so it never overflows the page (the table itself
-// scrolls internally rather than stretching the dialog).
-.selection-modal .modal-dialog {
-    width: auto;
-    max-width: min(860px, 90vw);
+// Plot export modal: a format picker plus a small set of named presets,
+// nothing else. A fixed `width` rather than `width: auto` is load-bearing:
+// auto sizes the dialog to its widest line of content, so the hint text below
+// the presets — whose length varies with which preset and format are picked —
+// was resizing the whole modal on every selection. A fixed width can't do
+// that; `max-width` only steps in as a safety cap on a narrow screen.
+.export-modal .modal-dialog {
+    width: 460px;
+    max-width: 90vw;
     margin: 1.75rem auto;
 }
 
-// Cap the whole dialog to the viewport height on short screens and let the
-// body scroll internally, so a tall table never pushes the page itself into
-// an overflow scroll.
+.export-modal .modal-body>*+* {
+    margin-top: 1rem;
+}
+
+// Each preset choice is a name plus a one-line description. Bootstrap's
+// vertical button group joins its buttons edge-to-edge with shared borders
+// and centred text, both tuned for short, single-line, unrelated actions —
+// wrong for a stack of two-line descriptions that read as one list. A small
+// gap and its own rounded corners per button turn the group into a stack of
+// separate, left-aligned cards instead. Width is set explicitly on both the
+// row and the button: radioGroupButtons' own `width=` reaches only the
+// outermost wrapper, and Bootstrap's `.btn` is inline-block by default, so
+// without this each button stays exactly as wide as its own text.
+.export-modal .btn-group-vertical.btn-group-container-sw {
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.export-modal .btn-group-vertical.btn-group-container-sw .btn-group {
+    width: 100%;
+}
+
+.export-modal .btn-group-vertical.btn-group-container-sw .btn {
+    width: 100%;
+    border-radius: var(--bs-border-radius) !important;
+    text-align: left;
+}
+
+// Isolate-preselection modal: sized to use most of the viewport (the metadata
+// table can carry a lot of columns, and a time filter benefits from showing
+// many rows at once) but still clamped to it by `min()`, so on a small display
+// it shrinks with the window rather than overflowing it.
+.selection-modal .modal-dialog {
+    width: auto;
+    max-width: min(1400px, 95vw);
+    margin: 1rem auto;
+}
+
+// `height`, not just `max-height`: a max only caps growth, it does not make a
+// flex column's un-stretched children (modal-body, sized to *its own*
+// content) actually claim the leftover space — which is why a bigger DT
+// `scrollY` used to just make the table ask for more content instead of the
+// dialog getting any taller. Forcing the real height here is what makes
+// modal-body's `flex: 1 1 auto` below have something to grow into, so the
+// dialog genuinely tracks the viewport rather than shrink-wrapping its
+// content. `min()` still keeps a short screen safe: no fixed cap on the raw
+// value here means an unusually short modal-body can only ever be *this*
+// height, never taller than what the screen already has room for.
 .selection-modal .modal-content {
-    max-height: calc(100vh - 3.5rem);
+    height: min(calc(100vh - 2rem), 1100px);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -2695,6 +4002,71 @@ label {
         font-weight: bold;
         font-size: 1.2em;
     }
+
+    // The "N outside window" tail is context for the count, not part of it —
+    // dropped back to body text so the selected/selectable numbers stay the
+    // thing the eye lands on. The font-family has to be named rather than
+    // inherited: the rule above already made the parent span monospace.
+    .selection-modal-count-total {
+        font-family: var(--bs-body-font-family);
+        font-weight: normal;
+        font-size: 0.85em;
+        opacity: 0.75;
+    }
+}
+
+// Time filter in the footer row, to the left of Cancel / Confirm: the picker
+// choosing which date-typed column is the time axis, then the window itself.
+// `margin-right: auto` is what splits the row - the footer is a flex container
+// that ends its children, so claiming the leftover space pushes the buttons
+// back to the right edge where they belong.
+.selection-modal-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: auto;
+
+    // Both inputs ship as block-level form groups sized for a stacked layout:
+    // full width, with a bottom margin under the label they do not have here.
+    // Left alone, the width is what stretches this whole block across the
+    // footer and pushes the buttons onto a second row.
+    .form-group,
+    .shiny-input-container {
+        flex: 0 0 auto;
+        width: auto;
+        margin-bottom: 0;
+    }
+
+    // Keep the two halves of the range input on one line at the modal's width,
+    // and let the date fields shrink rather than push the buttons off the row.
+    .input-daterange {
+        flex-wrap: nowrap;
+
+        .form-control {
+            min-width: 0;
+        }
+    }
+}
+
+// The footer is the one row the whole time filter has to share with Cancel /
+// Confirm, so it may not wrap: a filter that grew (a long column label in the
+// picker) has to compress rather than drop the buttons onto a line of their
+// own.
+.selection-modal .modal-footer {
+    flex-wrap: nowrap;
+}
+
+// Confirm-discard modal for closing an unsaved plot tab: wide enough that its
+// three footer buttons (Cancel / Close anyway / Save and close) stay on one
+// row instead of wrapping at Bootstrap's default 500px modal width.
+.unsaved-plot-modal .modal-dialog {
+    width: auto;
+    max-width: 560px;
+    margin: 1.75rem auto;
+}
+
+.unsaved-plot-modal .modal-footer {
+    flex-wrap: nowrap;
 }
 
 
@@ -2713,6 +4085,70 @@ label {
 
 .bootstrap-select .dropdown-menu {
     box-shadow: 0 0 5px 0 #8a8a8a;
+}
+
+// -- Dropdown overflow ------------------------------------------------------
+// Sidebars and bslib fill containers clip (`overflow: hidden` / `auto`), and a
+// menu listing long values — isolate ids, locus names, field labels — is far
+// wider than the control it hangs off, so it used to be cut off at the sidebar
+// edge. Every picker therefore renders its menu into <body>
+// (`container = "body"` for pickerInput, `dropboxWrapper = "body"` for
+// virtualSelectInput), where Bootstrap's Popper positioning flips and shifts it
+// back into the viewport instead.
+//
+// These rules are the CSS half of that contract: cap the menu against the
+// viewport so it can never itself be the thing that overflows, and let long
+// labels wrap rather than push the box wider. They apply to body-attached and
+// in-place menus alike, so a picker that has not (yet) opted into `container`
+// still degrades gracefully.
+.bootstrap-select .dropdown-menu {
+    max-width: calc(100vw - 1rem);
+}
+
+// bootstrap-select's own sizing (setMenuSize in its bundled JS) only shrinks
+// the menu to fit when the option count exceeds the `size` option; otherwise
+// it inline-sets min-height to "whatever room is left below the toggle down
+// to the viewport/document edge" regardless of how few options there are —
+// for a 4-option list that can mean several hundred px of blank space, or
+// even push the menu's bottom past the viewport. Only `!important` can beat
+// an inline style, so neutralize it here and let the menu (and its scrollable
+// `.inner`) size to their actual content. `max-height` is untouched, so a
+// genuinely long list still caps and scrolls exactly as before.
+.bootstrap-select .dropdown-menu,
+.bootstrap-select .dropdown-menu .inner {
+    min-height: 0 !important;
+}
+
+// Long option labels wrap inside that cap instead of forcing a wider menu.
+// `anywhere` rather than `break-word` because the values are single unbroken
+// tokens (`GCA_024714515.1_ASM2471451v1_genomic`) with no spaces to break at.
+.bootstrap-select .dropdown-menu .dropdown-item,
+.bootstrap-select .dropdown-menu .dropdown-item .text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+// The live-search box tracks the menu rather than the (wider) option list, so
+// it stays inside the box once the cap above has narrowed it.
+.bootstrap-select .dropdown-menu .bs-searchbox .form-control {
+    max-width: 100%;
+}
+
+// virtualSelectInput's dropbox, same contract: `dropboxWrapper = "body"` gets
+// it out of the clipping ancestor, this keeps it inside the viewport.
+.vscomp-dropbox-container {
+    max-width: calc(100vw - 1rem);
+}
+
+.vscomp-option-text {
+    overflow-wrap: anywhere;
+}
+
+// selectize (plain `selectInput`) sizes its dropdown to the control, so it can
+// only overflow vertically — but a long option would otherwise be clipped to
+// one ellipsised line with no way to read it.
+.selectize-dropdown .option {
+    overflow-wrap: anywhere;
 }
 
 [data-bs-theme="dark"] .ad-group-stack .bslib-card {
@@ -2751,6 +4187,14 @@ label {
 
 .navbar-brand {
     display: block;
+}
+
+// Typing-in-progress indicator: a nav_item that renders nothing (see
+// output$typing_indicator in app/main.R) while no run is active, so this
+// only ever needs to size and colour the icon when it does render.
+.navbar-typing-indicator {
+    color: var(--bs-warning);
+    font-size: 1.1em;
 }
 
 .db-menu-item .action-icon {
@@ -2811,6 +4255,7 @@ table.dataTable thead>tr>th.sorting {
 
 .map-plot-card .bslib-full-screen-enter {
     display: none !important;
+    z-index: 10;
 }
 
 .plot-controls {
@@ -2845,14 +4290,35 @@ table.dataTable thead>tr>th.sorting {
 }
 
 .isolate-selection-table {
+
+    // dom = "tip" renders the table, info and paginate as plain sibling
+    // divs (no bootstrap row/col wrapper), so they stack by default. Force
+    // the table onto its own full-width row and let info + paginate share
+    // the row below instead, without hard-coding the table wrapper's class.
+    .dataTables_wrapper {
+        display: flex;
+        flex-wrap: wrap;
+
+        >*:not(.dataTables_info):not(.dataTables_paginate) {
+            flex: 1 1 100%;
+            // Flex items default to `min-width: auto`, which floors their
+            // width at the content's natural size — here the unscrolled
+            // table — and lets it blow past the row instead of scrolling
+            // inside .dataTables_scrollBody. Let it shrink to the row.
+            min-width: 0;
+        }
+    }
+
     .dataTables_info {
         padding-top: 0;
-
+        flex: 1 1 auto;
     }
 
     .dataTables_paginate {
         padding-left: 1rem;
         padding-top: 0rem;
+        flex: 0 0 auto;
+        margin-left: auto;
     }
 }
 
@@ -2869,4 +4335,282 @@ table.dataTable thead>tr>th.sorting {
 // Geocoding feedback shown directly under the "Map mode" picker.
 .map-geocode-status {
     margin-top: 0.5rem;
+}
+
+// virtualSelectInput (Browse Entries' column picker) ---------------------------
+//
+// virtual-select is the only multi-select in the stack that offers a checkbox on
+// each optgroup header, which is what makes "(de)select this whole category"
+// possible. Its stylesheet is injected by its own JS bundle and hard-codes a
+// light palette (#fff boxes, #333 text, a purple tick), so every colour is
+// re-pointed at the Bootstrap variables here — that way the widget tracks the
+// theme in both light and dark mode instead of staying white in one of them.
+
+.vscomp-ele {
+    // Its own default caps the control at 250px; let the surrounding column
+    // size it instead.
+    max-width: none;
+    min-width: 260px;
+}
+
+.vscomp-wrapper {
+    color: var(--bs-body-color);
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.vscomp-toggle-button {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    color: var(--bs-body-color);
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button {
+    border-color: var(--bs-primary);
+}
+
+// The chevron and the clear "x" are drawn with borders/backgrounds, not glyphs.
+.vscomp-arrow::after {
+    border-bottom-color: var(--bs-secondary-color);
+    border-right-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-icon::before,
+.vscomp-clear-icon::after {
+    background-color: var(--bs-secondary-color);
+}
+
+.vscomp-clear-button:hover {
+    background: var(--bs-tertiary-bg);
+}
+
+// The library's bundled stylesheet (shared with its Tooltip component via the
+// generic `.pop-comp-wrapper` class it also puts on this element) hard-codes
+// this to white, which shows through as a light sliver around `.vscomp-dropbox`
+// in dark mode.
+.vscomp-dropbox-container {
+    background-color: var(--bs-body-bg);
+}
+
+.vscomp-dropbox {
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.175);
+}
+
+.vscomp-option.selected {
+    background-color: var(--bs-tertiary-bg);
+}
+
+.vscomp-option.focused,
+.vscomp-option:hover {
+    background-color: var(--bs-secondary-bg);
+}
+
+// The optgroup header. It carries the group's own checkbox (the whole point of
+// this widget here), so unlike virtual-select's default it must not read as
+// disabled — only as quieter than its options.
+.vscomp-option.group-title {
+    height: 32px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+
+    .vscomp-option-text {
+        opacity: 1;
+    }
+}
+
+// The per-option sub-text ("46 values · Text"), enabled by hasOptionDescription
+// on the field pickers. virtual-select hard-codes its colour the same way it
+// hard-codes the rest of this widget's palette, so it is invisible in dark mode
+// until it is pointed at a theme variable like everything else here.
+.vscomp-option-description {
+    color: var(--bs-secondary-color);
+    font-size: 0.78rem;
+    line-height: 1.2;
+}
+
+// A two-line option needs its label line tightened to match.
+.vscomp-option:has(.vscomp-option-description) .vscomp-option-text {
+    line-height: 1.3;
+}
+
+// A variable that cannot group is listed rather than withheld — its sub-text
+// says why — so it has to read as unavailable without disappearing.
+.vscomp-option.disabled {
+    opacity: 0.55;
+}
+
+.vscomp-search-container {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+.vscomp-search-input,
+.vscomp-search-input::placeholder {
+    color: var(--bs-body-color);
+    font-size: inherit;
+}
+
+.vscomp-wrapper .checkbox-icon::after {
+    border-color: var(--bs-secondary-color);
+}
+
+.vscomp-wrapper .checkbox-icon.checked::after {
+    border-color: var(--bs-primary);
+    border-left-color: transparent;
+    border-top-color: transparent;
+}
+
+.vscomp-no-options,
+.vscomp-no-search-results {
+    color: var(--bs-secondary-color);
+}
+
+// The close button shown in "popup" mode (see showDropboxAsPopup in
+// database_browser.R) - a circle hard-coded to white in the library's own
+// stylesheet, which would stay white in dark mode.
+.vscomp-dropbox-close-button {
+    background-color: var(--bs-body-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+// Only the multi-select popups get a Confirm button beside the close button,
+// which there means Cancel rather than just Close (see
+// app/js/virtual-select-popup-confirm.js, which sets .pt-has-confirm). Shift
+// the close button left of center so the pair reads as centered together.
+// Single-select popups have nothing to confirm and keep the library's own
+// lone, centered close button.
+.pt-has-confirm .vscomp-dropbox-close-button {
+    left: 48% !important;
+    margin-left: -52px;
+}
+
+.vscomp-dropbox-close-button:hover,
+.vscomp-dropbox-confirm-button:hover {
+    background-color: var(--bs-tertiary-bg);
+}
+
+// Confirm button injected next to the close button above. Same circle as the
+// close button; only position and icon differ.
+.vscomp-dropbox-confirm-button {
+    position: absolute;
+    left: 52%;
+    bottom: -48px;
+    margin-left: 12px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-color: var(--bs-body-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+}
+
+.vscomp-wrapper.show-as-popup .vscomp-dropbox-confirm-button {
+    display: flex;
+}
+
+// Drawn with borders, matching how the library draws its own X (clear) icon -
+// no icon font involved.
+.vscomp-confirm-icon {
+    position: relative;
+    width: 12px;
+    height: 12px;
+}
+
+.vscomp-confirm-icon::after {
+    content: "";
+    position: absolute;
+    width: 100%;
+    height: 8px;
+    border-left: 2px solid var(--bs-success);
+    border-bottom: 2px solid var(--bs-success);
+    transform: rotate(-45deg);
+}
+
+.custom-modal {
+    display: flex;
+    gap: 1rem;
+    flex-direction: column;
+}
+
+// Custom Variables panel (see database_custom.R) ------------------------------
+//
+// A fixed-height overview of what is defined over an isolate x variable table
+// that fills the rest. The values table reuses .db-page_body, so it inherits the
+// Browse Entries fill/scroll rules verbatim.
+
+// .custom-fields-layout {
+//     display: flex;
+//     flex-direction: column;
+//     height: 100%;
+//     overflow: hidden;
+// }
+
+.edit-table input[type="text"],
+.edit-table input[type="date"],
+.dt-category-select {
+    padding: 0;
+    border: none;
+    outline: none;
+}
+
+#custom-variable-modal .shiny-input-container:not(.shiny-input-container-inline) {
+    width: unset;
+}
+
+.vscomp-wrapper.focused .vscomp-toggle-button,
+.vscomp-wrapper:focus .vscomp-toggle-button {
+    box-shadow: unset;
+}
+
+.custom-fields-overview {
+    flex: 0 0 auto;
+    max-height: 38%;
+    overflow-y: auto;
+    padding: 0.5rem 0.5rem 0;
+
+    .card {
+        margin-bottom: 0;
+    }
+}
+
+// Browse Entries excludes its 9th column (the uneditable `organism`) from the
+// editable-cell cursor. Here every column but the isolate is editable.
+.custom-fields-values table.dataTable tbody td:not(:first-child) {
+    cursor: copy;
+}
+
+.custom-fields-hint {
+    max-width: 42rem;
+    margin: 2rem auto;
+
+    h5 {
+        margin-bottom: 1rem;
+    }
+
+    p {
+        color: var(--bs-secondary-color);
+    }
+}
+
+.custom-fields-hint_examples {
+    list-style: none;
+    padding-left: 0;
+    margin-bottom: 1.5rem;
+
+    li {
+        padding: 0.15rem 0;
+    }
+
+    code {
+        font-weight: 600;
+    }
 }

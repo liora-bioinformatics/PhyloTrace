@@ -1,0 +1,92 @@
+# Database Browser & Custom Fields {#sec-tech-browser}
+
+This chapter covers two of the five Database sub-app panels (@sec-arch-subapp):
+`app/view/database_browser.R` (Browse Entries) and `app/view/database_custom.R`
+(Custom Variables). The Import/Export panels are @sec-tech-interop and the cgMLST
+Overview panel is @sec-tech-schemes-inspect.
+
+## Browse Entries {#sec-tech-browser-browse}
+
+`database_browser.R` shows the isolate table: the `metadata` columns, with the
+classical-MLST, AMR and custom-variable columns merged in read-only at display
+time (@sec-db-companions). It is the one place metadata *values* are edited, and
+it returns a `pending` reactive so `main.R` can warn before a reload would
+discard unsaved edits (@sec-arch-signals).
+
+Edits are written as a tidy, one-row-per-changed-cell set — the same shape the
+custom-value writer uses — inside a transaction:
+
+```{.r filename="app/logic/database_functions.R"}
+#' Deliberately mirrors `save_custom_values()`'s shape: a tidy one-row-per-cell
+#' [edit set].
+save_metadata_table <- function(db_path, edits) { ... }
+```
+
+::: {.callout-important title="The edit grid treats a revision bump as 'stale', not 'reload'"}
+Most modules re-query when the revision bus advances. Browse Entries is the
+deliberate exception: because it may hold unsaved edits, a bump is treated as a
+*staleness marker* rather than a cue to reload over the user's work — the user
+asking for a reload is the explicit consent that discards it (@sec-arch-signals).
+Any new control in this panel must respect that: never re-render the grid from a
+bus bump alone.
+:::
+
+Deleting isolates is transactional and offers to keep or drop the now-orphaned
+allele sequences:
+
+```{.r filename="app/logic/database_functions.R"}
+#' Runs within a transaction to guarantee atomic updates.
+remove_isolates <- function(db_path, isolates, keep_alleles = TRUE) { ... }
+```
+
+## Custom fields {#sec-tech-browser-custom}
+
+`app/view/database_custom.R`, backed by `app/logic/custom_fields.R`, defines
+user-typed fields and their per-isolate values. This is the **only** place custom
+values are written; every other view merges them in read-only.
+
+Two tables hold this, both living inside the loaded `.db` (prefixed
+`phylotrace_`, so they travel with the file), with values stored **long**:
+
+```{.r filename="app/logic/custom_fields.R"}
+"CREATE TABLE IF NOT EXISTS phylotrace_custom_fields (
+   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+   type TEXT NOT NULL, description TEXT, levels TEXT, position INTEGER,
+   created TEXT NOT NULL, modified TEXT NOT NULL )",
+"CREATE TABLE IF NOT EXISTS phylotrace_custom_values (
+   field_id INTEGER NOT NULL, isolate TEXT NOT NULL, value TEXT,
+   PRIMARY KEY (field_id, isolate) )"
+```
+
+Storing values long rather than one column per variable means renaming a variable
+is a single `UPDATE` with no schema change, and pivoting long→wide at display
+time is the same pattern the classical-MLST and AMR readers use
+(@sec-db-companions). Every value is stored as TEXT in a canonical form (ISO
+date, `yes`/`no`, the number as written).
+
+### Typing and validation {#sec-tech-browser-types}
+
+- `create_custom_field()` / `update_custom_field()` / `delete_custom_field()`
+  manage definitions; deletion cascades to values in one transaction.
+- `validate_custom_name()` rejects reserved prefixes, invalid syntax and
+  collisions (custom columns carry a `CUSTOM_COL_PREFIX`, `custom_col()`).
+- `coerce_custom_value()` canonicalizes each entered value to its type — a date,
+  a yes/no, a number, or one of a categorical field's declared levels
+  (`field_levels()`, `encode_levels()`).
+- `load_custom_values()` / `append_custom()` pivot the long store to wide and join
+  it onto a metadata frame for display.
+
+The declared types are the vocabulary the visualization layer reads to decide how
+a variable may be mapped: `app/logic/field_types.R` supplies the type of any
+column (fixed, derived or custom), and `app/logic/field_profile.R` profiles a
+column's cardinality and coverage — the input the mapping engine ranks aesthetics
+from (@sec-tech-viz-mapping).
+
+## Chapter summary
+
+- `database_browser.R` edits metadata values transactionally, merges MLST/AMR/
+  custom columns read-only, and guards unsaved edits against reloads.
+- `custom_fields.R` stores user-defined typed fields long in two `phylotrace_*`
+  tables, so a rename is an `UPDATE` and the fields travel with the file.
+- Values are validated and canonicalized on write; the declared type drives what
+  the mapping engine will do with the variable.

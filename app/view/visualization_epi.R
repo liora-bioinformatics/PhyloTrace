@@ -35,16 +35,27 @@ box::use(
     sidebar,
   ],
   shiny,
-  shinyWidgets[radioGroupButtons, pickerInput, pickerOptions],
+  shinyWidgets[
+    radioGroupButtons,
+    pickerInput,
+    pickerOptions,
+    updatePickerInput
+  ],
 )
 box::use(
+  app / logic / date_bins[bin_date_values],
+  app / logic / db_events,
   app / logic / epi_plot,
-  app / logic / field_labels[field_label, grouped_field_choices],
+  app / logic / field_labels[field_label],
+  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
   app / logic / functions[render_info],
+  app / logic / mapping_engine[is_date_profile],
+  app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
-      export_panel,
+      field_select,
+      granularity_select,
       reset_viz_colors,
       scale_select,
       viz_color,
@@ -130,7 +141,7 @@ epi_controls <- function(ns) {
           accordion_panel(
             "Plot Mode",
             icon = shiny$icon("chart-column"),
-            shiny$selectInput(
+            pickerInput(
               ns("epi_plot_mode"),
               "Plot mode",
               choices = PLOT_MODES,
@@ -177,7 +188,7 @@ epi_controls <- function(ns) {
                   step = 1,
                   ticks = FALSE
                 ),
-                shiny$selectInput(
+                pickerInput(
                   ns("epi_moving_avg_align"),
                   "Window alignment",
                   choices = MOVING_AVG_ALIGNMENTS,
@@ -202,7 +213,8 @@ epi_controls <- function(ns) {
             # being declared empty here and back-filled (an empty <select>
             # initialises bootstrap-select in its disabled state). Same pattern
             # as the staged peers picker in visualization.R.
-            shiny$uiOutput(ns("stratify_ui"))
+            shiny$uiOutput(ns("stratify_ui")),
+            shiny$uiOutput(ns("stratify_granularity_ui"))
           ),
           # Axes & Sizing ------------------------------------------------------
           accordion_panel(
@@ -370,7 +382,7 @@ epi_controls <- function(ns) {
       nav_panel(
         "Annotations",
         icon = shiny$icon("calendar-plus"),
-        shiny$selectInput(
+        pickerInput(
           ns("epi_anno_type"),
           "Type",
           c(`Milestone (line)` = "milestone", `Time period (shaded)` = "period")
@@ -383,7 +395,8 @@ epi_controls <- function(ns) {
           "Start date",
           value = Sys.Date(),
           startview = "decade",
-          autoclose = TRUE
+          autoclose = TRUE,
+          format = "yyyy/mm/dd"
         ),
         shiny$conditionalPanel(
           condition = "input.epi_anno_type == 'period'",
@@ -393,7 +406,8 @@ epi_controls <- function(ns) {
             "End date",
             value = Sys.Date(),
             startview = "decade",
-            autoclose = TRUE
+            autoclose = TRUE,
+            format = "yyyy/mm/dd"
           )
         ),
         # allow-free-text: an annotation label is display text, so it takes
@@ -423,10 +437,7 @@ epi_controls <- function(ns) {
           icon = shiny$icon("trash"),
           width = "100%"
         )
-      ),
-      # ggsave needs no external toolchain, so unlike the plotly build this
-      # replaces — HTML only, for want of kaleido — every format here is real.
-      export_panel(ns, "epi", c("png", "jpeg", "pdf", "svg"))
+      )
     ),
     shiny$div(
       class = "reset-buttons",
@@ -441,7 +452,9 @@ epi_controls <- function(ns) {
 }
 
 #' @export
-ui <- function(id, generate_id) {
+# `options_ui` is accepted for one signature across all engines; this one has no
+# distance-computation controls, so the tab never passes any.
+ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -510,8 +523,14 @@ ui <- function(id, generate_id) {
 server <- function(
   id,
   db_path = shiny$reactive(NULL),
+  db_rev = db_events$new_bus(),
   session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
+  # Per-column profile of the metadata: declared type, distinct-value count,
+  # coverage and group, built once by the coordinator
+  # (app/logic/field_profile.R). Field pickers read it so every engine
+  # describes a variable the same way.
+  field_profiles = shiny$reactive(NULL),
   # Accepted for a uniform `shared` bundle from the coordinator; the Epi curve
   # plots straight from the already-filtered viz_metadata(), so it needs no
   # separate handling.
@@ -624,6 +643,15 @@ server <- function(
     # adapted to a renderUI-rebuilt (bucket 5) control.
     stratify_force_default <- shiny$reactiveVal(FALSE)
 
+    # A reopened plot's saved stratification and its granularity, parked here
+    # for the two renderUIs that own those controls to apply on their next
+    # rebuild. Neither can be restored with an update*Input() call: both
+    # controls are renderUI output, and a render replaces the control outright,
+    # discarding whatever was pushed at the element it replaced. Both are
+    # consumed on read, the same one-shot shape as stratify_force_default.
+    restore_stratify <- shiny$reactiveVal(NULL)
+    restore_granularity <- shiny$reactiveVal(NULL)
+
     # Whether "Play" is running. Drives the tick loop, the button label, and
     # locking the date-range slider and its step buttons (a manual drag
     # mid-playback is indistinguishable server-side from a tick).
@@ -725,24 +753,46 @@ server <- function(
       if (force_default) {
         stratify_force_default(FALSE)
       }
-      # Categorised, human-readable labels (a "Classical MLST" group holding the
-      # derived ST + locus columns); the selected value stays the raw column
-      # name the plot builder keys on. "" is the sentinel for no stratification
-      # — see stratify_selected().
-      pickerInput(
-        ns("epi_stratify"),
-        "Stratify by",
-        choices = c(
-          list(`No stratification` = ""),
-          grouped_field_choices(fields, attr(viz_metadata(), "mlst_cols"))
-        ),
-        selected = if (!force_default && isTRUE(prev %in% fields)) prev else "",
-        width = "100%",
-        options = pickerOptions(
-          size = 10,
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ..."
+      # A reopened plot's saved stratification, applied here rather than pushed
+      # at it from restore(). An update*Input() cannot win against this render:
+      # restoring writes the tab's selection reactiveVals, which invalidates
+      # stratify_fields() and so re-runs this very output in the same flush,
+      # replacing the control - and with it any value just sent to the old one.
+      # Rendering the value in is the only way it survives. Consumed on read,
+      # exactly as force_default is.
+      pending <- shiny$isolate(restore_stratify())
+      if (!is.null(pending)) {
+        restore_stratify(NULL)
+      }
+      # Categorised, human-readable labels, each carrying its own value count
+      # and declared type; the selected value stays the raw column name the
+      # plot builder keys on. "" is the sentinel for no stratification — see
+      # stratify_selected().
+      meta <- viz_metadata()
+      prof <- field_profiles() %||%
+        field_profiles_of(
+          meta,
+          mlst_cols = attr(meta, "mlst_cols"),
+          amr_cols = attr(meta, "amr_cols"),
+          custom_cols = attr(meta, "custom_cols")
         )
+      # `fields` already excludes the plotted date and the isolate id — the
+      # profile frame covers every column, so it has to be narrowed to what
+      # this control is allowed to offer.
+      field_select(
+        ns,
+        "epi_stratify",
+        "Stratify by",
+        profiles = prof[prof$field %in% fields, , drop = FALSE],
+        selected = if (isTRUE(pending %in% fields)) {
+          pending
+        } else if (!force_default && isTRUE(prev %in% fields)) {
+          prev
+        } else {
+          ""
+        },
+        extra = c(`No stratification` = ""),
+        placeholder = "No stratification"
       )
     })
 
@@ -752,6 +802,60 @@ server <- function(
     stratify_selected <- function() {
       s <- input$epi_stratify
       if (is.null(s) || identical(s, "")) character() else s
+    }
+
+    # Profile of the field the stratify picker currently holds.
+    stratify_profile <- shiny$reactive({
+      f <- stratify_selected()
+      if (!length(f)) {
+        return(NULL)
+      }
+      meta <- viz_metadata()
+      profile_for(field_profiles() %||% field_profiles_of(meta), f)
+    })
+
+    # Only a date can be grouped by a calendar interval. Stratifying by a raw
+    # collection date would draw one series per isolate.
+    output$stratify_granularity_ui <- shiny$renderUI({
+      render_info("visualization_epi stratify_granularity_ui")
+      if (!is_date_profile(stratify_profile())) {
+        return(NULL)
+      }
+      # Read isolated - stratify_profile() above is already this render's
+      # trigger (it changes once epi_stratify's restore round-trips), so
+      # depending on restore_granularity() too would make this render both
+      # read and write the same reactiveVal, invalidating itself into a second
+      # run that finds the value already consumed and falls back to "none".
+      # Consumed here rather than in restore(): this is the first render where
+      # the control exists at all, so it is the first point a value can safely
+      # be applied to it.
+      pending <- shiny$isolate(restore_granularity())
+      selected <- if (!is.null(pending)) {
+        restore_granularity(NULL)
+        pending
+      } else {
+        shiny$isolate(input$epi_stratify_granularity)
+      }
+      granularity_select(
+        ns,
+        "epi_stratify_granularity",
+        selected,
+        label = "Group stratifier dates by"
+      )
+    })
+
+    # The metadata as the builder should see it: a date stratifier grouped into
+    # the chosen interval, everything else untouched. The plotted date axis has
+    # its own interval control and is not affected.
+    stratified_meta <- function(meta) {
+      f <- stratify_selected()
+      if (!length(f) || !is_date_profile(stratify_profile())) {
+        return(meta)
+      }
+      meta[[f]] <- as.character(
+        bin_date_values(meta[[f]], input$epi_stratify_granularity)
+      )
+      meta
     }
 
     # Restrict the colour-scale picker to the scales that can actually carry the
@@ -766,7 +870,7 @@ server <- function(
       } else {
         epi_plot$epi_fit_scale(input$epi_col_scale, n_strata)
       }
-      shiny$updateSelectInput(
+      updatePickerInput(
         session,
         "epi_col_scale",
         choices = choices,
@@ -977,7 +1081,7 @@ server <- function(
       meta <- viz_metadata()
       shiny$req(!is.null(meta), nrow(meta) > 0)
       epi_plot$build_epi_data(
-        meta,
+        stratified_meta(meta),
         epi_plot$EPI_DATE_FIELD,
         stratify_selected(),
         input$epi_interval %||% fitted_interval()
@@ -1019,7 +1123,7 @@ server <- function(
 
       binned <- tryCatch(
         epi_plot$build_epi_data(
-          meta,
+          stratified_meta(meta),
           epi_plot$EPI_DATE_FIELD,
           stratify_selected(),
           input$epi_interval %||% fitted_interval()
@@ -1374,12 +1478,7 @@ server <- function(
         id = ns("plot_stage"),
         prompt,
         loading,
-        shiny$plotOutput(ns("epi_plot"), height = "auto"),
-        # Hidden target the export action button clicks to start the download.
-        shiny$div(
-          class = "d-none",
-          shiny$downloadButton(ns("download_epi"), "Download plot")
-        )
+        shiny$plotOutput(ns("epi_plot"), height = "auto")
       )
     })
 
@@ -1441,32 +1540,45 @@ server <- function(
       deleteFile = TRUE
     )
 
-    output$download_epi <- shiny$downloadHandler(
-      filename = function() {
-        paste0(Sys.Date(), "_epi_curve.", input$epi_filetype %||% "png")
-      },
-      content = function(file) {
-        epi_plot$save_epi_plot(
+    # ---- Export contract ----------------------------------------------------
+    # The tab's sidebar owns the export panel and the download; this engine only
+    # says what it can produce and how to write it.
+    #
+    # In Square blocks mode the export uses the same data-fitted ratio the
+    # on-screen renderImage falls back to (square_ratio()) rather than the
+    # plain aspect slider, so a cell is a true square in the exported file the
+    # same way it is on screen. This is deliberately not identical to the
+    # on-screen *pixel* shape: the preview's height formula also subtracts a
+    # fixed chrome offset for axis/legend room (see the renderImage block
+    # below), which matters at a ~900px preview but is a rounding error once
+    # the export is thousands of pixels wide — square_ratio() alone is the
+    # geometrically correct answer at export size. Every other mode has no
+    # shape the data imposes on it, so the slider governs both places exactly
+    # as before.
+    export_aspect <- shiny$reactive({
+      if (square_for()) {
+        square_ratio() %||% (input$epi_aspect_ratio %||% ASPECT_DEFAULT)
+      } else {
+        input$epi_aspect_ratio %||% ASPECT_DEFAULT
+      }
+    })
+
+    export <- list(
+      kind = "ggplot",
+      label = "epi_curve",
+      ready = shiny$reactive(isTRUE(generated())),
+      aspect = export_aspect,
+      save = function(file, format, opts) {
+        save_plot_export(
           epi_ggplot(),
           file,
-          input$epi_filetype %||% "png",
-          input$epi_aspect_ratio %||% ASPECT_DEFAULT
+          format,
+          width_cm = opts$width_cm,
+          aspect = export_aspect(),
+          dpi = opts$dpi
         )
       }
     )
-
-    # The export tab uses an action button; route it to the hidden download
-    # link.
-    shiny$observeEvent(input$epi_download, {
-      if (!isTRUE(generated())) {
-        shiny$showNotification(
-          "Generate a plot before saving it.",
-          type = "warning"
-        )
-        return()
-      }
-      shinyjs::click("download_epi")
-    })
 
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
@@ -1489,28 +1601,65 @@ server <- function(
         session,
         vals,
         switches = c(
-          "epi_label_ends", "epi_show_cumulative", "epi_show_moving_avg",
-          "epi_show_x_label", "epi_zoom_axis"
+          "epi_label_ends",
+          "epi_show_cumulative",
+          "epi_show_moving_avg",
+          "epi_show_x_label",
+          "epi_zoom_axis"
         ),
         selects = c(
-          "epi_plot_mode", "epi_moving_avg_align", "epi_anno_type",
+          "epi_plot_mode",
+          "epi_moving_avg_align",
+          "epi_anno_type",
           "epi_col_scale"
         ),
         sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
         texts = "epi_anno_label",
         colors = c(
-          "epi_single_color", "epi_text_color", "epi_anno_color",
-          "epi_cumulative_color", "epi_background_color", "epi_moving_avg_color"
+          "epi_single_color",
+          "epi_text_color",
+          "epi_anno_color",
+          "epi_cumulative_color",
+          "epi_background_color",
+          "epi_moving_avg_color"
         ),
-        # Time interval / stratify are server-rendered controls (rebuilt on a
-        # counter); best-effort here, corrected by the user's Generate.
-        radio_groups = "epi_interval",
-        pickers = "epi_stratify"
+        # Interval is a server-rendered radioGroupButtons (interval_ui), but by
+        # the time restore() runs the tab's own module has already completed
+        # its first render pass - see the note on epi_stratify below, which
+        # relies on the same guarantee.
+        radio_groups = "epi_interval"
       )
 
+      # epi_stratify and its granularity are renderUI-owned controls, so they
+      # are handed to the renders that own them rather than updated in place.
+      # Sending an update*Input() here cannot work: writing the tab's selection
+      # reactiveVals (which restoring a plot does, just before calling this)
+      # invalidates stratify_fields(), so stratify_ui re-renders in this same
+      # flush and replaces the control the update was addressed to. The value
+      # has to be *rendered* in, which is what parking it here arranges.
+      #
+      # Bumping stratify_rebuild() rather than trusting that invalidation to
+      # happen makes it a guarantee: whatever else did or did not change, the
+      # picker rebuilds once and picks this up. Read isolated - restore() runs
+      # inside the caller's observer, and depending on the counter it writes
+      # would feed that observer back into itself.
+      if (!is.null(vals$epi_stratify) && nzchar(vals$epi_stratify)) {
+        restore_stratify(vals$epi_stratify)
+        stratify_rebuild(shiny$isolate(stratify_rebuild()) + 1L)
+      }
+      # The granularity control needs no such nudge: it renders only once
+      # epi_stratify has echoed back as a date field, and that echo is itself
+      # what re-runs it.
+      if (!is.null(vals$epi_stratify_granularity)) {
+        restore_granularity(vals$epi_stratify_granularity)
+      }
+
+      # Through as_epi_annotations() rather than straight in: the snapshot came
+      # back through JSON, which has no date type, so `start`/`end` arrive as
+      # strings the plot code cannot do date arithmetic on.
       if (!is.null(vals$.annotations)) {
-        a <- vals$.annotations
-        if (is.data.frame(a) && nrow(a)) {
+        a <- epi_plot$as_epi_annotations(vals$.annotations)
+        if (nrow(a)) {
           try(annotations(a), silent = TRUE)
         }
       }
@@ -1519,8 +1668,12 @@ server <- function(
     # Thumbnail: server-render the Epi curve to a small PNG.
     save_thumb <- function(file, w, h) {
       epi_plot$render_epi_png(
-        epi_ggplot(), file,
-        width_px = w, height_px = h, res = 96, scale = 1
+        epi_ggplot(),
+        file,
+        width_px = w,
+        height_px = h,
+        res = 96,
+        scale = 1
       )
     }
 
@@ -1529,7 +1682,8 @@ server <- function(
       restore = restore,
       save_thumb = save_thumb,
       request_thumb = NULL,
-      thumb_data = NULL
+      thumb_data = NULL,
+      export = export
     )
   })
 }

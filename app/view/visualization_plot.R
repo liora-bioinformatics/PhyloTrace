@@ -31,8 +31,7 @@ box::use(
     div,
     icon,
     actionButton,
-    selectInput,
-    updateSelectInput,
+    downloadHandler,
     showNotification,
     tags,
     tagList,
@@ -41,6 +40,8 @@ box::use(
     modalDialog,
     modalButton,
     removeModal,
+    dateRangeInput,
+    updateDateRangeInput,
     uiOutput,
     renderUI,
     outputOptions,
@@ -60,37 +61,175 @@ box::use(
     pickerInput,
     updatePickerInput,
     pickerOptions,
+    updateRadioGroupButtons,
   ],
-  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows],
+  DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
 )
 box::use(
+  app / logic / db_events,
   app / logic / db_staging[imported_metadata_wide],
+  app / logic / field_labels[field_labels_for],
+  app / logic / field_types[as_date_safe, date_fields],
+  app /
+    logic /
+    viz_export[
+      export_filename,
+      export_hint,
+      export_modal,
+      export_panel,
+      export_preset,
+      export_presets,
+      write_data_uri
+    ],
   app / logic / analysis_store,
   app / view / visualization_mst,
   app / view / visualization_tree,
   app / view / visualization_map,
   app / view / visualization_epi,
+  app / view / visualization_amr,
   jsonlite[toJSON, fromJSON],
   base64enc[base64encode],
 )
 
 `%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
-# The four engines, keyed by the plot-type values the creator form offers.
+# The engines, keyed by the plot-type values the creator form offers.
 # `distance` marks the two engines built on a pairwise-distance computation:
 # they are the ones that consume the missing-value handling and can fold staged
 # peer isolates into their input, so they get the wider metadata bundle and the
-# Options panel. The Map geocodes metadata and the Epi curve bins collection
-# dates, so neither has any use for either.
+# Options panel. The Map geocodes metadata, the Epi curve bins collection dates
+# and the AMR views read the screening tables, so none of the three has any use
+# for either.
+# `export_kind` picks the export route, which is a property of where the plot is
+# drawn rather than of what it shows: "ggplot" engines hold a plot object on the
+# server and can be re-rendered at any size, while "widget" engines are drawn by
+# the browser and have to be captured from it. See app/logic/viz_export.R.
 .ENGINES <- list(
-  MST = list(mod = visualization_mst, distance = TRUE),
-  Tree = list(mod = visualization_tree, distance = TRUE),
-  Map = list(mod = visualization_map, distance = FALSE),
-  Epi = list(mod = visualization_epi, distance = FALSE)
+  MST = list(mod = visualization_mst, distance = TRUE, export_kind = "widget"),
+  Tree = list(
+    mod = visualization_tree,
+    distance = TRUE,
+    export_kind = "ggplot"
+  ),
+  Map = list(mod = visualization_map, distance = FALSE, export_kind = "widget"),
+  Epi = list(mod = visualization_epi, distance = FALSE, export_kind = "ggplot"),
+  AMR = list(mod = visualization_amr, distance = FALSE, export_kind = "ggplot")
 )
 
 #' @export
 plot_types <- names(.ENGINES)
+
+# What the creator's plot-type picker shows for each engine: the preview image
+# that backs its tile, a one-line tagline, the prose description and the
+# technical notes shown once a type is selected. It lives here, beside
+# .ENGINES, so the copy cannot drift away from the engines it describes —
+# `distance` is read from .ENGINES below rather than restated. Preview images
+# are resolved by the browser against the app root (Rhino serves app/static at
+# /static), exactly like the logos in app/main.R.
+.TYPE_INFO <- list(
+  MST = list(
+    title = "Minimum-Spanning Tree",
+    icon = "circle-nodes",
+    tagline = "Allelic distances as an interactive network",
+    image = "static/images/tiles/tile_mst.png",
+    about = paste(
+      "The minimum-spanning tree over the pairwise allelic distance matrix:",
+      "every isolate is a node, every edge is labelled with the number of",
+      "differing loci. Positions are computed, not dragged; pan and zoom the",
+      "canvas and hover a node to see its members, and single-linkage",
+      "clusters below a chosen threshold are shaded behind the network."
+    ),
+    technical = c(
+      "visNetwork (vis.js) over a distance matrix built in app/logic/phylo.R",
+      "Nodes can be drawn as pie charts over any categorical metadata field",
+      "Missing loci follow the missing-value handling set in the Options panel",
+      "Export as a self-contained interactive HTML file or as a canvas PNG"
+    )
+  ),
+  Tree = list(
+    title = "Phylogenetic Tree",
+    icon = "sitemap",
+    tagline = "Neighbour-Joining or UPGMA dendrogram",
+    image = "static/images/tiles/tile_tree.png",
+    about = paste(
+      "A dendrogram inferred from the same allelic distance matrix, using",
+      "either Neighbour-Joining or UPGMA. Tips carry metadata as coloured",
+      "symbols and rings, so host, country and collection date can be read",
+      "off the tree alongside its topology."
+    ),
+    technical = c(
+      "ggtree/ape; algorithm chosen per plot in the engine's control panel",
+      "Rectangular, slanted and circular layouts with adjustable tip labels",
+      "Metadata mapped onto tip shape, tip colour and surrounding heat rings",
+      "Export via ggsave: PNG, JPEG, PDF or SVG at a chosen size and DPI"
+    )
+  ),
+  Map = list(
+    title = "Geographic Map",
+    icon = "earth-europe",
+    tagline = "Isolates placed on an interactive world map",
+    image = "static/images/tiles/tile_map.png",
+    about = paste(
+      "Plots isolates at the places their metadata names. City, state and",
+      "country fields are geocoded once per distinct location when you press",
+      "Generate, then drawn in one of four modes: markers, a country",
+      "choropleth, a density heatmap, or a mini-chart per location."
+    ),
+    technical = c(
+      "leaflet; coordinates from OSM/Nominatim, cached per distinct place",
+      "Reads geo_loc_name_city, _state_province and _country from the metadata",
+      "Choropleth shading uses Natural Earth country polygons",
+      "Export as an interactive HTML map; timeline playback over collection date"
+    )
+  ),
+  Epi = list(
+    title = "Epidemiological Curve",
+    icon = "chart-column",
+    tagline = "Case counts binned over collection date",
+    image = "static/images/tiles/tile_epi.png",
+    about = paste(
+      "The classic epi curve: collection dates binned into equal intervals,",
+      "one bar per interval, optionally stacked or faceted by a metadata",
+      "field. A moving average can be laid over the bars, and playback walks",
+      "the curve forward one interval at a time."
+    ),
+    technical = c(
+      "ggplot2; day/week/month/year bins with integer-only count axes",
+      "Bars are exactly one interval wide, so gaps are real gaps in the data",
+      "Optional moving average, cumulative view and per-group faceting",
+      "Export via ggsave: PNG, JPEG, PDF or SVG"
+    )
+  ),
+  AMR = list(
+    title = "Resistance Profile",
+    icon = "shield-virus",
+    tagline = "Screening results across isolates and genes",
+    image = "static/images/tiles/tile_amr.png",
+    about = paste(
+      "Views over the antimicrobial-resistance screening stored with your",
+      "isolates: a presence/absence heatmap of isolates against genes, a",
+      "coarser isolates-against-drug-classes grid keeping abritamr's",
+      "confident/partial distinction, or a ranked prevalence bar chart."
+    ),
+    technical = c(
+      "ggplot2 plots built in app/logic/amr_plot.R from the amr_results tables",
+      "Screening comes from abritamr/NCBI AMRFinderPlus, run alongside typing",
+      "Genes group by element type or drug class, or cluster hierarchically",
+      "Only isolates screened in this database appear; export via ggsave"
+    )
+  )
+)
+
+#' Plot-type presentation metadata for the creator form, keyed by plot type and
+#' carrying the engine's own `distance` flag so the picker can state what each
+#' view needs without a second copy of that fact.
+#' @export
+plot_type_meta <- stats::setNames(
+  lapply(plot_types, function(k) {
+    c(.TYPE_INFO[[k]], list(key = k, distance = .ENGINES[[k]]$distance))
+  }),
+  plot_types
+)
 
 # Restrict a metadata table to the confirmed isolate preselection; NULL
 # selection means "no filter" and passes the table through untouched.
@@ -125,117 +264,122 @@ ui <- function(id, plot_type) {
   spec <- .ENGINES[[plot_type]]
   stopifnot(!is.null(spec))
 
-  layout_sidebar(
-    fillable = TRUE,
-    border_radius = FALSE,
-    padding = 0,
-    sidebar = sidebar(
-      id = ns("sidebar"),
-      title = NULL,
-      width = 320,
-      actionButton(
-        ns("generate"),
-        "Generate",
-        icon = icon("play"),
-        width = "100%"
-      ),
-      accordion(
-        id = ns("setup_accordion"),
-        open = if (spec$distance) c("Selection", "Options") else "Selection",
-        # Isolate preselection. The button opens a modal with the metadata
-        # table where the user picks which isolates feed this plot; the info
-        # line summarises the current selection. See the selection_button /
-        # sel_* handlers below, and how selected_isolates threads into the
-        # engine through viz_metadata_selected*.
-        accordion_panel(
-          "Selection",
-          icon = icon("list-check"),
+  as_fill_carrier(
+    div(
+      id = "plot-setup",
+      layout_sidebar(
+        fillable = TRUE,
+        border_radius = FALSE,
+        padding = 0,
+        sidebar = sidebar(
+          id = ns("sidebar"),
+          class = "plot-setup",
+          title = NULL,
+          width = 340,
           actionButton(
-            ns("selection_button"),
-            "Choose isolates",
-            icon = icon("list-check")
+            ns("generate"),
+            "Generate",
+            icon = icon("chalkboard"),
+            class = "btn-primary",
+            width = "100%"
           ),
-          uiOutput(ns("selection_info"))
-        ),
-        # Only the distance engines have anything to put here. For Map and Epi
-        # the panel is not emitted at all — it used to be rendered empty with a
-        # "Not available" placeholder and hidden with shinyjs, which is
-        # unnecessary now that the tab knows its type up front.
-        if (spec$distance) {
-          accordion_panel(
-            "Options",
-            icon = icon("gear"),
-            selectInput(
-              ns("na_handling"),
-              span(
-                "Missing values ",
-                span(
-                  class = "tooltip-bttn",
-                  actionButton(
-                    ns("na_handling_info"),
-                    label = NULL,
-                    icon = icon("circle-info")
-                  )
+          accordion(
+            id = ns("setup_accordion"),
+            open = c("Selection", "Export Plot"),
+            accordion_panel(
+              "Selection",
+              icon = icon("list-check"),
+              actionButton(
+                ns("selection_button"),
+                "Choose isolates",
+                icon = icon("list-check")
+              ),
+              uiOutput(ns("selection_info"))
+            ),
+            accordion_panel(
+              "Export Plot",
+              icon = icon("arrow-up-from-bracket"),
+              export_panel(ns, "export")
+            ),
+            # Save the currently displayed plot into an Analysis on the dashboard.
+            # The picker's grouped choices are the Analyses (each with a "New plot"
+            # entry) and the plots already saved in them; picking a plot overwrites
+            # it, picking "New plot" adds one.
+            accordion_panel(
+              "Save Analysis",
+              icon = icon("floppy-disk"),
+              pickerInput(
+                ns("save_target"),
+                "Save in analysis group",
+                choices = list(),
+                options = pickerOptions(
+                  title = "No analysis",
+                  size = 10,
+                  container = "body"
                 )
               ),
-              choices = c(
-                "Ignore for pairwise comparison" = "ignore_na",
-                "Omit loci with missing values" = "omit",
-                "Treat missing as allele variant" = "category"
-              )
-            ),
-            # Typing results imported from a peer (Database > Import). They
-            # carry allele identity but no sequences, so they can join a
-            # distance computation but nothing else.
-            uiOutput(ns("imported_picker_ui")),
-            # Tree-only. `algo` is a computation input (feeds compute_phylo_tree
-            # on Generate, like the missing-value handling above); `zoom_view`
-            # is purely presentational — the engine applies it as a CSS class
-            # with no re-render.
-            if (identical(plot_type, "Tree")) {
+              actionButton(
+                ns("save_plot"),
+                "Save",
+                icon = icon("floppy-disk"),
+                width = "100%"
+              ),
+              uiOutput(ns("save_status"))
+            )
+          )
+        ),
+        shinyjs::useShinyjs(),
+        # The engine's whole inner layout. `as_fill_carrier` used to come from the
+        # coordinator wrapping each navset panel; the tab has to supply it now.
+        as_fill_carrier(
+          spec$mod$ui(
+            ns("engine"),
+            generate_id = ns("generate"),
+            # The distance-computation controls, rendered in the engine's own
+            # right-hand sidebar rather than here. They stay namespaced to this
+            # module, so every observer behind them is unchanged — what moves is
+            # only where they appear, and with it what they mean: the left
+            # sidebar is the "press Generate to apply" side, the right sidebar
+            # takes effect live. Only the distance engines have any.
+            options_ui = if (spec$distance) {
               tagList(
-                prettyRadioButtons(
-                  ns("algo"),
-                  "Algorithm",
-                  choices = c("Neighbour-Joining", "UPGMA")
+                pickerInput(
+                  ns("na_handling"),
+                  span(
+                    "Missing values ",
+                    span(
+                      class = "tooltip-bttn",
+                      actionButton(
+                        ns("na_handling_info"),
+                        label = NULL,
+                        icon = icon("circle-info")
+                      )
+                    )
+                  ),
+                  choices = c(
+                    "Ignore for pairwise comparison" = "ignore_na",
+                    "Omit loci with missing values" = "omit",
+                    "Treat missing as allele variant" = "category"
+                  )
                 ),
-                input_switch(ns("zoom_view"), "Zoom view", FALSE)
+                # Typing results imported from a peer (Database > Import). They
+                # carry allele identity but no sequences, so they can join a
+                # distance computation but nothing else.
+                uiOutput(ns("imported_picker_ui")),
+                if (identical(plot_type, "Tree")) {
+                  tagList(
+                    prettyRadioButtons(
+                      ns("algo"),
+                      "Algorithm",
+                      choices = c("Neighbour-Joining", "UPGMA")
+                    )
+                  )
+                }
               )
             }
           )
-        },
-        # Save the currently displayed plot into an Analysis on the dashboard.
-        # The picker's grouped choices are the Analyses (each with a "New plot"
-        # entry) and the plots already saved in them; picking a plot overwrites
-        # it, picking "New plot" adds one.
-        accordion_panel(
-          "Save Analysis",
-          icon = icon("floppy-disk"),
-          pickerInput(
-            ns("save_target"),
-            "Save into",
-            choices = list(),
-            options = pickerOptions(
-              title = "No analysis",
-              size = 10,
-              container = "body"
-            )
-          ),
-          actionButton(
-            ns("save_plot"),
-            "Save",
-            icon = icon("floppy-disk"),
-            class = "btn-primary w-100"
-          ),
-          uiOutput(ns("save_status"))
         )
       )
-    ),
-    shinyjs::useShinyjs(),
-    # The engine's whole inner layout. `as_fill_carrier` used to come from the
-    # coordinator wrapping each navset panel; the tab has to supply it now.
-    as_fill_carrier(
-      spec$mod$ui(ns("engine"), generate_id = ns("generate"))
     )
   )
 }
@@ -253,11 +397,16 @@ server <- function(
   session_reset = shiny::reactive(0L),
   # Local per-isolate metadata, read and cached once by the coordinator.
   viz_metadata = shiny::reactive(NULL),
+  # One row per metadata column: its declared type, distinct-value count,
+  # coverage and group. Built once by the coordinator and threaded to every
+  # engine, which is what lets their field pickers agree on what a variable is
+  # without each recomputing it. See app/logic/field_profile.R.
+  viz_field_profiles = shiny::reactive(NULL),
   # Staged peer typing-result sets available for import into a distance plot.
   staged_sets = shiny::reactive(NULL),
   # Grouped Save-target choices, kept current by the coordinator.
   picker_choices = shiny::reactive(list()),
-  plots_changed = shiny::reactiveVal(0L),
+  db_rev = db_events$new_bus(),
   # TRUE while this tab is the selected nav panel. Only the Map needs it (to
   # nudge Leaflet into recomputing its size), but it costs nothing to thread.
   is_active = shiny::reactive(TRUE),
@@ -325,7 +474,8 @@ server <- function(
           actionsBox = TRUE,
           title = "None",
           selectedTextFormat = "count > 1",
-          countSelectedText = "{0} set(s)"
+          countSelectedText = "{0} set(s)",
+          container = "body"
         )
       )
     })
@@ -384,27 +534,299 @@ server <- function(
     # database, a session reset, or a new confirmed selection.
     selected_isolates <- reactiveVal(NULL)
 
-    # A new database means the previous isolate names may not exist any more.
+    # The selection the plot on screen was actually drawn from, as opposed to the
+    # one the user has picked but not yet applied. Everything the engine sees
+    # goes through this, which is what makes the left sidebar a form you submit
+    # rather than a set of live controls: confirming a different set of isolates
+    # changed the metadata under the tree immediately, so the plot redrew with
+    # new labels against a tree still computed from the old set.
+    #
+    # NULL before the first Generate; thereafter whatever Generate captured.
+    applied_selection <- reactiveVal(NULL)
+
+    # The isolate pool moved underneath this tab, so the sidebar's selection has
+    # to be re-checked against it.
+    #
+    # This used to clear it outright, which was right while viz_metadata() only
+    # ever changed when a different database was loaded. Now that it also
+    # advances on an isolate removal, a typing run or a metadata edit, clearing
+    # would throw away a selection the user built by hand every time somebody
+    # touched an unrelated cell. So: keep what still exists, drop what does not,
+    # and only fall back to NULL ("all isolates") when nothing survives.
+    #
+    # Only `selected_isolates`, the sidebar form. `applied_selection` is the
+    # record of what the plot on screen was drawn from and is deliberately left
+    # alone: reconciling it would erase the very difference that tells the user
+    # their plot is out of date.
     reg(observeEvent(
       viz_metadata(),
-      selected_isolates(NULL),
+      {
+        live <- db_events$reconcile_names(
+          isolate(selected_isolates()),
+          viz_metadata()$isolate
+        )
+        if (live$changed) {
+          selected_isolates(if (length(live$kept)) live$kept else NULL)
+        }
+      },
       ignoreInit = TRUE
     ))
+
+    # Say it once, when it happens, rather than leaving the user to notice that
+    # Generate has lit up. Fires only for a plot already on screen - before the
+    # first Generate there is nothing to be out of date.
+    reg(observeEvent(plot_missing(), {
+      n <- length(plot_missing())
+      if (!n) {
+        return()
+      }
+      showNotification(
+        tagList(
+          tags$strong(sprintf(
+            "%d isolate(s) in this plot were removed from the database.",
+            n
+          )),
+          tags$br(),
+          "The plot still shows them."
+        ),
+        type = "warning",
+        duration = 12
+      )
+    }))
 
     # Two flavours: the Map and the Epi curve plot straight from the metadata
     # and must see only local isolates; the distance engines also label and
     # colour the staged peer isolates they compute distances for.
+    #
+    # Both read the *applied* selection: they feed the engine, and the engine
+    # draws whatever it is given the moment it is given it.
+    # The metadata the plot on screen was actually drawn from, captured at
+    # Generate alongside `applied_selection`.
+    #
+    # This has to be a snapshot, not a live read. The distance engines keep the
+    # computed topology in a reactiveVal that only Generate replaces, but they
+    # rebuild the *drawing* whenever their metadata changes - so a live table
+    # let the two halves drift apart. Removing isolates from the database left
+    # the tree with the branches and tips it was computed from and a metadata
+    # table that no longer described them, and it redrew as a tree whose tips
+    # had silently lost their labels.
+    #
+    # NULL until the first Generate, where the reactives below fall through to
+    # the live table: the engines fill their variable pickers from it as soon as
+    # a database is loaded, which must keep working before anything is drawn.
+    applied_metadata <- reactiveVal(NULL)
+    applied_metadata_all <- reactiveVal(NULL)
+
     viz_metadata_selected <- reactive({
-      .subset_meta(viz_metadata(), selected_isolates())
+      applied_metadata() %||%
+        .subset_meta(viz_metadata(), applied_selection())
     })
 
     viz_metadata_selected_all <- reactive({
-      .subset_meta(viz_metadata_all(), selected_isolates())
+      applied_metadata_all() %||%
+        .subset_meta(viz_metadata_all(), applied_selection())
     })
+
+    # The isolate set handed to the engines: always concrete, never NULL.
+    #
+    # Read only by the two distance engines, which pass it straight to
+    # compute_phylo_tree() / compute_mst(). It must not be NULL there. NULL
+    # means "all isolates" everywhere in this sidebar, but load_allele_profile()
+    # resolves NULL with a live `SELECT ... FROM mlst` of its own - a different
+    # question, answered at a different moment, against a different table. Mid
+    # typing run that query sees isolates pyMLST has only half-written, which
+    # the sidebar count, the selection modal and the tip labels all know nothing
+    # about, so the tree came back with more tips than there were labels for.
+    #
+    # Deriving the list from the very frame that supplies those labels is what
+    # makes topology and labels agree by construction rather than by two
+    # separate reads happening to land on the same answer.
+    engine_isolates <- reactive({
+      meta <- viz_metadata_selected_all()
+      if (is.null(meta)) NULL else meta$isolate
+    })
+
+    # How the drawn plot differs from the database as it stands now.
+    #
+    # `plot_missing` is what makes the plot wrong rather than merely dated: those
+    # isolates are still drawn, but nothing in the database backs them any more.
+    # `plot_new` only counts for a plot drawn from the whole database - with an
+    # explicit selection a newly typed isolate simply is not part of it, so it is
+    # no reason to call the plot out of date.
+    plot_missing <- reactive({
+      snap <- applied_metadata()
+      live <- viz_metadata()
+      if (is.null(snap) || is.null(live)) {
+        return(character(0))
+      }
+      setdiff(snap$isolate, live$isolate)
+    })
+
+    plot_new <- reactive({
+      snap <- applied_metadata()
+      live <- viz_metadata()
+      if (is.null(snap) || is.null(live) || !is.null(applied_selection())) {
+        return(character(0))
+      }
+      setdiff(live$isolate, snap$isolate)
+    })
+
+    # Reported, not acted on. This drives the note under the isolate count and
+    # nothing else: a database change does not arm Generate, because the plot on
+    # screen is still a valid answer for the isolates it was built from and a
+    # redraw is the user's call. They make it by choosing isolates.
+    plot_stale <- reactive({
+      length(plot_missing()) > 0L || length(plot_new()) > 0L
+    })
+
+    # TRUE once this tab has drawn a plot at least once.
+    generated_once <- reactiveVal(FALSE)
+
+    # Whether the left sidebar holds anything not yet in the plot. Before the
+    # first Generate everything is pending, so the button is live from the start.
+    # Set when the user confirms the isolate modal, cleared at Generate.
+    #
+    # Needed because confirming collapses "all of them" back to NULL (see
+    # do_sel_confirm). Without it a plot drawn from the whole database could
+    # never be rebuilt after new isolates arrived: the user would tick them,
+    # confirm, and the selection would collapse to the same NULL the plot was
+    # generated from, comparing equal and leaving Generate disabled over a plot
+    # that no longer covers the database.
+    selection_touched <- reactiveVal(FALSE)
+
+    # Deliberately does not include plot_stale(). A database change on its own
+    # is reported (see selection_info) but does not arm Generate: the plot on
+    # screen is still a valid answer for the isolates it was built from, and
+    # nothing should invite a redraw the user did not ask for. Choosing isolates
+    # is what arms it — including re-confirming "all", which after a typing run
+    # means a different set than it did at the last Generate.
+    pending_changes <- reactive({
+      !isTRUE(generated_once()) ||
+        !identical(selected_isolates(), applied_selection()) ||
+        isTRUE(selection_touched())
+    })
+
+    # Generate is the only way to apply them, so it is only offered when there is
+    # something to apply — and says so, rather than looking pressable and doing
+    # nothing.
+    #
+    # Not withheld during a typing run. That used to be the case, on the
+    # assumption that the distance engines could see partly-written isolates -
+    # they cannot: engine_isolates() (below) is derived from the applied
+    # metadata snapshot, and a run in progress has not synced its new isolates
+    # into metadata yet (that happens once, at finalize - see
+    # sync_metadata_table()'s callers), so they are simply absent from the
+    # selection, not present with incomplete data. Existing isolates are
+    # untouched by a run in the first place: typing drops any name already in
+    # the database from its queue before pyMLST ever runs. A Generate pressed
+    # mid-run therefore computes the same correct tree it would have before
+    # the run started; the new isolates join it once the run finishes and the
+    # sidebar count updates (see plot_stale()).
+    reg(observe({
+      pending <- isTRUE(pending_changes())
+      shinyjs::toggleState("generate", condition = pending)
+      shinyjs::toggleClass("generate", "is-pending", condition = pending)
+      shinyjs::toggleClass("generate", "btn-primary", condition = pending)
+    }))
+
+    # ------------------------------------------------------ time filter ---
+    # The date-typed columns the modal's time filter can work along: the fixed
+    # schema's collection date, the app-stamped add time, and every user-defined
+    # `date` variable. None of them is named here — they come from the shared
+    # type map (app/logic/field_types.R), which reads `phylotrace_custom_fields`
+    # for the custom ones, so a date variable the user defines in Database >
+    # Custom fields becomes a filterable time axis with no change here.
+    sel_date_choices <- reactive({
+      meta <- viz_metadata_all()
+      if (is.null(meta)) {
+        return(character(0))
+      }
+      cols <- date_fields(db_path(), names(meta))
+      stats::setNames(cols, field_labels_for(cols))
+    })
+
+    # The chosen column parsed to Date, NA where the cell is empty or (for the
+    # free-text collection date) unreadable. NULL when no column is chosen.
+    sel_dates <- reactive({
+      meta <- viz_metadata_all()
+      col <- input$sel_date_field
+      if (is.null(meta) || is.null(col) || !nzchar(col)) {
+        return(NULL)
+      }
+      if (!col %in% names(meta)) {
+        return(NULL)
+      }
+      as_date_safe(meta[[col]])
+    })
+
+    # The rows the table shows. Without a chosen column, or before the range
+    # input has reported a complete window, that is every isolate. Rows whose
+    # date is missing or unreadable drop out while a filter is active — a row
+    # with no date cannot be shown to fall inside a window, and silently keeping
+    # them would make the window mean nothing.
+    sel_filtered <- reactive({
+      meta <- viz_metadata_all()
+      req(meta)
+      d <- sel_dates()
+      rng <- input$sel_date_range
+      if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
+        return(meta)
+      }
+      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      meta[keep, , drop = FALSE]
+    })
+
+    # Isolates ticked in the table, held by name rather than by row index so
+    # that changing the window — which re-renders the table and renumbers its
+    # rows — does not silently discard them. Only names still in the window
+    # survive: the window defines the pool the selection is drawn from.
+    sel_checked <- reactiveVal(character(0))
+
+    reg(observeEvent(
+      input$sel_table_rows_selected,
+      {
+        rows <- input$sel_table_rows_selected
+        tbl <- sel_filtered()
+        sel_checked(if (length(rows)) tbl$isolate[rows] else character(0))
+      },
+      ignoreNULL = FALSE
+    ))
+
+    # Switching the time axis re-bases the window on the new column's own span,
+    # since a window that made sense for the collection date is meaningless on,
+    # say, the date an isolate entered the database.
+    reg(observeEvent(input$sel_date_field, {
+      d <- sel_dates()
+      shinyjs::toggleState("sel_date_range", condition = !is.null(d))
+      if (is.null(d) || all(is.na(d))) {
+        return()
+      }
+      updateDateRangeInput(
+        session,
+        "sel_date_range",
+        start = min(d, na.rm = TRUE),
+        end = max(d, na.rm = TRUE),
+        min = min(d, na.rm = TRUE),
+        max = max(d, na.rm = TRUE)
+      )
+    }))
 
     reg(observeEvent(input$selection_button, {
       meta <- viz_metadata_all()
       req(meta)
+      # Fresh table, but a sticky time filter: the controls are recreated on
+      # every open carrying the values they had when the modal was last closed,
+      # so what the table shows always matches what the footer says. Re-creating
+      # them with defaults instead would leave the inputs' retained values
+      # briefly disagreeing with the visible controls.
+      dates <- sel_date_choices()
+      field <- isolate(input$sel_date_field) %||% ""
+      rng <- isolate(input$sel_date_range)
+      # Seeds the tick state from the last confirmed selection, so reopening
+      # the modal shows what's actually applied instead of starting blank
+      # every time (NULL means "everything", which ticks nothing).
+      seed <- isolate(selected_isolates()) %||% character(0)
+      sel_checked(seed)
       showModal(div(
         class = "selection-modal",
         modalDialog(
@@ -428,38 +850,157 @@ server <- function(
             DTOutput(ns("sel_table"), fill = FALSE)
           ),
           footer = tagList(
+            # Shares the footer row with the buttons (pushed to the left of
+            # them by .selection-modal-filter). Omitted entirely when the
+            # database has no date-typed column to filter along.
+            if (length(dates)) {
+              div(
+                class = "selection-modal-filter",
+                pickerInput(
+                  ns("sel_date_field"),
+                  label = NULL,
+                  choices = c("No time filter" = "", dates),
+                  selected = if (field %in% dates) field else "",
+                  width = "fit"
+                ),
+                div(
+                  id = ns("sel_date_range_wrap"),
+                  dateRangeInput(
+                    ns("sel_date_range"),
+                    label = NULL,
+                    start = rng[1],
+                    end = rng[2],
+                    separator = "–",
+                    width = "17rem"
+                  )
+                )
+              )
+            },
             modalButton("Cancel"),
             actionButton(
               ns("sel_confirm"),
-              "Confirm selection",
+              "Confirm",
+              class = "btn-primary"
+            ),
+            actionButton(
+              ns("sel_confirm_generate"),
+              "Confirm & Generate",
+              icon = icon("bolt"),
               class = "btn-primary"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         )
       ))
+      # The range input is created enabled; disable it right away when the
+      # modal opens with no column chosen (the observer above owns it from
+      # then on).
+      shinyjs::toggleState(
+        "sel_date_range",
+        condition = nzchar(field) && field %in% dates
+      )
+      # Baking `seed` into this render's own `selection=` argument isn't
+      # reliable: reopening rebinds the DT widget, and its own initial
+      # "nothing selected yet" report can reach the server after this render
+      # already ran, wiping out `sel_checked` before the ticks ever show.
+      # Applying it out-of-band, once the widget has had time to settle,
+      # sidesteps that race.
+      if (length(seed)) {
+        shinyjs::delay(150, {
+          tbl <- isolate(sel_filtered())
+          rows <- match(seed, tbl$isolate)
+          selectRows(sel_proxy, rows[!is.na(rows)])
+        })
+      }
     }))
 
     output$sel_table <- renderDT(
       {
-        meta <- viz_metadata_all()
-        req(meta)
+        tbl <- sel_filtered()
+        req(tbl)
+        # Row indices of the isolates that were ticked before the window
+        # changed, so the re-render restores rather than clears them. Read
+        # non-reactively: the checked set is an *output* of this table, and
+        # depending on it would re-render on every click.
+        keep <- match(isolate(sel_checked()), tbl$isolate)
+
+        # Pinned (FixedColumns) columns: `isolate` always, plus whatever date
+        # column the time filter is currently set to — moved to sit right
+        # after it, so both stay in view together while the rest of the wide
+        # metadata table scrolls underneath. Isolate alone when there is no
+        # time filter (or it names a column this frame doesn't have, e.g. the
+        # instant the picker's own choices are still catching up to a new
+        # database).
+        date_col <- input$sel_date_field
+        pin_cols <- if (
+          !is.null(date_col) &&
+            nzchar(date_col) &&
+            !identical(date_col, "isolate") &&
+            date_col %in% names(tbl)
+        ) {
+          c("isolate", date_col)
+        } else {
+          "isolate"
+        }
+        tbl <- tbl[, c(pin_cols, setdiff(names(tbl), pin_cols)), drop = FALSE]
+
         datatable(
-          meta,
+          tbl,
           rownames = FALSE,
           filter = "top",
           # Drop the default "display" class's zebra striping (keep borders /
           # hover / sortable) so the cells aren't tinted per row.
           class = "row-border hover order-column",
-          # Open with nothing selected ("0 of N"); confirming an empty
-          # selection is treated as "all" (see the sel_confirm handler).
-          selection = list(mode = "multiple", selected = NULL),
+          # Opens with nothing selected ("0 of N"); confirming an empty
+          # selection is treated as "all rows in the window" (see the
+          # sel_confirm handler).
+          selection = list(
+            mode = "multiple",
+            selected = keep[!is.na(keep)]
+          ),
+          extensions = "FixedColumns",
           options = list(
             dom = "tip",
-            pageLength = 10,
+            pageLength = 20,
             scrollX = TRUE,
-            scrollY = "42vh",
-            scrollCollapse = TRUE
+            # `scrollY` only has to be a non-empty value: it is what tells
+            # DataTables to build the header/body scroll structure at all —
+            # main.scss then takes over sizing entirely (single scroller, the
+            # header pinned inside it with position: sticky; see the
+            # `.edit-table, .isolate-selection-table, .db-page_body` rules and
+            # `.isolate-selection-table .dataTables_scroll`'s max-height), the
+            # same convention `database_browser.R`'s metadata_table uses.
+            scrollY = "1px",
+            scrollCollapse = TRUE,
+            fixedColumns = list(leftColumns = length(pin_cols)),
+            # FixedColumns pins each pinned column's own header cell (adding
+            # `dtfc-fixed-left` + a computed `left` offset it works out from
+            # the actual rendered column widths) but has no notion of the
+            # filter = "top" row underneath — that is a plain <td> row DT
+            # bolts onto <thead> outside the header API, so FixedColumns never
+            # touches it and it scrolls out from under its own column instead
+            # of staying put. `database_browser.R`'s metadata_table hits the
+            # same gap, but only ever pins one column, so a CSS rule hardcoded
+            # to `left: 0` (see the `.edit-table` rules in main.scss) is
+            # enough there; the second pinned column here is a date field
+            # whose width isn't knowable in advance, so its offset has to be
+            # read from the header cell FixedColumns already positioned,
+            # rather than guessed at in CSS.
+            initComplete = JS(sprintf(
+              "function(settings) {
+                 var rows = $(this.api().table().header()).find('tr');
+                 var headerCells = rows.eq(0).find('th');
+                 var filterCells = rows.eq(1).find('td');
+                 for (var i = 0; i < %d; i++) {
+                   filterCells.eq(i).addClass('dtfc-fixed-left').css({
+                     position: 'sticky',
+                     left: headerCells.eq(i).css('left') || '0px',
+                     zIndex: 3
+                   });
+                 }
+               }",
+              length(pin_cols)
+            ))
           )
         )
       },
@@ -469,9 +1010,43 @@ server <- function(
     output$sel_count <- renderUI({
       meta <- viz_metadata_all()
       req(meta)
+      shown <- nrow(sel_filtered())
       n <- length(input$sel_table_rows_selected)
-      span(sprintf("%d of %d selected", n, nrow(meta)))
+      if (shown == nrow(meta)) {
+        return(span(sprintf("%d of %d selected", n, shown)))
+      }
+      # A row leaves the table for one of two different reasons — its date
+      # falls outside the chosen window, or it has no usable date at all (blank
+      # cell, or free text that didn't parse) — and lumping both into one
+      # "outside window" figure would read as "the window excludes N" when some
+      # of those N were never judgeable against the window in the first place.
+      # Reporting them apart is what keeps a database with sparse date entry
+      # from looking like a window drawn too narrow.
+      d <- sel_dates()
+      missing <- if (is.null(d)) 0L else sum(is.na(d))
+      outside <- nrow(meta) - shown - missing
+      detail <- if (missing > 0 && outside > 0) {
+        sprintf(" · %d outside window, %d missing date", outside, missing)
+      } else if (missing > 0) {
+        sprintf(" · %d missing date", missing)
+      } else {
+        sprintf(" · %d outside window", outside)
+      }
+      span(
+        sprintf("%d of %d selected", n, shown),
+        span(class = "selection-modal-count-total", detail)
+      )
     })
+
+    # Unlike plain Confirm, an empty tick set has no "everything in the
+    # window" fallback here — it would generate immediately from a selection
+    # the user never actually made.
+    reg(observe({
+      shinyjs::toggleState(
+        "sel_confirm_generate",
+        condition = length(input$sel_table_rows_selected) > 0
+      )
+    }))
 
     # Select all / none act on the currently *filtered* rows, so "Select all"
     # after filtering only checks the visible subset.
@@ -482,14 +1057,63 @@ server <- function(
     ))
     reg(observeEvent(input$sel_none, selectRows(sel_proxy, NULL)))
 
-    reg(observeEvent(input$sel_confirm, {
+    # Shared by the plain confirm and the "confirm & generate" button: applies
+    # the ticked (or, if none ticked, filtered) rows as the selection. Returns
+    # FALSE, leaving the modal open, when there is nothing to select.
+    do_sel_confirm <- function() {
       meta <- viz_metadata_all()
-      req(meta)
+      tbl <- sel_filtered()
+      req(meta, tbl)
       rows <- input$sel_table_rows_selected
-      # An empty confirmation means "no filter" — fall back to all isolates
-      # (NULL), so the plot uses the full set rather than nothing.
-      selected_isolates(if (length(rows)) meta$isolate[rows] else NULL)
+      # An empty confirmation means "everything the window leaves" — with no
+      # window that is every isolate, which is how confirming without ticking
+      # anything has always behaved.
+      picked <- if (length(rows)) tbl$isolate[rows] else tbl$isolate
+      if (!length(picked)) {
+        showNotification(
+          "No isolates left to select — widen the time filter.",
+          type = "warning"
+        )
+        return(FALSE)
+      }
+      # Collapse "all of them" back to NULL (no filter), so a window that
+      # happens to cover the whole database costs the engines nothing.
+      selected_isolates(if (setequal(picked, meta$isolate)) NULL else picked)
+      # The user has chosen a set. That, not a database change, is what arms
+      # Generate — and it has to be recorded separately because the collapse
+      # above can leave the value identical to the applied one.
+      selection_touched(TRUE)
       removeModal()
+      TRUE
+    }
+
+    reg(observeEvent(input$sel_confirm, do_sel_confirm()))
+
+    # Draws the plot when the app itself decides one is due rather than the user
+    # pressing the button. It goes through the DOM instead of writing the input
+    # directly because the click is also what the engines' loading overlays
+    # listen for.
+    #
+    # Clearing `disabled` first is what makes it land at all. Generate is
+    # disabled exactly when nothing is pending, and both callers have just made
+    # this tab not-pending: the confirm path a flush too recently for the
+    # toggleState observer to have caught up, the restore path deliberately and
+    # for good — a tab filled from its snapshot has nothing left to apply. The
+    # browser swallows a click on a disabled button, so without this the plot is
+    # simply never drawn.
+    click_generate <- function() {
+      shinyjs::runjs(sprintf(
+        "var b=document.getElementById('%s'); if(b){b.disabled=false; b.click();}",
+        ns("generate")
+      ))
+    }
+
+    # Applies the selection exactly like Confirm, then redraws without a second
+    # click.
+    reg(observeEvent(input$sel_confirm_generate, {
+      if (isTRUE(do_sel_confirm())) {
+        click_generate()
+      }
     }))
 
     output$selection_info <- renderUI({
@@ -510,18 +1134,39 @@ server <- function(
           sprintf("%d of %d isolates selected", length(sel), total)
         )
       }
-      if (!is.null(active_analysis_restriction())) {
-        tagList(
-          base,
-          div(
-            class = "small text-info",
-            icon("lock"),
-            " Set by this Analysis"
-          )
+      # A toast fades; this does not. It is the standing answer to "why is
+      # Generate lit up on a plot I have not touched?", and it names the two
+      # cases separately because they mean different things: the plot is *wrong*
+      # when it still draws isolates the database no longer has, and merely
+      # *behind* when new isolates would join it.
+      missing_n <- length(plot_missing())
+      new_n <- length(plot_new())
+      staleness <- if (missing_n || new_n) {
+        div(
+          class = "small mt-1 text-warning",
+          icon("triangle-exclamation"),
+          " ",
+          if (missing_n) {
+            sprintf("%d isolate(s) in this plot were removed.", missing_n)
+          },
+          if (missing_n && new_n) " ",
+          if (new_n) {
+            sprintf("%d new isolate(s) are not included.", new_n)
+          }
         )
-      } else {
-        base
       }
+
+      restriction <- if (!is.null(active_analysis_restriction())) {
+        div(
+          class = "small text-info",
+          icon("lock"),
+          " Set by this Analysis"
+        )
+      }
+
+      parts <- list(base, restriction, staleness)
+      parts <- parts[!vapply(parts, is.null, logical(1))]
+      if (length(parts) == 1L) parts[[1]] else do.call(tagList, parts)
     })
 
     # "Missing values" help: a modal rather than a tooltip since the
@@ -564,11 +1209,18 @@ server <- function(
       list("engine"),
       list(
         db_path = gate(db_path),
+        # Not gated: it is a bus, not a reactive, and the engines that read the
+        # database directly (AMR hits, the tree's AMR matrix, the MST's scheme
+        # overview) need it to know when those reads went stale.
+        db_rev = db_rev,
         session_reset = gate(session_reset),
-        selected_isolates = gate(selected_isolates),
+        # Resolved, never NULL - see engine_isolates. Declared by every engine
+        # but read only by the two that compute a distance matrix.
+        selected_isolates = gate(engine_isolates),
         na_handling = gate(reactive(input$na_handling %||% "ignore_na")),
         generate = gate(reactive(input$generate)),
-        plot_type = gate(reactive(plot_type))
+        plot_type = gate(reactive(plot_type)),
+        field_profiles = gate(viz_field_profiles)
       )
     )
     engine_args <- c(
@@ -585,10 +1237,7 @@ server <- function(
     if (identical(plot_type, "Tree")) {
       engine_args <- c(
         engine_args,
-        list(
-          algo = gate(reactive(input$algo)),
-          zoom_view = gate(reactive(input$zoom_view))
-        )
+        list(algo = gate(reactive(input$algo)))
       )
     }
     if (identical(plot_type, "Map")) {
@@ -597,6 +1246,225 @@ server <- function(
       engine_args <- c(engine_args, list(visible = gate(is_active)))
     }
     eng <- do.call(spec$mod$server, engine_args)
+
+    # ------------------------------------------------------------ export ---
+    # The engine declares what it can produce and how to write it (its `export`
+    # contract); this owns the sidebar panel, the settings, and the single
+    # download the user actually clicks. Keeping the panel here rather than in
+    # each engine is what lets one plot type's export look and behave like
+    # another's.
+    exporter <- eng$export
+    export_widget <- identical(exporter$kind, "widget")
+
+    # A plain string for most engines; the AMR views make it a reactive, since
+    # their three modes are different plots and the file name has to say which.
+    export_label <- function() {
+      lbl <- exporter$label
+      if (is.function(lbl)) lbl() else lbl
+    }
+
+    export_format <- reactive(input$export_filetype %||% "png")
+
+    # No raw width/DPI/target-width controls: the preset alone decides them.
+    # Falls back to the first preset if the picker hasn't reported a selection
+    # yet (its own `selected=` default), so this never has to represent "no
+    # settings chosen."
+    export_opts <- reactive({
+      preset <- export_preset(input$export_preset) %||% export_presets[[1]]
+      vals <- preset[[spec$export_kind]]
+      list(
+        width_cm = vals$width_cm,
+        dpi = suppressWarnings(as.numeric(vals$dpi)),
+        target_px = vals$target_px
+      )
+    })
+
+    # What the modal's controls hold, mirrored continuously so reopening it
+    # restores the last choice however it was dismissed — Cancel, Export, or a
+    # click outside it, only the first two of which are observable events.
+    export_settings <- reactiveVal(list())
+
+    reg(observe({
+      export_settings(Filter(
+        Negate(is.null),
+        list(
+          filetype = input$export_filetype,
+          preset = input$export_preset
+        )
+      ))
+    }))
+
+    # The settings the confirmed export is running with, captured the moment
+    # Export is pressed. The controls live in the modal and are gone by the time
+    # the file is written, so nothing downstream may read them live.
+    export_request <- reactiveVal(NULL)
+
+    reg(observeEvent(input$export_open, {
+      # Refuse here rather than opening a settings form for a plot that does not
+      # exist yet.
+      if (!isTRUE(exporter$ready())) {
+        showNotification(
+          "Generate a plot before saving it.",
+          type = "warning"
+        )
+        return()
+      }
+      showModal(export_modal(
+        ns,
+        "export",
+        spec$export_kind,
+        isolate(export_settings())
+      ))
+    }))
+
+    reg(observeEvent(input$export_cancel, removeModal()))
+
+    # HTML has no width/DPI or target pixel size of its own — it is the
+    # self-contained widget as-is, not a re-render at a chosen size — so a
+    # widget engine's presets do nothing while it is the selected format.
+    # Disabled rather than hidden, so the layout doesn't jump when switching
+    # format back and forth.
+    if (export_widget) {
+      reg(observe({
+        updateRadioGroupButtons(
+          session,
+          "export_preset",
+          disabled = identical(export_format(), "html")
+        )
+      }))
+    }
+
+    output$export_hint <- renderUI({
+      aspect <- if (is.null(exporter$aspect)) {
+        0.62
+      } else {
+        tryCatch(exporter$aspect(), error = function(e) 0.62)
+      }
+      opts <- export_opts()
+      span(export_hint(
+        exporter$kind,
+        export_format(),
+        opts$width_cm,
+        if (export_widget) opts$target_px else opts$dpi,
+        aspect
+      ))
+    })
+
+    # The finished file, waiting to be handed to the browser. Written before the
+    # download link is clicked, never inside the handler — see `stage()`.
+    export_ready <- reactiveVal(NULL)
+
+    # Write the file now and only then trigger the download.
+    #
+    # Doing it the other way round — letting the download handler render — makes
+    # every failure unreportable: an engine with nothing to draw fails its own
+    # `req()`, and Shiny answers the HTTP request with its 500 page, which the
+    # browser dutifully saves under the .png name the user asked for. `ready()`
+    # cannot catch that on its own, since it only says Generate was pressed, not
+    # that the result had any data in it.
+    stage <- function(fmt, opts) {
+      previous <- isolate(export_ready())
+      if (!is.null(previous)) {
+        unlink(previous)
+      }
+      export_ready(NULL)
+      f <- tempfile(fileext = paste0(".", fmt))
+      ok <- tryCatch(
+        {
+          exporter$save(f, fmt, opts)
+          file.exists(f) && file.size(f) > 0
+        },
+        error = function(e) FALSE
+      )
+      if (!ok) {
+        unlink(f)
+        showNotification(
+          "Nothing to export — this plot has no data to draw.",
+          type = "error"
+        )
+        return(invisible(FALSE))
+      }
+      export_ready(f)
+      shinyjs::click("export_file")
+      invisible(TRUE)
+    }
+
+    # The modal's Export button. Settings are read before the modal closes and
+    # carried from here on, so nothing downstream depends on controls that no
+    # longer exist.
+    reg(observeEvent(input$export_download, {
+      fmt <- export_format()
+      opts <- export_opts()
+      removeModal()
+      if (!isTRUE(exporter$ready())) {
+        showNotification(
+          "Generate a plot before saving it.",
+          type = "warning"
+        )
+        return()
+      }
+      export_request(list(format = fmt, label = export_label()))
+      # A widget's raster only exists once the browser has drawn it, so it
+      # arrives asynchronously through capture_data() below and is staged there.
+      if (export_widget && !identical(fmt, "html")) {
+        exporter$capture(fmt, opts)
+      } else {
+        stage(fmt, opts)
+      }
+    }))
+
+    # Arrival of a browser capture: stage the decoded image, then download it.
+    if (!is.null(exporter$capture_data)) {
+      reg(observeEvent(
+        exporter$capture_data(),
+        {
+          fmt <- isolate(export_request())$format %||% "png"
+          previous <- isolate(export_ready())
+          if (!is.null(previous)) {
+            unlink(previous)
+          }
+          export_ready(NULL)
+          f <- tempfile(fileext = paste0(".", fmt))
+          if (!write_data_uri(exporter$capture_data(), f)) {
+            unlink(f)
+            showNotification(
+              "The browser could not capture this plot. Try a smaller target width.",
+              type = "error"
+            )
+            return()
+          }
+          export_ready(f)
+          shinyjs::click("export_file")
+        },
+        ignoreInit = TRUE
+      ))
+    }
+
+    # Purely a handover: whatever `stage()` (or the capture observer) already
+    # wrote is what gets sent. The staged file is deliberately not deleted here
+    # — a browser is free to request a download URL more than once, and clearing
+    # it on the first request would answer the second with an empty file.
+    output$export_file <- downloadHandler(
+      filename = function() {
+        req <- isolate(export_request())
+        export_filename(req$label %||% plot_type, req$format %||% "png")
+      },
+      content = function(file) {
+        staged <- isolate(export_ready())
+        req(staged)
+        file.copy(staged, file, overwrite = TRUE)
+        invisible(NULL)
+      }
+    )
+
+    # Load-bearing, and the reason the Save button did nothing at all before.
+    # Shiny hands a download link its URL as an *output value*, and outputs
+    # default to being suspended while hidden — which this one always is, since
+    # it sits in a `d-none` wrapper so the visible control can be an
+    # actionButton that validates first. Suspended, it keeps `href=""` and the
+    # `disabled` class for the whole session, so clicking it navigates nowhere
+    # and the content function never runs.
+    outputOptions(output, "export_file", suspendWhenHidden = FALSE)
 
     # -------------------------------------------------------------- save ---
     # Identity of this tab. `plot_id` is NULL until the plot has been saved
@@ -616,6 +1484,28 @@ server <- function(
     # generation it produces is booked as already-saved (it is, by definition,
     # what is stored) rather than leaving a freshly reopened plot dirty.
     restore_pending <- reactiveVal(FALSE)
+
+    # Apply what the left sidebar is holding. `priority` is load-bearing: the
+    # engine's own Generate observer was created before this one, so at equal
+    # priority it would run first and compute from the *previous* selection.
+    # Higher priority runs first, so the engine sees the applied selection in the
+    # same flush that told it to generate.
+    reg(observeEvent(
+      input$generate,
+      {
+        sel <- isolate(selected_isolates())
+        applied_selection(sel)
+        # Pin the metadata to the same instant the engine computes from, so the
+        # topology and the table describing it can never disagree afterwards.
+        applied_metadata(.subset_meta(isolate(viz_metadata()), sel))
+        applied_metadata_all(.subset_meta(isolate(viz_metadata_all()), sel))
+        generated_once(TRUE)
+        selection_touched(FALSE)
+      },
+      ignoreInit = TRUE,
+      priority = 100
+    ))
+
     reg(observeEvent(
       input$generate,
       {
@@ -678,8 +1568,17 @@ server <- function(
     # Analysis is targeted or the targeted Analysis doesn't restrict isolates.
     # Some Analyses fix a selection and some don't — this, not merely "is an
     # Analysis targeted", is what gates the per-plot isolate controls.
+    # An Analysis stores its fixed set as isolate *names*, so unlike the
+    # in-memory selections above it can still be naming isolates that were
+    # removed from the database long after it was defined. Reconcile it here,
+    # at the one point it is read, rather than rewriting the stored Analysis:
+    # the set the user chose is a record of intent, and an isolate that comes
+    # back (re-typed, or restored from a backup) should fall back under it.
+    #
+    # Depends on `isolates` as well as `analyses` for that reason - the stored
+    # value has not changed, but what it resolves to has.
     active_analysis_restriction <- reactive({
-      plots_changed()
+      db_events$depend(db_rev, "analyses", "isolates")
       aid <- active_analysis_id()
       if (is.null(aid)) {
         return(NULL)
@@ -688,7 +1587,15 @@ server <- function(
       if (is.null(row)) {
         return(NULL)
       }
-      parse_static(row$isolate_selection)
+      stored <- parse_static(row$isolate_selection)
+      if (is.null(stored)) {
+        return(NULL)
+      }
+      # An Analysis whose isolates are all gone stops restricting rather than
+      # restricting to nothing, which would render an empty plot with the
+      # controls locked and no way for the user to act on it.
+      live <- db_events$reconcile_names(stored, viz_metadata()$isolate)
+      if (length(live$kept)) live$kept else NULL
     })
 
     # A restricting Analysis owns the isolate set (defined in the dashboard's
@@ -704,6 +1611,7 @@ server <- function(
       )
       if (restricted) {
         isolate(selected_isolates(sel))
+        isolate(applied_selection(sel))
       }
     }))
 
@@ -752,7 +1660,7 @@ server <- function(
         # further Save appends another copy instead of updating this one —
         # easy to trip now that a tab sticks around to be saved repeatedly.
         preferred_target(paste0("plot:", new_id))
-        plots_changed(isolate(plots_changed()) + 1L)
+        db_events$bump(db_rev, "analyses")
         showNotification(
           "Plot saved to the Analysis dashboard.",
           type = "message"
@@ -798,7 +1706,9 @@ server <- function(
       } else {
         NULL
       }
-      effective_selection <- static_sel %||% selected_isolates()
+      # The *applied* selection: a save records the plot that is displayed, not
+      # a selection the user has picked and not yet generated.
+      effective_selection <- static_sel %||% applied_selection()
 
       # `selection` is the *restriction* (NULL = "all isolates"), which on its
       # own can't distinguish "all" at save time from "all" later — so a plot
@@ -818,7 +1728,6 @@ server <- function(
         na_handling = input$na_handling,
         imported_sets = input$imported_sets,
         algo = input$algo,
-        zoom_view = isTRUE(input$zoom_view),
         engine = tryCatch(eng$snapshot(), error = function(e) list())
       )
       inputs_json <- toJSON(
@@ -901,7 +1810,7 @@ server <- function(
               class = "btn-danger"
             )
           ),
-          easyClose = FALSE
+          easyClose = TRUE
         ))
       } else {
         # A new plot in an Analysis is purely additive — nothing to confirm.
@@ -960,7 +1869,7 @@ server <- function(
         return(invisible(NULL))
       }
       if (!is.null(snap$na_handling)) {
-        updateSelectInput(session, "na_handling", selected = snap$na_handling)
+        updatePickerInput(session, "na_handling", selected = snap$na_handling)
       }
       updatePickerInput(
         session,
@@ -970,13 +1879,13 @@ server <- function(
       if (!is.null(snap$algo)) {
         updatePrettyRadioButtons(session, "algo", selected = snap$algo)
       }
-      if (identical(plot_type, "Tree")) {
-        session$sendInputMessage(
-          "zoom_view",
-          list(value = isTRUE(snap$zoom_view))
-        )
-      }
+      # Both, because a restored plot is not waiting on the user to press
+      # Generate: the tab is complete the moment the snapshot is in it, and
+      # nothing about it is pending. That is also why the redraw below has to go
+      # through click_generate() — it leaves Generate disabled, correctly.
       selected_isolates(snap$selection)
+      applied_selection(snap$selection)
+      generated_once(TRUE)
 
       if (!is.null(eng$restore)) {
         try(eng$restore(snap$engine), silent = TRUE)
@@ -984,13 +1893,7 @@ server <- function(
 
       # Booked as already-saved when the click below lands; see restore_pending.
       restore_pending(TRUE)
-      shinyjs::delay(
-        500,
-        shinyjs::runjs(sprintf(
-          "var b=document.getElementById('%s'); if(b){b.click();}",
-          ns("generate")
-        ))
-      )
+      shinyjs::delay(500, click_generate())
       invisible(NULL)
     }
 
@@ -1008,6 +1911,7 @@ server <- function(
       }
       if (!is.null(preset$selection)) {
         selected_isolates(preset$selection)
+        applied_selection(preset$selection)
       }
       shinyjs::delay(150, {
         if (!is.null(preset$save_target)) {
@@ -1038,13 +1942,26 @@ server <- function(
         "selection_info",
         "sel_table",
         "sel_count",
-        "save_status"
+        "save_status",
+        "export_hint"
       )) {
         try(outputOptions(output, o, suspend = TRUE), silent = TRUE)
       }
       selected_isolates(NULL)
+      applied_selection(NULL)
+      applied_metadata(NULL)
+      applied_metadata_all(NULL)
+      selection_touched(FALSE)
+      generated_once(FALSE)
       pending(NULL)
       pending_save_target(NULL)
+      # A capture that never reached its download would otherwise leave its
+      # temp file behind for the rest of the session.
+      leftover <- export_ready()
+      if (!is.null(leftover)) {
+        unlink(leftover)
+      }
+      export_ready(NULL)
       invisible(NULL)
     }
 

@@ -1,0 +1,56 @@
+# External Tools & Versions {#sec-appendix-tools}
+
+The external command-line tools PhyloTrace drives, all installed in the single
+`PhyloTrace` Conda environment and pinned in `environment.yml` (@sec-arch-conda,
+@sec-install). Versions are pinned deliberately: the parsing logic is written
+against these exact outputs.
+
+## Pinned toolchain
+
+| Tool | Version | Role | Chapter |
+|---|---|---|---|
+| **pyMLST** | 2.2.2 (pip, non-editable) | cgMLST (`wgMLST`) + classical (`claMLST`) typing; scheme download | @sec-tech-typing, @sec-tech-schemes |
+| **BLAT** | 35 | Sequence alignment behind pyMLST typing | @sec-tech-typing |
+| **MAFFT** | 7.525 | Multiple sequence alignment where needed | @sec-tech-typing |
+| **abritamr** | 1.0.19 | Curation wrapper around AMRFinderPlus | @sec-tech-amr |
+| **NCBI AMRFinderPlus** | 3.12.8 | AMR / virulence / stress gene detection (`--plus`) | @sec-tech-amr |
+| *(transitive)* BLAST, HMMER | via abritamr/AMRFinderPlus | Search backends | @sec-tech-amr |
+| Python | 3.12 | Interpreter for the above | @sec-install |
+
+```{.yaml filename="environment.yml"}
+name: PhyloTrace
+channels: [conda-forge, bioconda]
+dependencies:
+  - python=3.12
+  - blat=35
+  - mafft=7.525
+  - abritamr=1.0.19
+  - ncbi-amrfinderplus=3.12.8
+  - pip
+  - pip:
+      - pymlst==2.2.2
+```
+
+## How they are invoked
+
+Every call goes through `conda run -n PhyloTrace …`, orchestrated by
+`app/logic/pymlst.R` and the shell script `app/logic/loop-pymlst.sh` (@sec-tech-typing).
+The base `conda` is resolved from `CONDA_EXE` in preference to any env-local
+`conda` on `PATH` (@sec-arch-conda). Tool versions are parsed from the run logs
+and stored per isolate in `typing_provenance` (@sec-tech-typing-provenance), so any
+call can be traced to the exact tool and reference-database version that produced
+it.
+
+## External data services
+
+Beyond the local toolchain, PhyloTrace makes a small number of outbound calls:
+
+| Service | Used for | Chapter |
+|---|---|---|
+| cgMLST.org | cgMLST scheme download | @sec-tech-schemes |
+| PubMLST / Institut Pasteur REST | classical-MLST scheme resolution | @sec-tech-typing |
+| OpenStreetMap / Nominatim | geocoding place names for the map | @sec-tech-engines-map |
+| Natural Earth (`rnaturalearth`) | country polygons for the choropleth | @sec-tech-engines-map |
+
+No isolate data is sent to any of these; the calls request public reference data
+or resolve a place name (@sec-install).

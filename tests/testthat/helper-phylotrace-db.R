@@ -196,6 +196,140 @@ meta_df <- function(isolates, species = "Testus organismus", extra = NULL) {
   df
 }
 
+# Seed the isolate-keyed analysis-result tables (classical_mlst, amr_results,
+# amr_summary) for one or more souches, using the same DDL the app creates
+# (pymlst.R / amr.R). Each isolate gets a couple of deterministic rows per table.
+# `classical` / `amr` gate which tables are written, so a fixture can carry one
+# family without the other.
+seed_results <- function(path, isolate, classical = TRUE, amr = TRUE) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  if (classical) {
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS classical_mlst (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         isolate TEXT, gene TEXT, allele TEXT, sequence TEXT, st TEXT,
+         status TEXT, scheme TEXT, scheme_version TEXT, alembic_version TEXT,
+         repository TEXT, identity REAL, coverage REAL, pymlst_version TEXT,
+         called_at TEXT)"
+    )
+    for (s in isolate) {
+      for (g in c("acsA", "aroE")) {
+        DBI::dbExecute(
+          con,
+          "INSERT INTO classical_mlst
+             (isolate, gene, allele, st, status, scheme, called_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)",
+          list(s, g, "1", "42", "known", "Testus organismus", "2026-01-01")
+        )
+      }
+    }
+  }
+
+  if (amr) {
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS amr_results (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         isolate TEXT, gene_symbol TEXT, sequence_name TEXT, element_type TEXT,
+         element_subtype TEXT, class TEXT, subclass TEXT, method TEXT,
+         pct_coverage REAL, pct_identity REAL, contig TEXT, start INTEGER,
+         stop INTEGER, strand TEXT, ref_accession TEXT, ref_name TEXT,
+         organism TEXT, point_mutations INTEGER, identity_threshold REAL,
+         abritamr_version TEXT, amrfinder_version TEXT,
+         amrfinder_db_version TEXT, called_at TEXT)"
+    )
+    DBI::dbExecute(
+      con,
+      "CREATE TABLE IF NOT EXISTS amr_summary (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         isolate TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
+    )
+    for (s in isolate) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_results
+           (isolate, gene_symbol, element_type, class, method, called_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        list(s, "blaTEST", "AMR", "BETA-LACTAM", "EXACTX", "2026-01-01")
+      )
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_summary (isolate, section, drug_class, genes, called_at)
+         VALUES (?, ?, ?, ?, ?)",
+        list(s, "matches", "Beta-lactam", "blaTEST", "2026-01-01")
+      )
+    }
+  }
+
+  invisible(path)
+}
+
+# Define custom variables and seed their values, as the Custom Variables panel
+# would (app/logic/custom_fields.R). `fields` is a named list, one entry per
+# variable: `type` plus an optional `values` vector named by isolate. The DDL is
+# written out here rather than imported so a fixture keeps documenting the shape
+# the app expects, exactly like MLST_DDL above.
+seed_custom <- function(path, fields) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS phylotrace_custom_fields (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name TEXT NOT NULL UNIQUE, type TEXT NOT NULL, description TEXT,
+       levels TEXT, position INTEGER, created TEXT NOT NULL,
+       modified TEXT NOT NULL)"
+  )
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS phylotrace_custom_values (
+       field_id INTEGER NOT NULL, isolate TEXT NOT NULL, value TEXT,
+       PRIMARY KEY (field_id, isolate))"
+  )
+
+  for (nm in names(fields)) {
+    spec <- fields[[nm]]
+    DBI::dbExecute(
+      con,
+      "INSERT INTO phylotrace_custom_fields
+         (name, type, description, levels, position, created, modified)
+       VALUES (?, ?, ?, ?, ?, ?, ?)",
+      list(
+        nm,
+        spec$type,
+        spec$description %||% NA_character_,
+        spec$levels %||% NA_character_,
+        match(nm, names(fields)),
+        "2026-01-01 00:00:00",
+        "2026-01-01 00:00:00"
+      )
+    )
+    id <- DBI::dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]]
+
+    values <- spec$values
+    if (length(values)) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO phylotrace_custom_values (field_id, isolate, value)
+         VALUES (?, ?, ?)",
+        list(
+          rep(as.integer(id), length(values)),
+          names(values),
+          unname(values)
+        )
+      )
+    }
+  }
+
+  invisible(path)
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
 q1 <- function(path, sql, params = NULL) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)

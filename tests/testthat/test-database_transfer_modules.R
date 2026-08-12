@@ -49,8 +49,8 @@ test_that("export module previews and writes the chosen subset", {
     database_export$server,
     args = list(db_path = reactive(src), session_reset = reactive(0L)),
     {
+      selected_isolates("A")
       session$setInputs(
-        isolates = "A",
         meta_cols = "sample_collection_date"
       )
 
@@ -377,7 +377,7 @@ test_that("import module surfaces name clashes and honours rename", {
       )
 
       expect_equal(accepted(), 2L)
-      expect_identical(resolutions()$final_souche[idx], "B_imp")
+      expect_identical(resolutions()$final_isolate[idx], "B_imp")
 
       session$setInputs(confirm_merge = 1)
       expect_equal(session$returned$imported(), 1L)

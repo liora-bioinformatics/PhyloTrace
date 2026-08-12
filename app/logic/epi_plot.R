@@ -1,26 +1,8 @@
 # app/logic/epi_plot.R
 #
-# Epidemiological-curve computation and plot building for
-# app/view/visualization_epi.R. Follows the split every other engine uses
-# (app/logic/phylo.R for the MST, app/logic/tree_plot.R for the Tree): the data
-# reshaping, palette and plot construction live here so the view module only
-# wires reactives to them, and the pure parts stay unit-testable without Shiny.
-#
-# The plot is a ggplot2 object rendered by shiny::renderPlot, exactly like the
-# Tree engine — so the same export path (ggsave) gives real PNG/JPEG/PDF/SVG
-# rather than HTML only. Playback is driven by the view's own tick loop rather
-# than gganimate: each step just rebuilds the curve with `reveal_to` set one
-# interval further on, which needs no renderer and stays responsive.
-#
-# The curve follows the conventions in
-# https://outbreaktools.ca/background/epidemic-curves/ :
-#   * x = date of collection, y = number of cases, counts are whole cases, so
-#     the y axis only ever carries integer breaks (see .count_breaks).
-#   * "Bars should touch each other (unless there are periods of time with no
-#     cases)" — hence every bar is exactly one interval wide; a gap in the curve
-#     then means a genuine gap in the data rather than a drawing artefact.
-#   * The unit-block style draws one cell per case stacked into its interval's
-#     column, so the reader can count cases straight off the plot.
+# Epidemiological curve computation and visualization engine.
+# Provides date binning, data reshaping, stratification, palette mapping,
+# timeline annotations, and ggplot2 construction for visualization_epi.R.
 
 box::use(
   RColorBrewer[brewer.pal, brewer.pal.info],
@@ -59,70 +41,48 @@ box::use(
   viridisLite[viridis],
 )
 box::use(
+  app / logic / date_bins[bin_date_values, floor_date_bin, parse_dates],
   app / logic / viz_helpers[color_scales],
 )
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
-# Stratum label used when no metadata field is mapped (a plain total curve),
-# and for isolates whose mapped field is empty/NA. Exported so the view module
-# and the tests agree on them rather than re-spelling the strings.
+#' Default label for unstratified isolate series.
 #' @export
 EPI_ALL_LABEL <- "All isolates"
 
+#' Default label for isolates missing metadata field values.
 #' @export
 EPI_UNKNOWN_LABEL <- "(unknown)"
 
-# Separator joining the values of a multi-field stratification into one
-# composite category ("E. coli | Germany").
+#' Delimiter for multi-field composite stratification categories.
 #' @export
 EPI_STRATUM_SEP <- " | "
 
-# The collection-date column every PhyloTrace database carries (see
-# make_metadata_table in app/logic/database_functions.R). The engine plots this
-# field and no other, so it lives here rather than being a user-facing choice.
+#' Expected metadata date column name across all isolate records.
 #' @export
 EPI_DATE_FIELD <- "sample_collection_date"
 
-# --- date binning ------------------------------------------------------------
+# --- Date Binning Configuration ----------------------------------------------
 
-# The bin widths on offer, smallest first. Ordered, because the adaptive
-# default walks them from the finest upwards and takes the first that fits.
-# Single source of truth: the view builds its "Time interval" select from this.
+#' Supported time aggregation intervals ordered by fine-to-coarse granularity.
 #' @export
 EPI_INTERVALS <- c(Day = "day", Week = "week", Month = "month", Year = "year")
 
-# Above this many bars the curve stops being readable: the bars thin to
-# hairlines and the shape of the outbreak is lost in the noise.
+#' Maximum target threshold for rendered bars before recommending coarser bins.
 #' @export
 EPI_MAX_BARS <- 150L
 
-# Used when there is no date to fit against (an empty or undated database).
+#' Default interval when no valid collection dates are available.
 #' @export
 EPI_INTERVAL_FALLBACK <- "week"
 
-# Round collection dates down to the start of their bin. Uses the same
-# Day/Week/Month/Year vocabulary the Map's timeline already offers, so the two
-# engines describe time identically. Weeks start Monday (ISO-8601, "%u" is
-# 1=Monday). NA in, NA out: `sample_collection_date` is a free-text TEXT column
-# and unparseable values are expected — callers drop them (see build_epi_data).
-#' @export
-floor_date_bin <- function(dates, interval = "day") {
-  d <- as.Date(dates)
-  switch(
-    tolower(interval),
-    day = d,
-    week = d - (as.numeric(format(d, "%u")) - 1),
-    month = as.Date(format(d, "%Y-%m-01")),
-    year = as.Date(format(d, "%Y-01-01")),
-    stop("Unknown interval: ", interval, call. = FALSE)
-  )
-}
-
-# Nominal width of one bin, in days. Months and years are averages, so this is
-# only good for sizing decisions that need a single number (fitting the
-# interval, the square aspect ratio) — never for drawing a bar. See
-# exact_bin_widths().
+#' Nominal Bin Width in Days
+#'
+#' Returns nominal day equivalents for sizing heuristic comparisons.
+#'
+#' @param interval String; target interval name.
+#' @return Numeric nominal width in days.
 #' @export
 bin_width_days <- function(interval) {
   switch(
@@ -135,20 +95,21 @@ bin_width_days <- function(interval) {
   )
 }
 
-# The true width of each bin, in days: the distance to where the next one
-# starts.
-#
-# Bars have to touch (the article's rule) without overlapping, and a month is
-# not 30.4 days long — drawing February 30.4 days wide runs it two days into
-# March, which ggplot rightly complains about ("position_stack() requires
-# non-overlapping x intervals") and which stacks the overlap wrongly. Days and
-# weeks are genuinely constant; months and years are measured.
+#' Exact Bin Widths in Days
+#'
+#' Calculates true physical day durations per binned date to handle variable
+#' month and leap-year boundaries without bar overlap.
+#'
+#' @param dates Vector of floored Date objects.
+#' @param interval String; time binning unit.
+#' @return Numeric vector of exact day durations per bin entry.
 #' @export
 exact_bin_widths <- function(dates, interval) {
   unit <- tolower(interval %||% "day")
   if (unit %in% c("day", "week")) {
     return(rep(bin_width_days(unit), length(dates)))
   }
+  # Calculate actual step difference for variable length periods (months/years)
   vapply(
     dates,
     function(d) as.numeric(seq(d, by = unit, length.out = 2)[2] - d),
@@ -156,14 +117,6 @@ exact_bin_widths <- function(dates, interval) {
   )
 }
 
-# How many bars an interval would put on the axis for a given date span.
-#
-# Counts the *slots* across the span, not the bins that happen to be occupied.
-# That is deliberate: the x axis is a continuous date axis, so the bars are
-# drawn one interval wide against the whole span. Eighty isolates scattered over
-# three years occupy only 80 daily bins, but each is 1/1100th of the axis — the
-# hairlines you get from binning too finely. It's the span-to-width ratio that
-# decides whether a curve is readable, so that is what gets measured.
 .n_slots <- function(dates, interval) {
   span <- as.numeric(diff(range(dates)))
   if (!is.finite(span)) {
@@ -172,23 +125,23 @@ exact_bin_widths <- function(dates, interval) {
   ceiling(span / bin_width_days(interval)) + 1
 }
 
-# The finest interval that keeps the curve under `max_bars` bars.
-#
-# Epi curves are read by shape, and the interval that shows it best depends on
-# how far the cases are spread (the article's rule of thumb ties it to the
-# incubation period and "the length of time over which cases are distributed").
-# Walking from the finest interval upwards keeps as much detail as the span
-# allows: a month-long outbreak lands on days, a decade of surveillance on
-# months. Falls back to the coarsest interval when even that overflows — a
-# century of data has nowhere finer to go.
+#' Determine Optimal Default Binning Interval
+#'
+#' Evaluates intervals from finest to coarsest to select the highest-resolution
+#' binning option that remains under `max_bars`.
+#'
+#' @param dates Vector of collection dates.
+#' @param max_bars Integer; maximum acceptable bar count threshold.
+#' @return String representing selected interval name.
 #' @export
 epi_default_interval <- function(dates, max_bars = EPI_MAX_BARS) {
-  d <- .parse_dates(dates)
+  d <- parse_dates(dates)
   d <- d[!is.na(d)]
   if (!length(d)) {
     return(EPI_INTERVAL_FALLBACK)
   }
   intervals <- unname(EPI_INTERVALS)
+  # Pick the finest interval that fits within max_bars limit
   for (iv in intervals) {
     if (isTRUE(.n_slots(d, iv) <= max_bars)) {
       return(iv)
@@ -197,33 +150,13 @@ epi_default_interval <- function(dates, max_bars = EPI_MAX_BARS) {
   intervals[length(intervals)]
 }
 
-# Parse a metadata column to Date, tolerating the two ways this fails.
-# as.Date.character() returns NA for values it can't read *only as long as at
-# least one value in the vector parses* — hand it a column where none do (an
-# isolate name, an ST number) and it throws "character string is not in a
-# standard unambiguous format" instead. Since the column is free text, a column
-# that is entirely unparseable has to come back as all-NA rather than abort.
-.parse_dates <- function(x) {
-  if (inherits(x, "Date")) {
-    return(x)
-  }
-  tryCatch(
-    suppressWarnings(as.Date(as.character(x))),
-    error = function(e) rep(as.Date(NA), length(x))
-  )
-}
+# --- Data Reshaping ----------------------------------------------------------
 
-# --- data reshaping ----------------------------------------------------------
-
-# Collapse the mapped metadata fields into one composite category per isolate.
-# Zero fields is the "no stratification" case (a single total series); one field
-# behaves as a plain colour-by; two or more join their values with
-# EPI_STRATUM_SEP. Empty strings are treated like NA — a metadata field the user
-# never filled in reads as unknown, not as a category named "".
 epi_stratum <- function(meta, stratify_by) {
   if (!length(stratify_by)) {
     return(rep(EPI_ALL_LABEL, nrow(meta)))
   }
+  # Replace empty or NA values with default unknown label
   parts <- lapply(stratify_by, function(f) {
     v <- as.character(meta[[f]])
     v[is.na(v) | !nzchar(trimws(v))] <- EPI_UNKNOWN_LABEL
@@ -243,12 +176,17 @@ epi_stratum <- function(meta, stratify_by) {
   out
 }
 
-# Bin isolates into (date_bin, stratum) counts.
-#
-# Returns a data frame of date_bin / stratum / count, carrying a "dropped"
-# attribute: how many isolates were discarded because their date was NA or
-# didn't parse. The view module surfaces that count rather than silently
-# under-reporting the curve.
+#' Aggregate Isolate Counts into Binned Intervals
+#'
+#' Parses dates, constructs composite stratifications, and calculates case
+#' counts grouped by `(date_bin, stratum)`. Unparseable dates are excluded
+#' and recorded in the `"dropped"` attribute.
+#'
+#' @param meta Data frame of isolate metadata.
+#' @param date_field Column name holding collection dates.
+#' @param stratify_by Character vector of metadata columns for grouping.
+#' @param interval Time step unit for grouping ("day", "week", "month", "year").
+#' @return Data frame with `date_bin`, `stratum`, and `count` columns.
 #' @export
 build_epi_data <- function(
   meta,
@@ -266,7 +204,8 @@ build_epi_data <- function(
     return(.empty_epi_data())
   }
 
-  parsed <- .parse_dates(meta[[date_field]])
+  # Filter out rows with unparseable dates
+  parsed <- parse_dates(meta[[date_field]])
   keep <- !is.na(parsed)
   dropped <- sum(!keep)
   if (!any(keep)) {
@@ -275,8 +214,6 @@ build_epi_data <- function(
   meta <- meta[keep, , drop = FALSE]
   parsed <- parsed[keep]
 
-  # Ignore fields that aren't actually in this database's metadata (a stale
-  # selection surviving a database switch).
   stratify_by <- intersect(stratify_by, names(meta))
 
   binned <- data.frame(
@@ -295,15 +232,19 @@ build_epi_data <- function(
   out
 }
 
-# Running total per stratum. Every stratum is evaluated at every bin (missing
-# combinations count 0) so each line is monotone and the strata stay comparable
-# at any x — a cumulative series that only had points where that stratum
-# happened to occur would jump across gaps and misread.
+#' Compute Cumulative Counts Across Strata
+#'
+#' Transforms per-interval counts into running total cumulative series per
+#' stratum across all distinct dates.
+#'
+#' @param binned Binned epi data frame output from `build_epi_data()`.
+#' @return Data frame of running totals per `(date_bin, stratum)`.
 #' @export
 epi_cumulate <- function(binned) {
   if (is.null(binned) || !nrow(binned)) {
     return(.empty_epi_data(attr(binned, "dropped") %||% 0L))
   }
+  # Create complete grid to ensure missing interval steps are zero-filled before cumulative sum
   grid <- expand.grid(
     date_bin = sort(unique(binned$date_bin)),
     stratum = sort(unique(binned$stratum)),
@@ -318,7 +259,10 @@ epi_cumulate <- function(binned) {
   out
 }
 
-# The bins in play, in order. The view's playback walks these.
+#' Extract Ordered Unique Date Bins
+#'
+#' @param binned Binned epi data frame.
+#' @return Vector of sorted unique `Date` entries.
 #' @export
 epi_bins <- function(binned) {
   if (is.null(binned) || !nrow(binned)) {
@@ -327,20 +271,17 @@ epi_bins <- function(binned) {
   sort(unique(binned$date_bin))
 }
 
-# --- moving average ----------------------------------------------------------
+# --- Moving Average Computation ----------------------------------------------
 
-# Default smoothing window, in number of intervals. Seven is the window every
-# surveillance dashboard reaches for: over daily bins a "7-day average" reads
-# out one week of trend and cancels the weekday reporting cycle, and it reads
-# just as sensibly over any other interval as "the last seven bins".
+#' Default moving average window size in intervals.
 #' @export
 EPI_MOVING_AVG_WINDOW_DEFAULT <- 7L
 
-# The interval's display noun, singular or pluralised for a count `n`: "week",
-# or "weeks" for n > 1. Keyed off EPI_INTERVALS so the word always matches the
-# Time tab's own interval buttons ("day"/"week"/"month"/"year"). Used to name a
-# span in the unit the curve is actually binned by — the moving-average control
-# label and its legend entry both read out "weeks" when the curve is weekly.
+#' Format Interval Name for Display Labels
+#'
+#' @param interval Target interval key.
+#' @param n Interval count for pluralization check.
+#' @return Character string formatted interval noun (e.g., "week" vs "weeks").
 #' @export
 epi_interval_noun <- function(interval, n = 1) {
   nm <- names(EPI_INTERVALS)[match(tolower(interval %||% "day"), EPI_INTERVALS)]
@@ -348,10 +289,11 @@ epi_interval_noun <- function(interval, n = 1) {
   if (as.integer(n) == 1L) word else paste0(word, "s")
 }
 
-# The legend/label text for the moving-average line: the span it smooths over,
-# named in the curve's own interval — "7-week moving average". So the reader
-# sees not just that a trend line is drawn but exactly how much smoothing it
-# carries, in the unit the x axis already uses.
+#' Format Moving Average Legend Label
+#'
+#' @param window Integer window size.
+#' @param interval Target interval unit.
+#' @return Formatted label string for plot legend.
 #' @export
 epi_moving_avg_label <- function(window, interval) {
   sprintf(
@@ -361,13 +303,6 @@ epi_moving_avg_label <- function(window, interval) {
   )
 }
 
-# Rolling mean over `x` with an integer window, aligned centre or trailing.
-# NA-padding the ends where a full window doesn't fit would clip the line's
-# start and finish; instead each edge point averages the partial window it does
-# have, so the trend line runs the full width of the data. `align`: "trailing"
-# ends the window on each point (the surveillance convention, "the last N
-# intervals"); anything else centres it (no phase lag — the peak of the smoothed
-# line sits over the peak of the bars).
 .rolling_mean <- function(x, window, align = "center") {
   n <- length(x)
   w <- max(1L, as.integer(window))
@@ -382,6 +317,7 @@ epi_moving_avg_label <- function(window, interval) {
         lo <- max(1L, i - w + 1L)
         hi <- i
       } else {
+        # Centered alignment window calculation
         lo <- max(1L, i - half)
         hi <- min(n, i + (w - 1L - half))
       }
@@ -391,21 +327,16 @@ epi_moving_avg_label <- function(window, interval) {
   )
 }
 
-# The rolling mean of the per-interval case total, summed across every stratum.
-#
-# A moving average smooths the bin-to-bin noise so the outbreak's underlying
-# trend shows through — the line every epi dashboard draws over its bars. It is
-# summed across strata for the same reason the cumulative overlay is (a per-
-# stratum smoother would need as many lines as there are strata, cluttering the
-# very thing it is meant to clarify), but unlike that overlay it stays in the
-# bars' own units — a mean of counts is still a count — so it rides the primary
-# axis directly rather than needing a second one.
-#
-# Empty intervals inside the span count as zero, not as missing: a moving
-# average that skipped the quiet stretches would read a lull as if it never
-# happened. The regular bin grid is rebuilt from `interval` (seq() over the same
-# Day/Week/Month/Year vocabulary the binner uses) so every slot between the
-# first and last bin is represented. Returns date_bin / avg, ordered by date.
+#' Calculate Moving Average Over Aggregate Interval Counts
+#'
+#' Fills missing temporal grid gaps with zero and calculates a rolling mean
+#' across total case counts across all strata.
+#'
+#' @param binned Binned epi data frame.
+#' @param window Integer window width.
+#' @param interval Binning time step unit.
+#' @param align Window alignment strategy ("center" or "trailing").
+#' @return Data frame with `date_bin` and `avg` columns.
 #' @export
 epi_moving_average <- function(
   binned,
@@ -427,6 +358,7 @@ epi_moving_average <- function(
     arrange(date_bin) |>
     as.data.frame()
 
+  # Create continuous temporal sequence to account for zero-count periods
   grid <- data.frame(
     date_bin = seq(
       min(totals$date_bin),
@@ -446,16 +378,18 @@ epi_moving_average <- function(
   )
 }
 
-# --- palette -----------------------------------------------------------------
+# --- Palette Utilities -------------------------------------------------------
 
 .viridis_scales <- color_scales$Gradient
 
-# Map category levels to hex colours. Mirrors the shape of phylo.R's private
-# mst_palette(), but resolves the ColorBrewer names too, so the same helper can
-# serve a qualitative palette and a continuous ramp.
-# brewer.pal caps out at 8-12 colours depending on the palette, so anything
-# wider is interpolated rather than recycled — repeating a colour would make two
-# different strata look identical in the legend.
+#' Map Categorical Stratum Levels to Color Hex Codes
+#'
+#' Interpolates palette colors when requested category count exceeds standard
+#' qualitative Brewer palette bounds.
+#'
+#' @param cats Character vector of category names.
+#' @param scale String palette identifier.
+#' @return Named character vector mapping categories to hex color codes.
 #' @export
 epi_palette <- function(cats, scale = "Set2") {
   n <- length(cats)
@@ -467,10 +401,9 @@ epi_palette <- function(cats, scale = "Set2") {
   cols <- if (scale %in% .viridis_scales) {
     viridis(n, option = scale)
   } else if (scale %in% rownames(brewer.pal.info)) {
-    # brewer.pal() errors below 3 even when fewer are asked for; take the
-    # smallest legal ramp and trim.
     max_n <- brewer.pal.info[scale, "maxcolors"]
     base <- brewer.pal(max(3L, min(max_n, n)), scale)
+    # Ramp palette if categories exceed max native colors
     if (n <= length(base)) base[seq_len(n)] else colorRampPalette(base)(n)
   } else {
     viridis(n)
@@ -479,20 +412,13 @@ epi_palette <- function(cats, scale = "Set2") {
   setNames(cols[seq_len(n)], cats)
 }
 
-# Which colour scales can actually carry `n_strata` categories.
-#
-# The other engines restrict their scale pickers by the mapped variable's *type*
-# (viz_helpers.R's suitable_scale_categories: a factor gets Qualitative). That is
-# the wrong axis here, because an epi curve's strata are always categorical, but
-# there can be any number of them: stratify 341 isolates by country and you ask
-# a nine-swatch palette like Set1 to cover forty values. What comes back is
-# forty interpolated neighbours nobody can tell apart.
-#
-# So filter by cardinality instead: only offer a qualitative palette that has at
-# least as many real swatches as there are strata (Set2 stops at 8, Set3 and
-# Paired at 12 — see brewer.pal.info), and always offer the continuous ramps,
-# which are defined for any n. The order a gradient implies over countries is
-# arbitrary, but an arbitrary order you can read beats a dozen identical pinks.
+#' Filter Suitable Color Scales by Stratum Cardinality
+#'
+#' Restricts available qualitative palette options to those that natively
+#' support `n_strata` levels without forced interpolation.
+#'
+#' @param n_strata Integer count of distinct categories.
+#' @return Named list of valid scale identifiers grouped by palette class.
 #' @export
 epi_scale_choices <- function(n_strata) {
   qualitative <- color_scales$Qualitative
@@ -511,25 +437,27 @@ epi_scale_choices <- function(n_strata) {
   out
 }
 
-# Coerce a chosen scale to one that can carry `n_strata`, keeping it when it
-# already can. The picker is kept in step separately (apply_scale_choices in the
-# view), but the plot resolves this itself so it can never draw with a scale the
-# data has outgrown — the picker's correction only lands a client round-trip
-# later, which would otherwise leave one frame rendered in mush.
+#' Resolve Scale Palette for High-Cardinality Data
+#'
+#' Ensures the selected scale can represent `n_strata` categories, falling back
+#' to a valid gradient/sequential scale when necessary.
+#'
+#' @param scale Requested palette name.
+#' @param n_strata Total category count.
+#' @return Valid palette string identifier.
 #' @export
 epi_fit_scale <- function(scale, n_strata) {
   valid <- unlist(epi_scale_choices(n_strata), use.names = FALSE)
   if (isTRUE(scale %in% valid)) scale else valid[1]
 }
 
-# --- timeline annotations ----------------------------------------------------
+# --- Timeline Annotations ----------------------------------------------------
 
-# The colour an annotation falls back to when none was stored on it (older
-# rows, or a call site that hasn't set one). The orange the period wash used
-# before annotations became individually colourable.
+#' Default hex color for visual period annotations.
 #' @export
 EPI_ANNO_COLOR_DEFAULT <- "#f39c12"
 
+#' Construct Empty Annotations Data Frame Schema
 #' @export
 empty_epi_annotations <- function() {
   data.frame(
@@ -543,9 +471,67 @@ empty_epi_annotations <- function() {
   )
 }
 
-# What the eye actually sees when `fg` is drawn at opacity `alpha` (0..1) over
-# `bg`: the alpha-composited hex. Used to judge the contrast of label text on a
-# semi-transparent wash, where the true backdrop is the blend, not `fg` itself.
+#' Coerce Restored Annotations To The Schema
+#'
+#' Rebuilds `empty_epi_annotations()`'s shape from whatever a saved snapshot
+#' hands back. JSON has no date type, so `start` and `end` return as ISO
+#' strings; assigning those straight into the annotations reactiveVal leaves the
+#' plot code holding character columns where it expects Dates, and the damage
+#' surfaces far from here — `Summary.Date` re-classes the character result of
+#' `min()`/`max()` as a Date, so `.x_limits` produces a Date whose storage is
+#' text and any arithmetic on it fails. Rows with no readable start are dropped:
+#' an annotation that cannot be placed on the axis has nothing to draw.
+#'
+#' @param x Annotations as restored (a data.frame, or NULL).
+#' @return A data.frame in the annotations schema, possibly with zero rows.
+#' @export
+as_epi_annotations <- function(x) {
+  empty <- empty_epi_annotations()
+  if (is.null(x) || !is.data.frame(x) || !nrow(x)) {
+    return(empty)
+  }
+
+  chr <- function(col, default = NA_character_) {
+    v <- if (col %in% names(x)) as.character(x[[col]]) else default
+    rep_len(v, nrow(x))
+  }
+  # A live frame arrives with real Dates and is handed straight back. Anything
+  # else is parsed as the ISO text jsonlite writes — via `format`, because bare
+  # as.Date() on an unreadable string throws where a dropped row is wanted. The
+  # storage check catches the corrupt in-between state: text carrying the Date
+  # class, which is what a restored frame turns into once it reaches min()/max().
+  dt <- function(col) {
+    if (!col %in% names(x)) {
+      return(rep_len(as.Date(NA), nrow(x)))
+    }
+    v <- x[[col]]
+    if (inherits(v, "Date") && is.numeric(unclass(v))) {
+      return(v)
+    }
+    if (is.numeric(v)) {
+      return(as.Date(v, origin = "1970-01-01"))
+    }
+    suppressWarnings(as.Date(as.character(v), format = "%Y-%m-%d"))
+  }
+
+  out <- data.frame(
+    id = chr("id"),
+    type = chr("type", ANNO_PERIOD),
+    start = dt("start"),
+    end = dt("end"),
+    label = chr("label", ""),
+    color = chr("color", EPI_ANNO_COLOR_DEFAULT),
+    stringsAsFactors = FALSE
+  )
+  out$color[is.na(out$color) | !nzchar(out$color)] <- EPI_ANNO_COLOR_DEFAULT
+  out$label[is.na(out$label)] <- ""
+  # Ids only have to be unique within the frame — they key the delete buttons.
+  missing_id <- is.na(out$id) | !nzchar(out$id)
+  out$id[missing_id] <- paste0("a_restored_", which(missing_id))
+
+  out[!is.na(out$start), , drop = FALSE]
+}
+
 .blend <- function(fg, bg, alpha) {
   f <- col2rgb(fg)
   b <- col2rgb(bg)
@@ -553,42 +539,27 @@ empty_epi_annotations <- function() {
   rgb(mix[1], mix[2], mix[3], maxColorValue = 255)
 }
 
-# Black or white text, whichever stays legible on `bg` — so a label keeps its
-# contrast whatever colour the user picks. Thresholds the perceived luminance
-# (ITU-R BT.601): a light backdrop gets black text, a dark one white.
+# Select readable text color (black/white) based on background luminance
 .contrast_text <- function(bg) {
   c <- col2rgb(bg)
   luma <- (0.299 * c[1] + 0.587 * c[2] + 0.114 * c[3]) / 255
   if (luma > 0.55) "#000000" else "#ffffff"
 }
 
-# The colour stored on annotation row `i`, falling back to the default when the
-# column is absent (an empty frame) or the value is missing/blank.
 .anno_color <- function(annos, i) {
   col <- if ("color" %in% names(annos)) annos$color[i] else NA_character_
   if (is.na(col) || !nzchar(col)) EPI_ANNO_COLOR_DEFAULT else col
 }
 
-# Approx. rendered width of one label character, in px, for geom text drawn at
-# `size` (ggplot's mm-based size, so the point size is size * .pt). At renderPlot's
-# 96 dpi a point is 96/72 px; ~0.5 em wide per character. Mirrors the estimate
-# epi_legend_ncol makes for the legend.
+# Conversion constants for estimating font pixel dimensions in ggplot
 .GG_PT <- 72.27 / 25.4
 .anno_char_px <- function(size = 3) size * .GG_PT * (96 / 72) * 0.5
 
-# Fit `label` into a period's bracket by wrapping it over up to `max_lines`
-# lines that each hold `max_chars` characters, so a long label uses the
-# bracket's height rather than bleeding past the dates it marks. Wraps on spaces
-# where it can and hard-breaks a single over-long token; when even the wrapped
-# text won't fit, the last line is truncated with an ellipsis. Returns a string
-# with embedded newlines, which annotate("text") renders as separate lines.
 .wrap_label <- function(label, max_chars, max_lines = 2L) {
   max_chars <- max(1L, as.integer(max_chars))
   if (nchar(label) <= max_chars) {
     return(label)
   }
-  # strwrap breaks on whitespace but leaves an over-long word on its own line
-  # untouched, so hard-break any line that is still wider than the bracket.
   lines <- unlist(lapply(strwrap(label, width = max_chars), function(l) {
     if (nchar(l) <= max_chars) {
       return(l)
@@ -596,6 +567,7 @@ empty_epi_annotations <- function() {
     starts <- seq(1L, nchar(l), by = max_chars)
     substring(l, starts, pmin(starts + max_chars - 1L, nchar(l)))
   }))
+  # Truncate lines exceeding max limit with ellipsis
   if (length(lines) > max_lines) {
     lines <- lines[seq_len(max_lines)]
     last <- lines[max_lines]
@@ -608,31 +580,17 @@ empty_epi_annotations <- function() {
   paste(lines, collapse = "\n")
 }
 
-# Fraction of the plot's height one annotation lane occupies, measured down from
-# the top.
 .lane_height <- 0.075
 .max_lanes <- 6L
-
-# How much of the plotted x span a label is assumed to occupy. Collisions are a
-# *screen* phenomenon: two milestones 15 days apart overlap completely on a plot
-# spanning ten years but not on one spanning a month, so the clearance has to
-# scale with the span rather than being a fixed number of days.
 .label_pad_frac <- 0.07
 
 ANNO_PERIOD <- "period"
 
-# Is this row a shaded time period (as opposed to a milestone line)? A period
-# with no end date can't be shaded, so it degrades to a milestone.
 .is_period <- function(annos, i) {
   identical(annos$type[i], ANNO_PERIOD) && !is.na(annos$end[i])
 }
 
-# Greedy first-fit lane packing over [left, right] extents, which must be sorted
-# by `left`. An annotation drops to the first lane whose occupant ends before it
-# starts, so non-overlapping annotations share the top lane and only genuinely
-# clashing ones are pushed down. This is what keeps two identical or partly
-# intersecting periods readable: they can never land in the same lane, so their
-# brackets and labels are always drawn one above the other.
+# Greedily pack labels into vertical lanes to minimize visual collisions
 .assign_lanes <- function(left, right) {
   lanes <- integer(length(left))
   lane_right <- numeric(0)
@@ -654,8 +612,6 @@ ANNO_PERIOD <- "period"
   lanes
 }
 
-# The x span the lanes are laid out against: the plotted data's range where
-# there is one, widened to cover any annotation outside it.
 .anno_span <- function(annos, x_range) {
   xs <- c(
     as.numeric(annos$start),
@@ -666,11 +622,14 @@ ANNO_PERIOD <- "period"
   if (!is.finite(span) || span <= 0) 1 else span
 }
 
-# Assign each annotation a lane so that no two labels overlap.
-#
-# Returns the annotations with `lane` (1-based) and `period` columns. Pure
-# geometry — no ggplot involved — which keeps the packing testable independently
-# of how it ends up being drawn.
+#' Assign Non-Overlapping Layout Lanes for Annotations
+#'
+#' Determines vertical offset packing for timeline milestone markers and
+#' period shading overlays to avoid visual label collisions.
+#'
+#' @param annos Data frame of annotations.
+#' @param x_range Plot x-axis domain range bounds.
+#' @return Input data frame augmented with `lane` and `period` indicators.
 #' @export
 epi_annotation_lanes <- function(annos, x_range = NULL) {
   if (is.null(annos) || !nrow(annos)) {
@@ -690,8 +649,6 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
     logical(1)
   )
 
-  # A milestone's label extends to the right of its line; a period's bracket
-  # spans its dates, but never less than a label's worth of room.
   left <- as.numeric(annos$start)
   right <- vapply(
     seq_len(nrow(annos)),
@@ -707,19 +664,6 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   annos
 }
 
-# Draw the annotations onto a curve whose y axis tops out at `y_max`.
-#
-# A period is a full-height wash — so the bars inside it stay readable, and two
-# overlapping washes simply darken where they intersect — plus an opaque bracket
-# in its own lane carrying the label. The bracket is what disambiguates
-# overlapping periods: the wash may be shared, but each period's extent and
-# label are drawn once, at their own height.
-#
-# `background` is the plot's own background colour, and `xlim`/`plot_width` the
-# drawn x-axis extent (Dates) and panel width (px): together they let a period's
-# label be trimmed to the bracket it sits in, and its colour chosen for contrast
-# against the wash (which is the user's annotation colour, so it can be any
-# lightness). Both degrade gracefully when unknown.
 .annotation_layers <- function(
   annos,
   x_range,
@@ -732,43 +676,31 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   if (!nrow(lanes)) {
     return(list())
   }
-  # Lanes are placed in data units, against the headroom the y scale leaves.
   top <- max(y_max, 1)
   layers <- list()
 
-  # For fitting a period label to its bracket: how many px the panel is wide,
-  # and how wide one label character is, so a bracket's date-span can be turned
-  # into a character budget (see .wrap_label). The panel is narrower than
-  # the whole output by the y axis and margins.
   char_px <- .anno_char_px(3)
   panel_px <- (plot_width %||% 900) - 70
   axis_days <- if (!is.null(xlim)) as.numeric(diff(range(xlim))) else NA_real_
 
   for (i in seq_len(nrow(lanes))) {
+    # Wrap lane placement within max allowable lane limits
     lane <- ((lanes$lane[i] - 1L) %% .max_lanes)
     y_top <- top * (1 - lane * .lane_height)
     y_bot <- y_top - top * .lane_height * 0.72
     y_mid <- (y_top + y_bot) / 2
 
-    # The user's chosen colour for this annotation.
     col <- .anno_color(lanes, i)
 
     if (lanes$period[i]) {
-      # The label sits on the bracket — a wash of `col` over the background — so
-      # its colour is chosen for contrast against that blend, not against `col`
-      # alone (a dark pick would otherwise get near-black text on a dark wash).
       label_col <- .contrast_text(.blend(col, background, 0.55))
-      # And it is wrapped to the bracket's own width, so a long label uses the
-      # bracket's height instead of spilling past the dates it describes.
       label <- lanes$label[i]
+      # Auto-wrap text if rendering width constraints are present
       if (is.finite(axis_days) && axis_days > 0) {
         bracket_days <- as.numeric(lanes$end[i] - lanes$start[i])
         avail_px <- (bracket_days / axis_days) * panel_px
         label <- .wrap_label(label, floor(avail_px / char_px), max_lines = 2L)
       }
-      # Grow the bracket downward to enclose every wrapped line: text spilling
-      # onto the fainter full-height wash (0.10) would lose the contrast the
-      # bracket blend (0.55) was chosen against, so it must stay on the bracket.
       n_lines <- length(strsplit(label, "\n", fixed = TRUE)[[1]])
       if (n_lines > 1L) {
         y_bot <- y_top - (y_top - y_bot) * n_lines
@@ -807,9 +739,7 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
         )
       )
     } else {
-      # A milestone's label sits beside its line on the plain background, not on
-      # a wash, so it reads in the annotation's own colour — matching the line —
-      # and extends freely to the right (it stands in for a legend entry).
+      # Render vertical milestone line and offset text label
       layers <- c(
         layers,
         list(
@@ -840,7 +770,7 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   layers
 }
 
-# --- plot building -----------------------------------------------------------
+# --- Plot Building -----------------------------------------------------------
 
 .date_labels <- function(interval) {
   switch(
@@ -853,10 +783,7 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   )
 }
 
-# Breaks for a case-count axis. Cases are whole things, so a fractional break
-# ("0.6 isolates") is meaningless — this picks a 1/2/5/10-style step that is
-# always a whole number, which keeps every break an integer even when the
-# tallest bar is 1.
+# Scale y-axis tick intervals dynamically based on value magnitude
 .count_step <- function(maxv) {
   if (!is.finite(maxv) || maxv <= 6) {
     return(1)
@@ -871,21 +798,26 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
   max(1, 10 * mag)
 }
 
+#' Generate Discrete Integer Axis Breaks
+#'
+#' Calculates integer tick step bounds for discrete case-count y-axes.
+#'
+#' @param maxv Maximum numeric value on y-axis scale.
+#' @return Numeric vector of discrete axis breaks.
 #' @export
 count_breaks <- function(maxv) {
   seq(0, max(1, ceiling(maxv)), by = .count_step(maxv))
 }
 
-# How many columns the bottom legend can have before it overflows the plot.
-#
-# guide_legend(ncol =) is rigid: ggplot honours the column count even when the
-# resulting legend is wider than the device, so a fixed count with long stratum
-# names (full institution names, say) runs off both edges of the panel and is
-# clipped — which no time-window or aspect change fixes, because the legend
-# always carries every category. Estimate instead how many of the *widest*
-# label fit across `width_px`, so the legend wraps to as many rows as it needs
-# rather than being cut off. `width_px` NULL (before the browser reports the
-# panel width) falls back to a typical panel so the first draw is still sane.
+#' Estimate Legend Column Capacity
+#'
+#' Calculates maximum legend column count given element text widths and total
+#' rendering width in order to wrap long keys cleanly.
+#'
+#' @param cats Character vector of category names.
+#' @param width_px Render target width in pixels.
+#' @param base_size Font size base setting.
+#' @return Integer target column count.
 #' @export
 epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
   n <- length(cats)
@@ -897,20 +829,12 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
   } else {
     width_px
   }
-  # Rendered width of one entry, in px at renderPlot's 96 dpi: the colour key
-  # and its padding, plus ~half an em per character of the widest label.
-  # legend.text is ~0.8 * base_size pt, and a point is 96/72 px at res = 96.
   char_px <- base_size * 0.8 * (96 / 72) * 0.5
   entry_px <- 34 + char_px * max(nchar(cats))
   cols <- floor(w / entry_px)
   max(1L, min(n, as.integer(cols)))
 }
 
-# The guide the strata scales carry: a wrapped legend when it should show, or
-# "none" to suppress it. Applied to both fill and colour in build_epi_ggplot so
-# whichever aesthetic a mode maps the strata to (fill for the bars, colour for
-# the cumulative curve) is governed identically — the legend can neither leak in
-# when hidden nor render with the wrong column count when shown.
 .strata_guide <- function(show_legend, cats, plot_width) {
   if (show_legend) {
     guide_legend(ncol = epi_legend_ncol(cats, plot_width))
@@ -919,20 +843,7 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
   }
 }
 
-# An invisible layer carrying one entry per stratum, so the legend shows a
-# coloured key for *every* stratum in the dataset — not just those the current
-# reveal window happens to include.
-#
-# ggplot derives each legend key's glyph from the drawn layer's data, so when
-# reveal_from/reveal_to drop the strata outside the window their keys come back
-# blank (the `limits`/`drop = FALSE` entry survives, but with no colour). The
-# palette is fixed to the whole dataset, so the legend should be too. This seeds
-# the scale with every stratum at a zero value, drawn with the same aesthetic
-# the mode maps strata to (fill for the bars, colour for the cumulative curve):
-# the key glyph is independent of that zeroed value, so it renders in the
-# stratum's colour while the layer itself draws nothing on the panel. Two rows
-# per stratum keep the cumulative seed's step path a zero-length no-op rather
-# than a one-observation warning.
+# Seed invisible zero-count points to force all categories into the legend key
 .legend_seed_layer <- function(cats, mode, x0) {
   if (length(cats) < 2L || is.null(x0)) {
     return(NULL)
@@ -958,10 +869,7 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
   }
 }
 
-# Expand each (date_bin, stratum, count) row into `count` unit rows, numbered
-# 1..n *within a date bin* so the cells stack into one column per interval.
-# Rows are pre-sorted by stratum so each bin's categories form contiguous bands
-# rather than interleaving.
+# Unroll counts into discrete unit blocks for tile unit display
 .unit_blocks <- function(binned) {
   blocks <- binned[binned$count > 0, , drop = FALSE]
   if (!nrow(blocks)) {
@@ -989,7 +897,6 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
 .epi_theme <- function(background, text_color) {
   theme_minimal(base_size = 13) +
     theme(
-      # No gridlines: the bars are the data, and a grid behind them is just ink.
       panel.grid = element_blank(),
       panel.background = element_rect(fill = background, colour = NA),
       plot.background = element_rect(fill = background, colour = NA),
@@ -1005,61 +912,28 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
     )
 }
 
-# Build the epi-curve ggplot.
-#
-# `opts`: mode ("stacked" | "cumulative"), square, col_scale, single_color,
-# cumulative_color, background, text_color, interval, annos, reveal_from,
-# reveal_to, fixed_axis, label_ends, show_x_label, plot_width. `col_scale` colours the strata when
-# stratified; `single_color` colours the lone "All isolates" series when not;
-# `cumulative_color` colours the running-total overlay (Stacked/Square only).
-#
-# `square` applies to the stacked mode only, and is what turns it from solid
-# bars into the textbook block curve: one countable square per case.
-#
-# `reveal_from`/`reveal_to` are what playback and the Time tab's date-range
-# window ride on: bins outside [reveal_from, reveal_to] are dropped from the
-# drawn data. By default (`fixed_axis` TRUE or unset) the scales stay fixed to
-# the whole dataset regardless, so the curve grows (or is windowed) inside a
-# stable frame instead of the axes crawling under it. With `fixed_axis` FALSE
-# the frame itself follows reveal_from/reveal_to instead, zooming the axis to
-# the windowed span. Either reveal bound may be NULL, meaning unbounded on
-# that side.
-#
-# `label_ends` (cumulative only) writes each stratum's name directly beside the
-# most recently plotted point on its line, instead of relying on the legend.
-#
-# `plot_width` is the panel width in px (the browser-reported render width). It
-# only sizes the legend: the number of columns is picked so a many-stratum
-# legend wraps to fit that width rather than overflowing the panel edges — see
-# epi_legend_ncol. Unset (NULL) falls back to a typical width.
+#' Build Epidemiological Curve ggplot
+#'
+#' Constructs a customizable ggplot object for epidemiological data visualization.
+#' Supports stacked bars, unit-block square cells, cumulative curves, rolling
+#' averages, overlays, and milestone annotations.
+#'
+#' @param binned Binned epi data frame.
+#' @param opts Named list containing plot configuration flags (mode, square,
+#'   interval, col_scale, reveal bounds, show_cumulative, show_moving_avg, etc.).
+#' @return Configured `ggplot` object.
 #' @export
 build_epi_ggplot <- function(binned, opts = list()) {
   mode <- opts$mode %||% "stacked"
-  # Squares only mean anything for the stacked curve; a step line has no cells.
   square <- isTRUE(opts$square) && identical(mode, "stacked")
-  # Likewise, a bar chart has no "line" to label the end of.
   label_ends <- isTRUE(opts$label_ends) && identical(mode, "cumulative")
-  # Square blocks/Stacked only: Cumulative already *is* the running total,
-  # drawn as the main curve, so overlaying one on top of it would just repeat
-  # it.
   show_cumulative <- isTRUE(opts$show_cumulative) && identical(mode, "stacked")
-  # Same restriction as the cumulative overlay: a moving average smooths the
-  # per-interval counts, and the cumulative curve carries no per-interval counts
-  # to smooth (it is a running total, already monotone), so the option only
-  # applies to the bar modes.
   show_moving_avg <- isTRUE(opts$show_moving_avg) &&
     !identical(mode, "cumulative")
-  # Off drops the x-axis title but keeps the tick labels — the dates are still
-  # named, only the "Date of collection" caption goes.
   show_x_label <- opts$show_x_label %||% TRUE
   background <- opts$background %||% "#ffffff"
   text_color <- opts$text_color %||% "#000000"
-  # The overlaid running total's own colour, independent of the axis/text so it
-  # can be picked out against the bars it sits on. Defaults to text_color, which
-  # is what it was drawn in before it became a separate control.
   cumulative_color <- opts$cumulative_color %||% text_color
-  # The moving-average line's own colour, likewise pickable so it stands out
-  # against the bars. Defaults to text_color.
   moving_avg_color <- opts$moving_avg_color %||% text_color
   moving_avg_window <- opts$moving_avg_window %||% EPI_MOVING_AVG_WINDOW_DEFAULT
   moving_avg_align <- opts$moving_avg_align %||% "center"
@@ -1070,35 +944,15 @@ build_epi_ggplot <- function(binned, opts = list()) {
     binned <- epi_cumulate(binned)
   }
   cats <- sort(unique(binned$stratum))
-  # A single unstratified series (the "All isolates" sentinel) is coloured by a
-  # plain colour picker, not the scale: there is one bar colour to set, not a
-  # palette to divide between strata. The scale only means anything once there
-  # is more than one series to tell apart — see the Colors panel in the view,
-  # which swaps the scale select for a colour picker on the same condition.
-  # Otherwise resolve the scale against the strata actually present rather than
-  # trusting the picker: a stratification can outgrow its palette a round-trip
-  # before the picker hears about it.
   pal <- if (identical(cats, EPI_ALL_LABEL) && !is.null(opts$single_color)) {
     setNames(opts$single_color, cats)
   } else {
     epi_palette(cats, epi_fit_scale(opts$col_scale, length(cats)))
   }
-  # A lone "All isolates" series has nothing to distinguish, so its legend
-  # would just be noise — and when the lines are labelled directly, the legend
-  # would just be saying the same thing twice.
   show_legend <- opts$show_legend %||%
     (!identical(cats, EPI_ALL_LABEL) && !label_ends)
 
-  # Limits come from the *whole* dataset, before any reveal, so that playback
-  # and the finished curve share one frame — unless `fixed_axis` is off, in
-  # which case the frame itself tracks the reveal window (the Time tab's
-  # "Adapt to selection" switch), zooming the axis to whatever span is
-  # currently windowed instead of holding it to the dataset's full extent.
   x_range <- if (nrow(binned)) range(binned$date_bin) else NULL
-  # Unset means fixed: isTRUE(NULL) is FALSE, so a caller that never mentions
-  # fixed_axis (every existing build_epi_ggplot() call before the Time tab's
-  # zoom switch was added) would otherwise silently get the zoom-to-selection
-  # behaviour instead of the documented default.
   fixed_axis <- if (is.null(opts$fixed_axis)) TRUE else isTRUE(opts$fixed_axis)
   axis_range <- if (fixed_axis || is.null(x_range)) {
     x_range
@@ -1107,6 +961,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
   }
   y_max <- .y_max(binned, mode)
 
+  # Filter data to display range if animation reveal options are set
   shown <- binned
   if (!is.null(opts$reveal_from) && nrow(shown)) {
     shown <- shown[shown$date_bin >= opts$reveal_from, , drop = FALSE]
@@ -1115,13 +970,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
     shown <- shown[shown$date_bin <= opts$reveal_to, , drop = FALSE]
   }
 
-  # The overlay's running total, summed across every stratum regardless of how
-  # the bars are coloured — a stratum-by-stratum cumulative curve on top of a
-  # stacked bar chart would need as many lines as there are strata, cluttering
-  # the very thing the overlay is meant to clarify. Scaled against the *whole*
-  # dataset's grand total (not the windowed one) for the same reason the y axis
-  # itself is fixed before any reveal: a playback frame's secondary axis
-  # shouldn't rescale out from under the line as the window moves.
+  # Prepare secondary cumulative trend overlay when requested
   cum_totals <- NULL
   cum_scale <- 1
   if (show_cumulative && nrow(binned)) {
@@ -1151,11 +1000,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
     }
   }
 
-  # The moving-average trend line. Computed over the *whole* dataset (like the
-  # cumulative overlay and the y axis itself) so the smoothing window doesn't
-  # shrink and the line doesn't rescale as a playback window sweeps across it,
-  # then trimmed to the revealed span. Sits on the primary axis — a mean of
-  # counts is a count — so it needs no secondary axis.
+  # Prepare rolling moving average trend line overlay when requested
   mov_shown <- NULL
   if (show_moving_avg && nrow(binned)) {
     mov_shown <- epi_moving_average(
@@ -1165,30 +1010,26 @@ build_epi_ggplot <- function(binned, opts = list()) {
       moving_avg_align
     )
     if (!is.null(opts$reveal_from)) {
-      mov_shown <- mov_shown[mov_shown$date_bin >= opts$reveal_from, , drop = FALSE]
+      mov_shown <- mov_shown[
+        mov_shown$date_bin >= opts$reveal_from,
+        ,
+        drop = FALSE
+      ]
     }
     if (!is.null(opts$reveal_to)) {
-      mov_shown <- mov_shown[mov_shown$date_bin <= opts$reveal_to, , drop = FALSE]
+      mov_shown <- mov_shown[
+        mov_shown$date_bin <= opts$reveal_to,
+        ,
+        drop = FALSE
+      ]
     }
   }
 
-  # Worked out ahead of the y scale (rather than left to .cumulative_end_labels
-  # alone) so the panel can reserve enough room below its lowest label —
-  # otherwise a stratum whose curve ends near 0 gets its label clipped by the
-  # panel's bottom edge, which sits exactly on the 0 line with no expansion.
   end_positions <- if (label_ends) {
     .cumulative_end_positions(shown, y_max)
   } else {
     NULL
   }
-  # Capped at one label's worth of height. The reservation exists so a single
-  # stratum whose curve ends right on 0 isn't clipped by the panel's bottom
-  # edge — half a line of text is all that needs. Left uncapped it exploded:
-  # with many strata crammed at low counts the greedy stacking in
-  # .cumulative_end_positions marches the lowest labels hundreds of units below
-  # 0, and reserving that whole distance ballooned the axis into a huge empty
-  # band under the curve. Labels pushed past the visible range are dropped by
-  # ggplot regardless, so there is nothing there to make room for.
   bottom_room <- if (!is.null(end_positions)) {
     half <- .label_half_height(y_max)
     min(half, max(0, half - min(end_positions$y_label)))
@@ -1196,9 +1037,6 @@ build_epi_ggplot <- function(binned, opts = list()) {
     0
   }
 
-  # A second axis rather than a shared one: the running total climbs to the
-  # dataset's grand total while each bar only ever reaches one bin's count, so
-  # sharing a scale would flatten the bars to a sliver at the bottom.
   y_scale_args <- list(
     breaks = count_breaks(y_max),
     limits = c(0, max(1, y_max)),
@@ -1211,15 +1049,10 @@ build_epi_ggplot <- function(binned, opts = list()) {
     )
   }
 
-  # The drawn x-axis extent, computed once so the annotation layer can trim a
-  # period's label to the fraction of the panel its bracket actually spans.
   xlim <- .x_limits(
     axis_range,
     opts$annos,
     interval,
-    # Line-end labels need room to the right of the last point; reserved
-    # as a fraction of the span since text width can't be known in data
-    # units up front.
     extra_right_frac = if (label_ends) 0.22 else 0
   )
 
@@ -1240,23 +1073,17 @@ build_epi_ggplot <- function(binned, opts = list()) {
         "Number of cases"
       }
     ) +
-    # Both fill and colour carry the strata, but which one is actually mapped
-    # depends on the mode: the bar modes colour by `fill` (geom_col/geom_tile),
-    # the cumulative curve by `colour` (geom_step). Only the mapped aesthetic
-    # produces a legend, so the guide setting has to cover both — silencing only
-    # `fill` left the cumulative curve's colour legend to render regardless of
-    # show_legend, which is what put a full stratum legend (and the whitespace it
-    # letterboxes the curve into) under a "Label lines" cumulative plot.
     guides(
       fill = .strata_guide(show_legend, cats, opts$plot_width),
       colour = .strata_guide(show_legend, cats, opts$plot_width)
     )
 
-  # Seed the legend with every stratum before the visible layers, so a windowed
-  # curve still shows a coloured key for the strata its span leaves out (see
-  # .legend_seed_layer). Only when a legend is actually drawn.
   if (show_legend) {
-    seed <- .legend_seed_layer(cats, mode, if (!is.null(x_range)) x_range[1] else NULL)
+    seed <- .legend_seed_layer(
+      cats,
+      mode,
+      if (!is.null(x_range)) x_range[1] else NULL
+    )
     if (!is.null(seed)) {
       p <- p + seed
     }
@@ -1280,20 +1107,10 @@ build_epi_ggplot <- function(binned, opts = list()) {
     p <- p + l
   }
 
+  # Overlay double-line moving average (background outline + foreground stroke)
   if (!is.null(mov_shown) && nrow(mov_shown) > 1) {
-    # Drawn at each bin's centre so it tracks the tops of the bars it smooths
-    # (the bars are centred on date_bin + width/2 too), with a background-
-    # coloured halo pass underneath so the trend stays legible wherever it
-    # crosses a bar of a similar colour — the same halo the cumulative overlay
-    # uses. On the primary axis: the average is in the bars' own units.
     mov_shown$x <- mov_shown$date_bin +
       exact_bin_widths(mov_shown$date_bin, interval) / 2
-    # The visible line maps `linetype` to a single constant — its span-and-unit
-    # label — so it earns one key in a legend of its own, separate from the
-    # strata colour/fill legend and shown even for an unstratified curve that
-    # has no strata legend at all. The key's colour is forced to the line's own
-    # via override.aes (linetype carries no colour of its own). The halo pass is
-    # drawn without the aes so it adds no second key.
     ma_label <- epi_moving_avg_label(moving_avg_window, interval)
     mov_shown$series <- ma_label
     p <- p +
@@ -1313,17 +1130,14 @@ build_epi_ggplot <- function(binned, opts = list()) {
         name = NULL,
         values = setNames("solid", ma_label),
         guide = guide_legend(
-          # After the strata legend, never interleaved with it.
           order = 99,
           override.aes = list(colour = moving_avg_color, linewidth = 0.9)
         )
       )
   }
 
+  # Overlay double-line cumulative trend step curve
   if (!is.null(cum_shown) && nrow(cum_shown)) {
-    # Added last so it sits in front of every other layer, including
-    # annotations — a running total is only useful if it's never the thing
-    # buried under the bars/tiles (or a period's shading) it's overlaid on.
     mapping <- aes(x = .data$date_bin, y = .data$cum / cum_scale)
     p <- p +
       geom_step(
@@ -1341,26 +1155,19 @@ build_epi_ggplot <- function(binned, opts = list()) {
   }
 
   if (square) {
-    # One case tall must measure the same as one interval wide. coord_fixed's
-    # ratio is in data units, and a Date axis counts days — so the ratio *is*
-    # the bin width. (plotly's equivalent, scaleanchor, silently does nothing
-    # against a date axis; ggplot's coord system has no such gap.)
-    #
-    # This hands the panel's aspect to the data, so the plot can no longer be
-    # any shape the caller likes — see square_panel_ratio(), which the view uses
-    # to give the output the height the squares actually need. Without that the
-    # panel gets letterboxed into a strip and the squares shrink to nothing.
     p <- p + coord_fixed(ratio = width_days)
   }
   p
 }
 
-# How tall the square-mode panel needs to be, as a fraction of its width.
-#
-# Square cells mean panel_height / y_max == panel_width / n_bins, so the panel's
-# shape is fixed by the data: a decade of months against a handful of cases is a
-# long thin strip, and asking for anything else just letterboxes it. The view
-# sizes the plot output from this instead of from the aspect slider.
+#' Compute Aspect Ratio for Square Unit Block Mode
+#'
+#' Calculates the height-to-width ratio required to maintain square cell aspect
+#' rendering under fixed coordinate constraints.
+#'
+#' @param binned Binned epi data frame.
+#' @param mode Selected rendering mode string.
+#' @return Numeric panel aspect ratio or NULL.
 #' @export
 square_panel_ratio <- function(binned, mode = "stacked") {
   if (is.null(binned) || !nrow(binned) || identical(mode, "cumulative")) {
@@ -1374,16 +1181,6 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   y_max / n_bins
 }
 
-# The date range the x axis has to cover.
-#
-# A bar starts at its bin and runs one interval to the right, so the span is
-# from the first bin to the last bin *plus its own width* — using the bin dates
-# alone would clip the final bar and warn about "values outside the scale
-# range". Widened again to take in any annotation outside the data: without that
-# an annotation dated beyond the last isolate would be silently dropped — you'd
-# add a milestone and simply never see it. `extra_right_frac` reserves further
-# room for the cumulative curve's line-end labels, as a fraction of the span
-# (text width isn't known in data units up front).
 .x_limits <- function(x_range, annos, interval, extra_right_frac = 0) {
   if (is.null(x_range)) {
     return(NULL)
@@ -1397,6 +1194,7 @@ square_panel_ratio <- function(binned, mode = "stacked") {
     0
   }
   lims <- c(x_range[1] - pad, x_range[2] + last_width + pad + right_extra)
+  # Expand scale limits if milestone dates fall outside bin data bounds
   if (!is.null(annos) && nrow(annos)) {
     dates <- c(annos$start, annos$end[!is.na(annos$end)])
     lims <- c(min(lims[1], dates), max(lims[2], dates))
@@ -1404,14 +1202,7 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   as.Date(lims, origin = "1970-01-01")
 }
 
-# Where each cumulative curve's end-of-line label lands: each stratum's name
-# positioned right after the most recently plotted point on its own line.
-# Greedy vertical separation (the same idea as the annotation lanes) keeps two
-# labels whose lines finish at similar counts from landing on top of each
-# other — the label reads the line directly, so it stands in for the legend
-# rather than repeating it (see show_legend in build_epi_ggplot). Split out
-# from .cumulative_end_labels so build_epi_ggplot can see where the lowest
-# label lands *before* fixing the y axis, and reserve enough room below it.
+# Adjust end-of-line label positions on cumulative plots to prevent overlaps
 .cumulative_end_positions <- function(shown, y_max) {
   if (!nrow(shown)) {
     return(NULL)
@@ -1431,8 +1222,6 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   }
   ends$y_label <- y_label
 
-  # A little clear of the point so the text doesn't sit on top of the line's
-  # own endpoint marker.
   span <- as.numeric(if (nrow(shown) > 1) diff(range(shown$date_bin)) else 1)
   offset <- max(1, span * 0.015)
   ends$x_label <- ends$date_bin + offset
@@ -1440,9 +1229,6 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   ends
 }
 
-# Half a line of text, in y-axis data units — used to keep the lowest label's
-# text clear of the panel's bottom clipping edge (see build_epi_ggplot's
-# bottom_room), since geom_text draws it vertically centred on y_label.
 .label_half_height <- function(y_max) max(1, y_max * 0.05)
 
 .cumulative_end_labels <- function(end_positions) {
@@ -1463,7 +1249,6 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   )
 }
 
-# The tallest the y axis has to reach for the *whole* dataset.
 .y_max <- function(binned, mode) {
   if (!nrow(binned)) {
     return(1)
@@ -1477,8 +1262,6 @@ square_panel_ratio <- function(binned, mode = "stacked") {
 
 .mode_layers <- function(shown, mode, square, interval) {
   if (identical(mode, "cumulative")) {
-    # A step, not an interpolation: nothing happens between two bins, so a
-    # sloped line would draw case counts that never existed.
     return(geom_step(
       data = shown,
       aes(x = .data$date_bin, y = .data$count, colour = .data$stratum),
@@ -1491,12 +1274,7 @@ square_panel_ratio <- function(binned, mode = "stacked") {
     return(geom_tile(
       data = blocks,
       aes(
-        # Each cell spans its own interval, and x marks that interval's start,
-        # so the cell has to be nudged half a width right to sit over it.
         x = .data$date_bin + .data$width / 2,
-        # y_idx - 0.5 centres each cell between its case index and the one
-        # below, so the column starts on the axis rather than half a case under
-        # it.
         y = .data$y_idx - 0.5,
         fill = .data$stratum,
         width = .data$width
@@ -1515,53 +1293,36 @@ square_panel_ratio <- function(binned, mode = "stacked") {
       fill = .data$stratum,
       width = .data$width
     ),
-    # "Bars should touch each other (unless there are periods of time with no
-    # cases)" — a visible gap then means no cases, not a drawing style.
     colour = "#FFFFFF",
     linewidth = 0.15
   )
 }
 
-# --- export ------------------------------------------------------------------
+# --- Export Utilities --------------------------------------------------------
 
-# Save the current curve. Unlike the plotly build this replaces, ggsave needs no
-# external toolchain, so every raster and vector format is genuinely available
-# rather than HTML only. Mirrors save_tree_plot() in app/logic/tree_plot.R.
+# File export goes through app/logic/viz_export.R's save_plot_export(), which
+# owns the device settings for every plot type; what stays here is the on-screen
+# render below, which is sized in pixels rather than in physical units.
+
+#' Render Epi Curve PNG Buffer for Display
+#'
+#' Writes the plot to a temporary PNG matching exact screen target resolution bounds.
+#'
+#' @param plot ggplot2 instance.
+#' @param file Target temporary output file path.
+#' @param width_px Target width in pixels.
+#' @param height_px Target height in pixels.
+#' @param res Base display resolution in DPI (defaults to 96).
+#' @param scale High-DPI scaling factor (e.g. devicePixelRatio).
 #' @export
-save_epi_plot <- function(
+render_epi_png <- function(
   plot,
   file,
-  filetype = "png",
-  aspect_ratio = 0.55,
-  dpi = 192
+  width_px,
+  height_px,
+  res = 96,
+  scale = 1
 ) {
-  width <- 12
-  ggsave(
-    filename = file,
-    plot = plot,
-    device = filetype,
-    width = width,
-    height = width * aspect_ratio,
-    dpi = dpi,
-    limitsize = FALSE
-  )
-}
-
-# Render the curve to a PNG at an exact pixel size, for the on-screen view.
-#
-# The view draws the plot through this rather than renderPlot precisely because
-# ggsave sets the output device's background from the theme's plot.background —
-# so the whole frame, including the coord_fixed letterbox that Square blocks
-# mode leaves around the panel, takes the chosen background colour. renderPlot's
-# device is hardwired white and can't be made to follow the colour picker (its
-# device args are forced once), which is what left the letterbox white.
-#
-# `width_px`/`height_px` are the CSS pixels the image occupies. `res` is the dpi
-# the layout is measured against (keeps text at its intended point size); `scale`
-# multiplies the actual pixels rendered (pass the browser's devicePixelRatio) so
-# the PNG stays crisp on HiDPI screens while laying out identically.
-#' @export
-render_epi_png <- function(plot, file, width_px, height_px, res = 96, scale = 1) {
   ggsave(
     filename = file,
     plot = plot,

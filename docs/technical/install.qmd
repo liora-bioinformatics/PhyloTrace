@@ -1,0 +1,105 @@
+# Installation, Environment & Runtime {#sec-install}
+
+This chapter covers how PhyloTrace is installed and what it needs at runtime: the
+two separate dependency worlds, the local files it keeps outside the database,
+logging, and how it is launched. Installation instructions in full are in the
+project `README.md`; this chapter explains the *shape* of the runtime so a
+maintainer understands what is where and why.
+
+## Two dependency worlds {#sec-install-deps}
+
+PhyloTrace's dependencies split cleanly in two, and keeping them separate is a
+deliberate architectural rule (@sec-arch-conda):
+
+| World | Manifest | Holds | Managed with |
+|---|---|---|---|
+| **R packages** | `renv.lock` + `dependencies.R` | ~40 R libraries the Shiny app runs on | `renv` |
+| **CLI tools** | `environment.yml` | pyMLST, AMRFinderPlus, abritamr, `blat`, `mafft` | Conda |
+
+The Shiny app runs under **system R** with its `renv` library; the Conda
+environment named `PhyloTrace` holds *only* the external command-line toolchain
+the app shells out to. `renv` is activated automatically by `.Rprofile`, so
+opening the project uses the locked library.
+
+```{.yaml filename="environment.yml"}
+# Rebuild from scratch:   conda env create -f environment.yml
+# Update an existing env:  conda env update -f environment.yml --prune
+```
+
+::: {.callout-important title="Why pin the tools"}
+`environment.yml` pins pyMLST to 2.2.2 (via pip, non-editable) and the AMR tools
+to fixed versions, because the typing/parsing logic in `loop-pymlst.sh` and
+`pymlst.R` is written against those exact outputs. An editable install from a
+since-deleted checkout is what originally broke scheme downloads — hence the
+non-editable pin. Treat the environment as part of the code contract, not a loose
+set of "latest" tools.
+:::
+
+## System requirements {#sec-install-sys}
+
+From the `README.md`, as guidance rather than hard limits:
+
+| Component | Recommendation |
+|---|---|
+| OS | Any Linux distribution running R and Conda (Windows via WSL) |
+| Browser | A current Chromium-family browser (Chrome, Brave, Chromium, …) |
+| Storage | ≥ 250 GB — assemblies and databases add up |
+| RAM | ≥ 8 GB |
+| CPU | Multi-core, ≥ 2.5 GHz |
+
+Typing whole-genome assemblies is the resource-hungry step; browsing and
+visualizing an existing database is light.
+
+## Local state outside the database {#sec-install-state}
+
+Almost everything PhyloTrace remembers is *inside* the loaded `.db`
+(@sec-arch-state). The exception is a small application-state directory,
+resolved by `app/logic/paths.R`:
+
+```{.r filename="app/logic/paths.R"}
+#' Base directory path for local application data storage (`~/.local/share/phylotrace`).
+app_local_share_path <- file.path(path_home(), ".local", "share", "phylotrace")
+```
+
+It holds `state.json` (the last-opened database, so the landing page can offer
+"Last used: …") and the session logs. `stat_json` is read from it at startup and
+rewritten by `main.R` on each database load (@sec-arch-nav).
+
+## Logging {#sec-install-logging}
+
+`app/logic/logging.R` is the central logging sink. `start_session_log()` opens a
+fresh log per database load, its header naming the database so later lines need
+not repeat it; `log_event()` writes structured, timestamped entries to both the
+file and the console (`main.R` logs reloads and resets, @sec-arch-nav). The
+Rhino-level log level is set in `config.yml` (`rhino_log_level`,
+`rhino_log_file`).
+
+## Launching the app {#sec-install-launch}
+
+On Linux the installer registers a desktop launcher; the app also starts from a
+terminal via the project's run script, which opens a browser tab pointed at the
+local Shiny server. If the desktop launcher cannot find a browser, the
+`R_BROWSER` environment variable selects one by executable name (see `README.md`
+for the per-browser values). On Windows the app runs inside WSL by the same Linux
+steps.
+
+::: {.callout-important title="The app is local — what does and does not leave the machine"}
+PhyloTrace is a *local* application: the server, the database and the toolchain
+all run on your own computer, and the browser tab talks only to `localhost`.
+Assemblies, isolates and metadata never leave the machine unless you explicitly
+export or share a database file. The only outbound network calls are downloading
+a scheme (@sec-tech-schemes), resolving a classical-MLST scheme (@sec-tech-typing), and
+geocoding places for the map (@sec-tech-engines-map).
+:::
+
+## Chapter summary
+
+- Dependencies split into `renv` (R packages, the app) and Conda (CLI tools);
+  the app runs under system R, not the Conda env.
+- The external toolchain is version-pinned as part of the code contract.
+- Local state outside the database is a small `~/.local/share/phylotrace`
+  directory (`state.json` + logs); everything else lives in the `.db`.
+- Logging is centralized per session; launching opens a `localhost` browser tab,
+  with `R_BROWSER` selecting the browser if needed.
+
+Next: how the app is tested (@sec-testing).
