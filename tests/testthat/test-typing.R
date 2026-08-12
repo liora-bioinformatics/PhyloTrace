@@ -3,7 +3,13 @@
 
 box::use(
   shiny[reactive, testServer],
-  testthat[expect_identical, expect_setequal, expect_true, test_that],
+  testthat[
+    expect_false,
+    expect_identical,
+    expect_setequal,
+    expect_true,
+    test_that
+  ],
   withr[local_tempdir],
 )
 box::use(
@@ -424,14 +430,14 @@ test_that("a large name-conflict batch pauses for confirmation instead of runnin
   )
 
   testServer(typing$server, args = list(db_path = reactive(path)), {
-    # 2 same-genome hits (never gate - typed fine under the new name) and 6
-    # name conflicts, past name_conflict_gate_min: real, silent data loss if
-    # the run went ahead unnoticed.
+    # Two typeable files that happen to duplicate stored assembly content (the
+    # content axis never blocks), and six whose isolate name is already taken
+    # (the name axis, past name_conflict_gate_min).
     checked <- data.frame(
       strain = names(genomes),
       file = unname(genomes),
       digest = "deadbeef",
-      status = c(rep("same_genome", 2L), rep("name_conflict", 6L)),
+      status = c(rep("new", 2L), rep("name_conflict", 6L)),
       other = c("Renamed1", "Renamed2", rep(NA_character_, 6L)),
       stringsAsFactors = FALSE
     )
@@ -440,11 +446,14 @@ test_that("a large name-conflict batch pauses for confirmation instead of runnin
 
     launch_typing(checked)
 
-    # same_genome rows reach the advisory panel regardless of the gate.
-    expect_identical(nrow(Typing$same_genome_dup), 2L)
-    expect_setequal(Typing$same_genome_dup$strain, c("S1", "S2"))
+    # The report carries both axes: 6 skipped names + 2 content duplicates.
+    expect_identical(nrow(Typing$dup_report), 8L)
 
-    # The name-conflict batch (6 rows) exceeds the gate threshold, so
+    # The queue is narrowed before the gate opens, so "Continue" can only ever
+    # send the two typeable files on - never a name pyMLST would reject.
+    expect_setequal(Typing$queued_strains, c("S1", "S2"))
+
+    # The skipped batch (6 rows) exceeds the gate threshold, so
     # begin_typing_run() was never reached - it is the first thing that would
     # set Typing$log_file.
     expect_identical(Typing$log_file, NULL)
@@ -539,5 +548,91 @@ test_that("a name already in the database is queued into the check, not dropped 
     # nothing else in the selection, the run never starts.
     expect_identical(Typing$queued_strains, character(0))
     expect_identical(Typing$status, "idle")
+  })
+})
+
+test_that("a taken name is skipped even when its content matches another isolate", {
+  # The failure this was found by, against a real A. baumannii database: files
+  # named after existing isolates but holding *another* isolate's assembly were
+  # classified on content first, came back typeable, and were handed to pyMLST -
+  # which rejected every one of them ("already present in the base") only after
+  # a full cgMLST + classical MLST + AMR pass had been spent on each. The name
+  # axis alone decides typeability.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())   # isolates A, B already in `mlst`
+
+  a_asm <- file.path(dir, "A_asm.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGCAAAA"), a_asm)
+  store_genome_hash(path, "A", a_asm)
+
+  b_asm <- file.path(dir, "B_asm.fna")
+  writeLines(c(">B_contig1", "TTTTGGGGCCCCAAAATTTTGGGG"), b_asm)
+  store_genome_hash(path, "B", b_asm)
+
+  # Offered as "A", but byte-identical to what is stored for B: both axes fire.
+  a_holding_b <- file.path(dir, "A.fna")
+  writeLines(c(">B_contig1", "TTTTGGGGCCCCAAAATTTTGGGG"), a_holding_b)
+
+  # A genuinely new isolate, so the run still has something to do.
+  fresh <- file.path(dir, "FRESH.fna")
+  writeLines(c(">F_contig1", "GGGGCCCCAAAATTTTGGGGCCCC"), fresh)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$files <- c(a_holding_b, fresh)
+    Typing$strains <- c("A", "FRESH")
+    session$setInputs(start = 1)
+    for (i in 1:5) session$elapse(50)
+
+    conflict <- chk$out[chk$out$strain == "A", ]
+    expect_identical(conflict$status, "name_conflict")
+    # The content match is still reported, it just does not win the verdict.
+    expect_identical(conflict$other, "B")
+
+    # Only the genuinely new name is handed to pyMLST.
+    expect_identical(Typing$queued_strains, "FRESH")
+
+    # Both facts about "A" survive into the panel the user reads afterwards.
+    expect_true("A" %in% Typing$dup_report$strain)
+  })
+})
+
+# ---------------------------------------------------------------------------
+# typing_active: the navbar spinner's signal (see app/main.R)
+# ---------------------------------------------------------------------------
+
+test_that("typing_active is FALSE before any run starts", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    expect_identical(Typing$status, "idle")
+    expect_false(typing_active())
+  })
+})
+
+test_that("typing_active turns true while the run is checking genomes", {
+  # "checking" is reached by the app's own path (Start), not by poking
+  # Typing$status directly - setting that field to values the run's own
+  # observers watch for (running/done/...) fires the real poller and finalize
+  # logic, which expect a fully populated run rather than this fixture's bare
+  # queue. Checking is reachable safely because it is driven by input$start
+  # alone; the run proper (which would need a live process) is not exercised
+  # here - see the persistence tests above for that.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$files <- genome
+    Typing$strains <- "A"
+    session$setInputs(start = 1)
+
+    expect_identical(Typing$status, "checking")
+    expect_true(typing_active())
   })
 })

@@ -200,6 +200,8 @@ export_preview <- function(
       n_loci = 0L,
       n_alleles = 0L,
       n_calls = 0L,
+      ref_calls = 0L,
+      ref_alleles = 0L,
       columns = character(0),
       custom_fields = character(0),
       est_bytes = 0
@@ -219,11 +221,22 @@ export_preview <- function(
     params = list(REF_SOUCHE)
   )
 
+  # The reference strain's own contribution, reported separately so a `.db`
+  # export doesn't inflate the isolate-facing tiles.
+  ref_counts <- dbGetQuery(
+    con,
+    "SELECT COUNT(*) AS calls, COUNT(DISTINCT seqid) AS alleles
+       FROM mlst WHERE souche = ?",
+    params = list(REF_SOUCHE)
+  )
+
   list(
     n_isolates = length(isolates),
     n_loci = as.integer(counts$loci),
     n_alleles = as.integer(counts$alleles),
     n_calls = as.integer(counts$calls),
+    ref_calls = as.integer(ref_counts$calls),
+    ref_alleles = as.integer(ref_counts$alleles),
     columns = if (include_metadata) {
       .metadata_out_cols(con, metadata_cols)
     } else {

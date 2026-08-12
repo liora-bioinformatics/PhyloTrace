@@ -873,6 +873,9 @@ server <- function(
         selected = NULL,
         multiple = TRUE,
         search = TRUE,
+        # Without this, the header checkbox selects every variable in the
+        # list, not just the ones the search term currently matches.
+        selectAllOnlyVisible = TRUE,
         searchPlaceholderText = "Search variables ...",
         placeholder = "Select variables to remove …",
         noOfDisplayValues = 2,

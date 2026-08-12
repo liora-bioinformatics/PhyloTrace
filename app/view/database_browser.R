@@ -165,10 +165,22 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
     i <- j
   }
 
+  # A flat, one-cell-per-column footer. DataTables' row+column selection mode
+  # (see the `selection` argument on the datatable() call below) only makes a
+  # column clickable through a <tfoot> cell, and resolves a click to a column
+  # by that cell's position among `table.columns().footer()` - which, for a
+  # cell spanning several columns, resolves to the *first* of them. Grouping
+  # the footer the same way as the header would make every gene under a group
+  # header pick the same one column, so the footer skips grouping entirely.
   tags$table(
     tags$thead(
       do.call(tags$tr, top),
       do.call(tags$tr, leaf)
+    ),
+    tags$tfoot(
+      do.call(tags$tr, lapply(cols, function(col) {
+        tags$th(class = "dt-ftr-cell", unname(labels[col]))
+      }))
     )
   )
 }
@@ -227,6 +239,11 @@ ui <- function(id) {
                     icon = icon("trash")
                   )
                 )
+              ),
+              div(
+                class = "sidebar-control-group",
+                div(class = "control-group-label", "Selection"),
+                uiOutput(ns("selection_stats_ui"))
               )
             )
           )
@@ -702,6 +719,10 @@ server <- function(
         },
         multiple = TRUE,
         search = TRUE,
+        # Without this, the header checkbox selects every option in the list,
+        # not just the ones the search term currently matches - surprising
+        # when the dropdown is showing a filtered subset.
+        selectAllOnlyVisible = TRUE,
         searchPlaceholderText = "Search fields ...",
         placeholder = "Show fields …",
         optionsCount = 8,
@@ -749,6 +770,9 @@ server <- function(
         selected = intersect(prev_selected, choices),
         multiple = TRUE,
         search = TRUE,
+        # Without this, the header checkbox selects every isolate in the
+        # database, not just the ones the search term currently matches.
+        selectAllOnlyVisible = TRUE,
         searchPlaceholderText = "Search isolates ...",
         placeholder = "Select isolates to remove …",
         noOfDisplayValues = 2,
@@ -985,7 +1009,11 @@ server <- function(
           numeric = edit_numeric_idx,
           date = edit_date_idx
         ),
-        selection = "none",
+        # row+column: click a row to select it, click a footer cell (added by
+        # .grouped_header_sketch()) to select its column. Read back via
+        # input$metadata_table_rows_selected / _columns_selected in
+        # selection_stats_ui below.
+        selection = list(target = "row+column"),
         extensions = "FixedColumns",
         options = list(
           dom = "ti",
@@ -1108,6 +1136,81 @@ server <- function(
     })
 
     proxy <- dataTableProxy("metadata_table", session = session)
+
+    # Short read-out of the grid's row+column selection, in the sidebar below
+    # "Remove isolates". Rows and columns are reported separately because
+    # that is what the highlight actually means: selecting a row highlights it
+    # across every column, and selecting a column highlights it down every
+    # row - the two are independent, not the corners of one rectangle.
+    # Reads State$data (not metadata_base()) so an unsaved edit is reflected
+    # here immediately, same as the table itself.
+    output$selection_stats_ui <- renderUI({
+      df <- State$data
+      if (!is.data.frame(df)) {
+        return(NULL)
+      }
+
+      rows <- input$metadata_table_rows_selected
+      col_idx <- input$metadata_table_columns_selected
+      cols <- if (length(col_idx)) names(df)[col_idx + 1L] else character(0)
+
+      if (!length(rows) && !length(cols)) {
+        return(div(
+          class = "selection-stats-empty",
+          "Select rows or columns in the table to see statistics here."
+        ))
+      }
+
+      lines <- list()
+
+      if (length(rows)) {
+        lines[[length(lines) + 1L]] <- div(
+          class = "selection-stats-line",
+          tags$strong(length(rows)),
+          if (length(rows) == 1) " isolate selected" else " isolates selected"
+        )
+      }
+
+      if (length(cols)) {
+        selected_vals <- df[, cols, drop = FALSE]
+        total <- nrow(df) * length(cols)
+        filled <- sum(vapply(
+          selected_vals,
+          function(v) sum(!is.na(v) & nzchar(trimws(as.character(v)))),
+          integer(1)
+        ))
+        lines[[length(lines) + 1L]] <- div(
+          class = "selection-stats-line",
+          tags$strong(length(cols)),
+          if (length(cols) == 1) " field selected" else " fields selected",
+          sprintf(" (%d/%d filled)", filled, total)
+        )
+
+        # A numeric aggregate only when every selected value the aggregate
+        # would cover is itself numeric - i.e. the selected fields are all
+        # numeric custom variables. Mixing in a text or date field would make
+        # a sum/mean meaningless, so it is skipped rather than guessed at.
+        numeric_cols <- intersect(cols, custom_cols_of_type(NUMERIC_TYPES))
+        if (length(numeric_cols) == length(cols)) {
+          nums <- unlist(df[, numeric_cols, drop = FALSE], use.names = FALSE)
+          nums <- nums[!is.na(nums)]
+          if (length(nums)) {
+            lines[[length(lines) + 1L]] <- div(
+              class = "selection-stats-line",
+              sprintf(
+                "Sum %s · Mean %s · Min %s · Max %s",
+                format(sum(nums), big.mark = ",", trim = TRUE),
+                format(round(mean(nums), 2), big.mark = ",", trim = TRUE),
+                format(min(nums), big.mark = ",", trim = TRUE),
+                format(max(nums), big.mark = ",", trim = TRUE)
+              )
+            )
+          }
+        }
+      }
+
+      div(class = "selection-stats", lines)
+    })
 
     # Apply cell edit to in-memory state and push to table without full re-render.
     #

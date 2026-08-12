@@ -377,10 +377,6 @@ server <- function(
       selected_meta <- input$meta_cols %||% character(0)
       selected_custom <- input$custom_fields %||% character(0)
 
-      if (!length(selected_meta) && !length(selected_custom)) {
-        return(NULL)
-      }
-
       path <- db_path()
       shiny$req(!is.null(path), !is.na(path))
 
@@ -847,6 +843,8 @@ server <- function(
       )
       p$columns <- full$columns
       p$custom_fields <- full$custom_fields
+      p$ref_calls <- full$ref_calls
+      p$ref_alleles <- full$ref_alleles
       p
     })
 

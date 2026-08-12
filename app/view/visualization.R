@@ -373,8 +373,7 @@ server <- function(
   # Wired to whatever db_path/db_rev this call actually received - see
   # database.R's server() for why the default can't just be
   # `db_store$new_store()`.
-  store = db_store$new_store(db_path = db_path, db_rev = db_rev),
-  typing_active = shiny::reactive(FALSE)
+  store = db_store$new_store(db_path = db_path, db_rev = db_rev)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -561,7 +560,6 @@ server <- function(
         staged_sets = staged_sets,
         picker_choices = picker_choices,
         db_rev = db_rev,
-        typing_active = typing_active,
         is_active = reactive(identical(input$plot_set, tid)),
         alive = alive,
         preset = preset

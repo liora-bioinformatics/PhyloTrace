@@ -219,6 +219,9 @@ LAYER_DEFAULTS <- list(
       selected = character(0),
       multiple = TRUE,
       search = TRUE,
+      # Without this, the header checkbox selects every column, not just the
+      # ones the search term currently matches.
+      selectAllOnlyVisible = TRUE,
       searchPlaceholderText = "Search columns ...",
       placeholder = "All columns",
       hasOptionDescription = TRUE,
@@ -255,6 +258,9 @@ LAYER_DEFAULTS <- list(
       selected = character(0),
       multiple = TRUE,
       search = TRUE,
+      # Without this, the header checkbox selects every column, not just the
+      # ones the search term currently matches.
+      selectAllOnlyVisible = TRUE,
       searchPlaceholderText = "Search columns ...",
       placeholder = "All columns",
       hasOptionDescription = TRUE,

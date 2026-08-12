@@ -904,11 +904,14 @@ test_that("the cumulative overlay is scaled to reach the panel's top at its fina
       list(mode = "stacked", show_cumulative = TRUE, interval = "week")
     )
   )
+  # The overlay is drawn twice — a background halo pass plus the visible
+  # line, sharing the same data (see build_epi_ggplot) — so either match
+  # carries the same y values.
   step_layer <- which(vapply(
     built$plot$layers,
     function(l) inherits(l$geom, "GeomStep"),
     logical(1)
-  ))
+  ))[1]
   overlay_y <- built$data[[step_layer]]$y
 
   totals <- tapply(binned$count, binned$date_bin, sum)

@@ -608,6 +608,15 @@ server <- function(
     genes_force_default <- shiny$reactiveVal(FALSE)
     anno_force_default <- shiny$reactiveVal(FALSE)
 
+    # A reopened plot's saved annotation field and its granularity, parked here
+    # for the two renderUIs that own those controls to apply on their next
+    # rebuild. Neither can be restored with an update*Input() call: both
+    # controls are renderUI output, and a render replaces the control outright,
+    # discarding whatever was pushed at the element it replaced. Both are
+    # consumed on read, the same one-shot shape as the force_default flags.
+    restore_anno_field <- shiny$reactiveVal(NULL)
+    restore_anno_granularity <- shiny$reactiveVal(NULL)
+
     mode <- function() input$amr_mode %||% PLOT_MODE_DEFAULT
 
     # --- data ---------------------------------------------------------------
@@ -739,6 +748,17 @@ server <- function(
       if (force_default) {
         anno_force_default(FALSE)
       }
+      # A reopened plot's saved annotation field, applied here rather than
+      # pushed at it from restore(). An update*Input() cannot win against this
+      # render: restoring writes the tab's selection reactiveVals, which
+      # invalidates anno_fields() and so re-runs this very output in the same
+      # flush, replacing the control - and with it any value just sent to the
+      # old one. Rendering the value in is the only way it survives. Consumed
+      # on read, exactly as force_default is.
+      pending <- shiny$isolate(restore_anno_field())
+      if (!is.null(pending)) {
+        restore_anno_field(NULL)
+      }
       meta <- viz_metadata()
       # Categorised, human-readable labels (the derived classical-MLST and AMR
       # columns get their own groups), each carrying its own value count and
@@ -755,7 +775,9 @@ server <- function(
         "amr_anno_field",
         "Colour isolates by",
         profiles = prof[prof$field %in% fields, , drop = FALSE],
-        selected = if (!force_default && isTRUE(prev %in% fields)) {
+        selected = if (isTRUE(pending %in% fields)) {
+          pending
+        } else if (!force_default && isTRUE(prev %in% fields)) {
           prev
         } else {
           NO_ANNOTATION
@@ -782,10 +804,25 @@ server <- function(
       if (!is_date_profile(anno_profile())) {
         return(NULL)
       }
+      # Read isolated - anno_profile() above is already this render's trigger
+      # (it changes once amr_anno_field's restore round-trips), so depending
+      # on restore_anno_granularity() too would make this render both read and
+      # write the same reactiveVal, invalidating itself into a second run that
+      # finds the value already consumed and falls back to "none".
+      # Consumed here rather than in restore(): this is the first render where
+      # the control exists at all, so it is the first point a value can safely
+      # be applied to it.
+      pending <- shiny$isolate(restore_anno_granularity())
+      selected <- if (!is.null(pending)) {
+        restore_anno_granularity(NULL)
+        pending
+      } else {
+        shiny$isolate(input$amr_anno_granularity)
+      }
       granularity_select(
         ns,
         "amr_anno_granularity",
-        shiny$isolate(input$amr_anno_granularity)
+        selected
       )
     })
 
@@ -1254,17 +1291,43 @@ server <- function(
           "amr_background_color"
         ),
         radio_groups = "amr_level",
-        # The gene and annotation pickers are server-rendered (bucket 5,
-        # rebuilt on a counter), so these are best-effort: they land only once
-        # the control exists. The element and section pickers are declared in
-        # the UI and restore straight away.
+        # amr_genes and the two above it are real pickerInputs (server-rendered,
+        # rebuilt on a counter, but bound the same way regardless of when their
+        # HTML lands), so a plain update reaches them. amr_anno_field is not -
+        # see the block below.
         pickers = c(
           "amr_elements",
           "amr_sections",
-          "amr_genes",
-          "amr_anno_field"
+          "amr_genes"
         )
       )
+
+      # amr_anno_field and its granularity are renderUI-owned controls, so they
+      # are handed to the renders that own them rather than updated in place.
+      # Sending an update*Input() here cannot work: writing the tab's selection
+      # reactiveVals (which restoring a plot does, just before calling this)
+      # invalidates anno_fields(), so anno_ui re-renders in this same flush and
+      # replaces the control the update was addressed to. The value has to be
+      # *rendered* in, which is what parking it here arranges.
+      #
+      # Bumping anno_rebuild() rather than trusting that invalidation to happen
+      # makes it a guarantee: whatever else did or did not change, the picker
+      # rebuilds once and picks this up. Read isolated - restore() runs inside
+      # the caller's observer, and depending on the counter it writes would
+      # feed that observer back into itself.
+      if (
+        !is.null(vals$amr_anno_field) &&
+          !identical(vals$amr_anno_field, NO_ANNOTATION)
+      ) {
+        restore_anno_field(vals$amr_anno_field)
+        anno_rebuild(shiny$isolate(anno_rebuild()) + 1L)
+      }
+      # The granularity control needs no such nudge: it renders only once
+      # amr_anno_field has echoed back as a date field, and that echo is itself
+      # what re-runs it.
+      if (!is.null(vals$amr_anno_granularity)) {
+        restore_anno_granularity(vals$amr_anno_granularity)
+      }
     }
 
     # Thumbnail: server-render the current view to a small PNG.

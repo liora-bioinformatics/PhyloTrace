@@ -49,8 +49,8 @@ test_that("export module previews and writes the chosen subset", {
     database_export$server,
     args = list(db_path = reactive(src), session_reset = reactive(0L)),
     {
+      selected_isolates("A")
       session$setInputs(
-        isolates = "A",
         meta_cols = "sample_collection_date"
       )
 

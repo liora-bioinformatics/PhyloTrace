@@ -407,8 +407,6 @@ server <- function(
   # Grouped Save-target choices, kept current by the coordinator.
   picker_choices = shiny::reactive(list()),
   db_rev = db_events$new_bus(),
-  # TRUE while a typing run is writing the database - see the Generate gate.
-  typing_active = shiny::reactive(FALSE),
   # TRUE while this tab is the selected nav panel. Only the Map needs it (to
   # nudge Leaflet into recomputing its size), but it costs nothing to thread.
   is_active = shiny::reactive(TRUE),
@@ -712,16 +710,20 @@ server <- function(
     # something to apply — and says so, rather than looking pressable and doing
     # nothing.
     #
-    # Also withheld outright while a typing run is under way. The distance
-    # engines are the one place that reads allele profiles straight from `mlst`
-    # rather than through the store, and during a run that table is being
-    # written by pyMLST from another process: a tree built from it would be
-    # computed from isolates whose profiles are still only partly written, so
-    # their distances would be wrong rather than merely incomplete. Declining
-    # for the minute or two a run lasts is the honest answer.
+    # Not withheld during a typing run. That used to be the case, on the
+    # assumption that the distance engines could see partly-written isolates -
+    # they cannot: engine_isolates() (below) is derived from the applied
+    # metadata snapshot, and a run in progress has not synced its new isolates
+    # into metadata yet (that happens once, at finalize - see
+    # sync_metadata_table()'s callers), so they are simply absent from the
+    # selection, not present with incomplete data. Existing isolates are
+    # untouched by a run in the first place: typing drops any name already in
+    # the database from its queue before pyMLST ever runs. A Generate pressed
+    # mid-run therefore computes the same correct tree it would have before
+    # the run started; the new isolates join it once the run finishes and the
+    # sidebar count updates (see plot_stale()).
     reg(observe({
-      busy <- isTRUE(typing_active())
-      pending <- isTRUE(pending_changes()) && !busy
+      pending <- isTRUE(pending_changes())
       shinyjs::toggleState("generate", condition = pending)
       shinyjs::toggleClass("generate", "is-pending", condition = pending)
       shinyjs::toggleClass("generate", "btn-primary", condition = pending)
@@ -1162,17 +1164,7 @@ server <- function(
         )
       }
 
-      # Says why Generate is greyed out, so a run in another tab does not read
-      # as the button being broken.
-      busy <- if (isTRUE(typing_active())) {
-        div(
-          class = "small mt-1 text-info",
-          icon("hourglass-half"),
-          " Typing in progress — Generate is available once the run finishes."
-        )
-      }
-
-      parts <- list(base, restriction, staleness, busy)
+      parts <- list(base, restriction, staleness)
       parts <- parts[!vapply(parts, is.null, logical(1))]
       if (length(parts) == 1L) parts[[1]] else do.call(tagList, parts)
     })

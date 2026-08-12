@@ -201,17 +201,46 @@ test_that("check_genomes separates the four interesting outcomes", {
 
   # Same name, same assembly - a genuine re-run.
   expect_identical(out$status[1], "retype")
-  # Same assembly under a new name: typing it would enter one isolate twice.
-  expect_identical(out$status[2], "same_genome")
+  # Free name, but the assembly is already stored under S1. The name is what
+  # decides typeability, so this stays "new"; the twin is reported in `other`.
+  expect_identical(out$status[2], "new")
   expect_identical(out$other[2], "S1")
   # Neither the name nor the assembly is on record.
   expect_identical(out$status[3], "new")
+  expect_true(is.na(out$other[3]))
   # The name exists but was typed from a different assembly - pyMLST would
   # reject this file and its data would vanish silently.
   expect_identical(out$status[4], "name_conflict")
 })
 
-test_that("check_genomes reports 'unknown' for isolates predating digests", {
+test_that("a taken name is never masked by a content match elsewhere", {
+  # Regression test: the content check used to run first and win, so a file
+  # that was BOTH a name conflict and a copy of some third isolate came back as
+  # a content duplicate - which reads as typeable. Those files were queued and
+  # then rejected one by one by `wgMLST add`, burning a full cgMLST + classical
+  # MLST + AMR pass each. The name axis has to be decided on its own.
+  dir <- local_tempdir()
+  db <- scratch_db(dir)
+
+  taken <- fasta(dir, "TAKEN.fa", c(">c1", C1))
+  third <- fasta(dir, "THIRD.fa", c(">c1", C2))
+  store_genome_hash(db, "TAKEN", taken)
+  store_genome_hash(db, "THIRD", third)
+
+  # Name "TAKEN" is in use, and the file offered for it holds THIRD's assembly.
+  out <- check_genomes(
+    db,
+    strains = "TAKEN",
+    files = third,
+    known_strains = c("TAKEN", "THIRD")
+  )
+
+  expect_identical(out$status, "name_conflict")
+  # The content match is still reported - it just does not override the verdict.
+  expect_identical(out$other, "THIRD")
+})
+
+test_that("check_genomes reports 'name_untracked' for isolates predating digests", {
   # The majority state for existing databases: the isolate is on record but its
   # assembly never was. This must never be reported as a mismatch.
   dir <- local_tempdir()
@@ -219,7 +248,7 @@ test_that("check_genomes reports 'unknown' for isolates predating digests", {
   file <- fasta(dir, "OLD.fa", c(">c1", C1))
 
   out <- check_genomes(db, "OLD", file, known_strains = c("OLD"))
-  expect_identical(out$status, "unknown")
+  expect_identical(out$status, "name_untracked")
   expect_true(is.na(out$other))
 })
 

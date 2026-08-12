@@ -291,15 +291,39 @@ genome_hash_map <- function(db_path) {
 
 #' Classify Input Assembly Status Against Known Database Records
 #'
-#' Evaluates whether an input assembly file is new, a identical re-type, a duplicate
-#' under a different isolate name (`same_genome`), or a conflicting assembly under an
-#' existing isolate name (`name_conflict`).
+#' Reports two independent facts about an input assembly, which must not be
+#' conflated: whether its **isolate name** is already taken, and whether its
+#' **assembly content** matches something already stored.
+#'
+#' `status` is the name axis, and it alone decides whether a file can be typed
+#' at all - pyMLST's `wgMLST add` keys on the strain name and rejects a name
+#' that already exists, whatever the file contains:
+#'
+#' * `new` - the name is free; this is the only status that can be typed.
+#' * `retype` - name taken, and the stored assembly for that same isolate is
+#'   byte-identical. A no-op re-run.
+#' * `name_conflict` - name taken, but the stored assembly differs. The
+#'   alarming case: two different assemblies are competing for one name.
+#' * `name_untracked` - name taken, with no recorded digest to compare against
+#'   (an isolate typed before genome hashing existed). The majority state for
+#'   older databases, and never a mismatch in itself.
+#'
+#' `other` is the content axis, filled in independently of `status`: the name of
+#' a *different* isolate whose stored assembly is byte-identical to this file,
+#' or `NA`. It is advisory only - identical content under a new name is
+#' legitimate (a re-deposit or a rename), and only the metadata can settle
+#' whether two records are really the same epidemiological isolate.
+#'
+#' Both axes can be true at once (a taken name whose content also matches some
+#' third isolate), which is why the content match must not overwrite the name
+#' verdict - doing so queues a file pyMLST is certain to reject.
 #'
 #' @param strain Target isolate identifier.
 #' @param file Path to assembly file.
 #' @param recorded Map of recorded genome digests from `genome_hash_map()`.
 #' @param known_strains Character vector of isolate names existing in database.
-#' @return List containing `digest`, `status` classification string, and `other` isolate name.
+#' @return List with `digest`, the name-axis `status`, and the content-axis
+#'   `other` isolate name (`NA` when no other isolate shares this assembly).
 #' @export
 classify_genome <- function(strain, file, recorded, known_strains) {
   digest <- tryCatch(genome_digest(file), error = function(e) NULL)
@@ -310,19 +334,23 @@ classify_genome <- function(strain, file, recorded, known_strains) {
 
   known <- strain %in% known_strains
   stored <- if (strain %in% names(recorded)) recorded[[strain]] else NULL
+  # Content axis: some *other* isolate already holds this exact assembly.
   elsewhere <- setdiff(names(recorded)[recorded == d], strain)
+  other <- if (length(elsewhere)) elsewhere[1] else NA_character_
 
-  if (length(elsewhere)) {
-    list(digest = d, status = "same_genome", other = elsewhere[1])
-  } else if (!known) {
-    list(digest = d, status = "new", other = NA_character_)
+  # Name axis: decided on its own, so a content match can never mask a taken
+  # name and smuggle an unusable file into the queue.
+  status <- if (!known) {
+    "new"
   } else if (is.null(stored)) {
-    list(digest = d, status = "unknown", other = NA_character_)
+    "name_untracked"
   } else if (identical(stored, d)) {
-    list(digest = d, status = "retype", other = NA_character_)
+    "retype"
   } else {
-    list(digest = d, status = "name_conflict", other = NA_character_)
+    "name_conflict"
   }
+
+  list(digest = d, status = status, other = other)
 }
 
 #' Batch Check and Classify Multiple Genome Assemblies
@@ -332,7 +360,8 @@ classify_genome <- function(strain, file, recorded, known_strains) {
 #' @param files Vector of assembly file paths.
 #' @param known_strains Vector of isolates already on record.
 #' @param progress Optional progress callback function `function(value, detail)`.
-#' @return Data frame listing strain, file path, digest, classification status, and collateral isolate match.
+#' @return Data frame of one row per input, with the same `digest` / `status` /
+#'   `other` columns `classify_genome()` returns (see there for the two axes).
 #' @export
 check_genomes <- function(
   db_path,

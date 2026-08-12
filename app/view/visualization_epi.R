@@ -643,6 +643,15 @@ server <- function(
     # adapted to a renderUI-rebuilt (bucket 5) control.
     stratify_force_default <- shiny$reactiveVal(FALSE)
 
+    # A reopened plot's saved stratification and its granularity, parked here
+    # for the two renderUIs that own those controls to apply on their next
+    # rebuild. Neither can be restored with an update*Input() call: both
+    # controls are renderUI output, and a render replaces the control outright,
+    # discarding whatever was pushed at the element it replaced. Both are
+    # consumed on read, the same one-shot shape as stratify_force_default.
+    restore_stratify <- shiny$reactiveVal(NULL)
+    restore_granularity <- shiny$reactiveVal(NULL)
+
     # Whether "Play" is running. Drives the tick loop, the button label, and
     # locking the date-range slider and its step buttons (a manual drag
     # mid-playback is indistinguishable server-side from a tick).
@@ -744,6 +753,17 @@ server <- function(
       if (force_default) {
         stratify_force_default(FALSE)
       }
+      # A reopened plot's saved stratification, applied here rather than pushed
+      # at it from restore(). An update*Input() cannot win against this render:
+      # restoring writes the tab's selection reactiveVals, which invalidates
+      # stratify_fields() and so re-runs this very output in the same flush,
+      # replacing the control - and with it any value just sent to the old one.
+      # Rendering the value in is the only way it survives. Consumed on read,
+      # exactly as force_default is.
+      pending <- shiny$isolate(restore_stratify())
+      if (!is.null(pending)) {
+        restore_stratify(NULL)
+      }
       # Categorised, human-readable labels, each carrying its own value count
       # and declared type; the selected value stays the raw column name the
       # plot builder keys on. "" is the sentinel for no stratification — see
@@ -764,7 +784,13 @@ server <- function(
         "epi_stratify",
         "Stratify by",
         profiles = prof[prof$field %in% fields, , drop = FALSE],
-        selected = if (!force_default && isTRUE(prev %in% fields)) prev else "",
+        selected = if (isTRUE(pending %in% fields)) {
+          pending
+        } else if (!force_default && isTRUE(prev %in% fields)) {
+          prev
+        } else {
+          ""
+        },
         extra = c(`No stratification` = ""),
         placeholder = "No stratification"
       )
@@ -795,10 +821,25 @@ server <- function(
       if (!is_date_profile(stratify_profile())) {
         return(NULL)
       }
+      # Read isolated - stratify_profile() above is already this render's
+      # trigger (it changes once epi_stratify's restore round-trips), so
+      # depending on restore_granularity() too would make this render both
+      # read and write the same reactiveVal, invalidating itself into a second
+      # run that finds the value already consumed and falls back to "none".
+      # Consumed here rather than in restore(): this is the first render where
+      # the control exists at all, so it is the first point a value can safely
+      # be applied to it.
+      pending <- shiny$isolate(restore_granularity())
+      selected <- if (!is.null(pending)) {
+        restore_granularity(NULL)
+        pending
+      } else {
+        shiny$isolate(input$epi_stratify_granularity)
+      }
       granularity_select(
         ns,
         "epi_stratify_granularity",
-        shiny$isolate(input$epi_stratify_granularity),
+        selected,
         label = "Group stratifier dates by"
       )
     })
@@ -1582,11 +1623,36 @@ server <- function(
           "epi_background_color",
           "epi_moving_avg_color"
         ),
-        # Time interval / stratify are server-rendered controls (rebuilt on a
-        # counter); best-effort here, corrected by the user's Generate.
-        radio_groups = "epi_interval",
-        pickers = "epi_stratify"
+        # Interval is a server-rendered radioGroupButtons (interval_ui), but by
+        # the time restore() runs the tab's own module has already completed
+        # its first render pass - see the note on epi_stratify below, which
+        # relies on the same guarantee.
+        radio_groups = "epi_interval"
       )
+
+      # epi_stratify and its granularity are renderUI-owned controls, so they
+      # are handed to the renders that own them rather than updated in place.
+      # Sending an update*Input() here cannot work: writing the tab's selection
+      # reactiveVals (which restoring a plot does, just before calling this)
+      # invalidates stratify_fields(), so stratify_ui re-renders in this same
+      # flush and replaces the control the update was addressed to. The value
+      # has to be *rendered* in, which is what parking it here arranges.
+      #
+      # Bumping stratify_rebuild() rather than trusting that invalidation to
+      # happen makes it a guarantee: whatever else did or did not change, the
+      # picker rebuilds once and picks this up. Read isolated - restore() runs
+      # inside the caller's observer, and depending on the counter it writes
+      # would feed that observer back into itself.
+      if (!is.null(vals$epi_stratify) && nzchar(vals$epi_stratify)) {
+        restore_stratify(vals$epi_stratify)
+        stratify_rebuild(shiny$isolate(stratify_rebuild()) + 1L)
+      }
+      # The granularity control needs no such nudge: it renders only once
+      # epi_stratify has echoed back as a date field, and that echo is itself
+      # what re-runs it.
+      if (!is.null(vals$epi_stratify_granularity)) {
+        restore_granularity(vals$epi_stratify_granularity)
+      }
 
       # Through as_epi_annotations() rather than straight in: the snapshot came
       # back through JSON, which has no date type, so `start`/`end` arrive as

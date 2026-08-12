@@ -11,6 +11,7 @@ box::use(
   withr[local_tempfile],
 )
 box::use(
+  app / logic / field_profile,
   app / view / visualization_amr,
 )
 
@@ -371,6 +372,134 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       # A snapshot taken before a control existed must restore everything else
       # cleanly rather than erroring on the missing id.
       expect_null(restore(list(amr_mode = "heatmap")))
+    }
+  )
+})
+
+# --- restore(): saved annotation field ---------------------------------------
+# amr_anno_field is a field_select() (virtualSelectInput) rendered by renderUI,
+# exactly like the Epi engine's epi_stratify - see that engine's own test file
+# for the fuller reasoning. restore() used to hand it to
+# apply_input_snapshot()'s `pickers=` bucket, which both sends a message the
+# virtualSelectInput binding never listens for and would be undone anyway by
+# the re-render restoring triggers. Either way a saved annotation field
+# silently never came back on reopen.
+#
+# So these assert on what the *rendered control* carries, which is what the
+# browser actually receives.
+selected_value <- function(ui) {
+  html <- paste(as.character(ui), collapse = "")
+  hit <- regmatches(html, regexpr('"selectedValue":"[^"]*"', html))
+  if (!length(hit)) {
+    return(NA_character_)
+  }
+  sub('^"selectedValue":"(.*)"$', "\\1", hit)
+}
+
+anno_meta_fixture <- function() {
+  meta <- meta_fixture()
+  meta$enrollment_date <- c(
+    "2026-01-05",
+    "2026-01-06",
+    "2026-01-20",
+    "2026-01-21"
+  )
+  meta
+}
+
+anno_profiles_fixture <- function(meta) {
+  field_profile$field_profiles(
+    meta,
+    types = c(
+      isolate = "text",
+      geo_loc_name_country = "category",
+      enrollment_date = "date"
+    )
+  )
+}
+
+test_that("restore() brings a saved annotation field back onto the control", {
+  path <- amr_db()
+  meta <- anno_meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(amr_anno_field = "geo_loc_name_country"))
+      session$flushReact()
+
+      expect_identical(
+        selected_value(output$anno_ui),
+        "geo_loc_name_country"
+      )
+    }
+  )
+})
+
+test_that("restore() ignores a saved annotation field the database no longer has", {
+  path <- amr_db()
+  meta <- anno_meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(amr_anno_field = "no_such_column"))
+      session$flushReact()
+
+      # The "No annotation" sentinel, not a control pinned to a missing column.
+      expect_identical(selected_value(output$anno_ui), "")
+    }
+  )
+})
+
+test_that("restore() applies a saved annotation field's granularity once it exists", {
+  path <- amr_db()
+  meta <- anno_meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      # amr_anno_granularity never appeared in restore()'s own
+      # apply_input_snapshot() bucket at all, so it was previously dropped
+      # unconditionally, whatever happened to the field itself.
+      restore(list(
+        amr_anno_field = "enrollment_date",
+        amr_anno_granularity = "month"
+      ))
+      session$flushReact()
+
+      expect_identical(selected_value(output$anno_ui), "enrollment_date")
+
+      # The granularity control is gated on the *echoed* field: it exists only
+      # once amr_anno_field reports back as a date, which is a later flush
+      # than the one restore() runs in.
+      session$setInputs(amr_anno_field = "enrollment_date")
+      html <- paste(as.character(output$anno_granularity_ui), collapse = "")
+      expect_true(grepl('value="month" selected', html, fixed = TRUE))
     }
   )
 })

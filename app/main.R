@@ -18,7 +18,9 @@ box::use(
     isolate,
     showNotification,
     removeNotification,
-    selectInput
+    selectInput,
+    uiOutput,
+    renderUI
   ],
   bslib[
     page_sidebar,
@@ -115,6 +117,10 @@ ui <- function(id) {
         scheme_browser$ui(ns("scheme_browser"))
       ),
       nav_spacer(),
+      # Empty (renders nothing) whenever no typing run is active - see
+      # output$typing_indicator. Always present in the navbar so it is
+      # recognisable from any tab, not just Add Isolates.
+      nav_item(uiOutput(ns("typing_indicator"), inline = TRUE)),
       nav_item(paste0("v", APP_VERSION)),
       nav_item(
         actionButton(
@@ -311,6 +317,18 @@ server <- function(id) {
       db_rev = db_rev
     )
 
+    # Navbar spinner: the one indicator of a typing run visible from every
+    # tab, not just Add Isolates. Empty (renders nothing) the rest of the time.
+    output$typing_indicator <- renderUI({
+      if (isTRUE(TYPING_vals$typing_active())) {
+        tags$span(
+          icon("circle-notch", class = "fa-spin"),
+          title = "Typing in progress",
+          class = "navbar-typing-indicator"
+        )
+      }
+    })
+
     # IDs of currently shown "database changed" notifications; used to remove
     # them programmatically when the user clicks Reload or resets. A vector
     # because typing/import can fire more than once before either is
@@ -427,12 +445,7 @@ server <- function(id) {
       launch_ctx = ANALYSIS_DASHBOARD_vals$request_add_plot,
       open_ctx = ANALYSIS_DASHBOARD_vals$request_open_plot,
       db_rev = db_rev,
-      store = store,
-      # Blocks Generate while a typing run is writing the database. The plot
-      # engines are the only readers that go to `mlst` for allele profiles
-      # instead of through the store, so they are the only ones that can see a
-      # run half-written.
-      typing_active = TYPING_vals$typing_active
+      store = store
     )
 
     # Dashboard buttons that hand off to the Visualization tab.

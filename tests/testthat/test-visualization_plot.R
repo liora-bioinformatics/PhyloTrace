@@ -27,23 +27,17 @@ meta_for <- function(isolates) {
 # A tab wired to a metadata table the test controls, standing in for the
 # coordinator's shared read. `plot_type = "AMR"` because it needs no distance
 # computation and no database file to instantiate.
-#
-# `typing` is the reactiveVal behind typing_active, so a test can start or end
-# a simulated typing run with `typing_is(TRUE/FALSE)`.
 with_tab <- function(pool, expr) {
   meta <- reactiveVal(meta_for(pool))
-  typing <- reactiveVal(FALSE)
   testServer(
     visualization_plot$server,
     args = list(
       plot_type = "AMR",
       viz_metadata = reactive(meta()),
-      db_path = reactive(NULL),
-      typing_active = typing
+      db_path = reactive(NULL)
     ),
     {
       pool_is <- function(isolates) meta(meta_for(isolates))
-      typing_is <- function(x) typing(x)
       # Settle the module before any test touches it. The Generate observers
       # carry ignoreInit, so without this their first run coincides with the
       # flush that sets `generate` and the click is swallowed as the initial
@@ -347,10 +341,6 @@ test_that("engine_isolates stays on the generated snapshot when the pool moves",
   }))
 })
 
-# ---------------------------------------------------------------------------
-# Generate is withheld while typing writes the database
-# ---------------------------------------------------------------------------
-
 test_that("the engines are actually handed engine_isolates, not the raw selection", {
   # Asserted against the source, because the two behavioural tests above pass
   # whether or not the resolved list is the one that reaches the engines -
@@ -380,32 +370,4 @@ test_that("the engines are actually handed engine_isolates, not the raw selectio
     handed_to_engine[[1]],
     quote(gate(engine_isolates))
   )
-})
-
-test_that("a typing run withholds Generate even with changes pending", {
-  with_tab(c("A", "B"), quote({
-    selected_isolates(c("A"))
-    session$flushReact()
-    expect_true(isolate(pending_changes()))
-
-    typing_is(TRUE)
-    session$flushReact()
-    # The pending state itself is unchanged - it is the button that is
-    # withheld, so the user's selection survives the run.
-    expect_true(isolate(pending_changes()))
-    expect_true(isolate(typing_active()))
-  }))
-})
-
-test_that("Generate returns once the run finishes", {
-  with_tab(c("A", "B"), quote({
-    selected_isolates(c("A"))
-    typing_is(TRUE)
-    session$flushReact()
-
-    typing_is(FALSE)
-    session$flushReact()
-    expect_false(isolate(typing_active()))
-    expect_true(isolate(pending_changes()))
-  }))
 })
