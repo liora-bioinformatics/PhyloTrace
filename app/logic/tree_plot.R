@@ -61,7 +61,6 @@ box::use(
   app / logic / field_profile[field_levels],
 )
 
-# Scale classification definitions
 .viridis_scales <- c(
   "viridis",
   "magma",

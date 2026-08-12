@@ -118,7 +118,6 @@ while getopts "d:i:c:e:s:m:M:I:C:A:p:o:" opt; do
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
         c) COVERAGE="$OPTARG" ;;
-        e) env="$OPTARG" ;;
         s) SPECIES="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
         M) CLA_SPEC="$OPTARG" ;;

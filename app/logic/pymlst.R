@@ -102,10 +102,6 @@ download_cgmlst_scheme <- function(
     run(
       command = conda_exe(),
       args = c(
-        "run",
-        "-n",
-        env_name,
-        "wgMLST",
         "import",
         if (overwrite) {
           "--force"
@@ -144,7 +140,6 @@ typing_args <- function(
   genome_files,
   identity,
   coverage,
-  env,
   species = NA_character_,
   cla_identity = CLA_IDENTITY_DEFAULT,
   cla_coverage = CLA_COVERAGE_DEFAULT,
@@ -160,9 +155,7 @@ typing_args <- function(
     "-i",
     as.character(identity),
     "-c",
-    as.character(coverage),
-    "-e",
-    env
+    as.character(coverage)
   )
   scalar_chr <- function(x) {
     !is.null(x) && length(x) == 1 && !is.na(x) && nzchar(x)
@@ -222,7 +215,7 @@ type_genomes <- function(
     command = "bash",
     args = c(
       normalizePath(script_path, mustWork = TRUE),
-      typing_args(db_path, genome_files, identity, coverage, env)
+      typing_args(db_path, genome_files, identity, coverage)
     ),
     wd = dirname(db_path),
     echo_cmd = TRUE,
@@ -330,7 +323,6 @@ start_typing <- function(
         genome_files,
         identity,
         coverage,
-        env,
         species,
         cla_identity,
         cla_coverage,
