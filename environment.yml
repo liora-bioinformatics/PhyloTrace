@@ -22,9 +22,9 @@
 # one — keep the exact pin.
 name: PhyloTrace
 channels:
+  - fpaskali
   - conda-forge
   - bioconda
-  - fpaskali
 dependencies:
   - r-base
   - nodejs
@@ -71,7 +71,7 @@ dependencies:
   - r-tidygeocoder
   - r-tidyr
   - r-viridislite
-  - r-visnetwork=2.1.2_custom=4df8e37
+  - r-visnetwork=2.1.4=r43_0
   - r-waiter
   - r-withr
   - r-zip

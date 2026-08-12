@@ -91,7 +91,7 @@ EOF
 
 # Setting up the Desktop Icon
 mkdir -p "$HOME/.local/share/applications"
-mkdir -p "$HOME/.local/share/icons/hicolor"/{48x48,64x64,256x256,512x512}/apps
+mkdir -p "$HOME/.local/share/icons/hicolor"/{48x48,64x64,256x256,512x512,scalable}/apps
 mkdir -p "$HOME/.local/share/phylotrace/logs"
 mv "$SCRIPT_DIR/PhyloTrace.desktop" "$HOME/.local/share/applications"
 # Copy icons to appropriate sizes
