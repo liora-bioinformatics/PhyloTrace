@@ -1,0 +1,376 @@
+Package,Version,License,Author,URL
+_libgcc_mutex,0.1,None,N/A,N/A
+_openmp_mutex,4.5,BSD-3-Clause,N/A,N/A
+_r-mutex,1.0.1,BSD,N/A,N/A
+abritamr,1.0.19,GPL-3.0-only,N/A,N/A
+argcomplete,3.6.2,Apache-2.0,N/A,N/A
+beautifulsoup4,4.13.5,MIT License,N/A,N/A
+binutils_impl_linux-64,2.43,GPL-3.0-only,N/A,N/A
+bioconductor-biocgenerics,0.48.1,Artistic-2.0,N/A,N/A
+bioconductor-biocversion,3.17.1,Artistic-2.0,N/A,N/A
+bioconductor-biostrings,2.70.1,Artistic-2.0,N/A,N/A
+bioconductor-complexheatmap,2.18.0,MIT + file LICENSE,N/A,N/A
+bioconductor-data-packages,20250401,MIT,N/A,N/A
+bioconductor-genomeinfodb,1.38.1,Artistic-2.0,N/A,N/A
+bioconductor-genomeinfodbdata,1.2.11,Artistic-2.0,N/A,N/A
+bioconductor-ggtree,3.10.0,Artistic-2.0,N/A,N/A
+bioconductor-ggtreeextra,1.12.0,GPL (>= 3),N/A,N/A
+bioconductor-iranges,2.36.0,Artistic-2.0,N/A,N/A
+bioconductor-s4vectors,0.40.2,Artistic-2.0,N/A,N/A
+bioconductor-treeio,1.26.0,Artistic-2.0,N/A,N/A
+bioconductor-xvector,0.42.0,Artistic-2.0,N/A,N/A
+bioconductor-zlibbioc,1.48.0,Artistic-2.0 + file LICENSE,N/A,N/A
+blast,2.16.0,NCBI-PD,N/A,N/A
+bs4,0.0.2,MIT License,N/A,N/A
+bwidget,1.10.1,TCL,N/A,N/A
+bzip2,1.0.8,bzip2-1.0.6,N/A,N/A
+c-ares,1.34.5,MIT,N/A,N/A
+ca-certificates,2025.8.3,ISC,N/A,N/A
+cairo,1.18.0,LGPL-2.1-only or MPL-1.1,N/A,N/A
+certifi,2025.8.3,MPL-2.0,Kenneth Reitz,https://github.com/certifi/python-certifi
+charset-normalizer,3.4.3,MIT,N/A,N/A
+curl,8.8.0,curl,N/A,N/A
+entrez-direct,22.4,PUBLIC DOMAIN,N/A,N/A
+expat,2.7.0,MIT,N/A,N/A
+font-ttf-dejavu-sans-mono,2.37,BSD-3-Clause,N/A,N/A
+font-ttf-inconsolata,3.000,OFL-1.1,N/A,N/A
+font-ttf-source-code-pro,2.038,OFL-1.1,N/A,N/A
+font-ttf-ubuntu,0.83,LicenseRef-Ubuntu-Font-Licence-Version-1.0,N/A,N/A
+fontconfig,2.14.2,MIT,N/A,N/A
+fonts-conda-ecosystem,1,BSD-3-Clause,N/A,N/A
+fonts-conda-forge,1,BSD-3-Clause,N/A,N/A
+freetype,2.12.1,GPL-2.0-only OR FTL,N/A,N/A
+fribidi,1.0.10,LGPL-2.1,N/A,N/A
+gcc_impl_linux-64,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+gfortran_impl_linux-64,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+glpk,5.0,GPL-3.0-or-later,N/A,N/A
+gmp,6.3.0,GPL-2.0-or-later OR LGPL-3.0-or-later,N/A,N/A
+graphite2,1.3.13,LGPL-2.0-or-later,N/A,N/A
+gsl,2.7,GPL-3.0-or-later,N/A,N/A
+gxx_impl_linux-64,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+harfbuzz,8.5.0,MIT,N/A,N/A
+hmmer,3.4,BSD,N/A,N/A
+icu,73.2,MIT,N/A,N/A
+idna,3.10,N/A,N/A,N/A
+jq,1.7.1,MIT,N/A,N/A
+kernel-headers_linux-64,3.10.0,LGPL-2.0-or-later AND LGPL-2.0-or-later WITH exceptions AND GPL-2.0-or-later AND MPL-2.0,N/A,N/A
+keyutils,1.6.1,LGPL-2.1-or-later,N/A,N/A
+kma,1.4.14,Apache-2.0,N/A,N/A
+krb5,1.21.3,MIT,N/A,N/A
+ld_impl_linux-64,2.43,GPL-3.0-only,N/A,N/A
+lerc,4.0.0,Apache-2.0,N/A,N/A
+libasprintf,0.24.1,LGPL-2.1-or-later,N/A,N/A
+libblas,3.9.0,BSD-3-Clause,N/A,N/A
+libcblas,3.9.0,BSD-3-Clause,N/A,N/A
+libcurl,8.8.0,curl,N/A,N/A
+libdeflate,1.20,MIT,N/A,N/A
+libedit,3.1.20250104,BSD-2-Clause,N/A,N/A
+libev,4.33,BSD-2-Clause,N/A,N/A
+libexpat,2.7.0,MIT,N/A,N/A
+libffi,3.4.6,MIT,N/A,N/A
+libgcc,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libgcc-devel_linux-64,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libgcc-ng,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libgettextpo,0.24.1,GPL-3.0-or-later,N/A,N/A
+libgfortran,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libgfortran-ng,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libgfortran5,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libglib,2.80.2,LGPL-2.1-or-later,N/A,N/A
+libgomp,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libiconv,1.18,LGPL-2.1-only,N/A,N/A
+libidn2,2.3.8,LGPL-2.0-only,N/A,N/A
+libjpeg-turbo,3.1.0,IJG AND BSD-3-Clause AND Zlib,N/A,N/A
+liblapack,3.9.0,BSD-3-Clause,N/A,N/A
+liblzma,5.8.1,0BSD,N/A,N/A
+liblzma-devel,5.8.1,0BSD,N/A,N/A
+libnghttp2,1.58.0,MIT,N/A,N/A
+libnsl,2.0.1,LGPL-2.1-only,N/A,N/A
+libopenblas,0.3.29,BSD-3-Clause,N/A,N/A
+libpng,1.6.43,zlib-acknowledgement,N/A,N/A
+libsanitizer,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libsqlite,3.46.0,Unlicense,N/A,N/A
+libssh2,1.11.0,BSD-3-Clause,N/A,N/A
+libstdcxx,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libstdcxx-devel_linux-64,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libstdcxx-ng,15.1.0,GPL-3.0-only WITH GCC-exception-3.1,N/A,N/A
+libtiff,4.6.0,HPND,N/A,N/A
+libunistring,0.9.10,GPL-3.0-only OR LGPL-3.0-only,N/A,N/A
+libuuid,2.38.1,BSD-3-Clause,N/A,N/A
+libwebp-base,1.5.0,BSD-3-Clause,N/A,N/A
+libxcb,1.15,MIT,N/A,N/A
+libxcrypt,4.4.36,LGPL-2.1-or-later,N/A,N/A
+libxcrypt1,4.4.36,LGPL-2.1-or-later,N/A,N/A
+libxml2,2.12.7,MIT,N/A,N/A
+libzlib,1.2.13,Zlib,N/A,N/A
+make,4.4.1,GPL-3.0-or-later,N/A,N/A
+mpi,1.0,BSD 3-clause,N/A,N/A
+ncbi-amrfinderplus,3.12.8,Public Domain,N/A,N/A
+ncbi-datasets-cli,16.27.1,Public Domain,N/A,N/A
+ncbi-vdb,3.2.1,Public Domain,N/A,N/A
+ncurses,6.5,X11 AND BSD-3-Clause,N/A,N/A
+numpy,2.2.6,BSD-3-Clause,N/A,N/A
+oniguruma,6.9.10,BSD-2-Clause,N/A,N/A
+openmpi,4.1.6,BSD-3-Clause,N/A,N/A
+openssl,3.5.2,Apache-2.0,N/A,N/A
+pandas,2.2.3,BSD-3-Clause,N/A,N/A
+pandoc,3.7.0.1,GPL-2.0-or-later,N/A,N/A
+pango,1.54.0,LGPL-2.1-or-later,N/A,N/A
+parallel,20240522,GPL-3,N/A,N/A
+pblat,2.5.1,OTHER,N/A,N/A
+pcre2,10.43,BSD-3-Clause,N/A,N/A
+perl,5.32.1,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-archive-tar,2.40,perl_5,N/A,N/A
+perl-carp,1.50,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-common-sense,3.75,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-compress-raw-bzip2,2.201,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-compress-raw-zlib,2.202,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-encode,3.21,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-exporter,5.74,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-exporter-tiny,1.002002,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-extutils-makemaker,7.70,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-io-compress,2.201,perl_5,N/A,N/A
+perl-io-zlib,1.14,unknown,N/A,N/A
+perl-json,4.10,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-json-xs,4.03,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-list-moreutils,0.430,apache_2_0,N/A,N/A
+perl-list-moreutils-xs,0.430,apache_2_0,N/A,N/A
+perl-parent,0.243,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-pathtools,3.75,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-scalar-list-utils,1.69,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-storable,3.15,GPL-1.0-or-later OR Artistic-1.0-Perl,N/A,N/A
+perl-types-serialiser,1.01,perl_5,N/A,N/A
+pip,25.1.1,MIT,N/A,N/A
+pixman,0.46.0,MIT,N/A,N/A
+pthread-stubs,0.4,MIT,N/A,N/A
+python,3.12.3,Python-2.0,N/A,N/A
+python-dateutil,2.9.0.post0,Apache-2.0,N/A,N/A
+python-tzdata,2025.2,Apache-2.0,N/A,N/A
+python_abi,3.12,BSD-3-Clause,N/A,N/A
+pytz,2025.2,MIT,N/A,N/A
+pyyaml,6.0.2,MIT,N/A,N/A
+r-anytime,0.3.9,GPL-2.0-or-later,N/A,N/A
+r-ape,5.7_1,GPL-2.0-or-later,N/A,N/A
+r-aplot,0.2.2,Artistic-2.0,N/A,N/A
+r-askpass,1.2.0,MIT,N/A,N/A
+r-assertthat,0.2.1,GPL-3.0-only,N/A,N/A
+r-backports,1.4.1,GPL-2.0-or-later,N/A,N/A
+r-base,4.3.3,GPL-2.0-or-later,N/A,N/A
+r-base64enc,0.1_3,GPL-2.0-or-later,N/A,N/A
+r-bh,1.81.0_1,BSL-1.0,N/A,N/A
+r-biocmanager,1.30.22,Artistic-2.0,N/A,N/A
+r-bit,4.0.5,GPL-2.0-or-later,N/A,N/A
+r-bit64,4.0.5,GPL-2.0-only,N/A,N/A
+r-bitops,1.0_9,GPL-2.0-or-later,N/A,N/A
+r-blob,1.2.4,GPL-3.0-only,N/A,N/A
+r-broom,1.0.5,MIT,N/A,N/A
+r-bsicons,0.1.1,MIT,N/A,N/A
+r-bslib,0.8.0,MIT,N/A,N/A
+r-cachem,1.1.0,MIT,N/A,N/A
+r-callr,3.7.3,MIT,N/A,N/A
+r-cellranger,1.1.0,MIT,N/A,N/A
+r-circlize,0.4.16,MIT,N/A,N/A
+r-cli,3.6.3,MIT,N/A,N/A
+r-clipr,0.8.0,GPL-3.0-only,N/A,N/A
+r-clue,0.3_66,GPL-2.0-only,N/A,N/A
+r-cluster,2.1.8.1,GPL-2.0-or-later,N/A,N/A
+r-coda,0.19_4.1,GPL-2.0-or-later,N/A,N/A
+r-codetools,0.2_20,GPL-2.0-or-later,N/A,N/A
+r-colorspace,2.1_0,BSD-3-Clause,N/A,N/A
+r-common,1.1.3,CC0-1.0,N/A,N/A
+r-commonmark,1.9.0,BSD-2-Clause,N/A,N/A
+r-conflicted,1.2.0,MIT,N/A,N/A
+r-cowplot,1.1.3,GPL-2.0-only,N/A,N/A
+r-cpp11,0.4.6,MIT,N/A,N/A
+r-crayon,1.5.2,MIT,N/A,N/A
+r-crosstalk,1.2.1,MIT,N/A,N/A
+r-curl,6.2.2,MIT,N/A,N/A
+r-dashboardthemes,1.1.6,MIT,N/A,N/A
+r-data.table,1.14.8,MPL-2.0,N/A,N/A
+r-dbi,1.1.3,LGPL-2.1-or-later,N/A,N/A
+r-dbplyr,2.3.4,MIT,N/A,N/A
+r-digest,0.6.37,GPL-2.0-or-later,N/A,N/A
+r-doparallel,1.0.17,GPL-2.0-only,N/A,N/A
+r-downloader,0.4.1,GPL-2,N/A,N/A
+r-dplyr,1.1.4,MIT,N/A,N/A
+r-dt,0.33,GPL-3.0-only,N/A,N/A
+r-dtplyr,1.3.1,MIT,N/A,N/A
+r-ellipsis,0.3.2,MIT,N/A,N/A
+r-evaluate,0.24.0,MIT,N/A,N/A
+r-fansi,1.0.5,GPL-2.0-or-later,N/A,N/A
+r-farver,2.1.1,MIT,N/A,N/A
+r-fastmap,1.2.0,MIT,N/A,N/A
+r-fastmatch,1.1_4,GPL-2.0-only,N/A,N/A
+r-fontawesome,0.5.2,MIT,N/A,N/A
+r-forcats,1.0.0,MIT,N/A,N/A
+r-foreach,1.5.2,Apache-2.0,N/A,N/A
+r-fs,1.6.4,MIT,N/A,N/A
+r-gargle,1.5.2,MIT,N/A,N/A
+r-generics,0.1.3,MIT,N/A,N/A
+r-getoptlong,1.0.5,MIT,N/A,N/A
+r-ggfun,0.1.3,Artistic-2.0,N/A,N/A
+r-ggnetwork,0.5.12,GPL-3.0-only,N/A,N/A
+r-ggnewscale,0.4.9,GPL-3.0-only,N/A,N/A
+r-ggplot2,3.4.4,MIT,N/A,N/A
+r-ggplotify,0.1.2,Artistic-2.0,N/A,N/A
+r-ggrepel,0.9.4,GPL-3.0-only,N/A,N/A
+r-globaloptions,0.1.2,MIT,N/A,N/A
+r-glue,1.7.0,MIT,N/A,N/A
+r-googledrive,2.1.1,MIT,N/A,N/A
+r-googlesheets4,1.1.1,MIT,N/A,N/A
+r-gridextra,2.3,GPL-2.0-or-later,N/A,N/A
+r-gridgraphics,0.5_1,GPL (>= 2),N/A,N/A
+r-gtable,0.3.4,MIT,N/A,N/A
+r-haven,2.5.3,MIT,N/A,N/A
+r-highr,0.11,GPL-2.0-or-later,N/A,N/A
+r-hms,1.1.3,MIT,N/A,N/A
+r-htmltools,0.5.8.1,GPL-2.0-or-later,N/A,N/A
+r-htmlwidgets,1.6.4,MIT,N/A,N/A
+r-httpuv,1.6.11,GPL-2.0-or-later,N/A,N/A
+r-httr,1.4.7,MIT,N/A,N/A
+r-ids,1.0.1,MIT,N/A,N/A
+r-igraph,1.5.1,GPL-2.0-or-later,N/A,N/A
+r-isoband,0.2.7,MIT,N/A,N/A
+r-iterators,1.0.14,Apache-2.0,N/A,N/A
+r-jquerylib,0.1.4,MIT,N/A,N/A
+r-jsonlite,1.8.8,MIT,N/A,N/A
+r-kableextra,1.3.4,MIT,N/A,N/A
+r-knitr,1.48,GPL-2.0-or-later,N/A,N/A
+r-labeling,0.4.3,MIT,N/A,N/A
+r-later,1.3.1,MIT,N/A,N/A
+r-lattice,0.22_5,GPL-2.0-or-later,N/A,N/A
+r-lazyeval,0.2.2,GPL-3.0-only,N/A,N/A
+r-lifecycle,1.0.4,MIT,N/A,N/A
+r-logr,1.3.8,CC0-1.0,N/A,N/A
+r-lubridate,1.9.3,GPL-2.0-or-later,N/A,N/A
+r-magrittr,2.0.3,MIT,N/A,N/A
+r-mass,7.3_60.0.1,GPL-2.0-or-later,N/A,N/A
+r-matrix,1.6_1.1,GPL-2.0-or-later,N/A,N/A
+r-matrixstats,1.5.0,Artistic-2.0,N/A,N/A
+r-memoise,2.0.1,MIT,N/A,N/A
+r-mgcv,1.9_0,GPL-2.0-or-later,N/A,N/A
+r-mime,0.12,GPL-2.0-or-later,N/A,N/A
+r-modelr,0.1.11,GPL-3,N/A,N/A
+r-munsell,0.5.0,MIT,N/A,N/A
+r-network,1.18.1,GPL-2.0-or-later,N/A,N/A
+r-nlme,3.1_163,GPL-2.0-or-later,N/A,N/A
+r-openssl,2.1.1,MIT,N/A,N/A
+r-patchwork,1.1.3,MIT,N/A,N/A
+r-phangorn,2.11.1,GPL-2.0-or-later,N/A,N/A
+r-pillar,1.9.0,GPL-3.0-only,N/A,N/A
+r-pkgconfig,2.0.3,MIT,N/A,N/A
+r-png,0.1_8,GPL-2.0-only OR GPL-3.0-only,N/A,N/A
+r-prettyunits,1.2.0,MIT,N/A,N/A
+r-processx,3.8.2,MIT,N/A,N/A
+r-progress,1.2.2,MIT,N/A,N/A
+r-promises,1.2.1,MIT,N/A,N/A
+r-proxy,0.4_27,GPL-2.0-only,N/A,N/A
+r-ps,1.7.5,BSD-3-Clause,N/A,N/A
+r-purrr,1.0.2,MIT,N/A,N/A
+r-quadprog,1.5_8,GPL-2.0-or-later,N/A,N/A
+r-r.methodss3,1.8.2,LGPL-2.1-or-later,N/A,N/A
+r-r.oo,1.25.0,LGPL-2.1-or-later,N/A,N/A
+r-r.utils,2.12.3,LGPL-2.1-or-later,N/A,N/A
+r-r6,2.5.1,MIT,N/A,N/A
+r-ragg,1.2.5,MIT,N/A,N/A
+r-rappdirs,0.3.3,MIT,N/A,N/A
+r-rcolorbrewer,1.1_3,Apache-2.0,N/A,N/A
+r-rcpp,1.0.11,GPL-2.0-or-later,N/A,N/A
+r-rcurl,1.98_1.16,BSD-3-Clause,N/A,N/A
+r-readr,2.1.4,MIT,N/A,N/A
+r-readxl,1.4.3,MIT,N/A,N/A
+r-rematch,2.0.0,MIT,N/A,N/A
+r-rematch2,2.1.2,MIT,N/A,N/A
+r-remotes,2.5.0,GPL-2.0-or-later,N/A,N/A
+r-reprex,2.0.2,MIT,N/A,N/A
+r-rhandsontable,0.3.8,MIT,N/A,N/A
+r-rjson,0.2.23,GPL-2.0-only,N/A,N/A
+r-rlang,1.1.4,GPL-3.0-only,N/A,N/A
+r-rle,0.9.2,GPL-3.0-only,N/A,N/A
+r-rmarkdown,2.28,GPL-3.0-only,N/A,N/A
+r-rstudioapi,0.15.0,MIT,N/A,N/A
+r-rvest,1.0.3,MIT,N/A,N/A
+r-sass,0.4.9,MIT,N/A,N/A
+r-scales,1.2.1,MIT,N/A,N/A
+r-selectr,0.4_2,BSD-3-Clause,N/A,N/A
+r-shape,1.4.6.1,GPL (>= 3),N/A,N/A
+r-shiny,1.8.1.1,GPL-3.0-only,N/A,N/A
+r-shinybs,0.61.1,GPL-3.0-only,N/A,N/A
+r-shinydashboard,0.7.2,GPL-2.0-or-later,N/A,N/A
+r-shinyfiles,0.9.3,GPL (>= 2),N/A,N/A
+r-shinyjs,2.1.0,MIT,N/A,N/A
+r-shinywidgets,0.8.0,GPL-3.0-only,N/A,N/A
+r-sna,2.7_1,GPL-2.0-or-later,N/A,N/A
+r-sourcetools,0.1.7_1,MIT,N/A,N/A
+r-statnet.common,4.9.0,GPL-3.0-only,N/A,N/A
+r-stringi,1.7.12,FOSS,N/A,N/A
+r-stringr,1.5.0,MIT,N/A,N/A
+r-svglite,2.1.2,GPL-2.0-or-later,N/A,N/A
+r-sys,3.4.2,MIT,N/A,N/A
+r-systemfonts,1.0.5,MIT,N/A,N/A
+r-textshaping,0.3.7,MIT,N/A,N/A
+r-this.path,2.7.0,MIT,N/A,N/A
+r-tibble,3.2.1,MIT,N/A,N/A
+r-tidyr,1.3.0,MIT,N/A,N/A
+r-tidyselect,1.2.0,MIT,N/A,N/A
+r-tidytree,0.4.5,Artistic-2.0,N/A,N/A
+r-tidyverse,2.0.0,MIT,N/A,N/A
+r-timechange,0.2.0,GPL-3.0-only AND Apache-2.0,N/A,N/A
+r-tinytex,0.52,MIT,N/A,N/A
+r-tzdb,0.4.0,MIT,N/A,N/A
+r-utf8,1.2.3,Apache-2.0,N/A,N/A
+r-uuid,1.1_1,MIT,N/A,N/A
+r-vctrs,0.6.4,MIT,N/A,N/A
+r-viridis,0.6.5,MIT,N/A,N/A
+r-viridislite,0.4.2,MIT,N/A,N/A
+r-visnetwork,2.1.2_custom,MIT,N/A,N/A
+r-vroom,1.6.4,MIT,N/A,N/A
+r-waiter,0.2.5,MIT,N/A,N/A
+r-webshot,0.5.5,GPL-2.0-only,N/A,N/A
+r-withr,2.5.1,GPL-2.0-or-later,N/A,N/A
+r-xfun,0.48,MIT,N/A,N/A
+r-xml2,1.3.5,GPL-2.0-or-later,N/A,N/A
+r-xtable,1.8_4,GPL (>= 2),N/A,N/A
+r-yaml,2.3.10,BSD-3-Clause,N/A,N/A
+r-yulab.utils,0.1.0,Artistic-2.0,N/A,N/A
+r-zoo,1.8_12,GPL-2.0-or-later,N/A,N/A
+readline,8.2,GPL-3.0-only,N/A,N/A
+requests,2.32.5,Apache-2.0,Kenneth Reitz,https://requests.readthedocs.io
+rpsbproc,0.5.0,Public Domain,N/A,N/A
+sed,4.9,GPL-3.0-only,N/A,N/A
+setuptools,80.1.0,MIT,N/A,N/A
+six,1.17.0,MIT,N/A,N/A
+soupsieve,2.8,N/A,N/A,N/A
+sysroot_linux-64,2.17,LGPL-2.0-or-later AND LGPL-2.0-or-later WITH exceptions AND GPL-2.0-or-later AND MPL-2.0,N/A,N/A
+tabulate,0.9.0,MIT,N/A,N/A
+tk,8.6.13,TCL,N/A,N/A
+tktable,2.10,TCL,N/A,N/A
+toml,0.10.2,MIT,N/A,N/A
+tomlkit,0.13.2,MIT,N/A,N/A
+typing-extensions,4.15.0,N/A,N/A,N/A
+tzdata,2025b,LicenseRef-Public-Domain,N/A,N/A
+unzip,6.0,LicenseRef-BSD-like,N/A,N/A
+urllib3,2.5.0,N/A,N/A,N/A
+wget,1.21.4,GPL-3.0-or-later,N/A,N/A
+wheel,0.45.1,MIT,N/A,N/A
+xlsxwriter,3.2.3,BSD-2-Clause,N/A,N/A
+xmltodict,0.14.2,MIT,N/A,N/A
+xorg-kbproto,1.0.7,MIT,N/A,N/A
+xorg-libice,1.1.2,MIT,N/A,N/A
+xorg-libsm,1.2.6,MIT,N/A,N/A
+xorg-libx11,1.8.9,MIT,N/A,N/A
+xorg-libxau,1.0.12,MIT,N/A,N/A
+xorg-libxdmcp,1.1.5,MIT,N/A,N/A
+xorg-libxext,1.3.4,MIT,N/A,N/A
+xorg-libxrender,0.9.11,MIT,N/A,N/A
+xorg-libxt,1.3.0,MIT,N/A,N/A
+xorg-renderproto,0.11.1,MIT,N/A,N/A
+xorg-xextproto,7.3.0,MIT,N/A,N/A
+xorg-xproto,7.0.31,MIT,N/A,N/A
+xz,5.8.1,0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later,N/A,N/A
+xz-gpl-tools,5.8.1,0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later,N/A,N/A
+xz-tools,5.8.1,0BSD AND LGPL-2.1-or-later,N/A,N/A
+yaml,0.2.5,MIT,N/A,N/A
+yq,3.4.3,Apache-2.0,N/A,N/A
+zip,3.0,BSD-like,N/A,N/A
+zlib,1.2.13,Zlib,N/A,N/A
+zstd,1.5.6,BSD-3-Clause,N/A,N/A
