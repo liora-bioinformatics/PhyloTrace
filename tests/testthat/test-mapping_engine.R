@@ -1,4 +1,5 @@
 box::use(
+  rlang[`%||%`],
   testthat[
     expect_false,
     expect_identical,
@@ -312,5 +313,3 @@ test_that("a refused date says how to make it work", {
   msg <- mapping_engine$aesthetic_block_reason(d$profile, "tippoint_shape")
   expect_true(grepl("month", msg))
 })
-
-`%||%` <- function(x, y) if (is.null(x)) y else x

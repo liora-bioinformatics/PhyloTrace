@@ -36,11 +36,10 @@ box::use(
     tags,
     uiOutput,
   ],
+  rlang[`%||%`],
   shinyWidgets[pickerInput, radioGroupButtons],
   svglite[svglite],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # --- Format definitions ------------------------------------------------------
 

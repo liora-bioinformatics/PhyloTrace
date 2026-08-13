@@ -64,6 +64,7 @@ box::use(
     updateRadioGroupButtons,
   ],
   DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
+  rlang[`%||%`],
 )
 box::use(
   app / logic / db_events,
@@ -90,8 +91,6 @@ box::use(
   jsonlite[toJSON, fromJSON],
   base64enc[base64encode],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # The engines, keyed by the plot-type values the creator form offers.
 # `distance` marks the two engines built on a pairwise-distance computation:

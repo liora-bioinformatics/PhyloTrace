@@ -42,6 +42,7 @@ box::use(
     navset_tab,
     sidebar,
   ],
+  rlang[`%||%`],
   shiny,
   shinyWidgets[
     pickerInput,
@@ -72,8 +73,6 @@ box::use(
       apply_input_snapshot,
     ],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # The three views. "heatmap" is the default because it is the one that answers
 # the question the screen was run for: which isolate carries what.

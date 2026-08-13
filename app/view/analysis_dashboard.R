@@ -7,6 +7,7 @@ box::use(
   bslib[page_sidebar, sidebar, tooltip],
   DT[datatable, dataTableProxy, DTOutput, JS, renderDT, selectRows],
   jsonlite[fromJSON, toJSON],
+  rlang[`%||%`],
   shiny[
     actionButton,
     dateRangeInput,
@@ -73,9 +74,6 @@ ui <- function(id) {
     )
   )
 }
-
-# Returns default value if a vector or list is NULL or empty
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # An Analysis's stored isolate_selection JSON as a character vector, or NULL
 # when it fixes nothing (i.e. all isolates).

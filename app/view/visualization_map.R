@@ -71,6 +71,7 @@ box::use(
   ],
   leaflet.extras[addFullscreenControl, addHeatmap],
   leaflet.minicharts[addMinicharts, clearMinicharts],
+  rlang[`%||%`],
   tidygeocoder[geocode],
   shinyjs[runjs],
   utils[URLencode, read.csv, write.csv],
@@ -100,8 +101,6 @@ box::use(
   app / logic / field_labels[field_label],
   app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # Non-API-key basemap providers offered in the Basemap select.
 map_providers <- c(

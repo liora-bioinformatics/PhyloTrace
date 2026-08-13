@@ -6,6 +6,10 @@
 # `targets`, `scheme_overview`) carry no keys — just as `dbWriteTable` leaves
 # them. Tests that assert the export preserves DDL depend on this fidelity.
 
+box::use(
+  rlang[`%||%`],
+)
+
 MLST_DDL <- "CREATE TABLE mlst (
   id INTEGER NOT NULL,
   souche TEXT,
@@ -327,8 +331,6 @@ seed_custom <- function(path, fields) {
 
   invisible(path)
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 q1 <- function(path, sql, params = NULL) {
   con <- DBI::dbConnect(RSQLite::SQLite(), path)

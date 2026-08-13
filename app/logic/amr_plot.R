@@ -26,14 +26,13 @@ box::use(
   ],
   ggplotify[as.ggplot],
   grid[gpar, grid.grabExpr, unit],
+  rlang[`%||%`],
   stats[dist, hclust, setNames],
 )
 box::use(
   app / logic / db_connect[connect],
   app / logic / epi_plot[epi_fit_scale, epi_palette, epi_scale_choices],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # --- Constants & Vocabulary --------------------------------------------------
 

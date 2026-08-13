@@ -41,7 +41,7 @@ REF_SOUCHE <- "ref"
 .norm_locus <- function(x) gsub("[-_]", "-", x)
 
 # Returns fallback value if target is NULL or NA.
-`%||%` <- function(a, b) if (is.null(a) || is.na(a)) b else a
+`%||na%` <- function(a, b) if (is.null(a) || is.na(a)) b else a
 
 #' Open Read-Only Database Connection
 #'
@@ -340,8 +340,8 @@ check_import_compatibility <- function(local_path, ext_path) {
       } else {
         sprintf(
           "Loaded: %s ≠ external: %s",
-          local$species %||% "—",
-          ext$species %||% "—"
+          local$species %||na% "—",
+          ext$species %||na% "—"
         )
       }
     )
@@ -432,12 +432,12 @@ check_import_compatibility <- function(local_path, ext_path) {
       "Schema revision",
       if (same_alembic) "pass" else "warn",
       if (same_alembic) {
-        ext$alembic %||% "—"
+        ext$alembic %||na% "—"
       } else {
         sprintf(
           "Loaded: %s, external: %s (advisory)",
-          local$alembic %||% "—",
-          ext$alembic %||% "—"
+          local$alembic %||na% "—",
+          ext$alembic %||na% "—"
         )
       }
     )

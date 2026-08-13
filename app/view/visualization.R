@@ -53,6 +53,7 @@ box::use(
     layout_columns,
     as_fill_carrier,
   ],
+  rlang[`%||%`],
   shinyWidgets[radioGroupButtons],
 )
 box::use(
@@ -67,8 +68,6 @@ box::use(
   app / view / visualization_plot,
   jsonlite[fromJSON],
 )
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
 
 # Value of the permanent creator tab. Also the fallback insertion target, so
 # the first plot tab lands directly after it.

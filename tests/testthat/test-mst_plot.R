@@ -1,5 +1,6 @@
 box::use(
   igraph[graph_from_data_frame, set_edge_attr],
+  rlang[`%||%`],
   testthat[
     expect_equal,
     expect_false,
@@ -65,8 +66,6 @@ random_tree <- function(n, shape) {
   data.frame(from = paste0("n", from), to = paste0("n", 2:n),
              stringsAsFactors = FALSE)
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # --- 1. Edge length model ----------------------------------------------------
 
