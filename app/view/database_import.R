@@ -46,6 +46,7 @@ box::use(
   stats[setNames],
   utils[head],
   waiter[spin_flower, useWaiter, Waiter],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -91,9 +92,6 @@ box::use(
     ],
   app / logic / pymlst[existing_strains],
 )
-
-# Returns default value b if a is NULL
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # A `.db` carries real sequences and can be merged into the typing database. A
 # profile table carries only allele identifiers, so it is staged alongside and

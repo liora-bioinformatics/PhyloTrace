@@ -24,6 +24,7 @@ box::use(
     dbCommit,
     dbRollback
   ],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -31,9 +32,6 @@ box::use(
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
   app / logic / logging[log_event],
 )
-
-# Returns fallback value if target is NULL.
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Core scheme tables copied verbatim when present. Carrying `alembic_version`
 # maintains pyMLST schema tracking, while `targets` and `scheme_overview`

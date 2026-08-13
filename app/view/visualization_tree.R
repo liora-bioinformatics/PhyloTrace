@@ -32,6 +32,7 @@ box::use(
     virtualSelectInput
   ],
   stats[setNames],
+  rlang[`%||%`],
 )
 box::use(
   app / logic / date_bins[granularity_label],

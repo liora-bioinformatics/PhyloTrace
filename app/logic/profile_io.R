@@ -26,13 +26,12 @@ box::use(
   DBI[dbConnect, dbDisconnect, dbGetQuery, dbListTables, dbWriteTable],
   stats[setNames],
   utils[read.table, write.table],
+  rlang[`%||%`],
 )
 
 box::use(
   app / logic / db_compat[REF_SOUCHE, connect_ro],
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 #' Normalize Locus Names Across Formats
 #'

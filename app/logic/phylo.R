@@ -23,6 +23,7 @@ box::use(
   ],
   stats[as.dist, hclust],
   tidyr[pivot_wider],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -347,6 +348,3 @@ compute_mst <- function(
 # (a Generate away) and the half that has nothing to do with how the result
 # looks, and keeping the two apart is what lets a control change redraw without
 # recomputing a distance matrix.
-
-# Null-coalescing infix operator
-`%||%` <- function(a, b) if (is.null(a)) b else a

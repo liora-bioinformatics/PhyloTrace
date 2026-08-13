@@ -55,6 +55,7 @@ dependencies:
   - r-processx
   - r-rcolorbrewer
   - r-rhino
+  - r-rlang
   - r-rnaturalearth
   - r-rnaturalearthdata
   - r-rsqlite

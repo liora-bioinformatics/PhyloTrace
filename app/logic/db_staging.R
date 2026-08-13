@@ -27,6 +27,7 @@ box::use(
     dbIsValid
   ],
   openssl[sha256],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -35,8 +36,6 @@ box::use(
   app / logic / profile_io[norm_locus],
   app / logic / logging[log_event],
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Minimum proportion of integer profile calls that must resolve locally to consider
 # the profile linked to this database lineage.

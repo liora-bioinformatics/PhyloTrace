@@ -44,9 +44,8 @@ box::use(
   app / logic / db_events,
   app / logic / db_store,
   jsonlite[fromJSON],
+  rlang[`%||%`],
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # A stored isolate JSON array as a character vector, or NULL when unset.
 .parse_selection <- function(raw) {

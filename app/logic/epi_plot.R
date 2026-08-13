@@ -39,13 +39,12 @@ box::use(
   grid[unit],
   stats[ave, setNames],
   viridisLite[viridis],
+  rlang[`%||%`],
 )
 box::use(
   app / logic / date_bins[bin_date_values, floor_date_bin, parse_dates],
   app / logic / viz_helpers[color_scales],
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 #' Default label for unstratified isolate series.
 #' @export

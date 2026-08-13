@@ -15,6 +15,7 @@ box::use(
     dbRollback
   ],
   jsonlite[fromJSON, toJSON],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -58,8 +59,6 @@ LISTED_TYPES <- c("boolean", "category")
     nzchar(db_path) &&
     file.exists(db_path)
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Helper: returns empty data frame structure matching custom fields query output.
 .empty_fields <- function() {

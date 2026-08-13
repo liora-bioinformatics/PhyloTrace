@@ -26,6 +26,7 @@ box::use(
   app / logic / field_labels[AMR_COL_PREFIX, MLST_COL_PREFIX],
   app / logic / logging[log_event],
   app / logic / mlst_repo[canonical_species],
+  rlang[`%||%`],
 )
 
 # Helper: normalizes locus names by converting underscores to hyphens for matching.

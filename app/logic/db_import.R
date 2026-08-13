@@ -34,6 +34,7 @@ box::use(
     dbIsValid
   ],
   openssl[sha256],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -52,9 +53,6 @@ box::use(
   app / logic / db_sources[SOURCE_COL, db_uuid, register_source],
   app / logic / logging[log_event],
 )
-
-# Returns fallback value if target is NULL.
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Default progress callback placeholder.
 .noop_progress <- function(frac, msg) invisible(NULL)

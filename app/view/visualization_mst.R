@@ -44,6 +44,7 @@ box::use(
     visUpdateEdges,
     visUpdateNodes,
   ],
+  rlang[`%||%`],
 )
 box::use(
   app / logic / database_functions[load_db_scheme_overview],
@@ -1704,5 +1705,3 @@ server <- function(
     )
   })
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a

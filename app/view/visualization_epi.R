@@ -41,6 +41,7 @@ box::use(
     pickerOptions,
     updatePickerInput
   ],
+  rlang[`%||%`],
 )
 box::use(
   app / logic / date_bins[bin_date_values],
@@ -63,8 +64,6 @@ box::use(
       apply_input_snapshot,
     ],
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # Only a fallback for before a dataset is known: the real default is fitted to
 # the loaded data's date span (see fitted_interval).

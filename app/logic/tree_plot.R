@@ -53,6 +53,7 @@ box::use(
   RColorBrewer[brewer.pal, brewer.pal.info],
   viridisLite[viridis],
   grDevices[colorRampPalette],
+  rlang[`%||%`],
 )
 
 box::use(

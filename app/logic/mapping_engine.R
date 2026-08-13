@@ -33,6 +33,7 @@ box::use(
     is_binned
   ],
   app / logic / field_profile[MAX_QUAL_LEVELS, MAX_SHAPE_LEVELS],
+  rlang[`%||%`],
 )
 
 #' The channels each drawing medium has, and how to rank them for a variable.
@@ -558,5 +559,3 @@ normalize_layer_records <- function(x, defaults) {
   }
   profiles[hit[[1]], , drop = FALSE]
 }
-
-`%||%` <- function(x, y) if (is.null(x)) y else x

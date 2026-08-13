@@ -28,6 +28,7 @@ box::use(
     virtualSelectInput
   ],
   viridisLite[viridis],
+  rlang[`%||%`],
 )
 
 box::use(

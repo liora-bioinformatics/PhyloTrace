@@ -42,6 +42,7 @@ box::use(
   stats[median, quantile, setNames],
   utils[head],
   visNetwork,
+  rlang[`%||%`],
 )
 
 box::use(
@@ -2259,5 +2260,3 @@ save_mst_html <- function(widget, file, background) {
   widget$height <- NULL
   visNetwork$visSave(widget, file = file, background = background)
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a

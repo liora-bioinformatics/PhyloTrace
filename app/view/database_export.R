@@ -15,7 +15,8 @@ box::use(
   shinyjs[disable, disabled, enable, hidden, toggle, toggleClass, toggleState],
   shinyWidgets[pickerInput, pickerOptions],
   stats[setNames],
-  waiter[spin_flower, useWaiter, Waiter]
+  waiter[spin_flower, useWaiter, Waiter],
+  rlang[`%||%`],
 )
 
 box::use(
@@ -46,8 +47,6 @@ box::use(
     ],
   app / logic / pymlst[existing_strains]
 )
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 EXPORT_TYPES <- c(
   "PhyloTrace database (.db)" = "database",
