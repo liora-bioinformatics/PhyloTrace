@@ -53,10 +53,11 @@ function isExemptFromShield(el) {
     (el.tagName === "INPUT" && el.type === "number") || // Stepper arrows
     // Tab/pill navigation (e.g. the top-level nav bar, bslib accordions):
     // switching away must stay possible even while a long-running,
-    // continuously-busy operation (e.g. typing's pre-run genome check) has
-    // Shiny too busy to ever fire shiny:idle - without this, clicking the
-    // trigger arms the shield on the resulting input change and it cannot
-    // release until that operation finally ends.
+    // continuously-busy operation has Shiny too busy to ever fire shiny:idle -
+    // without this, clicking the trigger arms the shield on the resulting input
+    // change and it cannot release until that operation finally ends. An
+    // operation that wants navigation blocked as well holds the UI explicitly
+    // instead (see holdShield), which does not depend on shiny:idle at all.
     el.closest('[data-bs-toggle="tab"]') ||
     el.closest('[data-bs-toggle="collapse"]')
   );
