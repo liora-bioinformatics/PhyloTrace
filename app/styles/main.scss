@@ -58,29 +58,6 @@ html.pt-busy-visible .pt-shield {
     cursor: wait;
 }
 
-// Server-driven hold, for an operation that keeps R busy end to end and so can
-// never release on `shiny:idle` (typing's pre-run genome check). It blocks the
-// same way but without the overlay: `pointer-events` reaches every descendant
-// of `body` whatever the stacking contexts in between, so the one control that
-// must stay live cannot end up trapped underneath a fixed element. The wait
-// cursor sits on the root, which is still hit-tested once `body` is inert, and
-// is immediate here - the operation is known to be long, so there is nothing to
-// debounce.
-html.pt-busy-hold {
-    cursor: wait;
-
-    body {
-        pointer-events: none;
-    }
-
-    // Re-opened against the rule above: the way out of the operation (Terminate)
-    // has to stay clickable, or a long check traps the user with no escape.
-    .pt-shield-passthrough {
-        pointer-events: auto;
-        cursor: pointer;
-    }
-}
-
 // Loading splash screen (waiterShowOnLoad overlay) ----------------------------
 
 @keyframes waiter-fade-in {
@@ -1680,13 +1657,9 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .edit-table table.dataTable tbody td:not(:first-child):not(:nth-child(9)) {
     cursor: copy;
 
-    // &:hover {
-    //     box-shadow: inset 0 0 0 1px #838383 !important;
-    // }
-}
-
-table.dataTable>tbody>tr.selected>* {
-    cursor: copy !important;
+    &:hover {
+        box-shadow: inset 0 0 0 1px #838383 !important;
+    }
 }
 
 // FixedColumns fixes, scoped to .edit-table (every DT with client-side cell
@@ -1842,6 +1815,8 @@ $session-new-tint: 20%;
     // would remove the cell from hit-testing, which stops `cursor` from ever
     // applying on hover.
     cursor: not-allowed;
+    // Signal that these columns are not client-side editable
+    color: #6c7a89;
     font-style: italic;
 }
 
@@ -2043,35 +2018,19 @@ $session-new-tint: 20%;
 }
 
 // The footer added to Browse Entries' table (see .grouped_header_sketch())
-// exists only to give row+column selection a clickable target per column -
-// a click on the header is forwarded to it in JS (see the metadata_table
-// render's initComplete), so it never needs to be seen, only present in the
-// DOM. DataTables' own scrollX support is what actually renders it as a
-// separate, visible clone (see .dataTables_scrollFoot); hide that rather than
-// the plain tfoot, which is already an invisible, zero-height bookkeeping
-// copy DataTables keeps on the original table.
-.db-page_body .dataTables_scrollFoot {
-    display: none;
+// exists only to give row+column selection a clickable target per column;
+// keep it visually quiet rather than reading as a second header.
+.db-page_body table.dataTable tfoot th.dt-ftr-cell {
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--bs-secondary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
 }
 
-// Selection mode is a class the browser toggles (see selection_js in
-// database_browser.R), so DataTables' own sorting stays bound even though a
-// header click now selects the column instead of sorting by it. Drop the sort
-// affordance for the duration rather than leaving the header promising a sort
-// it will not do, and point the cursor at what a click *will* do.
-.dt-selection-mode table.dataTable thead th.sorting::before,
-.dt-selection-mode table.dataTable thead th.sorting::after,
-.dt-selection-mode table.dataTable thead th.sorting_asc::before,
-.dt-selection-mode table.dataTable thead th.sorting_asc::after,
-.dt-selection-mode table.dataTable thead th.sorting_desc::before,
-.dt-selection-mode table.dataTable thead th.sorting_desc::after {
-    display: none;
-}
-
-.dt-selection-mode table.dataTable thead th.dt-hdr-leaf,
-.dt-selection-mode table.dataTable thead th.dt-hdr-ungrouped,
-.dt-selection-mode table.dataTable tbody td {
-    cursor: pointer;
+.db-page_body table.dataTable tfoot th.dt-ftr-cell:hover {
+    color: var(--bs-body-color);
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.03));
 }
 
 .db-menu-item {
@@ -2735,12 +2694,6 @@ table.dataTable thead>tr>th.sorting {
         min-width: 6rem;
     }
 
-    // Duplicate Check: the outcome badge column, sized to its widest badge
-    // ("Will be typed") so the "Why" column beside it does not shift.
-    &.pt-col-outcome {
-        min-width: 8rem;
-    }
-
     &.pt-col-mlst {
         min-width: 6rem;
     }
@@ -2752,10 +2705,6 @@ table.dataTable thead>tr>th.sorting {
     &.pt-col-time {
         min-width: 6rem;
     }
-}
-
-.sorting_disabled {
-    cursor: pointer;
 }
 
 // Strain names are assembly file names and can run long enough to squeeze every

@@ -2108,14 +2108,6 @@ server <- function(
     # also ticks the shared generate() — leaves this engine's result untouched.
     map_coords <- shiny$reactiveVal(NULL)
 
-    # A reopened plot's saved date granularities, parked for the two renderUIs
-    # that own those controls to apply on their next render. They cannot be
-    # pushed with an update*Input(): each control exists only once its variable
-    # picker reports a date field, which is a later flush than restore() runs
-    # in. Consumed on read - see visualization_epi.R for the fuller reasoning.
-    restore_col_granularity <- shiny$reactiveVal(NULL)
-    restore_chart_granularity <- shiny$reactiveVal(NULL)
-
     # Geocoding success/failure summary for the currently generated map (see
     # build_map_coords()'s status list) — drives output$map_geocode_status_ui
     # below, shown under the "Map mode" picker in this engine's own sidebar.
@@ -2794,18 +2786,10 @@ server <- function(
       if (!is_date_profile(picked_profile(input$map_col_var))) {
         return(NULL)
       }
-      # A restored plot's saved granularity wins for exactly one render, then
-      # the control's own value takes over again. Read isolated: the variable
-      # picker above is already this render's trigger, so also depending on the
-      # parked value would make this output invalidate itself.
-      pending <- shiny$isolate(restore_col_granularity())
-      if (!is.null(pending)) {
-        restore_col_granularity(NULL)
-      }
       granularity_select(
         ns,
         "map_col_granularity",
-        pending %||% shiny$isolate(input$map_col_granularity)
+        shiny$isolate(input$map_col_granularity)
       )
     })
 
@@ -2814,14 +2798,10 @@ server <- function(
       if (!is_date_profile(picked_profile(input$map_chart_var))) {
         return(NULL)
       }
-      pending <- shiny$isolate(restore_chart_granularity())
-      if (!is.null(pending)) {
-        restore_chart_granularity(NULL)
-      }
       granularity_select(
         ns,
         "map_chart_granularity",
-        pending %||% shiny$isolate(input$map_chart_granularity)
+        shiny$isolate(input$map_chart_granularity)
       )
     })
 
@@ -3214,13 +3194,6 @@ server <- function(
     # switch to the Map tab. output$map itself is deliberately left to the
     # default suspend-when-hidden behavior (see its own comment above).
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
-    # Same reasoning for the two granularity pickers, which are the only place
-    # a restored plot's saved granularity can be applied: hidden inside a
-    # collapsed accordion panel they would suspend, and a suspended control
-    # cannot be reached by an update or re-render to pick the value up.
-    for (id in c("col_granularity_ui", "chart_granularity_ui")) {
-      shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
-    }
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
     snapshot <- shiny$reactive(collect_input_snapshot(input, "map_"))
@@ -3355,17 +3328,6 @@ server <- function(
             )
           }
         }
-      }
-
-      # The two granularity pickers are renderUI-owned and exist only once
-      # their variable picker reports a date field - which the calls above have
-      # only just asked the browser for. Parked for those renders to apply
-      # rather than updated here, where the controls need not exist yet.
-      if (!is.null(vals$map_col_granularity)) {
-        restore_col_granularity(vals$map_col_granularity)
-      }
-      if (!is.null(vals$map_chart_granularity)) {
-        restore_chart_granularity(vals$map_chart_granularity)
       }
     }
 

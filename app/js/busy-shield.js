@@ -21,7 +21,6 @@ var lastGestureAt = 0;
 var probeTimer = null;
 var graceTimer = null;
 var failsafeTimer = null;
-var holdFailsafeTimer = null;
 var shieldEl = null;
 
 function isTypingSurface(el) {
@@ -59,13 +58,6 @@ function isExemptFromShield(el) {
     // release until that operation finally ends.
     el.closest('[data-bs-toggle="tab"]') ||
     el.closest('[data-bs-toggle="collapse"]')
-  );
-}
-
-// Controls that stay live through a server-driven hold (see holdShield).
-function isShieldPassthrough(el) {
-  return Boolean(
-    el && typeof el.closest === "function" && el.closest(".pt-shield-passthrough")
   );
 }
 
@@ -118,44 +110,6 @@ function engage() {
   }, MAX_HOLD_MS);
 }
 
-/**
- * Server-driven hold.
- *
- * The gesture-driven shield above can only release itself on `shiny:idle`, so
- * it is useless for an operation that keeps R continuously busy from start to
- * finish (typing's pre-run genome check hashes one assembly per reactive tick
- * and never yields an idle gap). Such an operation holds the UI explicitly
- * instead: it knows precisely when it begins and ends, so it says so.
- *
- * The hold deliberately does not use `.pt-shield`. A full-screen overlay wins
- * by z-index, which only orders elements inside the same stacking context - any
- * ancestor of a control that must stay live (Terminate) could trap it below the
- * overlay. Blocking through `pointer-events` instead reaches every descendant
- * of `body` regardless of stacking, and a single `pointer-events: auto` re-opens
- * exactly the controls marked `.pt-shield-passthrough`.
- */
-function holdShield() {
-  if (holdFailsafeTimer) clearTimeout(holdFailsafeTimer);
-  document.documentElement.classList.add("pt-busy-hold");
-
-  // The server should always release, but a crash mid-operation must not leave
-  // the UI permanently dead.
-  holdFailsafeTimer = setTimeout(function () {
-    holdFailsafeTimer = null;
-    // eslint-disable-next-line no-console
-    console.warn("busy-shield: hold exceeded MAX_HOLD_MS, releasing");
-    releaseHold();
-  }, MAX_HOLD_MS);
-}
-
-function releaseHold() {
-  if (holdFailsafeTimer) { clearTimeout(holdFailsafeTimer); holdFailsafeTimer = null; }
-  document.documentElement.classList.remove("pt-busy-hold");
-}
-
-window.__ptHoldShield = holdShield;
-window.__ptReleaseShieldHold = releaseHold;
-
 document.addEventListener("pointerdown", function () {
   pointerDown = true;
 }, true);
@@ -172,31 +126,16 @@ document.addEventListener("keyup", function (event) {
   if (!isExemptFromShield(event.target)) lastGestureAt = Date.now();
 }, true);
 
-// Suppress key triggers on currently focused UI elements while the shield is
-// active. Pointer blocking alone would leave keyboard activation of an
-// already-focused control working, which is the same queued-click problem by
-// another route.
+// Suppress key triggers on currently focused UI elements while the shield is active.
 document.addEventListener("keydown", function (event) {
-  var holding = document.documentElement.classList.contains("pt-busy-hold");
-  if (!engaged && !holding) return;
-
+  if (!engaged) return;
   if (event.key === "Escape") {
-    // A held operation is dismissed by its own control (Terminate), never by a
-    // stray Escape - releasing here would unblock the UI mid-operation.
-    if (!holding) release();
+    release(); // Manual override
     return;
   }
-
   if (event.key === "Enter" || event.key === " ") {
-    if (holding && !isShieldPassthrough(event.target)) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (!holding) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    event.preventDefault();
+    event.stopPropagation();
   }
 }, true);
 
@@ -220,8 +159,4 @@ $(document).on("shiny:idle", function () {
   }, IDLE_GRACE_MS);
 });
 
-// A dead session can never send its own release, so drop both shields.
-$(document).on("shiny:disconnected", function () {
-  release();
-  releaseHold();
-});
+$(document).on("shiny:disconnected", release);

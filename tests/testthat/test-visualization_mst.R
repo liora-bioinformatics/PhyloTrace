@@ -297,10 +297,7 @@ test_that("allelic distances can be switched back off once shown", {
 
     session$setInputs(mst_show_edge_label = FALSE)
     session$flushReact()
-    # A single space, not "" — vis.js only overwrites a label on a truthy
-    # incoming value (see mst_frames()'s comment), so "" would be silently
-    # ignored and the last real label would stay on screen forever.
-    expect_identical(unique(drawn()$edges$label), " ")
+    expect_identical(unique(drawn()$edges$label), "")
     # Same ids, so the push updates the branches already on the canvas. Without
     # them vis.js appended a second, unlabelled copy of every branch on top of
     # the labelled ones — which stayed, and stayed readable.

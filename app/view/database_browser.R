@@ -4,7 +4,6 @@ box::use(
   shiny[
     NS,
     moduleServer,
-    observe,
     observeEvent,
     reactive,
     reactiveVal,
@@ -28,7 +27,7 @@ box::use(
   ],
   bslib[as_fill_carrier, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable, addClass, removeClass],
-  shinyWidgets[radioGroupButtons, virtualSelectInput],
+  shinyWidgets[virtualSelectInput],
   waiter[Waiter, spin_flower, useWaiter, autoWaiter],
   htmltools[tags],
   DT[
@@ -37,9 +36,7 @@ box::use(
     datatable,
     editData,
     dataTableProxy,
-    replaceData,
-    selectColumns,
-    selectRows
+    replaceData
   ],
 )
 
@@ -123,15 +120,6 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
   leaf <- list()
   i <- 1L
   n <- length(cols)
-  # Every leaf-level header cell and its matching footer cell carry the same
-  # `data-col-idx`, a 0-based position in `cols` - the app's own resolution of
-  # a header click to "which column", used instead of asking DataTables
-  # (`api.column(node).index()`) to do it. That call also has to walk its own
-  # column/header model to answer, and on this table (250+ rows, FixedColumns,
-  # scrollX) it was observed to block the page for tens of seconds - the same
-  # class of cost already seen from columns.adjust() below. A data attribute
-  # set once at render time is free to read back.
-  col_idx <- stats::setNames(seq_len(n) - 1L, cols)
   group_of <- function(col) {
     if (col %in% names(groups)) unname(groups[col]) else NA_character_
   }
@@ -146,7 +134,6 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
   add_leaf <- function(col) {
     leaf[[length(leaf) + 1L]] <<- tags$th(
       class = "dt-hdr-leaf",
-      `data-col-idx` = unname(col_idx[col]),
       unname(labels[col])
     )
   }
@@ -157,7 +144,6 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
       top[[length(top) + 1L]] <- tags$th(
         rowspan = 2,
         class = "dt-hdr-ungrouped",
-        `data-col-idx` = unname(col_idx[cols[i]]),
         unname(labels[cols[i]])
       )
       i <- i + 1L
@@ -186,26 +172,15 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
   # cell spanning several columns, resolves to the *first* of them. Grouping
   # the footer the same way as the header would make every gene under a group
   # header pick the same one column, so the footer skips grouping entirely.
-  #
-  # Never shown (main.scss hides .dataTables_scrollFoot): it exists only as the
-  # click target the header forwards to, so it is built unconditionally rather
-  # than per mode - adding or dropping it would mean re-rendering the table.
   tags$table(
     tags$thead(
       do.call(tags$tr, top),
       do.call(tags$tr, leaf)
     ),
     tags$tfoot(
-      do.call(
-        tags$tr,
-        lapply(cols, function(col) {
-          tags$th(
-            class = "dt-ftr-cell",
-            `data-col-idx` = unname(col_idx[col]),
-            unname(labels[col])
-          )
-        })
-      )
+      do.call(tags$tr, lapply(cols, function(col) {
+        tags$th(class = "dt-ftr-cell", unname(labels[col]))
+      }))
     )
   )
 }
@@ -235,23 +210,6 @@ ui <- function(id) {
               ),
               div(
                 class = "sidebar-control-group",
-                div(class = "control-group-label", "Selection"),
-                radioGroupButtons(
-                  ns("selection_mode"),
-                  label = NULL,
-                  choiceValues = c("off", "on"),
-                  choiceNames = list(
-                    shiny::tagList(icon("pen-to-square"), "Edit"),
-                    shiny::tagList(icon("arrow-pointer"), "Select")
-                  ),
-                  selected = "off",
-                  justified = TRUE,
-                  width = "100%"
-                ),
-                uiOutput(ns("selection_stats_ui"))
-              ),
-              div(
-                class = "sidebar-control-group",
                 div(class = "control-group-label", "Edit"),
                 disabled(
                   actionButton(
@@ -272,9 +230,7 @@ ui <- function(id) {
               div(
                 class = "sidebar-control-group",
                 div(class = "control-group-label", "Remove isolates"),
-                # No picker of its own: the rows selected in the metadata grid
-                # above (see "Selection") are the isolates this removes - turn
-                # Selection on and pick rows to enable it.
+                uiOutput(ns("remove_picker_ui")),
                 disabled(
                   actionButton(
                     ns("remove_btn"),
@@ -283,6 +239,11 @@ ui <- function(id) {
                     icon = icon("trash")
                   )
                 )
+              ),
+              div(
+                class = "sidebar-control-group",
+                div(class = "control-group-label", "Selection"),
+                uiOutput(ns("selection_stats_ui"))
               )
             )
           )
@@ -679,9 +640,8 @@ server <- function(
       # col_picker has updateOn = "close" so it usually only changes when the
       # dropdown closes anyway, but making the read reactive would still wire
       # this renderUI to rerun (and rebuild the whole widget, closing it) on
-      # every value it sends - the failure mode any picker with no updateOn
-      # hits: it updates live on every click, so a reactive read would rebuild
-      # (and close) it after each one.
+      # every value it sends - exactly the bug this caused on remove_picker,
+      # which has no updateOn and so updates live on every click.
       prev_selected <- isolate(input$col_picker)
 
       cols <- optional_cols()
@@ -782,6 +742,43 @@ server <- function(
         # One column-visibility pass per dropdown session rather than one per
         # click: toggling a whole group otherwise redraws the table per option.
         updateOn = "close",
+        width = "100%"
+      )
+    })
+
+    output$remove_picker_ui <- renderUI({
+      # Reruns on every metadata_base() refresh, including a Discard - see
+      # the matching comment on col_picker_ui above for why that means this
+      # widget gets fully re-initialized in the browser, and why `selected=`
+      # has to be seeded from the picker's own current value rather than a
+      # fixed default. isolate(): remove_picker has no updateOn = "close", so
+      # input$remove_picker updates live on every click - reading it
+      # reactively here would rerun (and so rebuild and close) this widget on
+      # every single click, making multi-select impossible.
+      prev_selected <- isolate(input$remove_picker)
+
+      df <- metadata_base()
+      choices <- if (!is.null(df)) df$isolate else character(0)
+      # virtualSelectInput rather than pickerInput, same as col_picker above:
+      # isolate ids are long and this list can be large, and the popup mode
+      # (see col_picker_ui) reads far better centered over the page than
+      # pinned under a 300px-wide sidebar control.
+      virtualSelectInput(
+        ns("remove_picker"),
+        label = NULL,
+        choices = choices,
+        selected = intersect(prev_selected, choices),
+        multiple = TRUE,
+        search = TRUE,
+        # Without this, the header checkbox selects every isolate in the
+        # database, not just the ones the search term currently matches.
+        selectAllOnlyVisible = TRUE,
+        searchPlaceholderText = "Search isolates ...",
+        placeholder = "Select isolates to remove …",
+        noOfDisplayValues = 2,
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
         width = "100%"
       )
     })
@@ -888,16 +885,13 @@ server <- function(
       if (has_amr || has_new || has_imported) {
         parts <- character(0)
         if (has_amr) {
-          parts <- c(
-            parts,
-            paste0(
-              '<span class="amr-legend">',
-              '<span class="amr-call amr-call-match" title="Match — reported without a quality flag (an exact or allele match for an AMR gene family; point mutations and virulence/stress genes are never flagged)">&#10003;</span> match&ensp;',
-              '<span class="amr-call amr-call-inexact" title="Inexact — flagged * by abritamr: a BLAST hit close to, but not identical to, a known reference allele">&#10003;*</span> inexact&ensp;',
-              '<span class="amr-call amr-call-partial" title="Partial — from abritamr&#39;s partials set (e.g. an internal stop codon): the gene is likely truncated or non-functional">~</span> partial',
-              '</span>'
-            )
-          )
+          parts <- c(parts, paste0(
+            '<span class="amr-legend">',
+            '<span class="amr-call amr-call-match" title="Match — reported without a quality flag (an exact or allele match for an AMR gene family; point mutations and virulence/stress genes are never flagged)">&#10003;</span> match&ensp;',
+            '<span class="amr-call amr-call-inexact" title="Inexact — flagged * by abritamr: a BLAST hit close to, but not identical to, a known reference allele">&#10003;*</span> inexact&ensp;',
+            '<span class="amr-call amr-call-partial" title="Partial — from abritamr&#39;s partials set (e.g. an internal stop codon): the gene is likely truncated or non-functional">~</span> partial',
+            '</span>'
+          ))
         }
         # Two separate entries rather than one "added this session": the two
         # tints mean different things (typed here vs merged in from a peer), and
@@ -905,41 +899,27 @@ server <- function(
         # entry names its source databases on hover — the same labels the Source
         # column carries, so the legend and the column agree.
         if (has_new) {
-          parts <- c(
-            parts,
-            paste0(
-              '<span class="session-new-legend">',
-              '<span class="session-new-swatch"></span>',
-              if (length(new_isolates) == 1) {
-                "1 isolate"
-              } else {
-                paste0(length(new_isolates), " isolates")
-              },
-              " typed this session",
-              '</span>'
-            )
-          )
+          parts <- c(parts, paste0(
+            '<span class="session-new-legend">',
+            '<span class="session-new-swatch"></span>',
+            if (length(new_isolates) == 1) "1 isolate" else paste0(length(new_isolates), " isolates"),
+            " typed this session",
+            '</span>'
+          ))
         }
         if (has_imported) {
-          parts <- c(
-            parts,
-            paste0(
-              '<span class="session-new-legend" title="',
-              htmltools::htmlEscape(
-                paste0("From: ", paste(added$sources, collapse = ", ")),
-                attribute = TRUE
-              ),
-              '">',
-              '<span class="session-import-swatch"></span>',
-              if (length(imported_isolates) == 1) {
-                "1 isolate"
-              } else {
-                paste0(length(imported_isolates), " isolates")
-              },
-              " imported this session",
-              '</span>'
-            )
-          )
+          parts <- c(parts, paste0(
+            '<span class="session-new-legend" title="',
+            htmltools::htmlEscape(
+              paste0("From: ", paste(added$sources, collapse = ", ")),
+              attribute = TRUE
+            ),
+            '">',
+            '<span class="session-import-swatch"></span>',
+            if (length(imported_isolates) == 1) "1 isolate" else paste0(length(imported_isolates), " isolates"),
+            " imported this session",
+            '</span>'
+          ))
         }
         legend_html <- paste0(
           '<span class="dt-legend-group">',
@@ -1005,108 +985,6 @@ server <- function(
         .grouped_header_sketch(cols, header_labels(), groups)
       }
 
-      # Everything Selection mode changes about how the table behaves, done in
-      # the browser off a single class rather than by re-rendering. DT's
-      # `selection` / `editable` / `ordering` are all render-time arguments, so
-      # driving the mode from R meant rebuilding the widget on every toggle -
-      # which threw away unsaved cell edits, reset the column picker's
-      # visibility choices and jumped the scroll position back to the top.
-      #
-      # isolate(): the mode is read here only to set the *initial* class, and
-      # must not make this render depend on it - that dependency is exactly
-      # what caused the rebuild. Live changes arrive as a message instead (see
-      # the selection_mode observer below).
-      #
-      # Every listener is on the wrapper in the capture phase, because that is
-      # the one place that sees a click before all three things that would
-      # otherwise act on it: DataTables' sort handlers (bound on the header
-      # cells), its row/cell selection (delegated on the table), and the app's
-      # own single-click-to-edit shim (delegated on `document`, see
-      # app/js/index.js). Stopping an event there reliably suppresses the
-      # behaviour that does not belong to the current mode.
-      selection_js <- sprintf(
-        "var host = document.getElementById(%s);
-              var selOn = function() {
-                return !!host && host.classList.contains('dt-selection-mode');
-              };
-              // Mirrored onto the tables as well as their container, so both
-              // `.dt-selection-mode table` and `table.dt-selection-mode` work
-              // as CSS hooks (scrollX clones the table three times over).
-              var applyMode = function(on) {
-                if (!host) return;
-                host.classList.toggle('dt-selection-mode', !!on);
-                $(host).find('table').toggleClass('dt-selection-mode', !!on);
-              };
-              Shiny.addCustomMessageHandler(%s, function(msg) {
-                applyMode(msg && msg.on);
-              });
-              applyMode(%s);
-
-              var selectAllId = %s;
-              var wrapperEl = $(tableNode).closest('.dataTables_wrapper')[0];
-              if (wrapperEl) {
-                // Header: select the column rather than sorting by it. The
-                // column is resolved through the `data-col-idx` the header and
-                // footer cells share (see .grouped_header_sketch()) rather
-                // than DataTables' own api.column(node), which has to walk its
-                // column/header model to answer and on this table (250+ rows,
-                // FixedColumns, scrollX) was observed to block the page for
-                // tens of seconds - the same class of cost as columns.adjust()
-                // above. The click is forwarded to the matching footer cell
-                // because that is where DT binds column selection; the footer
-                // is hidden (main.scss) and exists only for this.
-                wrapperEl.addEventListener('click', function(e) {
-                  if (!selOn()) return;
-                  // Never swallow a click meant for the filter row's inputs.
-                  if (e.target.closest('input, select, textarea, label')) return;
-                  var th = e.target.closest('.dataTables_scrollHead thead th.dt-hdr-leaf, .dataTables_scrollHead thead th.dt-hdr-ungrouped');
-                  if (!th) return;
-                  e.stopPropagation();
-                  e.preventDefault();
-                  var idx = th.getAttribute('data-col-idx');
-                  if (idx === null) return;
-                  // Isolate (always column 0 - see rowCallback's data[0]) is
-                  // the row identity, not a data field: selecting *it* is not
-                  // a meaningful gesture, but selecting every row is.
-                  if (idx === '0') {
-                    Shiny.setInputValue(selectAllId, Math.random());
-                    return;
-                  }
-                  var sel = 'th[data-col-idx=\"' + idx + '\"]';
-                  var footerCell = $(wrapperEl).find('.dataTables_scrollFoot ' + sel)[0];
-                  if (!footerCell) footerCell = tableNode.querySelector('tfoot ' + sel);
-                  if (footerCell) $(footerCell).trigger('click');
-                }, true);
-
-                // Body: never open a cell editor while selecting. Both events
-                // matter - a real double-click reaches DT's own dblclick
-                // binding, and a single click reaches the shim that
-                // synthesises one from it.
-                ['click', 'dblclick'].forEach(function(evt) {
-                  wrapperEl.addEventListener(evt, function(e) {
-                    if (!selOn()) return;
-                    if (!e.target.closest('.dataTables_scrollBody tbody td')) return;
-                    e.stopPropagation();
-                  }, true);
-                });
-
-                // Body: never toggle a row while editing. DT selects rows on
-                // mousedown, a different event from the click the editor opens
-                // on, so suppressing it leaves editing untouched. Propagation
-                // only - the default action still runs, so text selection and
-                // focus inside a cell behave normally.
-                wrapperEl.addEventListener('mousedown', function(e) {
-                  if (selOn()) return;
-                  if (!e.target.closest('.dataTables_scrollBody tbody tr')) return;
-                  e.stopPropagation();
-                }, true);
-              }",
-        jsonlite::toJSON(ns("metadata_table"), auto_unbox = TRUE),
-        jsonlite::toJSON(ns("dt_selection_mode"), auto_unbox = TRUE),
-        if (isolate(identical(input$selection_mode, "on"))) "true" else "false",
-        jsonlite::toJSON(ns("select_all_isolates"), auto_unbox = TRUE)
-      )
-
       # DT's `container` builds its own default header when the argument is
       # missing entirely - passing an explicit NULL is not the same thing and
       # breaks rendering, so it is only added to the call when there is a
@@ -1117,30 +995,22 @@ server <- function(
         colnames = field_labels_for(cols),
         filter = "top",
         # Drop the default "display" class's zebra striping (keep borders /
-        # hover / sortable) so the cells aren't tinted per row. The
-        # `dt-selection-mode` hook is *not* set here - see the initComplete
-        # block, which adds and removes it client-side.
+        # hover / sortable) so the cells aren't tinted per row.
         class = "row-border order-column",
-        # Editing and selection are both wired up unconditionally, and which
-        # one a click means is decided client-side (see initComplete). None of
-        # these three can be changed after the fact - they are render-time
-        # arguments - so making them depend on the mode meant re-rendering on
-        # every toggle, which discarded unsaved cell edits, the column picker's
-        # visibility choices and the scroll position.
         editable = list(
           target = "cell",
           disable = list(columns = readonly_idx),
-          # Native inputs per column type, the same way database_custom.R
-          # does it: DT builds a <input type="date"> / <input type="number">
-          # itself and its own blur/Escape teardown keeps working. (This
-          # replaces a MutationObserver that retyped DT's text input after
-          # the fact — which had to re-parse and re-focus the input, and
-          # only ever knew about the one hardcoded collection-date column.)
+          # Native inputs per column type, the same way database_custom.R does
+          # it: DT builds a <input type="date"> / <input type="number"> itself
+          # and its own blur/Escape teardown keeps working. (This replaces a
+          # MutationObserver that retyped DT's text input after the fact —
+          # which had to re-parse and re-focus the input, and only ever knew
+          # about the one hardcoded collection-date column.)
           numeric = edit_numeric_idx,
           date = edit_date_idx
         ),
-        # Click a row to select it, click a header cell (forwarded to the
-        # hidden footer - see initComplete) to select its column. Read back via
+        # row+column: click a row to select it, click a footer cell (added by
+        # .grouped_header_sketch()) to select its column. Read back via
         # input$metadata_table_rows_selected / _columns_selected in
         # selection_stats_ui below.
         selection = list(target = "row+column"),
@@ -1169,12 +1039,10 @@ server <- function(
             jsonlite::toJSON(new_isolates),
             jsonlite::toJSON(imported_isolates)
           )),
-          initComplete = DT::JS(sprintf(
+          initComplete = DT::JS(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
-
-              %s
 
               $(tableNode).on('keyup', 'input', function(e) {
                 if (e.key === 'Enter') this.blur();
@@ -1238,9 +1106,8 @@ server <- function(
                 .closest('.dataTables_wrapper')
                 .children('.dataTables_info')
                 .addClass('session-legend-row');
-            }",
-            selection_js
-          )),
+            }"
+          ),
           # DataTables rebuilds the info div's *content* from scratch on every
           # draw (paging, filtering, and - critically - the columns.adjust()
           # redraw the column-visibility.dt handler above triggers when the
@@ -1270,42 +1137,6 @@ server <- function(
 
     proxy <- dataTableProxy("metadata_table", session = session)
 
-    # Selection mode, pushed to the browser rather than re-rendered into the
-    # table (see selection_js in the render for what the client does with it,
-    # and why a re-render is not an option here).
-    #
-    # Leaving the mode also clears the selection: the highlight is drawn from a
-    # class DT leaves on the rows, so it would otherwise stay on screen in Edit
-    # mode with nothing left to act on it. Neither call redraws the table -
-    # both only add and remove that class - so the scroll position survives.
-    observeEvent(
-      input$selection_mode,
-      {
-        on <- identical(input$selection_mode, "on")
-        session$sendCustomMessage(ns("dt_selection_mode"), list(on = on))
-        if (!on) {
-          selectRows(proxy, integer(0))
-          selectColumns(proxy, integer(0))
-        }
-      },
-      ignoreInit = TRUE
-    )
-
-    # Isolate header click (Selection mode only - see the forwarder built into
-    # metadata_table's initComplete): toggles every row through the same path
-    # DT's own row-click handler uses, rather than reimplementing row
-    # selection by hand, so a single click afterwards still toggles correctly
-    # off this "select all" state instead of desyncing from it. Already-all-
-    # selected is the only state a second click clears - anything short of
-    # that (nothing, or some hand-picked subset) reads as "not all yet" and
-    # a click fills the rest in, the same convention a header checkbox uses.
-    observeEvent(input$select_all_isolates, {
-      df <- State$data
-      req(is.data.frame(df), nrow(df) > 0)
-      all_selected <- length(input$metadata_table_rows_selected) == nrow(df)
-      selectRows(proxy, if (all_selected) integer(0) else seq_len(nrow(df)))
-    })
-
     # Short read-out of the grid's row+column selection, in the sidebar below
     # "Remove isolates". Rows and columns are reported separately because
     # that is what the highlight actually means: selecting a row highlights it
@@ -1317,17 +1148,6 @@ server <- function(
       df <- State$data
       if (!is.data.frame(df)) {
         return(NULL)
-      }
-
-      # Off: report nothing rather than trust input$metadata_table_..._selected.
-      # The mode observer clears the selection on the way out, but that is a
-      # round trip - this output would otherwise render the outgoing selection
-      # once, in Edit mode, before the cleared value arrives.
-      if (!identical(input$selection_mode, "on")) {
-        return(div(
-          class = "selection-stats-empty",
-          "Turn on Selection to inspect rows or columns in the table."
-        ))
       }
 
       rows <- input$metadata_table_rows_selected
@@ -1592,10 +1412,7 @@ server <- function(
         # orphan row no view can reach, so drop those the same way.
         dirty <- State$custom_dirty
         live <- db_events$reconcile_names(dirty$isolate, current$isolate)
-        save_custom_values(
-          db_path(),
-          dirty[!(dirty$isolate %in% live$dropped), ]
-        )
+        save_custom_values(db_path(), dirty[!(dirty$isolate %in% live$dropped), ])
         State$custom_dirty <- NULL
       }
 
@@ -1656,32 +1473,20 @@ server <- function(
       replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
     })
 
-    # Isolates the "Remove" button acts on: the metadata grid's row selection
-    # (see "Selection" above), not a picker of its own - Off mode, or On with
-    # no rows picked, leaves nothing to remove.
-    remove_candidates <- reactive({
-      df <- State$data
-      rows <- input$metadata_table_rows_selected
-      if (
-        !identical(input$selection_mode, "on") ||
-          !is.data.frame(df) ||
-          !length(rows)
-      ) {
-        return(character(0))
-      }
-      df$isolate[rows]
-    })
-
-    observe({
-      if (length(remove_candidates())) {
-        enable("remove_btn")
-      } else {
-        disable("remove_btn")
-      }
-    })
+    observeEvent(
+      input$remove_picker,
+      {
+        if (length(input$remove_picker) > 0) {
+          enable("remove_btn")
+        } else {
+          disable("remove_btn")
+        }
+      },
+      ignoreNULL = FALSE
+    )
 
     observeEvent(input$remove_btn, {
-      isolates <- remove_candidates()
+      isolates <- input$remove_picker
       req(length(isolates) > 0)
       showModal(modalDialog(
         title = "Remove isolates",
@@ -1745,7 +1550,7 @@ server <- function(
     })
 
     observeEvent(input$confirm_remove, {
-      isolates <- remove_candidates()
+      isolates <- input$remove_picker
       keep_alleles <- isTRUE(input$keep_alleles)
       removeModal()
       remove_waiter$show()

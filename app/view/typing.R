@@ -142,53 +142,68 @@ check_progress_min <- 10L
 # threshold the inline warning is legible enough on its own.
 name_conflict_gate_min <- 5L
 
-# Two independent questions decide what a run does with a selected file, and
-# they are answered at different points because they cost different amounts:
+# The two axes the pre-run check reports on (see classify_genome in
+# app/logic/genome_hash.R) are kept apart everywhere in this module, because
+# conflating them is what made unusable files reach pyMLST:
 #
 #   name axis    - is the isolate name already in the database? Decides whether
 #                  a file can be typed at all: `wgMLST add` keys on the strain
-#                  name and rejects a taken one whatever the file holds. Known
-#                  from the file name alone, so it is settled the moment a
-#                  selection is made - no hashing, nothing to wait for.
+#                  name and rejects a taken one whatever the file holds.
 #   content axis - does some other isolate already hold this exact assembly?
-#                  Advisory only, never blocks, and needs the assembly digest.
+#                  Advisory only; never blocks.
 #
-# Because the name axis alone decides typeability, only the files it clears are
-# ever hashed: hashing a file that cannot be typed would buy nothing the run
-# acts on. The two report statuses below follow from that split.
+# Only "new" is typeable. Everything else is skipped, and `skip_reason()` says
+# why in the user's words rather than in classifier vocabulary.
 typeable_status <- "new"
-skipped_status <- "name_taken"
 
-# Why a file was left out, in the user's terms rather than classifier
-# vocabulary. One reason only: the name axis is the sole thing that skips a
-# file, and it is not hashed, so nothing finer is known about it.
-name_taken_reason <- paste(
-  "Isolate name already in this database. pyMLST identifies an isolate by",
-  "name, so this file cannot be added under it - rename it to type it as a",
-  "new isolate."
-)
+# Per-status wording for the duplicate report: what happened, and why.
+skip_reason <- function(status) {
+  switch(
+    status,
+    retype = paste(
+      "Isolate name already in the database, holding this exact assembly -",
+      "re-typing it would change nothing."
+    ),
+    name_conflict = paste(
+      "Isolate name already in the database, but holding a <em>different</em>",
+      "assembly. Rename this file to type it as a separate isolate."
+    ),
+    name_untracked = paste(
+      "Isolate name already in the database. It was typed before assembly",
+      "hashing existed, so its content cannot be compared."
+    ),
+    "Isolate name already in the database."
+  )
+}
 
 # Rows of the pre-run check worth reporting, rendered for display: the outcome
-# spelled out per file, plus the reason. Skipped files (name axis) and typed
-# files that duplicate stored content (content axis) share one table, so the
-# panel is the single place either kind of "duplicate" is explained.
+# spelled out per file, plus the reason in the user's terms. Both axes end up
+# in one table so a file that is both skipped *and* content-identical to
+# something else reads as one coherent statement instead of two.
 build_dup_report_df <- function(rep) {
-  skipped <- rep$status == skipped_status
+  skipped <- rep$status != typeable_status
   outcome <- ifelse(skipped, "Skipped", "Will be typed")
   detail <- ifelse(
     skipped,
-    name_taken_reason,
-    sprintf(
-      "Typed as a new isolate. Identical assembly already stored as \"%s\".",
-      htmlEscape(rep$other)
-    )
+    vapply(rep$status, skip_reason, character(1)),
+    ""
   )
-  # Column names match dup_report_columns so the DT `container` header lines up
-  # with the data positionally and by name.
+  # The content-axis note is appended to whatever the name axis already said,
+  # since both can be true of the same file.
+  has_twin <- !is.na(rep$other)
+  twin_note <- sprintf(
+    "Identical assembly already stored as \"%s\".",
+    htmlEscape(rep$other)
+  )
+  detail <- ifelse(
+    has_twin,
+    ifelse(nzchar(detail), paste(detail, twin_note), twin_note),
+    detail
+  )
   data.frame(
     File = htmlEscape(rep$strain),
     Outcome = vapply(outcome, status_badge, character(1)),
-    Why = detail,
+    Detail = detail,
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -350,54 +365,23 @@ results_columns <- list(
   )
 )
 
-# Columns of the Duplicate Check table, in the same shape as results_columns so
-# both tables are built by the same header helper below. One column per axis of
-# the pre-run check (see classify_genome), plus the outcome those two imply.
-dup_report_columns <- list(
-  list(
-    name = "File",
-    class = "pt-col-strain",
-    tip = "The selected assembly file, named as the isolate it would become."
-  ),
-  list(
-    name = "Outcome",
-    class = "pt-col-outcome",
-    tip = paste(
-      "Whether this file is typed in this run. Decided by the isolate name",
-      "alone: pyMLST rejects a name the database already holds."
-    )
-  ),
-  list(
-    name = "Why",
-    tip = paste(
-      "The isolate-name verdict, and whether the assembly's content matches",
-      "an isolate already stored under a different name."
-    )
-  )
+# Header row for the results table, built as a DT `container` so each header
+# cell can carry its explanation (a Bootstrap tooltip, falling back to the
+# browser's native `title` tooltip) and its width-reserving class.
+results_header <- tags$table(
+  class = "display",
+  tags$thead(tags$tr(
+    lapply(results_columns, function(col) {
+      tags$th(
+        class = col$class,
+        title = col$tip,
+        `data-bs-toggle` = "tooltip",
+        `data-bs-placement` = "bottom",
+        col$name
+      )
+    })
+  ))
 )
-
-# Header row for a DT `container` so each header cell can carry its explanation
-# (a Bootstrap tooltip, falling back to the browser's native `title` tooltip)
-# and its width-reserving class. Shared by the results and duplicate tables.
-table_header <- function(columns) {
-  tags$table(
-    class = "display",
-    tags$thead(tags$tr(
-      lapply(columns, function(col) {
-        tags$th(
-          class = col$class,
-          title = col$tip,
-          `data-bs-toggle` = "tooltip",
-          `data-bs-placement` = "bottom",
-          col$name
-        )
-      })
-    ))
-  )
-}
-
-results_header <- table_header(results_columns)
-dup_report_header <- table_header(dup_report_columns)
 
 # Attach a Bootstrap tooltip to every header cell that carries an explanation.
 # Runs once per render (the header survives replaceData, so the live polling
@@ -697,12 +681,9 @@ ui <- function(id) {
         ns("terminate"),
         "Terminate",
         icon = icon("stop"),
-        # The one control that must stay usable while a long operation runs, so
-        # it opts out of the input shield twice over (busy-shield.js):
-        # pt-no-lock keeps a click on it from arming the gesture shield, and
-        # pt-shield-passthrough keeps it clickable while the genome check holds
-        # the UI - without it the check would trap the user with no way out.
-        class = "btn-danger pt-no-lock pt-shield-passthrough"
+        # pt-no-lock: the one control that must stay clickable while a long run
+        # is in progress, so it opts out of the global input shield (busy-shield.js).
+        class = "btn-danger pt-no-lock"
       ))
     ),
     div(
@@ -767,8 +748,19 @@ ui <- function(id) {
             DTOutput(ns("selection_table"))
           )
         ),
-        # Panel order follows the run: what was selected, what the pre-run check
-        # made of it, what typing produced, and finally the raw transcript.
+        accordion_panel(
+          "Process Log",
+          icon = icon("terminal"),
+          verbatimTextOutput(ns("log"))
+        ),
+        accordion_panel(
+          "Results",
+          icon = icon("table"),
+          div(
+            class = "typing-scrollpane",
+            DTOutput(ns("results_table"))
+          )
+        ),
         accordion_panel(
           title = tags$span(
             class = "typing-accordion-title",
@@ -782,19 +774,6 @@ ui <- function(id) {
             uiOutput(ns("duplicate_advisories_caption")),
             DTOutput(ns("duplicate_advisories_table"))
           )
-        ),
-        accordion_panel(
-          "Results",
-          icon = icon("table"),
-          div(
-            class = "typing-scrollpane",
-            DTOutput(ns("results_table"))
-          )
-        ),
-        accordion_panel(
-          "Process Log",
-          icon = icon("terminal"),
-          verbatimTextOutput(ns("log"))
         )
       )
     )
@@ -823,10 +802,6 @@ server <- function(
       # Strains manually excluded from typing via the selection table, on top of
       # the automatic "already present" exclusion.
       excluded_strains = character(0),
-      # Selected strains left out of the last run because the database already
-      # holds that isolate name. Settled from the names alone, before any
-      # hashing, so it is known the moment Start is clicked.
-      skipped_strains = character(0),
       # Rows of the last pre-run check worth reporting: files skipped for a
       # taken isolate name, and files typed despite duplicating stored assembly
       # content. Drives the "Duplicate Check" panel, which is the only lasting
@@ -1645,34 +1620,16 @@ server <- function(
       suspendWhenHidden = FALSE
     )
 
-    # TRUE once the last check produced something to report. Mirrors
-    # results_initialized so the structural render below fires on the same
-    # transitions the results table does, and no more often.
-    dup_report_initialized <- reactiveVal(FALSE)
-    observe({
-      rep <- Typing$dup_report
-      has <- !is.null(rep) && nrow(rep) > 0
-      if (!identical(has, isolate(dup_report_initialized()))) {
-        dup_report_initialized(has)
-      }
-    })
-
     # Everything the last check found worth reporting, one row per file, with
     # the outcome stated outright rather than implied by a classifier name.
-    # Structural render only, on the same terms as results_table: it fires when
-    # the report appears (initialized flips TRUE), on reset (flips FALSE), and
-    # when the panel is revealed again (render_nonce) so a render that landed in
-    # a hidden pane is rebuilt on a visible one. Data goes through replaceData
-    # below, which preserves scroll position.
     output$duplicate_advisories_table <- renderDT({
       render_info("output$duplicate_advisories_table")
-      render_nonce()
-
-      if (!dup_report_initialized()) {
+      rep <- Typing$dup_report
+      if (is.null(rep) || nrow(rep) == 0) {
         return(datatable(
           data.frame(
             " " = paste(
-              "Nothing flagged. Start an analysis to check the selected",
+              "Nothing flagged. Run a typing analysis to check the selected",
               "genomes against this database."
             ),
             check.names = FALSE
@@ -1682,44 +1639,13 @@ server <- function(
           options = list(dom = "t", ordering = FALSE)
         ))
       }
-
-      datatable(
-        isolate(build_dup_report_df(Typing$dup_report)),
-        container = dup_report_header,
-        rownames = FALSE,
-        escape = FALSE,
-        selection = "none",
-        options = list(
-          dom = "t",
-          paging = FALSE,
-          ordering = FALSE,
-          initComplete = header_tooltips
-        )
-      )
-    })
-
-    dup_report_proxy <- dataTableProxy(
-      "duplicate_advisories_table",
-      session = session
-    )
-
-    # Push report updates without a full re-render, same as the results table.
-    observe({
-      rep <- Typing$dup_report
-      req(!is.null(rep), nrow(rep) > 0)
-      replaceData(
-        dup_report_proxy,
+      duplicate_dt(
         build_dup_report_df(rep),
-        resetPaging = FALSE,
-        rownames = FALSE
+        c("File", "Outcome", "Detail"),
+        c("File", "Outcome", "Why")
       )
     })
-
-    outputOptions(
-      output,
-      "duplicate_advisories_table",
-      suspendWhenHidden = FALSE
-    )
+    outputOptions(output, "duplicate_advisories_table", suspendWhenHidden = FALSE)
 
     # Enable/disable controls based on current status.
     # While running: lock file/folder pickers (needs both disable() + CSS class
@@ -2291,145 +2217,61 @@ server <- function(
         return()
       }
 
-      # Both decisions here are made on names alone, which is why they can be
-      # made now: the isolate name settles whether pyMLST can accept a file at
-      # all, and exclusions are the user's own. No assembly has been read yet.
-      excluded <- Typing$strains %in% Typing$excluded_strains
-      name_taken <- Typing$strains %in% existing() & !excluded
-      typeable <- !excluded & !name_taken
-
-      Typing$queued_files <- Typing$files[typeable]
-      Typing$queued_strains <- Typing$strains[typeable]
-      # Skipped files are reported without ever being hashed - the name already
-      # says everything the run acts on.
-      Typing$skipped_strains <- Typing$strains[name_taken]
+      # Only manual exclusions are filtered here. A name already in the
+      # database is NOT dropped at this point any more: it might be a genuine
+      # no-op retype (same digest, safe to skip) or a real name collision
+      # (different digest under a taken name), and only the digest check below
+      # can tell those apart - dropping by name alone made every name-conflict
+      # or retype classification below unreachable, since it never let a known
+      # name survive into `checked`. See launch_typing(), which narrows the
+      # queue down to what actually gets typed once that check is in.
+      keep <- !(Typing$strains %in% Typing$excluded_strains)
+      Typing$queued_files <- Typing$files[keep]
+      Typing$queued_strains <- Typing$strains[keep]
       log_typing(
         "Queue filtered",
         sprintf(
-          "%d to type, %d name already in database, %d excluded",
-          sum(typeable),
-          sum(name_taken),
-          sum(excluded)
+          "%d queued, %d excluded",
+          length(Typing$queued_strains),
+          sum(Typing$strains %in% Typing$excluded_strains)
         )
       )
 
-      # Seed the report now, so the Duplicate Check panel is populated whether
-      # the user goes ahead, cancels at the gate, or nothing is typeable at all.
-      # The hashing phase adds its content-axis rows to this later.
-      Typing$dup_report <- data.frame(
-        strain = Typing$skipped_strains,
-        status = rep(skipped_status, sum(name_taken)),
-        other = rep(NA_character_, sum(name_taken)),
-        stringsAsFactors = FALSE
-      )
-
+      # Nothing survives the filter: bail out before the digest pass below, which
+      # would otherwise flash its "Checking genomes" progress panel for the
+      # instant it takes to walk an empty queue. Reusing one notification id
+      # keeps repeated clicks from stacking copies of the same message.
       if (length(Typing$queued_files) == 0) {
-        log_typing("Start aborted: nothing typeable in the selection")
+        log_typing("Start aborted: nothing queued after filter")
         showNotification(
-          if (sum(name_taken) > 0) {
-            paste(
-              "Nothing to type: every selected genome's isolate name is",
-              "already in this database. Rename the files to add them as new",
-              "isolates - see the Duplicate Check panel."
-            )
-          } else {
-            "All selected genomes are excluded."
-          },
+          "All selected genomes are excluded.",
           id = ns("empty_queue"),
           type = "warning",
-          duration = 8
+          duration = 5
         )
         return()
       }
 
-      # A big skip list usually means the wrong folder was picked, so confirm
-      # before spending a run on the remainder. This lands before any hashing:
-      # the skip verdict needed no digests, so there is nothing to wait for.
-      if (sum(name_taken) > name_conflict_gate_min) {
-        log_typing(
-          "Skip list requires confirmation",
-          sprintf("%d (gate threshold %d)", sum(name_taken), name_conflict_gate_min)
-        )
-        show_skip_gate(sum(name_taken), length(Typing$strains), sum(typeable))
-        return()
-      }
-
-      if (sum(name_taken) > 0) {
-        showNotification(
-          HTML(paste0(
-            "<strong>",
-            sum(name_taken),
-            " genome(s) skipped - isolate name already in this database:",
-            "</strong><br>",
-            paste(htmlEscape(Typing$skipped_strains), collapse = "<br>"),
-            "<br><em>Rename them to add them as new isolates. See the ",
-            "\"Duplicate Check\" panel for details.</em>"
-          )),
-          type = "error",
-          duration = NULL
-        )
-      }
-
-      start_checking_phase()
-    })
-
-    # The confirmation gate raised when a selection is mostly already-named
-    # files. Cancel abandons the click entirely; confirming drops through to the
-    # hashing phase, so the queue it acts on is the one already narrowed above.
-    show_skip_gate <- function(n_skipped, n_total, n_typeable) {
-      showModal(modalDialog(
-        title = "Some genomes will be skipped",
-        size = "l",
-        easyClose = FALSE,
-        tags$p(sprintf(
-          paste(
-            "%d of the %d selected genomes will NOT be typed: their isolate",
-            "name is already in this database, and pyMLST identifies an",
-            "isolate by that name. Rename those files to add them as new",
-            "isolates, or continue and type the remaining %d."
-          ),
-          n_skipped,
-          n_total,
-          n_typeable
-        )),
-        div(
-          class = "typing-scrollpane",
-          duplicate_dt(
-            build_dup_report_df(Typing$dup_report),
-            c("File", "Why"),
-            c("File", "Why it is skipped")
-          )
-        ),
-        footer = tagList(
-          actionButton(ns("cancel_typing_gate"), "Cancel"),
-          actionButton(
-            ns("confirm_typing_gate"),
-            sprintf("Type the other %d", n_typeable),
-            class = "btn-warning"
-          )
-        )
-      ))
-    }
-
-    # Digest the queued assemblies (see app/logic/genome_hash.R). Only files the
-    # name check already cleared reach this, so the digest is asked one thing
-    # only: does some other isolate already hold this exact assembly? That is
-    # advisory and never changes the queue.
-    #
-    # Hashing several hundred assemblies takes long enough that doing it inline
-    # would freeze the event loop for the whole pass and could not be cancelled.
-    # So it becomes its own phase: seed the non-reactive check state here, flip
-    # to "checking", and let the checking observe below walk one genome per tick
-    # (filling the progress bar to 100%, interruptible via Terminate) before
-    # handing off to launch_typing().
-    start_checking_phase <- function() {
+      # Content digests of every selected assembly (see app/logic/genome_hash.R).
+      # The selection table can already say which files are typeable, since that
+      # is decided by the isolate name alone; what the digests add is the *why*
+      # behind each skip (a harmless re-run of an identical assembly vs. two
+      # different assemblies competing for one name) plus the content-axis
+      # advisory for files that are typed.
+      #
+      # Hashing several hundred assemblies takes long enough that doing it inline
+      # would freeze the event loop for the whole pass and could not be
+      # cancelled. So it becomes its own phase: seed the non-reactive check state
+      # here, flip to "checking", and let the checking observe below walk one
+      # genome per tick (filling the progress bar to 100%, interruptible via
+      # Terminate) before handing off to launch_typing().
       chk$recorded <- genome_hash_map(db_path())
       chk$known <- existing()
       chk$out <- data.frame(
         strain = Typing$queued_strains,
         file = Typing$queued_files,
         digest = NA_character_,
-        status = typeable_status,
+        status = "new",
         other = NA_character_,
         stringsAsFactors = FALSE
       )
@@ -2443,7 +2285,7 @@ server <- function(
       Typing$status <- "checking"
       log_typing(
         "Checking phase started",
-        sprintf("hashing %d typeable genome(s)", chk$n)
+        sprintf("hashing %d genome(s)", chk$n)
       )
       runjs(sprintf(
         "var el = document.getElementById('%s'); if (el) el.classList.add('is-animating');",
@@ -2461,7 +2303,7 @@ server <- function(
         # text) carries over silently.
         status = "primary"
       )
-    }
+    })
 
     # Walk the queued selection one genome per reactive tick, classifying each
     # against the database (see classify_genome). invalidateLater(0) yields to
@@ -2491,8 +2333,11 @@ server <- function(
         log_typing(
           "Checking phase complete",
           sprintf(
-            "%d hashed | %d share an assembly with a stored isolate",
-            nrow(chk$out),
+            "%d new, %d retype, %d name-conflict, %d untracked | %d share a stored assembly",
+            sum(chk$out$status == "new"),
+            sum(chk$out$status == "retype"),
+            sum(chk$out$status == "name_conflict"),
+            sum(chk$out$status == "name_untracked"),
             sum(!is.na(chk$out$other))
           )
         )
@@ -2521,25 +2366,6 @@ server <- function(
       invalidateLater(0, session)
     })
 
-    # Hold the UI for the duration of the genome check. The check hashes one
-    # assembly per reactive tick and so keeps R busy from start to finish,
-    # which is precisely the case the gesture-driven shield cannot serve: it
-    # releases on `shiny:idle`, and no idle arrives until the pass is over (see
-    # busy-shield.js, and the pt-no-lock note on the Start button). Driving it
-    # from `Typing$status` instead means every exit from the phase - completion,
-    # Terminate, a failed start - releases the hold without having to remember
-    # to, because they all have to leave "checking" to get anywhere.
-    observe({
-      runjs(sprintf(
-        "if (window.%1$s) window.%1$s();",
-        if (identical(Typing$status, "checking")) {
-          "__ptHoldShield"
-        } else {
-          "__ptReleaseShieldHold"
-        }
-      ))
-    })
-
     # Shared reset back to idle once a run is abandoned after the progress bar
     # has already started animating: the checking-terminated path above and the
     # name-conflict gate's Cancel button below both need it.
@@ -2553,22 +2379,35 @@ server <- function(
     }
 
     # Kick off the typing run once its selection has been checked. `checked` is
-    # the hashed queue from the checking phase. Every file here is already
-    # cleared to be typed - the name check did that before hashing started - so
-    # all this adds is the content-axis advisory. Split out of the Start handler
-    # so the checking phase can call it asynchronously on completion rather than
-    # everything running in one blocking event.
+    # the classification table from the checking phase (see classify_genome),
+    # whose two axes are acted on separately here:
+    #
+    #   name axis    - only `typeable_status` can be typed. Everything else is
+    #                  dropped from the queue, because pyMLST would reject it
+    #                  and burn a full cgMLST + claMLST + AMR pass per file
+    #                  doing so.
+    #   content axis - `other` never affects the queue; it is reported so a
+    #                  re-deposit under a new name is visible, and no more.
+    #
+    # A large skipped batch usually means the wrong folder was picked, so past
+    # name_conflict_gate_min this pauses for an explicit Continue/Cancel before
+    # any process starts. Split out of the Start handler so the checking phase
+    # can call it asynchronously on completion rather than everything running in
+    # one blocking event.
     launch_typing <- function(checked) {
-      # The queue was settled before hashing began and does not change here -
-      # the digest answers an advisory question only. Files whose assembly is
-      # already stored under a different isolate name join the skipped files in
-      # the report, so both senses of "duplicate" live in one panel.
-      same_assembly <- checked[!is.na(checked$other), , drop = FALSE]
-      Typing$dup_report <- rbind(
-        Typing$dup_report,
-        same_assembly[, c("strain", "status", "other")]
-      )
+      # Everything the check found worth saying something about: files that
+      # cannot be typed, and files that can but duplicate stored content.
+      Typing$dup_report <- checked[
+        checked$status != typeable_status | !is.na(checked$other),
+        ,
+        drop = FALSE
+      ]
 
+      same_assembly <- checked[
+        checked$status == typeable_status & !is.na(checked$other),
+        ,
+        drop = FALSE
+      ]
       if (nrow(same_assembly)) {
         log_typing(
           "Advisory: assemblies already in DB under another name",
@@ -2588,22 +2427,114 @@ server <- function(
         )
       }
 
+      # The queue, narrowed to what pyMLST can actually accept. Set before the
+      # gate below can return early: begin_typing_run() reads these back whether
+      # it is called from here or later from "Continue typing".
+      to_type <- checked[checked$status == typeable_status, , drop = FALSE]
+      Typing$queued_files <- to_type$file
+      Typing$queued_strains <- to_type$strain
+
+      skipped <- checked[checked$status != typeable_status, , drop = FALSE]
+      if (nrow(skipped)) {
+        log_typing(
+          "Skipped: isolate name already in the database",
+          sprintf(
+            "%d (%d retype, %d name-conflict, %d untracked)",
+            nrow(skipped),
+            sum(skipped$status == "retype"),
+            sum(skipped$status == "name_conflict"),
+            sum(skipped$status == "name_untracked")
+          )
+        )
+      }
+
+      if (nrow(to_type) == 0) {
+        log_typing("Start aborted: nothing left to type after the check")
+        showNotification(
+          paste(
+            "Nothing to type: every selected genome's isolate name is already",
+            "in this database. Rename the files to add them as new isolates."
+          ),
+          id = ns("empty_queue"),
+          type = "warning",
+          duration = 8
+        )
+        reset_to_idle()
+        return()
+      }
+
+      if (nrow(skipped) > name_conflict_gate_min) {
+        log_typing(
+          "Skip list requires confirmation",
+          sprintf("%d (gate threshold %d)", nrow(skipped), name_conflict_gate_min)
+        )
+        showModal(modalDialog(
+          title = "Some genomes will be skipped",
+          size = "l",
+          easyClose = FALSE,
+          tags$p(sprintf(
+            paste(
+              "%d of the %d selected genomes will NOT be typed: their isolate",
+              "name is already in this database, and pyMLST identifies an",
+              "isolate by that name. Rename those files to add them as new",
+              "isolates, or continue and type the remaining %d."
+            ),
+            nrow(skipped),
+            nrow(checked),
+            nrow(to_type)
+          )),
+          div(
+            class = "typing-scrollpane",
+            duplicate_dt(
+              build_dup_report_df(skipped),
+              c("File", "Detail"),
+              c("File", "Why it is skipped")
+            )
+          ),
+          footer = tagList(
+            actionButton(ns("cancel_typing_gate"), "Cancel"),
+            actionButton(
+              ns("confirm_typing_gate"),
+              sprintf("Type the other %d", nrow(to_type)),
+              class = "btn-warning"
+            )
+          )
+        ))
+        return()
+      }
+
+      if (nrow(skipped)) {
+        showNotification(
+          HTML(paste0(
+            "<strong>",
+            nrow(skipped),
+            " genome(s) skipped - isolate name already in this database:",
+            "</strong><br>",
+            paste(htmlEscape(skipped$strain), collapse = "<br>"),
+            "<br><em>Rename them to add them as new isolates. See the ",
+            "\"Duplicate Check\" panel for details.</em>"
+          )),
+          type = "error",
+          duration = NULL
+        )
+      }
+
       begin_typing_run()
     }
 
-    # Resume from the skip confirmation gate: dismiss the modal and either
-    # abandon the click entirely, or drop into the hashing phase the gate was
-    # raised in front of.
+    # Resume from the name-conflict confirmation gate: dismiss the modal and
+    # either abandon the run (back to idle, as if Start was never clicked) or
+    # proceed exactly as a sub-threshold batch would have.
     observeEvent(input$cancel_typing_gate, {
       removeModal()
-      log_typing("Skip gate cancelled")
+      log_typing("Name-conflict gate cancelled")
       reset_to_idle()
     })
 
     observeEvent(input$confirm_typing_gate, {
       removeModal()
-      log_typing("Skip gate confirmed - proceeding")
-      start_checking_phase()
+      log_typing("Name-conflict gate confirmed - proceeding")
+      begin_typing_run()
     })
 
     # Second half of launch_typing(): actually starts the background typing

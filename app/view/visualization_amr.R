@@ -1242,19 +1242,6 @@ server <- function(
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
-
-    # The three controls this module renders rather than declares, kept live
-    # because they are the only place a restored plot's gene, annotation-field
-    # and granularity selections can be applied - and by default none of them
-    # is on screen when a reopened tab restores. Shiny counts anything under a
-    # `display: none` ancestor (a collapsed accordion panel, an inactive nav
-    # tab) as hidden, which suspends the render outright; suspended, the
-    # control neither exists in the DOM for an update*Input() to reach nor
-    # re-renders to pick a value up, so a saved selection was silently dropped.
-    # See the matching note in visualization_epi.R.
-    for (id in c("genes_ui", "anno_ui", "anno_granularity_ui")) {
-      shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
-    }
     # Server-side image with no client state to lose, so it may suspend while
     # its plot tab is in the background — as the Tree and the Epi curve do.
     shiny$outputOptions(output, "amr_plot", suspendWhenHidden = TRUE)
