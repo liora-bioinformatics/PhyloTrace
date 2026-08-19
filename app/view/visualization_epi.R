@@ -648,6 +648,7 @@ server <- function(
     # controls are renderUI output, and a render replaces the control outright,
     # discarding whatever was pushed at the element it replaced. Both are
     # consumed on read, the same one-shot shape as stratify_force_default.
+    restore_interval <- shiny$reactiveVal(NULL)
     restore_stratify <- shiny$reactiveVal(NULL)
     restore_granularity <- shiny$reactiveVal(NULL)
 
@@ -712,11 +713,24 @@ server <- function(
     output$interval_ui <- shiny$renderUI({
       render_info("visualization_epi interval_ui")
       interval_rebuild()
+      # A reopened plot's saved interval, for one render, ahead of the fit. It
+      # cannot be restored by an update either: restoring re-invalidates
+      # fitted_interval() (the isolate selection it is fitted to has just been
+      # written), so this output re-renders in the same flush and would put the
+      # fitted answer back over the saved one. Consumed on read.
+      pending <- shiny$isolate(restore_interval())
+      if (!is.null(pending)) {
+        restore_interval(NULL)
+      }
       radioGroupButtons(
         ns("epi_interval"),
         "Interval",
         choices = epi_plot$EPI_INTERVALS,
-        selected = fitted_interval(),
+        selected = if (isTRUE(pending %in% epi_plot$EPI_INTERVALS)) {
+          pending
+        } else {
+          fitted_interval()
+        },
         justified = TRUE,
         size = "sm"
       )
@@ -1582,6 +1596,21 @@ server <- function(
     # `plot_area` is a cheap renderUI gating the "press Generate" prompt, and
     # the plot output has to bind through it, so it stays live while hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
+
+    # The three controls this module renders rather than declares, kept live for
+    # the same reason but a more consequential one: they are the only place a
+    # restored plot's interval, stratifier and stratifier granularity can be
+    # applied, and by default they are not on screen when a reopened tab
+    # restores. Interval lives in the Time tab, the other two in a collapsed
+    # accordion panel, and Shiny counts anything under a `display: none`
+    # ancestor as hidden - which suspends the render outright. Suspended, the
+    # control neither exists in the DOM for an update*Input() to reach nor
+    # re-renders to pick a value up, so a saved selection was silently dropped
+    # and the plot came back unstratified. They are three small selects; there
+    # is nothing to save by not building them.
+    for (id in c("interval_ui", "stratify_ui", "stratify_granularity_ui")) {
+      shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
+    }
     # The curve is a server-side ggplot with no client state to lose — see the
     # matching note in visualization_tree.R for why it may suspend while its
     # plot tab is in the background.
@@ -1622,12 +1651,14 @@ server <- function(
           "epi_background_color",
           "epi_moving_avg_color"
         ),
-        # Interval is a server-rendered radioGroupButtons (interval_ui), but by
-        # the time restore() runs the tab's own module has already completed
-        # its first render pass - see the note on epi_stratify below, which
-        # relies on the same guarantee.
-        radio_groups = "epi_interval"
       )
+
+      # Interval is renderUI-owned too (interval_ui fits it to the data), so it
+      # takes the same treatment as the two below rather than an update.
+      if (!is.null(vals$epi_interval)) {
+        restore_interval(vals$epi_interval)
+        interval_rebuild(shiny$isolate(interval_rebuild()) + 1L)
+      }
 
       # epi_stratify and its granularity are renderUI-owned controls, so they
       # are handed to the renders that own them rather than updated in place.

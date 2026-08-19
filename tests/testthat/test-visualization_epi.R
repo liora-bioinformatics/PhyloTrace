@@ -588,13 +588,19 @@ test_that("the cumulative overlay switch reaches the plot only outside Cumulativ
         sum(vapply(epi_ggplot()$layers, function(l) inherits(l$geom, "GeomStep"), logical(1)))
       }
 
-      # Stacked: bars plus the overlay's step line.
-      expect_identical(n_steps(), 1L)
+      # Stacked: the overlay's halo pass plus its visible line (see the comment
+      # in build_epi_ggplot on why the line needs the halo to stay legible over
+      # the bars). Two strata means a legend is shown, but its invisible seed
+      # layer draws as GeomCol in stacked mode, so it adds nothing here.
+      expect_identical(n_steps(), 2L)
 
-      # Cumulative's own curve is already a step line; the overlay is guarded
-      # off rather than doubled up on top of it.
+      # Cumulative's own curve is already a step line, so the overlay is
+      # guarded off rather than doubled up on top of it — if it leaked through,
+      # this would be 4 (curve + seed + the overlay's own halo + line) instead
+      # of 2. The legend seed layer draws as GeomStep here (matching the curve
+      # style) rather than GeomCol, so it still counts for one.
       session$setInputs(epi_plot_mode = "cumulative")
-      expect_identical(n_steps(), 1L)
+      expect_identical(n_steps(), 2L)
     }
   )
 })
