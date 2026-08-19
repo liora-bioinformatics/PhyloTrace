@@ -581,7 +581,7 @@ mst_auto_layout <- function(
     node_size_min = r_min,
     node_size_max = r_max,
     node_font_size = font,
-    edge_font_size = .clamp(round(font * 1.3), 8, 22),
+    edge_font_size = .clamp(round(font * 1.5), 8, 22),
     spread = spread,
     length_mode = mode,
     show_label = labels_legible,

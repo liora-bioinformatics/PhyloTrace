@@ -1554,6 +1554,11 @@ server <- function(
     # navset_hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
     shiny$outputOptions(output, "mst_plot", suspendWhenHidden = FALSE)
+    # Node size is rendered rather than declared (its range is fitted to the
+    # data), which would otherwise let it suspend inside a collapsed accordion
+    # panel - and a suspended control is one a restored plot's saved value can
+    # never reach. See the fuller note in visualization_epi.R.
+    shiny$outputOptions(output, "mst_node_size_ui", suspendWhenHidden = FALSE)
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
     # Snapshot every mst_* control for reproduction, plus the mapping layers,
