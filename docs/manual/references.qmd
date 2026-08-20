@@ -1,7 +1,0 @@
-# References {.unnumbered}
-
-Every citation in the manual links here, and each entry links back to the
-passages that cite it.
-
-::: {#refs}
-:::
