@@ -5,11 +5,19 @@
 # guide variable selection across visualization modules.
 
 box::use(
+  rlang[`%||%`],
   stats[setNames],
 )
 
 box::use(
-  app / logic / field_labels[field_label, GROUP_ORDER, group_of],
+  app /
+    logic /
+    field_labels[
+      amr_field_map,
+      field_label,
+      GROUP_ORDER,
+      group_of,
+    ],
   app / logic / field_types[field_types, TYPE_LABELS],
 )
 
@@ -147,6 +155,8 @@ CONTINUOUS_TYPES <- c("integer", "numeric", "date", "datetime")
 #' @param mlst_cols Explicit vector of MLST column names.
 #' @param amr_cols Explicit vector of AMR column names.
 #' @param custom_cols Explicit vector of custom column names.
+#' @param amr_map What each AMR column is, from `field_labels$amr_field_map()`;
+#'   read off `metadata`'s own attributes by default.
 #' @return Data frame containing summary profile metrics per column.
 #' @export
 field_profiles <- function(
@@ -154,7 +164,8 @@ field_profiles <- function(
   types = NULL,
   mlst_cols = NULL,
   amr_cols = NULL,
-  custom_cols = NULL
+  custom_cols = NULL,
+  amr_map = amr_field_map(metadata)
 ) {
   cols <- names(metadata)
   n <- nrow(metadata)
@@ -183,10 +194,32 @@ field_profiles <- function(
   # (n levels, every bucket a singleton) genuinely cannot group.
   groupable <- levels >= 1L & levels < n
 
+  # An AMR screen is dozens of columns under one group heading, and the two
+  # kinds are not interchangeable: a drug-class column holds the isolate's genes
+  # in that class, a gene column holds abritamr's call on one gene. `subgroup`
+  # files both under the class they belong to, and `role` is what tells the two
+  # apart wherever one of them has to be treated differently (the tree's class
+  # heatmap, the sub-text below).
+  hit <- match(cols, amr_map$field)
+  role <- ifelse(is.na(hit), "", amr_map$role[hit])
+  subgroup <- ifelse(is.na(hit), "", amr_map$subgroup[hit])
+  # A gene column's name is a position, not a gene (see AMR_GENE_PREFIX), so
+  # the only place its label can come from is the map. A class column says so
+  # in words: picked, it is shown on its own — out from under the drug-class
+  # heading that would otherwise be the only thing separating "Efflux" the
+  # class from a gene of the same name.
+  label <- vapply(cols, field_label, character(1), USE.NAMES = FALSE)
+  gene <- !is.na(hit) & role == "gene"
+  label[gene] <- amr_map$gene[hit[gene]]
+  klass <- !is.na(hit) & role == "class"
+  label[klass] <- paste(amr_map$class[hit[klass]], "genes")
+
   out <- data.frame(
     field = cols,
-    label = vapply(cols, field_label, character(1)),
+    label = label,
     group = group,
+    subgroup = subgroup,
+    role = role,
     type = type,
     type_label = unname(TYPE_LABELS[match(type, names(TYPE_LABELS))]),
     levels = as.integer(levels),
@@ -203,9 +236,14 @@ field_profiles <- function(
   )
   out$type_label[is.na(out$type_label)] <- "Text"
 
-  # Sort by category group order, groupability status, quality rank, and field name
+  # Sort by category group order, then — inside the AMR group only, where
+  # `subgroup` is set — by drug class with the class column ahead of its own
+  # genes, then by groupability status, quality rank, and field name. The two
+  # AMR terms are constant outside that group, so they change nothing there.
   ord <- order(
     match(out$group, GROUP_ORDER),
+    out$subgroup,
+    out$role != "class",
     !out$groupable,
     out$rank,
     out$field
@@ -220,6 +258,8 @@ field_profiles <- function(
     field = character(0),
     label = character(0),
     group = character(0),
+    subgroup = character(0),
+    role = character(0),
     type = character(0),
     type_label = character(0),
     levels = integer(0),
@@ -235,6 +275,15 @@ field_profiles <- function(
   )
 }
 
+# What an AMR column measures, in place of the declared type — which for every
+# one of them is the same word ("Category") and so says nothing about the
+# difference that matters: a class column groups isolates by which genes of that
+# class they carry, a gene column by abritamr's call on one gene.
+AMR_ROLE_LABELS <- c(
+  class = "Genes in class",
+  gene = "Gene call"
+)
+
 #' Generate Subtext Option Description
 #'
 #' Formats descriptive text labels (e.g. "46 values · Text") for option choices,
@@ -245,11 +294,15 @@ field_profiles <- function(
 #' @export
 profile_description <- function(profiles) {
   n <- profiles$levels
+  kind <- profiles$type_label
+  role <- profiles$role %||% rep("", length(kind))
+  named <- role %in% names(AMR_ROLE_LABELS)
+  kind[named] <- unname(AMR_ROLE_LABELS[role[named]])
   base <- sprintf(
     "%d %s · %s",
     n,
     ifelse(n == 1L, "value", "values"),
-    profiles$type_label
+    kind
   )
   ifelse(profiles$groupable, base, paste(base, "— cannot group"))
 }

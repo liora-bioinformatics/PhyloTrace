@@ -390,6 +390,68 @@ test_that("a cluster's region follows its own subtree", {
   expect_equal(blobs[["Cluster 1"]]$radius, 18)
 })
 
+test_that("a region never reaches a node that is not in the cluster", {
+  # Membership is a claim the threshold made. A region wide enough to cover the
+  # node beside it makes the drawing say the opposite, and a reader counting
+  # coloured dots gets a different answer from the legend.
+  coords <- data.frame(
+    id = c("a", "b", "c"),
+    x = c(0, 100, 140),
+    y = c(0, 0, 0),
+    stringsAsFactors = FALSE
+  )
+  cl <- mst_plot$mst_clusters(coords$id, c("a", "b"), c("b", "c"), c(1, 90), 10)
+  expect_true(is.na(cl$node[[3]]))
+  # A padding wide enough to swallow "c" outright — 12 + 60 reaches x = 172.
+  blobs <- mst_plot$mst_cluster_blobs(
+    coords, cl$node, cl$edge, c("a", "b"), c("b", "c"),
+    radius = 12, pad = 60
+  )
+  r <- blobs[["Cluster 1"]]$radius
+  expect_true(r < 72)
+  # Daylight, not a touch: the region stops short of the foreign node's rim.
+  expect_true(100 + r < 140 - 12)
+
+  # A cluster with nothing near it still gets the padding it asked for.
+  far <- coords
+  far$x[[3]] <- 900
+  blobs <- mst_plot$mst_cluster_blobs(
+    far, cl$node, cl$edge, c("a", "b"), c("b", "c"),
+    radius = 12, pad = 60
+  )
+  expect_equal(blobs[["Cluster 1"]]$radius, 72)
+})
+
+test_that("no region on a real-shaped tree covers a node outside it", {
+  set.seed(11)
+  edges <- random_tree(60, "random")
+  w <- sample(c(1, 2, 3, 4, 30, 90), nrow(edges), replace = TRUE)
+  ids <- unique(c(edges$from, edges$to))
+  cl <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 5)
+  lens <- mst_plot$mst_edge_lengths(w, "log", spread = 15)
+  coords <- mst_plot$mst_layout(edges$from, edges$to, lens$length, ids)
+  radius <- rep(14, length(ids))
+  blobs <- mst_plot$mst_cluster_blobs(
+    coords, cl$node, cl$edge, edges$from, edges$to,
+    radius = radius, pad = 40
+  )
+  expect_true(length(blobs) > 1L)
+  for (nm in names(blobs)) {
+    b <- blobs[[nm]]
+    outside <- which(is.na(cl$node) | cl$node != nm)
+    for (o in outside) {
+      d <- min(sqrt((coords$x[o] - b$x)^2 + (coords$y[o] - b$y)^2))
+      if (nrow(b$seg)) {
+        d <- min(d, impl$.point_seg_dist(
+          coords$x[o], coords$y[o],
+          b$seg[, 1], b$seg[, 2], b$seg[, 3], b$seg[, 4]
+        ))
+      }
+      expect_gt(d, b$radius + radius[[o]])
+    }
+  }
+})
+
 # --- 5. Node content ---------------------------------------------------------
 
 test_that("a merged node reports how many isolates it stands for", {
@@ -516,6 +578,29 @@ test_that("the legend names every cluster and the threshold that made them", {
   expect_identical(kinds, c("header", "key", "key"))
   expect_true(grepl("12 alleles", labels[[1]]))
   expect_true(grepl("7 isolates", labels[[2]]))
+})
+
+test_that("the legend accounts for the isolates no cluster claimed", {
+  # The cluster keys are not a partition on their own — a singleton is in no
+  # cluster — so without this the reader cannot tell 249 clustered isolates out
+  # of 253 from 249 out of 249.
+  clusters <- data.frame(
+    cluster = "Cluster 1", nodes = 3L, isolates = 9L, stringsAsFactors = FALSE
+  )
+  colors <- stats::setNames("#111111", "Cluster 1")
+  labels <- function(...) {
+    vapply(
+      mst_plot$mst_legend_items(clusters = clusters, cluster_colors = colors, ...),
+      function(i) i$label,
+      character(1)
+    )
+  }
+  expect_true(any(grepl("Unclustered . 4 isolates", labels(unclustered = 4))))
+  # Counted in isolates, and singular when there is one of them.
+  expect_true(any(grepl("Unclustered . 1 isolate$", labels(unclustered = 1))))
+  # Nothing left over, nothing to say.
+  expect_false(any(grepl("Unclustered", labels(unclustered = 0))))
+  expect_false(any(grepl("Unclustered", labels())))
 })
 
 test_that("a legend too long to draw is capped and says how much it left out", {
@@ -946,6 +1031,61 @@ test_that("the caption states which length transform drew the branches", {
     mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
   )$x$events$afterDrawing
   expect_true(grepl("not to scale", drawn, fixed = TRUE))
+})
+
+test_that("the caption states what the drawing is made of", {
+  # Node count is the only place the collapse — zero-distance merging here — is
+  # stated: six isolates drawn as five dots is a different claim from six dots.
+  expect_match(
+    mst_plot$mst_stats_caption(c(1, 2, 1, 1, 1), c(1, 3, 400, 2)),
+    "^6 isolates in 5 nodes;"
+  )
+  # Median against mean is the long-tailed case the log scale exists for, so
+  # both are named rather than one summary.
+  expect_match(
+    mst_plot$mst_stats_caption(c(1, 2, 1, 1, 1), c(1, 3, 400, 2)),
+    "allelic distance median 2.5, mean 101.5, range 1.400"
+  )
+  # A tree of one node has no branches to summarise, and no plural either.
+  expect_identical(mst_plot$mst_stats_caption(1, numeric(0)), "1 isolate in 1 node.")
+  expect_identical(mst_plot$mst_stats_caption(numeric(0), numeric(0)), "")
+})
+
+test_that("the summary statistics ride on the caption bar and its switch", {
+  drawn <- function(...) {
+    opts <- base_opts(...)
+    mst_plot$build_mst_visnetwork(
+      demo_graph(), demo_meta(), opts,
+      mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+    )$x$events$afterDrawing
+  }
+  expect_true(grepl("6 isolates in 5 nodes", drawn(), fixed = TRUE))
+  expect_false(grepl("6 isolates in 5 nodes", drawn(show_caption = FALSE), fixed = TRUE))
+  # Collapsing is what the node count is there to report.
+  expect_true(grepl(
+    "6 isolates in 2 nodes",
+    drawn(collapse_threshold = 3),
+    fixed = TRUE
+  ))
+})
+
+test_that("the frames count the unclustered isolates for the legend", {
+  # At 3, everything but "e" (400 alleles out) joins one cluster.
+  fr <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 3)
+  )
+  labels <- vapply(fr$legend, function(i) i$label, character(1))
+  expect_true(any(grepl("Unclustered . 1 isolate", labels)))
+  # And nothing is left over once the threshold takes the whole tree.
+  loose <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 400)
+  )
+  expect_false(any(grepl(
+    "Unclustered",
+    vapply(loose$legend, function(i) i$label, character(1))
+  )))
 })
 
 test_that("the cap multiplier is a control, not just a constant", {

@@ -23,7 +23,14 @@ box::use(
   app / logic / db_compat[REF_SOUCHE],
   app / logic / db_connect[connect],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
-  app / logic / field_labels[AMR_COL_PREFIX, MLST_COL_PREFIX],
+  app /
+    logic /
+    field_labels[
+      AMR_COL_PREFIX,
+      AMR_GENE_PREFIX,
+      AMR_SECTIONS,
+      MLST_COL_PREFIX,
+    ],
   app / logic / logging[log_event],
   app / logic / mlst_repo[canonical_species],
   rlang[`%||%`],
@@ -475,10 +482,11 @@ append_classical_mlst <- function(meta, db_path) {
 
 #' Load Summary AMR Results
 #'
-#' Pivots antimicrobial resistance summary records into a wide per-isolate display layout.
+#' Pivots antimicrobial resistance summary records into a wide per-isolate
+#' layout: one column per drug class, holding that isolate's genes in the class.
 #'
 #' @param db_path Character path to the SQLite database file.
-#' @return Wide data frame with drug class profile summary columns, or `NULL` if unavailable.
+#' @return Wide data frame with one column per drug class, or `NULL` if unavailable.
 #' @export
 load_amr <- function(db_path) {
   if (
@@ -508,19 +516,6 @@ load_amr <- function(db_path) {
   isolates <- unique(as$isolate)
   out <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
 
-  # Resistance profile: the drug classes with a confident (matches) hit.
-  profile <- vapply(
-    isolates,
-    function(s) {
-      cls <- unique(as$drug_class[
-        as$isolate == s & as$section == "matches"
-      ])
-      if (length(cls)) paste(cls, collapse = ", ") else NA_character_
-    },
-    character(1)
-  )
-  out[[paste0(AMR_COL_PREFIX, "profile")]] <- unname(profile)
-
   # Which section a drug class belongs to. abritamr reports resistance
   # (matches/partials) and virulence/stress in separate files, and a class only
   # ever comes from one of them — so this labels the column rather than
@@ -541,14 +536,68 @@ load_amr <- function(db_path) {
     class_section[paste0(AMR_COL_PREFIX, dc)] <- if (
       all(as$section[as$drug_class == dc] == "virulence")
     ) {
-      "Virulence / stress"
+      AMR_SECTIONS[["virulence"]]
     } else {
-      "Resistance"
+      AMR_SECTIONS[["resistance"]]
     }
   }
 
   attr(out, "amr_class_sections") <- class_section
+  # The isolates the screen actually ran on. Everything else in a metadata
+  # frame has no AMR row at all, and "no gene found" and "never screened" are
+  # not the same answer — see `append_amr(absent = )`.
+  attr(out, "screened") <- isolates
   out
+}
+
+#' The value an AMR column takes where the screen ran and found nothing.
+#'
+#' Kept out of the loaders, which leave NA: the database browser needs the NA
+#' to draw an empty cell and to keep a factor column's level dropdown honest.
+#' A *plot* needs the opposite — an unmapped level reaching a legend as "Not
+#' recorded" says the screen never ran, when in fact it ran and the gene was
+#' not there — so the visualization layer asks for the fill and the browser
+#' does not.
+#' @export
+AMR_ABSENT <- "Absent"
+
+# Fill the appended AMR columns for the isolates the screen actually covered.
+#
+# The distinction is the whole point: an isolate with no row in `amr_summary`
+# was never screened and keeps its NA, while one that appears there was
+# screened, so an NA in any of its AMR columns means the gene or class was
+# looked for and not found.
+.fill_amr_absent <- function(meta, cols, screened, absent) {
+  if (is.null(absent) || !length(cols) || !length(screened)) {
+    return(meta)
+  }
+  covered <- meta$isolate %in% screened
+  for (col in cols) {
+    v <- meta[[col]]
+    gap <- covered & (is.na(v) | !nzchar(trimws(as.character(v))))
+    if (!any(gap)) {
+      next
+    }
+    if (is.factor(v)) {
+      levels(v) <- c(levels(v), absent)
+    } else {
+      v <- as.character(v)
+    }
+    v[gap] <- absent
+    meta[[col]] <- v
+  }
+  meta
+}
+
+# Both AMR appenders record what they added under one attribute, and a metadata
+# frame may be run through both. Union rather than assignment, so whichever
+# runs second does not silently drop the other's columns.
+.note_amr_cols <- function(meta, added) {
+  attr(meta, "amr_cols") <- union(
+    attr(meta, "amr_cols", exact = TRUE) %||% character(0),
+    added
+  )
+  meta
 }
 
 #' Append AMR Summary Data to Metadata
@@ -557,9 +606,11 @@ load_amr <- function(db_path) {
 #'
 #' @param meta Metadata data frame with an `isolate` column.
 #' @param db_path Character path to the SQLite database file.
+#' @param absent Value to write where the screen ran and found nothing; NULL
+#'   (the default) leaves those cells NA. See `AMR_ABSENT`.
 #' @return Input data frame extended with AMR summary columns, tracking added fields in `"amr_cols"`.
 #' @export
-append_amr <- function(meta, db_path) {
+append_amr <- function(meta, db_path, absent = NULL) {
   if (
     !is.data.frame(meta) || !nrow(meta) || isFALSE("isolate" %in% names(meta))
   ) {
@@ -576,12 +627,16 @@ append_amr <- function(meta, db_path) {
         meta[[col]] <- amr[[col]][idx]
       }
       appended <- add
+      meta <- .fill_amr_absent(
+        meta, add, attr(amr, "screened", exact = TRUE), absent
+      )
     }
   }
 
-  attr(meta, "amr_cols") <- appended
+  meta <- .note_amr_cols(meta, appended)
   # Which of them are resistance and which virulence/stress, for consumers that
-  # group AMR columns when offering them (the tree's heatmap picker).
+  # group AMR columns when offering them (the variable pickers, the tree's
+  # heatmap picker).
   attr(meta, "amr_class_sections") <- if (is.null(amr)) {
     character(0)
   } else {
@@ -646,7 +701,7 @@ load_amr_matrix <- function(db_path) {
   for (grp in unique(as$drug_class)) {
     for (gene in unique(as$gene[as$drug_class == grp])) {
       n <- n + 1L
-      col <- paste0(AMR_COL_PREFIX, "g", n)
+      col <- paste0(AMR_COL_PREFIX, AMR_GENE_PREFIX, n)
       sub <- as[as$drug_class == grp & as$gene == gene, , drop = FALSE]
       best <- tapply(unname(rank[sub$state]), sub$isolate, min)
       out[[col]] <- factor(
@@ -656,9 +711,9 @@ load_amr_matrix <- function(db_path) {
       col_group[col] <- grp
       col_gene[col] <- gene
       col_section[col] <- if (all(sub$section == "virulence")) {
-        "Virulence / stress"
+        AMR_SECTIONS[["virulence"]]
       } else {
-        "Resistance"
+        AMR_SECTIONS[["resistance"]]
       }
     }
   }
@@ -666,18 +721,24 @@ load_amr_matrix <- function(db_path) {
   attr(out, "amr_gene_groups") <- col_group
   attr(out, "amr_gene_labels") <- col_gene
   attr(out, "amr_gene_sections") <- col_section
+  attr(out, "screened") <- isolates
   out
 }
 
 #' Append Detailed AMR Gene Matrix to Metadata
 #'
-#' Joins individual AMR gene call state factors onto a metadata data frame.
+#' Joins individual AMR gene call state factors onto a metadata data frame. The
+#' column names are positional (`amr_g1`, ...); the gene and drug class each one
+#' stands for travel beside the data, in the `"amr_gene_labels"` and
+#' `"amr_gene_groups"` attributes that `field_labels$amr_field_map()` reads.
 #'
 #' @param meta Metadata data frame containing an `isolate` column.
 #' @param db_path Character path to the SQLite database file.
+#' @param absent Value to write where the screen ran and the gene was not
+#'   found; NULL (the default) leaves those cells NA. See `AMR_ABSENT`.
 #' @return Data frame augmented with individual AMR gene presence columns.
 #' @export
-append_amr_matrix <- function(meta, db_path) {
+append_amr_matrix <- function(meta, db_path, absent = NULL) {
   if (
     !is.data.frame(meta) || !nrow(meta) || isFALSE("isolate" %in% names(meta))
   ) {
@@ -687,6 +748,7 @@ append_amr_matrix <- function(meta, db_path) {
   appended <- character(0)
   groups <- character(0)
   labels <- character(0)
+  sections <- character(0)
   mat <- load_amr_matrix(db_path)
   if (!is.null(mat)) {
     add <- setdiff(names(mat), c("isolate", names(meta)))
@@ -696,16 +758,23 @@ append_amr_matrix <- function(meta, db_path) {
         meta[[col]] <- mat[[col]][idx]
       }
       appended <- add
-      all_groups <- attr(mat, "amr_gene_groups", exact = TRUE)
-      all_labels <- attr(mat, "amr_gene_labels", exact = TRUE)
-      groups <- all_groups[intersect(add, names(all_groups))]
-      labels <- all_labels[intersect(add, names(all_labels))]
+      carry <- function(name) {
+        all <- attr(mat, name, exact = TRUE) %||% character(0)
+        all[intersect(add, names(all))]
+      }
+      groups <- carry("amr_gene_groups")
+      labels <- carry("amr_gene_labels")
+      sections <- carry("amr_gene_sections")
+      meta <- .fill_amr_absent(
+        meta, add, attr(mat, "screened", exact = TRUE), absent
+      )
     }
   }
 
-  attr(meta, "amr_cols") <- appended
+  meta <- .note_amr_cols(meta, appended)
   attr(meta, "amr_gene_groups") <- groups
   attr(meta, "amr_gene_labels") <- labels
+  attr(meta, "amr_gene_sections") <- sections
   meta
 }
 

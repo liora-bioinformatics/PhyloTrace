@@ -59,7 +59,14 @@ box::use(
 box::use(
   app / logic / analysis_store,
   app / logic / custom_fields[append_custom],
-  app / logic / database_functions[append_amr, append_classical_mlst],
+  app /
+    logic /
+    database_functions[
+      AMR_ABSENT,
+      append_amr,
+      append_amr_matrix,
+      append_classical_mlst,
+    ],
   app / logic / db_events,
   app / logic / db_staging[list_imported_sets],
   app / logic / db_store,
@@ -392,18 +399,34 @@ server <- function(
       db_events$depend(db_rev, "custom_fields", "amr")
       req(db_path())
       # Surface the classical-MLST columns (ST + per-locus alleles), the
-      # AMR-screening columns (the resistance profile plus one per drug class)
-      # and the user-defined custom variables as ordinary metadata so every
-      # engine can label, colour and map by them. Display only — no appender
-      # writes anything back to the database. Each records what it added in its
-      # own attribute ("mlst_cols" / "amr_cols" / "custom_cols"), which
-      # grouped_field_choices() turns into the optgroups the engines' field
-      # pickers show; engines that pass no explicit sets get the same grouping
-      # from the columns' name prefixes.
+      # AMR-screening columns and the user-defined custom variables as ordinary
+      # metadata so every engine can label, colour and map by them. Display
+      # only — no appender writes anything back to the database. Each records
+      # what it added in its own attribute ("mlst_cols" / "amr_cols" /
+      # "custom_cols"), which grouped_field_choices() turns into the optgroups
+      # the engines' field pickers show; engines that pass no explicit sets get
+      # the same grouping from the columns' name prefixes.
+      #
+      # AMR comes in at both levels abritamr reports at — one column per drug
+      # class, holding the genes an isolate carries in it, and one per gene,
+      # holding the call on that gene. Which of the two a question is about is
+      # the user's to decide ("is anything in this lineage carrying a
+      # carbapenemase?" against "is it blaOXA-2 specifically?"), and offering
+      # only the class level answered the first and made the second
+      # unaskable. `amr_field_map()` keeps the two apart downstream.
+      #
+      # `AMR_ABSENT` because a plot legend is where the difference between "the
+      # screen found nothing" and "there was no screen" becomes visible: both
+      # arrive as NA and only the first is an answer.
       append_custom(
-        append_amr(
-          append_classical_mlst(store$metadata(), db_path()),
-          db_path()
+        append_amr_matrix(
+          append_amr(
+            append_classical_mlst(store$metadata(), db_path()),
+            db_path(),
+            absent = AMR_ABSENT
+          ),
+          db_path(),
+          absent = AMR_ABSENT
         ),
         db_path()
       )

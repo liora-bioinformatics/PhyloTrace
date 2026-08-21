@@ -225,12 +225,24 @@ ui <- function(id) {
           width = 300,
           open = TRUE,
           fillable = TRUE,
+          # Scoped hook so main.scss can stretch bslib's own .sidebar-content
+          # to the aside's full height (fillable = TRUE alone does not do
+          # this - it only makes .sidebar-content a fill container for its
+          # children, not itself filled by its parent). Named for the
+          # instance, not the shared .sidebar/.sidebar-content classes other
+          # modules' sidebars use too.
+          class = "browse-entries-sidebar",
           as_fill_carrier(
             div(
-              class = "sidebar-control",
+              # browse-sidebar: scoped to this instance, not the shared
+              # .sidebar-control (database_custom.R uses that one too) -
+              # stretches this column to the sidebar's full height so
+              # .selection-stats-slot's margin-top:auto can actually push it
+              # to the bottom edge instead of sitting right under Remove.
+              class = "sidebar-control browse-sidebar",
               div(
                 class = "sidebar-control-group",
-                div(class = "control-group-label", "Column Selection"),
+                div(class = "control-group-label", "View Columns "),
                 uiOutput(ns("col_picker_ui"))
               ),
               div(
@@ -247,8 +259,7 @@ ui <- function(id) {
                   selected = "off",
                   justified = TRUE,
                   width = "100%"
-                ),
-                uiOutput(ns("selection_stats_ui"))
+                )
               ),
               div(
                 class = "sidebar-control-group",
@@ -283,6 +294,14 @@ ui <- function(id) {
                     icon = icon("trash")
                   )
                 )
+              ),
+              # Deliberately the last child: the read-out changes height as
+              # the selection changes, and from the end of the column that can
+              # never shift the controls above it (see .selection-stats-slot
+              # in main.scss).
+              div(
+                class = "sidebar-control-group selection-stats-slot",
+                uiOutput(ns("selection_stats_ui"))
               )
             )
           )
@@ -1701,19 +1720,24 @@ server <- function(
               " save or discard your changes first if you want to keep them."
             )
           },
+          # Names the selection explicitly: the button takes whatever is
+          # selected in the table right now (see remove_candidates()), not a
+          # list picked in this dialog, so the confirmation has to say where
+          # the isolates came from.
           if (length(isolates) == 1) {
             div(
-              div('Permanently remove'),
+              div("Permanently remove the isolate selected in the table"),
               div(class = "dest-label is-empty", isolates),
-              div('from the database? This cannot be undone.')
+              div("from the database? This cannot be undone.")
             )
           } else {
             div(
               style = "margin-bottom: 1rem;",
               paste0(
-                "Permanently remove ",
+                "Permanently remove the ",
                 length(isolates),
-                " isolates from the database? This cannot be undone."
+                " isolates currently selected in the table from the database?",
+                " This cannot be undone."
               )
             )
           },

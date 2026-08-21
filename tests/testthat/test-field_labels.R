@@ -1,14 +1,49 @@
 box::use(
-  testthat[test_that, expect_identical, expect_named, expect_type],
+  testthat[
+    expect_false,
+    expect_identical,
+    expect_named,
+    expect_true,
+    expect_type,
+    test_that,
+  ],
   app /
     logic /
     field_labels[
+      amr_field_map,
       CUSTOM_COL_PREFIX,
       field_label,
       grouped_field_choices,
       MLST_COL_PREFIX
     ],
 )
+
+# A metadata frame as the two AMR appenders leave it: two drug-class columns and
+# two gene columns, with the attributes that say which gene and class each of
+# the latter stands for.
+amr_meta <- function() {
+  meta <- data.frame(
+    isolate = c("A", "B"),
+    `amr_Beta-lactam` = c("blaOXA-2", ""),
+    amr_Metal = c("merA", "merA, merD"),
+    amr_g1 = c("Match", "Absent"),
+    amr_g2 = c("Absent", "Match"),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  attr(meta, "amr_cols") <- c("amr_Beta-lactam", "amr_Metal", "amr_g1", "amr_g2")
+  attr(meta, "amr_class_sections") <- c(
+    `amr_Beta-lactam` = "Resistance",
+    amr_Metal = "Virulence / stress"
+  )
+  attr(meta, "amr_gene_labels") <- c(amr_g1 = "blaOXA-2", amr_g2 = "merD")
+  attr(meta, "amr_gene_groups") <- c(amr_g1 = "Beta-lactam", amr_g2 = "Metal")
+  attr(meta, "amr_gene_sections") <- c(
+    amr_g1 = "Resistance",
+    amr_g2 = "Virulence / stress"
+  )
+  meta
+}
 
 test_that("grouped_field_choices stays flat without MLST columns", {
   fields <- c("isolate", "geo_loc_name_country")
@@ -73,4 +108,44 @@ test_that("grouped_field_choices splits custom variables into their own group", 
 
 test_that("field_label prettifies a custom variable's own name", {
   expect_identical(field_label("custom_sampling_site"), "Sampling Site")
+})
+
+test_that("amr_field_map tells a gene column from a drug-class one", {
+  map <- amr_field_map(amr_meta())
+  expect_identical(map$field, c("amr_Beta-lactam", "amr_Metal", "amr_g1", "amr_g2"))
+  expect_identical(map$role, c("class", "class", "gene", "gene"))
+  # A class column carries its class in its own name; a gene column cannot, so
+  # the gene and the class it belongs to come off the attributes.
+  expect_identical(map$class, c("Beta-lactam", "Metal", "Beta-lactam", "Metal"))
+  expect_identical(map$gene, c(NA, NA, "blaOXA-2", "merD"))
+  # A gene is filed with its class, so the two arrive together in a picker.
+  expect_identical(map$subgroup[[1]], map$subgroup[[3]])
+  expect_identical(map$subgroup[[1]], "AMR \u00b7 Beta-lactam")
+  # Virulence and stress do not read as resistance.
+  expect_identical(map$subgroup[[2]], "Virulence / stress \u00b7 Metal")
+})
+
+test_that("amr_field_map survives what abritamr can actually report", {
+  # No AMR at all.
+  expect_identical(nrow(amr_field_map(data.frame(isolate = "A"))), 0L)
+
+  # An empty drug class and an unnamed gene: virtual-select draws a row per
+  # group whatever the label says, so a blank one is an unselectable line.
+  meta <- data.frame(isolate = "A", amr_g1 = "Match", stringsAsFactors = FALSE)
+  attr(meta, "amr_cols") <- "amr_g1"
+  attr(meta, "amr_gene_labels") <- c(amr_g1 = "  ")
+  attr(meta, "amr_gene_groups") <- c(amr_g1 = "")
+  map <- amr_field_map(meta)
+  expect_identical(map$class, "Other")
+  expect_identical(map$gene, "amr_g1")
+  # An unknown section is resistance, which is what abritamr reports by default.
+  expect_identical(map$subgroup, "AMR \u00b7 Other")
+})
+
+test_that("field_label no longer claims an AMR profile column", {
+  # The comma-joined summary of every other AMR column is gone: it could not be
+  # mapped to anything a reader could act on.
+  expect_identical(field_label("amr_Beta-lactam"), "Beta-lactam")
+  expect_false(identical(field_label("amr_profile"), "AMR Profile"))
+  expect_true(nzchar(field_label("amr_profile")))
 })

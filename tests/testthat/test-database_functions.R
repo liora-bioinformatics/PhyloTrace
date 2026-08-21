@@ -18,10 +18,48 @@ box::use(
       read_metadata_table,
       remove_isolates,
       save_metadata_table,
-      sync_metadata_table
+      sync_metadata_table,
+      AMR_ABSENT,
+      append_amr,
+      append_amr_matrix
     ],
-  app / logic / field_labels[MLST_COL_PREFIX],
+  app / logic / field_labels[amr_field_map, MLST_COL_PREFIX],
 )
+
+# An amr_summary shaped like abritamr's own output: two drug classes, one of
+# them virulence, and two genes inside one class. `blank` is an isolate with no
+# AMR rows at all — never screened, which is not the same as screened clean.
+seed_amr_summary <- function(path, rows) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE IF NOT EXISTS amr_summary (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
+  )
+  for (i in seq_len(nrow(rows))) {
+    DBI::dbExecute(
+      con,
+      "INSERT INTO amr_summary (isolate, section, drug_class, genes)
+         VALUES (?, ?, ?, ?)",
+      params = as.list(unname(rows[i, ]))
+    )
+  }
+  invisible(path)
+}
+
+amr_db <- function(dir) {
+  path <- file.path(dir, "amr.db")
+  seed_amr_summary(path, data.frame(
+    isolate = c("A", "A", "A", "B"),
+    section = c("matches", "matches", "virulence", "matches"),
+    drug_class = c("Beta-lactam", "Beta-lactam", "Metal", "Beta-lactam"),
+    genes = c("blaOXA-2", "blaPDC-5*", "merA", "blaOXA-2"),
+    stringsAsFactors = FALSE
+  ))
+  path
+}
 
 # A subset of the real pymlst `classical_mlst` schema: one row per (isolate,
 # locus), with the strain-level ST and status repeated across the isolate's
@@ -530,4 +568,55 @@ test_that("save_metadata_table is atomic: a mid-way failure writes nothing", {
 
   expect_identical(n, 0L)
   expect_identical(read_metadata_table(path), before)
+})
+
+# --- AMR columns -------------------------------------------------------------
+
+test_that("AMR arrives at both levels, and the profile summary is gone", {
+  path <- amr_db(local_tempdir())
+  meta <- data.frame(isolate = c("A", "B"), stringsAsFactors = FALSE)
+  out <- append_amr_matrix(append_amr(meta, path), path)
+
+  map <- amr_field_map(out)
+  # One column per drug class, and one per gene inside it.
+  expect_setequal(map$field[map$role == "class"], c("amr_Beta-lactam", "amr_Metal"))
+  expect_setequal(map$gene[map$role == "gene"], c("blaOXA-2", "blaPDC-5", "merA"))
+  # The comma-joined summary of every class is no longer built at all.
+  expect_false("amr_profile" %in% names(out))
+
+  # Running both appenders keeps both sets: each records what it added under the
+  # same attribute, and the second used to overwrite the first.
+  expect_setequal(attr(out, "amr_cols"), map$field)
+})
+
+test_that("a class column holds the isolate's genes, a gene column the call", {
+  path <- amr_db(local_tempdir())
+  meta <- data.frame(isolate = c("A", "B"), stringsAsFactors = FALSE)
+  out <- append_amr_matrix(append_amr(meta, path), path)
+  map <- amr_field_map(out)
+
+  expect_identical(out$`amr_Beta-lactam`, c("blaOXA-2, blaPDC-5*", "blaOXA-2"))
+  # abritamr's own quality flag comes off the name and becomes the call state.
+  inexact <- map$field[!is.na(map$gene) & map$gene == "blaPDC-5"]
+  expect_identical(as.character(out[[inexact]]), c("Inexact", NA))
+})
+
+test_that("a screened isolate that carries nothing says so; an unscreened one does not", {
+  # Both reach a plot as NA and only one of them is an answer: "the screen ran
+  # and found nothing" against "this isolate was never screened".
+  path <- amr_db(local_tempdir())
+  meta <- data.frame(isolate = c("A", "B", "C"), stringsAsFactors = FALSE)
+
+  raw <- append_amr_matrix(append_amr(meta, path), path)
+  filled <- append_amr_matrix(
+    append_amr(meta, path, absent = AMR_ABSENT), path, absent = AMR_ABSENT
+  )
+  map <- amr_field_map(filled)
+  gene <- map$field[!is.na(map$gene) & map$gene == "merA"]
+
+  # The browser keeps the NA it draws an empty cell from.
+  expect_true(is.na(raw[[gene]][[2]]))
+  # B was screened and has no merA; C was never screened at all.
+  expect_identical(as.character(filled[[gene]]), c("Match", AMR_ABSENT, NA))
+  expect_identical(filled$amr_Metal, c("merA", AMR_ABSENT, NA))
 })

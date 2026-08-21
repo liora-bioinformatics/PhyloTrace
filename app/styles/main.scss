@@ -2042,6 +2042,39 @@ $session-new-tint: 20%;
     color: var(--bs-secondary-color);
 }
 
+// bslib's own .sidebar-content (inside the <aside class="sidebar"> that
+// `class = "browse-entries-sidebar"` on sidebar() tags - see
+// database_browser.R) is a block-level child of a plain `display: block`
+// aside: it shrink-wraps to its own content's height (fillable = TRUE alone
+// only makes it a fill container *for its children*, it does not itself get
+// stretched by its parent). height: 100% is what makes it fill the aside's
+// full height instead.
+.browse-entries-sidebar .sidebar-content {
+    height: 100%;
+}
+
+// .browse-sidebar (Browse Entries only - see database_browser.R) stretches to
+// fill that now-100%-tall .sidebar-content rather than shrinking to its own
+// content's height, which is what lets .selection-stats-slot's
+// margin-top:auto below push it all the way to the bottom edge instead of
+// sitting right under "Remove". min-height: 0 overrides flexbox's default
+// min-height:auto, which would otherwise refuse to let this column shrink
+// below its content's height and silently defeat the grow (a case that
+// doesn't arise today since the sidebar has room to spare, but would if a
+// future control pushed the content taller).
+.browse-sidebar {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+// The Browse sidebar's selection read-out is the last child of
+// .browse-sidebar; pushing it to the bottom (rather than leaving it right
+// under "Remove") is exactly what margin-top:auto on a flex child does once
+// its container is stretched to fill available height, as above.
+.sidebar-control .selection-stats-slot {
+    margin-top: auto;
+}
+
 // The footer added to Browse Entries' table (see .grouped_header_sketch())
 // exists only to give row+column selection a clickable target per column -
 // a click on the header is forwarded to it in JS (see the metadata_table

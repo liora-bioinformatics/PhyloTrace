@@ -558,20 +558,24 @@ amr_meta <- function() {
     purpose = rep(c("outbreak", "surveillance"), 4),
     `amr_Beta-lactam` = rep(c("blaOXA", ""), 4),
     amr_Aminoglycoside = rep(c("aac(6')", "", "", ""), 2),
-    amr_profile = rep(c("Beta-lactam", ""), 4),
+    # One gene column too: viz_metadata carries both levels now, and the class
+    # panel has to list only the class ones.
+    amr_g1 = factor(rep(c("Match", "Absent"), 4)),
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
   attr(meta, "amr_cols") <- c(
     "amr_Beta-lactam",
     "amr_Aminoglycoside",
-    "amr_profile"
+    "amr_g1"
   )
   attr(meta, "amr_class_sections") <- c(
     `amr_Beta-lactam` = "Resistance",
-    amr_Aminoglycoside = "Resistance",
-    amr_profile = "Resistance"
+    amr_Aminoglycoside = "Resistance"
   )
+  attr(meta, "amr_gene_labels") <- c(amr_g1 = "blaOXA-2")
+  attr(meta, "amr_gene_groups") <- c(amr_g1 = "Beta-lactam")
+  attr(meta, "amr_gene_sections") <- c(amr_g1 = "Resistance")
   meta
 }
 
@@ -599,8 +603,8 @@ test_that("switching the class heatmap on draws every column by default", {
     hs <- tree_opts()$heatmaps
     expect_identical(length(hs), 1L)
     expect_identical(hs[[1]]$level, "class")
-    # An empty picker means "all of them", not an empty matrix — and the
-    # profile column is a summary of the others, so it is never one of them.
+    # An empty picker means "all of them", not an empty matrix — and only the
+    # drug-class columns, never the gene ones the other panel draws.
     expect_setequal(hs[[1]]$cols, c("amr_Beta-lactam", "amr_Aminoglycoside"))
   })
 })

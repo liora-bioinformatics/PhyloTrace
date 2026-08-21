@@ -28,9 +28,6 @@ PREFIX_FIELD_TYPES <- c(
   amr_ = "category"
 )
 
-#' Derived column names exempt from prefix type assignment.
-PREFIX_EXCEPTIONS <- c("amr_profile")
-
 #' Human-readable labels for variable type slugs.
 #' @export
 TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time")
@@ -39,8 +36,7 @@ TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time")
 .prefix_type <- function(cols) {
   out <- rep(NA_character_, length(cols))
   for (p in names(PREFIX_FIELD_TYPES)) {
-    hit <- startsWith(cols, p) & !(cols %in% PREFIX_EXCEPTIONS)
-    out[hit] <- PREFIX_FIELD_TYPES[[p]]
+    out[startsWith(cols, p)] <- PREFIX_FIELD_TYPES[[p]]
   }
   out
 }

@@ -12,7 +12,12 @@ startShiny <- function() {
 
   # Set fresh (not just relying on .Rprofile) so a browser is always
   # configured even in a session started before that default was set up.
-  if (!nzchar(getOption("browser", ""))) {
+  # Overridden even when a *function* is already there: RStudio and Positron
+  # both preset `browser` to a closure that opens their own integrated Viewer
+  # instead, and this dev launch wants the real external browser regardless -
+  # see the matching (fuller) comment in .Rprofile.
+  browser_opt <- getOption("browser", "")
+  if (!is.character(browser_opt) || !nzchar(browser_opt)) {
     options(browser = "xdg-open")
   }
 

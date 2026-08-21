@@ -84,6 +84,72 @@ test_that("every field lands in the group its profile names", {
   expect_true(all(c("organism", "purpose", "isolate") %in% values))
 })
 
+# The same frame with an AMR screen on it: two drug classes, three genes.
+amr_meta <- function() {
+  meta <- meta()
+  meta$`amr_Beta-lactam` <- rep(c("blaOXA-2", "Absent"), 4)
+  meta$amr_Metal <- rep(c("merA", "merA, merD"), 4)
+  meta$amr_g1 <- rep(c("Match", "Absent"), 4)
+  meta$amr_g2 <- rep(c("Absent", "Match"), 4)
+  meta$amr_g3 <- rep(c("Match", "Absent"), 4)
+  attr(meta, "amr_cols") <- c(
+    "amr_Beta-lactam", "amr_Metal", "amr_g1", "amr_g2", "amr_g3"
+  )
+  attr(meta, "amr_class_sections") <- c(
+    `amr_Beta-lactam` = "Resistance",
+    amr_Metal = "Virulence / stress"
+  )
+  attr(meta, "amr_gene_labels") <- c(
+    amr_g1 = "blaOXA-2", amr_g2 = "blaPDC-5", amr_g3 = "merD"
+  )
+  attr(meta, "amr_gene_groups") <- c(
+    amr_g1 = "Beta-lactam", amr_g2 = "Beta-lactam", amr_g3 = "Metal"
+  )
+  attr(meta, "amr_gene_sections") <- c(
+    amr_g1 = "Resistance",
+    amr_g2 = "Resistance",
+    amr_g3 = "Virulence / stress"
+  )
+  meta
+}
+
+.headings <- function(choices) {
+  vapply(
+    choices$choices,
+    function(x) if (is.null(x$options)) "" else x$label,
+    character(1)
+  )
+}
+
+test_that("an AMR screen is filed one heading per drug class", {
+  # A screen of any size is dozens of columns, and under one "AMR screening"
+  # heading they are a wall of names with nothing saying which gene belongs to
+  # which class.
+  meta <- amr_meta()
+  choices <- impl$.field_choices(
+    field_profiles(meta, amr_cols = attr(meta, "amr_cols"))
+  )
+  headings <- .headings(choices)
+  expect_true("AMR \u00b7 Beta-lactam" %in% headings)
+  expect_true("Virulence / stress \u00b7 Metal" %in% headings)
+  # Not the flat group it would otherwise be filed under.
+  expect_false("AMR screening" %in% headings)
+  # Everything else keeps its single heading.
+  expect_true("Sample metadata" %in% headings)
+
+  block <- choices$choices[[which(headings == "AMR \u00b7 Beta-lactam")]]
+  labels <- vapply(block$options, function(o) o$label, character(1))
+  values <- vapply(block$options, function(o) o$value, character(1))
+  # The whole class first, then the genes in it — so the choice between mapping
+  # a class and mapping one determinant is made in one place.
+  expect_equal(labels, c("Beta-lactam genes", "blaOXA-2", "blaPDC-5"))
+  expect_equal(values, c("amr_Beta-lactam", "amr_g1", "amr_g2"))
+  # The sub-text says which of the two a row is, since both are "Category".
+  descriptions <- vapply(block$options, function(o) o$description, character(1))
+  expect_match(descriptions[[1]], "Genes in class")
+  expect_match(descriptions[[2]], "Gene call")
+})
+
 test_that("a field picker builds before any database is loaded", {
   expect_no_error(viz_helpers$field_select(function(x) x, "some_id", "Variable"))
 })

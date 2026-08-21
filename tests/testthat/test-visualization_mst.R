@@ -76,7 +76,7 @@ set_mst_inputs <- function(session, ...) {
     mst_background_color = "#ffffff",
     mst_background_transparent = TRUE,
     mst_scale_nodes = TRUE,
-    mst_shadow = TRUE,
+    mst_shadow = FALSE,
     mst_length_mode = "log",
     mst_edge_length_scale = 15,
     mst_shorten_long = TRUE,
@@ -321,7 +321,7 @@ test_that("the widget is rebuilt on a changed value, not a changed input", {
 
     # Re-reporting a value it already holds — which is what every echo of an
     # update*Input() message is — must not republish and so must not rebuild.
-    session$setInputs(mst_shadow = TRUE, mst_legend_ori = "left")
+    session$setInputs(mst_shadow = FALSE, mst_legend_ori = "left")
     session$flushReact()
     expect_identical(shell_built(), built)
 

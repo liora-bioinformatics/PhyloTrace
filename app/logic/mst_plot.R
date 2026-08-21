@@ -113,6 +113,26 @@ LABEL_ROOM <- 1.6
 
 .clamp <- function(x, lo, hi) min(max(x, lo), hi)
 
+# "1 isolate" / "249 nodes". Every count this module writes into a legend or a
+# caption is read as prose, and "1 nodes" in a figure caption reads as a bug in
+# the figure.
+.count_label <- function(n, singular, plural = paste0(singular, "s")) {
+  sprintf("%d %s", as.integer(n), if (as.integer(n) == 1L) singular else plural)
+}
+
+# A distance for prose: whole numbers stay whole, everything else keeps one
+# decimal. A median of 4 written "4.0" claims a precision alleles do not have.
+.stat_label <- function(x) {
+  if (!length(x) || !is.finite(x)) {
+    return("NA")
+  }
+  if (abs(x - round(x)) < 1e-9) {
+    format(round(x), trim = TRUE)
+  } else {
+    formatC(x, format = "f", digits = 1)
+  }
+}
+
 # --- 1. Edge length model ----------------------------------------------------
 
 #' Edge length transforms, as offered in the control panel.
@@ -735,6 +755,71 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
   )
 }
 
+# Daylight, in graph units, a region keeps clear of the nearest node that is
+# not one of its members. Small, but non-zero: a region that stops exactly at a
+# foreign node's edge still reads as touching it.
+MST_BLOB_CLEARANCE <- 3
+
+# Distance from a point to a line *segment* (not the infinite line): the
+# perpendicular where the foot falls inside the segment, the nearer endpoint
+# where it does not. Vectorised over the segments.
+.point_seg_dist <- function(px, py, ax, ay, bx, by) {
+  dx <- bx - ax
+  dy <- by - ay
+  len2 <- dx * dx + dy * dy
+  t <- ifelse(len2 > 0, ((px - ax) * dx + (py - ay) * dy) / len2, 0)
+  t <- pmin(pmax(t, 0), 1)
+  sqrt((px - (ax + t * dx))^2 + (py - (ay + t * dy))^2)
+}
+
+# How wide the region may be *at each place it is drawn* before it reaches a
+# node that is not in the cluster.
+#
+# Per disc and per capsule, not one number for the whole cluster, and that is
+# the difference between the rule working and not. The half-width used to be
+# `max member radius + pad` everywhere, so the reference database's largest
+# cluster — which holds one 16px merged node among 175 mostly 6px ones — painted
+# a 30px halo around every single-isolate node in it as well. Two unclustered
+# nodes 14px from their nearest member ended up inside a coloured region,
+# reading as members of a cluster the threshold had excluded them from. Capping
+# that one shared number instead would be no better: the tightest spot in a
+# 175-node cluster would shrink the halo below the big node's own rim, which is
+# not a region either. Each place gets the width its own surroundings allow.
+#
+# `others` is every node outside the cluster, foreign nodes and other clusters'
+# members alike: a region that covers another cluster's node makes the same
+# false claim.
+.blob_clearance <- function(x, y, rows, coords, radius, seg = NULL) {
+  others <- setdiff(seq_len(nrow(coords)), rows)
+  if (!length(others) || !length(x)) {
+    return(rep(Inf, max(length(x), if (is.null(seg)) 0L else nrow(seg))))
+  }
+  ox <- coords$x[others]
+  oy <- coords$y[others]
+  orim <- radius[others]
+  if (is.null(seg)) {
+    # Discs: the reach of each member centre.
+    vapply(
+      seq_along(x),
+      function(i) {
+        min(sqrt((ox - x[[i]])^2 + (oy - y[[i]])^2) - orim)
+      },
+      numeric(1)
+    ) - MST_BLOB_CLEARANCE
+  } else {
+    # Capsules: the reach of each intra-cluster branch along its whole length.
+    vapply(
+      seq_len(nrow(seg)),
+      function(i) {
+        min(.point_seg_dist(
+          ox, oy, seg[[i, 1]], seg[[i, 2]], seg[[i, 3]], seg[[i, 4]]
+        ) - orim)
+      },
+      numeric(1)
+    ) - MST_BLOB_CLEARANCE
+  }
+}
+
 #' The shaded region behind each cluster.
 #'
 #' Follows the cluster's own subtree — a disc at each member node and a capsule
@@ -746,6 +831,13 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
 #' padding separated them. A region that follows the topology cannot do that: it
 #' covers only where the cluster actually is.
 #'
+#' Each disc and each capsule is then narrowed until it no longer reaches a node
+#' outside the cluster (see `.blob_clearance()`). Membership is a *claim* —
+#' these isolates are within the threshold of each other and that one is not —
+#' and a region wide enough to swallow the node next to it makes the drawing say
+#' the opposite of what the threshold decided. The padding control therefore
+#' sets the width the region would like, not the width it gets.
+#'
 #' Returned as geometry rather than as a drawn polygon so the arrangement is
 #' testable here and the canvas work stays in one small JS function.
 #'
@@ -756,8 +848,9 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
 #' @param radius Numeric node radii, recycled.
 #' @param pad Numeric padding in pixels around the nodes.
 #' @return Named list, one entry per cluster, each with `x`, `y` (member node
-#'   centres), `seg` (a four-column matrix of intra-cluster edge endpoints) and
-#'   `radius` (the half-width the region is drawn at).
+#'   centres), `seg` (a four-column matrix of intra-cluster edge endpoints),
+#'   `r` and `seg_r` (the half-width each of those is drawn at) and `radius`,
+#'   the widest of them — what the cluster's name is offset by.
 #' @export
 mst_cluster_blobs <- function(
   coords,
@@ -783,17 +876,38 @@ mst_cluster_blobs <- function(
     e <- which(
       !is.na(edge_cluster) & edge_cluster == nm & !is.na(f) & !is.na(t)
     )
-    list(
-      x = coords$x[rows],
-      y = coords$y[rows],
-      seg = cbind(
-        coords$x[f[e]],
-        coords$y[f[e]],
-        coords$x[t[e]],
-        coords$y[t[e]]
-      ),
-      radius = max(radius[rows]) + pad
+    seg <- cbind(
+      coords$x[f[e]],
+      coords$y[f[e]],
+      coords$x[t[e]],
+      coords$y[t[e]]
     )
+    x <- coords$x[rows]
+    y <- coords$y[rows]
+    # The floor is the shape's own rim — a disc narrower than the node it is
+    # drawn behind is not a region, and a capsule narrower than the branch's
+    # thicker end is not either. Two nodes closer together than their own two
+    # rims is a layout collision, which no choice of halo width can fix.
+    own <- radius[rows]
+    fit <- function(floor, want, room) pmax(floor, pmin(want, room))
+    seg_own <- if (nrow(seg)) pmax(radius[f[e]], radius[t[e]]) else numeric(0)
+    list(
+      x = x,
+      y = y,
+      seg = seg,
+      r = fit(own, own + pad, .blob_clearance(x, y, rows, coords, radius)),
+      seg_r = fit(
+        seg_own,
+        seg_own + pad,
+        .blob_clearance(x, y, rows, coords, radius, seg = seg)
+      )
+    )
+  })
+  # The name is offset by the widest part of the region, so it clears the shape
+  # whatever the rest of it narrowed to.
+  out <- lapply(out, function(b) {
+    b$radius <- max(c(b$r, b$seg_r), 0)
+    b
   })
   # Largest first, so a small cluster sitting inside a large one's region is
   # painted last and stays visible.
@@ -1131,6 +1245,24 @@ MST_LEGEND_MAX_KEYS <- 24L
 MST_LEGEND_MIN_KEYS <- 4L
 MST_LEGEND_LABEL_CHARS <- 22L
 
+# How big a cluster is, in the units the drawing actually shows.
+#
+# Isolates and nodes are not the same number the moment anything is merged —
+# zero-distance isolates always are, and the collapse threshold merges more —
+# and the legend used to give only the isolate count. A reader who counts dots
+# then finds a different number in the key has to assume one of the two is
+# wrong. Both, whenever they can differ.
+.cluster_size <- function(isolates, nodes, merged = FALSE) {
+  if (!isTRUE(merged) || !length(nodes) || is.na(nodes)) {
+    return(.count_label(isolates, "isolate"))
+  }
+  sprintf(
+    "%s in %s",
+    .count_label(isolates, "isolate"),
+    .count_label(nodes, "node")
+  )
+}
+
 # One legend entry. `kind` is "header", "key" or "note"; headers and notes are
 # drawn as text-only nodes, which is how one legend block carries sections.
 .legend_entry <- function(kind, label, color = NULL, shape = "dot") {
@@ -1179,6 +1311,10 @@ MST_LEGEND_LABEL_CHARS <- 22L
 #' @param cluster_colors Named colours per cluster.
 #' @param threshold Cluster threshold, for the section header.
 #' @param scaled Logical. Node size encodes the isolate count.
+#' @param unclustered Named integer of `isolates` and `nodes` in no cluster, or
+#'   NULL to leave it unsaid.
+#' @param merged Logical. Some node holds more than one isolate, so counts are
+#'   given in both.
 #' @return List of entries.
 #' @export
 mst_legend_items <- function(
@@ -1186,7 +1322,9 @@ mst_legend_items <- function(
   clusters = NULL,
   cluster_colors = character(0),
   threshold = NULL,
-  scaled = FALSE
+  scaled = FALSE,
+  unclustered = NULL,
+  merged = FALSE
 ) {
   # Sections share the key budget: the clusters count as one section when there
   # are any, so a plot with two mappings and clusters gives each of the three a
@@ -1220,9 +1358,9 @@ mst_legend_items <- function(
         .legend_entry(
           "key",
           sprintf(
-            "%s – %d isolates",
+            "%s – %s",
             clusters$cluster[[i]],
-            clusters$isolates[[i]]
+            .cluster_size(clusters$isolates[[i]], clusters$nodes[[i]], merged)
           ),
           color = .lookup(cluster_colors, clusters$cluster[[i]], MISSING_COLOR),
           shape = "square"
@@ -1235,6 +1373,23 @@ mst_legend_items <- function(
         list(.legend_entry(
           "note",
           sprintf("+ %d more", nrow(clusters) - length(shown))
+        ))
+      )
+    }
+    # The clusters account for part of the collection and the reader cannot
+    # subtract their way to the rest: the cluster keys may be truncated, and a
+    # singleton is in no cluster at all yet is still an isolate in this tree.
+    # Naming it keeps the section a complete partition of the isolates.
+    left <- suppressWarnings(as.integer(unclustered %||% NA_integer_))
+    if (length(left) >= 1L && !is.na(left[[1]]) && left[[1]] > 0L) {
+      items <- c(
+        items,
+        list(.legend_entry(
+          "note",
+          sprintf(
+            "Unclustered – %s",
+            .cluster_size(left[[1]], left[length(left)], merged)
+          )
         ))
       )
     }
@@ -1492,10 +1647,15 @@ MST_NODE_RENDERER <- JS(
       b <- blobs[[nm]]
       col <- .lookup(colors, nm, MISSING_COLOR)
       sprintf(
-        '{"x":[%s],"y":[%s],"s":[%s],"r":%s,"c":"%s","lc":"%s","l":%s}',
+        paste0(
+          '{"x":[%s],"y":[%s],"s":[%s],"rp":[%s],"rs":[%s],',
+          '"r":%s,"c":"%s","lc":"%s","l":%s}'
+        ),
         paste(round(b$x, 1), collapse = ","),
         paste(round(b$y, 1), collapse = ","),
         paste(round(as.vector(t(b$seg)), 1), collapse = ","),
+        paste(round(b$r, 1), collapse = ","),
+        paste(round(b$seg_r, 1), collapse = ","),
         round(b$radius, 1),
         col,
         label_color %||% col,
@@ -1527,16 +1687,19 @@ MST_NODE_RENDERER <- JS(
     ";",
     "B.forEach(function(b){if(!b.x.length)return;",
     "ctx.save();ctx.globalAlpha=A;ctx.fillStyle=b.c;ctx.beginPath();",
-    # A capsule per intra-cluster edge, as a quad of half-width b.r about the
-    # segment; its round ends are the member discs added straight after.
-    "for(var i=0;i+3<b.s.length;i+=4){",
-    "var ax=b.s[i],ay=b.s[i+1],bx=b.s[i+2],by=b.s[i+3];",
+    # A capsule per intra-cluster edge, as a quad of half-width b.rs[k] about
+    # the segment; its round ends are the member discs added straight after.
+    # The half-widths are per shape, not per cluster: each one is as wide as its
+    # own surroundings allow (see .blob_clearance).
+    "for(var i=0,k=0;i+3<b.s.length;i+=4,k++){",
+    "var ax=b.s[i],ay=b.s[i+1],bx=b.s[i+2],by=b.s[i+3],rr=b.rs[k];",
     "var dx=bx-ax,dy=by-ay,L=Math.sqrt(dx*dx+dy*dy);if(!L)continue;",
-    "var nx=-dy/L*b.r,ny=dx/L*b.r;",
+    "var nx=-dy/L*rr,ny=dx/L*rr;",
     "ctx.moveTo(ax-nx,ay-ny);ctx.lineTo(bx-nx,by-ny);",
     "ctx.lineTo(bx+nx,by+ny);ctx.lineTo(ax+nx,ay+ny);ctx.closePath();}",
-    "for(var j=0;j<b.x.length;j++){ctx.moveTo(b.x[j]+b.r,b.y[j]);",
-    "ctx.arc(b.x[j],b.y[j],b.r,0,2*Math.PI);}",
+    "for(var j=0;j<b.x.length;j++){var pr=b.rp[j];",
+    "ctx.moveTo(b.x[j]+pr,b.y[j]);",
+    "ctx.arc(b.x[j],b.y[j],pr,0,2*Math.PI);}",
     "ctx.fill();ctx.restore();});}"
   ))
 }
@@ -1626,11 +1789,60 @@ mst_scale_caption <- function(
   }
 }
 
-# The caption bar: a single line, centred at the foot of the canvas, sized to
-# its own text rather than to a column grid — the legend's per-key layout
-# would ellipsise a sentence meant to be read whole.
-.caption_js <- function(text, font_color, panel_color) {
-  if (!nzchar(text %||% "")) {
+#' One-line summary of what the drawn tree is made of.
+#'
+#' Two numbers a reader of the figure otherwise has to take on trust. How many
+#' nodes the isolates came out as says whether the picture is one dot per
+#' isolate or a collapsed one — a 253-isolate collection drawn as 249 nodes is
+#' a different claim from 253 — and it is the only place the effect of the
+#' collapse threshold is stated. The median and mean allelic distance are the
+#' distribution the branches were drawn from: a median far below the mean is
+#' the long-tailed case the log scale and the branch cap exist for, so the two
+#' numbers together are what makes the sentence beside them checkable.
+#'
+#' @param counts Isolate counts per node, from `mst_node_sizes()`.
+#' @param weights Edge weights (allelic distances) of the drawn tree.
+#' @return A character string; empty when there is nothing drawn.
+#' @export
+mst_stats_caption <- function(counts, weights) {
+  counts <- suppressWarnings(as.numeric(counts))
+  counts <- counts[is.finite(counts)]
+  if (!length(counts)) {
+    return("")
+  }
+  out <- sprintf(
+    "%s in %s",
+    .count_label(sum(counts), "isolate"),
+    .count_label(length(counts), "node")
+  )
+
+  w <- suppressWarnings(as.numeric(weights))
+  w <- w[is.finite(w)]
+  if (length(w)) {
+    out <- paste0(
+      out,
+      sprintf(
+        "; allelic distance median %s, mean %s, range %s–%s",
+        .stat_label(median(w)),
+        .stat_label(mean(w)),
+        .stat_label(min(w)),
+        .stat_label(max(w))
+      )
+    )
+  }
+  paste0(out, ".")
+}
+
+# The caption bar: one or more lines, centred at the foot of the canvas, sized
+# to its own text rather than to a column grid — the legend's per-key layout
+# would ellipsise a sentence meant to be read whole. Lines rather than one long
+# sentence because the two things it says — the length convention and the
+# summary statistics — are read separately, and a caption wider than the canvas
+# is squeezed by fillText() into unreadable condensed type.
+.caption_js <- function(lines, font_color, panel_color) {
+  lines <- as.character(lines %||% character(0))
+  lines <- lines[!is.na(lines) & nzchar(lines)]
+  if (!length(lines)) {
     return("")
   }
   paste0(
@@ -1638,11 +1850,12 @@ mst_scale_caption <- function(
     "ctx.save();ctx.setTransform(pr,0,0,pr,0,0);",
     "var W=ctx.canvas.clientWidth,H=ctx.canvas.clientHeight;",
     "var f=12;ctx.font=f+'px sans-serif';",
-    "var s=",
-    .json_string(text),
-    ";",
-    "var tw=ctx.measureText(s).width;",
-    "var pad=7,bw=Math.min(tw+2*pad,W-10),bh=f+2*pad;",
+    "var ls=[",
+    paste(.json_string(lines), collapse = ","),
+    "];",
+    "var lh=f+4,tw=0;",
+    "ls.forEach(function(s){tw=Math.max(tw,ctx.measureText(s).width);});",
+    "var pad=7,bw=Math.min(tw+2*pad,W-10),bh=ls.length*lh+2*pad;",
     "var x0=(W-bw)/2,y0=H-bh-6;",
     "ctx.globalAlpha=0.88;ctx.fillStyle='",
     panel_color,
@@ -1654,7 +1867,8 @@ mst_scale_caption <- function(
     font_color,
     "';ctx.textAlign='center';",
     "ctx.textBaseline='middle';",
-    "ctx.fillText(s,x0+bw/2,y0+bh/2,bw-2*pad);",
+    "ls.forEach(function(s,i){",
+    "ctx.fillText(s,x0+bw/2,y0+pad+lh/2+i*lh,bw-2*pad);});",
     "ctx.restore();"
   )
 }
@@ -2106,7 +2320,17 @@ mst_frames <- function(graph, metadata, opts) {
       if (is.null(clusters)) NULL else clusters$table,
       cluster_colors,
       opts$cluster_threshold,
-      isTRUE(opts$scale_nodes) && max(counts) > 1L
+      isTRUE(opts$scale_nodes) && max(counts) > 1L,
+      # Both counts: a node the threshold left out of every cluster may still
+      # carry several zero-distance isolates, so five unclustered isolates can
+      # be three dots on the canvas.
+      if (is.null(clusters)) {
+        NULL
+      } else {
+        loose <- is.na(clusters$node)
+        c(isolates = sum(counts[loose]), nodes = sum(loose))
+      },
+      max(counts) > 1L
     ),
     custom = custom,
     length_mode = mode,
@@ -2188,10 +2412,13 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
   # branches is not, and a caption with no way to hide it would be exactly the
   # kind of control nobody asked for either way.
   caption <- if (!isFALSE(opts$show_caption)) {
-    mst_scale_caption(
-      fr$length_mode,
-      opts$shorten_long,
-      opts$cap_mult %||% MST_MAX_EDGE_MULT
+    c(
+      mst_scale_caption(
+        fr$length_mode,
+        opts$shorten_long,
+        opts$cap_mult %||% MST_MAX_EDGE_MULT
+      ),
+      mst_stats_caption(fr$counts, fr$edges$weight)
     )
   }
 

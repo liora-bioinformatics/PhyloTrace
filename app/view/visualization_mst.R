@@ -313,7 +313,7 @@ mst_controls <- function(ns, options_ui = NULL) {
           accordion_panel(
             "Shadow",
             icon = shiny$icon("circle-dot"),
-            input_switch(ns("mst_shadow"), "Show shadow", TRUE)
+            input_switch(ns("mst_shadow"), "Show shadow", FALSE)
           )
         )
       ),

@@ -71,10 +71,11 @@ field_label <- function(f) {
     locus <- substring(f, nchar(MLST_COL_PREFIX) + 1L)
     return(if (identical(locus, "st")) "Sequence Type (ST)" else locus)
   }
-  # Render profile summary as "AMR Profile" and drug classes as bare class keys
+  # Drug-class columns render as the bare class key. Gene columns cannot be
+  # labelled from their name — it is a positional id — so `amr_field_map()`
+  # carries their gene name instead.
   if (startsWith(f, AMR_COL_PREFIX)) {
-    key <- substring(f, nchar(AMR_COL_PREFIX) + 1L)
-    return(if (identical(key, "profile")) "AMR Profile" else key)
+    return(substring(f, nchar(AMR_COL_PREFIX) + 1L))
   }
   # Format custom user variables via standard prettify logic
   if (startsWith(f, CUSTOM_COL_PREFIX)) {
@@ -114,6 +115,108 @@ GROUP_ORDER <- c(
   "AMR screening",
   "Custom variables"
 )
+
+#' Prefix marking a gene-level AMR column (`amr_g1`, `amr_g2`, ...).
+#'
+#' The name is a position, not a gene: `load_amr_matrix()` numbers the genes in
+#' the order abritamr first reported them, and the gene each one stands for
+#' travels beside the data in the `"amr_gene_labels"` attribute.
+#' @export
+AMR_GENE_PREFIX <- "g"
+
+#' The two kinds of finding abritamr reports, as they are shown to the user.
+#'
+#' Resistance (its `matches`/`partials` files) and virulence/stress are separate
+#' reports and a drug class only ever comes from one of them, so this labels a
+#' column rather than splitting it.
+#' @export
+AMR_SECTIONS <- c(resistance = "Resistance", virulence = "Virulence / stress")
+
+#' Header a drug class is filed under in a variable picker.
+#'
+#' One header per drug class rather than one for all of AMR: a screen of any
+#' size is dozens of genes, and the class a gene belongs to is how a reader
+#' looks for it. The section leads so that resistance and virulence/stress do
+#' not interleave — "AMR" rather than "Resistance" because the group is what
+#' the tab is called.
+#'
+#' @param section One of `AMR_SECTIONS`.
+#' @param drug_class Drug class or group name.
+#' @return Character header.
+#' @export
+amr_subgroup <- function(section, drug_class) {
+  lead <- ifelse(
+    is.na(section) | section != AMR_SECTIONS[["virulence"]],
+    "AMR",
+    AMR_SECTIONS[["virulence"]]
+  )
+  paste0(lead, " \u00b7 ", drug_class)
+}
+
+#' What each AMR column of a metadata frame is.
+#'
+#' The AMR appenders leave three parallel attributes behind — which columns they
+#' added, and for the gene columns the gene and the drug class each one stands
+#' for. This reads them back as one table, so everything downstream asks the
+#' same question the same way instead of re-deriving it from attribute names.
+#'
+#' A drug-class column carries its class in its own name; a gene column cannot
+#' (see `AMR_GENE_PREFIX`), which is what the attributes are for. A column the
+#' attributes do not cover is reported as a class column, because that is the
+#' shape it has.
+#'
+#' @param metadata Data frame carrying the AMR appenders' attributes.
+#' @return Data frame with `field`, `role` ("class" or "gene"), `class`, `gene`
+#'   and `subgroup`; zero rows when there are no AMR columns.
+#' @export
+amr_field_map <- function(metadata) {
+  attr_or <- function(name) {
+    v <- attr(metadata, name, exact = TRUE)
+    if (is.null(v)) character(0) else v
+  }
+  cols <- as.character(attr_or("amr_cols"))
+  if (!length(cols)) {
+    return(.empty_amr_map())
+  }
+  genes <- attr_or("amr_gene_labels")
+  classes <- attr_or("amr_gene_groups")
+  sections <- c(attr_or("amr_class_sections"), attr_or("amr_gene_sections"))
+
+  role <- ifelse(cols %in% names(genes), "gene", "class")
+  # abritamr can report an empty drug class or gene name, and a blank header
+  # reaches virtual-select as an empty, unselectable row.
+  or_default <- function(x, default) {
+    x <- unname(x)
+    ifelse(is.na(x) | !nzchar(trimws(x)), default, x)
+  }
+  drug_class <- or_default(
+    ifelse(role == "gene", classes[cols], substring(cols, nchar(AMR_COL_PREFIX) + 1L)),
+    "Other"
+  )
+  section <- or_default(sections[cols], AMR_SECTIONS[["resistance"]])
+
+  data.frame(
+    field = cols,
+    role = role,
+    class = drug_class,
+    gene = ifelse(role == "gene", or_default(genes[cols], cols), NA_character_),
+    section = section,
+    subgroup = amr_subgroup(section, drug_class),
+    stringsAsFactors = FALSE
+  )
+}
+
+.empty_amr_map <- function() {
+  data.frame(
+    field = character(0),
+    role = character(0),
+    class = character(0),
+    gene = character(0),
+    section = character(0),
+    subgroup = character(0),
+    stringsAsFactors = FALSE
+  )
+}
 
 #' Map Column Names to Category Groups
 #'

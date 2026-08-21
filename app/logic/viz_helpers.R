@@ -245,17 +245,43 @@ viz_color <- function(ns, id, label, value) {
 # through verbatim by the JS binding), so each option has to be a complete
 # object rather than the column-wise form prepare_choices() emits.
 .field_choices <- function(profiles, extra = NULL) {
-  option <- function(label, value, description) {
-    list(label = label, value = value, description = description)
+  # `alias` is searched but never drawn (virtual-select lowercases it and asks
+  # `includes`). It carries the heading, so typing a drug class finds the class
+  # column *and* every gene in it — searching only labels found the one row
+  # whose name happened to be the class, which is the opposite of what someone
+  # typing "carbapenemase" is after.
+  option <- function(label, value, description, alias = "") {
+    list(
+      label = label,
+      value = value,
+      description = description,
+      alias = alias
+    )
   }
   description <- profile_description(profiles)
-  groups <- unique(as.character(profiles$group))
-  choices <- lapply(groups, function(name) {
-    rows <- which(profiles$group == name)
+  # One heading per group, except where a group hands out its own: an AMR screen
+  # is dozens of columns under "AMR screening", and a flat list of them is the
+  # thing this picker exists to avoid. `subgroup` files each one under its drug
+  # class instead, so the class and the genes in it arrive together and a reader
+  # can see what belongs to what. Blank for every other column, which is how
+  # those keep their single group heading.
+  sub <- as.character(profiles$subgroup %||% rep("", nrow(profiles)))
+  sub[is.na(sub)] <- ""
+  heading <- ifelse(nzchar(sub), sub, as.character(profiles$group))
+  # `unique()` and not `sort()`: the frame arrives in the order the pickers
+  # present it (see field_profiles()), and re-sorting here would split a drug
+  # class from the group it was filed under.
+  choices <- lapply(unique(heading), function(name) {
+    rows <- which(heading == name)
     list(
       label = name,
       options = lapply(rows, function(i) {
-        option(profiles$label[[i]], profiles$field[[i]], description[[i]])
+        option(
+          profiles$label[[i]],
+          profiles$field[[i]],
+          description[[i]],
+          alias = sub[[i]]
+        )
       })
     )
   })
@@ -316,7 +342,9 @@ field_select <- function(
     # Defaults to TRUE for a single select, which would silently pick whatever
     # sorts first the moment the choices land.
     autoSelectFirstOption = FALSE,
-    optionsCount = 5,
+    # Eight rows, not five: with the AMR screen filed one drug class per
+    # heading, a five-row box shows barely one class at a time.
+    optionsCount = 8,
     dropboxWrapper = "body",
     showDropboxAsPopup = TRUE,
     popupDropboxBreakpoint = "10000px",

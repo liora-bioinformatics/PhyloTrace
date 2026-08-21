@@ -160,15 +160,20 @@ test_that("derived columns carry the type their prefix declares", {
   md <- data.frame(
     isolate = c("A", "B", "C"),
     mlst_adk = c("12", "44", "12"),
-    amr_profile = c("Beta-lactam", "", "Beta-lactam,Aminoglycoside"),
-    stringsAsFactors = FALSE
+    `amr_Beta-lactam` = c("blaOXA", "", "blaOXA, blaPDC"),
+    amr_g1 = factor(c("Match", "Absent", "Match")),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
   )
   p <- field_profile$field_profiles(md)
 
   # An allele identifier is a name that happens to look like a number.
   expect_identical(field_profile$profile_for(p, "mlst_adk")$type, "category")
-  # The profile summary is a comma-joined string, not a category.
-  expect_identical(field_profile$profile_for(p, "amr_profile")$type, "text")
+  # Both AMR levels are categories: a set of genes, or a call on one gene.
+  expect_identical(
+    field_profile$profile_for(p, "amr_Beta-lactam")$type, "category"
+  )
+  expect_identical(field_profile$profile_for(p, "amr_g1")$type, "category")
 })
 
 test_that("groups match the picker's optgroups, in the picker's order", {

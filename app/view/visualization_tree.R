@@ -37,7 +37,13 @@ box::use(
 box::use(
   app / logic / date_bins[granularity_label],
   app / logic / db_events,
-  app / logic / field_labels[field_labels_for, grouped_field_choices],
+  app /
+    logic /
+    field_labels[
+      amr_field_map,
+      field_labels_for,
+      grouped_field_choices,
+    ],
   app /
     logic /
     field_profile[
@@ -1899,10 +1905,11 @@ server <- function(
     # classes did this isolate come back positive for" and "which genes said
     # so" — and reading one against the other is the whole point of having both.
 
-    # The gene-level call matrix. Read on demand: it is one column per gene —
-    # hundreds on a real database — and it is heatmap data, not a variable
-    # anyone maps, so it stays out of viz_metadata and out of every field
-    # picker.
+    # The gene-level call matrix, in the shape a heatmap needs: one column per
+    # gene, every gene, whether or not it is in the current selection. Read
+    # separately from viz_metadata (which now carries the same genes as mappable
+    # variables) because a heatmap panel draws the matrix itself, not a variable
+    # off it, and needs the call states unfilled.
     # No req(): this is read from an observer that also builds the *class*
     # panel, and a req() there would abort the whole observer — so a database
     # with no gene matrix silently dropped the class heatmap as well. Absence
@@ -1969,10 +1976,11 @@ server <- function(
       if (is.null(meta)) {
         return(.empty_catalog)
       }
-      cols <- intersect(names(meta), attr(meta, "amr_cols") %||% character(0))
-      # The profile column is a comma-joined summary of every other column, so
-      # it is not a measurement the matrix can show alongside them.
-      cols <- setdiff(cols, paste0("amr_", "profile"))
+      # The drug-class columns only: viz_metadata carries the gene columns too
+      # now, and those are the *other* panel — listing them here would offer
+      # every gene twice, once per level, under a heading saying otherwise.
+      map <- amr_field_map(meta)
+      cols <- intersect(names(meta), map$field[map$role == "class"])
       if (!length(cols)) {
         return(.empty_catalog)
       }
