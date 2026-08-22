@@ -227,3 +227,21 @@ test_that("an empty metadata table profiles to an empty frame", {
   expect_true(all(c("field", "levels", "groupable") %in% names(p)))
   expect_null(field_profile$profile_for(p, "anything"))
 })
+
+test_that("a profile row may carry its own sub-text", {
+  # Not every mappable variable is a column of the table — an engine can offer
+  # one derived from the drawing (the MST's cluster assignment) — and for those
+  # the distinct-value count is not known here, so quoting one would be wrong.
+  p <- field_profile$field_profiles(meta_fixture(8))
+  p$description <- NA_character_
+  plain <- field_profile$profile_description(p)
+  expect_true(all(grepl("value", plain)))
+
+  p$description[[1]] <- "At \u2264 12 alleles"
+  expect_identical(field_profile$profile_description(p)[[1]], "At \u2264 12 alleles")
+  # Every other row is untouched.
+  expect_identical(field_profile$profile_description(p)[-1], plain[-1])
+  # An empty override is not an override.
+  p$description[[1]] <- ""
+  expect_identical(field_profile$profile_description(p)[[1]], plain[[1]])
+})

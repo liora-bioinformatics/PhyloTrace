@@ -3,6 +3,7 @@ import "./dt-column-sizing";
 import "./dt-column-visibility";
 import "./dt-visibility-resync";
 import "./virtual-select-popup-confirm";
+import "./virtual-select-popup-refresh";
 import "./viz-scale-swatch";
 
 /**

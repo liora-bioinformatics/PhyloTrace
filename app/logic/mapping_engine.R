@@ -36,6 +36,38 @@ box::use(
   rlang[`%||%`],
 )
 
+#' Most tips a tree can draw before the per-tip channels stop being readable.
+#'
+#' A tip point is a few pixels across and a tip label a couple of millimetres
+#' tall, and both shrink as rows are added: past about sixty isolates a reader
+#' can no longer tell one point colour from the next, let alone a triangle from
+#' a diamond, and the mapping is decoration rather than information. A tile
+#' strip does not shrink — it is a band beside the tips whose width is set by
+#' the canvas, not by the tip count — so it is the one channel that still
+#' carries a variable at that size.
+#'
+#' This demotes the per-tip channels, it does not remove them: the edit dialog
+#' still offers all four, because a user who wants tip colour on three hundred
+#' tips is making a deliberate choice. Only the automatic layout changes.
+#' @export
+TIP_MAPPING_MAX <- 60L
+
+#' Whether a tree of this many tips is too dense for the per-tip channels.
+#'
+#' Deliberately not read off the profile's own `n`: that counts every isolate
+#' in the database, because a variable has to describe itself the same way in
+#' every tab, while this is about the isolates one plot actually draws.
+#'
+#' @param n_units Tips the tree will draw, or NULL when the caller cannot say.
+#' @return TRUE past `TIP_MAPPING_MAX` tips; FALSE when the count is unknown.
+#' @export
+crowded_tips <- function(n_units) {
+  !is.null(n_units) &&
+    length(n_units) == 1L &&
+    !is.na(n_units) &&
+    n_units > TIP_MAPPING_MAX
+}
+
 #' The channels each drawing medium has, and how to rank them for a variable.
 #'
 #' `order` returns the aesthetics a variable of this profile should prefer, best
@@ -48,6 +80,9 @@ box::use(
 #' is a pie and can show all of it, while a shape or a border has to collapse to
 #' the majority value and quietly lose the rest. Scarcity is why the tree ranks
 #' shape first; fidelity is why the MST does not.
+#'
+#' Both orderings also turn on how many isolates are drawn — see
+#' `TIP_MAPPING_MAX`.
 #' @export
 MAPPING_MEDIA <- list(
   tree = list(
@@ -65,14 +100,19 @@ MAPPING_MEDIA <- list(
     # several side by side is the normal way to read a handful of categorical
     # variables against a tree.
     repeatable = "tile",
-    caps = c(tile = 4L),
+    # Ten strips. A strip is a narrow band whose width comes from the canvas
+    # rather than from the tip count (see tree_plot$TILE_COL_IN), so ten of them
+    # is a legible column of variables beside the tree rather than a crush —
+    # and past sixty tips the strips are the *only* channel the engine will
+    # reach for, so the cap is what a crowded tree can show at all.
+    caps = c(tile = 10L),
     # Three exclusive aesthetics plus room for the strips. The ceiling is about
     # legibility rather than mechanism: every strip widens the canvas
     # (tree_plot$annotation_total), so the tree gets a smaller share of the page
     # with each one.
-    max_layers = 7L,
-    order = function(profile) {
-      if (isTRUE(profile$continuous)) {
+    max_layers = 13L,
+    order = function(profile, n_units = NULL) {
+      ranked <- if (isTRUE(profile$continuous)) {
         c("tippoint_color", "tiplab_color", "tile")
       } else if (profile$levels <= MAX_SHAPE_LEVELS) {
         c("tippoint_shape", "tippoint_color", "tiplab_color", "tile")
@@ -80,6 +120,11 @@ MAPPING_MEDIA <- list(
         c("tiplab_color", "tippoint_color", "tile")
       } else {
         c("tile", "tippoint_color", "tiplab_color")
+      }
+      if (crowded_tips(n_units)) {
+        c("tile", setdiff(ranked, "tile"))
+      } else {
+        ranked
       }
     }
   ),
@@ -102,7 +147,7 @@ MAPPING_MEDIA <- list(
     repeatable = character(0),
     caps = integer(0),
     max_layers = 1L,
-    order = function(profile) "node_fill"
+    order = function(profile, n_units = NULL) "node_fill"
   )
 )
 
@@ -268,21 +313,27 @@ granularity_profile <- function(profile, values, granularity) {
 #'   is noise; the same forty-six as a band of shades beside the tree is a
 #'   gradient a reader can actually follow.
 #'
+#' Past `TIP_MAPPING_MAX` tips the per-tip channels are demoted rather than
+#' withdrawn: they stay in the returned vector, behind the tile strip, so the
+#' edit dialog still offers them and only the automatic choice changes.
+#'
 #' @param profile One-row profile frame.
 #' @param taken Character vector of aesthetics already occupied.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
+#' @param n_units Units the medium will draw — tips for a tree.
 #' @return Character vector of aesthetic names, best first, possibly empty.
 #' @export
 eligible_aesthetics <- function(
   profile,
   taken = character(0),
-  medium = "tree"
+  medium = "tree",
+  n_units = NULL
 ) {
   if (is.null(profile) || !isTRUE(profile$groupable)) {
     return(character(0))
   }
   spec <- .medium(medium)
-  order <- spec$order(profile)
+  order <- spec$order(profile, n_units)
   # A repeatable aesthetic is never used up by an existing layer; the exclusive
   # ones are. A capped one is used up once it is at its cap.
   spent <- setdiff(taken, spec$repeatable)
@@ -358,6 +409,7 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
 #' @param id Stable identifier for the new layer.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @param values The variable's raw column values, for the date default.
+#' @param n_units Units the medium will draw — tips for a tree.
 #' @return A layer record, or NULL when no aesthetic is free.
 #' @export
 assign_mapping_layer <- function(
@@ -365,7 +417,8 @@ assign_mapping_layer <- function(
   existing = list(),
   id = "L1",
   medium = "tree",
-  values = NULL
+  values = NULL,
+  n_units = NULL
 ) {
   granularity <- NULL
   if (
@@ -375,7 +428,7 @@ assign_mapping_layer <- function(
     profile <- granularity_profile(profile, values, granularity)
   }
   taken <- vapply(existing, function(l) l$aesthetic, character(1))
-  choice <- eligible_aesthetics(profile, taken, medium)
+  choice <- eligible_aesthetics(profile, taken, medium, n_units)
   if (!length(choice)) {
     return(NULL)
   }
@@ -466,9 +519,11 @@ set_layer_granularity <- function(layer, granularity, values) {
 #' @param profiles Profile frame, for the current level counts.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @param values Metadata frame, needed only to count a binned date's groups.
+#' @param n_units Units the medium will draw — tips for a tree.
 #' @return The list, same length and order, automatic entries re-derived.
 #' @export
-rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL) {
+rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL,
+                             n_units = NULL) {
   if (!length(layers)) {
     return(layers)
   }
@@ -493,7 +548,7 @@ rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL) {
     # applied before the aesthetic is picked, since binning is what makes a
     # date discrete enough for one.
     prof <- granularity_profile(prof, values[[l$field]], l$granularity)
-    choice <- eligible_aesthetics(prof, taken, medium)
+    choice <- eligible_aesthetics(prof, taken, medium, n_units)
     # Nothing free: keep what it had rather than dropping the layer, so a
     # rebalance can never lose a mapping the user asked for.
     aesthetic <- if (length(choice)) choice[[1]] else l$aesthetic

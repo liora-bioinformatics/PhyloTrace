@@ -225,16 +225,30 @@ test_that("the scale bar carries a round number", {
 test_that("every strip gets the same width, whatever the count", {
   # Strips used to divide a fixed budget between them, which meant one strip
   # took all of it and a heatmap beside it was left the floor — a 15-column
-  # matrix in a tenth of the tree's width. They no longer compete: each is sized
-  # for legibility and the canvas grows (see tree_panel_width_in).
-  one <- tree_plot$tree_annotation_width(1)
-  four <- tree_plot$tree_annotation_width(4)
+  # matrix in a tenth of the tree's width. They no longer compete: each is a
+  # fixed physical width and the canvas grows (see tree_panel_width_in).
+  md <- data.frame(isolate = strrep("A", 20), stringsAsFactors = FALSE)
+  base <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3, width_in = 5.5,
+    heatmaps = list()
+  )
+  one <- base
+  one$layers <- list(list(aesthetic = "tile", field = "a"))
+  four <- base
+  four$layers <- lapply(1:4, function(i) {
+    list(aesthetic = "tile", field = paste0("v", i))
+  })
 
-  expect_equal(one, four)
+  expect_equal(
+    tree_plot$tree_annotation_width(tree_plot$resolve_annotation_widths(one, md)),
+    tree_plot$tree_annotation_width(
+      tree_plot$resolve_annotation_widths(four, md)
+    )
+  )
   # Still a fraction of the tree, not a multiple of it: the 2 this shipped with
   # drew a strip twice as wide as the tree it annotates.
-  expect_lt(one, 1)
-  expect_gt(one, 0)
+  expect_lt(tree_plot$tree_annotation_width(one), 1)
+  expect_gt(tree_plot$tree_annotation_width(one), 0)
 })
 
 test_that("annotations are sized by what they have to show", {
@@ -299,7 +313,13 @@ test_that("annotations together never dwarf the tree", {
     layers = lapply(1:4, function(i) list(aesthetic = "tile", field = paste0("v", i))),
     heatmaps = list(list(kind = "amr", cols = paste0("c", 1:60)))
   )
-  expect_lte(tree_plot$annotation_total(huge), impl$ANNOTATION_SPAN_MAX + 1e-9)
+  # The columns are what the squeeze bounds; the lead and the slack are gutters
+  # either side of them and are not part of the ceiling.
+  expect_lte(
+    tree_plot$annotation_total(huge),
+    impl$ANNOTATION_SPAN_MAX + impl$ANNOTATION_LEAD + impl$ANNOTATION_SLACK +
+      1e-9
+  )
 })
 
 test_that("a branch too narrow to hold its number does not get one", {
@@ -863,7 +883,10 @@ test_that("an unbinned date still reaches the plot as a continuous Date", {
   md <- date_md()
   layer <- list(field = "sample_collection_date", transform = "as_date")
 
-  expect_s3_class(impl$.layer_values(layer, md), "Date")
+  expect_s3_class(
+    impl$.layer_values(layer, md$sample_collection_date),
+    "Date"
+  )
 })
 
 test_that("a binned date reaches the plot as its interval labels", {
@@ -875,7 +898,7 @@ test_that("a binned date reaches the plot as its interval labels", {
     transform = "as_date",
     granularity = "month"
   )
-  out <- impl$.layer_values(layer, md)
+  out <- impl$.layer_values(layer, md$sample_collection_date)
 
   expect_s3_class(out, "factor")
   expect_identical(levels(out)[1], "2024-01")
@@ -894,4 +917,337 @@ test_that("the binned column is written back, so scale and data agree", {
   out <- impl$.normalize_mapped_columns(opts, md)
 
   expect_identical(as.character(unique(out$sample_collection_date)), "2024")
+})
+
+# --- What the annotations actually draw --------------------------------------
+
+# The finished ggplot, before build_tree_ggtree() wraps it into a fixed-size
+# grob, so its layers can be inspected as data. Everything below asks the same
+# question — did the tiles survive the x scale — and only the built plot knows.
+.built_tree <- function(tree, meta, opts) {
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+  suppressWarnings(suppressMessages(build(tree, meta, opts)))
+  inner
+}
+
+# Rows each tile layer of a built plot draws, in layer order. `xlim()` censors
+# rather than clips, so an annotation past the limit comes back as a layer of
+# NAs — which is what "the strip has a header and a legend but no tiles" is.
+.tile_rows <- function(p) {
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  keep <- which(vapply(
+    p$layers,
+    function(l) grepl("Tile", class(l$geom)[1]),
+    logical(1)
+  ))
+  vapply(keep, function(i) sum(!is.na(b$data[[i]]$xmax)), integer(1))
+}
+
+.annot_opts <- function(tips) {
+  list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_color = "#000000",
+    tippoint_show = FALSE, tippoint_alpha = 1, tippoint_size = 3,
+    tippoint_color = "#3A4657", tippoint_shape = 16,
+    nodelabel_show = FALSE, parentnodes = character(0),
+    clade_color = "#D0F221", heatmaps = list(),
+    rootedge_show = FALSE, treescale_show = FALSE, width_in = 5.5,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+}
+
+.annot_fixture <- function(n = 16) {
+  set.seed(21)
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("isolate-%02d", seq_len(n))
+  list(
+    tree = tree,
+    meta = data.frame(
+      isolate = tree$tip.label,
+      ward = rep(c("ICU", "ER", "Ward"), length.out = n),
+      source = rep(c("Blood", "Urine"), length.out = n),
+      `amr_Beta-lactam` = rep(c("blaOXA", ""), length.out = n),
+      amr_Colistin = rep(c("mcr-1", ""), length.out = n),
+      amr_Quinolone = rep(c("gyrA", ""), length.out = n),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  )
+}
+
+.tile_layer <- function(id, field, palette) {
+  list(
+    id = id, field = field, title = field, aesthetic = "tile",
+    palette = palette, family = "Qualitative", n_levels = 3L,
+    continuous = FALSE, transform = NULL, granularity = NULL, auto = TRUE
+  )
+}
+
+test_that("a lone tile strip draws its tiles, not just a header and a legend", {
+  # The reported fault. The strips fill their reserve exactly, so the far edge
+  # of the last one landed on the x limit — and xlim() censors, so the whole
+  # column went. Adding a second strip made the first one appear, because it
+  # was no longer the outermost.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  expect_identical(.tile_rows(.built_tree(f$tree, f$meta, opts)), 16L)
+})
+
+test_that("the outermost of several tile strips draws too", {
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(
+    .tile_layer("L1", "ward", "Set1"),
+    .tile_layer("L2", "source", "Dark2")
+  )
+
+  expect_identical(.tile_rows(.built_tree(f$tree, f$meta, opts)), c(16L, 16L))
+})
+
+test_that("every heatmap column is drawn, the last one included", {
+  # gheatmap centres column k at offset + k * cell, so the matrix it draws sits
+  # half a column further out than heatmap_panels reserved for it — and the
+  # outermost column fell off the axis. With one column that is the whole
+  # panel: a header and a legend over nothing at all.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$heatmaps <- list(list(
+    kind = "amr", level = "class",
+    cols = c("amr_Beta-lactam", "amr_Colistin", "amr_Quinolone"),
+    palette = "Reds", title = "AMR classes"
+  ))
+
+  expect_identical(.tile_rows(.built_tree(f$tree, f$meta, opts)), 48L)
+})
+
+test_that("a single-column heatmap draws its one column", {
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$heatmaps <- list(list(
+    kind = "amr", level = "class", cols = "amr_Colistin",
+    palette = "Reds", title = "AMR classes"
+  ))
+
+  expect_identical(.tile_rows(.built_tree(f$tree, f$meta, opts)), 16L)
+})
+
+test_that("a tile strip and a heatmap beside it both draw in full", {
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+  opts$heatmaps <- list(list(
+    kind = "amr", level = "class",
+    cols = c("amr_Beta-lactam", "amr_Colistin"),
+    palette = "Reds", title = "AMR classes"
+  ))
+
+  expect_identical(.tile_rows(.built_tree(f$tree, f$meta, opts)), c(16L, 32L))
+})
+
+test_that("a grouped date keeps its intervals as the levels the scale colours", {
+  # The reported fault: a collection date grouped by year drew one grey strip
+  # and no legend, because the binned column was binned a second time — and
+  # as.Date("2024") is NA for every tip, so the scale had nothing in it but the
+  # missing level.
+  n <- 24
+  set.seed(22)
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("ISO-%02d", seq_len(n))
+  meta <- data.frame(
+    isolate = tree$tip.label,
+    collected = as.character(
+      seq(as.Date("2023-01-01"), by = "40 days", length.out = n)
+    ),
+    stringsAsFactors = FALSE
+  )
+  opts <- .annot_opts()
+  opts$layers <- list(list(
+    id = "L1", field = "collected", title = "Collection Date",
+    aesthetic = "tile", palette = "Set1", family = "Qualitative",
+    n_levels = 3L, continuous = FALSE, transform = "as_date",
+    granularity = "year", auto = TRUE
+  ))
+
+  p <- .built_tree(tree, meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  tile <- which(vapply(
+    p$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  ))[[1]]
+
+  # Every year present is drawn, and in a colour of its own rather than the
+  # grey that stands for "not recorded".
+  fills <- unique(b$data[[tile]]$fill)
+  expect_identical(length(fills), 3L)
+  expect_false(impl$MISSING_COLOR %in% fills)
+})
+
+test_that("the header reserve follows the size the headers are set at", {
+  # A fifteen-column matrix fits about a millimetre of type per column, and
+  # reserving for HEADER_SIZE_MAX there took a third of the page for headers
+  # that needed an eighth of it — which is also what floated the legend that
+  # far above the tree.
+  wide <- list(heatmaps = list(list(
+    kind = "amr", level = "gene", cols = paste0("g", 1:15),
+    labels = rep("Amikacin/Kanamycin/Tobramycin", 15)
+  )))
+  # tree_span 1, axis 3, panel 5.5in: a real solve, so the fitted size applies.
+  fitted <- tree_plot$heatmap_header_frac(wide, 45, 1, 3, 5.5)
+  capped <- tree_plot$heatmap_header_frac(wide, 45)
+
+  expect_lt(fitted, capped)
+  expect_lt(fitted, 0.25)
+})
+
+test_that("a heatmap panel is budgeted for the legend it draws", {
+  # A panel draws a guide whether or not anything is mapped beside it. Left out
+  # of the canvas budget, that guide came out of the panel — and the tip labels
+  # it had squeezed were drawn over the matrix.
+  md <- data.frame(isolate = strrep("A", 30), stringsAsFactors = FALSE)
+  panels <- list(list(kind = "amr", level = "class", cols = "amr_Colistin",
+    title = "AMR classes"))
+
+  expect_identical(tree_plot$tree_legend_width_in(list(), md, 9, 5.5), 0)
+  expect_gt(
+    tree_plot$tree_legend_width_in(list(), md, 9, 5.5, panels),
+    0.5
+  )
+  # A panel with no columns draws nothing, so it needs nothing.
+  expect_identical(
+    tree_plot$tree_legend_width_in(
+      list(), md, 9, 5.5, list(list(kind = "amr", cols = character(0)))
+    ),
+    0
+  )
+})
+
+test_that("the outermost annotation stops short of the x limit", {
+  # The invariant behind both faults above, stated as geometry rather than as a
+  # render: the annotations are placed to fill their reserve exactly, so
+  # without ANNOTATION_SLACK the far edge of the outermost one lands *on* the
+  # limit — and whether xlim() then censors it is down to floating point.
+  md <- data.frame(isolate = strrep("A", 24), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3, width_in = 5.5,
+    rootedge_show = FALSE,
+    layers = list(
+      list(aesthetic = "tile", field = "a"),
+      list(aesthetic = "tile", field = "b")
+    ),
+    heatmaps = list(list(kind = "amr", cols = c("c1", "c2", "c3")))
+  )
+
+  max_x <- 4
+  tree_data <- data.frame(x = c(0, 2, max_x))
+  tree_span <- max_x
+  fit <- impl$.tiplab_xlim(
+    opts, md, tree_data, max_x, tree_plot$annotation_total(opts)
+  )
+
+  panels <- tree_plot$heatmap_panels(opts, tree_span, fit$reserve)$panels
+  last <- panels[[length(panels)]]
+  # heatmap_panels' offset is the panel's near edge — the builder converts it
+  # to gheatmap's own convention, so the matrix ends here.
+  heat_edge <- max_x + last$offset + last$width * tree_span
+
+  centres <- tree_plot$tile_centres(
+    opts, 2L, fit$reserve / tree_span, max_x, tree_span
+  )
+  tile_edge <- max(centres) + impl$.tile_span(opts) * tree_span / 2
+
+  expect_lt(tile_edge, heat_edge)
+  expect_equal(
+    fit$limit - heat_edge,
+    impl$ANNOTATION_SLACK * tree_span,
+    tolerance = 1e-8
+  )
+})
+
+# --- What the tip labels are actually given -----------------------------------
+
+# Inches of the finished panel the label reserve takes. The reserve is solved
+# as a fraction of the x axis and the axis spans the grown panel, so only the
+# two together say how much room the labels really got.
+.reserve_in <- function(opts, md, panel_in = 5.5) {
+  max_x <- 1
+  fit <- impl$.tiplab_xlim(
+    opts, md, data.frame(x = c(0, max_x)), max_x,
+    tree_plot$annotation_total(opts)
+  )
+  tree_plot$tree_panel_width_in(opts, md, panel_in) * fit$reserve / fit$limit
+}
+
+test_that("the label reserve is a width, not a share of the grown canvas", {
+  # `.tiplab_frac()` measures the labels against the tree-and-labels budget,
+  # but the reserve is spent on the *axis*, which spans the whole grown panel.
+  # Spending the budget's fraction of the grown axis is how a thirty-column
+  # heatmap reserved three inches for labels that needed two — a band of dead
+  # space between the tips and the first strip, and an inch off the tree.
+  md <- data.frame(isolate = strrep("A", 36), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.3, width_in = 5.5,
+    rootedge_show = FALSE, layers = list(), heatmaps = list()
+  )
+  needed <- 36 * impl$TIP_CHAR_EM * 2.3 / 25.4 * impl$X_EXPANSION
+
+  narrow <- opts
+  narrow$heatmaps <- list(list(kind = "amr", cols = paste0("c", 1:3)))
+  wide <- opts
+  wide$heatmaps <- list(list(kind = "amr", cols = paste0("c", 1:30)))
+
+  expect_equal(.reserve_in(narrow, md), needed, tolerance = 0.01)
+  # The one that mattered: thirty columns must not buy the labels more room.
+  expect_equal(.reserve_in(wide, md), needed, tolerance = 0.01)
+})
+
+test_that("what the labels stop taking goes to the tree, not the annotations", {
+  # The other half of the same solve. The tree-and-labels budget is 5.5in
+  # whatever the matrix beside it does, so the tree gets the rest of it.
+  md <- data.frame(isolate = strrep("A", 36), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.3, width_in = 5.5,
+    rootedge_show = FALSE, layers = list(),
+    heatmaps = list(list(kind = "amr", cols = paste0("c", 1:30)))
+  )
+  needed <- 36 * impl$TIP_CHAR_EM * 2.3 / 25.4 * impl$X_EXPANSION
+
+  expect_equal(5.5 - .reserve_in(opts, md), 5.5 - needed, tolerance = 0.02)
+})
+
+test_that("a date left ungrouped labels its colour bar with dates", {
+  # Days since the epoch is what a Date is to a continuous scale, and a scale
+  # not told otherwise puts 17250 and 18000 on the keys — which is what "Exact
+  # date" drew. The interval the breaks land on follows the span.
+  span <- function(days) {
+    v <- seq(as.Date("2020-01-01"), by = "1 day", length.out = days)
+    sc <- impl$tree_scale(v, "viridis", "fill", "Collection Date")
+    sc$train(range(as.numeric(v)))
+    sc$get_labels()
+  }
+
+  expect_true(all(grepl("^20\\d\\d$", span(2000))))
+  expect_true(all(grepl("20\\d\\d$", span(400))))
+  # And nothing anywhere reads as a bare day count.
+  expect_false(
+    any(grepl("^1[678]\\d{3}$", c(span(60), span(400), span(2000))))
+  )
+})
+
+test_that("a numeric variable still gets a plain continuous scale", {
+  # `transform = "date"` over a column that is not a date would relabel plain
+  # numbers as calendar dates, which is the same fault the other way round.
+  sc <- impl$tree_scale(c(3, 900), "viridis", "fill", "Alleles")
+  sc$train(c(3, 900))
+
+  expect_true(all(grepl("^[0-9]+$", sc$get_labels())))
 })

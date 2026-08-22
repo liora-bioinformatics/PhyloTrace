@@ -74,6 +74,7 @@ box::use(
   app /
     logic /
     mst_plot[
+      MST_CLUSTER_FIELD,
       MST_FIT_DEFAULTS,
       MST_LENGTH_MODES,
       MST_MAX_EDGE_MULT,
@@ -222,7 +223,7 @@ mst_controls <- function(ns, options_ui = NULL) {
                 "Width",
                 0,
                 60,
-                20,
+                15,
                 ticks = FALSE
               ),
               shiny$sliderInput(
@@ -626,13 +627,59 @@ server <- function(
     mst_layers <- shiny$reactiveVal(list())
     mst_layer_seq <- shiny$reactiveVal(0L)
 
+    # The cluster assignment as a profile row, so it is offered and mapped like
+    # any database column even though no database has it. Written as a blanked
+    # copy of a real row rather than built from scratch, so it keeps whatever
+    # columns field_profiles() happens to produce.
+    .cluster_profile <- function(prof, threshold) {
+      row <- prof[1, , drop = FALSE]
+      row[] <- lapply(row, function(x) x[NA_integer_])
+      row$field <- MST_CLUSTER_FIELD
+      row$label <- "Cluster"
+      row$group <- "Clustering"
+      row$subgroup <- ""
+      row$role <- ""
+      row$type <- "category"
+      row$type_label <- "Category"
+      # Its own sub-text: how many clusters there turn out to be is not known
+      # until the frames are built, so the usual "N values" would be a guess.
+      row$description <- sprintf(
+        "At \u2264 %s alleles \u00b7 unclustered nodes in grey",
+        threshold %||% "?"
+      )
+      # The only thing this number decides is a qualitative palette rather than
+      # a gradient, and two is the floor: a cluster and everything outside it.
+      row$levels <- 2L
+      row$coverage <- 1
+      row$n <- nrow(prof)
+      row$numeric <- FALSE
+      row$continuous <- FALSE
+      row$groupable <- TRUE
+      row$shapeable <- FALSE
+      row$heatmapable <- FALSE
+      row$rank <- 0
+      row
+    }
+
     # Every column's profile, for the variable pickers and the mapping engine.
     profiles <- shiny$reactive({
       meta <- viz_metadata()
       if (is.null(meta) || !length(names(meta))) {
         return(NULL)
       }
-      field_profiles() %||% field_profiles_of(meta)
+      prof <- field_profiles() %||% field_profiles_of(meta)
+      if (is.null(prof) || !nrow(prof)) {
+        return(prof)
+      }
+      # First, not last: it is the one variable in this picker that describes
+      # the drawing rather than the isolates, and the reason to reach for it —
+      # "which nodes did the threshold leave out?" — is a question about the
+      # plot in front of you.
+      prof$description <- NA_character_
+      rbind(
+        .cluster_profile(prof, fitted$mst_cluster_threshold),
+        prof
+      )
     })
 
     # A profile frame fit to label the node label source itself picker.
@@ -652,7 +699,10 @@ server <- function(
         return(NULL)
       }
       prof$groupable <- TRUE
-      prof
+      # The cluster assignment is a mapping, not a caption: it exists only while
+      # the frames are being built, so a node label asking for it would find no
+      # column and silently fall back to the isolate name.
+      prof[prof$field != MST_CLUSTER_FIELD, , drop = FALSE]
     }
 
     # mst_node_label's and mst_layer_add's *choices* are swapped out for the

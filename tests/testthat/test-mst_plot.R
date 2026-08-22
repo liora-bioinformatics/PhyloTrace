@@ -170,15 +170,25 @@ test_that("the layout never crosses an edge, whatever the shape or transform", {
       edges <- random_tree(n, shape)
       w <- sample(c(1, 1, 2, 3, 8, 60, 400, 3000), nrow(edges), replace = TRUE)
       ids <- paste0("n", seq_len(n))
+      # Both fans: the plain proportional one, and the one that re-allocates
+      # angle to the branches leaving a cluster. Reordering a wedge and
+      # re-sharing it out keeps the wedges contiguous and disjoint, so it must
+      # not cost the planarity everything here rests on — but "must not" is
+      # worth what the test is worth.
+      cl <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 5)$node
       for (mode in c("log", "real", "uniform")) {
         len <- mst_plot$mst_edge_lengths(w, mode)$length
-        coords <- mst_plot$mst_layout(edges$from, edges$to, len, ids)
-        expect_identical(
-          mst_plot$mst_count_crossings(coords, edges$from, edges$to),
-          0L,
-          info = paste(shape, n, mode)
-        )
-        expect_true(all(is.finite(c(coords$x, coords$y))))
+        for (fan in list(NULL, cl)) {
+          coords <- mst_plot$mst_layout(
+            edges$from, edges$to, len, ids, cluster = fan
+          )
+          expect_identical(
+            mst_plot$mst_count_crossings(coords, edges$from, edges$to),
+            0L,
+            info = paste(shape, n, mode, is.null(fan))
+          )
+          expect_true(all(is.finite(c(coords$x, coords$y))))
+        }
       }
     }
   }
@@ -390,10 +400,89 @@ test_that("a cluster's region follows its own subtree", {
   expect_equal(blobs[["Cluster 1"]]$radius, 18)
 })
 
-test_that("a region never reaches a node that is not in the cluster", {
-  # Membership is a claim the threshold made. A region wide enough to cover the
-  # node beside it makes the drawing say the opposite, and a reader counting
-  # coloured dots gets a different answer from the legend.
+# How much daylight there is between one node and a cluster's region, measured
+# the way the region is actually drawn: every disc at its own half-width, every
+# band at its own two. A negative answer means the node is inside the shape.
+region_gap <- function(b, x, y, r) {
+  d <- sqrt((x - b$x)^2 + (y - b$y)^2) - b$r
+  if (nrow(b$seg)) {
+    d <- c(
+      d,
+      impl$.point_seg_dist(
+        x, y, b$seg[, 1], b$seg[, 2], b$seg[, 3], b$seg[, 4]
+      ) - pmax(b$seg_r[, 1], b$seg_r[, 2])
+    )
+  }
+  min(d) - r
+}
+
+test_that("point-to-segment distance answers for every point it is given", {
+  # Vectorised over either argument, and the second direction is the one that
+  # matters: the region cap asks one branch against every node outside the
+  # cluster at once. Written with ifelse() it returned only the first node's
+  # answer — the cap then ignored all the rest, which is how an unclustered node
+  # ended up inside a region that was supposed to have made room for it.
+  seg <- c(0, 0, 100, 0)
+  px <- c(50, 50, 50)
+  py <- c(400, 5, 900)
+  d <- impl$.point_seg_dist(px, py, seg[[1]], seg[[2]], seg[[3]], seg[[4]])
+  expect_equal(d, c(400, 5, 900))
+  # And the other way round: one point against many segments.
+  expect_equal(
+    impl$.point_seg_dist(50, 5, c(0, 0), c(0, 100), c(100, 100), c(0, 100)),
+    c(5, 95)
+  )
+  # Past an end, the nearer endpoint rather than the infinite line.
+  expect_equal(impl$.point_seg_dist(-30, 0, 0, 0, 100, 0), 30)
+  # A branch of zero length is its own endpoint.
+  expect_equal(impl$.point_seg_dist(3, 4, 0, 0, 0, 0), 5)
+})
+
+test_that("a region never reaches another cluster's node", {
+  # Membership is a claim the threshold made. A region wide enough to cover a
+  # node the threshold put in a *different* cluster makes the drawing say the
+  # opposite, and neither region can give way to the other by being cut.
+  coords <- data.frame(
+    id = c("a", "b", "c", "d"),
+    x = c(0, 100, 140, 240),
+    y = c(0, 0, 0, 0),
+    stringsAsFactors = FALSE
+  )
+  cl <- mst_plot$mst_clusters(
+    coords$id, c("a", "b", "c"), c("b", "c", "d"), c(1, 90, 1), 10
+  )
+  expect_identical(cl$node, c("Cluster 1", "Cluster 1", "Cluster 2", "Cluster 2"))
+  # A padding wide enough to swallow "c" outright — 12 + 60 reaches x = 172.
+  b <- mst_plot$mst_cluster_blobs(
+    coords, cl$node, cl$edge, c("a", "b", "c"), c("b", "c", "d"),
+    radius = 12, pad = 60
+  )[["Cluster 1"]]
+  # Daylight, not a touch.
+  expect_equal(region_gap(b, 140, 0, 12), impl$MST_BLOB_CLEARANCE)
+  # Narrowed only where it had to be: "a" is 140 from the intruder and keeps the
+  # width it asked for, "b" is 40 away and gives it up. A single width for the
+  # whole cluster could do one or the other, never both.
+  expect_equal(b$r, c(72, 25))
+  # The band between them tapers to the disc at each end, so a branch leaving a
+  # large node no longer runs at that width all the way to a small one.
+  expect_equal(b$seg_r[1, ], c(25, 25))
+
+  # A cluster with nothing near it still gets the padding it asked for.
+  far <- coords
+  far$x[c(3, 4)] <- c(900, 1000)
+  b <- mst_plot$mst_cluster_blobs(
+    far, cl$node, cl$edge, c("a", "b", "c"), c("b", "c", "d"),
+    radius = 12, pad = 60
+  )[["Cluster 1"]]
+  expect_equal(b$r, c(72, 72))
+  expect_equal(b$radius, 72)
+})
+
+test_that("a region does not narrow around a node in no cluster", {
+  # It is cut instead (see MST_NODE_CASING). Narrowing was the first answer and
+  # it scallops the outline: one cluster holding 175 of a collection's 181 nodes
+  # came out notched wherever a single unclustered node sat near it, which reads
+  # as damage to the shape rather than as a node outside it.
   coords <- data.frame(
     id = c("a", "b", "c"),
     x = c(0, 100, 140),
@@ -402,24 +491,26 @@ test_that("a region never reaches a node that is not in the cluster", {
   )
   cl <- mst_plot$mst_clusters(coords$id, c("a", "b"), c("b", "c"), c(1, 90), 10)
   expect_true(is.na(cl$node[[3]]))
-  # A padding wide enough to swallow "c" outright — 12 + 60 reaches x = 172.
-  blobs <- mst_plot$mst_cluster_blobs(
+  b <- mst_plot$mst_cluster_blobs(
     coords, cl$node, cl$edge, c("a", "b"), c("b", "c"),
     radius = 12, pad = 60
-  )
-  r <- blobs[["Cluster 1"]]$radius
-  expect_true(r < 72)
-  # Daylight, not a touch: the region stops short of the foreign node's rim.
-  expect_true(100 + r < 140 - 12)
+  )[["Cluster 1"]]
+  expect_equal(b$r, c(72, 72))
+})
 
-  # A cluster with nothing near it still gets the padding it asked for.
-  far <- coords
-  far$x[[3]] <- 900
-  blobs <- mst_plot$mst_cluster_blobs(
-    far, cl$node, cl$edge, c("a", "b"), c("b", "c"),
-    radius = 12, pad = 60
+test_that("a band tapers between two differently sized nodes", {
+  # The reference database's largest cluster holds one 16px merged node among
+  # 175 mostly 6px ones. A band at the thicker end's width from end to end is
+  # what covered the nodes beside the thin end.
+  coords <- data.frame(
+    id = c("a", "b"), x = c(0, 300), y = c(0, 0), stringsAsFactors = FALSE
   )
-  expect_equal(blobs[["Cluster 1"]]$radius, 72)
+  cl <- mst_plot$mst_clusters(coords$id, "a", "b", 1, 10)
+  b <- mst_plot$mst_cluster_blobs(
+    coords, cl$node, cl$edge, "a", "b", radius = c(16, 6), pad = 0
+  )[["Cluster 1"]]
+  expect_equal(b$r, c(16, 6))
+  expect_equal(b$seg_r[1, ], c(16, 6))
 })
 
 test_that("no region on a real-shaped tree covers a node outside it", {
@@ -438,16 +529,39 @@ test_that("no region on a real-shaped tree covers a node outside it", {
   expect_true(length(blobs) > 1L)
   for (nm in names(blobs)) {
     b <- blobs[[nm]]
-    outside <- which(is.na(cl$node) | cl$node != nm)
+    outside <- which(!is.na(cl$node) & cl$node != nm)
     for (o in outside) {
-      d <- min(sqrt((coords$x[o] - b$x)^2 + (coords$y[o] - b$y)^2))
-      if (nrow(b$seg)) {
-        d <- min(d, impl$.point_seg_dist(
-          coords$x[o], coords$y[o],
-          b$seg[, 1], b$seg[, 2], b$seg[, 3], b$seg[, 4]
-        ))
+      expect_gte(
+        region_gap(b, coords$x[o], coords$y[o], radius[[o]]),
+        impl$MST_BLOB_CLEARANCE - 1e-9
+      )
+    }
+  }
+})
+
+test_that("node sizes that vary do not widen a region past its neighbours", {
+  # The shape the real failure took: one big merged node in a cluster of small
+  # ones, with unclustered nodes close to the small ones.
+  set.seed(29)
+  edges <- random_tree(80, "random")
+  w <- sample(c(1, 1, 2, 3, 40, 120), nrow(edges), replace = TRUE)
+  ids <- unique(c(edges$from, edges$to))
+  cl <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 5)
+  lens <- mst_plot$mst_edge_lengths(w, "log", spread = 15)
+  coords <- mst_plot$mst_layout(edges$from, edges$to, lens$length, ids)
+  radius <- sample(c(6, 6, 6, 6, 16), length(ids), replace = TRUE)
+  for (pad in c(0, 14, 60)) {
+    blobs <- mst_plot$mst_cluster_blobs(
+      coords, cl$node, cl$edge, edges$from, edges$to,
+      radius = radius, pad = pad
+    )
+    for (nm in names(blobs)) {
+      for (o in which(!is.na(cl$node) & cl$node != nm)) {
+        expect_gte(
+          region_gap(blobs[[nm]], coords$x[o], coords$y[o], radius[[o]]),
+          impl$MST_BLOB_CLEARANCE - 1e-9
+        )
       }
-      expect_gt(d, b$radius + radius[[o]])
     }
   }
 })
@@ -766,6 +880,30 @@ test_that("the region width is the control, not the node radius", {
   )
 })
 
+test_that("every node in no cluster is handed to the renderer to cut around", {
+  # The cut is what separates it from the region, so a node left out of this
+  # list is a node with nothing between it and the shading.
+  opts <- base_opts(show_clusters = TRUE, cluster_threshold = 3)
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  loose <- which(is.na(fr$clusters$node))
+  expect_true(length(loose) > 0L)
+  expect_equal(fr$loose$x, fr$coords$x[loose])
+  expect_equal(fr$loose$r, fr$nodes$size[loose])
+
+  # Nothing to cut out of when no region is drawn.
+  plain <- mst_plot$mst_frames(
+    demo_graph(), demo_meta(), base_opts(show_clusters = FALSE)
+  )
+  expect_null(plain$loose)
+
+  # And the renderer erases rather than painting: the canvas may be transparent
+  # over the panel's own backdrop, where a disc of "background" is a white disc.
+  js <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts, fr
+  )$x$events$beforeDrawing
+  expect_true(grepl("destination-out", js, fixed = TRUE))
+})
+
 test_that("the region is one path at the requested opacity", {
   opts <- base_opts(show_clusters = TRUE, cluster_threshold = 5,
                     cluster_opacity = 0.5, cluster_label_size = 22)
@@ -775,9 +913,23 @@ test_that("the region is one path at the requested opacity", {
   )$x$events$beforeDrawing
   expect_true(grepl("var A=0.5", hook, fixed = TRUE))
   # One beginPath and one fill per region: a fill per disc and capsule is what
-  # made a translucent region composite into a patchwork.
+  # made a translucent region composite into a patchwork. The second fill is the
+  # cut around the nodes in no cluster, which runs once for all of them.
+  fills <- lengths(regmatches(hook, gregexpr("ctx.fill()", hook, fixed = TRUE)))
+  expect_identical(fills, 2L)
+  bare <- mst_plot$build_mst_visnetwork(
+    demo_graph(),
+    demo_meta(),
+    base_opts(show_clusters = TRUE, cluster_threshold = 400),
+    mst_plot$mst_frames(
+      demo_graph(),
+      demo_meta(),
+      base_opts(show_clusters = TRUE, cluster_threshold = 400)
+    )
+  )$x$events$beforeDrawing
+  # Nothing outside the cluster, nothing to cut.
   expect_identical(
-    lengths(regmatches(hook, gregexpr("ctx.fill()", hook, fixed = TRUE))),
+    lengths(regmatches(bare, gregexpr("ctx.fill()", bare, fixed = TRUE))),
     1L
   )
 })
@@ -1101,4 +1253,133 @@ test_that("the cap multiplier is a control, not just a constant", {
   expect_false(any(loose$edges$dashes))
   expect_gt(max(loose$coords$x) - min(loose$coords$x),
             max(tight$coords$x) - min(tight$coords$x))
+})
+
+test_that("a branch leaving a cluster is fanned to the edge of its wedge", {
+  # Angle is the one thing an equal-angle layout is free to choose — the lengths
+  # carry the allelic distances — so it is spent on pointing the branches that
+  # leave a cluster away from the ones that stay in it. Two leaves in the
+  # cluster and one out of it: the odd one takes an end of the fan, not the
+  # middle, and more of the wedge than its single tip would earn.
+  fan <- impl$.fan_layout(
+    ch = c(10L, 11L, 12L),
+    tips_ch = c(20, 1, 20),
+    attached = c(TRUE, FALSE, TRUE)
+  )
+  expect_identical(fan$ch[[1]], 11L)
+  expect_gte(fan$share[[1]], impl$MST_LOOSE_SHARE)
+  expect_equal(sum(fan$share), 1)
+
+  # Several of them alternate between the two ends rather than stacking on one.
+  fan <- impl$.fan_layout(
+    ch = 1:4,
+    tips_ch = c(1, 30, 1, 30),
+    attached = c(FALSE, TRUE, FALSE, TRUE)
+  )
+  expect_identical(fan$ch[[1]], 1L)
+  expect_identical(fan$ch[[length(fan$ch)]], 3L)
+
+  # With nothing leaving, the fan is exactly the proportional one it always was.
+  fan <- impl$.fan_layout(1:3, c(2, 3, 5), rep(TRUE, 3))
+  expect_identical(fan$ch, 1:3)
+  expect_equal(fan$share, c(0.2, 0.3, 0.5))
+
+  # However many leave, the cluster's own branch keeps a fifth of the wedge —
+  # otherwise a node with eight stragglers hanging off it would have its own
+  # subtree, however large, squeezed into nothing.
+  fan <- impl$.fan_layout(1:9, c(rep(1, 8), 100), c(rep(FALSE, 8), TRUE))
+  expect_gte(fan$share[[which(fan$ch == 9L)]], 0.2 - 1e-9)
+  expect_equal(sum(fan$share), 1)
+
+  # A floor is a floor, not a cap: a straggler that is itself a large subtree
+  # keeps the share its size earns.
+  fan <- impl$.fan_layout(1:2, c(90, 10), c(FALSE, TRUE))
+  expect_equal(fan$share[[which(fan$ch == 1L)]], 0.9)
+})
+
+test_that("a branch leaving a cluster is swung out of it, at its own length", {
+  # Ordering the fan is not enough on a real collection: a node in no cluster is
+  # usually surrounded by *unrelated* subtrees the radial layout packed against
+  # it, which no choice of wedge reaches. Swinging the branch does reach it —
+  # and it swings at the length it had, so the allelic distance the branch
+  # stands for is untouched.
+  #
+  # A parent with two cluster arms above it and the straggler placed between
+  # them, which is the shape that reads as a hole in the shading.
+  x <- c(0, -40, 40, 0)
+  y <- c(0, 90, 90, 100)
+  cl <- c("A", "A", "A", NA)
+  rad <- rep(6, 4)
+  skel <- list(
+    x = x[1:3], y = y[1:3], r = rep(60, 3),
+    seg = matrix(numeric(0), 0, 4), seg_r = numeric(0)
+  )
+  # Where the fan left it, the region covers it outright.
+  expect_lt(impl$.cluster_reach(x[[4]], y[[4]], skel), 0)
+
+  out <- impl$.push_out_of_clusters(
+    x, y,
+    parent = c(NA, 1L, 1L, 1L),
+    subtree = list(1:4, 2L, 3L, 4L),
+    cl = cl,
+    radius = rad,
+    f = c(1L, 1L, 1L),
+    t = c(2L, 3L, 4L),
+    skel = skel
+  )
+  # Clear of it now.
+  expect_gt(impl$.cluster_reach(out$x[[4]], out$y[[4]], skel), 0)
+  # Swung, not moved: the branch is exactly as long as it was.
+  expect_equal(
+    sqrt((out$x[[4]] - out$x[[1]])^2 + (out$y[[4]] - out$y[[1]])^2),
+    100
+  )
+  # The cluster's own nodes did not move at all.
+  expect_equal(out$x[1:3], x[1:3])
+  expect_equal(out$y[1:3], y[1:3])
+})
+
+test_that("the swing keeps every promise the plain layout made", {
+  # It gives up the wedges that made the layout crossing-free, so it checks for
+  # crossings itself — and it must not trade one collision for another.
+  set.seed(5)
+  edges <- random_tree(50, "random")
+  w <- sample(c(1, 1, 2, 3, 40, 90), nrow(edges), replace = TRUE)
+  ids <- unique(c(edges$from, edges$to))
+  cl <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 5)
+  len <- mst_plot$mst_edge_lengths(w, "log", spread = 15)$length
+  plain <- mst_plot$mst_layout(edges$from, edges$to, len, ids)
+  swung <- mst_plot$mst_layout(
+    edges$from, edges$to, len, ids,
+    cluster = cl$node, radius = 12, pad = 25
+  )
+
+  expect_identical(
+    mst_plot$mst_count_crossings(swung, edges$from, edges$to), 0L
+  )
+  # No pair of nodes brought closer together than the plain layout's tightest.
+  spacing <- function(z) {
+    d <- as.matrix(stats::dist(cbind(z$x, z$y)))
+    diag(d) <- Inf
+    min(d)
+  }
+  expect_gte(spacing(swung), spacing(plain))
+  # Every branch still exactly as long as its allelic distance earned it.
+  blen <- function(z) {
+    ix <- stats::setNames(seq_len(nrow(z)), z$id)
+    sqrt((z$x[ix[edges$to]] - z$x[ix[edges$from]])^2 +
+      (z$y[ix[edges$to]] - z$y[ix[edges$from]])^2)
+  }
+  expect_equal(blen(swung), blen(plain))
+})
+
+test_that("the segment-crossing test answers for every segment it is given", {
+  # Same trap as .point_seg_dist: vectorised over the second argument, so it
+  # cannot be written with ifelse().
+  cross <- impl$.crosses_any(0, 0, 10, 0, c(5, 50), c(-5, -5), c(5, 50), c(5, 5), 1e-9)
+  expect_true(cross)
+  # The crossing is the *second* segment — an implementation that only looked at
+  # the first would miss it.
+  expect_true(impl$.crosses_any(0, 0, 10, 0, c(50, 5), c(-5, -5), c(50, 5), c(5, 5), 1e-9))
+  expect_false(impl$.crosses_any(0, 0, 10, 0, c(50, 60), c(-5, -5), c(50, 60), c(5, 5), 1e-9))
 })

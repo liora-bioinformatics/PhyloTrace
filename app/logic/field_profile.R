@@ -304,7 +304,13 @@ profile_description <- function(profiles) {
     ifelse(n == 1L, "value", "values"),
     kind
   )
-  ifelse(profiles$groupable, base, paste(base, "— cannot group"))
+  out <- ifelse(profiles$groupable, base, paste(base, "— cannot group"))
+  # A row may write its own sub-text. Not every mappable variable is a column
+  # of the table: an engine can offer one it derives from the drawing itself,
+  # and for those the distinct-value count is not known here — quoting one
+  # anyway would put a number in front of the user that is simply wrong.
+  own <- profiles$description %||% rep(NA_character_, length(out))
+  ifelse(is.na(own) | !nzchar(own), out, own)
 }
 
 #' Extract Profile Entry for Single Field

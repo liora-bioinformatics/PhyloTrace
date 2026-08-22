@@ -313,3 +313,83 @@ test_that("a refused date says how to make it work", {
   msg <- mapping_engine$aesthetic_block_reason(d$profile, "tippoint_shape")
   expect_true(grepl("month", msg))
 })
+
+# --- Too many tips for the per-tip channels ----------------------------------
+
+test_that("a crowded tree maps onto the tile strip, not onto its tips", {
+  # A tip point is a few pixels across and a tip label a couple of millimetres
+  # tall, and both shrink as rows are added. Past TIP_MAPPING_MAX neither can
+  # carry a variable, so the automatic choice is the one channel whose width
+  # comes from the canvas rather than from the tip count.
+  crowded <- mapping_engine$TIP_MAPPING_MAX + 1L
+
+  # A four-level variable would otherwise take shape, the scarcest aesthetic.
+  expect_identical(
+    mapping_engine$assign_mapping_layer(prof(4), n_units = crowded)$aesthetic,
+    "tile"
+  )
+  # An eight-level one would otherwise take the tip labels' colour.
+  expect_identical(
+    mapping_engine$assign_mapping_layer(prof(8), n_units = crowded)$aesthetic,
+    "tile"
+  )
+  expect_identical(
+    mapping_engine$assign_mapping_layer(
+      prof(4), n_units = mapping_engine$TIP_MAPPING_MAX
+    )$aesthetic,
+    "tippoint_shape"
+  )
+  # Nothing said, nothing assumed: the count is the caller's to supply.
+  expect_identical(
+    mapping_engine$assign_mapping_layer(prof(4))$aesthetic,
+    "tippoint_shape"
+  )
+})
+
+test_that("a crowded tree still offers the per-tip channels to the user", {
+  # Demoted, not withdrawn: the edit dialog lists all four, because mapping tip
+  # colour on three hundred tips is a deliberate choice and this is a default.
+  crowded <- mapping_engine$TIP_MAPPING_MAX + 1L
+  free <- mapping_engine$eligible_aesthetics(
+    prof(4), character(0), "tree", crowded
+  )
+
+  expect_identical(free[[1]], "tile")
+  expect_true(all(mapping_engine$AESTHETIC_POOL %in% free))
+})
+
+test_that("more variables than tile strips fall back to the tip channels", {
+  # The cap is four strips, and a fifth mapping is better drawn badly than not
+  # drawn at all.
+  crowded <- mapping_engine$TIP_MAPPING_MAX + 1L
+  out <- list()
+  for (i in seq_len(5)) {
+    out <- c(out, list(mapping_engine$assign_mapping_layer(
+      prof(4, field = paste0("v", i)),
+      out,
+      id = paste0("L", i),
+      n_units = crowded
+    )))
+  }
+  aes <- vapply(out, function(l) l$aesthetic, character(1))
+
+  expect_identical(sum(aes == "tile"), mapping_engine$MAX_TILES)
+  expect_identical(aes[[5]], "tippoint_shape")
+})
+
+test_that("a rebalance on a crowded tree moves automatic layers to the tiles", {
+  # Deleting a layer re-derives the automatic ones, and the tip count is part
+  # of that derivation — otherwise the rebuild would put them back on the tips.
+  crowded <- mapping_engine$TIP_MAPPING_MAX + 1L
+  md <- data.frame(
+    isolate = sprintf("i%03d", seq_len(40)),
+    v = rep(letters[1:4], length.out = 40),
+    stringsAsFactors = FALSE
+  )
+  p <- field_profile$field_profiles(md)
+  ls <- list(mapping_engine$assign_mapping_layer(prof(4)))
+  expect_identical(ls[[1]]$aesthetic, "tippoint_shape")
+
+  out <- mapping_engine$rebalance_layers(ls, p, "tree", md, crowded)
+  expect_identical(out[[1]]$aesthetic, "tile")
+})

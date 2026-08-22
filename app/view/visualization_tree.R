@@ -41,7 +41,7 @@ box::use(
     logic /
     field_labels[
       amr_field_map,
-      field_labels_for,
+      AMR_SECTIONS,
       grouped_field_choices,
     ],
   app /
@@ -60,26 +60,28 @@ box::use(
       AESTHETIC_LABELS,
       assign_mapping_layer,
       COLOR_AESTHETICS,
+      crowded_tips,
       eligible_aesthetics,
       granularity_profile,
       is_date_profile,
       MAX_LAYERS,
       rebalance_layers,
-      set_layer_granularity
+      set_layer_granularity,
+      TIP_MAPPING_MAX
     ],
   app / logic / functions[render_info],
   app /
     logic /
     tree_plot[
-      annotation_total,
       build_tree_ggtree,
       save_tree_plot,
       tree_auto_layout,
+      tree_legend_shown,
       tree_legend_width_in,
       tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
-  app / logic / database_functions[load_amr_matrix],
+  app / logic / database_functions[AMR_ABSENT, load_amr_matrix],
   app / logic / phylo[compute_phylo_tree],
   app / logic / viz_export[save_plot_export],
   app /
@@ -210,56 +212,24 @@ LAYER_DEFAULTS <- list(
   )
 }
 
-# One heatmap panel's controls: a switch and a column picker. Both levels get
-# one, and both can be on at once — a drug-class overview beside the genes that
-# produced it is the comparison the panel exists for.
-.heatmap_card <- function(ns, level, title, hint) {
-  shiny$div(
-    class = "tree-heatmap-card",
-    id = ns(paste0("nj_heatcard_", level)),
-    input_switch(ns(paste0("nj_heatmap_", level)), title, FALSE),
-    shiny$div(class = "text-muted small mb-2", hint),
-    virtualSelectInput(
-      ns(paste0("nj_heatcols_", level)),
-      "Columns",
-      choices = character(0),
-      selected = character(0),
-      multiple = TRUE,
-      search = TRUE,
-      # Without this, the header checkbox selects every column, not just the
-      # ones the search term currently matches.
-      selectAllOnlyVisible = TRUE,
-      searchPlaceholderText = "Search columns ...",
-      placeholder = "All columns",
-      hasOptionDescription = TRUE,
-      optionsCount = 5,
-      noOfDisplayValues = 2,
-      dropboxWrapper = "body",
-      showDropboxAsPopup = TRUE,
-      popupDropboxBreakpoint = "10000px",
-      updateOn = "close",
-      width = "100%"
-    )
-  )
-}
-
-# One heatmap panel's controls: a switch and a column picker. Both levels get
-# one, and both can be shown at once — a drug-class overview beside the genes
-# that produced it is the comparison the panel exists for.
+# One heatmap panel's controls: a switch and a column picker. One card per
+# report abritamr writes, and both can be shown at once — resistance genes and
+# virulence/stress genes are different findings about the same isolate, and
+# reading one against the other is what having two panels is for.
 #
 # Rendered statically, and only their *choices* are filled in server-side. Built
 # in a renderUI they were re-created on every interaction (changing a control is
 # what changes the record the renderUI read), each time from
 # `choices = character(0)` — which is why the list came up empty, why a chosen
 # subset vanished, and why the tree drew twice.
-.heatmap_card <- function(ns, level, title, hint) {
+.heatmap_card <- function(ns, panel, title, hint) {
   shiny$div(
     class = "tree-heatmap-card",
-    id = ns(paste0("nj_heatcard_", level)),
-    input_switch(ns(paste0("nj_heatmap_", level)), title, FALSE),
+    id = ns(paste0("nj_heatcard_", panel)),
+    input_switch(ns(paste0("nj_heatmap_", panel)), title, FALSE),
     shiny$div(class = "text-muted small mb-2", hint),
     virtualSelectInput(
-      ns(paste0("nj_heatcols_", level)),
+      ns(paste0("nj_heatcols_", panel)),
       "Columns",
       choices = character(0),
       selected = character(0),
@@ -287,7 +257,10 @@ LAYER_DEFAULTS <- list(
     x,
     list(
       kind = NA_character_,
+      level = "gene",
+      section = NA_character_,
       cols = character(0),
+      labels = character(0),
       palette = "Reds",
       title = NA_character_
     )
@@ -295,11 +268,16 @@ LAYER_DEFAULTS <- list(
   if (is.null(out)) {
     return(NULL)
   }
+  # The drug-class panel no longer has a control, so a snapshot saved while it
+  # existed restores without it rather than as a panel nothing can switch off.
+  out <- Filter(function(h) !identical(h$level, "class"), out)
   lapply(out, function(h) {
     # `character(0)` serialises to `[]`, which jsonlite reads back as an empty
     # *list* rather than a character vector.
     v <- unlist(h$cols, use.names = FALSE)
     h$cols <- if (!length(v)) character(0) else as.character(v)
+    l <- unlist(h$labels, use.names = FALSE)
+    h$labels <- if (!length(l)) NULL else as.character(l)
     h
   })
 }
@@ -583,15 +561,15 @@ tree_controls <- function(ns, options_ui = NULL) {
             shiny$uiOutput(ns("nj_heatmap_none")),
             .heatmap_card(
               ns,
-              "class",
-              "Drug classes, virulence and stress",
-              "One column per drug class or virulence/stress group, found or not."
+              "amr",
+              "Resistance genes",
+              "One column per gene, shaded by how confident the call is."
             ),
             .heatmap_card(
               ns,
-              "gene",
-              "Individual genes",
-              "One column per gene, shaded by how confident the call is."
+              "vir",
+              "Virulence / stress genes",
+              "The same, for abritamr's virulence and stress report."
             )
           )
         )
@@ -1288,6 +1266,16 @@ server <- function(
       if (is.null(p) || !nrow(p)) NULL else p
     })
 
+    # Tips this tree will draw, which the mapping engine needs to decide whether
+    # the per-tip channels are still readable (mapping_engine$TIP_MAPPING_MAX).
+    # The profile frame cannot answer it: its own `n` counts every isolate in
+    # the database so a variable reads the same in every tab, while a tree draws
+    # only the tab's selection — one row of `viz_metadata` per tip.
+    n_tips <- shiny$reactive({
+      meta <- viz_metadata()
+      if (is.null(meta)) NULL else nrow(meta)
+    })
+
     # Resolved Tree control values, shared by the live render and the export.
     tree_opts <- shiny$reactive(
       list(
@@ -1379,7 +1367,8 @@ server <- function(
         opts$layers,
         md,
         opts$legend_size,
-        TREE_PANEL_IN
+        TREE_PANEL_IN,
+        opts$heatmaps
       )
       # Solved in tree_plot.R, beside the axis split it has to agree with: the
       # annotations' share is a fraction of the tree's *span*, not of the panel,
@@ -1633,7 +1622,8 @@ server <- function(
         prof,
         layers,
         id = next_layer_id(),
-        values = viz_metadata()[[field]]
+        values = viz_metadata()[[field]],
+        n_units = n_tips()
       )
       if (is.null(layer)) {
         shiny$showNotification(
@@ -1654,7 +1644,9 @@ server <- function(
         function(l) !identical(l$id, input$nj_layer_delete),
         nj_layers()
       )
-      nj_layers(rebalance_layers(keep, profiles(), "tree", viz_metadata()))
+      nj_layers(
+        rebalance_layers(keep, profiles(), "tree", viz_metadata(), n_tips())
+      )
     })
 
     output$nj_layers_ui <- shiny$renderUI({
@@ -1682,7 +1674,11 @@ server <- function(
                   if (!is.null(granularity_label(l$granularity))) {
                     paste("· by", tolower(granularity_label(l$granularity)))
                   },
-                  if (!is.null(l$palette)) paste("·", l$palette)
+                  if (!is.null(l$palette)) paste("·", l$palette),
+                  # Too many values for a key list to be worth reading, so the
+                  # plot draws the colours and skips the legend. Said here
+                  # because a missing legend otherwise reads as a fault.
+                  if (!tree_legend_shown(l$n_levels)) "· no legend"
                 )
               )
             ),
@@ -1716,7 +1712,10 @@ server <- function(
       # the raw column is a continuum and cannot.
       values <- viz_metadata()[[l$field]]
       binned <- granularity_profile(prof, values, l$granularity)
-      free <- union(l$aesthetic, eligible_aesthetics(binned, taken))
+      free <- union(
+        l$aesthetic,
+        eligible_aesthetics(binned, taken, "tree", n_tips())
+      )
       blocked <- setdiff(names(AESTHETIC_LABELS), free)
       reasons <- Filter(
         Negate(is.null),
@@ -1744,6 +1743,21 @@ server <- function(
           choices = setNames(free, unname(AESTHETIC_LABELS[free])),
           selected = l$aesthetic
         ),
+        # Why the tile strip led the list. The per-tip channels are still
+        # offered — this says what picking one costs at this many tips.
+        if (crowded_tips(n_tips())) {
+          shiny$div(
+            class = "small text-muted mb-2",
+            sprintf(
+              paste(
+                "%d tips is past the %d this tree can draw a readable tip",
+                "point or label at. A tile strip keeps its width whatever",
+                "the tip count; the others do not."
+              ),
+              n_tips(), TIP_MAPPING_MAX
+            )
+          )
+        },
         if (length(reasons)) {
           shiny$div(
             class = "small text-muted mb-2",
@@ -1786,7 +1800,9 @@ server <- function(
       })
       # A pinned layer may now hold an aesthetic an automatic one had, so the
       # automatic ones move out of its way.
-      nj_layers(rebalance_layers(layers, profiles(), "tree", viz_metadata()))
+      nj_layers(
+        rebalance_layers(layers, profiles(), "tree", viz_metadata(), n_tips())
+      )
       editing(NULL)
       shiny$removeModal()
     })
@@ -1901,9 +1917,30 @@ server <- function(
 
     # --- Heatmap panels ------------------------------------------------------
     #
-    # Two panels, either or both. They answer different questions — "which drug
-    # classes did this isolate come back positive for" and "which genes said
-    # so" — and reading one against the other is the whole point of having both.
+    # Two panels, either or both, one per report abritamr writes: resistance
+    # genes and virulence/stress genes. Both are the same measurement — the
+    # call on one gene in one isolate — which is what makes a shared fill scale
+    # mean something; they are two panels rather than one because they answer
+    # different questions about the isolate and a reader looks for them
+    # separately.
+    #
+    # The drug-class panel is gone. It drew one column per class holding
+    # presence or absence, which is the *same* finding as its genes with the
+    # detail thrown away: a class column is positive exactly when one of its
+    # gene columns is. Two panels saying the same thing at different
+    # resolutions is not a comparison, it is a duplicate — and it cost a column
+    # run and a legend to say so.
+
+    # What the two panels are, and which of abritamr's sections each draws.
+    # Keyed by the suffix their controls carry, so the id, the catalogue and
+    # the record it produces all come off one table.
+    HEATMAP_PANELS <- list(
+      amr = list(section = AMR_SECTIONS[["resistance"]], title = "AMR genes"),
+      vir = list(
+        section = AMR_SECTIONS[["virulence"]],
+        title = "Virulence / stress genes"
+      )
+    )
 
     # The gene-level call matrix, in the shape a heatmap needs: one column per
     # gene, every gene, whether or not it is in the current selection. Read
@@ -1943,57 +1980,37 @@ server <- function(
       unname(ifelse(is.na(x) | !nzchar(trimws(x)), default, x))
     }
 
+    # Read off the metadata table rather than the call matrix. Both carry the
+    # same gene columns — the matrix is what the panel *draws*, because it keeps
+    # the call states unfilled — but the metadata frame is what the variable
+    # pickers are already built from, so listing the columns from it is what
+    # makes a gene describe itself the same way wherever it is offered.
     gene_catalog <- shiny$reactive({
-      mat <- amr_matrix()
-      if (is.null(mat)) {
-        return(.empty_catalog)
-      }
-      cols <- setdiff(names(mat), "isolate")
-      if (!length(cols)) {
-        return(.empty_catalog)
-      }
-      genes <- (attr(mat, "amr_gene_labels") %||% character(0))[cols]
-      groups <- (attr(mat, "amr_gene_groups") %||% character(0))[cols]
-      sections <- (attr(mat, "amr_gene_sections") %||% character(0))[cols]
-      hits <- vapply(cols, function(c) sum(!is.na(mat[[c]])), integer(1))
-      data.frame(
-        col = cols,
-        label = .or_default(genes, cols),
-        # Filed under the drug class, which is how a reader looks for a gene.
-        group = .or_default(groups, "Other"),
-        description = sprintf(
-          "%d isolate%s · %s",
-          hits,
-          ifelse(hits == 1L, "", "s"),
-          .or_default(sections, "Resistance")
-        ),
-        stringsAsFactors = FALSE
-      )
-    })
-
-    class_catalog <- shiny$reactive({
       meta <- viz_metadata()
       if (is.null(meta)) {
         return(.empty_catalog)
       }
-      # The drug-class columns only: viz_metadata carries the gene columns too
-      # now, and those are the *other* panel — listing them here would offer
-      # every gene twice, once per level, under a heading saying otherwise.
       map <- amr_field_map(meta)
-      cols <- intersect(names(meta), map$field[map$role == "class"])
-      if (!length(cols)) {
+      map <- map[map$role == "gene" & map$field %in% names(meta), , drop = FALSE]
+      if (!nrow(map)) {
         return(.empty_catalog)
       }
-      sections <- (attr(meta, "amr_class_sections") %||% character(0))[cols]
       hits <- vapply(
-        cols,
-        function(c) sum(nzchar(trimws(as.character(meta[[c]]))), na.rm = TRUE),
+        map$field,
+        function(c) {
+          v <- trimws(as.character(meta[[c]]))
+          sum(!is.na(v) & nzchar(v) & v != AMR_ABSENT)
+        },
         integer(1)
       )
       data.frame(
-        col = cols,
-        label = field_labels_for(cols),
-        group = .or_default(sections, "Resistance"),
+        col = map$field,
+        label = .or_default(map$gene, map$field),
+        # Filed under the drug class, which is how a reader looks for a gene.
+        group = .or_default(map$class, "Other"),
+        # Which panel the gene belongs to. The section is the report abritamr
+        # found it in, and it is what splits the two panels' catalogues.
+        section = .or_default(map$section, AMR_SECTIONS[["resistance"]]),
         description = sprintf(
           "%d isolate%s",
           hits,
@@ -2003,12 +2020,17 @@ server <- function(
       )
     })
 
-    heatmap_catalog <- function(level) {
-      if (identical(level, "gene")) gene_catalog() else class_catalog()
+    # One panel's columns: the genes from its own section, in catalogue order.
+    heatmap_catalog <- function(panel) {
+      cat <- gene_catalog()
+      if (!nrow(cat)) {
+        return(cat)
+      }
+      cat[cat$section == HEATMAP_PANELS[[panel]]$section, , drop = FALSE]
     }
 
     output$nj_heatmap_none <- shiny$renderUI({
-      if (nrow(class_catalog()) || nrow(gene_catalog())) {
+      if (nrow(gene_catalog())) {
         return(NULL)
       }
       shiny$div(
@@ -2020,13 +2042,13 @@ server <- function(
     # Fill each picker's choices once its catalogue is known, and again if the
     # database changes. A selection that still exists is kept — this is an
     # update, not a rebuild, which is the whole reason the controls are static.
-    for (lvl in c("class", "gene")) {
+    for (key in names(HEATMAP_PANELS)) {
       local({
-        level <- lvl
-        picker <- paste0("nj_heatcols_", level)
+        panel <- key
+        picker <- paste0("nj_heatcols_", panel)
 
         shiny$observe({
-          cat <- heatmap_catalog(level)
+          cat <- heatmap_catalog(panel)
           shiny$req(nrow(cat))
           keep <- intersect(
             shiny$isolate(input[[picker]]) %||% character(0),
@@ -2046,32 +2068,33 @@ server <- function(
           )
         })
 
-        # A level with nothing to show cannot be switched on.
+        # A panel with nothing to show cannot be switched on: a database whose
+        # screen found no virulence gene has nothing to put in that column run.
         shiny$observe({
           shinyjs::toggleState(
-            id = paste0("nj_heatmap_", level),
-            condition = nrow(heatmap_catalog(level)) > 0L
+            id = paste0("nj_heatmap_", panel),
+            condition = nrow(heatmap_catalog(panel)) > 0L
           )
         })
       })
     }
 
-    # One record per switched-on level, in a fixed order so the panels always
-    # draw class-then-gene however they were switched on. An empty picker means
-    # "all columns" rather than an empty matrix — the placeholder says so, and a
-    # panel with no columns draws nothing at all.
+    # One record per switched-on panel, in HEATMAP_PANELS order so resistance
+    # always draws before virulence however they were switched on. An empty
+    # picker means "all columns" rather than an empty matrix — the placeholder
+    # says so, and a panel with no columns draws nothing at all.
     shiny$observe({
       out <- list()
-      for (level in c("class", "gene")) {
-        if (!isTRUE(input[[paste0("nj_heatmap_", level)]])) {
+      for (key in names(HEATMAP_PANELS)) {
+        if (!isTRUE(input[[paste0("nj_heatmap_", key)]])) {
           next
         }
-        cat <- heatmap_catalog(level)
+        cat <- heatmap_catalog(key)
         if (!nrow(cat)) {
           next
         }
         chosen <- intersect(
-          input[[paste0("nj_heatcols_", level)]] %||% character(0),
+          input[[paste0("nj_heatcols_", key)]] %||% character(0),
           cat$col
         )
         if (!length(chosen)) {
@@ -2080,15 +2103,13 @@ server <- function(
         idx <- match(chosen, cat$col)
         out[[length(out) + 1L]] <- list(
           kind = "amr",
-          level = level,
+          # Both panels draw the gene matrix; `section` is what separates them.
+          level = "gene",
+          section = key,
           cols = chosen,
           labels = cat$label[idx],
           palette = "Reds",
-          title = if (identical(level, "gene")) {
-            "AMR genes"
-          } else {
-            "AMR classes"
-          }
+          title = HEATMAP_PANELS[[key]]$title
         )
       }
       nj_heatmaps(out)
@@ -2152,7 +2173,7 @@ server <- function(
           "nj_rootedge_show",
           "nj_treescale_show",
           "nj_axis_show",
-          paste0("nj_heatmap_", c("class", "gene"))
+          paste0("nj_heatmap_", names(HEATMAP_PANELS))
         ),
         selects = c(
           "nj_tippoint_shape",

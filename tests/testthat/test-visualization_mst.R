@@ -10,7 +10,9 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / mst_plot,
   app / logic / mst_plot[mst_node_sizes],
+  app / logic / tree_plot[MISSING_COLOR],
   app / view / visualization_mst,
 )
 
@@ -85,7 +87,7 @@ set_mst_inputs <- function(session, ...) {
     mst_collapse_threshold = 0,
     mst_show_clusters = TRUE,
     mst_cluster_col_scale = "viridis",
-    mst_cluster_width = 20,
+    mst_cluster_width = 15,
     mst_cluster_opacity = 35,
     mst_cluster_label_size = 18,
     mst_cluster_label_tint = FALSE,
@@ -223,6 +225,48 @@ test_that("a mapped variable takes the fill; a second is refused", {
     # refused rather than mapped to nothing.
     session$setInputs(mst_layer_add = "ward")
     expect_identical(length(mst_layers()), 1L)
+  })
+})
+
+test_that("the cluster assignment is offered as a variable and colours the nodes", {
+  # Why it exists: the legend counts *isolates*, the canvas shows *nodes*, and
+  # the shaded region says which nodes are in a cluster only by where it stops.
+  # Colouring the nodes says it on the nodes themselves, so "four unclustered"
+  # can be checked by looking rather than by subtracting.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(
+      session,
+      mst_cluster_threshold = 1,
+      mst_show_clusters = FALSE
+    )
+    generate(1L)
+    session$flushReact()
+
+    # Offered by the picker, ahead of the database's own columns.
+    prof <- profiles()
+    expect_identical(prof$field[[1]], mst_plot$MST_CLUSTER_FIELD)
+    expect_identical(prof$group[[1]], "Clustering")
+    # ... but not as a node *label*: it exists only while the frames are built.
+    expect_false(mst_plot$MST_CLUSTER_FIELD %in% label_profile()$field)
+
+    session$setInputs(mst_layer_add = mst_plot$MST_CLUSTER_FIELD)
+    expect_identical(length(mst_layers()), 1L)
+    expect_identical(mst_layers()[[1]]$field, mst_plot$MST_CLUSTER_FIELD)
+
+    # Mapped even with the regions switched off — the two are separate choices.
+    fills <- frames()$nodes$color.background
+    expect_true(MISSING_COLOR %in% fills)
+    keys <- Filter(function(i) identical(i$kind, "key"), frames()$legend)
+    labels <- vapply(keys, function(i) i$label, character(1))
+    expect_true(mst_plot$MST_UNCLUSTERED %in% labels)
+    expect_true(any(grepl("^Cluster ", labels)))
+
+    # Grey, not a palette colour: it is the level a reader is scanning for.
+    grey <- which(fills == MISSING_COLOR)
+    expect_true(length(grey) > 0L)
   })
 })
 
