@@ -39,7 +39,7 @@ box::use(
     radioGroupButtons,
     pickerInput,
     pickerOptions,
-    updatePickerInput
+    updateVirtualSelect
   ],
   rlang[`%||%`],
 )
@@ -48,22 +48,63 @@ box::use(
   app / logic / db_events,
   app / logic / epi_plot,
   app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
+  app /
+    logic /
+    field_profile[
+      field_profiles_of = field_profiles,
+      profile_for,
+      scale_categories_for,
+    ],
   app / logic / functions[render_info],
-  app / logic / mapping_engine[is_date_profile],
+  app /
+    logic /
+    mapping_engine[
+      aesthetic_block_reason,
+      assign_mapping_layer,
+      granularity_profile,
+      is_date_profile,
+      max_layers,
+      rebalance_layers,
+      set_layer_granularity,
+    ],
   app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
+      apply_input_snapshot,
+      collect_input_snapshot,
       field_select,
       granularity_select,
       reset_viz_colors,
       scale_select,
+      suitable_scale_categories,
+      update_field_select,
       viz_color,
-      collect_input_snapshot,
-      apply_input_snapshot,
+    ],
+  app /
+    logic /
+    viz_layers[
+      drop_layer,
+      find_layer,
+      layer_cards,
+      layer_defaults,
+      layer_has_field,
+      layer_id_source,
+      normalize_layers,
     ],
 )
+
+# --- Variable mapping layers -------------------------------------------------
+
+# The medium this engine maps onto, in app/logic/mapping_engine.R's terms: the
+# bar fill alone. What used to be the "Stratification" picker is one layer on
+# that channel, so the curve offers the same mapping card, palette dialog and
+# date grouping as the Tree and the MST rather than its own arrangement.
+MEDIUM <- "epi"
+
+# Canonical shape of one mapping layer, taken from the shared record so the
+# snapshot/restore path here and in the other engines rebuild the same thing.
+LAYER_DEFAULTS <- layer_defaults(MEDIUM)
 
 # Only a fallback for before a dataset is known: the real default is fitted to
 # the loaded data's date span (see fitted_interval).
@@ -203,18 +244,6 @@ epi_controls <- function(ns) {
               input_switch(ns("epi_label_ends"), "Label lines", TRUE)
             )
           ),
-          # Stratification -----------------------------------------------------
-          accordion_panel(
-            "Stratification",
-            icon = shiny$icon("layer-group"),
-            # Rendered server-side: the choices are this database's metadata
-            # columns, so the picker is built once they are known rather than
-            # being declared empty here and back-filled (an empty <select>
-            # initialises bootstrap-select in its disabled state). Same pattern
-            # as the staged peers picker in visualization.R.
-            shiny$uiOutput(ns("stratify_ui")),
-            shiny$uiOutput(ns("stratify_granularity_ui"))
-          ),
           # Axes & Sizing ------------------------------------------------------
           accordion_panel(
             "Axes & Sizing",
@@ -311,33 +340,37 @@ epi_controls <- function(ns) {
           "to sweep forward from the start handle one interval at a time."
         )
       ),
+      # Variable mapping -------------------------------------------------------
+      nav_panel(
+        "Mapping",
+        icon = shiny$icon("layer-group"),
+        # One picker over the *variables*, the same arrangement as the Tree and
+        # the MST, though a curve has only one channel to give a variable: the
+        # bar fill. Picking a variable adds a layer and
+        # app/logic/mapping_engine.R decides its palette from the variable's own
+        # profile. The plotted collection date is not offered — splitting the
+        # curve by its own x axis draws one series per bar.
+        field_select(ns, "epi_layer_add", "Map a variable"),
+        shiny$uiOutput(ns("epi_layers_ui"))
+      ),
       # Colors -------------------------------------------------------------
       nav_panel(
         "Colors",
         icon = shiny$icon("palette"),
-        # A colour scale only means anything once the curve is split into
-        # strata to tell apart; with a single series there is just one bar
-        # colour to set. So the scale select shows only while stratified, and a
-        # plain colour picker takes its place otherwise. The empty string is the
-        # "no stratification" sentinel (see stratify_selected); an undefined
-        # epi_stratify — before stratify_ui has rendered — counts as unstratified
-        # too, which `!= null` (JS ==/!= treat undefined and null alike) covers.
-        shiny$conditionalPanel(
-          condition = "input.epi_stratify != '' && input.epi_stratify != null",
-          ns = ns,
-          # Placeholder choices: which scales are actually offered depends on how
-          # many strata there are, and is swapped in by apply_scale_choices().
-          scale_select(ns, "epi_col_scale", categories = "Qualitative")
-        ),
-        # The single-series colour lives in the same grid as Text and Background
-        # so all three colour rows share one gap; only its visibility is
-        # conditional (shown when not stratified). Keeping it in a separate grid
-        # would space it differently from the rows below it.
+        # The single-series colour lives in the same grid as Text and
+        # Background so all three colour rows share one gap; only its
+        # visibility is conditional. Keeping it in a separate grid would space
+        # it differently from the rows below it.
+        #
+        # It is hidden the moment a variable is mapped, because the mapping's
+        # palette is then what colours the bars — the swatch would be a control
+        # with no effect. The wrapper carries the id the server toggles (a
+        # conditionalPanel cannot see the layer list, which is reactiveVal state
+        # rather than an input).
         shiny$div(
           class = "viz-color-grid",
-          shiny$conditionalPanel(
-            condition = "input.epi_stratify == '' || input.epi_stratify == null",
-            ns = ns,
+          shiny$div(
+            id = ns("epi_single_color_wrap"),
             viz_color(ns, "epi_single_color", "Series", SINGLE_COLOR_DEFAULT)
           ),
           viz_color(ns, "epi_text_color", "Text", TEXT_COLOR_DEFAULT),
@@ -384,7 +417,7 @@ epi_controls <- function(ns) {
         pickerInput(
           ns("epi_anno_type"),
           "Type",
-          c(`Milestone (line)` = "milestone", `Time period (shaded)` = "period")
+          c(Timestamp = "milestone", `Time period` = "period")
         ),
         # startview = "decade" opens the picker on a year grid, so jumping to a
         # collection year (often years before today's default) is one click
@@ -627,30 +660,22 @@ server <- function(
     # Timeline annotations the user has added (see the Annotations tab).
     annotations <- shiny$reactiveVal(epi_plot$empty_epi_annotations())
 
-    # Bumped to rebuild the server-rendered pickers (Reset settings).
-    stratify_rebuild <- shiny$reactiveVal(0L)
+    # Bumped to rebuild the server-rendered interval picker (Reset settings).
     interval_rebuild <- shiny$reactiveVal(0L)
 
-    # TRUE for exactly one stratify_ui rebuild: the reset path forces the picker
-    # back to "No stratification", whereas a plain data-driven re-render (a new
-    # database / isolate set changing stratify_fields()) keeps the current field
-    # so a deliberate choice sticks. stratify_ui re-renders on both, and can't
-    # tell them apart from its dependencies alone — this flag is the signal,
-    # set by reset just before it bumps stratify_rebuild() and consumed (reset to
-    # FALSE) on read. Mirrors the force_default argument the Tree/Map pass to
-    # their update*Input reset path (visualization_tree.R populate_metadata_selects),
-    # adapted to a renderUI-rebuilt (bucket 5) control.
-    stratify_force_default <- shiny$reactiveVal(FALSE)
+    # The variables mapped onto the curve. At most one — a curve's bars are
+    # already a stack, so the mapped variable *is* the stack (see MEDIUM) — but
+    # held as a list, because that is the shape every engine's mapping state,
+    # snapshot and restore path share.
+    epi_layers <- shiny$reactiveVal(list())
+    epi_layer_seq <- shiny$reactiveVal(0L)
 
-    # A reopened plot's saved stratification and its granularity, parked here
-    # for the two renderUIs that own those controls to apply on their next
-    # rebuild. Neither can be restored with an update*Input() call: both
-    # controls are renderUI output, and a render replaces the control outright,
-    # discarding whatever was pushed at the element it replaced. Both are
-    # consumed on read, the same one-shot shape as stratify_force_default.
+    # A reopened plot's saved interval, parked here for the renderUI that owns
+    # that control to apply on its next rebuild. It cannot be restored with an
+    # update*Input() call: the control is renderUI output, and a render replaces
+    # it outright, discarding whatever was pushed at the element it replaced.
+    # Consumed on read.
     restore_interval <- shiny$reactiveVal(NULL)
-    restore_stratify <- shiny$reactiveVal(NULL)
-    restore_granularity <- shiny$reactiveVal(NULL)
 
     # Whether "Play" is running. Drives the tick loop, the button label, and
     # locking the date-range slider and its step buttons (a manual drag
@@ -737,8 +762,8 @@ server <- function(
     })
 
     # Anything except the isolate id and the date being plotted is a candidate
-    # stratifier.
-    stratify_fields <- shiny$reactive({
+    # variable. Splitting the curve by its own x axis draws one series per bar.
+    mappable_fields <- shiny$reactive({
       meta <- viz_metadata()
       if (is.null(meta) || !length(names(meta))) {
         return(character())
@@ -746,150 +771,233 @@ server <- function(
       setdiff(names(meta), c("isolate", epi_plot$EPI_DATE_FIELD))
     })
 
-    # A single field, or none. Composite (multi-field) stratification is
-    # something build_epi_data still supports (stratify_by takes a vector), but
-    # a picker with 40 countries selectable two at a time confused more than it
-    # clarified — the curve reads better naming one thing at a time.
-    output$stratify_ui <- shiny$renderUI({
-      render_info("visualization_epi stratify_ui")
-      fields <- stratify_fields()
-      stratify_rebuild()
-      if (!length(fields)) {
+    # Every column's profile, for the variable picker and the mapping engine.
+    profiles <- shiny$reactive({
+      meta <- viz_metadata()
+      if (is.null(meta) || !length(names(meta))) {
         return(NULL)
       }
-      prev <- shiny$isolate(input$epi_stratify)
-      # Consumed here: TRUE only on a reset-driven rebuild, where the picker must
-      # return to "No stratification" rather than preserve prev (which a reset
-      # otherwise wouldn't clear, since prev is still a valid field). Read under
-      # isolate so writing it back doesn't re-invalidate this render.
-      force_default <- shiny$isolate(stratify_force_default())
-      if (force_default) {
-        stratify_force_default(FALSE)
-      }
-      # A reopened plot's saved stratification, applied here rather than pushed
-      # at it from restore(). An update*Input() cannot win against this render:
-      # restoring writes the tab's selection reactiveVals, which invalidates
-      # stratify_fields() and so re-runs this very output in the same flush,
-      # replacing the control - and with it any value just sent to the old one.
-      # Rendering the value in is the only way it survives. Consumed on read,
-      # exactly as force_default is.
-      pending <- shiny$isolate(restore_stratify())
-      if (!is.null(pending)) {
-        restore_stratify(NULL)
-      }
-      # Categorised, human-readable labels, each carrying its own value count
-      # and declared type; the selected value stays the raw column name the
-      # plot builder keys on. "" is the sentinel for no stratification — see
-      # stratify_selected().
-      meta <- viz_metadata()
-      prof <- field_profiles() %||%
+      field_profiles() %||%
         field_profiles_of(
           meta,
           mlst_cols = attr(meta, "mlst_cols"),
           amr_cols = attr(meta, "amr_cols"),
           custom_cols = attr(meta, "custom_cols")
         )
-      # `fields` already excludes the plotted date and the isolate id — the
-      # profile frame covers every column, so it has to be narrowed to what
-      # this control is allowed to offer.
-      field_select(
+    })
+
+    # Fill the picker as soon as a database is loaded rather than waiting for a
+    # Generate: until then it lists the placeholder names viz_helpers declares
+    # it with — "Isolation Date", "Host", "Country" — which are not columns of
+    # any real database.
+    shiny$observeEvent(
+      profiles(),
+      {
+        prof <- profiles()
+        fields <- mappable_fields()
+        shiny$req(!is.null(prof), nrow(prof), length(fields))
+        update_field_select(
+          session,
+          "epi_layer_add",
+          prof[prof$field %in% fields, , drop = FALSE]
+        )
+      },
+      ignoreNULL = TRUE
+    )
+
+    # --- Variable mapping layers --------------------------------------------
+
+    next_layer_id <- layer_id_source(epi_layer_seq)
+
+    shiny$observeEvent(input$epi_layer_add, {
+      field <- input$epi_layer_add
+      shiny$req(nzchar(field %||% ""))
+      # Clear the picker straight away so the same variable can be re-picked
+      # after a delete, and so the selection cannot re-fire on a later flush.
+      updateVirtualSelect(
+        inputId = "epi_layer_add",
+        session = session,
+        selected = character(0)
+      )
+
+      layers <- epi_layers()
+      if (layer_has_field(layers, field)) {
+        return()
+      }
+      if (length(layers) >= max_layers(MEDIUM)) {
+        shiny$showNotification(
+          paste(
+            "An epi curve can split by only one variable at a time. Remove",
+            "the current mapping first."
+          ),
+          type = "warning"
+        )
+        return()
+      }
+      prof <- profile_for(profiles(), field)
+      layer <- assign_mapping_layer(
+        prof,
+        layers,
+        next_layer_id(),
+        MEDIUM,
+        viz_metadata()[[field]]
+      )
+      if (is.null(layer)) {
+        shiny$showNotification(
+          aesthetic_block_reason(prof, NULL, MEDIUM) %||%
+            "That variable cannot be mapped.",
+          type = "warning"
+        )
+        return()
+      }
+      epi_layers(c(layers, list(layer)))
+    })
+
+    # One delegated handler per action rather than one observer per row: an
+    # observeEvent created inside renderUI is re-registered on every render, so
+    # the ids push their own value into a single input instead.
+    shiny$observeEvent(input$epi_layer_delete, {
+      keep <- drop_layer(epi_layers(), input$epi_layer_delete)
+      epi_layers(rebalance_layers(keep, profiles(), MEDIUM, viz_metadata()))
+    })
+
+    output$epi_layers_ui <- shiny$renderUI({
+      render_info("visualization_epi epi_layers_ui")
+      layer_cards(
         ns,
-        "epi_stratify",
-        "Stratify by",
-        profiles = prof[prof$field %in% fields, , drop = FALSE],
-        selected = if (isTRUE(pending %in% fields)) {
-          pending
-        } else if (!force_default && isTRUE(prev %in% fields)) {
-          prev
-        } else {
-          ""
-        },
-        extra = c(`No stratification` = ""),
-        placeholder = "No stratification"
+        epi_layers(),
+        MEDIUM,
+        "epi_layer_edit",
+        "epi_layer_delete",
+        empty_text = "No mapping yet - the curve is drawn as one series."
       )
     })
 
-    # input$epi_stratify is always exactly one string: "" for the sentinel "no
-    # stratification" choice, or a field name otherwise. Every reader goes
-    # through this rather than re-checking for "" at each call site.
-    stratify_selected <- function() {
-      s <- input$epi_stratify
-      if (is.null(s) || identical(s, "")) character() else s
+    editing <- shiny$reactiveVal(NULL)
+
+    shiny$observeEvent(input$epi_layer_edit, {
+      l <- find_layer(epi_layers(), input$epi_layer_edit)
+      shiny$req(!is.null(l))
+      prof <- profile_for(profiles(), l$field)
+      shiny$req(!is.null(prof))
+      editing(l$id)
+
+      values <- viz_metadata()[[l$field]]
+      # The palette has to suit the variable as the chosen granularity leaves
+      # it: binned to months it is a category, not a continuum.
+      binned <- granularity_profile(prof, values, l$granularity)
+      # Parsed, not raw: an ungrouped date reaches the scale as a continuum,
+      # and out of SQLite it is a character column that no test for one can
+      # recognise. Left raw, the palette offer came back with Qualitative on it.
+      shown <- if (is_date_profile(prof)) {
+        bin_date_values(values, l$granularity)
+      } else {
+        values
+      }
+      cats <- scale_categories_for(
+        if (isTRUE(binned$continuous)) shown else as.character(shown),
+        suitable_scale_categories(
+          if (isTRUE(binned$continuous)) "Numeric" else "Factor",
+          shown
+        )
+      )
+
+      # No "Show as" picker: the bar fill is the medium's only channel, so what
+      # is left to decide is the palette and, for a date, its grouping.
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Mapping:", l$title),
+        size = "s",
+        easyClose = TRUE,
+        if (is_date_profile(prof)) {
+          granularity_select(
+            ns,
+            "epi_layer_granularity",
+            l$granularity,
+            label = "Group dates by",
+            values = values
+          )
+        },
+        scale_select(
+          ns,
+          "epi_layer_palette",
+          categories = cats,
+          selected = l$palette
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("epi_layer_apply"), "Apply")
+        )
+      ))
+    })
+
+    shiny$observeEvent(input$epi_layer_apply, {
+      id <- editing()
+      shiny$req(!is.null(id))
+      layers <- lapply(epi_layers(), function(l) {
+        if (!identical(l$id, id)) {
+          return(l)
+        }
+        l$palette <- input$epi_layer_palette %||% l$palette
+        l <- set_layer_granularity(
+          l,
+          input$epi_layer_granularity,
+          viz_metadata()[[l$field]]
+        )
+        # Pinned: rebalance_layers() rebuilds automatic layers from scratch and
+        # would discard the palette just chosen.
+        l$auto <- FALSE
+        l
+      })
+      epi_layers(rebalance_layers(layers, profiles(), MEDIUM, viz_metadata()))
+      editing(NULL)
+      shiny$removeModal()
+    })
+
+    # The mapping the curve is drawn with, or NULL for a single-series curve.
+    # Every reader goes through this rather than reaching into the list.
+    mapped_layer <- function() {
+      layers <- epi_layers()
+      if (length(layers)) layers[[1]] else NULL
     }
 
-    # Profile of the field the stratify picker currently holds.
-    stratify_profile <- shiny$reactive({
-      f <- stratify_selected()
-      if (!length(f)) {
-        return(NULL)
-      }
-      meta <- viz_metadata()
-      profile_for(field_profiles() %||% field_profiles_of(meta), f)
-    })
+    # The field the curve splits by, as build_epi_data wants it: a length-0
+    # vector when nothing is mapped.
+    stratify_selected <- function() {
+      l <- mapped_layer()
+      if (is.null(l)) character() else l$field
+    }
 
-    # Only a date can be grouped by a calendar interval. Stratifying by a raw
-    # collection date would draw one series per isolate.
-    output$stratify_granularity_ui <- shiny$renderUI({
-      render_info("visualization_epi stratify_granularity_ui")
-      if (!is_date_profile(stratify_profile())) {
-        return(NULL)
-      }
-      # Read isolated - stratify_profile() above is already this render's
-      # trigger (it changes once epi_stratify's restore round-trips), so
-      # depending on restore_granularity() too would make this render both
-      # read and write the same reactiveVal, invalidating itself into a second
-      # run that finds the value already consumed and falls back to "none".
-      # Consumed here rather than in restore(): this is the first render where
-      # the control exists at all, so it is the first point a value can safely
-      # be applied to it.
-      pending <- shiny$isolate(restore_granularity())
-      selected <- if (!is.null(pending)) {
-        restore_granularity(NULL)
-        pending
-      } else {
-        shiny$isolate(input$epi_stratify_granularity)
-      }
-      granularity_select(
-        ns,
-        "epi_stratify_granularity",
-        selected,
-        label = "Group stratifier dates by"
-      )
-    })
-
-    # The metadata as the builder should see it: a date stratifier grouped into
-    # the chosen interval, everything else untouched. The plotted date axis has
-    # its own interval control and is not affected.
+    # The metadata as the builder should see it: a mapped date grouped into the
+    # layer's calendar interval, everything else untouched. The plotted date
+    # axis has its own interval control and is not affected.
     stratified_meta <- function(meta) {
-      f <- stratify_selected()
-      if (!length(f) || !is_date_profile(stratify_profile())) {
+      l <- mapped_layer()
+      if (is.null(l) || is.null(l$granularity)) {
         return(meta)
       }
-      meta[[f]] <- as.character(
-        bin_date_values(meta[[f]], input$epi_stratify_granularity)
+      meta[[l$field]] <- as.character(
+        bin_date_values(meta[[l$field]], l$granularity)
       )
       meta
     }
 
-    # Restrict the colour-scale picker to the scales that can actually carry the
-    # current number of strata, and move the selection if it no longer can.
-    # Mirrors filter_scale_choices() in visualization_tree.R, but keyed on how
-    # many strata there are rather than the mapped variable's type — see
-    # epi_plot$epi_scale_choices().
-    apply_scale_choices <- function(n_strata, force_default = FALSE) {
-      choices <- epi_plot$epi_scale_choices(n_strata)
-      selected <- if (force_default) {
-        unlist(choices, use.names = FALSE)[1]
-      } else {
-        epi_plot$epi_fit_scale(input$epi_col_scale, n_strata)
-      }
-      updatePickerInput(
-        session,
-        "epi_col_scale",
-        choices = choices,
-        selected = selected
-      )
+    # The palette the mapping carries, fitted to how many strata it actually
+    # produces. The engine picks a palette off the variable's profile, which
+    # counts every value in the database; the curve draws only the isolates in
+    # this plot, so a tabulated palette can still come up short here.
+    epi_col_scale <- function() {
+      l <- mapped_layer()
+      if (is.null(l)) COL_SCALE_DEFAULT else l$palette %||% COL_SCALE_DEFAULT
     }
+
+    # The single-series swatch has no effect once a mapping colours the bars,
+    # so it is hidden rather than left as a dead control (see the Colors tab).
+    shiny$observe({
+      shinyjs::toggle(
+        id = "epi_single_color_wrap",
+        condition = is.null(mapped_layer())
+      )
+    })
 
     # --- reset --------------------------------------------------------------
 
@@ -925,22 +1033,18 @@ server <- function(
       win_start_idx(0L)
       win_end_idx(0L)
       anim_target_idx(0L)
-      # All three pickers are rendered by renderUI, so shinyjs::reset() has no
-      # page-load value to restore them from — rebuild them instead, which
-      # drops any selection and re-applies the fit. daterange_ui shares the
-      # interval's counter because its bounds are just this dataset's bins at
-      # the (possibly just-reset) interval — one bump keeps both in step.
-      # stratify_ui would otherwise *preserve* the current field across the
-      # rebuild (that's what keeps a deliberate choice through a data change),
-      # so signal it to force "No stratification" for this one rebuild. Set
-      # before the bump so the re-render sees it.
-      stratify_force_default(TRUE)
-      stratify_rebuild(stratify_rebuild() + 1L)
+      # The mapping is reactiveVal state, not an input, so shinyjs::reset()
+      # cannot clear it — and the seq goes back to zero with it, which is safe
+      # only because no card survives to address an id that will be handed out
+      # again.
+      epi_layers(list())
+      epi_layer_seq(0L)
+      # The interval picker is rendered by renderUI, so shinyjs::reset() has no
+      # page-load value to restore it from — rebuild it instead, which drops
+      # any selection and re-applies the fit. daterange_ui shares the counter
+      # because its bounds are just this dataset's bins at the (possibly
+      # just-reset) interval — one bump keeps both in step.
       interval_rebuild(interval_rebuild() + 1L)
-
-      # Nothing is stratified after a reset, so one series. Deferred past
-      # shinyjs::reset()'s own asynchronous, stale restoration.
-      shinyjs::delay(400, apply_scale_choices(1L, force_default = TRUE))
     }
 
     shiny$observeEvent(input$reset_settings, reset_epi_settings())
@@ -1058,7 +1162,7 @@ server <- function(
               shiny$div(
                 class = "epi-anno_meta",
                 paste(
-                  if (is_period) "Time period" else "Milestone",
+                  if (is_period) "Time period" else "Timestamp",
                   "|",
                   subtitle
                 )
@@ -1104,14 +1208,15 @@ server <- function(
     # The bins playback walks.
     epi_bins <- shiny$reactive(epi_plot$epi_bins(epi_data()))
 
+    # First and last date actually collected. Not range(epi_bins()): a bin is
+    # named by its first day, so the last bin's name trails the last collection
+    # date by up to an interval.
+    epi_extent <- shiny$reactive(epi_plot$epi_date_range(epi_data()))
+
     # The panel shape square cells force on this data; NULL when it doesn't
     # apply. Drives the plot's height — see the epi_plot renderImage below.
     square_ratio <- shiny$reactive({
       epi_plot$square_panel_ratio(epi_data(), mode_for())
-    })
-
-    shiny$observeEvent(epi_data(), {
-      apply_scale_choices(length(unique(epi_data()$stratum)))
     })
 
     shiny$observeEvent(
@@ -1201,6 +1306,28 @@ server <- function(
       if (idx < 1L || idx > length(bins)) default else idx
     }
 
+    # What the slider shows for the window of bins [s, e]. The handles are
+    # labelled in collected-date terms rather than bin-identity terms: the left
+    # one is bin s's first day (or the first collection date, when s is the
+    # opening bin), the right one the last day bin e covers (or the last
+    # collection date). Labelling the right handle bins[e] instead reported the
+    # span as ending up to an interval early — 2020-12-01 for data collected
+    # through 2020-12-12.
+    slider_bounds <- function(s, e) {
+      bins <- shiny$isolate(epi_bins())
+      rng <- shiny$isolate(epi_extent())
+      interval <- shiny$isolate(input$epi_interval %||% fitted_interval())
+      lo <- bins[s]
+      hi <- epi_plot$bin_end_date(bins[e], interval)
+      if (!is.na(rng[1])) {
+        lo <- max(lo, rng[1])
+      }
+      if (!is.na(rng[2])) {
+        hi <- min(hi, rng[2])
+      }
+      c(lo, hi)
+    }
+
     win_start_date <- shiny$reactive({
       bins <- epi_bins()
       shiny$req(length(bins) >= 1)
@@ -1213,13 +1340,13 @@ server <- function(
     })
 
     # The date-range slider. Rendered server-side, like interval_ui, because
-    # its bounds are this dataset's bin extent — not known until the data
+    # its bounds are this dataset's collected extent — not known until the data
     # exists, and re-derived (via epi_bins()) whenever the interval changes.
-    # Reads win_start_date()/win_end_date() rather than raw bin indices so a
-    # rebuild (reset, or a genuinely new bin set) always bakes in "the full
-    # span" without needing its own special-cased default.
+    # Goes through slider_bounds() rather than raw bin indices so a rebuild
+    # (reset, or a genuinely new bin set) always bakes in "the full span"
+    # without needing its own special-cased default.
     #
-    # Those two window reactives are read under isolate(), NOT as live
+    # The window indices are read under isolate(), NOT as live
     # dependencies. That is what makes playback flicker-free: the tick loop
     # advances win_end_idx() every frame, and if this renderUI depended on it
     # the whole slider uiOutput would re-render each tick — the browser draws
@@ -1235,7 +1362,11 @@ server <- function(
       interval_rebuild()
       bins <- epi_bins()
       shiny$req(length(bins) >= 2)
-      win_value <- shiny$isolate(c(win_start_date(), win_end_date()))
+      full <- slider_bounds(1L, length(bins))
+      win_value <- shiny$isolate(slider_bounds(
+        resolve_idx(win_start_idx(), bins, 1L),
+        resolve_idx(win_end_idx(), bins, length(bins))
+      ))
       shiny$div(
         class = "custom-slider date-slider",
         # Covered while Play is running (see the anim_playing observer): even
@@ -1248,8 +1379,8 @@ server <- function(
         shiny$sliderInput(
           ns("epi_daterange"),
           NULL,
-          min = bins[1],
-          max = bins[length(bins)],
+          min = full[1],
+          max = full[2],
           value = win_value,
           step = epi_plot$bin_width_days(
             input$epi_interval %||% fitted_interval()
@@ -1286,7 +1417,9 @@ server <- function(
         return(invisible(NULL))
       }
       vals <- input$epi_daterange
-      snap <- function(d) which.min(abs(as.numeric(bins - d)))
+      # The bin a dropped handle lands *inside*. Nearest-bin-start would round
+      # a right handle sitting on a bin's last day into the next bin.
+      snap <- function(d) max(1L, findInterval(as.Date(d), bins))
       win_start_idx(snap(vals[1]))
       win_end_idx(snap(vals[2]))
     })
@@ -1303,7 +1436,7 @@ server <- function(
       shiny$updateSliderInput(
         session,
         "epi_daterange",
-        value = c(bins[nxt], bins[e])
+        value = slider_bounds(nxt, e)
       )
     }
     step_end_by <- function(delta) {
@@ -1318,7 +1451,7 @@ server <- function(
       shiny$updateSliderInput(
         session,
         "epi_daterange",
-        value = c(bins[s], bins[nxt])
+        value = slider_bounds(s, nxt)
       )
     }
     shiny$observeEvent(input$epi_step_start_prev, step_start_by(-1L))
@@ -1347,7 +1480,7 @@ server <- function(
       shiny$updateSliderInput(
         session,
         "epi_daterange",
-        value = c(bins[s], bins[s])
+        value = slider_bounds(s, s)
       )
       anim_playing(TRUE)
     })
@@ -1405,7 +1538,7 @@ server <- function(
       shiny$updateSliderInput(
         session,
         "epi_daterange",
-        value = c(bins[s], bins[nxt])
+        value = slider_bounds(s, nxt)
       )
       shiny$invalidateLater(STEP_MS, session)
     })
@@ -1430,7 +1563,7 @@ server <- function(
         list(
           mode = mode_for(),
           plot_width = plot_width,
-          col_scale = input$epi_col_scale %||% COL_SCALE_DEFAULT,
+          col_scale = epi_col_scale(),
           single_color = input$epi_single_color %||% SINGLE_COLOR_DEFAULT,
           cumulative_color = input$epi_cumulative_color %||%
             CUMULATIVE_COLOR_DEFAULT,
@@ -1597,32 +1730,67 @@ server <- function(
     # the plot output has to bind through it, so it stays live while hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
 
-    # The three controls this module renders rather than declares, kept live for
-    # the same reason but a more consequential one: they are the only place a
-    # restored plot's interval, stratifier and stratifier granularity can be
-    # applied, and by default they are not on screen when a reopened tab
-    # restores. Interval lives in the Time tab, the other two in a collapsed
-    # accordion panel, and Shiny counts anything under a `display: none`
-    # ancestor as hidden - which suspends the render outright. Suspended, the
-    # control neither exists in the DOM for an update*Input() to reach nor
-    # re-renders to pick a value up, so a saved selection was silently dropped
-    # and the plot came back unstratified. They are three small selects; there
-    # is nothing to save by not building them.
-    for (id in c("interval_ui", "stratify_ui", "stratify_granularity_ui")) {
-      shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
-    }
+    # The interval picker is rendered rather than declared, and kept live for
+    # the same reason but a more consequential one: it is the only place a
+    # restored plot's interval can be applied, and the Time tab it lives in is
+    # not on screen when a reopened tab restores. Shiny counts anything under a
+    # `display: none` ancestor as hidden - which suspends the render outright.
+    # Suspended, the control neither exists in the DOM for an update*Input() to
+    # reach nor re-renders to pick a value up, so a saved interval was silently
+    # dropped. It is one small select; there is nothing to save by not building
+    # it.
+    #
+    # The mapping needs no such care: a layer is reactiveVal state that
+    # restore() writes directly, and the card that shows it is redrawn from
+    # that state whenever the tab is next looked at.
+    shiny$outputOptions(output, "interval_ui", suspendWhenHidden = FALSE)
     # The curve is a server-side ggplot with no client state to lose — see the
     # matching note in visualization_tree.R for why it may suspend while its
     # plot tab is in the background.
     shiny$outputOptions(output, "epi_plot", suspendWhenHidden = TRUE)
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
-    # Snapshot the epi_* controls plus the annotation list (a reactiveVal, not
-    # an input).
+    # Snapshot the epi_* controls plus the annotation list and the mapping
+    # layers, both reactiveVal state rather than inputs.
     snapshot <- shiny$reactive(c(
       collect_input_snapshot(input, "epi_"),
-      list(.annotations = annotations())
+      list(.annotations = annotations(), .layers = epi_layers())
     ))
+
+    # Rebuild a mapping layer from a pre-rewrite snapshot's flat keys. Every
+    # saved curve carried its stratification in epi_stratify, its grouping in
+    # epi_stratify_granularity and its palette in epi_col_scale, and rebuilding
+    # a layer from those is what stops each one silently losing its split on
+    # first reopen.
+    migrate_legacy_mapping <- function(vals) {
+      field <- vals$epi_stratify
+      if (is.null(field) || !nzchar(field)) {
+        return(NULL)
+      }
+      prof <- profile_for(profiles(), field)
+      if (is.null(prof)) {
+        return(NULL)
+      }
+      values <- viz_metadata()[[field]]
+      layer <- assign_mapping_layer(prof, list(), "L1", MEDIUM, values)
+      if (is.null(layer)) {
+        return(NULL)
+      }
+      if (!is.null(vals$epi_stratify_granularity)) {
+        layer <- set_layer_granularity(
+          layer,
+          vals$epi_stratify_granularity,
+          values
+        )
+      }
+      if (!is.null(vals$epi_col_scale)) {
+        layer$palette <- vals$epi_col_scale
+      }
+      # Pinned: the saved palette and grouping are the user's choices, and
+      # rebalance_layers() rebuilds automatic layers from scratch.
+      layer$auto <- FALSE
+      list(layer)
+    }
 
     restore <- function(vals) {
       apply_input_snapshot(
@@ -1638,8 +1806,7 @@ server <- function(
         selects = c(
           "epi_plot_mode",
           "epi_moving_avg_align",
-          "epi_anno_type",
-          "epi_col_scale"
+          "epi_anno_type"
         ),
         sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
         texts = "epi_anno_label",
@@ -1660,28 +1827,18 @@ server <- function(
         interval_rebuild(shiny$isolate(interval_rebuild()) + 1L)
       }
 
-      # epi_stratify and its granularity are renderUI-owned controls, so they
-      # are handed to the renders that own them rather than updated in place.
-      # Sending an update*Input() here cannot work: writing the tab's selection
-      # reactiveVals (which restoring a plot does, just before calling this)
-      # invalidates stratify_fields(), so stratify_ui re-renders in this same
-      # flush and replaces the control the update was addressed to. The value
-      # has to be *rendered* in, which is what parking it here arranges.
-      #
-      # Bumping stratify_rebuild() rather than trusting that invalidation to
-      # happen makes it a guarantee: whatever else did or did not change, the
-      # picker rebuilds once and picks this up. Read isolated - restore() runs
-      # inside the caller's observer, and depending on the counter it writes
-      # would feed that observer back into itself.
-      if (!is.null(vals$epi_stratify) && nzchar(vals$epi_stratify)) {
-        restore_stratify(vals$epi_stratify)
-        stratify_rebuild(shiny$isolate(stratify_rebuild()) + 1L)
+      # The mapping is written straight into its reactiveVal — no rebuild
+      # dance, and no update*Input() that a re-render could discard, which is
+      # what the old renderUI-owned stratify picker needed. A snapshot saved
+      # before the mapping rewrite carries no .layers at all, so its flat keys
+      # are rebuilt into one.
+      layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)
+      if (is.null(layers)) {
+        layers <- migrate_legacy_mapping(vals)
       }
-      # The granularity control needs no such nudge: it renders only once
-      # epi_stratify has echoed back as a date field, and that echo is itself
-      # what re-runs it.
-      if (!is.null(vals$epi_stratify_granularity)) {
-        restore_granularity(vals$epi_stratify_granularity)
+      if (!is.null(layers)) {
+        epi_layers(layers)
+        epi_layer_seq(length(layers))
       }
 
       # Through as_epi_annotations() rather than straight in: the snapshot came

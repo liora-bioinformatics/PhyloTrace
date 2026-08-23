@@ -8,19 +8,23 @@ impl <- attr(tree_plot, "namespace")
 # fit reproduces the values this module shipped as fixed defaults at the one
 # dataset size they suited — if this drifts, every other fitted plot has moved
 # with it.
-test_that("the fit reproduces the shipped defaults at ~15 tips", {
+test_that("the fit reproduces its calibration at ~15 tips", {
+  # The anchor. TIP_ROW_IN is the one number the whole linear fit hangs off,
+  # and these are what it produces at the one dataset size the module once
+  # shipped fixed defaults for — if this drifts, every other fitted plot has
+  # moved with it. The values came down with TIP_ROW_IN itself, which was
+  # lowered to stop the plots coming out taller than they need to be.
   fit <- tree_plot$tree_auto_layout(15, width_in = 5.7, label_chars = 20)
-  expect_equal(fit$aspect, 0.6)
-  expect_equal(fit$tiplab_size, 4)
+  expect_equal(fit$aspect, 0.5)
+  expect_equal(fit$tiplab_size, 3.3)
   expect_true(fit$labels_legible)
 })
 
-test_that("every fitted size keeps the shipped proportions at ~15 tips", {
+test_that("every fitted size keeps its proportions at ~15 tips", {
   fit <- tree_plot$tree_auto_layout(15, width_in = 5.7, label_chars = 20)
-  # The other sizes are read off the same row pitch, so they too come back at
-  # the values the sidebar shipped with.
-  expect_equal(fit$branch_size, 4)
-  expect_equal(fit$tippoint_size, 4)
+  # The other sizes are read off the same row pitch, so they move with it.
+  expect_equal(fit$branch_size, 3.3)
+  expect_equal(fit$tippoint_size, 3.3)
 })
 
 test_that("the sizes stay in proportion at every tree size", {
@@ -60,8 +64,11 @@ test_that("long labels cap the size before the row pitch does", {
 })
 
 test_that("a wider panel earns a squatter plot and larger labels", {
-  narrow <- tree_plot$tree_auto_layout(60, width_in = 4, label_chars = 20)
-  wide <- tree_plot$tree_auto_layout(60, width_in = 10, label_chars = 20)
+  # Long labels deliberately: the row pitch a linear fit produces does not move
+  # with the panel width (it is TIP_USABLE * TIP_ROW_IN either way), so a wider
+  # panel only buys type size where the *label length* is what binds.
+  narrow <- tree_plot$tree_auto_layout(60, width_in = 4, label_chars = 36)
+  wide <- tree_plot$tree_auto_layout(60, width_in = 10, label_chars = 36)
 
   expect_lt(wide$aspect, narrow$aspect)
   expect_gt(wide$tiplab_size, narrow$tiplab_size)
@@ -96,39 +103,63 @@ test_that("labels stay legible for a few hundred tips and give up past that", {
   )
 })
 
-test_that("a linear tree is drawn to the edges of its canvas", {
+test_that("every tree is drawn to the edges of its canvas", {
   linear <- tree_plot$tree_auto_layout(50, width_in = 5.5)
   circ <- tree_plot$tree_auto_layout(50, width_in = 5.5, layout = "circular")
 
   # as.ggplot(scale = zoom) spends (1 - zoom) of the canvas on a blank border,
-  # half of it above the plot and half below — the empty band over and under a
-  # tall tree. Nothing on a linear layout can run off the edge (the tip labels
-  # are the only thing drawn past the tree, and .tiplab_xlim reserves for
-  # them), so it takes the whole canvas.
+  # half of it above the plot and half below. Nothing in either layout can run
+  # off the edge now — the tip labels are the only thing drawn past the tree,
+  # and .tiplab_xlim reserves for them in both — so both take the whole canvas.
+  # The 0.95/-0.05 a radial tree used to carry was compensation for a reserve
+  # it did not have.
   expect_equal(linear$zoom, 1)
   expect_equal(linear$h, 0)
-
-  # Circular labels radiate outward with nothing reserving room for them, so
-  # that layout keeps the border it shipped with.
-  expect_equal(circ$zoom, tree_plot$TREE_FIT_DEFAULTS$zoom)
-  expect_equal(circ$h, tree_plot$TREE_FIT_DEFAULTS$h)
+  expect_equal(circ$zoom, 1)
+  expect_equal(circ$h, 0)
 })
 
-test_that("circular layouts fit the font to the circumference", {
-  # The aspect ratio is the linear fit either way — a circular tree is rendered
-  # square, so the slider is left holding what a switch back would need.
-  linear <- tree_plot$tree_auto_layout(400, width_in = 5.7, label_chars = 10)
-  circ <- tree_plot$tree_auto_layout(
-    400,
-    width_in = 5.7,
-    layout = "circular",
-    label_chars = 10
-  )
-  expect_equal(circ$aspect, linear$aspect)
+test_that("a circular panel is square, whatever the tip count", {
+  # The tree is a disc: its height is its width, and the aspect slider has
+  # nothing to choose. A linear tree of the same size is far taller than wide.
+  for (n in c(20, 80, 400)) {
+    circ <- tree_plot$tree_auto_layout(n, width_in = 5.7, layout = "circular")
+    expect_equal(circ$aspect, 1)
+  }
+  expect_gt(tree_plot$tree_auto_layout(400, width_in = 5.7)$aspect, 1)
+})
 
-  # A tall linear plot has far more room per tip at this count than a square
-  # circular one, so the fitted font is smaller — small enough to give up on.
-  expect_lt(circ$tiplab_size, linear$tiplab_size)
+test_that("the circular fit follows the circumference, not a fixed guess", {
+  # The old fit assumed the tips sat at 0.35 of the panel however many there
+  # were, so it returned the same type size at twenty tips as at eighty — and
+  # ran it off the canvas at both. Room per tip is arc length, so it has to
+  # fall as tips are added.
+  sizes <- vapply(
+    c(20, 80, 400),
+    function(n) {
+      tree_plot$tree_auto_layout(
+        n, width_in = 5.7, layout = "circular", label_chars = 20
+      )$tiplab_size
+    },
+    numeric(1)
+  )
+  expect_true(all(diff(sizes) < 0))
+
+  # And a long label costs type size, because the ring it needs is taken off
+  # the circle the tips sit on.
+  short <- tree_plot$tree_auto_layout(
+    80, width_in = 5.7, layout = "circular", label_chars = 8
+  )
+  long <- tree_plot$tree_auto_layout(
+    80, width_in = 5.7, layout = "circular", label_chars = 40
+  )
+  expect_gt(short$tiplab_size, long$tiplab_size)
+})
+
+test_that("a circular tree of a few hundred tips gives up on its labels", {
+  circ <- tree_plot$tree_auto_layout(
+    400, width_in = 5.7, layout = "circular", label_chars = 10
+  )
   expect_false(circ$labels_legible)
 })
 
@@ -1179,6 +1210,9 @@ test_that("the outermost annotation stops short of the x limit", {
 # as a fraction of the x axis and the axis spans the grown panel, so only the
 # two together say how much room the labels really got.
 .reserve_in <- function(opts, md, panel_in = 5.5) {
+  # Resolved first: the axis solve and the panel solve have to be asking about
+  # the same column widths, or they answer about different plots.
+  opts <- tree_plot$resolve_annotation_widths(opts, md)
   max_x <- 1
   fit <- impl$.tiplab_xlim(
     opts, md, data.frame(x = c(0, max_x)), max_x,
@@ -1250,4 +1284,552 @@ test_that("a numeric variable still gets a plain continuous scale", {
   sc$train(c(3, 900))
 
   expect_true(all(grepl("^[0-9]+$", sc$get_labels())))
+})
+
+# --- Annotation columns as physical widths -----------------------------------
+
+test_that("an annotation column is a width in inches, not a share of the tree", {
+  # The header over a column is set in real type, so the column has to be a
+  # real width. Held as a fraction of the tree span it moved with the label
+  # reserve: the same matrix drew wide columns beside short tip labels and
+  # hairlines beside long ones.
+  short <- data.frame(isolate = strrep("A", 8), stringsAsFactors = FALSE)
+  long <- data.frame(isolate = strrep("A", 40), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3, width_in = 5.5,
+    layers = list(list(aesthetic = "tile", field = "a")), heatmaps = list()
+  )
+
+  inches <- function(md) {
+    o <- tree_plot$resolve_annotation_widths(opts, md)
+    # Span times the tree's own width in inches is the column on the page.
+    tree_plot$tree_annotation_width(o) * 5.5 * (1 - impl$.tiplab_budget_frac(o, md))
+  }
+
+  expect_equal(inches(short), impl$TILE_COL_IN, tolerance = 1e-8)
+  expect_equal(inches(long), impl$TILE_COL_IN, tolerance = 1e-8)
+  # And in tree spans they differ, which is the point: long labels leave the
+  # tree less of the page, so the same inch is a bigger share of it.
+  expect_gt(
+    tree_plot$tree_annotation_width(
+      tree_plot$resolve_annotation_widths(opts, long)
+    ),
+    tree_plot$tree_annotation_width(
+      tree_plot$resolve_annotation_widths(opts, short)
+    )
+  )
+})
+
+test_that("a wide gene matrix still gets headers a reader can read", {
+  # The reported fault: thirty gene names came out at the minimum type size,
+  # because the fit was against the tree-and-labels budget while the panel the
+  # matrix is drawn on is nearly twice that wide.
+  md <- data.frame(isolate = strrep("A", 36), stringsAsFactors = FALSE)
+  opts <- list(
+    tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.3, width_in = 5.5,
+    rootedge_show = FALSE, layers = list(),
+    heatmaps = list(list(kind = "amr", level = "gene",
+      cols = paste0("g", 1:30), labels = paste0("gene", 1:30)))
+  )
+  opts <- tree_plot$resolve_annotation_widths(opts, md)
+
+  max_x <- 1
+  tree_span <- max_x
+  fit <- impl$.tiplab_xlim(
+    opts, md, data.frame(x = c(0, max_x)), max_x,
+    tree_plot$annotation_total(opts)
+  )
+  panel <- tree_plot$tree_panel_width_in(opts, md, 5.5)
+  axis_units <- fit$limit
+  cell <- impl$.heat_span(opts) * tree_span
+
+  # Fitted against the panel the matrix is actually drawn on.
+  expect_equal(
+    tree_plot$tree_header_size(cell, axis_units, panel),
+    impl$HEADER_SIZE_MAX,
+    tolerance = 0.15
+  )
+  # Against the tree's budget alone — the old fit — it would be far smaller.
+  expect_lt(tree_plot$tree_header_size(cell, axis_units, 5.5), impl$HEADER_SIZE_MAX)
+})
+
+# --- Legends a reader can actually use ---------------------------------------
+
+test_that("a long variable lists a few keys and counts the rest", {
+  # 81 patient ids ran the guide box off the bottom of the canvas, and would
+  # have been unusable had it fit. Dropping the guide outright lost the reader
+  # the values entirely; this keeps the first few and says how many it is not
+  # showing, the way the MST legend does.
+  n_over <- tree_plot$LEGEND_MAX_KEYS + 144L
+  levels <- sprintf("p%03d", seq_len(n_over))
+  keys <- tree_plot$tree_legend_breaks(levels)
+
+  expect_identical(length(keys$breaks), tree_plot$LEGEND_MAX_KEYS)
+  expect_identical(keys$hidden, 144L)
+  expect_identical(keys$breaks, levels[seq_len(tree_plot$LEGEND_MAX_KEYS)])
+  expect_match(tree_plot$tree_legend_title("Patient Id", 144L), "\\+ 144 more")
+
+  # A variable that fits lists all of it and says nothing extra.
+  short <- tree_plot$tree_legend_breaks(sprintf("p%03d", 1:4))
+  expect_identical(short$hidden, 0L)
+  expect_identical(tree_plot$tree_legend_title("Ward", 0L), "Ward")
+})
+
+test_that("a capped guide still gets a scale, and only its keys are budgeted", {
+  # The guide is drawn either way now — what changes is how many rows it has,
+  # and so how much canvas it needs.
+  many <- sprintf("p%03d", seq_len(tree_plot$LEGEND_MAX_KEYS + 40L))
+  sc <- impl$tree_scale(many, "Set1", "fill", "Patient Id")
+
+  expect_s3_class(sc$guide, "Guide")
+  expect_identical(length(sc$breaks), tree_plot$LEGEND_MAX_KEYS)
+  expect_match(sc$name, "\\+ 40 more")
+
+  md <- data.frame(
+    isolate = sprintf("i%03d", 1:60),
+    patient = sprintf("patient-%03d", 1:60),
+    stringsAsFactors = FALSE
+  )
+  over <- list(list(
+    field = "patient", title = "Patient Id",
+    n_levels = tree_plot$LEGEND_MAX_KEYS + 40L
+  ))
+  under <- list(list(
+    field = "patient", title = "Patient Id",
+    n_levels = tree_plot$LEGEND_MAX_KEYS
+  ))
+
+  # Both need room, and the long one needs no more than the short one: it is
+  # sized from the keys it lists, not from the values it has.
+  expect_equal(
+    tree_plot$tree_legend_width_in(over, md, 9, 5.5),
+    tree_plot$tree_legend_width_in(under, md, 9, 5.5)
+  )
+})
+
+# --- The circular layout ------------------------------------------------------
+
+# modifyList() is deliberately not used here: it recurses into list-valued
+# entries and keeps only the *named* ones, which silently empties a heatmap or
+# layer list built from unnamed records.
+.circ_opts <- function(tiplab_size = 1.4, layers = list(), heatmaps = list(),
+                       layout = "circular") {
+  list(
+    layout = layout, tiplab_show = TRUE, tiplab = "isolate",
+    tiplab_size = tiplab_size, width_in = 5.5, rootedge_show = FALSE,
+    layers = layers, heatmaps = heatmaps
+  )
+}
+
+test_that("a circular tree measures itself against its radius", {
+  # Its x axis is a radius, and ggplot's CoordPolar draws that across
+  # TREE_RADIAL_FRAC of a square panel. Measuring against the panel instead is
+  # how the fit sized type for a radius longer than the one it got.
+  circ <- .circ_opts()
+  linear <- .circ_opts(layout = "rectangular")
+
+  expect_equal(tree_plot$tree_budget_in(linear), 5.5)
+  expect_equal(tree_plot$tree_budget_in(circ), 5.5 * impl$TREE_RADIAL_FRAC)
+  expect_equal(tree_plot$tree_axis_in(circ, 9), 9 * impl$TREE_RADIAL_FRAC)
+  expect_equal(tree_plot$tree_axis_in(linear, 9), 9)
+})
+
+test_that("the circular fit and the label reserve agree with each other", {
+  # The invariant the layout stands on. The fit picks a type size from the
+  # radius it thinks it has; the reserve keeps room for the labels that size
+  # produces. Solved against different radii, the labels came out longer than
+  # the room kept for them and were clipped mid-word.
+  for (n in c(20, 60, 200)) {
+    for (chars in c(10, 36)) {
+      md <- data.frame(
+        isolate = strrep("A", chars),
+        stringsAsFactors = FALSE
+      )
+      fit <- tree_plot$tree_auto_layout(
+        n, width_in = 5.5, layout = "circular", label_chars = chars
+      )
+      opts <- .circ_opts(tiplab_size = fit$tiplab_size)
+
+      needed <- chars * impl$TIP_CHAR_EM * fit$tiplab_size / 25.4
+      reserved <- impl$.tiplab_budget_frac(opts, md) *
+        tree_plot$tree_budget_in(opts)
+
+      expect_gte(reserved, needed)
+    }
+  }
+})
+
+test_that("a circular tree reserves radius for its labels", {
+  # It used to be skipped outright, which is why a radial tree drew its labels
+  # off every edge of the canvas.
+  md <- data.frame(isolate = strrep("A", 30), stringsAsFactors = FALSE)
+  opts <- .circ_opts(tiplab_size = 1.4)
+  max_x <- 1
+  fit <- impl$.tiplab_xlim(
+    opts, md, data.frame(x = c(0, max_x)), max_x,
+    tree_plot$annotation_total(opts)
+  )
+
+  expect_gt(fit$reserve, 0)
+  expect_gt(fit$limit, max_x)
+})
+
+test_that("a circular tree gives its rings less room than a linear one", {
+  # A column's share of the picture is its width; a ring's is its area, which
+  # grows with the radius it sits at. The same ceiling in both left a radial
+  # tree a knot at the centre of a dartboard.
+  heat <- list(list(kind = "amr", level = "gene", cols = paste0("g", 1:30)))
+  circ <- .circ_opts(heatmaps = heat)
+  linear <- .circ_opts(heatmaps = heat, layout = "rectangular")
+
+  expect_lt(impl$.annotation_span_max(circ), impl$.annotation_span_max(linear))
+  expect_lt(tree_plot$annotation_total(circ), tree_plot$annotation_total(linear))
+})
+
+test_that("a circular tree draws its rings past its labels", {
+  # The rings used to be pinned to the tree's own edge (gheatmap offset 0 and
+  # no label reserve at all), so they were drawn straight over the tip labels.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layout <- "circular"
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  tile <- which(vapply(
+    p$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  ))[[1]]
+  lab <- which(vapply(
+    p$layers, function(l) grepl("TextGGtree", class(l$geom)[1]), logical(1)
+  ))[[1]]
+
+  # Every tile drawn, and the ring starts outside the radius the labels sit at.
+  expect_identical(sum(!is.na(b$data[[tile]]$xmax)), 16L)
+  expect_gt(min(b$data[[tile]]$xmin), max(b$data[[lab]]$x))
+})
+
+test_that("guides flow into columns rather than being cut off", {
+  # ggplot2 stacks guides in one column and clips whatever runs past the panel.
+  # A tab with a dozen mappings simply lost the last few legends off the bottom
+  # of the canvas.
+  many <- lapply(1:12, function(i) {
+    list(field = paste0("v", i), title = paste("Var", i), n_levels = 8L)
+  })
+
+  # Tall enough for all of them: one column.
+  expect_identical(tree_plot$tree_legend_cols(many, list(), 9, 40), 1L)
+  # Short: they have to flow sideways instead.
+  expect_gt(tree_plot$tree_legend_cols(many, list(), 9, 6), 1L)
+  # And never wider than the ceiling, whatever is thrown at it.
+  expect_lte(
+    tree_plot$tree_legend_cols(many, list(), 9, 1),
+    impl$LEGEND_MAX_COLS
+  )
+  # Nothing to draw, nothing to flow.
+  expect_identical(tree_plot$tree_legend_cols(list(), list(), 9, 6), 1L)
+
+  # The canvas is widened for every column the box flows into.
+  md <- data.frame(
+    isolate = sprintf("i%02d", 1:12),
+    stringsAsFactors = FALSE
+  )
+  for (i in 1:12) md[[paste0("v", i)]] <- rep(letters[1:8], length.out = 12)
+  tall <- tree_plot$tree_legend_width_in(many, md, 9, 5.5, list(), 40)
+  short <- tree_plot$tree_legend_width_in(many, md, 9, 5.5, list(), 6)
+  expect_gt(short, tall)
+})
+
+test_that("a capped guide counts as the rows it will actually draw", {
+  # 150 values is nine rows plus a "+ N more" line, not 150 — the whole point
+  # of capping the keys.
+  huge <- list(list(field = "v", title = "Patient Id", n_levels = 150L))
+  small <- list(list(field = "v", title = "Patient Id", n_levels = 9L))
+
+  expect_identical(
+    tree_plot$tree_legend_rows(huge),
+    tree_plot$tree_legend_rows(small) + 1L
+  )
+})
+
+# --- Opening the circle -------------------------------------------------------
+
+test_that("a radial tree opens far enough for its ring headers", {
+  # With no wedge, ggtree draws every ring's header at one angle, on top of the
+  # others — which is what a circular tree with a strip and a heatmap looked
+  # like. The wedge has to fit the longest header as an arc at its own ring's
+  # radius, and an inner ring is the tight one.
+  md <- data.frame(isolate = strrep("A", 20), stringsAsFactors = FALSE)
+  bare <- .circ_opts()
+  expect_identical(tree_plot$tree_open_angle(bare, md), 0)
+
+  tiled <- .circ_opts(layers = list(list(
+    aesthetic = "tile", field = "v", title = "Collection Date"
+  )))
+  expect_gt(tree_plot$tree_open_angle(tiled, md), 0)
+
+  # A longer header needs more of the circle than a short one on the same ring.
+  short <- .circ_opts(layers = list(list(
+    aesthetic = "tile", field = "v", title = "Ward"
+  )))
+  expect_gt(
+    tree_plot$tree_open_angle(tiled, md),
+    tree_plot$tree_open_angle(short, md)
+  )
+
+  # Never past the ceiling, whatever it is asked to fit.
+  silly <- .circ_opts(layers = list(list(
+    aesthetic = "tile", field = "v", title = strrep("x", 400)
+  )))
+  expect_lte(tree_plot$tree_open_angle(silly, md), impl$OPEN_ANGLE_MAX)
+
+  # A linear tree has no circle to open.
+  flat <- .circ_opts(layout = "rectangular", layers = tiled$layers)
+  expect_identical(tree_plot$tree_open_angle(flat, md), 0)
+})
+
+test_that("a wider wedge takes more of the circle", {
+  # ggtree opens the circle by widening the angular axis past the tip count and
+  # mapping the whole of it onto 360 degrees — so the wedge is visible as how
+  # much of that axis the tips do *not* occupy.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layout <- "circular"
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  theta <- function(angle) {
+    o <- opts
+    o$open_angle <- angle
+    p <- .built_tree(f$tree, f$meta, o)
+    b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+    diff(b$layout$panel_params[[1]]$theta.range)
+  }
+  expect_gt(theta(60), theta(15))
+})
+
+# --- The inward layout --------------------------------------------------------
+
+test_that("an inward tree keeps a clear core so its labels stop converging", {
+  # Inward labels run from their tips *toward* the centre, so they close on
+  # each other as they go: left to reach the middle they meet at a point. The
+  # fit solves their spacing at INWARD_CORE_FRAC of the radius, which is where
+  # they stop.
+  for (n in c(20, 90, 300)) {
+    fit <- tree_plot$tree_auto_layout(
+      n, width_in = 5.5, layout = "inward", label_chars = 30
+    )
+    expect_equal(fit$aspect, 1)
+    expect_gt(fit$tiplab_size, 0)
+  }
+  # Room per label is an arc at a fixed radius, so it falls with the tip count.
+  sizes <- vapply(
+    c(20, 90, 300),
+    function(n) {
+      tree_plot$tree_auto_layout(
+        n, width_in = 5.5, layout = "inward", label_chars = 30
+      )$tiplab_size
+    },
+    numeric(1)
+  )
+  expect_true(all(diff(sizes) <= 0))
+})
+
+test_that("an inward tree maps onto its tips rather than into rings", {
+  # The space past an inward tree's tips is the middle of the disc, where the
+  # arc a ring is drawn along shrinks to nothing — a ring there comes out as a
+  # filled circle with its labels converging to a point.
+  bare <- .circ_opts(layout = "inward")
+  tiled <- .circ_opts(
+    layout = "inward",
+    layers = list(list(aesthetic = "tile", field = "v", title = "Ward")),
+    heatmaps = list(list(kind = "amr", cols = paste0("g", 1:5)))
+  )
+
+  expect_false(tree_plot$tree_annotations_drawn(tiled))
+  expect_true(tree_plot$tree_annotations_drawn(.circ_opts()))
+  # So they reserve nothing, and the tree keeps the whole radius.
+  expect_identical(tree_plot$annotation_total(tiled), 0)
+  expect_identical(
+    tree_plot$annotation_total(tiled),
+    tree_plot$annotation_total(bare)
+  )
+})
+
+test_that("an inward tree draws a tree, not a blot", {
+  # Its radius is a build argument, and it was being set twice — once through
+  # ggtree and again as a scale limit, which clipped the reversed axis instead
+  # of extending it. Every tip has to survive that.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layout <- "inward"
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  # ggtree splits the tip labels across two layers, one per half of the circle,
+  # so the count is their sum.
+  tips <- which(vapply(
+    p$layers, function(l) grepl("TextGGtree", class(l$geom)[1]), logical(1)
+  ))
+
+  expect_true(length(tips) > 0)
+  expect_identical(sum(vapply(tips, function(i) nrow(b$data[[i]]), 0)), 16)
+  # And the tile strip is not drawn into the middle of the disc.
+  expect_false(any(vapply(
+    p$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  )))
+})
+
+test_that("a radial tree hangs its headers off the edge the rings end at", {
+  # The wedge has two edges. The rings stop against the leading one — a
+  # straight radial cut a header can be aligned to — while the other is open
+  # space, where a header floats with nothing to line up with.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  header_y <- function(layout) {
+    o <- opts
+    o$layout <- layout
+    p <- .built_tree(f$tree, f$meta, o)
+    b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+    txt <- which(vapply(
+      p$layers,
+      function(l) identical(class(l$geom)[1], "GeomText"),
+      logical(1)
+    ))
+    b$data[[txt[[1]]]]$y
+  }
+
+  # Linear: above the last tip, where the strip ends.
+  expect_gt(header_y("rectangular"), 16)
+  # Radial: below the first, against the other side of the same opening.
+  expect_lt(header_y("circular"), 1)
+})
+
+test_that("strip and matrix headers share a baseline, clear of the columns", {
+  # gheatmap anchors its column names at `max(y) + 1` and nudges from there,
+  # while a strip's header is placed at an absolute y — so the two sat a full
+  # tip row apart. And both were anchored at the tip rather than past the
+  # column's edge, which put every header inside its own top tile.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+  # Drawn from the metadata columns, so the panel needs no call matrix to
+  # exist — what is under test is where its column names land, not what they
+  # say.
+  opts$heatmaps <- list(list(
+    kind = "amr", level = "class",
+    cols = c("amr_Beta-lactam", "amr_Colistin"),
+    palette = "Reds", title = "AMR classes"
+  ))
+
+  for (layout in c("rectangular", "circular")) {
+    o <- opts
+    o$layout <- layout
+    p <- .built_tree(f$tree, f$meta, o)
+    b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+    cls <- vapply(p$layers, function(l) class(l$geom)[1], character(1))
+
+    heads <- unlist(lapply(
+      which(cls == "GeomText"),
+      function(i) unique(b$data[[i]]$y)
+    ))
+    tiles <- which(grepl("Tile", cls))
+    edges <- unlist(lapply(
+      tiles,
+      function(i) c(b$data[[i]]$ymin, b$data[[i]]$ymax)
+    ))
+
+    # The class band sits under the tree, so only the headers above the
+    # columns are in question here.
+    heads <- if (identical(layout, "circular")) {
+      heads[heads < min(edges, na.rm = TRUE)]
+    } else {
+      heads[heads > max(edges, na.rm = TRUE)]
+    }
+
+    expect_gt(length(heads), 1)
+    # One baseline for both kinds ...
+    expect_identical(length(unique(round(heads, 6))), 1L)
+    # ... and it clears the columns rather than sitting inside them.
+    gap <- if (identical(layout, "circular")) {
+      min(edges, na.rm = TRUE) - heads[[1]]
+    } else {
+      heads[[1]] - max(edges, na.rm = TRUE)
+    }
+    expect_equal(gap, impl$TILE_HEADER_GAP, tolerance = 1e-6)
+  }
+})
+
+# --- Exporting at another size ------------------------------------------------
+
+test_that("the design scales with the page instead of being stretched", {
+  # A finished ggplot cannot be rescaled: its type is in millimetres and the
+  # reserves beside it are fractions, so printing the preview at another width
+  # moves one and not the other. Exported small, the tip labels ran into the
+  # annotation; exported large, they shrank into a gutter of dead space.
+  md <- data.frame(isolate = strrep("A", 36), stringsAsFactors = FALSE)
+  opts <- list(
+    layout = "rectangular", tiplab_show = TRUE, tiplab = "isolate",
+    tiplab_size = 2.3, branch_size = 3, tippoint_size = 3, legend_size = 9,
+    width_in = 5.5, rootedge_show = FALSE,
+    layers = list(list(aesthetic = "tile", field = "v", title = "Ward")),
+    heatmaps = list(list(kind = "amr", cols = paste0("g", 1:8)))
+  )
+
+  for (k in c(0.6, 1.45, 2.32)) {
+    big <- tree_plot$scale_tree_opts(opts, k)
+
+    # Every physical length multiplied through ...
+    expect_equal(big$width_in, opts$width_in * k)
+    expect_equal(big$tiplab_size, opts$tiplab_size * k)
+    expect_equal(big$legend_size, opts$legend_size * k)
+
+    # ... and so every *fraction* left exactly where it was, which is what
+    # makes the two figures similar rather than merely different sizes.
+    expect_equal(
+      impl$.tiplab_budget_frac(big, md),
+      impl$.tiplab_budget_frac(opts, md)
+    )
+    expect_equal(
+      tree_plot$annotation_total(big),
+      tree_plot$annotation_total(opts)
+    )
+    # An annotation column keeps its share of the tree, and gains its inches.
+    small_w <- tree_plot$tree_annotation_width(
+      tree_plot$resolve_annotation_widths(opts, md)
+    )
+    big_w <- tree_plot$tree_annotation_width(
+      tree_plot$resolve_annotation_widths(big, md)
+    )
+    expect_equal(big_w, small_w)
+    expect_equal(impl$.tile_col_in(big), impl$.tile_col_in(opts) * k)
+  }
+
+  # A nonsense factor changes nothing rather than producing a nonsense plot.
+  expect_identical(tree_plot$scale_tree_opts(opts, NA), opts)
+  expect_identical(tree_plot$scale_tree_opts(opts, 0), opts)
+})
+
+test_that("a scaled build draws the same figure, larger", {
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  extent <- function(o) {
+    p <- .built_tree(f$tree, f$meta, o)
+    b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+    tile <- which(vapply(
+      p$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+    ))[[1]]
+    rng <- b$layout$panel_params[[1]]$x.range
+    # Where the strip sits along the axis, as a fraction of it.
+    (range(b$data[[tile]]$xmin, b$data[[tile]]$xmax) - rng[[1]]) / diff(rng)
+  }
+
+  expect_equal(
+    extent(tree_plot$scale_tree_opts(opts, 2)),
+    extent(opts),
+    tolerance = 1e-6
+  )
 })

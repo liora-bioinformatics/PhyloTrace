@@ -691,7 +691,11 @@ test_that("the legend names every cluster and the threshold that made them", {
   labels <- vapply(items, function(i) i$label, character(1))
   expect_identical(kinds, c("header", "key", "key"))
   expect_true(grepl("12 alleles", labels[[1]]))
-  expect_true(grepl("7 isolates", labels[[2]]))
+  expect_identical(labels[[2]], "Cluster 1 \u2013 7 isolates")
+  # Isolates and nothing else. How many nodes they came out as is a fact about
+  # the drawing rather than about the clustering, and the caption gives it once
+  # for the whole tree.
+  expect_false(any(grepl("node", labels)))
 })
 
 test_that("the legend accounts for the isolates no cluster claimed", {
@@ -709,7 +713,7 @@ test_that("the legend accounts for the isolates no cluster claimed", {
       character(1)
     )
   }
-  expect_true(any(grepl("Unclustered . 4 isolates", labels(unclustered = 4))))
+  expect_true(any(grepl("Unclustered . 4 isolates$", labels(unclustered = 4))))
   # Counted in isolates, and singular when there is one of them.
   expect_true(any(grepl("Unclustered . 1 isolate$", labels(unclustered = 1))))
   # Nothing left over, nothing to say.
@@ -1363,7 +1367,7 @@ test_that("the swing keeps every promise the plain layout made", {
     diag(d) <- Inf
     min(d)
   }
-  expect_gte(spacing(swung), spacing(plain))
+  expect_gte(spacing(swung), spacing(plain) - 1e-9)
   # Every branch still exactly as long as its allelic distance earned it.
   blen <- function(z) {
     ix <- stats::setNames(seq_len(nrow(z)), z$id)
@@ -1382,4 +1386,73 @@ test_that("the segment-crossing test answers for every segment it is given", {
   # the first would miss it.
   expect_true(impl$.crosses_any(0, 0, 10, 0, c(50, 5), c(-5, -5), c(50, 5), c(5, 5), 1e-9))
   expect_false(impl$.crosses_any(0, 0, 10, 0, c(50, 60), c(-5, -5), c(50, 60), c(5, 5), 1e-9))
+})
+
+test_that("switching the regions on does not move a single node", {
+  # Reported: the same database drew a visibly different arrangement with
+  # "Show clusters" off. The cluster assignment follows the *threshold*, which
+  # is an analysis parameter; whether the regions are painted is a display
+  # choice, and a display choice must never reach the layout.
+  g <- mst_graph(
+    from = c("a", "a", "a", "d", "d", "f"),
+    to = c("b", "c", "d", "e", "f", "g"),
+    weight = c(1, 2, 40, 1, 3, 90),
+    ids = c("a", "b", "c", "d", "e", "f", "g")
+  )
+  meta <- data.frame(isolate = letters[1:7], stringsAsFactors = FALSE)
+  frames <- function(...) {
+    mst_plot$mst_frames(g, meta, base_opts(cluster_threshold = 5, ...))
+  }
+  on <- frames(show_clusters = TRUE)
+  off <- frames(show_clusters = FALSE)
+  expect_equal(on$coords$x, off$coords$x)
+  expect_equal(on$coords$y, off$coords$y)
+  # The regions themselves are the only difference.
+  expect_true(length(on$blobs) > 0L)
+  expect_identical(length(off$blobs), 0L)
+
+  # Nor does any other display-only control.
+  for (o in list(
+    list(cluster_opacity = 0.9),
+    list(cluster_col_scale = "Dark2"),
+    list(cluster_label_size = 30),
+    list(show_legend = FALSE)
+  )) {
+    alt <- do.call(frames, c(list(show_clusters = TRUE), o))
+    expect_equal(alt$coords$x, on$coords$x, info = names(o))
+  }
+
+  # The threshold is allowed to move it — it changes which nodes are in a
+  # cluster, so the fan has different branches to steer. Asserted on a real
+  # collection rather than here, where seven nodes can fan the same way either
+  # way by coincidence.
+})
+
+test_that("with nothing clustered the fan is the plain proportional one", {
+  # `cl` is all-NA when no clustering is in play, and the membership test
+  # answers FALSE for every child of an NA parent — which read as "every branch
+  # leaves the cluster" and re-ordered every fan in the tree. A node in no
+  # cluster has no region at it and so nothing to point away from.
+  set.seed(17)
+  edges <- random_tree(40, "random")
+  w <- sample(c(1, 2, 3, 20, 60), nrow(edges), replace = TRUE)
+  ids <- unique(c(edges$from, edges$to))
+  len <- mst_plot$mst_edge_lengths(w, "log", spread = 15)$length
+
+  plain <- mst_plot$mst_layout(edges$from, edges$to, len, ids)
+  none <- mst_plot$mst_layout(
+    edges$from, edges$to, len, ids,
+    cluster = rep(NA_character_, length(ids)), radius = 10, pad = 20
+  )
+  expect_equal(none$x, plain$x)
+  expect_equal(none$y, plain$y)
+
+  # A threshold that clusters nothing is the same thing arriving by another
+  # route, and must land in the same place.
+  empty <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 0)$node
+  quiet <- mst_plot$mst_layout(
+    edges$from, edges$to, len, ids,
+    cluster = empty, radius = 10, pad = 20
+  )
+  expect_equal(quiet$x, plain$x)
 })

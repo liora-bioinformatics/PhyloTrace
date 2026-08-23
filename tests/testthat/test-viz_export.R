@@ -199,20 +199,21 @@ test_that("write_data_uri decodes a data URI to its bytes", {
 })
 
 test_that("the hint states what each format will actually produce", {
-  # A raster is described in pixels, because DPI alone says nothing without a
-  # size to apply it to.
-  expect_match(
-    viz_export$export_hint("ggplot", "png", 10, 300, 0.5),
-    "^1181 . 59[01] px at 300 dpi"
-  )
-  expect_match(viz_export$export_hint("ggplot", "pdf", 10, 300), "Vector")
+  # Physical size first, because that is what decides how much type fits
+  # beside the drawing — then the pixels, because DPI alone says nothing
+  # without a size to apply it to.
+  raster <- viz_export$export_hint("ggplot", "png", 10, 300, 0.5)
+  expect_match(raster, "10.0 . 5.0 cm")
+  expect_match(raster, "1,181 . 59[01] px at 300 dpi")
+
+  # A vector file is the same drawing at any size, so it is described by its
+  # size alone — quoting a DPI for a PDF is not a detail, it is wrong.
+  pdf <- viz_export$export_hint("ggplot", "pdf", 10, 300)
+  expect_match(pdf, "vector")
+  expect_false(grepl("dpi", pdf, fixed = TRUE))
+
   expect_match(viz_export$export_hint("widget", "png", NA, 4000), "4,000")
   expect_match(viz_export$export_hint("widget", "html", NA, 4000), "interactive")
-})
-
-test_that("the widget hint calls out low-detail targets", {
-  expect_match(viz_export$export_hint("widget", "png", NA, 6000), "enough for print")
-  expect_match(viz_export$export_hint("widget", "png", NA, 800), "raise for more detail")
 })
 
 test_that("export file names are date-stamped and filesystem-safe", {
@@ -235,53 +236,43 @@ test_that("an unknown format is refused rather than silently written", {
   expect_error(impl$.device_for("webp", 300), "Unsupported export format")
 })
 
-test_that("export_presets defines the same four use cases for both kinds", {
-  # Every preset must be able to drive either engine kind, since a preset id
-  # travels from the modal (which doesn't know the engine's kind) to whichever
-  # kind is actually open.
-  ids <- vapply(viz_export$export_presets, `[[`, character(1), "id")
+test_that("the sizes offered are the pages a figure is actually made for", {
+  ids <- vapply(viz_export$export_sizes, `[[`, character(1), "id")
   expect_identical(anyDuplicated(ids), 0L)
-  for (p in viz_export$export_presets) {
-    expect_true(all(c("format", "width_cm", "dpi") %in% names(p$ggplot)), info = p$id)
-    expect_true(all(c("format", "target_px") %in% names(p$widget)), info = p$id)
+  for (sz in viz_export$export_sizes) {
+    expect_true(sz$width_cm >= 4 && sz$width_cm <= 60, info = sz$id)
+    expect_true(nzchar(sz$label), info = sz$id)
   }
+  # A journal column is the tight one, so it has to be there: it is the size at
+  # which a figure's type is most likely to end up too small to read.
+  expect_true("column" %in% ids)
 })
 
-test_that("export_preset looks up a preset by id, or returns NULL", {
-  found <- viz_export$export_preset("publication")
-  expect_identical(found$id, "publication")
-  expect_null(viz_export$export_preset("no-such-preset"))
+test_that("export_size looks a size up by id, or returns NULL", {
+  expect_identical(viz_export$export_size("double")$width_cm, 18)
+  expect_null(viz_export$export_size("no-such-size"))
 })
 
-test_that("preset ggplot widths stay within the exportable range", {
-  # numericInput's own min/max (4-60cm) would silently clamp a preset that
-  # asked for something outside it, quietly producing a different plot than
-  # the preset's name promises.
-  for (p in viz_export$export_presets) {
-    expect_true(p$ggplot$width_cm >= 4 && p$ggplot$width_cm <= 60, info = p$id)
-  }
-})
-
-test_that("the modal offers no raw size/quality controls, only presets", {
-  # A preset is the only thing that decides width/DPI (ggplot) or target pixel
-  # width (widget) — an earlier version tucked a second, freely-typed size
-  # control into a collapsed "Advanced" section beside the four preset
-  # choices, which added a decision without adding a use case.
+test_that("size and resolution are separate choices in the modal", {
+  # They answer different questions — how big the figure is *made*, and how
+  # finely that figure is rasterised — and the four bundled presets named it
+  # after neither.
   ggplot_modal <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
   widget_modal <- as.character(viz_export$export_modal(identity, "e", "widget"))
 
-  expect_false(grepl("e_width", ggplot_modal, fixed = TRUE))
-  expect_false(grepl("e_dpi", ggplot_modal, fixed = TRUE))
-  expect_false(grepl("e_target_px", ggplot_modal, fixed = TRUE))
-  expect_false(grepl("e_target_px", widget_modal, fixed = TRUE))
-  expect_false(grepl("e_width", widget_modal, fixed = TRUE))
-  expect_false(grepl("e_dpi", widget_modal, fixed = TRUE))
+  expect_true(grepl("e_size", ggplot_modal, fixed = TRUE))
+  expect_true(grepl("e_quality", ggplot_modal, fixed = TRUE))
+  # A widget has no physical size of its own, only a pixel width.
+  expect_false(grepl("e_size", widget_modal, fixed = TRUE))
+  expect_true(grepl("e_quality", widget_modal, fixed = TRUE))
+  # The resolution control is wrapped so it can be hidden for vector output.
+  expect_true(grepl("e_quality_wrap", ggplot_modal, fixed = TRUE))
 })
 
-test_that("every preset is offered as a choice in the modal", {
+test_that("every size is offered as a choice in the modal", {
   html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
-  for (p in viz_export$export_presets) {
-    expect_true(grepl(p$label, html, fixed = TRUE), info = p$id)
+  for (sz in viz_export$export_sizes) {
+    expect_true(grepl(sz$label, html, fixed = TRUE), info = sz$id)
   }
 })
 
@@ -310,7 +301,7 @@ test_that("the modal footer commits or abandons the export", {
   expect_false(grepl("id=\"e_file\"", html, fixed = TRUE))
 })
 
-test_that("reopening the modal restores the format and preset last chosen", {
+test_that("reopening the modal restores the choices last made", {
   # Shiny keeps an input's value after its UI is removed, but re-rendering the
   # control resets it to its declaration — so the values have to be handed back
   # in, or every export would start from the defaults again.
@@ -318,10 +309,11 @@ test_that("reopening the modal restores the format and preset last chosen", {
     identity,
     "e",
     "ggplot",
-    values = list(filetype = "svg", preset = "print")
+    values = list(filetype = "svg", size = "poster", quality = "Journal")
   ))
   expect_true(grepl("<option value=\"svg\" selected>", html, fixed = TRUE))
-  expect_true(grepl('value="print" checked', html, fixed = TRUE))
+  expect_true(grepl("<option value=\"poster\" selected>", html, fixed = TRUE))
+  expect_true(grepl("Journal", html, fixed = TRUE))
 })
 
 test_that("the sidebar panel is just a trigger plus the download target", {

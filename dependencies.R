@@ -1,6 +1,7 @@
 # This file allows packrat (used by rsconnect during deployment) to pick up dependencies.
 library(ape)
 library(bslib)
+library(circlize)
 library(ComplexHeatmap)
 library(cowplot)
 library(dbplyr)

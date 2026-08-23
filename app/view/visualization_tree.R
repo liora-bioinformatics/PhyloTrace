@@ -35,7 +35,7 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
-  app / logic / date_bins[granularity_label],
+  app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app /
     logic /
@@ -65,6 +65,7 @@ box::use(
       granularity_profile,
       is_date_profile,
       MAX_LAYERS,
+      normalize_layer_records,
       rebalance_layers,
       set_layer_granularity,
       TIP_MAPPING_MAX
@@ -74,16 +75,20 @@ box::use(
     logic /
     tree_plot[
       build_tree_ggtree,
+      LEGEND_MAX_KEYS,
+      MIN_PRINT_PT,
+      scale_tree_opts,
       save_tree_plot,
       tree_auto_layout,
-      tree_legend_shown,
+      tree_open_angle,
       tree_legend_width_in,
+      tree_min_type_pt,
       tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
   app / logic / database_functions[AMR_ABSENT, load_amr_matrix],
   app / logic / phylo[compute_phylo_tree],
-  app / logic / viz_export[save_plot_export],
+  app / logic / viz_export[CM_PER_IN, save_plot_export],
   app /
     logic /
     viz_helpers[
@@ -98,30 +103,19 @@ box::use(
       color_scales,
       suitable_scale_categories,
       reset_viz_colors,
-      reset_viz_radio_buttons,
       collect_input_snapshot,
       apply_input_snapshot,
     ],
+  app / logic / viz_layers[layer_cards, layer_defaults, normalize_layers],
 )
 
 # --- Variable mapping layers -------------------------------------------------
 
-# Canonical shape of one mapping layer. The engine fills these in
-# (app/logic/mapping_engine.R); the snapshot/restore path must rebuild exactly
-# this shape (see .normalize_layers).
-LAYER_DEFAULTS <- list(
-  id = NA_character_,
-  field = NA_character_,
-  title = NA_character_,
-  aesthetic = "tiplab_color",
-  palette = "viridis",
-  family = "Gradient",
-  n_levels = 1L,
-  continuous = FALSE,
-  transform = NULL,
-  granularity = NULL,
-  auto = TRUE
-)
+# Canonical shape of one mapping layer, taken from the shared record so every
+# engine's snapshot/restore path rebuilds the same thing. The tree opens on the
+# tip-label colour rather than on its medium's first channel: shape is the
+# scarcer aesthetic and the engine assigns it deliberately, never as a fallback.
+LAYER_DEFAULTS <- layer_defaults("tree", aesthetic = "tiplab_color")
 
 # The heatmap is the AMR screening result and nothing else.
 #
@@ -135,53 +129,6 @@ LAYER_DEFAULTS <- list(
 #   class — one column per drug class / virulence group, presence or absence.
 #   gene  — one column per gene, carrying abritamr's own confidence in the call.
 
-# jsonlite reads a JSON array of same-shaped objects back as a *data.frame*, so
-# a saved snapshot's `.layers` does NOT come back as the list-of-lists the
-# reactiveVal holds. Assigning that straight in corrupts it. Rebuild the
-# canonical shape from whatever JSON handed us, filling anything absent from
-# the defaults so older or partial snapshots restore cleanly too.
-.normalize_records <- function(x, defaults) {
-  if (is.null(x)) {
-    return(NULL)
-  }
-  rows <- if (is.data.frame(x)) {
-    lapply(seq_len(nrow(x)), function(i) as.list(x[i, , drop = FALSE]))
-  } else if (is.list(x)) {
-    x
-  } else {
-    return(NULL)
-  }
-
-  lapply(rows, function(row) {
-    rec <- defaults
-    if (is.list(row)) {
-      for (f in names(row)) {
-        v <- row[[f]]
-        # A JSON null arrives as NULL or NA — keep the default for those.
-        if (is.null(v) || (!is.list(v) && length(v) == 1L && is.na(v))) {
-          next
-        }
-        rec[[f]] <- if (is.list(v) && length(v) == 1L) {
-          unname(v[[1]])
-        } else {
-          unname(v)
-        }
-      }
-    }
-    rec
-  })
-}
-
-.normalize_layers <- function(x) {
-  out <- .normalize_records(x, LAYER_DEFAULTS)
-  if (is.null(out)) {
-    return(NULL)
-  }
-  # A layer whose field is gone (the database changed under a saved Analysis)
-  # cannot be drawn and must not reach the builder.
-  Filter(function(l) !is.na(l$field %||% NA), out)
-}
-
 # Does any mapping draw on the tip points? Three answers hang off this one
 # question — whether the points come on with the mapping, whether their switch
 # is the user's to touch, and whether the plot draws them at all — and they only
@@ -192,24 +139,6 @@ LAYER_DEFAULTS <- list(
     function(l) l$aesthetic %in% c("tippoint_color", "tippoint_shape"),
     logical(1)
   ))
-}
-
-# A row-action button that reports which record it belongs to. The id travels
-# in the value rather than in the button's own input id, so one observer serves
-# every row however many times the list re-renders.
-.layer_btn <- function(ns, input_id, record_id, icon, title) {
-  shiny$tags$button(
-    type = "button",
-    class = "btn btn-sm tree-layer_btn",
-    title = title,
-    `aria-label` = title,
-    onclick = sprintf(
-      "Shiny.setInputValue('%s', '%s', {priority: 'event'})",
-      ns(input_id),
-      record_id
-    ),
-    shiny$icon(icon)
-  )
 }
 
 # One heatmap panel's controls: a switch and a column picker. One card per
@@ -253,7 +182,7 @@ LAYER_DEFAULTS <- list(
 }
 
 .normalize_heatmaps <- function(x) {
-  out <- .normalize_records(
+  out <- normalize_layer_records(
     x,
     list(
       kind = NA_character_,
@@ -261,6 +190,7 @@ LAYER_DEFAULTS <- list(
       section = NA_character_,
       cols = character(0),
       labels = character(0),
+      classes = character(0),
       palette = "Reds",
       title = NA_character_
     )
@@ -278,6 +208,8 @@ LAYER_DEFAULTS <- list(
     h$cols <- if (!length(v)) character(0) else as.character(v)
     l <- unlist(h$labels, use.names = FALSE)
     h$labels <- if (!length(l)) NULL else as.character(l)
+    g <- unlist(h$classes, use.names = FALSE)
+    h$classes <- if (!length(g)) NULL else as.character(g)
     h
   })
 }
@@ -327,6 +259,14 @@ CANVAS_MAX_FACTOR <- 2.6
 # A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
 PLOT_MAX_PX <- 12000
 
+# The legend is not the user's to set. Its column is reserved beside the tree
+# (below it, for circular layouts) and sized to the widest key by the layout
+# engine, so orientation and text size are fixed here at the values that
+# reserve agrees with — a horizontal box or a larger type size would claim a
+# width the reserve was never computed for and land the keys on the tips.
+LEGEND_ORIENTATION <- "vertical"
+LEGEND_SIZE <- 10
+
 # --- Controls fitted to the data ---------------------------------------------
 
 # Which field of a tree_auto_layout() fit feeds which control.
@@ -335,8 +275,7 @@ FITTED_FIELDS <- c(
   nj_tiplab_size = "tiplab_size",
   nj_branch_size = "branch_size",
   nj_tippoint_size = "tippoint_size",
-  nj_zoom = "zoom",
-  nj_h = "h"
+  nj_open_angle = "open_angle"
 )
 
 # The values those controls hold before any data is loaded. Taken from the logic
@@ -455,38 +394,72 @@ tree_controls <- function(ns, options_ui = NULL) {
   shiny$tagList(
     navset_tab(
       # Options ----------------------------------------------------------------
-      if (!is.null(options_ui)) {
-        nav_panel(
-          "Options",
-          icon = shiny$icon("gear"),
-          options_ui,
-          accordion(
-            open = c("Tree Rooting", "Layout"),
-            accordion_panel(
-              "Tree Rooting",
-              icon = shiny$icon("seedling"),
-              pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
-            ),
-            accordion_panel(
+      # Rendered whether or not the tab supplied its own controls, because the
+      # circle-opening slider below is this engine's and has to have somewhere
+      # to live.
+      nav_panel(
+        "Options",
+        icon = shiny$icon("gear"),
+        options_ui,
+        # Height per tip, which is the one thing about the shape that is a
+        # judgement rather than a fit: Generate solves it from the tip count so
+        # the rows come out legible, but how tall a figure is worth having is
+        # the reader's call, not the engine's.
+        shiny$sliderInput(
+          ns("nj_aspect_ratio"),
+          "Aspect ratio",
+          0.3,
+          8,
+          FITTED_DEFAULTS$nj_aspect_ratio,
+          step = 0.1,
+          ticks = FALSE
+        ),
+        accordion(
+          open = c("Tree Rooting", "Layout"),
+          accordion_panel(
+            "Tree Rooting",
+            icon = shiny$icon("seedling"),
+            pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
+          ),
+          accordion_panel(
+            "Layout",
+            icon = shiny$icon("project-diagram"),
+            pickerInput(
+              ns("nj_layout"),
               "Layout",
-              icon = shiny$icon("project-diagram"),
-              pickerInput(
-                ns("nj_layout"),
-                "Layout",
-                list(
-                  Linear = c(
-                    Rectangular = "rectangular",
-                    Roundrect = "roundrect",
-                    Slanted = "slanted",
-                    Ellipse = "ellipse"
-                  ),
-                  Circular = c(Circular = "circular", Inward = "inward")
-                )
+              list(
+                Linear = c(
+                  Rectangular = "rectangular",
+                  Roundrect = "roundrect",
+                  Slanted = "slanted",
+                  Ellipse = "ellipse"
+                ),
+                Circular = c(Circular = "circular", Inward = "inward")
+              )
+            ),
+            # How far a radial tree opens between its last tip and its first.
+            # Generate solves it from what the ring headers need
+            # (tree_open_angle) and this is where that answer can be argued with
+            # — the one piece of geometry the engine cannot settle alone, because
+            # it trades the tree's sweep against the room its headers get. Hidden
+            # for the layouts that have no circle to open.
+            shiny$div(
+              id = ns("nj_open_angle_wrap"),
+              class = "d-none",
+              shiny$sliderInput(
+                ns("nj_open_angle"),
+                "Circle opening",
+                0,
+                90,
+                0,
+                step = 1,
+                post = "\u00b0",
+                ticks = FALSE
               )
             )
           )
         )
-      },
+      ),
       # Labels -----------------------------------------------------------------
       nav_panel(
         "Labels",
@@ -634,33 +607,6 @@ tree_controls <- function(ns, options_ui = NULL) {
             ),
             viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221")
           ),
-
-          accordion_panel(
-            "Legend",
-            icon = shiny$icon("list"),
-            radioGroupButtons(
-              ns("nj_legend_orientation"),
-              "Orientation",
-              c(Vertical = "vertical", Horizontal = "horizontal"),
-              justified = TRUE
-            ),
-            shiny$sliderInput(
-              ns("nj_legend_size"),
-              "Size",
-              5,
-              25,
-              10,
-              ticks = FALSE
-            ),
-            # No position sliders. The legend gets a reserved column beside the
-            # tree (below it, for circular layouts) that the layout engine
-            # sizes to the widest key — placing it by hand is what let it land
-            # on top of the tips and run off the canvas.
-            shiny$div(
-              class = "text-muted small",
-              "Placed beside the tree automatically, clear of the labels."
-            )
-          ),
           accordion_panel(
             "Other Elements",
             icon = shiny$icon("code-branch"),
@@ -679,62 +625,6 @@ tree_controls <- function(ns, options_ui = NULL) {
           viz_color(ns, "nj_tiplab_color", "Tip Label", "#000000"),
           viz_color(ns, "nj_branch_color", "Allelic Distance", "#000000"),
           viz_color(ns, "nj_tippoint_color", "Tip Point", "#3A4657"),
-        )
-      ),
-      # Layout -----------------------------------------------------------------
-      nav_panel(
-        "Position",
-        icon = shiny$icon("sliders"),
-        accordion(
-          open = "Dimensions",
-          accordion_panel(
-            "Dimensions",
-            icon = shiny$icon("up-right-and-down-left-from-center"),
-            # Ceiling well above the 2 this used to stop at: height per tip is
-            # what makes a tree readable, so a few hundred isolates need a tall,
-            # scrollable plot (Options > Zoom) that the old range could not
-            # express at all. Generate fits this to the data — see
-            # tree_auto_layout.
-            shiny$sliderInput(
-              ns("nj_aspect_ratio"),
-              "Aspect ratio",
-              0.3,
-              8,
-              FITTED_DEFAULTS$nj_aspect_ratio,
-              step = 0.1,
-              ticks = FALSE
-            ),
-            layout_columns(
-              col_widths = c(6, 6),
-              shiny$sliderInput(
-                ns("nj_v"),
-                "Vertical",
-                -0.5,
-                0.5,
-                0,
-                step = 0.01,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_h"),
-                "Horizontal",
-                -0.5,
-                0.5,
-                FITTED_DEFAULTS$nj_h,
-                step = 0.01,
-                ticks = FALSE
-              )
-            ),
-            shiny$sliderInput(
-              ns("nj_zoom"),
-              "Zoom",
-              0.5,
-              1.5,
-              FITTED_DEFAULTS$nj_zoom,
-              step = 0.05,
-              ticks = FALSE
-            )
-          )
         )
       )
     ),
@@ -1123,6 +1013,14 @@ server <- function(
       )
       for (id in names(FITTED_DEFAULTS)) {
         value <- fit[[FITTED_FIELDS[[id]]]]
+        # The layout fit sees only the tree, so the one value that depends on
+        # what is drawn *beside* it is solved separately and applied over it.
+        if (identical(id, "nj_open_angle")) {
+          value <- tree_open_angle(
+            shiny$isolate(tree_opts()),
+            shiny$isolate(viz_metadata()) %||% data.frame()
+          )
+        }
         if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
           shiny$updateSliderInput(session, id, value = value)
         }
@@ -1134,9 +1032,15 @@ server <- function(
       # silently moving a toggle the user may have set deliberately. Only on a
       # Generate: a re-fit triggered by adding a mapping must not countermand a
       # toggle the user has just set by hand.
+      # Two reasons to give up on them, and they are the same reason: room per
+      # tip. `labels_legible` is the fitted type size falling under the floor;
+      # TIP_MAPPING_MAX is the count past which a per-tip mark stops carrying
+      # anything at all, which is the same ceiling the mapping engine uses to
+      # stop reaching for the per-tip channels.
+      crowded <- crowded_tips(length(tree$tip.label))
       if (
         notify &&
-          !fit$labels_legible &&
+          (crowded || !fit$labels_legible) &&
           isTRUE(shiny$isolate(fitted$nj_tiplab_show))
       ) {
         set_fitted("nj_tiplab_show", FALSE)
@@ -1165,11 +1069,32 @@ server <- function(
     # paid for by a wider canvas (see plot_canvas), not by re-fitting the tree,
     # so a re-fit here would be a redraw that changed nothing. Nor on anything
     # this writes, which would loop.
+    # The circle-opening slider belongs to the radial layouts and nowhere else.
+    shiny$observe({
+      shinyjs::toggleClass(
+        id = "nj_open_angle_wrap",
+        class = "d-none",
+        condition = !identical(input$nj_layout, "circular")
+      )
+    })
+
+    # Which layout the fit last ran for, so a switch can be told from the other
+    # things that trigger one.
+    fitted_layout <- shiny$reactiveVal(NULL)
+
     shiny$observeEvent(
       list(input$nj_layout, fitted$nj_tiplab, fitted$nj_tiplab_show),
       {
         shiny$req(tree_obj())
-        refit_layout(tree_obj())
+        # A layout switch is re-fitted with the legibility warning armed. Room
+        # per tip is a row's height on a linear tree and an *arc* on a circular
+        # one, so a count whose labels read perfectly well down a tall page can
+        # be a grey smudge around a disc — the switch is exactly the moment the
+        # user needs telling. The other triggers here leave it disarmed, since
+        # neither of them may countermand a toggle just set by hand.
+        switched <- !identical(fitted_layout(), input$nj_layout)
+        fitted_layout(input$nj_layout)
+        refit_layout(tree_obj(), notify = switched)
       },
       ignoreInit = TRUE
     )
@@ -1195,11 +1120,10 @@ server <- function(
     # directness of the "Reset view" button in Map.
     #
     # shinyjs::reset() alone can't reach colorPickr (every "colors" tab
-    # swatch) or the "Legend" tab's radioGroupButtons orientation picker —
-    # see reset_viz_colors()/reset_viz_radio_buttons() in viz_helpers.R for
-    # why — so both are patched up explicitly right after the blanket reset.
+    # swatch) — see reset_viz_colors() in viz_helpers.R for why — so those are
+    # patched up explicitly right after the blanket reset.
     #
-    # populate_metadata_selects(), unlike those two, has to be deferred with
+    # populate_metadata_selects(), unlike that one, has to be deferred with
     # shinyjs::delay() rather than just called right after shinyjs::reset():
     # nj_tiplab/.../nj_root_isolate/nj_parentnode *are* plain <select>s (or a
     # pickerInput, itself a <select> underneath) that shinyjs::reset()
@@ -1227,10 +1151,6 @@ server <- function(
         nj_branch_color = "#000000",
         nj_tippoint_color = "#3A4657",
         nj_clade_scale = "#D0F221"
-      )
-      reset_viz_radio_buttons(
-        session,
-        nj_legend_orientation = "vertical"
       )
       shinyjs::delay(400, populate_metadata_selects(force_default = TRUE))
     }
@@ -1274,6 +1194,21 @@ server <- function(
     n_tips <- shiny$reactive({
       meta <- viz_metadata()
       if (is.null(meta)) NULL else nrow(meta)
+    })
+
+    # Channels this plot is not drawing, so the engine neither picks them nor
+    # leaves a mapping stranded on one. Tip labels are the only switchable one:
+    # the tip points come *on* with a mapping (see .layers_want_tippoints), so
+    # a point channel is never off while something needs it.
+    off_channels <- shiny$reactive({
+      c(
+        if (isTRUE(fitted$nj_tiplab_show)) NULL else "tiplab_color",
+        # An inward tree has no room past its tips for a strip — that space is
+        # the middle of the disc (see tree_plot$tree_annotations_drawn), so a
+        # variable is drawn onto the tips there instead.
+        if (identical(input$nj_layout, "inward")) "tile" else NULL
+      ) %||%
+        character(0)
     })
 
     # Resolved Tree control values, shared by the live render and the export.
@@ -1340,11 +1275,22 @@ server <- function(
         # Panel width, for the tip-label reserve (see .tiplab_frac).
         width_in = plot_width_in(),
         # Dimensions / legend.
-        zoom = fitted$nj_zoom,
-        h = fitted$nj_h,
-        v = input$nj_v,
-        legend_orientation = input$nj_legend_orientation,
-        legend_size = input$nj_legend_size
+        # Fixed. `as.ggplot()` spends (1 - zoom) of the canvas on a blank
+        # border and shifts the plot inside it — compensation for content
+        # running off the edge, which the axis reserves now prevent in every
+        # layout. There is nothing left for them to correct, so they are no
+        # longer the user's to set.
+        zoom = 1,
+        h = 0,
+        v = 0,
+        legend_orientation = LEGEND_ORIENTATION,
+        legend_size = LEGEND_SIZE,
+        # The tree's own aspect. The builder turns it into a plot height, which
+        # for a radial layout is not this at all (see tree_legend_cols).
+        aspect = fitted$nj_aspect_ratio,
+        # Degrees of circle left open for the ring headers. Fitted on Generate
+        # and adjustable after; only a radial layout uses it.
+        open_angle = fitted$nj_open_angle
       )
     )
 
@@ -1363,26 +1309,37 @@ server <- function(
       meta <- viz_metadata()
       md <- if (is.null(meta)) data.frame() else meta
 
+      # Solved in tree_plot.R, beside the axis split it has to agree with: the
+      # annotations' share is a fraction of the tree's *span*, not of the panel,
+      # so the panel a given annotation set needs is not simply the sum.
+      panel_in <- tree_panel_width_in(opts, md, TREE_PANEL_IN)
+
+      circular <- identical(opts$layout, "circular") ||
+        identical(opts$layout, "inward")
+      # A circular tree is a disc, so its panel is square — and the annotation
+      # rings grow it in *both* directions, not just across. Holding the height
+      # at the budget while the width grew for the rings drew the disc as an
+      # ellipse and put the outer ring off the bottom of the image.
+      height_in <- if (circular) {
+        panel_in
+      } else {
+        TREE_PANEL_IN * fitted$nj_aspect_ratio
+      }
+
+      # After the height, because how many columns the guides need depends on
+      # it — and so, in turn, does how much width they claim.
       legend_in <- tree_legend_width_in(
         opts$layers,
         md,
         opts$legend_size,
         TREE_PANEL_IN,
-        opts$heatmaps
+        opts$heatmaps,
+        height_in
       )
-      # Solved in tree_plot.R, beside the axis split it has to agree with: the
-      # annotations' share is a fraction of the tree's *span*, not of the panel,
-      # so the panel a given annotation set needs is not simply the sum.
-      panel_in <- tree_panel_width_in(opts, md, TREE_PANEL_IN)
       canvas_in <- min(
         panel_in + legend_in,
         TREE_PANEL_IN * CANVAS_MAX_FACTOR
       )
-
-      circular <- identical(opts$layout, "circular") ||
-        identical(opts$layout, "inward")
-      aspect <- if (circular) 1 else fitted$nj_aspect_ratio
-      height_in <- TREE_PANEL_IN * aspect
 
       list(
         panel_in = TREE_PANEL_IN,
@@ -1623,7 +1580,8 @@ server <- function(
         layers,
         id = next_layer_id(),
         values = viz_metadata()[[field]],
-        n_units = n_tips()
+        n_units = n_tips(),
+        off = off_channels()
       )
       if (is.null(layer)) {
         shiny$showNotification(
@@ -1645,49 +1603,51 @@ server <- function(
         nj_layers()
       )
       nj_layers(
-        rebalance_layers(keep, profiles(), "tree", viz_metadata(), n_tips())
+        rebalance_layers(
+          keep,
+          profiles(),
+          "tree",
+          viz_metadata(),
+          n_tips(),
+          off_channels()
+        )
       )
     })
 
     output$nj_layers_ui <- shiny$renderUI({
-      layers <- nj_layers()
-      if (!length(layers)) {
-        return(shiny$div(
-          class = "text-muted fst-italic mb-2 tree-layer-empty",
-          "No mappings yet."
-        ))
-      }
-      shiny$div(
-        class = "tree-layer-list",
-        lapply(layers, function(l) {
-          shiny$div(
-            class = "tree-layer-card",
-            shiny$div(
-              class = "tree-layer_body",
-              shiny$div(class = "tree-layer_title", title = l$title, l$title),
-              shiny$div(
-                class = "tree-layer_meta",
-                paste(
-                  AESTHETIC_LABELS[[l$aesthetic]],
-                  "·",
-                  sprintf("%d values", l$n_levels),
-                  if (!is.null(granularity_label(l$granularity))) {
-                    paste("· by", tolower(granularity_label(l$granularity)))
-                  },
-                  if (!is.null(l$palette)) paste("·", l$palette),
-                  # Too many values for a key list to be worth reading, so the
-                  # plot draws the colours and skips the legend. Said here
-                  # because a missing legend otherwise reads as a fault.
-                  if (!tree_legend_shown(l$n_levels)) "· no legend"
-                )
-              )
-            ),
-            .layer_btn(ns, "nj_layer_edit", l$id, "pen", "Edit mapping"),
-            .layer_btn(ns, "nj_layer_delete", l$id, "xmark", "Remove mapping")
-          )
-        })
+      layer_cards(
+        ns,
+        nj_layers(),
+        "tree",
+        "nj_layer_edit",
+        "nj_layer_delete",
+        legend_max = LEGEND_MAX_KEYS
       )
     })
+
+    # Turning the tip labels off strands any mapping drawn on them, so the
+    # engine re-places it — onto a tile strip, which is what is left. Without
+    # this the layer stayed on a channel the plot no longer draws: no marks, no
+    # legend, and a card in the sidebar claiming otherwise.
+    shiny$observeEvent(
+      off_channels(),
+      {
+        layers <- nj_layers()
+        shiny$req(length(layers))
+        moved <- rebalance_layers(
+          layers,
+          profiles(),
+          "tree",
+          viz_metadata(),
+          n_tips(),
+          off_channels()
+        )
+        if (!identical(moved, layers)) {
+          nj_layers(moved)
+        }
+      },
+      ignoreInit = TRUE
+    )
 
     # --- Editing one layer --------------------------------------------------
 
@@ -1714,7 +1674,7 @@ server <- function(
       binned <- granularity_profile(prof, values, l$granularity)
       free <- union(
         l$aesthetic,
-        eligible_aesthetics(binned, taken, "tree", n_tips())
+        eligible_aesthetics(binned, taken, "tree", n_tips(), off_channels())
       )
       blocked <- setdiff(names(AESTHETIC_LABELS), free)
       reasons <- Filter(
@@ -1722,11 +1682,19 @@ server <- function(
         lapply(blocked, function(a) aesthetic_block_reason(binned, a))
       )
 
+      # Parsed, not raw: an ungrouped date reaches the scale as a continuum,
+      # and out of SQLite it is a character column that no test for one can
+      # recognise. Left raw, the palette offer came back with Qualitative on it.
+      shown <- if (is_date_profile(prof)) {
+        bin_date_values(values, l$granularity)
+      } else {
+        values
+      }
       cats <- scale_categories_for(
-        if (isTRUE(binned$continuous)) values else as.character(values),
+        if (isTRUE(binned$continuous)) shown else as.character(shown),
         suitable_scale_categories(
           if (isTRUE(binned$continuous)) "Numeric" else "Factor",
-          values
+          shown
         )
       )
 
@@ -1735,7 +1703,12 @@ server <- function(
         size = "s",
         easyClose = TRUE,
         if (is_date_profile(prof)) {
-          granularity_select(ns, "nj_layer_granularity", l$granularity)
+          granularity_select(
+            ns,
+            "nj_layer_granularity",
+            l$granularity,
+            values = values
+          )
         },
         pickerInput(
           ns("nj_layer_aesthetic"),
@@ -1754,7 +1727,8 @@ server <- function(
                 "point or label at. A tile strip keeps its width whatever",
                 "the tip count; the others do not."
               ),
-              n_tips(), TIP_MAPPING_MAX
+              n_tips(),
+              TIP_MAPPING_MAX
             )
           )
         },
@@ -1767,7 +1741,12 @@ server <- function(
           )
         },
         if (l$aesthetic %in% COLOR_AESTHETICS) {
-          scale_select(ns, "nj_layer_palette", categories = cats, selected = l$palette)
+          scale_select(
+            ns,
+            "nj_layer_palette",
+            categories = cats,
+            selected = l$palette
+          )
         },
         footer = shiny$tagList(
           shiny$modalButton("Cancel"),
@@ -1801,7 +1780,14 @@ server <- function(
       # A pinned layer may now hold an aesthetic an automatic one had, so the
       # automatic ones move out of its way.
       nj_layers(
-        rebalance_layers(layers, profiles(), "tree", viz_metadata(), n_tips())
+        rebalance_layers(
+          layers,
+          profiles(),
+          "tree",
+          viz_metadata(),
+          n_tips(),
+          off_channels()
+        )
       )
       editing(NULL)
       shiny$removeModal()
@@ -1991,7 +1977,11 @@ server <- function(
         return(.empty_catalog)
       }
       map <- amr_field_map(meta)
-      map <- map[map$role == "gene" & map$field %in% names(meta), , drop = FALSE]
+      map <- map[
+        map$role == "gene" & map$field %in% names(meta),
+        ,
+        drop = FALSE
+      ]
       if (!nrow(map)) {
         return(.empty_catalog)
       }
@@ -2093,10 +2083,12 @@ server <- function(
         if (!nrow(cat)) {
           next
         }
-        chosen <- intersect(
-          input[[paste0("nj_heatcols_", key)]] %||% character(0),
-          cat$col
-        )
+        # Catalogue order, not the picker's: the catalogue files the genes by
+        # drug class, and the panel brackets each class under its own run of
+        # columns. A run has to be contiguous to be bracketed.
+        chosen <- cat$col[
+          cat$col %in% (input[[paste0("nj_heatcols_", key)]] %||% character(0))
+        ]
         if (!length(chosen)) {
           chosen <- cat$col
         }
@@ -2108,6 +2100,11 @@ server <- function(
           section = key,
           cols = chosen,
           labels = cat$label[idx],
+          # The drug class each gene belongs to, in column order. The panel
+          # draws its columns grouped by it and brackets the runs below the
+          # matrix, which is the only place the grouping is visible: a gene
+          # symbol does not say which class it belongs to.
+          classes = cat$group[idx],
           palette = "Reds",
           title = HEATMAP_PANELS[[key]]$title
         )
@@ -2127,13 +2124,52 @@ server <- function(
       label = "tree",
       ready = shiny$reactive(isTRUE(generated())),
       aspect = shiny$reactive(plot_canvas()$aspect),
+      # What the chosen size will do to the smallest type on the figure.
+      #
+      # Scaling the design keeps it proportioned at any width, which is what
+      # makes the export faithful — but proportion is not legibility. A dense
+      # tree on a journal column is correctly drawn and still unreadable, and
+      # the honest thing is to say so before the file is written rather than
+      # to quietly enlarge the type and put the labels back on top of each
+      # other.
+      note = function(width_cm) {
+        canvas <- plot_canvas()
+        meta <- viz_metadata()
+        md <- if (is.null(meta)) data.frame() else meta
+        k <- (max(1, width_cm) / CM_PER_IN) / canvas$canvas_in
+        pt <- tree_min_type_pt(scale_tree_opts(tree_opts(), k), md)
+        if (!is.finite(pt) || pt >= MIN_PRINT_PT) {
+          return(NULL)
+        }
+        sprintf(
+          paste(
+            "Smallest text would print at %.1f pt — under the %g pt most",
+            "journals ask for. Export wider, or show fewer columns."
+          ),
+          pt, MIN_PRINT_PT
+        )
+      },
+      # Rebuilt at the size it is going out at, not the size it was drawn at.
+      # A ggplot cannot be rescaled: its type is in millimetres and the
+      # reserves around it are fractions, so printing the preview at another
+      # width moves one and not the other — which is how a 25cm export came out
+      # with its tip labels colliding and a 40cm one with them lost in a
+      # gutter. `scale_tree_opts()` scales the design instead, so the export is
+      # the preview at another size rather than the preview stretched.
       save = function(file, format, opts) {
+        canvas <- plot_canvas()
+        target_in <- max(1, opts$width_cm) / CM_PER_IN
+        built <- build_tree_ggtree(
+          plot_inputs()$tree,
+          plot_inputs()$metadata,
+          scale_tree_opts(plot_inputs()$opts, target_in / canvas$canvas_in)
+        )
         save_plot_export(
-          tree_plot_built(),
+          built,
           file,
           format,
           width_cm = opts$width_cm,
-          aspect = plot_canvas()$aspect,
+          aspect = canvas$aspect,
           dpi = opts$dpi
         )
       }
@@ -2185,10 +2221,7 @@ server <- function(
           "nj_tippoint_alpha",
           "nj_tippoint_size",
           "nj_aspect_ratio",
-          "nj_v",
-          "nj_h",
-          "nj_zoom",
-          "nj_legend_size"
+          "nj_open_angle"
         ),
         colors = c(
           "nj_color",
@@ -2198,7 +2231,7 @@ server <- function(
           "nj_tippoint_color",
           "nj_clade_scale"
         ),
-        radio_groups = c("nj_legend_orientation", "zoom_view")
+        radio_groups = "zoom_view"
       )
 
       # Put the fitted controls' saved values straight into the mirrors the
@@ -2259,7 +2292,7 @@ server <- function(
 
       # Both come back from JSON as data.frames rather than lists of lists —
       # normalise before storing.
-      layers <- .normalize_layers(vals$.layers)
+      layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, "tree")
       if (is.null(layers)) {
         # An Analysis saved before the layer rewrite carries the old
         # per-aesthetic keys instead. Rebuilding layers from them is what stops
@@ -2334,7 +2367,7 @@ server <- function(
           if (is.null(spec$palette)) NULL else vals[[spec$palette]]
         )
       }
-      for (tile in .normalize_records(
+      for (tile in normalize_layer_records(
         vals$.tiles,
         list(
           show = FALSE,

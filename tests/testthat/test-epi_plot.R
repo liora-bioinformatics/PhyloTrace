@@ -6,6 +6,7 @@ box::use(
     expect_false,
     expect_identical,
     expect_length,
+    expect_no_warning,
     expect_s3_class,
     expect_true,
     test_that
@@ -14,6 +15,9 @@ box::use(
 box::use(
   app / logic / epi_plot,
 )
+
+# The bar-stacking helpers below are internal to the module.
+impl <- attr(epi_plot, "namespace")
 
 # A small metadata frame shaped like the `metadata` table's output: ISO date
 # strings (free text, so unparseable and NA values are expected).
@@ -472,6 +476,38 @@ test_that("annotations are drawn onto the curve", {
   expect_true(n_layers(annos_fixture()) > n_layers(epi_plot$empty_epi_annotations()))
 })
 
+test_that("a timestamp's label is a badge filled with the plot background", {
+  # A timestamp lands wherever its date falls, regularly on top of a bar. Bare
+  # text there is unreadable, so the label carries an opaque badge in the plot's
+  # own background colour — it punches a hole in the bars rather than tinting
+  # them.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  milestone <- data.frame(
+    id = "a",
+    type = "milestone",
+    start = as.Date("2026-01-20"),
+    end = as.Date(NA),
+    label = "Ward closed",
+    color = "#E8A33D",
+    stringsAsFactors = FALSE
+  )
+
+  built <- ggplot2::ggplot_build(epi_plot$build_epi_ggplot(
+    binned,
+    list(interval = "week", annos = milestone, background = "#F2EFE6")
+  ))
+  badges <- Filter(
+    function(l) inherits(l$geom, "GeomLabel"),
+    built$plot$layers
+  )
+
+  expect_length(badges, 1L)
+  expect_identical(badges[[1]]$aes_params$fill, "#F2EFE6")
+  expect_identical(badges[[1]]$aes_params$label, "Ward closed")
+  # Borderless, or the badge reads as a box of its own rather than as backdrop.
+  expect_equal(badges[[1]]$geom_params$label.size, 0)
+})
+
 # --- as_epi_annotations ------------------------------------------------------
 # What a saved plot's annotations look like coming back out of its snapshot.
 restored_annos <- function(annos = annos_fixture()) {
@@ -918,6 +954,34 @@ test_that("the cumulative overlay is scaled to reach the panel's top at its fina
   expect_equal(max(overlay_y), max(totals))
 })
 
+test_that("the cumulative overlay's final point survives the y scale's limits", {
+  # Dividing the running total by cum_scale can put the last point a float
+  # hair above the y limit, and scale_y_continuous() drops anything outside
+  # it: the curve loses its final step and every render warns twice (once
+  # per overlay pass). 61 cases peaking at 7 is one such pair.
+  binned <- data.frame(
+    date_bin = as.Date("2024-01-01") + (0:8) * 7,
+    stratum = epi_plot$EPI_ALL_LABEL,
+    count = c(7L, 7L, 7L, 7L, 7L, 7L, 7L, 7L, 5L)
+  )
+  p <- epi_plot$build_epi_ggplot(
+    binned,
+    list(mode = "stacked", show_cumulative = TRUE, interval = "week")
+  )
+  expect_no_warning(built <- ggplot2::ggplot_build(p))
+
+  step_layer <- which(vapply(
+    built$plot$layers,
+    function(l) inherits(l$geom, "GeomStep"),
+    logical(1)
+  ))[1]
+  overlay <- built$data[[step_layer]]
+
+  expect_identical(nrow(overlay), nrow(binned))
+  expect_false(anyNA(overlay$y))
+  expect_equal(max(overlay$y), max(binned$count))
+})
+
 # --- moving average ----------------------------------------------------------
 
 test_that("epi_moving_average fills the gaps and smooths across strata", {
@@ -1186,4 +1250,117 @@ test_that("epi_bins lists the bins in order", {
 
   expect_identical(epi_plot$epi_bins(binned), as.Date(c("2026-01-12", "2026-02-02")))
   expect_length(epi_plot$epi_bins(epi_plot$build_epi_data(meta_fixture(), "nope")), 0L)
+})
+
+test_that("the date axis carries major and minor ticks", {
+  # theme_minimal draws no ticks and panel.grid is switched off, which left the
+  # date labels floating with nothing marking the position they name.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+  p <- epi_plot$build_epi_ggplot(binned, list(interval = "week"))
+  theme <- ggplot2::ggplot_build(p)$plot$theme
+
+  expect_s3_class(theme$axis.ticks.x, "element_line")
+  expect_false(inherits(theme$axis.ticks.x, "element_blank"))
+  # Half-length subdivisions between two labels — what makes a date readable
+  # off a span running over several years.
+  expect_true(isTRUE(p$scales$get_scales("x")$guide$params$minor.ticks))
+  expect_equal(as.numeric(theme$axis.minor.ticks.length.x), 0.5)
+})
+
+test_that("epi_date_range reports the dates collected, not the bins", {
+  # A bin is named by its first day, so the last bin's name can trail the last
+  # collection date by nearly a whole interval — 2026-02-02 for data collected
+  # through 2026-02-04. Anything showing the user a date span wants the latter.
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+
+  expect_identical(
+    epi_plot$epi_date_range(binned),
+    as.Date(c("2026-01-14", "2026-02-04"))
+  )
+  # A frame from before the attribute existed (a restored analysis) still has
+  # its bins to fall back on.
+  bare <- binned
+  attr(bare, "date_range") <- NULL
+  expect_identical(epi_plot$epi_date_range(bare), range(epi_plot$epi_bins(binned)))
+  expect_true(all(is.na(
+    epi_plot$epi_date_range(epi_plot$build_epi_data(meta_fixture(), "nope"))
+  )))
+})
+
+test_that("epi_cumulate carries the collected extent through", {
+  binned <- epi_plot$build_epi_data(meta_fixture(), interval = "week")
+
+  expect_identical(
+    epi_plot$epi_date_range(epi_plot$epi_cumulate(binned)),
+    epi_plot$epi_date_range(binned)
+  )
+})
+
+test_that("bin_end_date closes the bin on its own last day", {
+  expect_identical(
+    epi_plot$bin_end_date(as.Date("2026-02-02"), "week"),
+    as.Date("2026-02-08")
+  )
+  expect_identical(
+    epi_plot$bin_end_date(as.Date("2026-01-01"), "day"),
+    as.Date("2026-01-01")
+  )
+  # February is not March: the month's own length, not a fixed 30 or 31.
+  expect_identical(
+    epi_plot$bin_end_date(as.Date(c("2024-02-01", "2024-03-01")), "month"),
+    as.Date(c("2024-02-29", "2024-03-31"))
+  )
+  expect_length(epi_plot$bin_end_date(as.Date(character()), "month"), 0L)
+})
+
+test_that("bars are drawn at their bin's real width, without complaint", {
+  # A calendar bin is not a fixed width — February is shorter than March — and
+  # `width` is not an aesthetic geom_col() declares. It honoured it while
+  # warning about it on every draw, which filled the console whenever the time
+  # frame was dragged. Rectangles say the same thing without the ambiguity.
+  set.seed(2)
+  n <- 200
+  md <- data.frame(
+    isolate = sprintf("i%03d", seq_len(n)),
+    d = as.character(sample(
+      seq(as.Date("2020-01-01"), as.Date("2021-06-01"), by = "day"), n, TRUE
+    )),
+    grp = sample(c("ICU", "ER", "Ward"), n, TRUE),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(
+    md, date_field = "d", stratify_by = "grp", interval = "month"
+  )
+  layer <- impl$.mode_layers(binned, "incidence", FALSE, "month")
+
+  expect_no_warning(
+    built <- ggplot2::ggplot_build(ggplot2::ggplot() + layer)
+  )
+  d <- built$data[[1]]
+  # Every block sits inside its bin, and each bin stacks to its own total.
+  expect_true(all(d$xmax > d$xmin))
+  expect_true(all(d$ymin >= 0))
+  expect_equal(max(d$ymax), max(tapply(binned$count, binned$date_bin, sum)))
+})
+
+test_that("stacked bars keep the order the fill scale draws them in", {
+  # position_stack() lays the first factor level on top, and the fill scale
+  # assumes the same — solving the stack by hand means matching it, or the
+  # colours and the blocks disagree about which is which.
+  binned <- data.frame(
+    date_bin = as.Date(c("2020-01-01", "2020-01-01", "2020-02-01")),
+    stratum = factor(c("a", "b", "a"), levels = c("a", "b")),
+    count = c(2, 3, 4),
+    width = 31
+  )
+  out <- impl$.stacked_bars(binned)
+  first <- out[out$date_bin == as.Date("2020-01-01"), ]
+
+  # "a" is the first level, so it is the one on top.
+  expect_identical(
+    as.character(first$stratum[which.max(first$ymax)]),
+    "a"
+  )
+  expect_equal(max(first$ymax), 5)
+  expect_equal(min(first$ymin), 0)
 })

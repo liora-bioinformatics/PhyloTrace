@@ -4001,28 +4001,11 @@ label {
     margin-top: 1rem;
 }
 
-// Each preset choice is a name plus a one-line description. Bootstrap's
-// vertical button group joins its buttons edge-to-edge with shared borders
-// and centred text, both tuned for short, single-line, unrelated actions —
-// wrong for a stack of two-line descriptions that read as one list. A small
-// gap and its own rounded corners per button turn the group into a stack of
-// separate, left-aligned cards instead. Width is set explicitly on both the
-// row and the button: radioGroupButtons' own `width=` reaches only the
-// outermost wrapper, and Bootstrap's `.btn` is inline-block by default, so
-// without this each button stays exactly as wide as its own text.
-.export-modal .btn-group-vertical.btn-group-container-sw {
-    gap: 0.5rem;
-    width: 100%;
-}
-
-.export-modal .btn-group-vertical.btn-group-container-sw .btn-group {
-    width: 100%;
-}
-
-.export-modal .btn-group-vertical.btn-group-container-sw .btn {
-    width: 100%;
-    border-radius: var(--bs-border-radius) !important;
-    text-align: left;
+// The size the figure is made at can leave its smallest type below what a
+// journal will print. That is a consequence of the choice above it rather
+// than an error, so it reads as a warning and not as a failure.
+.export-modal .viz-export-warn {
+    color: var(--bs-warning-text-emphasis, #997404);
 }
 
 // Isolate-preselection modal: sized to use most of the viewport (the metadata
@@ -4697,4 +4680,8 @@ table.dataTable thead>tr>th.sorting {
     code {
         font-weight: 600;
     }
+}
+
+.datepicker-dropdown {
+    z-index: 9999 !important;
 }

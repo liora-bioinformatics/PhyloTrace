@@ -256,30 +256,45 @@ test_that("the sidebar panel holds only the trigger and the download target", {
   expect_false(grepl("t-export_dpi", html, fixed = TRUE))
 })
 
-test_that("export_opts() reads straight from the selected preset", {
-  # No raw width/DPI/target-width inputs exist any more — the preset radio is
-  # the only thing that decides them, read directly rather than through an
-  # update*Input() round-trip (which testServer can't simulate anyway; see
+test_that("export_opts() reads size and resolution as separate choices", {
+  # Two controls, two questions: how big the figure is made, and how finely it
+  # is rasterised. Read directly rather than through an update*Input()
+  # round-trip, which testServer cannot simulate anyway (see
   # [[shiny-testing-gotchas]] and the real-browser check this is paired with).
   with_tab(c("A", "B"), quote({
-    print_preset <- viz_export$export_preset("print")
-    session$setInputs(export_preset = "print")
-    expect_identical(isolate(export_opts()$width_cm), print_preset$ggplot$width_cm)
+    session$setInputs(export_size = "poster", export_quality = "Journal")
+    expect_identical(
+      isolate(export_opts()$width_cm),
+      viz_export$export_size("poster")$width_cm
+    )
     expect_identical(
       isolate(export_opts()$dpi),
-      as.numeric(print_preset$ggplot$dpi)
+      unname(viz_export$export_qualities[["Journal"]])
     )
 
-    web_preset <- viz_export$export_preset("web")
-    session$setInputs(export_preset = "web")
-    expect_identical(isolate(export_opts()$width_cm), web_preset$ggplot$width_cm)
+    # Changing one leaves the other where it was.
+    session$setInputs(export_size = "column")
+    expect_identical(
+      isolate(export_opts()$width_cm),
+      viz_export$export_size("column")$width_cm
+    )
+    expect_identical(
+      isolate(export_opts()$dpi),
+      unname(viz_export$export_qualities[["Journal"]])
+    )
   }))
 })
 
-test_that("export_opts() falls back to the first preset with nothing selected", {
+test_that("export_opts() falls back to its controls' own defaults", {
   with_tab(c("A", "B"), quote({
-    default <- viz_export$export_presets[[1]]
-    expect_identical(isolate(export_opts()$width_cm), default$ggplot$width_cm)
+    expect_identical(
+      isolate(export_opts()$width_cm),
+      viz_export$export_size("double")$width_cm
+    )
+    expect_identical(
+      isolate(export_opts()$dpi),
+      unname(viz_export$export_qualities[["Print"]])
+    )
   }))
 })
 

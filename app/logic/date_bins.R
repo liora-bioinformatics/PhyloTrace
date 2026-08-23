@@ -176,6 +176,37 @@ default_granularity <- function(x, max_groups = DATE_MAX_GROUPS) {
   unname(DATE_GRANULARITIES[length(DATE_GRANULARITIES)])
 }
 
+#' The interval a mapped date is grouped by unless the reader says otherwise.
+#'
+#' The one place this decision is made, because every engine has to make it and
+#' they were each making a different one: a date arrived ungrouped and drew a
+#' *continuous* scale, whose legend is three quantiles (first, middle, last)
+#' whatever the column holds. On the reference database that is 213 collection
+#' dates rendered as 213 all-but-identical colours under a three-line key —
+#' nothing a reader can match a node to. Grouping first is what makes a date
+#' behave like the categorical variable a legend can carry.
+#'
+#' `default_granularity()` picks the *finest* interval that stays inside
+#' `max_groups`, so a fortnight of dates still comes out by day and a decade
+#' comes out by year — the coarseness follows the data rather than a fixed rule.
+#' "Exact date" remains available in every engine's own control; this is the
+#' starting point, not a restriction.
+#'
+#' @param x Raw column values.
+#' @param max_groups Upper bound on how many groups are acceptable.
+#' @return A granularity slug, or NULL when there is no date to group.
+#' @export
+mapped_granularity <- function(x, max_groups = DATE_MAX_GROUPS) {
+  if (is.null(x) || !length(x)) {
+    return(NULL)
+  }
+  # Nothing parseable is not a date column, whatever the schema says of it.
+  if (!binned_levels(x, DATE_GRANULARITY_NONE)) {
+    return(NULL)
+  }
+  default_granularity(x, max_groups)
+}
+
 #' Human-readable name for a granularity, for a layer card or a legend title.
 #'
 #' @param granularity One of `DATE_GRANULARITIES`, or NULL/"none".

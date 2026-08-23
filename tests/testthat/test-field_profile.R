@@ -245,3 +245,23 @@ test_that("a profile row may carry its own sub-text", {
   p$description[[1]] <- ""
   expect_identical(field_profile$profile_description(p)[[1]], plain[[1]])
 })
+
+test_that("a date asks for a continuous palette even out of SQLite", {
+  # A date column arrives as character, so `is.numeric` says no and the level
+  # count then said "too many for a qualitative palette" — which offered
+  # Qualitative anyway. Nine hues interpolated across a decade is the rainbow a
+  # continuous scale must never be.
+  dates <- as.Date("2011-01-01") + seq(0, 3600, by = 17)
+  expect_identical(
+    field_profile$scale_categories_for(dates, c("Sequential", "Gradient")),
+    c("Sequential", "Gradient")
+  )
+  expect_identical(
+    field_profile$scale_categories_for(seq_along(dates), c("Sequential")),
+    "Sequential"
+  )
+  # A real category still gets the qualitative offer.
+  expect_true("Qualitative" %in% field_profile$scale_categories_for(
+    rep(c("a", "b"), 5), c("Sequential", "Gradient")
+  ))
+})

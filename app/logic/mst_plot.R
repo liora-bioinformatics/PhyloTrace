@@ -408,10 +408,20 @@ mst_edge_lengths <- function(
         )
       }
       if (nrow(skel$seg)) {
-        best <- min(best, min(.point_seg_dist(
-          px[[i]], py[[i]],
-          skel$seg[, 1], skel$seg[, 2], skel$seg[, 3], skel$seg[, 4]
-        ) - skel$seg_r))
+        best <- min(
+          best,
+          min(
+            .point_seg_dist(
+              px[[i]],
+              py[[i]],
+              skel$seg[, 1],
+              skel$seg[, 2],
+              skel$seg[, 3],
+              skel$seg[, 4]
+            ) -
+              skel$seg_r
+          )
+        )
       }
       best
     },
@@ -443,7 +453,17 @@ MST_PUSH_ANGLES <- 72L
 # node, or cross another branch. The equal-angle wedges are what normally
 # guarantee the second, and swinging out of a wedge gives that guarantee up, so
 # it is checked directly instead.
-.push_out_of_clusters <- function(x, y, parent, subtree, cl, radius, f, t, skel) {
+.push_out_of_clusters <- function(
+  x,
+  y,
+  parent,
+  subtree,
+  cl,
+  radius,
+  f,
+  t,
+  skel
+) {
   n <- length(x)
   loose <- which(
     is.na(cl) & !is.na(parent) & !is.na(cl[parent])
@@ -468,8 +488,10 @@ MST_PUSH_ANGLES <- 72L
     fbx <- x[t[fixed]]
     fby <- y[t[fixed]]
     touching <- lapply(moving, function(i) {
-      f[fixed] == f[[i]] | f[fixed] == t[[i]] |
-        t[fixed] == f[[i]] | t[fixed] == t[[i]]
+      f[fixed] == f[[i]] |
+        f[fixed] == t[[i]] |
+        t[fixed] == f[[i]] |
+        t[fixed] == t[[i]]
     })
     now <- atan2(y[[v]] - y[[p]], x[[v]] - x[[p]])
 
@@ -515,10 +537,19 @@ MST_PUSH_ANGLES <- 72L
         if (!any(ok)) {
           next
         }
-        if (.crosses_any(
-          px[f[i]], py[f[i]], px[t[i]], py[t[i]],
-          fax[ok], fay[ok], fbx[ok], fby[ok], eps
-        )) {
+        if (
+          .crosses_any(
+            px[f[i]],
+            py[f[i]],
+            px[t[i]],
+            py[t[i]],
+            fax[ok],
+            fay[ok],
+            fbx[ok],
+            fby[ok],
+            eps
+          )
+        ) {
           crossed <- TRUE
           break
         }
@@ -678,10 +709,20 @@ mst_layout <- function(
     span <- cone[[v]]
     # A branch is inside the cluster only when both its ends are in the *same*
     # one — which is exactly when the shaded region runs along it.
+    #
+    # A node in no cluster has no region at it, so there is nothing for its
+    # branches to point away from and the fan is the plain proportional one.
+    # Written as "everything is attached" rather than left to the comparison
+    # above, which answers FALSE for every child when the parent is NA and so
+    # re-ordered and re-shared *every* fan in a tree with no clustering at all.
     fan <- .fan_layout(
       ch,
       tips[ch],
-      !is.na(cl[[v]]) & !is.na(cl[ch]) & cl[ch] == cl[[v]]
+      if (is.na(cl[[v]])) {
+        rep(TRUE, length(ch))
+      } else {
+        !is.na(cl[ch]) & cl[ch] == cl[[v]]
+      }
     )
     acc <- facing[[v]] - span / 2
     for (i in seq_along(fan$ch)) {
@@ -707,7 +748,14 @@ mst_layout <- function(
     inside <- !is.na(cl[f]) & !is.na(cl[t]) & cl[f] == cl[t]
     member <- which(!is.na(cl))
     moved <- .push_out_of_clusters(
-      x, y, parent, kin, cl, rad, f, t,
+      x,
+      y,
+      parent,
+      kin,
+      cl,
+      rad,
+      f,
+      t,
       skel = list(
         x = x[member],
         y = y[member],
@@ -1621,24 +1669,6 @@ MST_LEGEND_MIN_KEYS <- 4L
 # ("Cluster 1 – 247 isolates in 175 nodes"), which is what 22 was too tight for.
 MST_LEGEND_LABEL_CHARS <- 36L
 
-# How big a cluster is, in the units the drawing actually shows.
-#
-# Isolates and nodes are not the same number the moment anything is merged —
-# zero-distance isolates always are, and the collapse threshold merges more —
-# and the legend used to give only the isolate count. A reader who counts dots
-# then finds a different number in the key has to assume one of the two is
-# wrong. Both, whenever they can differ.
-.cluster_size <- function(isolates, nodes, merged = FALSE) {
-  if (!isTRUE(merged) || !length(nodes) || is.na(nodes)) {
-    return(.count_label(isolates, "isolate"))
-  }
-  sprintf(
-    "%s in %s",
-    .count_label(isolates, "isolate"),
-    .count_label(nodes, "node")
-  )
-}
-
 # One legend entry. `kind` is "header", "key" or "note"; headers and notes are
 # drawn as text-only nodes, which is how one legend block carries sections.
 .legend_entry <- function(kind, label, color = NULL, shape = "dot") {
@@ -1687,10 +1717,7 @@ MST_LEGEND_LABEL_CHARS <- 36L
 #' @param cluster_colors Named colours per cluster.
 #' @param threshold Cluster threshold, for the section header.
 #' @param scaled Logical. Node size encodes the isolate count.
-#' @param unclustered Named integer of `isolates` and `nodes` in no cluster, or
-#'   NULL to leave it unsaid.
-#' @param merged Logical. Some node holds more than one isolate, so counts are
-#'   given in both.
+#' @param unclustered Isolates in no cluster, or NULL to leave it unsaid.
 #' @return List of entries.
 #' @export
 mst_legend_items <- function(
@@ -1699,8 +1726,7 @@ mst_legend_items <- function(
   cluster_colors = character(0),
   threshold = NULL,
   scaled = FALSE,
-  unclustered = NULL,
-  merged = FALSE
+  unclustered = NULL
 ) {
   # Sections share the key budget: the clusters count as one section when there
   # are any, so a plot with two mappings and clusters gives each of the three a
@@ -1736,7 +1762,7 @@ mst_legend_items <- function(
           sprintf(
             "%s – %s",
             clusters$cluster[[i]],
-            .cluster_size(clusters$isolates[[i]], clusters$nodes[[i]], merged)
+            .count_label(clusters$isolates[[i]], "isolate")
           ),
           color = .lookup(cluster_colors, clusters$cluster[[i]], MISSING_COLOR),
           shape = "square"
@@ -1756,16 +1782,17 @@ mst_legend_items <- function(
     # subtract their way to the rest: the cluster keys may be truncated, and a
     # singleton is in no cluster at all yet is still an isolate in this tree.
     # Naming it keeps the section a complete partition of the isolates.
+    #
+    # Isolates throughout, as every key here is. How many *nodes* they came out
+    # as is a fact about the drawing rather than about the clustering, and the
+    # caption already gives it once for the whole tree.
     left <- suppressWarnings(as.integer(unclustered %||% NA_integer_))
     if (length(left) >= 1L && !is.na(left[[1]]) && left[[1]] > 0L) {
       items <- c(
         items,
         list(.legend_entry(
           "note",
-          sprintf(
-            "Unclustered – %s",
-            .cluster_size(left[[1]], left[length(left)], merged)
-          )
+          sprintf("Unclustered – %s", .count_label(left[[1]], "isolate"))
         ))
       )
     }
@@ -2177,7 +2204,7 @@ mst_scale_caption <- function(
     mode %||% "log",
     real = "Branch length is proportional to allelic distance.",
     uniform = "Branch lengths are not to scale.",
-    "Branch length is log-scaled, not proportional."
+    "Branch length is log-scaled."
   )
   if (isTRUE(shorten) && !identical(mode, "uniform")) {
     paste(
@@ -2545,31 +2572,33 @@ mst_frames <- function(graph, metadata, opts) {
   # mst_layout's `cluster`). The regions themselves are built further down, once
   # there are coordinates to build them from.
   #
-  # Computed when the regions are drawn *or* when something maps the assignment
-  # (see MST_CLUSTER_FIELD) — the two are independent choices, and colouring
-  # nodes by cluster with the shaded regions switched off is the clearest way to
-  # see which node the threshold left out of every one of them.
+  # Computed whatever the controls say, and that is deliberate. It is a function
+  # of the threshold, which is an analysis parameter; the two things that read
+  # it — the shaded regions and the mappable assignment — are display choices.
+  # Deriving it only when one of them is switched on made the *layout* move when
+  # a checkbox did: the same database drew a different arrangement with the
+  # regions hidden, which is the one thing a toggle must never do. An unusable
+  # threshold yields no clusters and the layout falls back to the plain fan.
   mapped_clusters <- any(vapply(
     opts$layers %||% list(),
     function(l) identical(l$field, MST_CLUSTER_FIELD),
     logical(1)
   ))
-  found <- if (isTRUE(opts$show_clusters) || mapped_clusters) {
-    mst_clusters(
-      ids,
-      edges$from,
-      edges$to,
-      edges$weight,
-      opts$cluster_threshold,
-      counts
-    )
-  }
+  found <- mst_clusters(
+    ids,
+    edges$from,
+    edges$to,
+    edges$weight,
+    opts$cluster_threshold,
+    counts
+  )
   if (mapped_clusters) {
     # As a metadata column, so the mapping path reads it exactly like any other
     # variable — one join, one legend, one set of pie slices.
     col <- .cluster_column(ids, found$node)
     metadata[[MST_CLUSTER_FIELD]] <- col$cluster[match(
-      metadata$isolate, col$isolate
+      metadata$isolate,
+      col$isolate
     )]
   }
 
@@ -2783,16 +2812,9 @@ mst_frames <- function(graph, metadata, opts) {
       cluster_colors,
       opts$cluster_threshold,
       isTRUE(opts$scale_nodes) && max(counts) > 1L,
-      # Both counts: a node the threshold left out of every cluster may still
-      # carry several zero-distance isolates, so five unclustered isolates can
-      # be three dots on the canvas.
-      if (is.null(clusters)) {
-        NULL
-      } else {
-        loose <- is.na(clusters$node)
-        c(isolates = sum(counts[loose]), nodes = sum(loose))
-      },
-      max(counts) > 1L
+      # Isolates, not nodes: a node the threshold left out of every cluster may
+      # still carry several zero-distance isolates.
+      if (is.null(clusters)) NULL else sum(counts[is.na(clusters$node)])
     ),
     custom = custom,
     length_mode = mode,

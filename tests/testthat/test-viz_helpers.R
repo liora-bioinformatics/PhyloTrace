@@ -225,3 +225,26 @@ test_that("a viridis swatch blends its sampled ramp smoothly", {
   expect_true(!grepl("%,", style, fixed = TRUE))
   expect_match(style, "color: white", fixed = TRUE)
 })
+
+test_that("the interval control opens at what the dates warrant", {
+  # Every engine builds this control, so the default belongs here rather than
+  # in each of them — and "Exact date" is the wrong default for anything but a
+  # very short collection.
+  pick <- function(...) {
+    ui <- viz_helpers$granularity_select(function(x) x, "g", ...)
+    grep("selected", as.character(ui), value = TRUE)
+  }
+  set.seed(8)
+  decade <- as.character(as.Date("2011-01-01") + sample(3650, 200))
+  expect_match(paste(pick(values = decade), collapse = " "), "year")
+  # A fortnight of sampling is legible day by day.
+  expect_match(
+    paste(pick(values = as.character(as.Date("2024-03-01") + 0:9)),
+      collapse = " "),
+    "day"
+  )
+  # An explicit choice always wins over the suggestion.
+  expect_match(paste(pick("none", values = decade), collapse = " "), "none")
+  # And with nothing to go on it stays where it always was.
+  expect_match(paste(pick(), collapse = " "), "none")
+})

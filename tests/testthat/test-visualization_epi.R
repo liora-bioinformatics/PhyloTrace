@@ -47,15 +47,19 @@ meta_fixture <- function() {
 }
 
 # The controls the curve reads. Mirrors what the UI declares, so a test starts
-# from the same place a freshly loaded sidebar does. "" is stratify_ui's
-# sentinel for "No stratification" — see stratify_selected() in the module.
+# from the same place a freshly loaded sidebar does.
 set_default_inputs <- function(session) {
   session$setInputs(
     epi_interval = "week",
-    epi_plot_mode = "stacked",
-    epi_col_scale = "Set2",
-    epi_stratify = ""
+    epi_plot_mode = "stacked"
   )
+}
+
+# Map a variable onto the bar fill, the way picking one in the Mapping tab
+# does. The palette and any date grouping are the engine's own choices from
+# here, exactly as they are for a real pick.
+map_variable <- function(session, field) {
+  session$setInputs(epi_layer_add = field)
 }
 
 test_that("Generate bins the metadata only while Epi is the active engine", {
@@ -138,12 +142,11 @@ test_that("the interval re-bins the curve without another Generate", {
   )
 })
 
-test_that("stratification re-splits the curve without another Generate", {
-  # epi_stratify is a plain single-select select (see stratify_ui): "" reads as
-  # no stratification, any field name splits by that one field. build_epi_data
-  # still accepts a vector for a composite category, but the picker no longer
-  # offers a way to select more than one at once — see epi_plot's own tests for
-  # composite-category coverage.
+test_that("a mapping re-splits the curve without another Generate", {
+  # The bar fill is the medium's only channel and it does not stack, so one
+  # variable at a time. build_epi_data still accepts a vector for a composite
+  # category — see epi_plot's own tests for that coverage — but the curve no
+  # longer offers a way to ask for one.
   generate <- reactiveVal(0L)
 
   testServer(
@@ -159,14 +162,43 @@ test_that("stratification re-splits the curve without another Generate", {
       session$flushReact()
       expect_identical(unique(epi_data()$stratum), epi_plot$EPI_ALL_LABEL)
 
-      session$setInputs(epi_stratify = "organism")
+      map_variable(session, "organism")
       expect_identical(sort(unique(epi_data()$stratum)), c("E. coli", "S. enterica"))
 
-      session$setInputs(epi_stratify = "geo_loc_name_country")
-      expect_identical(sort(unique(epi_data()$stratum)), c("France", "Germany"))
+      # A second variable is refused rather than composited: one channel.
+      map_variable(session, "geo_loc_name_country")
+      expect_identical(length(epi_layers()), 1L)
+      expect_identical(epi_layers()[[1]]$field, "organism")
 
-      session$setInputs(epi_stratify = "")
+      # Removing the mapping puts the single series back.
+      session$setInputs(epi_layer_delete = epi_layers()[[1]]$id)
       expect_identical(unique(epi_data()$stratum), epi_plot$EPI_ALL_LABEL)
+
+      map_variable(session, "geo_loc_name_country")
+      expect_identical(sort(unique(epi_data()$stratum)), c("France", "Germany"))
+    }
+  )
+})
+
+test_that("a mapped variable lands on the bar fill with a palette of its own", {
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      map_variable(session, "organism")
+
+      l <- epi_layers()[[1]]
+      expect_identical(l$field, "organism")
+      expect_identical(l$aesthetic, "bar_fill")
+      expect_identical(l$n_levels, 2L)
+      # The engine picks the palette off the variable's own profile; a curve
+      # with no mapping falls back to the module's default.
+      expect_true(nzchar(l$palette %||% ""))
     }
   )
 })
@@ -352,9 +384,9 @@ test_that("Reset settings clears the annotation list", {
   )
 })
 
-test_that("Reset settings rebuilds the server-rendered stratify picker", {
-  # The picker is built by renderUI, so shinyjs::reset() has no page-load value
-  # to restore it from — the reset has to force a rebuild instead.
+test_that("Reset settings clears the mapping", {
+  # The layer list is reactiveVal state, not an input, so shinyjs::reset()
+  # cannot reach it — the reset has to clear it itself.
   testServer(
     visualization_epi$server,
     args = list(
@@ -364,11 +396,12 @@ test_that("Reset settings rebuilds the server-rendered stratify picker", {
     ),
     {
       set_default_inputs(session)
-      before <- stratify_rebuild()
+      map_variable(session, "organism")
+      expect_identical(length(epi_layers()), 1L)
 
       session$setInputs(reset_settings = 1)
 
-      expect_gt(stratify_rebuild(), before)
+      expect_identical(length(epi_layers()), 0L)
     }
   )
 })
@@ -399,9 +432,9 @@ test_that("session reset tears down the generated curve", {
   )
 })
 
-test_that("the stratify picker offers the metadata fields but not the date", {
-  # Built server-side: the choices are this database's own columns, unknown
-  # until the metadata exists.
+test_that("the mapping picker offers the metadata fields but not the plotted date", {
+  # The choices are this database's own columns, unknown until the metadata
+  # exists, so they are pushed at the picker rather than declared with it.
   testServer(
     visualization_epi$server,
     args = list(
@@ -411,21 +444,16 @@ test_that("the stratify picker offers the metadata fields but not the date", {
     ),
     {
       set_default_inputs(session)
-      # virtualSelectInput carries its options as JSON in a data attribute
-      # rather than as <option> tags, so the assertions look for the field
-      # names and the sentinel's value in that payload.
-      html <- as.character(output$stratify_ui$html)
+      session$flushReact()
 
-      expect_true(grepl("organism", html, fixed = TRUE))
-      expect_true(grepl("geo_loc_name_country", html, fixed = TRUE))
-      # The plotted date and the isolate id are not stratifiers.
-      expect_false(grepl("sample_collection_date", html, fixed = TRUE))
-      # The "No stratification" sentinel is always offered, and is what an
-      # empty selection actually means to stratify_selected().
-      expect_true(grepl("No stratification", html, fixed = TRUE))
-      # And each option carries its distinct-value count and declared type.
-      expect_true(grepl("values &middot;", html, fixed = TRUE) ||
-        grepl("values ·", html, fixed = TRUE))
+      expect_identical(
+        sort(mappable_fields()),
+        c("geo_loc_name_country", "organism")
+      )
+      # Splitting the curve by its own x axis draws one series per bar, and an
+      # isolate id names every isolate uniquely.
+      expect_false("sample_collection_date" %in% mappable_fields())
+      expect_false("isolate" %in% mappable_fields())
     }
   )
 })
@@ -580,7 +608,8 @@ test_that("the cumulative overlay switch reaches the plot only outside Cumulativ
     ),
     {
       set_default_inputs(session)
-      session$setInputs(epi_stratify = "organism", epi_show_cumulative = TRUE)
+      map_variable(session, "organism")
+      session$setInputs(epi_show_cumulative = TRUE)
       generate(1L)
       session$flushReact()
 
@@ -754,7 +783,7 @@ test_that("the window reveals only the bins inside it", {
   )
 })
 
-test_that("dragging the range slider sets the window, snapped to the nearest bin", {
+test_that("dragging the range slider sets the window, snapped to the bin it lands in", {
   generate <- reactiveVal(0L)
 
   testServer(
@@ -773,6 +802,53 @@ test_that("dragging the range slider sets the window, snapped to the nearest bin
       session$setInputs(epi_daterange = c(bins[1], bins[1]))
       expect_identical(win_start_date(), bins[1])
       expect_identical(win_end_date(), bins[1])
+
+      # The right handle rests on its bin's LAST day, not the bin's name.
+      # Nearest-bin-start snapping rounded that into the following bin; the
+      # bin a handle lands *inside* is the one it means.
+      session$setInputs(
+        epi_daterange = c(bins[1], epi_plot$bin_end_date(bins[1], "week"))
+      )
+      expect_identical(win_end_date(), bins[1])
+    }
+  )
+})
+
+test_that("the range slider is labelled in collected dates, not bin names", {
+  # A bin is named by its first day, so the last bin's name trails the last
+  # collection date — the slider read "up to 2020-12-01" for a database
+  # collected through 2020-12-12. The handles carry the span the bins cover,
+  # clipped to what was actually collected.
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+      bins <- epi_bins()
+
+      # Full span: the first and last dates in the metadata, not 2026-01-12
+      # (the opening bin's name) through 2026-02-02 (the closing bin's).
+      expect_identical(
+        slider_bounds(1L, length(bins)),
+        as.Date(c("2026-01-14", "2026-02-04"))
+      )
+      # A window closing on an interior bin runs to that bin's own last day.
+      expect_identical(
+        slider_bounds(1L, 1L),
+        as.Date(c("2026-01-14", "2026-01-18"))
+      )
+      # The window itself still travels as bin starts — that is what the plot
+      # compares its date_bin column against.
+      expect_identical(win_start_date(), bins[1])
+      expect_identical(win_end_date(), bins[length(bins)])
     }
   )
 })
@@ -860,6 +936,17 @@ test_that("ui() mounts the controls and the loading overlay under the id", {
   expect_true(grepl("epi-controls_sidebar", html, fixed = TRUE))
   # The overlay script has to hook the *parent's* Generate button id.
   expect_true(grepl("viz-generate", html, fixed = TRUE))
+})
+
+test_that("the annotation types are named for what they mark, not how", {
+  html <- as.character(visualization_epi$ui("epi", generate_id = "viz-generate"))
+
+  expect_true(grepl(">Timestamp<", html, fixed = TRUE))
+  expect_true(grepl(">Time period<", html, fixed = TRUE))
+  expect_false(grepl("Milestone", html, fixed = TRUE))
+  expect_false(grepl("(shaded)", html, fixed = TRUE))
+  # The stored type keys are untouched — a saved plot still restores.
+  expect_true(grepl("\"milestone\"", html, fixed = TRUE))
 })
 
 # --- restore(): saved stratification -----------------------------------------

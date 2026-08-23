@@ -159,3 +159,35 @@ test_that("granularity_label names the interval, and nothing when unbinned", {
   expect_null(date_bins$granularity_label(NULL))
   expect_null(date_bins$granularity_label("none"))
 })
+
+test_that("a mapped date starts at the interval its own spread warrants", {
+  # The rule every engine shares. Not "always exact" — a decade of collection
+  # dates drawn exactly is one colour per isolate under a three-line key — and
+  # not a fixed interval either, which would coarsen a fortnight of sampling
+  # into a single bar.
+  fortnight <- as.character(as.Date("2024-03-01") + 0:9)
+  expect_identical(date_bins$mapped_granularity(fortnight), "day")
+
+  # Ten weeks sampled three days apiece: thirty distinct days is past the
+  # budget, ten weeks is not, so it stops at the first interval that fits.
+  starts <- as.Date("2024-01-01") + seq(0, 63, by = 7)
+  weeks <- as.character(sort(c(starts, starts + 1, starts + 2)))
+  expect_identical(date_bins$mapped_granularity(weeks), "week")
+
+  # Ten years of near-unique dates — the reference database's shape — comes out
+  # by year rather than as 213 shades of one ramp.
+  set.seed(3)
+  decade <- as.character(as.Date("2011-01-01") + sample(3650, 213))
+  expect_identical(date_bins$mapped_granularity(decade), "year")
+  expect_true(date_bins$binned_levels(decade, "year") <= date_bins$DATE_MAX_GROUPS)
+
+  # Nothing to group is not a date, whatever the schema says of the column.
+  expect_null(date_bins$mapped_granularity(NULL))
+  expect_null(date_bins$mapped_granularity(character(0)))
+  expect_null(date_bins$mapped_granularity(c("not a date", NA)))
+
+  # Past the coarsest interval it stops rather than giving up: a century of
+  # sampling has more years than the budget and years is still the answer.
+  century <- as.character(as.Date("1925-06-01") + seq(0, 36500, by = 365))
+  expect_identical(date_bins$mapped_granularity(century), "year")
+})

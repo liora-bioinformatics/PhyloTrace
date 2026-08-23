@@ -34,8 +34,8 @@ fixture_db <- function(dir) {
 }
 
 # testServer starts every input NULL, and the ggtree build dereferences most of
-# them (a NULL legend size reaches unit() and errors), so stand the whole
-# control panel up at its coded defaults.
+# them (a NULL size reaches unit() and errors), so stand the whole control
+# panel up at its coded defaults.
 set_tree_inputs <- function(session) {
   session$setInputs(
     nj_root_isolate = "Automatic",
@@ -63,12 +63,7 @@ set_tree_inputs <- function(session) {
     nj_rootedge_show = FALSE,
     nj_treescale_show = FALSE,
     nj_axis_show = TRUE,
-    nj_aspect_ratio = 0.6,
-    nj_zoom = 0.95,
-    nj_h = -0.05,
-    nj_v = 0,
-    nj_legend_orientation = "vertical",
-    nj_legend_size = 10
+    nj_aspect_ratio = 0.6
   )
 }
 

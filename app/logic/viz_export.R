@@ -37,7 +37,8 @@ box::use(
     uiOutput,
   ],
   rlang[`%||%`],
-  shinyWidgets[pickerInput, radioGroupButtons],
+  shinyWidgets[pickerInput, sliderTextInput],
+  stats[setNames],
   svglite[svglite],
 )
 
@@ -78,6 +79,9 @@ raster_formats <- c("png", "jpeg", "tiff")
 # reduced to fit rather than letting the device fail on allocation.
 MAX_EXPORT_PX <- 20000L
 
+#' Centimetres per inch. Exported because the plot modules size their exports
+#' in inches and the export panel asks for centimetres.
+#' @export
 CM_PER_IN <- 2.54
 
 # --- Presets -------------------------------------------------------------
@@ -97,50 +101,54 @@ CM_PER_IN <- 2.54
 #' and 14 cm are sized for a slide and for a quick attachment respectively,
 #' both at screen resolution since neither is ever viewed at arm's length.
 #' @export
-export_presets <- list(
-  list(
-    id = "publication",
-    label = "Publication figure",
-    hint = "600 dpi · journal-ready",
-    ggplot = list(format = "png", width_cm = 17, dpi = "600"),
-    widget = list(format = "png", target_px = 4000)
-  ),
-  list(
-    id = "print",
-    label = "Print / large format",
-    hint = "300 dpi · poster-scale",
-    ggplot = list(format = "png", width_cm = 50, dpi = "300"),
-    widget = list(format = "png", target_px = 6000)
-  ),
-  list(
-    id = "presentation",
-    label = "Presentation",
-    hint = "150 dpi · slide-sized",
-    ggplot = list(format = "png", width_cm = 25, dpi = "150"),
-    widget = list(format = "png", target_px = 2400)
-  ),
-  list(
-    id = "web",
-    label = "Web / general",
-    hint = "150 dpi · compact & quick",
-    ggplot = list(format = "png", width_cm = 14, dpi = "150"),
-    widget = list(format = "png", target_px = 1600)
-  )
+# The sizes a figure is actually made at, in centimetres. Named for the page it
+# is going on rather than for a number, because that is the choice being made:
+# a single-column figure has to carry its type at 8.9 cm, and knowing that is
+# what stops someone exporting a wall chart for a journal.
+#' @export
+export_sizes <- list(
+  list(id = "column", label = "Journal column", width_cm = 8.9),
+  list(id = "double", label = "Journal double column", width_cm = 18),
+  list(id = "slide", label = "Slide", width_cm = 25),
+  list(id = "poster", label = "Poster", width_cm = 50)
 )
 
-#' Look up one export preset by id.
-#'
-#' @param id Character. A value from `export_presets[[i]]$id`.
-#' @return The matching preset list, or NULL if `id` matches none.
+#' The size record for an id, or NULL.
+#' @param id Character.
+#' @return A list, or NULL.
 #' @export
-export_preset <- function(id) {
-  for (p in export_presets) {
-    if (identical(p$id, id)) {
-      return(p)
+export_size <- function(id) {
+  for (sz in export_sizes) {
+    if (identical(sz$id, id)) {
+      return(sz)
     }
   }
   NULL
 }
+
+#' Raster resolutions offered, coarsest first.
+#'
+#' Three, not a free number: dpi only decides how finely the *same* figure is
+#' rasterised, so the useful range is "screen", "print" and "journal" and
+#' anything between them is a distinction without a difference. Vector formats
+#' take none of it.
+#' Target pixel widths for the widget engines, which have no physical size of
+#' their own — an interactive network is rendered at whatever width it is asked
+#' for, so "how detailed" is the only question it can answer.
+#' @export
+export_widget_px <- c(
+  `Screen` = 1600L,
+  `Print` = 4000L,
+  `Poster` = 6000L
+)
+
+#' @export
+export_qualities <- c(
+  `Screen` = 150L,
+  `Print` = 300L,
+  `Journal` = 600L
+)
+
 
 # --- UI ----------------------------------------------------------------------
 
@@ -207,7 +215,6 @@ export_panel <- function(ns, prefix) {
 export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
   id <- function(suffix) ns(paste0(prefix, "_", suffix))
   held <- function(name, default) values[[name]] %||% default
-  default_preset <- export_presets[[1]]
 
   div(
     class = "export-modal",
@@ -220,40 +227,56 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         selected = held("filetype", "png"),
         width = "100%"
       ),
-      # A plain radioGroupButtons rather than prettyRadioButtons: pretty-checkbox
-      # positions its checkmark assuming a single-line, fixed-height label
-      # (`.pretty { white-space: nowrap; line-height: 1 }` in its own CSS) and
-      # visibly breaks — the indicator detaches from its row — once a choice
-      # holds two lines of text. A button group has no such assumption; each
-      # choice is a real <button> that lays out multi-line content like any
-      # other block content.
-      #
-      # No raw width/DPI/scale controls beside it: an earlier version tucked
-      # them into a collapsed "Advanced" section, but a second, freely-typed
-      # size control next to four pre-vetted ones added a decision without
-      # adding a use case — every real one is already a preset. The preset
-      # alone decides width/DPI (ggplot) or target pixel width (widget).
-      radioGroupButtons(
-        id("preset"),
-        "Export for",
-        choiceNames = lapply(export_presets, function(p) {
-          tagList(
-            tags$strong(p$label),
-            tags$br(),
-            tags$span(class = "text-muted small", p$hint)
+      # Two controls, because there are two decisions and they are not the same
+      # one. Size is how big the figure is *made* — it decides how much type
+      # fits beside the drawing, so it changes the figure. Quality is only how
+      # finely that figure is rasterised, and a vector file has no such
+      # question. The four "export for" presets bundled both into one choice
+      # and named it after neither.
+      if (identical(kind, "ggplot")) {
+        pickerInput(
+          id("size"),
+          "Figure size",
+          choices = setNames(
+            vapply(export_sizes, `[[`, character(1), "id"),
+            vapply(
+              export_sizes,
+              function(s) sprintf("%s (%g cm)", s$label, s$width_cm),
+              character(1)
+            )
+          ),
+          selected = held("size", "double"),
+          width = "100%"
+        )
+      },
+      div(
+        id = id("quality_wrap"),
+        if (identical(kind, "ggplot")) {
+          sliderTextInput(
+            id("quality"),
+            "Resolution",
+            choices = names(export_qualities),
+            selected = held("quality", "Print"),
+            grid = TRUE,
+            width = "100%"
           )
-        }),
-        choiceValues = vapply(export_presets, `[[`, character(1), "id"),
-        selected = held("preset", default_preset$id),
-        direction = "vertical",
-        width = "100%"
+        } else {
+          sliderTextInput(
+            id("quality"),
+            "Detail",
+            choices = names(export_widget_px),
+            selected = held("quality", names(export_widget_px)[[2]]),
+            grid = TRUE,
+            width = "100%"
+          )
+        }
       ),
       uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
       footer = tagList(
         actionButton(id("cancel"), "Cancel"),
         actionButton(
           id("download"),
-          "Export",
+          "Save",
           icon = icon("download"),
           class = "btn-primary"
         )
@@ -280,20 +303,30 @@ export_hint <- function(kind, format, width_cm, quality, aspect = 0.62) {
   if (identical(format, "html")) {
     return("Self-contained interactive file; opens in any browser.")
   }
-  if (format %in% vector_formats) {
-    return("Vector output — resolution-independent at any print size.")
-  }
   if (identical(kind, "widget")) {
     px <- round(as.numeric(quality))
-    return(sprintf(
-      "%s px wide, at any window size%s",
-      prettyNum(px, big.mark = ","),
-      if (px >= 2000) ", enough for print." else " — raise for more detail."
-    ))
+    return(sprintf("%s px wide, at any window size.", prettyNum(px, big.mark = ",")))
+  }
+  size <- sprintf(
+    "%.1f \u00d7 %.1f cm",
+    width_cm,
+    width_cm * aspect
+  )
+  # A vector file is the same drawing at any size, so there is nothing about
+  # resolution to report — saying "600 dpi" of a PDF is not a detail, it is
+  # wrong.
+  if (format %in% vector_formats) {
+    return(paste0(size, " \u00b7 vector, sharp at any size."))
   }
   dpi <- resolved_dpi(width_cm, aspect, quality)
   w <- round(width_cm / CM_PER_IN * dpi)
-  sprintf("%d × %d px at %d dpi.", w, round(w * aspect), as.integer(dpi))
+  sprintf(
+    "%s \u00b7 %s \u00d7 %s px at %d dpi.",
+    size,
+    prettyNum(w, big.mark = ","),
+    prettyNum(round(w * aspect), big.mark = ","),
+    as.integer(dpi)
+  )
 }
 
 # --- Server-side rendering ---------------------------------------------------

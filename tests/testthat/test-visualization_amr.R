@@ -83,16 +83,40 @@ set_default_inputs <- function(session) {
     amr_sections = c("matches", "partials", "virulence"),
     amr_min_identity = 0,
     amr_min_coverage = 0,
-    amr_column_grouping = "element",
+    amr_column_grouping = "class",
     amr_cluster_rows = TRUE,
     amr_cluster_distance = "binary",
-    amr_cluster_method = "average",
-    amr_auto_fontsize = TRUE,
+    amr_cluster_method = "ward.D2",
+    amr_col_cluster_distance = "binary",
+    amr_col_cluster_method = "ward.D2",
+    amr_dend_size = 1.5,
     amr_show_row_names = FALSE,
     amr_show_class_anno = TRUE,
     amr_level = "gene",
     amr_top_n = 30
   )
+}
+
+anno_meta_fixture <- function() {
+  meta <- meta_fixture()
+  # Two isolates share a day deliberately: a date with one distinct value per
+  # isolate groups nothing and the mapping engine refuses it outright, which is
+  # a different case from the one these tests are about.
+  meta$enrollment_date <- c(
+    "2026-01-05",
+    "2026-01-05",
+    "2026-01-20",
+    "2026-02-21"
+  )
+  meta
+}
+
+anno_profiles_fixture <- function(meta) {
+  types <- c(isolate = "text", geo_loc_name_country = "category")
+  if ("enrollment_date" %in% names(meta)) {
+    types <- c(types, enrollment_date = "date")
+  }
+  field_profile$field_profiles(meta, types = types)
 }
 
 test_that("Generate builds the matrix only while AMR is the active engine", {
@@ -285,15 +309,17 @@ test_that("each view renders to a ggplot the export path can take", {
   )
 })
 
-test_that("the metadata colour strip resolves values keyed by isolate", {
+test_that("mapping a variable adds an annotation strip keyed by isolate", {
   path <- amr_db()
+  meta <- meta_fixture()
   generate <- reactiveVal(0L)
 
   testServer(
     visualization_amr$server,
     args = list(
       db_path = reactive(path),
-      viz_metadata = reactive(meta_fixture()),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
       generate = generate,
       plot_type = reactiveVal("AMR")
     ),
@@ -302,15 +328,48 @@ test_that("the metadata colour strip resolves values keyed by isolate", {
       generate(1L)
       session$flushReact()
 
-      # "" is the picker's sentinel for no annotation.
-      session$setInputs(amr_anno_field = "")
-      expect_null(anno_values())
-      expect_null(anno_label())
+      expect_identical(anno_layers(), list())
 
-      session$setInputs(amr_anno_field = "geo_loc_name_country")
-      expect_identical(anno_values()[["ISO-1"]], "Germany")
-      expect_identical(anno_label(), "Country")
+      session$setInputs(amr_layer_add = "geo_loc_name_country")
+      session$flushReact()
+
+      layers <- anno_layers()
+      expect_identical(length(layers), 1L)
+      expect_identical(layers[[1]]$label, "Country")
+      expect_identical(layers[[1]]$values[["ISO-1"]], "Germany")
       expect_s3_class(amr_ggplot(), "ggplot")
+    }
+  )
+})
+
+test_that("the same variable cannot be mapped twice", {
+  path <- amr_db()
+  meta <- meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_layer_add = "geo_loc_name_country")
+      session$flushReact()
+      id <- amr_layers()[[1]]$id
+
+      # The picker clears itself after an add, so re-picking the same field is
+      # what a second click looks like from here.
+      session$setInputs(amr_layer_add = "geo_loc_name_country")
+      session$flushReact()
+      expect_identical(length(amr_layers()), 1L)
+
+      session$setInputs(amr_layer_delete = id)
+      session$flushReact()
+      expect_identical(length(amr_layers()), 0L)
     }
   )
 })
@@ -367,7 +426,9 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       snap <- snapshot()
       expect_identical(snap$amr_mode, "classes")
       expect_identical(snap$amr_top_n, 15)
-      expect_true(all(startsWith(names(snap), "amr_")))
+      # `.layers` is the annotation strips, which are reactiveVal state rather
+      # than an input; everything else is an amr_ control.
+      expect_true(all(startsWith(setdiff(names(snap), ".layers"), "amr_")))
 
       # A snapshot taken before a control existed must restore everything else
       # cleanly rather than erroring on the missing id.
@@ -376,49 +437,13 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
   )
 })
 
-# --- restore(): saved annotation field ---------------------------------------
-# amr_anno_field is a field_select() (virtualSelectInput) rendered by renderUI,
-# exactly like the Epi engine's epi_stratify - see that engine's own test file
-# for the fuller reasoning. restore() used to hand it to
-# apply_input_snapshot()'s `pickers=` bucket, which both sends a message the
-# virtualSelectInput binding never listens for and would be undone anyway by
-# the re-render restoring triggers. Either way a saved annotation field
-# silently never came back on reopen.
-#
-# So these assert on what the *rendered control* carries, which is what the
-# browser actually receives.
-selected_value <- function(ui) {
-  html <- paste(as.character(ui), collapse = "")
-  hit <- regmatches(html, regexpr('"selectedValue":"[^"]*"', html))
-  if (!length(hit)) {
-    return(NA_character_)
-  }
-  sub('^"selectedValue":"(.*)"$', "\\1", hit)
-}
+# --- restore(): saved annotation strips ---------------------------------------
+# The strips are reactiveVal state rather than inputs, so they travel in the
+# snapshot's `.layers` key and come back through normalize_layers(). A snapshot
+# saved before the rewrite carried one strip in flat amr_anno_* keys instead;
+# migrate_legacy_annotation() is what stops those plots losing it on reopen.
 
-anno_meta_fixture <- function() {
-  meta <- meta_fixture()
-  meta$enrollment_date <- c(
-    "2026-01-05",
-    "2026-01-06",
-    "2026-01-20",
-    "2026-01-21"
-  )
-  meta
-}
-
-anno_profiles_fixture <- function(meta) {
-  field_profile$field_profiles(
-    meta,
-    types = c(
-      isolate = "text",
-      geo_loc_name_country = "category",
-      enrollment_date = "date"
-    )
-  )
-}
-
-test_that("restore() brings a saved annotation field back onto the control", {
+test_that("the snapshot carries the strips and restore brings them back", {
   path <- amr_db()
   meta <- anno_meta_fixture()
 
@@ -433,18 +458,23 @@ test_that("restore() brings a saved annotation field back onto the control", {
     ),
     {
       set_default_inputs(session)
-      restore(list(amr_anno_field = "geo_loc_name_country"))
+      session$setInputs(amr_layer_add = "geo_loc_name_country")
       session$flushReact()
 
-      expect_identical(
-        selected_value(output$anno_ui),
-        "geo_loc_name_country"
-      )
+      saved <- snapshot()$.layers
+      expect_identical(length(saved), 1L)
+
+      amr_layers(list())
+      restore(list(.layers = saved))
+      session$flushReact()
+
+      expect_identical(length(amr_layers()), 1L)
+      expect_identical(amr_layers()[[1]]$field, "geo_loc_name_country")
     }
   )
 })
 
-test_that("restore() ignores a saved annotation field the database no longer has", {
+test_that("a saved strip naming a missing column draws nothing", {
   path <- amr_db()
   meta <- anno_meta_fixture()
 
@@ -459,16 +489,28 @@ test_that("restore() ignores a saved annotation field the database no longer has
     ),
     {
       set_default_inputs(session)
-      restore(list(amr_anno_field = "no_such_column"))
+      restore(list(.layers = list(
+        list(
+          id = "L1",
+          field = "gone_from_this_database",
+          title = "Gone",
+          aesthetic = "annotation",
+          palette = "Set1",
+          n_levels = 2L,
+          auto = TRUE
+        )
+      )))
       session$flushReact()
 
-      # The "No annotation" sentinel, not a control pinned to a missing column.
-      expect_identical(selected_value(output$anno_ui), "")
+      # The record survives the restore — dropping it would lose the mapping if
+      # the column comes back — but nothing reaches the builder for it.
+      expect_identical(length(amr_layers()), 1L)
+      expect_identical(anno_layers(), list())
     }
   )
 })
 
-test_that("restore() applies a saved annotation field's granularity once it exists", {
+test_that("a pre-rewrite snapshot's single annotation field becomes a strip", {
   path <- amr_db()
   meta <- anno_meta_fixture()
 
@@ -483,23 +525,41 @@ test_that("restore() applies a saved annotation field's granularity once it exis
     ),
     {
       set_default_inputs(session)
-      # amr_anno_granularity never appeared in restore()'s own
-      # apply_input_snapshot() bucket at all, so it was previously dropped
-      # unconditionally, whatever happened to the field itself.
       restore(list(
         amr_anno_field = "enrollment_date",
-        amr_anno_granularity = "month"
+        amr_anno_granularity = "month",
+        amr_anno_scale = "Set3"
       ))
       session$flushReact()
 
-      expect_identical(selected_value(output$anno_ui), "enrollment_date")
+      expect_identical(length(amr_layers()), 1L)
+      l <- amr_layers()[[1]]
+      expect_identical(l$field, "enrollment_date")
+      expect_identical(l$granularity, "month")
+      expect_identical(l$palette, "Set3")
+    }
+  )
+})
 
-      # The granularity control is gated on the *echoed* field: it exists only
-      # once amr_anno_field reports back as a date, which is a later flush
-      # than the one restore() runs in.
-      session$setInputs(amr_anno_field = "enrollment_date")
-      html <- paste(as.character(output$anno_granularity_ui), collapse = "")
-      expect_true(grepl('value="month" selected', html, fixed = TRUE))
+test_that("a saved 'Element type' grouping restores as one the picker offers", {
+  path <- amr_db()
+  meta <- meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      # Element type is structural now, so the grouping it named is gone from
+      # the control and the value has to be translated rather than passed on.
+      session$setInputs(amr_column_grouping = "element")
+      expect_identical(grouping(), "none")
     }
   )
 })

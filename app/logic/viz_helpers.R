@@ -32,7 +32,13 @@ box::use(
 )
 
 box::use(
-  app / logic / date_bins[DATE_GRANULARITIES, DATE_GRANULARITY_NONE],
+  app /
+    logic /
+    date_bins[
+      DATE_GRANULARITIES,
+      DATE_GRANULARITY_NONE,
+      mapped_granularity,
+    ],
   app / logic / field_profile[profile_description],
 )
 
@@ -422,19 +428,27 @@ scale_select <- function(ns, id, categories = names(color_scales), selected = NU
 #'
 #' @param ns Function. Module namespace function (`session$ns`).
 #' @param id Character. Input ID.
-#' @param selected Character. Granularity to preselect, or NULL for "none".
+#' @param selected Character. Granularity to preselect, or NULL to start at
+#'   whatever `values` warrants.
 #' @param label Character. Control label.
 #' @param allow_none Logical. Offer the ungrouped option (a continuous scale).
+#' @param values The column's own values, for that starting interval.
 #' @return Shiny UI tag.
 #' @export
 granularity_select <- function(ns, id, selected = NULL, label = "Group dates by",
-                               allow_none = TRUE) {
+                               allow_none = TRUE, values = NULL) {
   choices <- as.list(DATE_GRANULARITIES)
   if (allow_none) {
     choices <- c(setNames(list(DATE_GRANULARITY_NONE), "Exact date"), choices)
   }
-  if (is.null(selected)) {
-    selected <- DATE_GRANULARITY_NONE
+  # Nothing chosen yet: start at the interval the dates themselves warrant
+  # rather than at "Exact date". A collection spanning years has one distinct
+  # date per isolate, and exact dates make a scale with a colour per isolate —
+  # legible for a fortnight of sampling and useless for anything longer. The
+  # rule is `date_bins$mapped_granularity()`, shared with the mapping engine so
+  # a date opens the same way whichever engine is asking.
+  if (is.null(selected) || !nzchar(selected %||% "")) {
+    selected <- mapped_granularity(values) %||% DATE_GRANULARITY_NONE
   }
   div(
     class = "viz-granularity-select",

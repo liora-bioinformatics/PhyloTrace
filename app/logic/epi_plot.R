@@ -13,19 +13,23 @@ box::use(
     annotate,
     coord_fixed,
     element_blank,
+    element_line,
     element_rect,
     element_text,
     expansion,
     geom_col,
+    geom_rect,
     geom_line,
     geom_step,
     geom_text,
     geom_tile,
     ggplot,
     ggsave,
+    guide_axis,
     guide_legend,
     guides,
     labs,
+    rel,
     scale_colour_manual,
     scale_fill_manual,
     scale_linetype_manual,
@@ -172,6 +176,7 @@ epi_stratum <- function(meta, stratify_by) {
     stringsAsFactors = FALSE
   )
   attr(out, "dropped") <- dropped
+  attr(out, "date_range") <- as.Date(c(NA, NA))
   out
 }
 
@@ -228,6 +233,10 @@ build_epi_data <- function(
     as.data.frame()
 
   attr(out, "dropped") <- dropped
+  # The observed extent, NOT the bin extent: a bin is named by its first day,
+  # so range(date_bin) understates the last bin by up to an interval. Anything
+  # showing the user a date span (the window slider) wants this instead.
+  attr(out, "date_range") <- range(parsed)
   out
 }
 
@@ -255,6 +264,7 @@ epi_cumulate <- function(binned) {
   out$count <- as.integer(ave(out$count, out$stratum, FUN = cumsum))
   rownames(out) <- NULL
   attr(out, "dropped") <- attr(binned, "dropped") %||% 0L
+  attr(out, "date_range") <- epi_date_range(binned)
   out
 }
 
@@ -268,6 +278,40 @@ epi_bins <- function(binned) {
     return(as.Date(character()))
   }
   sort(unique(binned$date_bin))
+}
+
+#' Observed Collection-Date Extent of a Binned Frame
+#'
+#' The first and last date actually collected, as recorded by
+#' `build_epi_data()` before flooring — not `range(date_bin)`, which names the
+#' last bin by its first day and so can fall short of the real last date by
+#' almost a whole interval.
+#'
+#' @param binned Binned epi data frame.
+#' @return Length-2 `Date` vector, `NA` when the extent is unknown.
+#' @export
+epi_date_range <- function(binned) {
+  rng <- attr(binned, "date_range")
+  if (is.null(rng) || length(rng) != 2) {
+    # Pre-attribute frames (a restored analysis, a hand-built fixture) still
+    # have their bins, which bound the extent from the inside.
+    bins <- epi_bins(binned)
+    rng <- if (length(bins)) range(bins) else as.Date(c(NA, NA))
+  }
+  as.Date(rng)
+}
+
+#' Last Day Covered by a Bin
+#'
+#' @param bin Bin start `Date` (or vector of them).
+#' @param interval Interval key the bin was floored to.
+#' @return `Date` of the bin's final day.
+#' @export
+bin_end_date <- function(bin, interval) {
+  if (!length(bin)) {
+    return(as.Date(character()))
+  }
+  bin + exact_bin_widths(bin, interval) - 1
 }
 
 # --- Moving Average Computation ----------------------------------------------
@@ -738,7 +782,11 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
         )
       )
     } else {
-      # Render vertical milestone line and offset text label
+      # Render vertical timestamp line and its label. The label is a filled
+      # badge rather than bare text: a timestamp lands wherever its date falls,
+      # which is regularly on top of a bar, and unfilled text there is
+      # unreadable. The fill is the plot background, so the badge reads as a
+      # hole punched in the bars rather than as a coloured box of its own.
       layers <- c(
         layers,
         list(
@@ -753,14 +801,18 @@ epi_annotation_lanes <- function(annos, x_range = NULL) {
             linewidth = 0.4
           ),
           annotate(
-            "text",
+            "label",
             x = lanes$start[i],
             y = y_mid,
-            label = paste0(" ", lanes$label[i]),
+            label = lanes$label[i],
             colour = col,
+            fill = background,
             size = 3,
             hjust = 0,
-            vjust = 0.5
+            vjust = 0.5,
+            label.size = 0,
+            label.padding = unit(1.6, "pt"),
+            label.r = unit(1.5, "pt")
           )
         )
       )
@@ -904,6 +956,13 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
       text = element_text(colour = text_color),
       axis.text = element_text(colour = text_color),
       axis.title = element_text(colour = text_color),
+      # theme_minimal draws no ticks, and panel.grid is off above, so without
+      # these the date labels float with nothing marking where they point.
+      # The half-length minor ticks subdivide the gap between two labels, which
+      # is what makes a date readable off a span running over several years.
+      axis.ticks.x = element_line(colour = text_color, linewidth = 0.4),
+      axis.ticks.length.x = unit(4, "pt"),
+      axis.minor.ticks.length.x = rel(0.5),
       legend.position = "bottom",
       legend.title = element_blank(),
       legend.key.size = unit(0.8, "lines"),
@@ -959,6 +1018,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
     c(opts$reveal_from %||% x_range[1], opts$reveal_to %||% x_range[2])
   }
   y_max <- .y_max(binned, mode)
+  y_limit <- max(1, y_max)
 
   # Filter data to display range if animation reveal options are set
   shown <- binned
@@ -979,7 +1039,11 @@ build_epi_ggplot <- function(binned, opts = list()) {
       arrange(date_bin) |>
       as.data.frame()
     cum_totals$cum <- cumsum(cum_totals$count)
-    cum_scale <- max(cum_totals$cum, 1) / max(1, y_max)
+    cum_scale <- max(cum_totals$cum, 1) / y_limit
+    # The overlay rides the primary axis, so pre-scale it here and clamp: the
+    # round-trip through cum_scale can land the final point a float hair above
+    # y_limit, where the y scale would censor it as out of range.
+    cum_totals$scaled <- pmin(cum_totals$cum / cum_scale, y_limit)
   }
   cum_shown <- cum_totals
   if (!is.null(cum_shown) && nrow(cum_shown)) {
@@ -1038,7 +1102,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
 
   y_scale_args <- list(
     breaks = count_breaks(y_max),
-    limits = c(0, max(1, y_max)),
+    limits = c(0, y_limit),
     expand = expansion(mult = c(0, 0.08), add = c(bottom_room, 0))
   )
   if (!is.null(cum_totals)) {
@@ -1062,7 +1126,8 @@ build_epi_ggplot <- function(binned, opts = list()) {
     do.call(scale_y_continuous, y_scale_args) +
     scale_x_date(
       date_labels = .date_labels(interval),
-      limits = xlim
+      limits = xlim,
+      guide = guide_axis(minor.ticks = TRUE)
     ) +
     labs(
       x = if (show_x_label) "Date of collection" else NULL,
@@ -1137,7 +1202,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
 
   # Overlay double-line cumulative trend step curve
   if (!is.null(cum_shown) && nrow(cum_shown)) {
-    mapping <- aes(x = .data$date_bin, y = .data$cum / cum_scale)
+    mapping <- aes(x = .data$date_bin, y = .data$scaled)
     p <- p +
       geom_step(
         data = cum_shown,
@@ -1283,18 +1348,43 @@ square_panel_ratio <- function(binned, mode = "stacked") {
       linewidth = 0.3
     ))
   }
+  # Drawn as rectangles with the stack solved here rather than as stacked
+  # columns, because a calendar bin is not a fixed width: February is shorter
+  # than March, and a `width` aesthetic is not one `geom_col()` declares — it
+  # honoured it while warning about it on every draw, which is what filled the
+  # console when the window was dragged.
   shown$width <- exact_bin_widths(shown$date_bin, interval)
-  geom_col(
-    data = shown,
+  geom_rect(
+    data = .stacked_bars(shown),
     aes(
-      x = .data$date_bin + .data$width / 2,
-      y = .data$count,
-      fill = .data$stratum,
-      width = .data$width
+      xmin = .data$date_bin,
+      xmax = .data$date_bin + .data$width,
+      ymin = .data$ymin,
+      ymax = .data$ymax,
+      fill = .data$stratum
     ),
     colour = "#FFFFFF",
     linewidth = 0.15
   )
+}
+
+# Where each stratum's block sits within its bin.
+#
+# `position_stack()` lays the *first* factor level on top, so the running total
+# is accumulated in reverse level order to match — the fill scale and the bars
+# have to agree about which colour is where.
+.stacked_bars <- function(shown) {
+  lv <- if (is.factor(shown$stratum)) {
+    levels(shown$stratum)
+  } else {
+    sort(unique(shown$stratum))
+  }
+  order_in_bin <- match(as.character(shown$stratum), rev(lv))
+  out <- shown[order(shown$date_bin, order_in_bin), , drop = FALSE]
+  top <- ave(out$count, out$date_bin, FUN = cumsum)
+  out$ymax <- top
+  out$ymin <- top - out$count
+  out
 }
 
 # --- Export Utilities --------------------------------------------------------

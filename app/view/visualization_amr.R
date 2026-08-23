@@ -48,7 +48,8 @@ box::use(
     pickerInput,
     pickerOptions,
     radioGroupButtons,
-    updatePickerInput
+    updatePickerInput,
+    updateVirtualSelect
   ],
   stats[setNames],
 )
@@ -56,21 +57,47 @@ box::use(
   app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
-  app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
+  app / logic / field_profile[
+    field_profiles_of = field_profiles,
+    profile_for,
+    scale_categories_for
+  ],
   app / logic / functions[render_info],
-  app / logic / mapping_engine[is_date_profile],
+  app /
+    logic /
+    mapping_engine[
+      aesthetic_block_reason,
+      assign_mapping_layer,
+      granularity_profile,
+      is_date_profile,
+      max_layers,
+      rebalance_layers,
+      set_layer_granularity
+    ],
   app / logic / viz_export[save_plot_export],
   app /
     logic /
     viz_helpers[
+      apply_input_snapshot,
+      collect_input_snapshot,
       field_select,
       granularity_select,
       reset_viz_colors,
       scale_select,
-      viz_color,
-      collect_input_snapshot,
-      apply_input_snapshot,
+      suitable_scale_categories,
+      update_field_select,
+      viz_color
+    ],
+  app /
+    logic /
+    viz_layers[
+      drop_layer,
+      find_layer,
+      layer_cards,
+      layer_defaults,
+      layer_has_field,
+      layer_id_source,
+      normalize_layers
     ],
 )
 
@@ -83,17 +110,33 @@ PLOT_MODES <- c(
 )
 PLOT_MODE_DEFAULT <- "heatmap"
 
-# How the heatmap's columns are arranged. Grouping and clustering are mutually
-# exclusive on that axis (ComplexHeatmap cannot reconcile one dendrogram with a
-# categorical split), so they share one control rather than being two switches
-# that would silently override each other. See .column_layout in amr_plot.R.
+# How the heatmap's columns are arranged *inside* one element-type panel.
+# Grouping and clustering are mutually exclusive on that axis (ComplexHeatmap
+# cannot reconcile one dendrogram with a categorical split), so they share one
+# control rather than being two switches that would silently override each
+# other. See .column_layout in amr_plot.R.
+#
+# "Element type" is not among them any more: resistance, virulence and stress
+# genes are now always drawn as separate panels side by side, whatever this
+# says, so offering it as a grouping would have been a control that changed
+# nothing. Saved analyses still carry the value and the builder still accepts
+# it — see LEGACY_GROUPINGS.
 COLUMN_GROUPINGS <- c(
-  `Element type` = "element",
   `Drug class` = "class",
   Cluster = "cluster",
   None = "none"
 )
-COLUMN_GROUPING_DEFAULT <- "element"
+COLUMN_GROUPING_DEFAULT <- "class"
+
+# Values an older snapshot may hold, and what they mean now. Read through
+# `.modern_grouping()`: `[[` on a name a vector does not carry is an error, not
+# a NULL, and every current value is such a name.
+LEGACY_GROUPINGS <- c(element = "none")
+
+.modern_grouping <- function(grouping) {
+  hit <- LEGACY_GROUPINGS[match(grouping, names(LEGACY_GROUPINGS))]
+  if (is.na(hit)) grouping else unname(hit)
+}
 
 # The drug-class matrix has no per-gene metadata to group its columns by, so it
 # offers only the two arrangements that mean something there.
@@ -102,17 +145,23 @@ CLASS_COLUMN_GROUPINGS <- COLUMN_GROUPINGS[c("Cluster", "None")]
 LEVELS <- c(Genes = "gene", `Drug classes` = "class")
 LEVEL_DEFAULT <- "gene"
 
-CLUSTER_METHOD_DEFAULT <- "average"
-CLUSTER_DISTANCE_DEFAULT <- "binary"
+# Both axes open on Jaccard and Ward's. The argument, and the silhouette
+# measurements behind it, are in amr_plot.R beside the constants themselves.
+CLUSTER_DISTANCE_DEFAULT <- amr_plot$AMR_CLUSTER_DISTANCE_DEFAULT
+CLUSTER_METHOD_DEFAULT <- amr_plot$AMR_CLUSTER_METHOD_DEFAULT
 
 TOP_N_DEFAULT <- 30L
+
+# One depth for both dendrograms, in centimetres. They are read together and
+# there was never a reason to give them different depths; 0 draws neither,
+# keeping the clustering's row and column *order* while dropping the trees.
 DEND_DEFAULT <- 1.5
-GRID_WIDTH_DEFAULT <- 1
-ASPECT_DEFAULT <- 0.65
-FONTSIZE_ROW_DEFAULT <- 10
-FONTSIZE_COL_DEFAULT <- 10
-FONTSIZE_TITLE_DEFAULT <- 14
-FONTSIZE_LEGEND_DEFAULT <- 9
+
+# The medium this engine maps variables onto, in mapping_engine.R's terms: a
+# repeatable colour strip beside the rows.
+MEDIUM <- "amr"
+
+LAYER_DEFAULTS <- layer_defaults(MEDIUM)
 
 PRESENT_COLOR_DEFAULT <- "#000000"
 PARTIAL_COLOR_DEFAULT <- "#E5C494"
@@ -122,13 +171,8 @@ DEND_COLOR_DEFAULT <- "#000000"
 TEXT_COLOR_DEFAULT <- "#000000"
 BACKGROUND_DEFAULT <- "#FFFFFF"
 
-ANNO_SCALE_DEFAULT <- "Set1"
 CLASS_SCALE_DEFAULT <- "Set2"
 BAR_SCALE_DEFAULT <- "Set2"
-
-# The sentinel for "no metadata colour strip", matching the Epi engine's
-# stratify picker.
-NO_ANNOTATION <- ""
 
 # Only shown while the element-type / hit-quality filters actually bite: they
 # read `amr_results`, which backs the gene heatmap and the gene-level prevalence
@@ -285,35 +329,55 @@ amr_controls <- function(ns) {
                 selected = COLUMN_GROUPING_DEFAULT
               ),
               input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
-              pickerInput(
-                ns("amr_cluster_distance"),
-                "Distance",
-                choices = amr_plot$AMR_CLUSTER_DISTANCES,
-                selected = CLUSTER_DISTANCE_DEFAULT
+              shiny$conditionalPanel(
+                condition = "input.amr_cluster_rows",
+                ns = ns,
+                pickerInput(
+                  ns("amr_cluster_distance"),
+                  "Isolate distance",
+                  choices = amr_plot$AMR_CLUSTER_DISTANCES,
+                  selected = CLUSTER_DISTANCE_DEFAULT
+                ),
+                pickerInput(
+                  ns("amr_cluster_method"),
+                  "Isolate linkage",
+                  choices = amr_plot$AMR_CLUSTER_METHODS,
+                  selected = CLUSTER_METHOD_DEFAULT
+                )
               ),
-              pickerInput(
-                ns("amr_cluster_method"),
-                "Linkage",
-                choices = amr_plot$AMR_CLUSTER_METHODS,
-                selected = CLUSTER_METHOD_DEFAULT
+              # The gene axis gets its own pair. It is a different question —
+              # how alike two *genes* are across the isolates, rather than two
+              # isolates across the genes — and sharing one setting meant a
+              # reader who tuned the isolate tree silently retuned the gene one.
+              shiny$conditionalPanel(
+                condition = "input.amr_column_grouping == 'cluster'",
+                ns = ns,
+                pickerInput(
+                  ns("amr_col_cluster_distance"),
+                  "Gene distance",
+                  choices = amr_plot$AMR_CLUSTER_DISTANCES,
+                  selected = CLUSTER_DISTANCE_DEFAULT
+                ),
+                pickerInput(
+                  ns("amr_col_cluster_method"),
+                  "Gene linkage",
+                  choices = amr_plot$AMR_CLUSTER_METHODS,
+                  selected = CLUSTER_METHOD_DEFAULT
+                )
               ),
               shiny$sliderInput(
-                ns("amr_dend_row"),
-                "Isolate dendrogram (cm)",
-                min = 0.5,
+                ns("amr_dend_size"),
+                "Dendrogram depth (cm)",
+                min = 0,
                 max = 6,
                 value = DEND_DEFAULT,
                 step = 0.5,
                 ticks = FALSE
               ),
-              shiny$sliderInput(
-                ns("amr_dend_col"),
-                "Column dendrogram (cm)",
-                min = 0.5,
-                max = 6,
-                value = DEND_DEFAULT,
-                step = 0.5,
-                ticks = FALSE
+              shiny$helpText(
+                class = "amr-help",
+                "At 0 the dendrograms are hidden and the clustering still sets",
+                "the row and column order."
               )
             ),
             shiny$conditionalPanel(
@@ -326,9 +390,16 @@ amr_controls <- function(ns) {
               )
             )
           ),
+          # Everything else about the matrix's proportions — the label sizes,
+          # the block-title size, the cell borders and the aspect ratio — is
+          # fitted to the shape of the data by amr_plot$amr_auto_layout(),
+          # exactly as the Tree fits its own. The six sliders that used to be
+          # here each had a right answer the module could work out, and getting
+          # one of them wrong made the plot unreadable in a way the reader then
+          # had to diagnose.
           accordion_panel(
-            "Labels & Sizing",
-            icon = shiny$icon("ruler-combined"),
+            "Labels",
+            icon = shiny$icon("tag"),
             shiny$conditionalPanel(
               condition = COND_HEATMAPS,
               ns = ns,
@@ -336,78 +407,8 @@ amr_controls <- function(ns) {
                 ns("amr_show_row_names"),
                 "Show isolate names",
                 FALSE
-              )
-            ),
-            # On (default) the label sizes step down as the matrix grows, which
-            # is what master did and had no way to override. The steps stop
-            # helping somewhere past a couple of hundred labels, so the sliders
-            # take over when this is off.
-            input_switch(ns("amr_auto_fontsize"), "Auto label size", TRUE),
-            shiny$conditionalPanel(
-              condition = "!input.amr_auto_fontsize",
-              ns = ns,
-              shiny$sliderInput(
-                ns("amr_fontsize_row"),
-                "Row label size",
-                min = 3,
-                max = 20,
-                value = FONTSIZE_ROW_DEFAULT,
-                step = 1,
-                ticks = FALSE
               ),
-              shiny$conditionalPanel(
-                condition = COND_HEATMAPS,
-                ns = ns,
-                shiny$sliderInput(
-                  ns("amr_fontsize_col"),
-                  "Column label size",
-                  min = 3,
-                  max = 20,
-                  value = FONTSIZE_COL_DEFAULT,
-                  step = 1,
-                  ticks = FALSE
-                )
-              )
-            ),
-            shiny$conditionalPanel(
-              condition = COND_HEATMAPS,
-              ns = ns,
-              shiny$sliderInput(
-                ns("amr_fontsize_title"),
-                "Block title size",
-                min = 8,
-                max = 24,
-                value = FONTSIZE_TITLE_DEFAULT,
-                step = 1,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("amr_grid_width"),
-                "Cell border width",
-                min = 0,
-                max = 3,
-                value = GRID_WIDTH_DEFAULT,
-                step = 0.25,
-                ticks = FALSE
-              )
-            ),
-            shiny$sliderInput(
-              ns("amr_fontsize_legend"),
-              "Legend text size",
-              min = 6,
-              max = 18,
-              value = FONTSIZE_LEGEND_DEFAULT,
-              step = 1,
-              ticks = FALSE
-            ),
-            shiny$sliderInput(
-              ns("amr_aspect_ratio"),
-              "Aspect ratio",
-              min = 0.3,
-              max = 1.4,
-              value = ASPECT_DEFAULT,
-              step = 0.05,
-              ticks = FALSE
+              shiny$uiOutput(ns("row_name_warning"))
             )
           )
         )
@@ -419,11 +420,12 @@ amr_controls <- function(ns) {
         shiny$conditionalPanel(
           condition = COND_HEATMAPS,
           ns = ns,
-          # Server-rendered for the same reason as the gene picker: the choices
-          # are this database's metadata columns.
-          shiny$uiOutput(ns("anno_ui")),
-          shiny$uiOutput(ns("anno_granularity_ui")),
-          scale_select(ns, "amr_anno_scale", categories = "Qualitative"),
+          # The same arrangement as the Tree and the MST: pick a *variable* and
+          # app/logic/mapping_engine.R decides the rest. Every variable this
+          # database holds is offered, each carrying its own value count and
+          # type, and each mapping becomes one colour strip beside the rows.
+          field_select(ns, "amr_layer_add", "Map a variable"),
+          shiny$uiOutput(ns("amr_layers_ui")),
           shiny$hr(),
           shiny$conditionalPanel(
             condition = "input.amr_mode == 'heatmap'",
@@ -597,24 +599,22 @@ server <- function(
     # look broken (the same reasoning as the Epi curve's epi_data()).
     generated <- shiny$reactiveVal(FALSE)
 
-    # Bumped to rebuild the server-rendered pickers (Reset settings).
+    # Bumped to rebuild the server-rendered gene picker (Reset settings).
     genes_rebuild <- shiny$reactiveVal(0L)
-    anno_rebuild <- shiny$reactiveVal(0L)
     # TRUE for exactly one rebuild: a reset must force the picker back to its
     # default, whereas a plain data-driven re-render keeps the current choice so
     # a deliberate selection sticks. Consumed on read — see the Epi engine's
     # stratify_force_default for the full reasoning.
     genes_force_default <- shiny$reactiveVal(FALSE)
-    anno_force_default <- shiny$reactiveVal(FALSE)
 
-    # A reopened plot's saved annotation field and its granularity, parked here
-    # for the two renderUIs that own those controls to apply on their next
-    # rebuild. Neither can be restored with an update*Input() call: both
-    # controls are renderUI output, and a render replaces the control outright,
-    # discarding whatever was pushed at the element it replaced. Both are
-    # consumed on read, the same one-shot shape as the force_default flags.
-    restore_anno_field <- shiny$reactiveVal(NULL)
-    restore_anno_granularity <- shiny$reactiveVal(NULL)
+    # The annotation strips, in draw order. Written only by explicit user action
+    # (add, edit, delete) and by a restore — never by a re-render, which is what
+    # the single annotation picker they replaced could not promise.
+    amr_layers <- shiny$reactiveVal(list())
+    # Ids are never reused: a stale card's button would otherwise address the
+    # layer that replaced it.
+    amr_layer_seq <- shiny$reactiveVal(0L)
+    next_layer_id <- layer_id_source(amr_layer_seq)
 
     mode <- function() input$amr_mode %||% PLOT_MODE_DEFAULT
 
@@ -681,7 +681,8 @@ server <- function(
         amr_sections(),
         isolates(),
         level = input$amr_level %||% LEVEL_DEFAULT,
-        top_n = input$amr_top_n %||% TOP_N_DEFAULT
+        top_n = input$amr_top_n %||% TOP_N_DEFAULT,
+        keep_sections = input$amr_sections
       )
     })
 
@@ -725,43 +726,12 @@ server <- function(
       )
     })
 
-    # Candidate fields for the isolate colour strip: anything except the isolate
-    # id itself.
-    anno_fields <- shiny$reactive({
+    # Every column's profile, for the variable picker and the mapping engine.
+    # `isolate` names every row uniquely; it labels the matrix, it never colours
+    # it.
+    profiles <- shiny$reactive({
       meta <- viz_metadata()
-      if (is.null(meta) || !length(names(meta))) {
-        return(character())
-      }
-      setdiff(names(meta), "isolate")
-    })
-
-    output$anno_ui <- shiny$renderUI({
-      render_info("visualization_amr anno_ui")
-      fields <- anno_fields()
-      anno_rebuild()
-      if (!length(fields)) {
-        return(NULL)
-      }
-      prev <- shiny$isolate(input$amr_anno_field)
-      force_default <- shiny$isolate(anno_force_default())
-      if (force_default) {
-        anno_force_default(FALSE)
-      }
-      # A reopened plot's saved annotation field, applied here rather than
-      # pushed at it from restore(). An update*Input() cannot win against this
-      # render: restoring writes the tab's selection reactiveVals, which
-      # invalidates anno_fields() and so re-runs this very output in the same
-      # flush, replacing the control - and with it any value just sent to the
-      # old one. Rendering the value in is the only way it survives. Consumed
-      # on read, exactly as force_default is.
-      pending <- shiny$isolate(restore_anno_field())
-      if (!is.null(pending)) {
-        restore_anno_field(NULL)
-      }
-      meta <- viz_metadata()
-      # Categorised, human-readable labels (the derived classical-MLST and AMR
-      # columns get their own groups), each carrying its own value count and
-      # declared type; the value stays the raw column name.
+      shiny$req(meta)
       prof <- field_profiles() %||%
         field_profiles_of(
           meta,
@@ -769,94 +739,202 @@ server <- function(
           amr_cols = attr(meta, "amr_cols"),
           custom_cols = attr(meta, "custom_cols")
         )
-      field_select(
+      prof[prof$field != "isolate", , drop = FALSE]
+    })
+
+    # Refilled here rather than declared in the UI, because updateVirtualSelect()
+    # has no `...` and so cannot re-set hasOptionDescription. Columns that cannot
+    # group the isolates stay listed but disabled, with the reason in their
+    # sub-text.
+    shiny$observe({
+      prof <- profiles()
+      shiny$req(nrow(prof))
+      update_field_select(session, "amr_layer_add", prof)
+    })
+
+    # Picking a variable adds a strip; the engine decides its palette from the
+    # variable's own profile and from what the other strips already hold.
+    shiny$observeEvent(input$amr_layer_add, {
+      field <- input$amr_layer_add
+      shiny$req(nzchar(field %||% ""))
+      # Cleared straight away so the same variable can be re-picked after a
+      # delete, and so the selection cannot re-fire on a later flush.
+      updateVirtualSelect(
+        inputId = "amr_layer_add",
+        session = session,
+        selected = character(0)
+      )
+
+      layers <- amr_layers()
+      if (layer_has_field(layers, field)) {
+        return()
+      }
+      if (length(layers) >= max_layers(MEDIUM)) {
+        shiny$showNotification(
+          sprintf(
+            paste(
+              "%d annotation strips is the most the heatmap can show at once.",
+              "Remove one first."
+            ),
+            max_layers(MEDIUM)
+          ),
+          type = "warning"
+        )
+        return()
+      }
+      prof <- profile_for(profiles(), field)
+      layer <- assign_mapping_layer(
+        prof,
+        layers,
+        next_layer_id(),
+        MEDIUM,
+        viz_metadata()[[field]]
+      )
+      if (is.null(layer)) {
+        shiny$showNotification(
+          aesthetic_block_reason(prof, NULL, MEDIUM) %||%
+            "That variable cannot be mapped.",
+          type = "warning"
+        )
+        return()
+      }
+      amr_layers(c(layers, list(layer)))
+    })
+
+    # One delegated handler per action rather than one observer per row: an
+    # observeEvent created inside renderUI is re-registered on every render, so
+    # the ids push their own value into a single input instead.
+    shiny$observeEvent(input$amr_layer_delete, {
+      keep <- drop_layer(amr_layers(), input$amr_layer_delete)
+      amr_layers(rebalance_layers(keep, profiles(), MEDIUM, viz_metadata()))
+    })
+
+    output$amr_layers_ui <- shiny$renderUI({
+      render_info("visualization_amr amr_layers_ui")
+      layer_cards(
         ns,
-        "amr_anno_field",
-        "Colour isolates by",
-        profiles = prof[prof$field %in% fields, , drop = FALSE],
-        selected = if (isTRUE(pending %in% fields)) {
-          pending
-        } else if (!force_default && isTRUE(prev %in% fields)) {
-          prev
-        } else {
-          NO_ANNOTATION
-        },
-        extra = stats::setNames(NO_ANNOTATION, "No annotation"),
-        placeholder = "No annotation"
+        amr_layers(),
+        MEDIUM,
+        "amr_layer_edit",
+        "amr_layer_delete",
+        empty_text = "No variables mapped."
       )
     })
 
-    # Profile of whatever the annotation picker currently holds.
-    anno_profile <- shiny$reactive({
-      field <- input$amr_anno_field
-      if (is.null(field) || identical(field, NO_ANNOTATION)) {
-        return(NULL)
-      }
-      meta <- viz_metadata()
-      profile_for(field_profiles() %||% field_profiles_of(meta), field)
-    })
+    # --- Editing one strip ---------------------------------------------------
 
-    # Only a date can be grouped by a calendar interval, so the control appears
-    # only for one. Without it a collection date is one colour per isolate.
-    output$anno_granularity_ui <- shiny$renderUI({
-      render_info("visualization_amr anno_granularity_ui")
-      if (!is_date_profile(anno_profile())) {
-        return(NULL)
-      }
-      # Read isolated - anno_profile() above is already this render's trigger
-      # (it changes once amr_anno_field's restore round-trips), so depending
-      # on restore_anno_granularity() too would make this render both read and
-      # write the same reactiveVal, invalidating itself into a second run that
-      # finds the value already consumed and falls back to "none".
-      # Consumed here rather than in restore(): this is the first render where
-      # the control exists at all, so it is the first point a value can safely
-      # be applied to it.
-      pending <- shiny$isolate(restore_anno_granularity())
-      selected <- if (!is.null(pending)) {
-        restore_anno_granularity(NULL)
-        pending
+    editing <- shiny$reactiveVal(NULL)
+
+    # The strip has one channel, so what is left to decide is the palette and,
+    # for a date, the calendar interval it is grouped by.
+    shiny$observeEvent(input$amr_layer_edit, {
+      l <- find_layer(amr_layers(), input$amr_layer_edit)
+      shiny$req(!is.null(l))
+      prof <- profile_for(profiles(), l$field)
+      shiny$req(!is.null(prof))
+      editing(l$id)
+
+      values <- viz_metadata()[[l$field]]
+      # The palette has to suit the variable as the chosen granularity leaves
+      # it: binned to months it is a category, not a continuum.
+      binned <- granularity_profile(prof, values, l$granularity)
+      # Parsed, not raw: an ungrouped date reaches the scale as a continuum, and
+      # out of SQLite it is a character column that no test for one can
+      # recognise. Left raw, the palette offer came back with Qualitative on it.
+      shown <- if (is_date_profile(prof)) {
+        bin_date_values(values, l$granularity)
       } else {
-        shiny$isolate(input$amr_anno_granularity)
+        values
       }
-      granularity_select(
-        ns,
-        "amr_anno_granularity",
-        selected
+      cats <- scale_categories_for(
+        if (isTRUE(binned$continuous)) shown else as.character(shown),
+        suitable_scale_categories(
+          if (isTRUE(binned$continuous)) "Numeric" else "Factor",
+          shown
+        )
       )
+
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Mapping:", l$title),
+        size = "s",
+        easyClose = TRUE,
+        if (is_date_profile(prof)) {
+          granularity_select(
+            ns,
+            "amr_layer_granularity",
+            l$granularity,
+            values = values
+          )
+        },
+        scale_select(
+          ns,
+          "amr_layer_palette",
+          categories = cats,
+          selected = l$palette
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("amr_layer_apply"), "Apply")
+        )
+      ))
     })
 
-    # The chosen field's values, keyed by isolate, or NULL when nothing is
-    # mapped. Isolates the field is empty for are labelled rather than dropped
-    # (see .row_annotation in amr_plot.R). A date is grouped first, so the
-    # annotation carries as many colours as there are intervals, not isolates.
-    anno_values <- shiny$reactive({
-      field <- input$amr_anno_field
-      if (is.null(field) || identical(field, NO_ANNOTATION)) {
-        return(NULL)
-      }
+    shiny$observeEvent(input$amr_layer_apply, {
+      id <- editing()
+      shiny$req(!is.null(id))
+      layers <- lapply(amr_layers(), function(l) {
+        if (!identical(l$id, id)) {
+          return(l)
+        }
+        l$palette <- input$amr_layer_palette %||% l$palette
+        l <- set_layer_granularity(
+          l,
+          input$amr_layer_granularity,
+          viz_metadata()[[l$field]]
+        )
+        # Pinned: rebalance_layers() rebuilds automatic layers from scratch and
+        # would discard the palette just chosen.
+        l$auto <- FALSE
+        l
+      })
+      amr_layers(rebalance_layers(layers, profiles(), MEDIUM, viz_metadata()))
+      editing(NULL)
+      shiny$removeModal()
+    })
+
+    # Each mapped variable's values keyed by isolate, ready for the builder.
+    # Isolates the field is empty for are labelled rather than dropped (see
+    # .row_annotation in amr_plot.R). A date is binned first, so the strip
+    # carries as many colours as there are intervals, not as there are isolates.
+    anno_layers <- shiny$reactive({
       meta <- viz_metadata()
-      if (is.null(meta) || !field %in% names(meta)) {
-        return(NULL)
+      layers <- amr_layers()
+      if (is.null(meta) || !length(layers)) {
+        return(list())
       }
-      vals <- meta[[field]]
-      if (is_date_profile(anno_profile())) {
-        vals <- bin_date_values(vals, input$amr_anno_granularity)
-      }
-      setNames(as.character(vals), meta$isolate)
-    })
-
-    anno_label <- shiny$reactive({
-      field <- input$amr_anno_field
-      if (is.null(field) || identical(field, NO_ANNOTATION)) {
-        return(NULL)
-      }
-      field_label(field)
+      out <- lapply(layers, function(l) {
+        if (!l$field %in% names(meta)) {
+          return(NULL)
+        }
+        vals <- meta[[l$field]]
+        if (identical(l$transform, "as_date")) {
+          vals <- bin_date_values(vals, l$granularity)
+        }
+        list(
+          field = l$field,
+          label = l$title,
+          palette = l$palette,
+          continuous = isTRUE(l$continuous),
+          values = setNames(vals, meta$isolate)
+        )
+      })
+      Filter(Negate(is.null), out)
     })
 
     # Restrict a colour-scale picker to the palettes that can carry the number
     # of categories currently mapped to it, and move the selection when the one
     # in force no longer can. Mirrors apply_scale_choices() in the Epi engine,
-    # generalised over the picker id since this engine has three of them.
+    # generalised over the picker id since this engine has two of them.
     apply_scale_choices <- function(id, n, default, force_default = FALSE) {
       choices <- amr_plot$amr_scale_choices(max(1L, as.integer(n)))
       selected <- if (force_default) {
@@ -871,12 +949,6 @@ server <- function(
         selected = selected
       )
     }
-
-    shiny$observe({
-      vals <- anno_values()
-      n <- if (is.null(vals)) 1L else length(unique(vals))
-      apply_scale_choices("amr_anno_scale", n, ANNO_SCALE_DEFAULT)
-    })
 
     shiny$observe({
       meta <- attr(presence_mat(), "genes")
@@ -942,14 +1014,18 @@ server <- function(
         amr_background_color = BACKGROUND_DEFAULT
       )
 
-      # Bucket 5: both pickers are rendered by renderUI, so shinyjs::reset() has
-      # no page-load value to restore them from — rebuild them instead, forcing
+      # Bucket 5: the gene picker is rendered by renderUI, so shinyjs::reset()
+      # has no page-load value to restore it from — rebuild it instead, forcing
       # the default for this one rebuild rather than preserving the current
       # choice. Set before the bump so the re-render sees it.
       genes_force_default(TRUE)
-      anno_force_default(TRUE)
       genes_rebuild(genes_rebuild() + 1L)
-      anno_rebuild(anno_rebuild() + 1L)
+
+      # Bucket 6: the annotation strips are reactiveVal state rather than an
+      # input, so nothing shinyjs does touches them.
+      amr_layers(list())
+      amr_layer_seq(0L)
+      editing(NULL)
 
       # Bucket 4: controls whose *choices* are swapped in at runtime. Deferred
       # past shinyjs::reset()'s own asynchronous, stale restoration, which would
@@ -960,12 +1036,6 @@ server <- function(
           "amr_column_grouping",
           choices = COLUMN_GROUPINGS,
           selected = COLUMN_GROUPING_DEFAULT
-        )
-        apply_scale_choices(
-          "amr_anno_scale",
-          1L,
-          ANNO_SCALE_DEFAULT,
-          force_default = TRUE
         )
         apply_scale_choices(
           "amr_class_scale",
@@ -1049,51 +1119,103 @@ server <- function(
 
     # --- plot ---------------------------------------------------------------
 
-    # Label sizes: NULL lets the logic layer fit them to the matrix (master's
-    # step function), which is what the "Auto label size" switch means.
-    fontsize_row <- function() {
-      if (isTRUE(input$amr_auto_fontsize)) {
-        NULL
-      } else {
-        input$amr_fontsize_row %||% FONTSIZE_ROW_DEFAULT
-      }
-    }
-    fontsize_col <- function() {
-      if (isTRUE(input$amr_auto_fontsize)) {
-        NULL
-      } else {
-        input$amr_fontsize_col %||% FONTSIZE_COL_DEFAULT
-      }
+    # The canvas the plot is laid out for, in inches. Read from the browser so
+    # the fit knows the room it actually has; 9in is a reasonable desktop
+    # sidebar-open width for the first render, before clientData has reported.
+    canvas_in <- function() {
+      w <- session$clientData[[paste0("output_", ns("amr_plot"), "_width")]]
+      w <- suppressWarnings(as.numeric(w))
+      if (!length(w) || !is.finite(w) || w <= 0) 9 else w / 96
     }
 
-    heatmap_opts <- function() {
-      list(
-        present_color = input$amr_present_color %||% PRESENT_COLOR_DEFAULT,
-        partial_color = input$amr_partial_color %||% PARTIAL_COLOR_DEFAULT,
-        absent_color = input$amr_absent_color %||% ABSENT_COLOR_DEFAULT,
-        grid_color = input$amr_grid_color %||% GRID_COLOR_DEFAULT,
-        dend_color = input$amr_dend_color %||% DEND_COLOR_DEFAULT,
-        text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
-        grid_width = input$amr_grid_width %||% GRID_WIDTH_DEFAULT,
-        column_grouping = input$amr_column_grouping %||%
-          COLUMN_GROUPING_DEFAULT,
-        cluster_rows = isTRUE(input$amr_cluster_rows),
-        cluster_distance = input$amr_cluster_distance %||%
-          CLUSTER_DISTANCE_DEFAULT,
-        cluster_method = input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT,
-        dend_row = input$amr_dend_row %||% DEND_DEFAULT,
-        dend_col = input$amr_dend_col %||% DEND_DEFAULT,
-        fontsize_row = fontsize_row(),
-        fontsize_col = fontsize_col(),
-        fontsize_title = input$amr_fontsize_title %||% FONTSIZE_TITLE_DEFAULT,
-        fontsize_legend = input$amr_fontsize_legend %||%
-          FONTSIZE_LEGEND_DEFAULT,
+    # Which matrix the current view draws, so the fit and the plot agree on the
+    # shape they are describing.
+    current_mat <- function() {
+      if (identical(mode(), "classes")) class_mat() else presence_mat()
+    }
+
+    grouping <- function() {
+      .modern_grouping(input$amr_column_grouping %||% COLUMN_GROUPING_DEFAULT)
+    }
+
+    # Every size in the heatmap, fitted to the matrix it is drawing. This is
+    # what replaced the sliders: aspect ratio, both label sizes, the block-title
+    # size, the legend size, the cell border width and whether the block titles
+    # have to be turned on their side. See amr_plot$amr_auto_layout().
+    layout_fit <- shiny$reactive({
+      mat <- current_mat()
+      shiny$req(ncol(mat) > 0)
+      blocks <- if (identical(mode(), "classes")) {
+        list(titles = character(0), cols = integer(0))
+      } else {
+        amr_plot$amr_column_blocks(mat, grouping())
+      }
+      amr_plot$amr_auto_layout(
+        n_rows = nrow(mat),
+        n_cols = ncol(mat),
+        width_in = canvas_in(),
         show_row_names = isTRUE(input$amr_show_row_names),
-        show_class_anno = isTRUE(input$amr_show_class_anno),
-        class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
-        anno_values = anno_values(),
-        anno_label = anno_label(),
-        anno_scale = input$amr_anno_scale %||% ANNO_SCALE_DEFAULT
+        row_label_chars = max(nchar(rownames(mat)), 1L),
+        col_label_chars = max(nchar(colnames(mat)), 1L),
+        block_titles = blocks$titles,
+        block_cols = blocks$cols,
+        dend_cm = input$amr_dend_size %||% DEND_DEFAULT,
+        n_strips = length(anno_layers())
+      )
+    })
+
+    # The one place the automatic fit is allowed to answer back: at this many
+    # isolates a name cannot be set large enough to read, and saying so is
+    # better than drawing a grey smear and leaving the reader to work out why.
+    output$row_name_warning <- shiny$renderUI({
+      if (!isTRUE(input$amr_show_row_names)) {
+        return(NULL)
+      }
+      fit <- shiny$req(layout_fit())
+      if (isTRUE(fit$legible)) {
+        return(NULL)
+      }
+      shiny$helpText(
+        class = "amr-help",
+        sprintf(
+          paste(
+            "%d isolates leave about %.1f pt per name, which is below what",
+            "prints legibly. Narrow the selection or map a variable instead."
+          ),
+          nrow(current_mat()),
+          fit$fontsize_row
+        )
+      )
+    })
+
+    heatmap_opts <- function() {
+      fit <- layout_fit()
+      c(
+        list(
+          present_color = input$amr_present_color %||% PRESENT_COLOR_DEFAULT,
+          partial_color = input$amr_partial_color %||% PARTIAL_COLOR_DEFAULT,
+          absent_color = input$amr_absent_color %||% ABSENT_COLOR_DEFAULT,
+          grid_color = input$amr_grid_color %||% GRID_COLOR_DEFAULT,
+          dend_color = input$amr_dend_color %||% DEND_COLOR_DEFAULT,
+          text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
+          column_grouping = grouping(),
+          cluster_rows = isTRUE(input$amr_cluster_rows),
+          cluster_distance = input$amr_cluster_distance %||%
+            CLUSTER_DISTANCE_DEFAULT,
+          cluster_method = input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT,
+          col_cluster_distance = input$amr_col_cluster_distance %||%
+            CLUSTER_DISTANCE_DEFAULT,
+          col_cluster_method = input$amr_col_cluster_method %||%
+            CLUSTER_METHOD_DEFAULT,
+          dend_size = input$amr_dend_size %||% DEND_DEFAULT,
+          show_row_names = isTRUE(input$amr_show_row_names),
+          show_class_anno = isTRUE(input$amr_show_class_anno),
+          class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
+          anno_layers = anno_layers()
+        ),
+        # The fit comes last so its fontsize_*, grid_width and title_rot are the
+        # ones the builder reads.
+        fit
       )
     }
 
@@ -1112,9 +1234,6 @@ server <- function(
             bar_scale = input$amr_bar_scale %||% BAR_SCALE_DEFAULT,
             text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
             background = background,
-            fontsize_row = fontsize_row(),
-            fontsize_legend = input$amr_fontsize_legend %||%
-              FONTSIZE_LEGEND_DEFAULT,
             n_isolates = length(isolates())
           )
         ))
@@ -1184,6 +1303,19 @@ server <- function(
       ignoreNULL = FALSE
     )
 
+    # The plot's proportions, fitted rather than set: taller as the isolate
+    # count grows, so a screen of two hundred is drawn as a tall matrix a reader
+    # can tell the rows of rather than a wide band they cannot. Prevalence bars
+    # are the exception — their rows are the bars, one line of type each, so
+    # they scale with the bar count and not with the isolates.
+    plot_aspect <- shiny$reactive({
+      if (identical(mode(), "prevalence")) {
+        n <- nrow(prevalence_df())
+        return(max(0.35, min(1.6, 0.22 + n * 0.035)))
+      }
+      layout_fit()$aspect
+    })
+
     # Rendered through ggsave (via renderImage) rather than renderPlot so the
     # whole frame takes the chosen background: ggsave derives the device
     # background from the theme's plot.background, whereas renderPlot's device
@@ -1195,7 +1327,7 @@ server <- function(
         p <- amr_ggplot()
         w <- session$clientData[[paste0("output_", ns("amr_plot"), "_width")]]
         w <- as.integer(w %||% 900L)
-        h <- as.integer(w * (input$amr_aspect_ratio %||% ASPECT_DEFAULT))
+        h <- as.integer(w * plot_aspect())
         # Lay the plot out as if at 96dpi (so point sizes keep their meaning)
         # but render at the browser's device pixel ratio so the PNG stays crisp
         # on HiDPI screens.
@@ -1219,7 +1351,7 @@ server <- function(
     # says what it can produce and how to write it. The file name carries the
     # view mode, since the three modes are different plots over the same data
     # and an exported heatmap should not be mistaken for a prevalence chart.
-    export_aspect <- shiny$reactive(input$amr_aspect_ratio %||% ASPECT_DEFAULT)
+    export_aspect <- plot_aspect
 
     export <- list(
       kind = "ggplot",
@@ -1242,16 +1374,16 @@ server <- function(
     # the plot output has to bind through it, so it stays live while hidden.
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
 
-    # The three controls this module renders rather than declares, kept live
-    # because they are the only place a restored plot's gene, annotation-field
-    # and granularity selections can be applied - and by default none of them
-    # is on screen when a reopened tab restores. Shiny counts anything under a
-    # `display: none` ancestor (a collapsed accordion panel, an inactive nav
-    # tab) as hidden, which suspends the render outright; suspended, the
-    # control neither exists in the DOM for an update*Input() to reach nor
-    # re-renders to pick a value up, so a saved selection was silently dropped.
-    # See the matching note in visualization_epi.R.
-    for (id in c("genes_ui", "anno_ui", "anno_granularity_ui")) {
+    # The two controls this module renders rather than declares, kept live
+    # because a restored plot's gene selection and its annotation strips are
+    # applied through them - and by default neither is on screen when a reopened
+    # tab restores. Shiny counts anything under a `display: none` ancestor (a
+    # collapsed accordion panel, an inactive nav tab) as hidden, which suspends
+    # the render outright; suspended, the control neither exists in the DOM for
+    # an update*Input() to reach nor re-renders to pick a value up, so a saved
+    # selection was silently dropped. See the matching note in
+    # visualization_epi.R.
+    for (id in c("genes_ui", "amr_layers_ui")) {
       shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
     }
     # Server-side image with no client state to lose, so it may suspend while
@@ -1259,7 +1391,51 @@ server <- function(
     shiny$outputOptions(output, "amr_plot", suspendWhenHidden = TRUE)
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
-    snapshot <- shiny$reactive(collect_input_snapshot(input, "amr_"))
+    # Every amr_* control, plus the annotation strips, which are reactiveVal
+    # state rather than an input.
+    snapshot <- shiny$reactive(
+      c(
+        collect_input_snapshot(input, "amr_"),
+        list(.layers = amr_layers())
+      )
+    )
+
+    # Rebuild an annotation strip from a pre-rewrite snapshot's flat keys. Each
+    # saved AMR plot carried at most one, in amr_anno_field plus its granularity
+    # and palette; rebuilding it here is what stops a saved analysis silently
+    # losing its colour strip on first reopen.
+    migrate_legacy_annotation <- function(vals) {
+      field <- vals$amr_anno_field
+      if (is.null(field) || !nzchar(field %||% "")) {
+        return(NULL)
+      }
+      prof <- profile_for(profiles(), field)
+      if (is.null(prof)) {
+        return(NULL)
+      }
+      layer <- assign_mapping_layer(
+        prof,
+        list(),
+        "L1",
+        MEDIUM,
+        viz_metadata()[[field]]
+      )
+      if (is.null(layer)) {
+        return(NULL)
+      }
+      if (!is.null(vals$amr_anno_granularity)) {
+        layer <- set_layer_granularity(
+          layer,
+          vals$amr_anno_granularity,
+          viz_metadata()[[field]]
+        )
+      }
+      if (!is.null(vals$amr_anno_scale)) {
+        layer$palette <- vals$amr_anno_scale
+      }
+      layer$auto <- FALSE
+      list(layer)
+    }
 
     restore <- function(vals) {
       apply_input_snapshot(
@@ -1268,7 +1444,6 @@ server <- function(
         switches = c(
           "amr_cluster_rows",
           "amr_show_row_names",
-          "amr_auto_fontsize",
           "amr_show_class_anno"
         ),
         selects = c(
@@ -1276,7 +1451,8 @@ server <- function(
           "amr_column_grouping",
           "amr_cluster_distance",
           "amr_cluster_method",
-          "amr_anno_scale",
+          "amr_col_cluster_distance",
+          "amr_col_cluster_method",
           "amr_class_scale",
           "amr_bar_scale"
         ),
@@ -1284,14 +1460,7 @@ server <- function(
           "amr_top_n",
           "amr_min_identity",
           "amr_min_coverage",
-          "amr_dend_row",
-          "amr_dend_col",
-          "amr_fontsize_row",
-          "amr_fontsize_col",
-          "amr_fontsize_title",
-          "amr_fontsize_legend",
-          "amr_grid_width",
-          "amr_aspect_ratio"
+          "amr_dend_size"
         ),
         colors = c(
           "amr_present_color",
@@ -1303,10 +1472,9 @@ server <- function(
           "amr_background_color"
         ),
         radio_groups = "amr_level",
-        # amr_genes and the two above it are real pickerInputs (server-rendered,
-        # rebuilt on a counter, but bound the same way regardless of when their
-        # HTML lands), so a plain update reaches them. amr_anno_field is not -
-        # see the block below.
+        # Real pickerInputs (amr_genes is server-rendered and rebuilt on a
+        # counter, but bound the same way regardless of when its HTML lands), so
+        # a plain update reaches them.
         pickers = c(
           "amr_elements",
           "amr_sections",
@@ -1314,31 +1482,25 @@ server <- function(
         )
       )
 
-      # amr_anno_field and its granularity are renderUI-owned controls, so they
-      # are handed to the renders that own them rather than updated in place.
-      # Sending an update*Input() here cannot work: writing the tab's selection
-      # reactiveVals (which restoring a plot does, just before calling this)
-      # invalidates anno_fields(), so anno_ui re-renders in this same flush and
-      # replaces the control the update was addressed to. The value has to be
-      # *rendered* in, which is what parking it here arranges.
-      #
-      # Bumping anno_rebuild() rather than trusting that invalidation to happen
-      # makes it a guarantee: whatever else did or did not change, the picker
-      # rebuilds once and picks this up. Read isolated - restore() runs inside
-      # the caller's observer, and depending on the counter it writes would
-      # feed that observer back into itself.
-      if (
-        !is.null(vals$amr_anno_field) &&
-          !identical(vals$amr_anno_field, NO_ANNOTATION)
-      ) {
-        restore_anno_field(vals$amr_anno_field)
-        anno_rebuild(shiny$isolate(anno_rebuild()) + 1L)
+      # A saved column grouping the control no longer offers ("Element type",
+      # now always structural) would leave the picker on whatever it held, so it
+      # is translated rather than sent through unchanged.
+      saved <- vals$amr_column_grouping %||% ""
+      if (!saved %in% COLUMN_GROUPINGS && nzchar(saved)) {
+        updatePickerInput(
+          session,
+          "amr_column_grouping",
+          selected = .modern_grouping(saved)
+        )
       }
-      # The granularity control needs no such nudge: it renders only once
-      # amr_anno_field has echoed back as a date field, and that echo is itself
-      # what re-runs it.
-      if (!is.null(vals$amr_anno_granularity)) {
-        restore_anno_granularity(vals$amr_anno_granularity)
+
+      layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)
+      if (is.null(layers)) {
+        layers <- migrate_legacy_annotation(vals)
+      }
+      if (!is.null(layers)) {
+        amr_layers(layers)
+        amr_layer_seq(length(layers))
       }
     }
 

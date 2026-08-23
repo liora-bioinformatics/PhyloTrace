@@ -131,7 +131,13 @@ mapping_fields <- function(metadata, max_levels = Inf) {
 #' @return Character vector of matching color scale class identifiers.
 #' @export
 scale_categories_for <- function(values, numeric_categories) {
-  if (is.numeric(values)) {
+  # A Date is a continuum like any number, and the callers hand one over
+  # whenever a date is mapped ungrouped ("Exact date"). Without this it fell
+  # through to the level count, 213 collection dates counted as "too many for a
+  # qualitative palette", and the offer came back with Qualitative on it — a
+  # nine-hue set interpolated across a date range, which is the rainbow a
+  # continuous scale must never be.
+  if (is.numeric(values) || inherits(values, "Date")) {
     return(numeric_categories)
   }
   if (field_levels(values) <= MAX_QUAL_LEVELS) {

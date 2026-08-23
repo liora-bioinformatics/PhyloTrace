@@ -2804,7 +2804,8 @@ server <- function(
       granularity_select(
         ns,
         "map_col_granularity",
-        pending %||% shiny$isolate(input$map_col_granularity)
+        pending %||% shiny$isolate(input$map_col_granularity),
+        values = viz_metadata()[[input$map_col_var]]
       )
     })
 
@@ -2820,7 +2821,8 @@ server <- function(
       granularity_select(
         ns,
         "map_chart_granularity",
-        pending %||% shiny$isolate(input$map_chart_granularity)
+        pending %||% shiny$isolate(input$map_chart_granularity),
+        values = viz_metadata()[[input$map_chart_var]]
       )
     })
 

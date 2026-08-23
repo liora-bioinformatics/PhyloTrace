@@ -93,7 +93,11 @@ test_that("each exclusive aesthetic is claimed at most once", {
 test_that("tile strips stack, up to their own limit", {
   # Several strips side by side is the normal way to read a few categorical
   # variables against a tree, so `tile` is the one aesthetic that repeats.
-  wide <- lapply(1:6, function(i) prof(20, n = 300, field = paste0("t", i)))
+  n_wide <- mapping_engine$MAX_TILES + 2L
+  wide <- lapply(
+    seq_len(n_wide),
+    function(i) prof(20, n = 300, field = paste0("t", i))
+  )
   ls <- do.call(layers_of, wide)
   tiles <- Filter(function(l) identical(l$aesthetic, "tile"), ls)
   expect_identical(length(tiles), mapping_engine$MAX_TILES)
@@ -250,6 +254,32 @@ test_that("granularity_profile leaves a non-date, or an unbinned date, alone", {
     prof(4))
 })
 
+test_that("a date that groups but groups badly is binned too", {
+  # The reported bug. The old rule only binned a date that grouped *nothing* —
+  # one distinct value per isolate. 213 collection dates across 253 isolates
+  # pass that test, so they arrived raw: a continuous scale whose legend is
+  # three quantiles, over 213 near-identical colours.
+  n <- 60
+  set.seed(4)
+  vals <- as.character(as.Date("2011-01-01") + sample(3650, 40))
+  vals <- c(vals, vals[1:20])
+  md <- data.frame(
+    isolate = sprintf("i%03d", seq_len(n)),
+    sample_collection_date = vals,
+    stringsAsFactors = FALSE
+  )
+  p <- field_profile$field_profiles(md)
+  p <- p[p$field == "sample_collection_date", , drop = FALSE]
+  # It does group — that is the point — and still cannot be read raw.
+  expect_true(p$groupable)
+  expect_true(p$levels > 12L)
+
+  l <- mapping_engine$assign_mapping_layer(p, values = vals)
+  expect_identical(l$granularity, "year")
+  expect_false(l$continuous)
+  expect_true(l$n_levels <= 12L)
+})
+
 test_that("picking a date produces a mapping instead of a dead end", {
   # Without a granularity the raw column is refused outright, which is what
   # made every date variable unusable.
@@ -359,11 +389,12 @@ test_that("a crowded tree still offers the per-tip channels to the user", {
 })
 
 test_that("more variables than tile strips fall back to the tip channels", {
-  # The cap is four strips, and a fifth mapping is better drawn badly than not
-  # drawn at all.
+  # The strips run out at MAX_TILES, and the one past it is better drawn badly
+  # than not drawn at all.
   crowded <- mapping_engine$TIP_MAPPING_MAX + 1L
+  over <- mapping_engine$MAX_TILES + 1L
   out <- list()
-  for (i in seq_len(5)) {
+  for (i in seq_len(over)) {
     out <- c(out, list(mapping_engine$assign_mapping_layer(
       prof(4, field = paste0("v", i)),
       out,
@@ -374,7 +405,7 @@ test_that("more variables than tile strips fall back to the tip channels", {
   aes <- vapply(out, function(l) l$aesthetic, character(1))
 
   expect_identical(sum(aes == "tile"), mapping_engine$MAX_TILES)
-  expect_identical(aes[[5]], "tippoint_shape")
+  expect_identical(aes[[over]], "tippoint_shape")
 })
 
 test_that("a rebalance on a crowded tree moves automatic layers to the tiles", {
@@ -392,4 +423,86 @@ test_that("a rebalance on a crowded tree moves automatic layers to the tiles", {
 
   out <- mapping_engine$rebalance_layers(ls, p, "tree", md, crowded)
   expect_identical(out[[1]]$aesthetic, "tile")
+})
+
+# --- Channels the plot is not drawing ----------------------------------------
+
+test_that("a channel the plot does not draw is never assigned", {
+  # Tip labels switched off: a tip-label colour mapping would be drawn onto
+  # nothing, and its scale would have no geom behind it.
+  l <- mapping_engine$assign_mapping_layer(
+    prof(8), off = "tiplab_color"
+  )
+  expect_false(identical(l$aesthetic, "tiplab_color"))
+  expect_false(
+    "tiplab_color" %in%
+      mapping_engine$eligible_aesthetics(
+        prof(8), character(0), "tree", NULL, "tiplab_color"
+      )
+  )
+  # Withdrawn, not demoted: unlike the crowded-tree rule, this one is about
+  # what the plot can draw at all.
+  expect_true(
+    "tiplab_color" %in% mapping_engine$eligible_aesthetics(prof(8))
+  )
+})
+
+test_that("a mapping stranded on a withdrawn channel is moved, pinned or not", {
+  # Switching the labels off after mapping onto them left the layer on a
+  # channel the plot no longer draws: no marks, no legend, and a sidebar card
+  # claiming otherwise.
+  md <- data.frame(
+    isolate = sprintf("i%03d", seq_len(40)),
+    v = rep(letters[1:8], length.out = 40),
+    stringsAsFactors = FALSE
+  )
+  p <- field_profile$field_profiles(md)
+  l <- mapping_engine$assign_mapping_layer(prof(8))
+  expect_identical(l$aesthetic, "tiplab_color")
+
+  for (pinned in c(FALSE, TRUE)) {
+    l$auto <- !pinned
+    out <- mapping_engine$rebalance_layers(
+      list(l), p, "tree", md, NULL, "tiplab_color"
+    )
+    expect_false(identical(out[[1]]$aesthetic, "tiplab_color"))
+    # Handed back to the engine, so the channel can be re-picked if it returns.
+    expect_true(out[[1]]$auto)
+  }
+})
+
+# --- the AMR heatmap's medium -------------------------------------------------
+
+test_that("the AMR medium offers one repeatable strip", {
+  expect_identical(
+    names(mapping_engine$aesthetic_labels("amr")),
+    "annotation"
+  )
+  # Several strips side by side is the normal reading, so the channel is not
+  # used up by the layer already on it.
+  taken <- rep("annotation", 3L)
+  expect_identical(
+    mapping_engine$eligible_aesthetics(prof(4), taken, "amr"),
+    "annotation"
+  )
+})
+
+test_that("the AMR medium stops at its cap", {
+  full <- rep("annotation", mapping_engine$max_layers("amr"))
+  expect_length(
+    mapping_engine$eligible_aesthetics(prof(4), full, "amr"),
+    0L
+  )
+})
+
+test_that("a variable that groups nothing gets no strip", {
+  # One distinct value per isolate: it labels them, it cannot group them.
+  unique_col <- prof(40, n = 40)
+  expect_length(
+    mapping_engine$eligible_aesthetics(unique_col, character(0), "amr"),
+    0L
+  )
+  expect_null(
+    mapping_engine$assign_mapping_layer(unique_col, list(), "L1", "amr")
+  )
 })

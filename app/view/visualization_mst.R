@@ -48,7 +48,7 @@ box::use(
 )
 box::use(
   app / logic / database_functions[load_db_scheme_overview],
-  app / logic / date_bins[granularity_label],
+  app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app /
     logic /
@@ -62,12 +62,10 @@ box::use(
     logic /
     mapping_engine[
       aesthetic_block_reason,
-      aesthetic_labels,
       assign_mapping_layer,
       granularity_profile,
       is_date_profile,
       max_layers,
-      normalize_layer_records,
       rebalance_layers,
       set_layer_granularity,
     ],
@@ -92,13 +90,13 @@ box::use(
       collect_input_snapshot,
       field_select,
       granularity_select,
-      layer_action_btn,
       reset_viz_colors,
       scale_select,
       suitable_scale_categories,
       update_field_select,
       viz_color,
     ],
+  app / logic / viz_layers[layer_cards, layer_defaults, normalize_layers],
 )
 
 # --- Variable mapping layers -------------------------------------------------
@@ -107,43 +105,9 @@ box::use(
 # fill alone.
 MEDIUM <- "mst"
 
-# Canonical shape of one mapping layer. The engine fills these in; the
-# snapshot/restore path has to rebuild exactly this shape.
-LAYER_DEFAULTS <- list(
-  id = NA_character_,
-  field = NA_character_,
-  title = NA_character_,
-  aesthetic = "node_fill",
-  palette = "viridis",
-  family = "Gradient",
-  n_levels = 1L,
-  continuous = FALSE,
-  transform = NULL,
-  granularity = NULL,
-  auto = TRUE
-)
-
-.normalize_layers <- function(x) {
-  out <- normalize_layer_records(x, LAYER_DEFAULTS)
-  if (is.null(out)) {
-    return(NULL)
-  }
-  channels <- names(aesthetic_labels(MEDIUM))
-  out <- lapply(out, function(l) {
-    # An Analysis saved while node border and label colour were still channels
-    # names one of them here. Hand it back to the engine as an automatic layer
-    # rather than dropping the mapping or drawing it as something it did not
-    # ask for.
-    if (!isTRUE(l$aesthetic %in% channels)) {
-      l$aesthetic <- LAYER_DEFAULTS$aesthetic
-      l$auto <- TRUE
-    }
-    l
-  })
-  # A layer whose field is gone (the database changed under a saved Analysis)
-  # cannot be drawn and must not reach the builder.
-  Filter(function(l) !is.na(l$field %||% NA), out)
-}
+# Canonical shape of one mapping layer, taken from the shared record so the
+# snapshot/restore path here and in the other engines rebuild the same thing.
+LAYER_DEFAULTS <- layer_defaults(MEDIUM)
 
 # --- Controls fitted to the data ---------------------------------------------
 
@@ -1002,45 +966,12 @@ server <- function(
     })
 
     output$mst_layers_ui <- shiny$renderUI({
-      layers <- mst_layers()
-      if (!length(layers)) {
-        return(shiny$div(
-          class = "text-muted fst-italic mb-2 tree-layer-empty",
-          "No mappings yet."
-        ))
-      }
-      labels <- aesthetic_labels(MEDIUM)
-      shiny$div(
-        class = "tree-layer-list",
-        lapply(layers, function(l) {
-          shiny$div(
-            class = "tree-layer-card",
-            shiny$div(
-              class = "tree-layer_body",
-              shiny$div(class = "tree-layer_title", title = l$title, l$title),
-              shiny$div(
-                class = "tree-layer_meta",
-                paste(
-                  labels[[l$aesthetic]] %||% l$aesthetic,
-                  "·",
-                  sprintf("%d values", l$n_levels),
-                  if (!is.null(granularity_label(l$granularity))) {
-                    paste("· by", tolower(granularity_label(l$granularity)))
-                  },
-                  if (!is.null(l$palette)) paste("·", l$palette)
-                )
-              )
-            ),
-            layer_action_btn(ns, "mst_layer_edit", l$id, "pen", "Edit mapping"),
-            layer_action_btn(
-              ns,
-              "mst_layer_delete",
-              l$id,
-              "xmark",
-              "Remove mapping"
-            )
-          )
-        })
+      layer_cards(
+        ns,
+        mst_layers(),
+        MEDIUM,
+        "mst_layer_edit",
+        "mst_layer_delete"
       )
     })
 
@@ -1059,11 +990,19 @@ server <- function(
       # The palette has to suit the variable as the chosen granularity leaves
       # it: binned to months it is a category, not a continuum.
       binned <- granularity_profile(prof, values, l$granularity)
+      # Parsed, not raw: an ungrouped date reaches the scale as a continuum,
+      # and out of SQLite it is a character column that no test for one can
+      # recognise. Left raw, the palette offer came back with Qualitative on it.
+      shown <- if (is_date_profile(prof)) {
+        bin_date_values(values, l$granularity)
+      } else {
+        values
+      }
       cats <- scale_categories_for(
-        if (isTRUE(binned$continuous)) values else as.character(values),
+        if (isTRUE(binned$continuous)) shown else as.character(shown),
         suitable_scale_categories(
           if (isTRUE(binned$continuous)) "Numeric" else "Factor",
-          values
+          shown
         )
       )
 
@@ -1074,7 +1013,9 @@ server <- function(
         size = "s",
         easyClose = TRUE,
         if (is_date_profile(prof)) {
-          granularity_select(ns, "mst_layer_granularity", l$granularity)
+          granularity_select(
+            ns, "mst_layer_granularity", l$granularity, values = values
+          )
         },
         scale_select(
           ns,
@@ -1700,7 +1641,7 @@ server <- function(
         }
       }
 
-      layers <- .normalize_layers(vals$.layers)
+      layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)
       if (is.null(layers)) {
         layers <- migrate_legacy_mapping(vals)
       }

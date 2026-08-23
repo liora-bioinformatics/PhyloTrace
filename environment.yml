@@ -79,6 +79,7 @@ dependencies:
   - bioconductor-ggtree
   - bioconductor-ggtreeextra
   - bioconductor-complexheatmap
+  - r-circlize
   # --- cgMLST / classical MLST typing (pyMLST toolchain) ---
   - python=3.12
   - blat=35

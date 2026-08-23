@@ -3,6 +3,9 @@ box::use(
     expect_equal,
     expect_false,
     expect_identical,
+    expect_gt,
+    expect_lt,
+    expect_s4_class,
     expect_named,
     expect_s3_class,
     expect_true,
@@ -397,9 +400,18 @@ test_that("binary distance between two clean isolates does not break hclust", {
 
 # --- plot building -----------------------------------------------------------
 
+strip_fixture <- function(label = "Country", palette = "Set1") {
+  list(
+    field = "country",
+    label = label,
+    palette = palette,
+    continuous = FALSE,
+    values = stats::setNames(rep(c("DE", "FR", "IT"), 2), ISOLATES)
+  )
+}
+
 test_that("every column arrangement of the gene heatmap renders", {
   mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
-  anno <- stats::setNames(rep(c("DE", "FR", "IT"), 2), ISOLATES)
 
   for (grouping in c("element", "class", "cluster", "none")) {
     plot <- amr_plot$amr_as_ggplot(
@@ -408,8 +420,7 @@ test_that("every column arrangement of the gene heatmap renders", {
         list(
           column_grouping = grouping,
           show_class_anno = TRUE,
-          anno_values = anno,
-          anno_label = "Country"
+          anno_layers = list(strip_fixture())
         )
       )
     )
@@ -421,6 +432,118 @@ test_that("every column arrangement of the gene heatmap renders", {
   }
 })
 
+test_that("several element types are drawn as separate panels", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  # The fixture carries AMR and VIRULENCE hits, so this is a two-panel screen.
+  expect_s4_class(amr_plot$build_amr_heatmap(mat, list()), "HeatmapList")
+
+  # One element type is one panel, not a list of one.
+  amr_only <- amr_plot$amr_presence_matrix(
+    hits_fixture()[hits_fixture()$element_type == "AMR", , drop = FALSE],
+    ISOLATES
+  )
+  expect_s4_class(amr_plot$build_amr_heatmap(amr_only, list()), "Heatmap")
+})
+
+test_that("several annotation strips travel in one rowAnnotation", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  host <- strip_fixture("Host", "Set2")
+  host$field <- "host"
+  host$values <- stats::setNames(rep(c("Human", "Env"), 3), ISOLATES)
+
+  anno <- impl$.row_annotation(
+    mat,
+    list(strip_fixture(), host),
+    "#000000",
+    impl$.legend_gp("#000000", 9)
+  )
+  expect_identical(length(anno@anno_list), 2L)
+  expect_named(anno@anno_list, c("Country", "Host"))
+})
+
+test_that("a continuous strip gets a ramp rather than a colour per value", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  layer <- list(
+    field = "depth",
+    label = "Depth",
+    palette = "viridis",
+    continuous = TRUE,
+    values = stats::setNames(seq_along(ISOLATES) * 1.5, ISOLATES)
+  )
+  spec <- impl$.strip_spec(layer, mat)
+  expect_true(is.function(spec$col))
+  expect_true(is.numeric(spec$values))
+})
+
+test_that("an empty strip is dropped rather than drawn blank", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  gp <- impl$.legend_gp("#000000", 9)
+  expect_null(impl$.row_annotation(mat, list(), "#000000", gp))
+  expect_null(impl$.row_annotation(mat, NULL, "#000000", gp))
+})
+
+# --- automatic layout --------------------------------------------------------
+
+test_that("the fit grows the plot taller as isolates are added", {
+  small <- amr_plot$amr_auto_layout(10, 20)
+  large <- amr_plot$amr_auto_layout(400, 20)
+  expect_gt(large$aspect, small$aspect)
+  # ... and stops, rather than producing a page nobody can scroll.
+  expect_lt(large$aspect, 3)
+})
+
+test_that("the fit shrinks the column labels as columns are added", {
+  wide <- amr_plot$amr_auto_layout(50, 300)
+  narrow <- amr_plot$amr_auto_layout(50, 10)
+  expect_lt(wide$fontsize_col, narrow$fontsize_col)
+  # Cell borders come off once a cell is smaller than the border is wide.
+  expect_identical(wide$grid_width, 0)
+  expect_gt(narrow$grid_width, 0)
+})
+
+test_that("block titles turn vertical only when they do not fit", {
+  # Eleven drug classes over thirty-two columns: "FLUOROQUINOLONE" is eight
+  # times wider than the single column it sits over. This is the overlap the
+  # rotation exists for.
+  tight <- amr_plot$amr_auto_layout(
+    100, 32,
+    block_titles = c("AMINOGLYCOSIDE", "BETA-LACTAM", "FLUOROQUINOLONE"),
+    block_cols = c(4L, 8L, 1L)
+  )
+  expect_identical(tight$title_rot, 90)
+
+  roomy <- amr_plot$amr_auto_layout(
+    100, 12,
+    block_titles = c("AMR", "VIR"),
+    block_cols = c(6L, 6L)
+  )
+  expect_identical(roomy$title_rot, 0)
+
+  # Nothing to title is not a reason to rotate.
+  expect_identical(amr_plot$amr_auto_layout(100, 12)$title_rot, 0)
+})
+
+test_that("the fit reports when the row labels are past reading", {
+  expect_true(amr_plot$amr_auto_layout(20, 20, show_row_names = TRUE)$legible)
+  expect_false(
+    amr_plot$amr_auto_layout(2000, 20, show_row_names = TRUE)$legible
+  )
+})
+
+test_that("amr_column_blocks names the panels the reader will see", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+
+  # Grouped by class, the titles that can collide are the class names.
+  by_class <- amr_plot$amr_column_blocks(mat, "class")
+  expect_true("BETA-LACTAM" %in% by_class$titles)
+  expect_identical(sum(by_class$cols), ncol(mat))
+
+  # Otherwise they are the element-type panels, in the vocabulary's own order.
+  clustered <- amr_plot$amr_column_blocks(mat, "cluster")
+  expect_identical(clustered$titles, c("Resistance", "Virulence"))
+  expect_identical(sum(clustered$cols), ncol(mat))
+})
+
 test_that("the drug-class heatmap renders clustered and split", {
   mat <- amr_plot$amr_class_matrix(sections_fixture(), ISOLATES)
 
@@ -430,6 +553,31 @@ test_that("the drug-class heatmap renders clustered and split", {
     )
     expect_s3_class(plot, "ggplot")
   }
+})
+
+test_that("a dendrogram depth of zero hides the trees but keeps the order", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  hidden <- amr_plot$build_amr_heatmap(
+    mat,
+    list(column_grouping = "cluster", dend_size = 0)
+  )
+  # The row order still comes from the clustering, so the panels still line up.
+  expect_s3_class(hidden@ht_list[[1]]@row_dend_param$obj, "hclust")
+  expect_false(hidden@ht_list[[1]]@row_dend_param$show)
+})
+
+test_that("the section filter reaches the class-level prevalence bars", {
+  all_sections <- amr_plot$amr_prevalence(
+    hits_fixture(), sections_fixture(), ISOLATES,
+    level = "class"
+  )
+  matches <- amr_plot$amr_prevalence(
+    hits_fixture(), sections_fixture(), ISOLATES,
+    level = "class", keep_sections = "matches"
+  )
+  expect_true("Adhesion" %in% all_sections$item)
+  expect_false("Adhesion" %in% matches$item)
+  expect_identical(matches$item, "Beta-lactam")
 })
 
 test_that("the prevalence chart renders to a real image", {

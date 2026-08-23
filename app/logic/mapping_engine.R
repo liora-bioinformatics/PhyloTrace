@@ -29,8 +29,8 @@ box::use(
   app / logic / date_bins[
     binned_levels,
     DATE_TYPES,
-    default_granularity,
-    is_binned
+    is_binned,
+    mapped_granularity
   ],
   app / logic / field_profile[MAX_QUAL_LEVELS, MAX_SHAPE_LEVELS],
   rlang[`%||%`],
@@ -148,6 +148,38 @@ MAPPING_MEDIA <- list(
     caps = integer(0),
     max_layers = 1L,
     order = function(profile, n_units = NULL) "node_fill"
+  ),
+  amr = list(
+    # One channel, and it stacks. An AMR heatmap's rows are the isolates, so a
+    # mapped variable is drawn as a colour strip down the side of the matrix —
+    # the same band the tree draws as a tile strip, and for the same reason: it
+    # keeps its width whatever the row count, where a per-row mark would not.
+    #
+    # Several strips side by side is the normal way to read a handful of
+    # variables against a matrix, so the channel is repeatable. Six of them,
+    # because each one takes width from the heatmap body itself; past that the
+    # matrix the strips exist to annotate is the smaller half of the picture.
+    pool = c("annotation"),
+    labels = c(annotation = "Annotation strip"),
+    color = "annotation",
+    repeatable = "annotation",
+    caps = c(annotation = 6L),
+    max_layers = 6L,
+    order = function(profile, n_units = NULL) "annotation"
+  ),
+  epi = list(
+    # One channel and it does not stack. An epi curve's bars are already a
+    # stack — one segment per stratum — so the mapped variable *is* the stack,
+    # and a second variable would have to be composited into the first
+    # ("Urine | Germany"), multiplying the level count and the legend with it.
+    # A curve split forty ways is not a curve any more.
+    pool = c("bar_fill"),
+    labels = c(bar_fill = "Bar fill"),
+    color = "bar_fill",
+    repeatable = character(0),
+    caps = integer(0),
+    max_layers = 1L,
+    order = function(profile, n_units = NULL) "bar_fill"
   )
 )
 
@@ -185,10 +217,14 @@ AESTHETIC_POOL <- MAPPING_MEDIA$tree$pool
 AESTHETIC_LABELS <- MAPPING_MEDIA$tree$labels
 
 #' Aesthetics that carry a colour scale, and so must not repeat a palette.
+#'
+#' Read off every medium rather than listed by hand: a medium added without its
+#' channel here draws layers with no palette at all, which is what the AMR
+#' strips did.
 #' @export
-COLOR_AESTHETICS <- unique(c(
-  MAPPING_MEDIA$tree$color,
-  MAPPING_MEDIA$mst$color
+COLOR_AESTHETICS <- unique(unlist(
+  lapply(MAPPING_MEDIA, `[[`, "color"),
+  use.names = FALSE
 ))
 
 #' Aesthetics that can carry more than one variable at a time.
@@ -321,13 +357,17 @@ granularity_profile <- function(profile, values, granularity) {
 #' @param taken Character vector of aesthetics already occupied.
 #' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @param n_units Units the medium will draw — tips for a tree.
+#' @param off Aesthetics this plot is not drawing at all — tip-label colour on
+#'   a tree whose labels are switched off. Withdrawn rather than demoted: a
+#'   mapping put there would be drawn onto nothing.
 #' @return Character vector of aesthetic names, best first, possibly empty.
 #' @export
 eligible_aesthetics <- function(
   profile,
   taken = character(0),
   medium = "tree",
-  n_units = NULL
+  n_units = NULL,
+  off = character(0)
 ) {
   if (is.null(profile) || !isTRUE(profile$groupable)) {
     return(character(0))
@@ -342,7 +382,7 @@ eligible_aesthetics <- function(
       spent <- c(spent, aes)
     }
   }
-  setdiff(order, spent)
+  setdiff(order, c(spent, off %||% character(0)))
 }
 
 #' Why an aesthetic is unavailable for this variable, for the edit dialog.
@@ -410,6 +450,7 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
 #' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @param values The variable's raw column values, for the date default.
 #' @param n_units Units the medium will draw — tips for a tree.
+#' @param off Aesthetics this plot is not drawing at all.
 #' @return A layer record, or NULL when no aesthetic is free.
 #' @export
 assign_mapping_layer <- function(
@@ -418,17 +459,20 @@ assign_mapping_layer <- function(
   id = "L1",
   medium = "tree",
   values = NULL,
-  n_units = NULL
+  n_units = NULL,
+  off = character(0)
 ) {
+  # A date is grouped before anything else is decided about it. Not only when
+  # it is unique per isolate, which is what this used to test: 213 distinct
+  # collection dates across 253 isolates pass that test — they *do* group — and
+  # still make an unreadable scale. `mapped_granularity()` owns the rule.
   granularity <- NULL
-  if (
-    is_date_profile(profile) && !isTRUE(profile$groupable) && !is.null(values)
-  ) {
-    granularity <- default_granularity(values)
+  if (is_date_profile(profile)) {
+    granularity <- mapped_granularity(values)
     profile <- granularity_profile(profile, values, granularity)
   }
   taken <- vapply(existing, function(l) l$aesthetic, character(1))
-  choice <- eligible_aesthetics(profile, taken, medium, n_units)
+  choice <- eligible_aesthetics(profile, taken, medium, n_units, off)
   if (!length(choice)) {
     return(NULL)
   }
@@ -520,21 +564,27 @@ set_layer_granularity <- function(layer, granularity, values) {
 #' @param medium Name of a `MAPPING_MEDIA` entry.
 #' @param values Metadata frame, needed only to count a binned date's groups.
 #' @param n_units Units the medium will draw — tips for a tree.
+#' @param off Aesthetics this plot is not drawing at all. A layer already
+#'   sitting on one is moved, pinned or not: the alternative is a mapping the
+#'   user asked for that the plot silently does not draw.
 #' @return The list, same length and order, automatic entries re-derived.
 #' @export
 rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL,
-                             n_units = NULL) {
+                             n_units = NULL, off = character(0)) {
   if (!length(layers)) {
     return(layers)
   }
-  pinned <- Filter(function(l) !isTRUE(l$auto), layers)
+  off <- off %||% character(0)
+  # A pinned layer keeps its aesthetic only while the plot still draws it.
+  stranded <- function(l) l$aesthetic %in% off
+  pinned <- Filter(function(l) !isTRUE(l$auto) && !stranded(l), layers)
   taken <- vapply(pinned, function(l) l$aesthetic, character(1))
   settled <- pinned
 
   out <- vector("list", length(layers))
   for (i in seq_along(layers)) {
     l <- layers[[i]]
-    if (!isTRUE(l$auto)) {
+    if (!isTRUE(l$auto) && !stranded(l)) {
       out[[i]] <- l
       next
     }
@@ -548,10 +598,14 @@ rebalance_layers <- function(layers, profiles, medium = "tree", values = NULL,
     # applied before the aesthetic is picked, since binning is what makes a
     # date discrete enough for one.
     prof <- granularity_profile(prof, values[[l$field]], l$granularity)
-    choice <- eligible_aesthetics(prof, taken, medium, n_units)
+    choice <- eligible_aesthetics(prof, taken, medium, n_units, off)
     # Nothing free: keep what it had rather than dropping the layer, so a
     # rebalance can never lose a mapping the user asked for.
     aesthetic <- if (length(choice)) choice[[1]] else l$aesthetic
+    # Rebuilt as automatic even if it was pinned. The channel the user chose is
+    # not being drawn, so their choice cannot be honoured — handing the layer
+    # back to the engine is what lets it be re-picked when that channel returns,
+    # rather than frozen wherever it was moved to.
     fresh <- .layer(prof, aesthetic, settled, l$id, granularity = l$granularity)
     out[[i]] <- fresh
     taken <- c(taken, aesthetic)

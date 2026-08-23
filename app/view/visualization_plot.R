@@ -78,8 +78,10 @@ box::use(
       export_hint,
       export_modal,
       export_panel,
-      export_preset,
-      export_presets,
+      export_qualities,
+      export_size,
+      export_sizes,
+      export_widget_px,
       write_data_uri
     ],
   app / logic / analysis_store,
@@ -1264,17 +1266,19 @@ server <- function(
 
     export_format <- reactive(input$export_filetype %||% "png")
 
-    # No raw width/DPI/target-width controls: the preset alone decides them.
-    # Falls back to the first preset if the picker hasn't reported a selection
-    # yet (its own `selected=` default), so this never has to represent "no
-    # settings chosen."
+    # Two independent choices, resolved separately: how big the figure is made
+    # and — for raster only — how finely it is rasterised. Each falls back to
+    # its control's own default, so this never has to represent "nothing
+    # chosen yet".
     export_opts <- reactive({
-      preset <- export_preset(input$export_preset) %||% export_presets[[1]]
-      vals <- preset[[spec$export_kind]]
+      size <- export_size(input$export_size) %||% export_size("double")
+      quality <- input$export_quality
       list(
-        width_cm = vals$width_cm,
-        dpi = suppressWarnings(as.numeric(vals$dpi)),
-        target_px = vals$target_px
+        width_cm = size$width_cm,
+        dpi = unname(export_qualities[quality %||% "Print"]) %||% 300,
+        target_px = unname(
+          export_widget_px[quality %||% names(export_widget_px)[[2]]]
+        ) %||% 4000L
       )
     })
 
@@ -1288,7 +1292,8 @@ server <- function(
         Negate(is.null),
         list(
           filetype = input$export_filetype,
-          preset = input$export_preset
+          size = input$export_size,
+          quality = input$export_quality
         )
       ))
     }))
@@ -1318,20 +1323,16 @@ server <- function(
 
     reg(observeEvent(input$export_cancel, removeModal()))
 
-    # HTML has no width/DPI or target pixel size of its own — it is the
-    # self-contained widget as-is, not a re-render at a chosen size — so a
-    # widget engine's presets do nothing while it is the selected format.
-    # Disabled rather than hidden, so the layout doesn't jump when switching
-    # format back and forth.
-    if (export_widget) {
-      reg(observe({
-        updateRadioGroupButtons(
-          session,
-          "export_preset",
-          disabled = identical(export_format(), "html")
-        )
-      }))
-    }
+    # Resolution is a raster question. A vector file is the same drawing at any
+    # size and HTML is the widget as it stands, so for both the control is
+    # hidden rather than left sitting there doing nothing.
+    reg(observe({
+      shinyjs::toggleClass(
+        id = "export_quality_wrap",
+        class = "d-none",
+        condition = export_format() %in% c("pdf", "svg", "html")
+      )
+    }))
 
     output$export_hint <- renderUI({
       aspect <- if (is.null(exporter$aspect)) {
@@ -1340,13 +1341,25 @@ server <- function(
         tryCatch(exporter$aspect(), error = function(e) 0.62)
       }
       opts <- export_opts()
-      span(export_hint(
+      hint <- export_hint(
         exporter$kind,
         export_format(),
         opts$width_cm,
         if (export_widget) opts$target_px else opts$dpi,
         aspect
-      ))
+      )
+      # An engine may have something to say about the size that only it can
+      # know — the tree reports when the figure's smallest type would print
+      # below what a journal accepts.
+      note <- if (is.function(exporter$note)) {
+        tryCatch(exporter$note(opts$width_cm), error = function(e) NULL)
+      }
+      tagList(
+        span(hint),
+        if (!is.null(note)) {
+          div(class = "viz-export-warn small mt-1", note)
+        }
+      )
     })
 
     # The finished file, waiting to be handed to the browser. Written before the
