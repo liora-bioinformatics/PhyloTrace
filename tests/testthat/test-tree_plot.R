@@ -1833,3 +1833,126 @@ test_that("a scaled build draws the same figure, larger", {
     tolerance = 1e-6
   )
 })
+
+# --- Drawing many branches on one page ----------------------------------------
+
+test_that("a negative branch length is drawn as zero, not backwards", {
+  # Neighbour-joining estimates branch lengths independently of the topology,
+  # so a few come out negative. Drawn literally they run backwards along their
+  # own radius, and the crossing, doubled-back segments are what made a radial
+  # NJ tree look broken.
+  set.seed(31)
+  tree <- ape::rtree(12)
+  tree$tip.label <- sprintf("iso%02d", 1:12)
+  tree$edge.length[c(2, 5)] <- c(-0.4, -0.01)
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  p <- .built_tree(tree, meta, .annot_opts())
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  seg <- which(vapply(
+    p$layers, function(l) identical(class(l$geom)[1], "GeomSegment"), logical(1)
+  ))[[1]]
+
+  # Nothing is drawn to the left of the root.
+  expect_gte(min(b$data[[seg]]$x, na.rm = TRUE), 0)
+  expect_gte(min(b$data[[seg]]$xend, na.rm = TRUE), 0)
+})
+
+test_that("the branch stroke thins as the branches multiply", {
+  # A tree has as many branches as tips and they all share one page, so past a
+  # few dozen the stroke has to come down with them or the drawing fills in.
+  widths <- vapply(
+    c(20, 150, 500),
+    function(n) {
+      tree_plot$tree_auto_layout(n, 5.5, "circular", 20)$branch_width
+    },
+    numeric(1)
+  )
+  expect_true(all(diff(widths) < 0))
+  expect_gte(min(widths), impl$BRANCH_WIDTH_MIN)
+  expect_lte(max(widths), impl$BRANCH_WIDTH)
+})
+
+test_that("leader lines survive the labels being switched off", {
+  # They are what makes a tree with ragged tip depths readable without labels:
+  # the eye has to carry a row across an empty band to whatever is annotated
+  # beside it. Only the inward layout drops them, because there every line
+  # converges on the root and they blot it out.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$tiplab_show <- FALSE
+
+  tiplab_layers <- function(layout) {
+    o <- opts
+    o$layout <- layout
+    p <- .built_tree(f$tree, f$meta, o)
+    sum(vapply(
+      p$layers,
+      function(l) grepl("TextGGtree", class(l$geom)[1]),
+      logical(1)
+    ))
+  }
+  expect_gt(tiplab_layers("rectangular"), 0)
+  expect_gt(tiplab_layers("circular"), 0)
+  expect_identical(tiplab_layers("inward"), 0L)
+})
+
+# --- Following the aspect the user chose --------------------------------------
+
+test_that("the header reserve grows when the rows get shorter", {
+  # HEADER_CHAR_ROWS counts rows at the pitch the fit aims for. The aspect is
+  # the user's to change, and a squatter plot has shorter rows — so the same
+  # column name needs more of them. Measured against the nominal pitch, they
+  # were clipped off the top the moment the aspect came down.
+  opts <- list(
+    layout = "rectangular", tiplab_show = TRUE, tiplab = "isolate",
+    tiplab_size = 3, width_in = 5.5, layers = list(),
+    heatmaps = list(list(
+      kind = "amr", level = "gene", cols = paste0("g", 1:10),
+      labels = rep("Amikacin/Kanamycin/Tobramycin", 10)
+    ))
+  )
+  tall <- tree_plot$heatmap_header_frac(opts, 40, 1, 3, 5.5, 12)
+  squat <- tree_plot$heatmap_header_frac(opts, 40, 1, 3, 5.5, 4)
+
+  expect_gt(squat, tall)
+})
+
+test_that("a guide wraps its own keys rather than the box going sideways", {
+  # Thrown sideways, the box spent the whole width on one row of guides and
+  # looked worse than the clipping it was avoiding. Each guide wraps instead.
+  many <- lapply(1:6, function(i) {
+    list(field = paste0("v", i), title = paste("Var", i), n_levels = 9L)
+  })
+
+  tall <- tree_plot$tree_legend_max_rows(many, list(), 9, 40)
+  squat <- tree_plot$tree_legend_max_rows(many, list(), 9, 5)
+
+  # A short page gives each guide fewer rows, so its keys wrap into more
+  # columns and the stack still fits.
+  expect_lt(squat, tall)
+  expect_gte(squat, 3L)
+  expect_gt(tree_plot$tree_legend_ncol(9L, squat), 1L)
+  expect_identical(tree_plot$tree_legend_ncol(9L, tall), 1L)
+})
+
+test_that("the distance axis is sized for a page, not for a tip row", {
+  # It is a single row at the foot of the plot, so unlike a tip label it is not
+  # competing with n-1 others for the height. Taking its size from the fitted
+  # branch size shrank it to a smear on a tree of a few hundred tips.
+  opts <- .annot_opts()
+  opts$axis_show <- TRUE
+
+  axis_size <- function(branch) {
+    o <- opts
+    o$branch_size <- branch
+    layers <- impl$tree_axis_layer(o, 1, -1)
+    sizes <- vapply(
+      layers,
+      function(l) l$aes_params$size %||% NA_real_,
+      numeric(1)
+    )
+    sizes[!is.na(sizes)]
+  }
+  expect_identical(axis_size(0.6), axis_size(4))
+})

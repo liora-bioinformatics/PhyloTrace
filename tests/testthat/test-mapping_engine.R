@@ -506,3 +506,87 @@ test_that("a variable that groups nothing gets no strip", {
     mapping_engine$assign_mapping_layer(unique_col, list(), "L1", "amr")
   )
 })
+
+# --- the epi medium ----------------------------------------------------------
+
+test_that("the epi medium offers one exclusive bar fill", {
+  expect_identical(
+    names(mapping_engine$aesthetic_labels("epi")),
+    "bar_fill"
+  )
+  expect_identical(mapping_engine$max_layers("epi"), 1L)
+  # A curve's bars are already a stack, so the fill does not stack again: once
+  # a variable holds it there is nothing left to give a second one.
+  expect_length(
+    mapping_engine$eligible_aesthetics(prof(4), "bar_fill", "epi"),
+    0L
+  )
+  expect_identical(
+    mapping_engine$eligible_aesthetics(prof(4), character(0), "epi"),
+    "bar_fill"
+  )
+})
+
+test_that("an epi layer carries a palette of its own", {
+  # The channel has to be in COLOR_AESTHETICS or the layer comes out with no
+  # palette at all, which is what the AMR strips did.
+  expect_true("bar_fill" %in% mapping_engine$COLOR_AESTHETICS)
+
+  layer <- mapping_engine$assign_mapping_layer(prof(4), list(), "L1", "epi")
+  expect_identical(layer$aesthetic, "bar_fill")
+  expect_true(nzchar(layer$palette %||% ""))
+  expect_identical(layer$family, "Qualitative")
+})
+
+test_that("every medium's colour channel carries a palette", {
+  # Listed by hand, COLOR_AESTHETICS went stale the moment a medium was added.
+  for (m in names(mapping_engine$MAPPING_MEDIA)) {
+    expect_true(all(
+      mapping_engine$MAPPING_MEDIA[[m]]$color %in%
+        mapping_engine$COLOR_AESTHETICS
+    ))
+  }
+})
+
+test_that("a variable that groups nothing gets no bar fill", {
+  unique_col <- prof(40, n = 40)
+  expect_null(
+    mapping_engine$assign_mapping_layer(unique_col, list(), "L1", "epi")
+  )
+})
+
+test_that("a given granularity overrides the one the engine would choose", {
+  # Rebuilding a saved layer: the grouping the plot was drawn with is a fact
+  # about that plot. A date the automatic rule cannot group at all — six dates
+  # across six isolates — is exactly the one a saved coarser grouping rescues,
+  # and a layer refused up front cannot be corrected afterwards.
+  values <- c(
+    "2026-01-05", "2026-01-06", "2026-01-20",
+    "2026-01-21", "2026-02-01", "2026-02-02"
+  )
+  md <- data.frame(
+    isolate = sprintf("i%d", seq_along(values)),
+    d = values,
+    stringsAsFactors = FALSE
+  )
+  p <- field_profile$field_profiles(md, types = c(isolate = "text", d = "date"))
+  row <- p[p$field == "d", , drop = FALSE]
+
+  expect_null(
+    mapping_engine$assign_mapping_layer(row, list(), "L1", "epi", values)
+  )
+
+  saved <- mapping_engine$assign_mapping_layer(
+    row, list(), "L1", "epi", values, granularity = "month"
+  )
+  expect_identical(saved$granularity, "month")
+  expect_identical(saved$n_levels, 2L)
+  expect_false(saved$continuous)
+})
+
+test_that("a granularity given for a non-date is ignored", {
+  layer <- mapping_engine$assign_mapping_layer(
+    prof(4), list(), "L1", "epi", granularity = "month"
+  )
+  expect_null(layer$granularity)
+})

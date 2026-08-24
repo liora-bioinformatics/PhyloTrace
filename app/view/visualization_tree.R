@@ -99,6 +99,7 @@ box::use(
       field_select,
       granularity_select,
       update_field_select,
+      update_scale_select,
       scale_select,
       color_scales,
       suitable_scale_categories,
@@ -295,7 +296,7 @@ FITTED_DEFAULTS <- setNames(
 # The other half of what the render reads through a mirror: the selects the
 # server resolves rather than the user, from the loaded metadata
 # (populate_metadata_selects). They need mirroring for exactly the reason the
-# fitted sliders do — updatePickerInput reaches input$ only once the browser
+# fitted sliders do — updateVirtualSelect reaches input$ only once the browser
 # has echoed it back, a flush after the tree it belongs to was drawn, so the
 # plot is drawn once with the stale value and again with the resolved one. The
 # console named "tiplab" as one of those second draws.
@@ -419,7 +420,24 @@ tree_controls <- function(ns, options_ui = NULL) {
           accordion_panel(
             "Tree Rooting",
             icon = shiny$icon("seedling"),
-            pickerInput(ns("nj_root_isolate"), "Outgroup", c("Automatic"))
+            virtualSelectInput(
+              ns("nj_root_isolate"),
+              "Outgroup",
+              choices = c("Automatic"),
+              selected = "Automatic",
+              search = TRUE,
+              searchPlaceholderText = "Search isolates ...",
+              placeholder = "Automatic",
+              # The isolate names only arrive at Generate; left on its default
+              # this would hand the selection to whichever name lands first,
+              # silently rooting the tree on an arbitrary tip.
+              autoSelectFirstOption = FALSE,
+              optionsCount = 8,
+              dropboxWrapper = "body",
+              showDropboxAsPopup = TRUE,
+              popupDropboxBreakpoint = "10000px",
+              width = "100%"
+            )
           ),
           accordion_panel(
             "Layout",
@@ -470,7 +488,23 @@ tree_controls <- function(ns, options_ui = NULL) {
             "Isolate Labels",
             icon = shiny$icon("tag"),
             input_switch(ns("nj_tiplab_show"), "Show isolate labels", TRUE),
-            pickerInput(ns("nj_tiplab"), "Label source", label_vars),
+            virtualSelectInput(
+              ns("nj_tiplab"),
+              "Label source",
+              choices = label_vars,
+              selected = label_vars[[1]],
+              search = TRUE,
+              searchPlaceholderText = "Search variables ...",
+              placeholder = "Pick a variable ...",
+              # Same reason as the outgroup: the database's own columns replace
+              # these placeholders at Generate.
+              autoSelectFirstOption = FALSE,
+              optionsCount = 8,
+              dropboxWrapper = "body",
+              showDropboxAsPopup = TRUE,
+              popupDropboxBreakpoint = "10000px",
+              width = "100%"
+            ),
             # Floor below the 1 this used to stop at: a few hundred tips are
             # legible only at ~2mm, and the fit (tree_auto_layout) needs room
             # underneath that for the trees that are larger still.
@@ -593,17 +627,28 @@ tree_controls <- function(ns, options_ui = NULL) {
             "Clade Highlight",
             icon = shiny$icon("highlighter"),
             input_switch(ns("nj_nodelabel_show"), "Toggle node view", FALSE),
-            pickerInput(
+            virtualSelectInput(
               ns("nj_parentnode"),
               "Nodes",
               choices = character(0),
+              selected = character(0),
               multiple = TRUE,
-              options = list(
-                liveSearch = TRUE,
-                size = 10,
-                liveSearchPlaceholder = "Search nodes ...",
-                container = "body"
-              )
+              search = TRUE,
+              # Without this, the header checkbox highlights every internal
+              # node, not just the ones the search term currently matches.
+              selectAllOnlyVisible = TRUE,
+              searchPlaceholderText = "Search nodes ...",
+              placeholder = "No clade highlighted",
+              optionsCount = 10,
+              noOfDisplayValues = 3,
+              # Every pick redraws the tree, so a selection of several clades
+              # is batched to the dropdown's close rather than costing one
+              # draw per node.
+              updateOn = "close",
+              dropboxWrapper = "body",
+              showDropboxAsPopup = TRUE,
+              popupDropboxBreakpoint = "10000px",
+              width = "100%"
             ),
             viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221")
           ),
@@ -794,12 +839,11 @@ server <- function(
     # *choices* are all swapped out at Generate time for the loaded
     # database's actual metadata columns / isolate names (see the generate()
     # observer below) — the UI-declared choices are just placeholders shown
-    # before any data is loaded. shinyjs::reset() only knows how to restore
-    # the selected *value* it captured at page load (back when those
-    # placeholder choices were still current); it never restores `choices`,
-    # so after Generate has swapped them out, that captured value usually
-    # isn't even among the select's current options any more, leaving the
-    # control visibly blank instead of at any real value. force_default =
+    # before any data is loaded. Nothing else restores them: they are
+    # virtual-select widgets, which shinyjs::reset() does not recognize at all,
+    # and even for a widget it does recognize it only ever restores the
+    # selected *value* captured at page load — never `choices`, which after
+    # Generate no longer contains that value anyway. force_default =
     # TRUE (Reset settings) always jumps to the same default Generate would
     # use for a metadata set it's never seen a selection for; force_default =
     # FALSE (Generate) keeps the current selection when it's still valid, so
@@ -825,7 +869,8 @@ server <- function(
           cols,
           attr(meta, "mlst_cols"),
           attr(meta, "amr_cols"),
-          attr(meta, "custom_cols")
+          attr(meta, "custom_cols"),
+          amr_field_map(meta)
         )
       }
 
@@ -840,11 +885,17 @@ server <- function(
         } else {
           default
         }
-        # updatePickerInput, not updateSelectInput: these are bootstrap-select
-        # widgets, and they ignore a plain select's update message entirely —
-        # the choices stayed on the placeholder names the UI declares and the
-        # control read "Nothing selected".
-        updatePickerInput(session, id, choices = choices, selected = value)
+        # updateVirtualSelect, not updateSelectInput/updatePickerInput: these
+        # are virtual-select widgets and ignore either of those messages
+        # entirely — the choices stayed on the placeholder names the UI
+        # declares and the control read "Nothing selected". Note the argument
+        # order, which is the reverse of updatePickerInput's.
+        updateVirtualSelect(
+          inputId = id,
+          session = session,
+          choices = choices,
+          selected = value
+        )
         set_fitted(id, value)
       }
 
@@ -864,9 +915,9 @@ server <- function(
       } else {
         "Automatic"
       }
-      updatePickerInput(
-        session,
-        "nj_root_isolate",
+      updateVirtualSelect(
+        inputId = "nj_root_isolate",
+        session = session,
         choices = c("Automatic", tips),
         selected = root
       )
@@ -883,9 +934,9 @@ server <- function(
         } else {
           intersect(input$nj_parentnode, nodes)
         }
-        shinyWidgets::updatePickerInput(
-          session,
-          "nj_parentnode",
+        updateVirtualSelect(
+          inputId = "nj_parentnode",
+          session = session,
           choices = nodes,
           selected = picked
         )
@@ -1123,19 +1174,15 @@ server <- function(
     # swatch) — see reset_viz_colors() in viz_helpers.R for why — so those are
     # patched up explicitly right after the blanket reset.
     #
-    # populate_metadata_selects(), unlike that one, has to be deferred with
-    # shinyjs::delay() rather than just called right after shinyjs::reset():
-    # nj_tiplab/.../nj_root_isolate/nj_parentnode *are* plain <select>s (or a
-    # pickerInput, itself a <select> underneath) that shinyjs::reset()
-    # recognizes and restores — but only asynchronously (it round-trips
-    # through the browser to read back each resettable element's page-load
-    # value before calling the matching update*Input() on the server). That
-    # means a same-tick call right after shinyjs::reset() runs and sends its
-    # corrected choices/selection *first*, and shinyjs's own (stale,
-    # pre-Generate) restoration lands *after* it and overwrites it — the
-    # controls reset fine, then silently revert to blank a moment later.
-    # Delaying past that round-trip (typically well under 100ms locally)
-    # guarantees this runs last and wins.
+    # populate_metadata_selects() is what returns nj_tiplab / nj_root_isolate /
+    # nj_parentnode to their defaults — shinyjs::reset() cannot: virtual-select
+    # is a custom binding and is not among the widget types it knows how to
+    # restore. It stays deferred with shinyjs::delay() regardless, because
+    # shinyjs::reset() restores the rest of the panel asynchronously (it
+    # round-trips through the browser to read back each resettable element's
+    # page-load value before calling the matching update*Input() on the
+    # server), and letting that pass finish first keeps the fitted sliders'
+    # echoes from landing on top of the mirrors this call writes.
     # Restore every sidebar control to its coded default. Shared by this
     # engine's own "Reset settings" button and the top-level app-reset
     # (session_reset) path below, so both routes return the controls
@@ -1513,12 +1560,7 @@ server <- function(
       } else {
         color_scales[[cats[1]]][1]
       }
-      updatePickerInput(
-        session,
-        input_id,
-        choices = color_scales[cats],
-        selected = sel
-      )
+      update_scale_select(session, input_id, color_scales[cats], sel)
       # Mirrored for the same reason as the metadata selects above — the plot
       # reads the palette from the mirror, not from the echo.
       set_fitted(input_id, sel)
@@ -2250,9 +2292,9 @@ server <- function(
         fields <- names(meta)
         setsel <- function(id, choices) {
           if (!is.null(vals[[id]])) {
-            updatePickerInput(
-              session,
-              id,
+            updateVirtualSelect(
+              inputId = id,
+              session = session,
               choices = choices,
               selected = vals[[id]]
             )
@@ -2270,9 +2312,9 @@ server <- function(
           if (!isTRUE(root %in% c("Automatic", tips))) {
             root <- "Automatic"
           }
-          updatePickerInput(
-            session,
-            "nj_root_isolate",
+          updateVirtualSelect(
+            inputId = "nj_root_isolate",
+            session = session,
             choices = c("Automatic", tips),
             selected = root
           )
@@ -2281,9 +2323,9 @@ server <- function(
         if (n_tip >= 3 && !is.null(vals$nj_parentnode)) {
           n_node <- if (identical(algo(), "UPGMA")) n_tip - 1L else n_tip - 2L
           nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
-          shinyWidgets::updatePickerInput(
-            session,
-            "nj_parentnode",
+          updateVirtualSelect(
+            inputId = "nj_parentnode",
+            session = session,
             choices = nodes,
             selected = intersect(vals$nj_parentnode, nodes)
           )

@@ -212,6 +212,22 @@ test_that("every palette option carries a gradient swatch style", {
   expect_true(lengths(regmatches(html, gregexpr("linear-gradient", html))) >= n_palettes)
 })
 
+test_that("refilling a scale select re-supplies the swatch styles", {
+  # updatePickerInput() re-renders the option list from `choices` alone, so a
+  # refill that forgets choicesOpt leaves the dropdown as plain text.
+  msg <- NULL
+  session <- list(sendInputMessage = function(inputId, message) msg <<- message)
+  viz_helpers$update_scale_select(
+    session,
+    "col_scale",
+    list(Qualitative = c("Set1", "Set3")),
+    "Set3"
+  )
+  html <- as.character(msg$choices)
+  expect_match(html, 'value="Set1" style="background: linear-gradient', fixed = TRUE)
+  expect_match(html, 'value="Set3" style="background: linear-gradient', fixed = TRUE)
+})
+
 test_that("a Brewer swatch bands its tabulated colours with hard stops", {
   style <- impl$.scale_swatch_style("Set1")
   expect_match(style, "linear-gradient", fixed = TRUE)

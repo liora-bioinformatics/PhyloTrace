@@ -11,6 +11,7 @@ box::use(
     expect_true,
     test_that
   ],
+  utils[tail],
   withr[local_tempfile],
 )
 box::use(
@@ -473,6 +474,33 @@ test_that("a continuous strip gets a ramp rather than a colour per value", {
   spec <- impl$.strip_spec(layer, mat)
   expect_true(is.function(spec$col))
   expect_true(is.numeric(spec$values))
+})
+
+test_that("a strip's unrecorded category is coloured last, never first", {
+  # "NA" sorts wherever its label happens to fall — ahead of "Urine", behind
+  # "Blood" — so the one category carrying no information could head the strip's
+  # legend and take the palette's first colour.
+  expect_identical(
+    amr_plot$amr_strip_levels(c("Urine", NA, "Blood", "NA", "Wound")),
+    c("Blood", "Urine", "Wound", amr_plot$AMR_MISSING_LABEL)
+  )
+  expect_identical(amr_plot$amr_strip_levels(c("b", "a")), c("a", "b"))
+
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  layer <- strip_fixture()
+  layer$values <- stats::setNames(
+    c("Urine", NA, "Blood", "", "Wound", "Urine")[seq_along(ISOLATES)],
+    ISOLATES
+  )
+  spec <- impl$.strip_spec(layer, mat)
+
+  # The colour vector's own order is what ComplexHeatmap lists the keys in.
+  expect_identical(
+    tail(names(spec$col), 1L),
+    amr_plot$AMR_MISSING_LABEL
+  )
+  # And the blank came through as that category rather than as a gap.
+  expect_true(amr_plot$AMR_MISSING_LABEL %in% spec$values)
 })
 
 test_that("an empty strip is dropped rather than drawn blank", {

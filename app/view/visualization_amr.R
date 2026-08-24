@@ -49,7 +49,8 @@ box::use(
     pickerOptions,
     radioGroupButtons,
     updatePickerInput,
-    updateVirtualSelect
+    updateVirtualSelect,
+    virtualSelectInput
   ],
   stats[setNames],
 )
@@ -86,6 +87,7 @@ box::use(
       scale_select,
       suitable_scale_categories,
       update_field_select,
+      update_scale_select,
       viz_color
     ],
   app /
@@ -252,9 +254,10 @@ amr_controls <- function(ns) {
               ),
               # Rendered server-side: the choices are this database's detected
               # genes, grouped by drug class, so the picker is built once they
-              # are known rather than declared empty and back-filled (an empty
-              # <select> initialises bootstrap-select disabled). Same reasoning
-              # as the Epi engine's stratify picker.
+              # are known rather than declared empty and back-filled — the
+              # selection it carries is "every gene", which cannot be expressed
+              # before the gene list exists. Same reasoning as the Epi engine's
+              # stratify picker.
               shiny$uiOutput(ns("genes_ui")),
               # AMRFinderPlus reports partial and low-identity hits alongside
               # confident ones and `amr_results` keeps both percentages, so the
@@ -706,23 +709,37 @@ server <- function(
         genes_force_default(FALSE)
       }
       keep <- if (!force_default) intersect(prev, all_genes) else character()
-      pickerInput(
+      virtualSelectInput(
         ns("amr_genes"),
         "Genes",
         choices = choices,
         selected = if (length(keep)) keep else all_genes,
         multiple = TRUE,
-        width = "100%",
-        options = pickerOptions(
-          actionsBox = TRUE,
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search genes ...",
-          size = 10,
-          title = "None",
-          selectedTextFormat = "count > 2",
-          countSelectedText = "{0} of {1} genes",
-          container = "body"
-        )
+        search = TRUE,
+        # Without this, the header checkbox takes every gene the screen found,
+        # not just the ones the search term currently matches — surprising when
+        # the dropdown is showing a filtered subset.
+        selectAllOnlyVisible = TRUE,
+        searchPlaceholderText = "Search genes ...",
+        # An empty selection means "every gene" (see selected_genes()), so the
+        # empty state names that rather than reading "None".
+        placeholder = "All genes",
+        optionsCount = 10,
+        noOfDisplayValues = 2,
+        # Not formals — these reach the widget config through `...`. A screen
+        # reporting several hundred genes cannot list them in the toggle, so
+        # past two it counts them instead.
+        optionsSelectedText = "genes selected",
+        optionSelectedText = "gene selected",
+        allOptionsSelectedText = "All genes",
+        # Every pick re-derives the presence matrix and re-clusters it, so a
+        # multi-gene selection is batched to the dropdown's close rather than
+        # costing one recompute per click.
+        updateOn = "close",
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       )
     })
 
@@ -942,12 +959,7 @@ server <- function(
       } else {
         amr_plot$amr_fit_scale(input[[id]], n)
       }
-      updatePickerInput(
-        session,
-        id,
-        choices = choices,
-        selected = selected
-      )
+      update_scale_select(session, id, choices, selected)
     }
 
     shiny$observe({
@@ -1472,14 +1484,14 @@ server <- function(
           "amr_background_color"
         ),
         radio_groups = "amr_level",
-        # Real pickerInputs (amr_genes is server-rendered and rebuilt on a
-        # counter, but bound the same way regardless of when its HTML lands), so
-        # a plain update reaches them.
         pickers = c(
           "amr_elements",
-          "amr_sections",
-          "amr_genes"
-        )
+          "amr_sections"
+        ),
+        # Server-rendered and rebuilt on a counter, but bound the same way
+        # regardless of when its HTML lands — what sets it apart is the widget:
+        # a virtual-select ignores updatePickerInput() outright.
+        virtual_selects = "amr_genes"
       )
 
       # A saved column grouping the control no longer offers ("Element type",

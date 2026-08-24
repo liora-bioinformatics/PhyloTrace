@@ -271,10 +271,27 @@ grouped_field_choices <- function(
   fields,
   mlst_cols = NULL,
   amr_cols = NULL,
-  custom_cols = NULL
+  custom_cols = NULL,
+  amr_map = NULL
 ) {
   group <- group_of(fields, mlst_cols, amr_cols, custom_cols)
   in_group <- function(name) fields[group == name]
+
+  # A gene column's name is a position, not a gene: `load_amr_matrix()` numbers
+  # them in the order abritamr reported them, so `amr_g1` labels itself "g1" —
+  # which is what a picker was listing under AMR screening, and it says nothing
+  # to anybody. The gene each one stands for travels beside the data, and
+  # `amr_field_map()` is what reads it back.
+  amr_label <- function(cols) {
+    labs <- field_labels_for(cols)
+    if (is.null(amr_map) || !nrow(amr_map)) {
+      return(labs)
+    }
+    hit <- match(cols, amr_map$field)
+    gene <- !is.na(hit) & amr_map$role[hit] == "gene"
+    labs[gene] <- amr_map$gene[hit[gene]]
+    labs
+  }
 
   mlst_cols <- in_group(GROUP_ORDER[[2]])
   amr_cols <- in_group(GROUP_ORDER[[3]])
@@ -299,7 +316,7 @@ grouped_field_choices <- function(
   if (length(amr_cols)) {
     out[[GROUP_ORDER[[3]]]] <- stats::setNames(
       amr_cols,
-      field_labels_for(amr_cols)
+      amr_label(amr_cols)
     )
   }
   if (length(custom_cols)) {

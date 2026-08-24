@@ -168,6 +168,23 @@ epi_stratum <- function(meta, stratify_by) {
   do.call(paste, c(parts, list(sep = EPI_STRATUM_SEP)))
 }
 
+#' Order Strata for the Legend and the Stack
+#'
+#' Alphabetical, except that the "value not recorded" category is always last —
+#' "(unknown)" sorts ahead of every letter, which put the one category carrying
+#' no information at the head of the legend and gave it the palette's first
+#' (loudest) colour. Every place that decides an order — the palette, the fill
+#' scale's limits, the stack, the cumulative grid — goes through this, or the
+#' legend and the bars disagree about which colour is which.
+#'
+#' @param x Character vector of stratum labels.
+#' @return Sorted unique labels, `EPI_UNKNOWN_LABEL` last when present.
+#' @export
+epi_strata_levels <- function(x) {
+  lv <- sort(unique(as.character(x)))
+  c(setdiff(lv, EPI_UNKNOWN_LABEL), intersect(lv, EPI_UNKNOWN_LABEL))
+}
+
 .empty_epi_data <- function(dropped = 0L) {
   out <- data.frame(
     date_bin = as.Date(character()),
@@ -255,12 +272,19 @@ epi_cumulate <- function(binned) {
   # Create complete grid to ensure missing interval steps are zero-filled before cumulative sum
   grid <- expand.grid(
     date_bin = sort(unique(binned$date_bin)),
-    stratum = sort(unique(binned$stratum)),
+    stratum = epi_strata_levels(binned$stratum),
     stringsAsFactors = FALSE
   )
   out <- merge(grid, binned, by = c("date_bin", "stratum"), all.x = TRUE)
   out$count[is.na(out$count)] <- 0L
-  out <- out[order(out$stratum, out$date_bin), , drop = FALSE]
+  # By the grid's own level order, not alphabetically: the running total has to
+  # accumulate within each stratum, and the rows must come out in the same
+  # order the legend lists them.
+  out <- out[
+    order(match(out$stratum, grid$stratum), out$date_bin),
+    ,
+    drop = FALSE
+  ]
   out$count <- as.integer(ave(out$count, out$stratum, FUN = cumsum))
   rownames(out) <- NULL
   attr(out, "dropped") <- attr(binned, "dropped") %||% 0L
@@ -1001,7 +1025,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
   if (identical(mode, "cumulative")) {
     binned <- epi_cumulate(binned)
   }
-  cats <- sort(unique(binned$stratum))
+  cats <- epi_strata_levels(binned$stratum)
   pal <- if (identical(cats, EPI_ALL_LABEL) && !is.null(opts$single_color)) {
     setNames(opts$single_color, cats)
   } else {
@@ -1377,7 +1401,7 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   lv <- if (is.factor(shown$stratum)) {
     levels(shown$stratum)
   } else {
-    sort(unique(shown$stratum))
+    epi_strata_levels(shown$stratum)
   }
   order_in_bin <- match(as.character(shown$stratum), rev(lv))
   out <- shown[order(shown$date_bin, order_in_bin), , drop = FALSE]

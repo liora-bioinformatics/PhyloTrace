@@ -620,10 +620,12 @@ test_that("a merged node's value is a distribution, not a value", {
   expect_identical(sort(names(vals$shares[[2]])), c("Kenya", "Peru"))
 })
 
-test_that("a value nobody recorded is its own level, not a gap", {
-  vals <- mst_plot$mst_node_values(c("e", "f"), demo_meta(), "country")
-  expect_identical(names(vals$shares[[1]]), "Not recorded")
-  expect_true("Not recorded" %in% vals$levels)
+test_that("a value nobody recorded is its own level, last, not a gap", {
+  vals <- mst_plot$mst_node_values(c("a", "e"), demo_meta(), "country")
+  expect_identical(names(vals$shares[[2]]), "Not recorded")
+  # Last, so the one category carrying no information does not head the legend
+  # or take the palette's first colour.
+  expect_identical(vals$levels[[length(vals$levels)]], "Not recorded")
 })
 
 # A date column the way SQLite hands it over: character, not Date.

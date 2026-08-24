@@ -1252,6 +1252,53 @@ test_that("epi_bins lists the bins in order", {
   expect_length(epi_plot$epi_bins(epi_plot$build_epi_data(meta_fixture(), "nope")), 0L)
 })
 
+test_that("the unrecorded stratum is listed last, never first", {
+  # "(unknown)" sorts ahead of every letter, so the one category carrying no
+  # information headed the legend and took the palette's first (loudest)
+  # colour. Every place that decides an order has to agree, or the legend and
+  # the bars disagree about which colour is which.
+  labelled <- c("SC2", "SC1", epi_plot$EPI_UNKNOWN_LABEL, "SC1")
+
+  expect_identical(
+    epi_plot$epi_strata_levels(labelled),
+    c("SC1", "SC2", epi_plot$EPI_UNKNOWN_LABEL)
+  )
+  # Nothing to move when every value is recorded.
+  expect_identical(epi_plot$epi_strata_levels(c("b", "a")), c("a", "b"))
+  expect_length(epi_plot$epi_strata_levels(character()), 0L)
+})
+
+test_that("a blank stratifier value reaches the legend last, and stays there", {
+  meta <- data.frame(
+    sample_collection_date = rep(c("2024-01-05", "2024-02-05"), each = 3),
+    sc = c("SC1", "SC2", NA, "SC2", "", "SC1"),
+    stringsAsFactors = FALSE
+  )
+  binned <- epi_plot$build_epi_data(
+    meta,
+    "sample_collection_date",
+    "sc",
+    "month"
+  )
+  last <- epi_plot$EPI_UNKNOWN_LABEL
+
+  fills <- function(opts) {
+    p <- epi_plot$build_epi_ggplot(binned, opts)
+    ggplot2::ggplot_build(p)$plot$scales$get_scales("fill")$get_limits()
+  }
+
+  expect_identical(fills(list(interval = "month")), c("SC1", "SC2", last))
+  # And on the cumulative curve, whose grid is built from the same order.
+  expect_identical(
+    fills(list(mode = "cumulative", interval = "month")),
+    c("SC1", "SC2", last)
+  )
+  expect_identical(
+    unique(epi_plot$epi_cumulate(binned)$stratum),
+    c("SC1", "SC2", last)
+  )
+})
+
 test_that("the date axis carries major and minor ticks", {
   # theme_minimal draws no ticks and panel.grid is switched off, which left the
   # date labels floating with nothing marking the position they name.

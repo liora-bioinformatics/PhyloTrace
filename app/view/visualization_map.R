@@ -84,6 +84,7 @@ box::use(
       field_select,
       granularity_select,
       update_field_select,
+      update_scale_select,
       scale_select,
       color_scales,
       suitable_scale_categories,
@@ -2766,12 +2767,7 @@ server <- function(
         } else {
           color_scales[[cats[1]]][1]
         }
-        updatePickerInput(
-          session,
-          "map_col_scale",
-          choices = color_scales[cats],
-          selected = sel
-        )
+        update_scale_select(session, "map_col_scale", color_scales[cats], sel)
       },
       ignoreInit = TRUE
     )

@@ -60,6 +60,24 @@ AMR_PRESENCE_STATES <- c("Absent", "Present")
 #' @export
 AMR_UNCLASSIFIED <- "Unclassified"
 
+#' Label for isolates a mapped variable has no value for.
+#' @export
+AMR_MISSING_LABEL <- "NA"
+
+#' Order a mapped variable's categories for its strip and legend.
+#'
+#' Alphabetical, except that the "no value recorded" category is always last:
+#' it sorts wherever its label happens to fall, which put the one category
+#' carrying no information ahead of the values that do.
+#'
+#' @param x Character vector of category labels.
+#' @return Sorted unique labels, `AMR_MISSING_LABEL` last when present.
+#' @export
+amr_strip_levels <- function(x) {
+  lv <- sort(unique(as.character(x)))
+  c(setdiff(lv, AMR_MISSING_LABEL), intersect(lv, AMR_MISSING_LABEL))
+}
+
 #' @export
 AMR_CLUSTER_METHODS <- c(
   `Ward D2` = "ward.D2",
@@ -770,7 +788,8 @@ amr_auto_layout <- function(
 #
 # Isolates the variable is empty for are labelled "NA" rather than dropped: the
 # row still exists in the matrix, and a gap in the strip beside a present row is
-# read as a rendering fault.
+# read as a rendering fault. That category is listed last whatever it sorts as,
+# so the one value carrying no information does not head the legend.
 .strip_spec <- function(layer, mat) {
   vals <- layer$values[rownames(mat)]
   label <- layer$label %||% layer$field
@@ -795,8 +814,8 @@ amr_auto_layout <- function(
     }
   }
   chr <- as.character(vals)
-  chr[is.na(chr) | !nzchar(chr)] <- "NA"
-  cats <- sort(unique(chr))
+  chr[is.na(chr) | !nzchar(chr)] <- AMR_MISSING_LABEL
+  cats <- amr_strip_levels(chr)
   list(
     label = label,
     values = chr,

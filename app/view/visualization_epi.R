@@ -820,6 +820,12 @@ server <- function(
         selected = character(0)
       )
 
+      # Checked here and not only when filling the picker: a restored plot and
+      # a legacy snapshot both reach the layer list without going past the
+      # control, and a curve split by its own x axis draws one series per bar.
+      if (!isTRUE(field %in% mappable_fields())) {
+        return()
+      }
       layers <- epi_layers()
       if (layer_has_field(layers, field)) {
         return()
@@ -1767,21 +1773,28 @@ server <- function(
       if (is.null(field) || !nzchar(field)) {
         return(NULL)
       }
+      if (!isTRUE(field %in% mappable_fields())) {
+        return(NULL)
+      }
       prof <- profile_for(profiles(), field)
       if (is.null(prof)) {
         return(NULL)
       }
       values <- viz_metadata()[[field]]
-      layer <- assign_mapping_layer(prof, list(), "L1", MEDIUM, values)
+      # The saved grouping goes in rather than being applied afterwards: a date
+      # the automatic rule cannot group at all is precisely the one the saved
+      # coarser grouping rescues, and a layer refused up front cannot be
+      # corrected later.
+      layer <- assign_mapping_layer(
+        prof,
+        list(),
+        "L1",
+        MEDIUM,
+        values,
+        granularity = vals$epi_stratify_granularity
+      )
       if (is.null(layer)) {
         return(NULL)
-      }
-      if (!is.null(vals$epi_stratify_granularity)) {
-        layer <- set_layer_granularity(
-          layer,
-          vals$epi_stratify_granularity,
-          values
-        )
       }
       if (!is.null(vals$epi_col_scale)) {
         layer$palette <- vals$epi_col_scale
@@ -1833,7 +1846,14 @@ server <- function(
       # before the mapping rewrite carries no .layers at all, so its flat keys
       # are rebuilt into one.
       layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)
-      if (is.null(layers)) {
+      if (!is.null(layers)) {
+        # A saved layer on a column this database no longer has — or on the
+        # plotted date, which nothing should be split by — is dropped rather
+        # than drawn.
+        fields <- mappable_fields()
+        layers <- Filter(function(l) isTRUE(l$field %in% fields), layers)
+      }
+      if (!length(layers)) {
         layers <- migrate_legacy_mapping(vals)
       }
       if (!is.null(layers)) {

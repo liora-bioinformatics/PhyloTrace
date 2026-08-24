@@ -451,6 +451,11 @@ aesthetic_block_reason <- function(profile, aesthetic, medium = "tree") {
 #' @param values The variable's raw column values, for the date default.
 #' @param n_units Units the medium will draw — tips for a tree.
 #' @param off Aesthetics this plot is not drawing at all.
+#' @param granularity Calendar interval to group a date by, instead of the one
+#'   this function would choose. For rebuilding a saved layer: the grouping the
+#'   plot was drawn with is a fact about that plot, not a choice to re-make, and
+#'   a date the automatic rule cannot group at all (six dates over six isolates)
+#'   is exactly the one a saved coarser grouping rescues.
 #' @return A layer record, or NULL when no aesthetic is free.
 #' @export
 assign_mapping_layer <- function(
@@ -460,16 +465,20 @@ assign_mapping_layer <- function(
   medium = "tree",
   values = NULL,
   n_units = NULL,
-  off = character(0)
+  off = character(0),
+  granularity = NULL
 ) {
   # A date is grouped before anything else is decided about it. Not only when
   # it is unique per isolate, which is what this used to test: 213 distinct
   # collection dates across 253 isolates pass that test — they *do* group — and
   # still make an unreadable scale. `mapped_granularity()` owns the rule.
-  granularity <- NULL
   if (is_date_profile(profile)) {
-    granularity <- mapped_granularity(values)
+    if (!is_binned(granularity)) {
+      granularity <- mapped_granularity(values)
+    }
     profile <- granularity_profile(profile, values, granularity)
+  } else {
+    granularity <- NULL
   }
   taken <- vapply(existing, function(l) l$aesthetic, character(1))
   choice <- eligible_aesthetics(profile, taken, medium, n_units, off)

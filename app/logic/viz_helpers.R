@@ -419,6 +419,29 @@ scale_select <- function(ns, id, categories = names(color_scales), selected = NU
   )
 }
 
+#' Refill a `scale_select()` without losing its palette swatches.
+#'
+#' `updatePickerInput()` re-renders the option list from `choices` alone, so a
+#' plain update drops the `choicesOpt` styles the UI was built with and leaves
+#' the dropdown as plain text. Every refill of a colour-scale picker has to go
+#' through here so the swatches are re-supplied along with the new choices.
+#'
+#' @param session Shiny session object.
+#' @param id Character. Input ID (unnamespaced).
+#' @param choices Named list of palette vectors, as `color_scales[cats]`.
+#' @param selected Character. Palette to select.
+#' @export
+update_scale_select <- function(session, id, choices, selected = NULL) {
+  palettes <- unlist(choices, use.names = FALSE)
+  updatePickerInput(
+    session,
+    id,
+    choices = choices,
+    selected = selected,
+    choicesOpt = list(style = vapply(palettes, .scale_swatch_style, character(1)))
+  )
+}
+
 #' Calendar-interval selector for a mapped date variable.
 #'
 #' A collection date is near-unique per isolate, so raw it groups nothing.
@@ -557,6 +580,7 @@ collect_input_snapshot <- function(input, prefix) {
 #' @param radio_groups Character vector of radio group button input IDs.
 #' @param pretty_radios Character vector of pretty radio button input IDs.
 #' @param pickers Character vector of picker input IDs.
+#' @param virtual_selects Character vector of `virtualSelectInput` IDs.
 #' @export
 apply_input_snapshot <- function(
   session,
@@ -569,7 +593,8 @@ apply_input_snapshot <- function(
   colors = character(),
   radio_groups = character(),
   pretty_radios = character(),
-  pickers = character()
+  pickers = character(),
+  virtual_selects = character()
 ) {
   if (is.null(vals)) {
     return(invisible(NULL))
@@ -607,6 +632,16 @@ apply_input_snapshot <- function(
   for (id in pickers) {
     v <- get(id)
     if (!is.null(v)) updatePickerInput(session, id, selected = v)
+  }
+  # A virtualSelectInput ignores a picker's update message entirely, so these
+  # cannot ride along in `pickers`: the control would keep whatever it held and
+  # the restore would look like it silently did nothing. Note the argument
+  # order — `inputId` first, `session` last (see update_field_select()).
+  for (id in virtual_selects) {
+    v <- get(id)
+    if (!is.null(v)) {
+      updateVirtualSelect(inputId = id, session = session, selected = v)
+    }
   }
 
   color_vals <- list()

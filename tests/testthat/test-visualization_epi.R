@@ -949,28 +949,17 @@ test_that("the annotation types are named for what they mark, not how", {
   expect_true(grepl("\"milestone\"", html, fixed = TRUE))
 })
 
-# --- restore(): saved stratification -----------------------------------------
-# epi_stratify is a field_select() (virtualSelectInput) rendered by renderUI,
-# and restore() used to hand it to apply_input_snapshot()'s `pickers=` bucket.
-# That was wrong twice over: updatePickerInput() sends a message the
-# virtualSelectInput binding never listens for, and even the right update
-# message would not have survived, because restoring a plot writes the tab's
-# selection reactiveVals and so re-renders this control in the same flush,
-# replacing whatever the update had been applied to. Either way a saved
-# stratification silently never came back on reopen.
+# --- restore(): the saved mapping --------------------------------------------
+# A mapping is reactiveVal state, so restoring one is a plain write rather than
+# the renderUI dance the old stratify picker needed (an update*Input() could not
+# survive: restoring a plot writes the tab's selection reactiveVals, which
+# re-rendered the control in the same flush and replaced whatever had been
+# pushed at it). These assert on the layer list, which is what the curve is
+# actually drawn from.
 #
-# So these assert on what the *rendered control* carries, not on which updater
-# restore() happened to call - the rendered markup is what the browser
-# actually receives, and is the only form of the answer that cannot be
-# clobbered a moment later.
-selected_value <- function(ui) {
-  html <- paste(as.character(ui), collapse = "")
-  hit <- regmatches(html, regexpr('"selectedValue":"[^"]*"', html))
-  if (!length(hit)) {
-    return(NA_character_)
-  }
-  sub('^"selectedValue":"(.*)"$', "\\1", hit)
-}
+# They also cover the other half: a plot saved before this rewrite carries no
+# `.layers` at all, only the flat epi_stratify / epi_stratify_granularity /
+# epi_col_scale keys, and has to come back as a layer anyway.
 
 stratify_meta_fixture <- function() {
   meta <- meta_fixture()
@@ -998,7 +987,7 @@ stratify_profiles_fixture <- function(meta) {
   )
 }
 
-test_that("restore() brings a saved stratification back onto the control", {
+test_that("restore() brings a saved mapping back", {
   meta <- stratify_meta_fixture()
 
   testServer(
@@ -1009,18 +998,25 @@ test_that("restore() brings a saved stratification back onto the control", {
     ),
     {
       set_default_inputs(session)
-      restore(list(epi_stratify = "geo_loc_name_country"))
+      restore(list(.layers = list(list(
+        id = "L1",
+        field = "geo_loc_name_country",
+        title = "Country",
+        aesthetic = "bar_fill",
+        palette = "Dark2",
+        n_levels = 2L,
+        auto = FALSE
+      ))))
       session$flushReact()
 
-      expect_identical(
-        selected_value(output$stratify_ui),
-        "geo_loc_name_country"
-      )
+      expect_identical(length(epi_layers()), 1L)
+      expect_identical(epi_layers()[[1]]$field, "geo_loc_name_country")
+      expect_identical(epi_layers()[[1]]$palette, "Dark2")
     }
   )
 })
 
-test_that("restore() ignores a saved field the current database no longer has", {
+test_that("restore() drops a saved layer whose column the database no longer has", {
   meta <- stratify_meta_fixture()
 
   testServer(
@@ -1031,16 +1027,21 @@ test_that("restore() ignores a saved field the current database no longer has", 
     ),
     {
       set_default_inputs(session)
-      restore(list(epi_stratify = "no_such_column"))
+      # A layer needs a field to be drawn from; one that is gone cannot be
+      # rebuilt, and a card claiming otherwise is worse than none.
+      restore(list(.layers = list(list(
+        id = "L1",
+        field = NA_character_,
+        aesthetic = "bar_fill"
+      ))))
       session$flushReact()
 
-      # The sentinel, not a control left pinned to a column that is not there.
-      expect_identical(selected_value(output$stratify_ui), "")
+      expect_identical(length(epi_layers()), 0L)
     }
   )
 })
 
-test_that("a restore carrying no stratification leaves the control alone", {
+test_that("a restore carrying no mapping leaves the curve unsplit", {
   meta <- stratify_meta_fixture()
 
   testServer(
@@ -1054,12 +1055,14 @@ test_that("a restore carrying no stratification leaves the control alone", {
       restore(list(epi_plot_mode = "stacked"))
       session$flushReact()
 
-      expect_identical(selected_value(output$stratify_ui), "")
+      expect_identical(length(epi_layers()), 0L)
     }
   )
 })
 
-test_that("restore() applies a saved stratifier's granularity once it exists", {
+test_that("a plot saved before the rewrite comes back as a mapping layer", {
+  # The flat keys every saved curve carried. Without the migration each one
+  # silently reopened unsplit, having lost the stratification it was saved with.
   meta <- stratify_meta_fixture()
 
   testServer(
@@ -1070,26 +1073,46 @@ test_that("restore() applies a saved stratifier's granularity once it exists", {
     ),
     {
       set_default_inputs(session)
-      # epi_stratify_granularity never appeared in restore()'s own
-      # apply_input_snapshot() bucket at all, so it was previously dropped
-      # unconditionally, whatever happened to the field itself.
       restore(list(
         epi_stratify = "enrollment_date",
-        epi_stratify_granularity = "month"
+        epi_stratify_granularity = "month",
+        epi_col_scale = "Set1"
       ))
       session$flushReact()
 
-      expect_identical(selected_value(output$stratify_ui), "enrollment_date")
-
-      # The granularity control is gated on the *echoed* field: it exists only
-      # once epi_stratify reports back as a date, which is a later flush than
-      # the one restore() runs in.
-      session$setInputs(epi_stratify = "enrollment_date")
-      html <- paste(
-        as.character(output$stratify_granularity_ui),
-        collapse = ""
+      expect_identical(length(epi_layers()), 1L)
+      l <- epi_layers()[[1]]
+      expect_identical(l$field, "enrollment_date")
+      expect_identical(l$aesthetic, "bar_fill")
+      # The saved grouping and palette are the user's own choices, so they are
+      # pinned against rebalance_layers() rebuilding the layer from scratch.
+      expect_identical(l$granularity, "month")
+      expect_identical(l$palette, "Set1")
+      expect_false(l$auto)
+      # And the grouping reaches the builder: two months, not six dates.
+      expect_identical(
+        sort(unique(stratified_meta(meta)$enrollment_date)),
+        c("2026-01", "2026-02")
       )
-      expect_true(grepl('value="month" selected', html, fixed = TRUE))
+    }
+  )
+})
+
+test_that("a restore with no saved stratifier at all adds nothing", {
+  meta <- stratify_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(stratify_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(epi_stratify = "", epi_col_scale = "Set1"))
+      session$flushReact()
+
+      expect_identical(length(epi_layers()), 0L)
     }
   )
 })
