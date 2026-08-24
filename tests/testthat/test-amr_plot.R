@@ -551,6 +551,25 @@ test_that("block titles turn vertical only when they do not fit", {
   expect_identical(amr_plot$amr_auto_layout(100, 12)$title_rot, 0)
 })
 
+test_that("a reader's aspect ratio is used as given and re-solves the sizes", {
+  fitted <- amr_plot$amr_auto_layout(250, 32)
+  taller <- amr_plot$amr_auto_layout(250, 32, aspect = 6)
+  expect_identical(taller$aspect, 6)
+  # A taller figure is more room per row, so the isolate labels grow with it
+  # rather than the extra height becoming whitespace.
+  expect_gt(taller$fontsize_row, fitted$fontsize_row)
+
+  # Nonsense is ignored in favour of the fit rather than drawn.
+  expect_identical(
+    amr_plot$amr_auto_layout(250, 32, aspect = 0)$aspect,
+    fitted$aspect
+  )
+  expect_identical(
+    amr_plot$amr_auto_layout(250, 32, aspect = NA_real_)$aspect,
+    fitted$aspect
+  )
+})
+
 test_that("the fit reports when the row labels are past reading", {
   expect_true(amr_plot$amr_auto_layout(20, 20, show_row_names = TRUE)$legible)
   expect_false(
@@ -606,6 +625,46 @@ test_that("the section filter reaches the class-level prevalence bars", {
   expect_true("Adhesion" %in% all_sections$item)
   expect_false("Adhesion" %in% matches$item)
   expect_identical(matches$item, "Beta-lactam")
+})
+
+test_that("the canvas height reaches the device the legends are packed on", {
+  # The regression this guards: grid.grabExpr() opens a 7x7 inch device unless
+  # told otherwise, and ComplexHeatmap packs legends against `par("din")`. Left
+  # at that default, a legend column taller than seven inches wrapped into a
+  # second column beside the first however tall the real figure was — which is
+  # what a heatmap with several annotation strips produces every time.
+  #
+  # Asserted as a difference rather than as a column count, because the wrap
+  # happens inside ComplexHeatmap and leaves nothing addressable behind: drawn
+  # to the *same* pixel canvas, a grab told it has seven inches and one told it
+  # has forty differ only because the height was honoured. Ignored, both grabs
+  # would use 7in and the two images would be identical.
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  strips <- lapply(1:8, function(i) {
+    list(
+      field = paste0("v", i),
+      label = paste("Variable", i),
+      palette = "Set1",
+      continuous = FALSE,
+      values = stats::setNames(rep(c("a", "b", "c"), 2), ISOLATES)
+    )
+  })
+  ht <- amr_plot$build_amr_heatmap(
+    mat,
+    list(show_class_anno = TRUE, anno_layers = strips)
+  )
+
+  render_at <- function(height_in) {
+    file <- local_tempfile(fileext = ".png")
+    amr_plot$render_amr_png(
+      amr_plot$amr_as_ggplot(ht, width_in = 9, height_in = height_in),
+      file,
+      900,
+      2400
+    )
+    unname(tools::md5sum(file))
+  }
+  expect_false(identical(render_at(7), render_at(40)))
 })
 
 test_that("the prevalence chart renders to a real image", {

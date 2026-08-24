@@ -90,6 +90,8 @@ set_default_inputs <- function(session) {
     amr_col_cluster_distance = "binary",
     amr_col_cluster_method = "ward.D2",
     amr_dend_size = 1.5,
+    amr_aspect_ratio = 0.9,
+    zoom_view = "FALSE",
     amr_show_row_names = FALSE,
     amr_show_class_anno = TRUE,
     amr_level = "gene",
@@ -426,9 +428,12 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       snap <- snapshot()
       expect_identical(snap$amr_mode, "classes")
       expect_identical(snap$amr_top_n, 15)
-      # `.layers` is the annotation strips, which are reactiveVal state rather
-      # than an input; everything else is an amr_ control.
-      expect_true(all(startsWith(setdiff(names(snap), ".layers"), "amr_")))
+      # `.layers` is the annotation strips (reactiveVal state, not an input) and
+      # `zoom_view` is the shared display-mode control; everything else is an
+      # amr_ control.
+      expect_true(all(startsWith(
+        setdiff(names(snap), c(".layers", "zoom_view")), "amr_"
+      )))
 
       # A snapshot taken before a control existed must restore everything else
       # cleanly rather than erroring on the missing id.
@@ -560,6 +565,118 @@ test_that("a saved 'Element type' grouping restores as one the picker offers", {
       # the control and the value has to be translated rather than passed on.
       session$setInputs(amr_column_grouping = "element")
       expect_identical(grouping(), "none")
+    }
+  )
+})
+
+# --- aspect ratio -------------------------------------------------------------
+
+test_that("Generate fits the aspect ratio to the matrix", {
+  path <- amr_db()
+  meta <- meta_fixture()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      # The mirror is what the render reads, and Generate has just written the
+      # fit into it — the slider's own echo arrives a flush later, which is the
+      # whole reason the mirror exists.
+      expect_identical(aspect_mirror(), layout_fit()$aspect)
+      expect_identical(plot_aspect(), aspect_mirror())
+    }
+  )
+})
+
+test_that("a reader's aspect ratio overrides the fit and survives a redraw", {
+  path <- amr_db()
+  meta <- meta_fixture()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      session$setInputs(amr_aspect_ratio = 5)
+      session$flushReact()
+      expect_identical(plot_aspect(), 5)
+      # Every size that hangs off the row pitch is re-solved against it.
+      expect_identical(layout_fit()$aspect, 5)
+
+      # A cosmetic control must not quietly hand the plot back to the fit.
+      session$setInputs(amr_show_class_anno = FALSE)
+      session$flushReact()
+      expect_identical(plot_aspect(), 5)
+    }
+  )
+})
+
+test_that("a restored aspect ratio reaches the mirror on the same flush", {
+  path <- amr_db()
+  meta <- meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      restore(list(amr_aspect_ratio = 3.4))
+      expect_identical(aspect_mirror(), 3.4)
+    }
+  )
+})
+
+test_that("the snapshot carries the display mode and the aspect ratio", {
+  path <- amr_db()
+  meta <- meta_fixture()
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_aspect_ratio = 2.2, zoom_view = "TRUE")
+      session$flushReact()
+
+      snap <- snapshot()
+      expect_identical(snap$amr_aspect_ratio, 2.2)
+      # zoom_view has no amr_ prefix — it is the shared display-mode control the
+      # Tree declares under the same name — so it travels in its own key, as a
+      # logical rather than as the widget's "TRUE"/"FALSE" strings.
+      expect_identical(snap$zoom_view, TRUE)
     }
   )
 })

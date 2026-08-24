@@ -1308,10 +1308,14 @@ test_that("the date axis carries major and minor ticks", {
 
   expect_s3_class(theme$axis.ticks.x, "element_line")
   expect_false(inherits(theme$axis.ticks.x, "element_blank"))
-  # Half-length subdivisions between two labels — what makes a date readable
-  # off a span running over several years.
+  # Subdivisions between two labels — what makes a date readable off a span
+  # running over several years. Shorter than the labelled ticks so the two
+  # kinds stay tellable apart, but not so short they vanish; asserted as a
+  # relationship rather than a number, so the size can be tuned freely.
   expect_true(isTRUE(p$scales$get_scales("x")$guide$params$minor.ticks))
-  expect_equal(as.numeric(theme$axis.minor.ticks.length.x), 0.5)
+  minor <- as.numeric(theme$axis.minor.ticks.length.x)
+  expect_true(minor > 0 && minor < 1)
+  expect_true(as.numeric(theme$axis.ticks.length.x) > 0)
 })
 
 test_that("epi_date_range reports the dates collected, not the bins", {

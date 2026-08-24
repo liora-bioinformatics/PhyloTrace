@@ -984,9 +984,9 @@ epi_legend_ncol <- function(cats, width_px = NULL, base_size = 13) {
       # these the date labels float with nothing marking where they point.
       # The half-length minor ticks subdivide the gap between two labels, which
       # is what makes a date readable off a span running over several years.
-      axis.ticks.x = element_line(colour = text_color, linewidth = 0.4),
-      axis.ticks.length.x = unit(4, "pt"),
-      axis.minor.ticks.length.x = rel(0.5),
+      axis.ticks.x = element_line(colour = text_color, linewidth = 0.5),
+      axis.ticks.length.x = unit(8, "pt"),
+      axis.minor.ticks.length.x = rel(0.55),
       legend.position = "bottom",
       legend.title = element_blank(),
       legend.key.size = unit(0.8, "lines"),

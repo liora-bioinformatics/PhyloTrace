@@ -154,6 +154,11 @@ CLUSTER_METHOD_DEFAULT <- amr_plot$AMR_CLUSTER_METHOD_DEFAULT
 
 TOP_N_DEFAULT <- 30L
 
+# What the aspect slider holds before any data is loaded. Generate replaces it
+# with amr_auto_layout()'s answer for the matrix actually being drawn; this is
+# only what the control shows until then.
+ASPECT_DEFAULT <- 0.9
+
 # One depth for both dendrograms, in centimetres. They are read together and
 # there was never a reason to give them different depths; 0 draws neither,
 # keeping the clustering's row and column *order* while dropping the trees.
@@ -313,6 +318,25 @@ amr_controls <- function(ns) {
       nav_panel(
         "Layout",
         icon = shiny$icon("sliders"),
+        # Height per isolate, which is the one thing about the shape that is a
+        # judgement rather than a fit: Generate solves it from the matrix so the
+        # rows come out legible, but how tall a figure is worth having is the
+        # reader's call. Every size that hangs off the row pitch — the isolate
+        # labels above all — is re-solved against whatever is set here, so a
+        # taller figure means larger labels rather than more whitespace.
+        shiny$conditionalPanel(
+          condition = COND_HEATMAPS,
+          ns = ns,
+          shiny$sliderInput(
+            ns("amr_aspect_ratio"),
+            "Aspect ratio",
+            min = 0.3,
+            max = 8,
+            value = ASPECT_DEFAULT,
+            step = 0.1,
+            ticks = FALSE
+          )
+        ),
         accordion(
           open = "Clustering",
           accordion_panel(
@@ -488,6 +512,16 @@ amr_controls <- function(ns) {
             BACKGROUND_DEFAULT
           )
         )
+      )
+    ),
+    shiny$div(
+      class = "reset-buttons",
+      radioGroupButtons(
+        ns("zoom_view"),
+        NULL,
+        choiceNames = c("Full", "Zoomed"),
+        choiceValues = c(FALSE, TRUE),
+        width = "100%"
       )
     ),
     shiny$div(
@@ -1038,6 +1072,7 @@ server <- function(
       amr_layers(list())
       amr_layer_seq(0L)
       editing(NULL)
+      aspect_mirror(ASPECT_DEFAULT)
 
       # Bucket 4: controls whose *choices* are swapped in at runtime. Deferred
       # past shinyjs::reset()'s own asynchronous, stale restoration, which would
@@ -1126,6 +1161,10 @@ server <- function(
         )))
       }
 
+      # Fitted before the plot is published, so the first draw is already at the
+      # right ratio rather than being drawn once at the old one and again at the
+      # new one.
+      refit_aspect()
       generated(TRUE)
     })
 
@@ -1150,11 +1189,32 @@ server <- function(
       .modern_grouping(input$amr_column_grouping %||% COLUMN_GROUPING_DEFAULT)
     }
 
-    # Every size in the heatmap, fitted to the matrix it is drawing. This is
-    # what replaced the sliders: aspect ratio, both label sizes, the block-title
-    # size, the legend size, the cell border width and whether the block titles
-    # have to be turned on their side. See amr_plot$amr_auto_layout().
-    layout_fit <- shiny$reactive({
+    # The aspect the plot is actually drawn at, and the only thing the render
+    # reads for it — never input$amr_aspect_ratio directly.
+    #
+    # updateSliderInput does not set an input; it sends a message the browser
+    # applies and echoes back a flush later. A plot built from the input alone
+    # is therefore drawn once at the stale ratio and again at the fitted one.
+    # Writing the fit into this mirror before the plot is published makes the
+    # first draw the correct one, and the echo that follows assigns the value it
+    # already holds, which shiny does not treat as a change. Same arrangement,
+    # and the same reason, as the Tree's `fitted` mirrors.
+    aspect_mirror <- shiny$reactiveVal(ASPECT_DEFAULT)
+
+    # A user drag lands in the same mirror the fit writes to, so the two are
+    # indistinguishable downstream and whichever happened last simply wins.
+    shiny$observeEvent(input$amr_aspect_ratio, {
+      value <- input$amr_aspect_ratio
+      if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), value))) {
+        aspect_mirror(value)
+      }
+    })
+
+    # Everything the fit needs to describe the matrix on screen. Split out
+    # because it is asked for twice: once at the ratio the reader has set (what
+    # gets drawn) and once with no ratio at all (what Generate seeds the slider
+    # from).
+    fit_args <- function() {
       mat <- current_mat()
       shiny$req(ncol(mat) > 0)
       blocks <- if (identical(mode(), "classes")) {
@@ -1162,7 +1222,7 @@ server <- function(
       } else {
         amr_plot$amr_column_blocks(mat, grouping())
       }
-      amr_plot$amr_auto_layout(
+      list(
         n_rows = nrow(mat),
         n_cols = ncol(mat),
         width_in = canvas_in(),
@@ -1174,7 +1234,33 @@ server <- function(
         dend_cm = input$amr_dend_size %||% DEND_DEFAULT,
         n_strips = length(anno_layers())
       )
+    }
+
+    # Every size in the heatmap, solved against the ratio in force. This is what
+    # replaced the sliders: both label sizes, the block-title size, the legend
+    # size, the cell border width and whether the block titles have to be turned
+    # on their side. See amr_plot$amr_auto_layout().
+    layout_fit <- shiny$reactive({
+      do.call(
+        amr_plot$amr_auto_layout,
+        c(fit_args(), list(aspect = aspect_mirror()))
+      )
     })
+
+    # Fit the aspect to the data, the way the Tree fits its own. The coded
+    # default suits a few dozen isolates and nothing else: two hundred and fifty
+    # at 0.9 is a band of rows a millimetre apart, and no hand-tuning could fix
+    # it because the ratio needed is several times what the slider used to open
+    # at. Seeded on Generate only — a filter change must not countermand a ratio
+    # the reader has just set by hand.
+    refit_aspect <- function() {
+      fitted <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
+      value <- fitted$aspect
+      if (!isTRUE(all.equal(shiny$isolate(input$amr_aspect_ratio), value))) {
+        shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
+      }
+      aspect_mirror(value)
+    }
 
     # The one place the automatic fit is allowed to answer back: at this many
     # isolates a name cannot be set large enough to read, and saying so is
@@ -1251,12 +1337,21 @@ server <- function(
         ))
       }
 
+      # The size the finished image is bound for. ComplexHeatmap lays the
+      # legends out against the device it is drawn on, so this has to be the
+      # real canvas rather than grid.grabExpr's 7x7 default — see
+      # amr_plot$amr_as_ggplot().
+      width_in <- canvas_in()
+      height_in <- width_in * plot_aspect()
+
       if (identical(mode(), "classes")) {
         mat <- class_mat()
         shiny$req(ncol(mat) > 0)
         return(amr_plot$amr_as_ggplot(
           amr_plot$build_amr_class_heatmap(mat, heatmap_opts()),
-          background
+          background,
+          width_in = width_in,
+          height_in = height_in
         ))
       }
 
@@ -1264,7 +1359,9 @@ server <- function(
       shiny$req(ncol(mat) > 0)
       amr_plot$amr_as_ggplot(
         amr_plot$build_amr_heatmap(mat, heatmap_opts()),
-        background
+        background,
+        width_in = width_in,
+        height_in = height_in
       )
     })
 
@@ -1299,7 +1396,16 @@ server <- function(
       )
 
       shiny$div(
-        class = "viz-plot-stage amr-stage",
+        # The `is-zoom` modifier is re-applied on every (re)mount from the
+        # current control value via isolate() — read without a reactive
+        # dependency so toggling it never re-renders the plot; live toggles are
+        # the observer's job. radioGroupButtons' choiceValues = c(FALSE, TRUE)
+        # round-trip as the strings "FALSE"/"TRUE", never as a logical, which is
+        # what as.logical() is doing here.
+        class = paste(
+          "viz-plot-stage amr-stage",
+          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
+        ),
         id = ns("plot_stage"),
         prompt,
         loading,
@@ -1327,6 +1433,24 @@ server <- function(
       }
       layout_fit()$aspect
     })
+
+    # Fit ⇄ Zoom display mode, driven by this engine's own `zoom_view` control
+    # (right sidebar, amr_controls()). Purely toggles the .is-zoom class on the
+    # mounted stage — the image is not re-rendered (see the amr-stage CSS in
+    # app/styles/main.scss), which is what makes it free on a matrix that takes
+    # a second to draw. ignoreInit: the initial state is already stamped on the
+    # stage div by renderUI's isolate() read.
+    shiny$observeEvent(
+      input$zoom_view,
+      {
+        shinyjs::toggleClass(
+          id = "plot_stage",
+          class = "is-zoom",
+          condition = isTRUE(as.logical(input$zoom_view))
+        )
+      },
+      ignoreInit = TRUE
+    )
 
     # Rendered through ggsave (via renderImage) rather than renderPlot so the
     # whole frame takes the chosen background: ggsave derives the device
@@ -1408,7 +1532,13 @@ server <- function(
     snapshot <- shiny$reactive(
       c(
         collect_input_snapshot(input, "amr_"),
-        list(.layers = amr_layers())
+        list(
+          # No amr_ prefix: `zoom_view` is the shared display-mode control, named
+          # the same here as in the Tree, so the prefix sweep never picks it up.
+          # Saved as a logical, as the Tree saves it.
+          zoom_view = isTRUE(as.logical(input$zoom_view)),
+          .layers = amr_layers()
+        )
       )
     )
 
@@ -1472,7 +1602,8 @@ server <- function(
           "amr_top_n",
           "amr_min_identity",
           "amr_min_coverage",
-          "amr_dend_size"
+          "amr_dend_size",
+          "amr_aspect_ratio"
         ),
         colors = c(
           "amr_present_color",
@@ -1483,7 +1614,7 @@ server <- function(
           "amr_text_color",
           "amr_background_color"
         ),
-        radio_groups = "amr_level",
+        radio_groups = c("amr_level", "zoom_view"),
         pickers = c(
           "amr_elements",
           "amr_sections"
@@ -1504,6 +1635,13 @@ server <- function(
           "amr_column_grouping",
           selected = .modern_grouping(saved)
         )
+      }
+
+      # The mirror is what the render reads, and a restored slider reaches it
+      # only via the browser's echo — which never arrives for a value that did
+      # not change. Writing it here makes a restore take effect on this flush.
+      if (!is.null(vals$amr_aspect_ratio)) {
+        aspect_mirror(vals$amr_aspect_ratio)
       }
 
       layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)

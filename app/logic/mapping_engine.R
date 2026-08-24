@@ -156,15 +156,25 @@ MAPPING_MEDIA <- list(
     # keeps its width whatever the row count, where a per-row mark would not.
     #
     # Several strips side by side is the normal way to read a handful of
-    # variables against a matrix, so the channel is repeatable. Six of them,
-    # because each one takes width from the heatmap body itself; past that the
-    # matrix the strips exist to annotate is the smaller half of the picture.
+    # variables against a matrix, so the channel is repeatable.
+    #
+    # Ten of them, the same cap the tree gives its tile strips — and for the
+    # same reason, because they are the same object. A strip is a narrow band
+    # beside the rows whose width comes from the canvas rather than from the row
+    # count, so unlike a per-row mark it does not become illegible as isolates
+    # are added; what it costs is width taken from the heatmap body
+    # (`amr_plot$amr_auto_layout()` reserves it), and ten is where the matrix
+    # the strips exist to annotate stops being the larger half of the picture.
+    #
+    # There is no mechanical ceiling under this: `rowAnnotation()` takes as many
+    # columns as it is given. The earlier six was a guess, and a lower one than
+    # the tree makes on identical grounds.
     pool = c("annotation"),
     labels = c(annotation = "Annotation strip"),
     color = "annotation",
     repeatable = "annotation",
-    caps = c(annotation = 6L),
-    max_layers = 6L,
+    caps = c(annotation = 10L),
+    max_layers = 10L,
     order = function(profile, n_units = NULL) "annotation"
   ),
   epi = list(

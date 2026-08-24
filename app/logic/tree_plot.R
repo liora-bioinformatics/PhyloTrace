@@ -153,13 +153,15 @@ LINEAR_H <- 0
 # page — so past a few dozen the stroke has to come down with them or the
 # drawing fills in solid, which is what a few hundred tips in a circle did.
 BRANCH_WIDTH <- 0.5
-BRANCH_WIDTH_MIN <- 0.1
+# A hairline, and no thinner: the preview is drawn at PLOT_RES, where this is
+# about one pixel. Below it the stroke stops being a line and starts being a
+# grey smudge — thinner on paper, but gone on screen.
+BRANCH_WIDTH_MIN <- 0.08
 BRANCH_WIDTH_TIPS <- 60
-# How hard the stroke falls with the tip count. Near-linear rather than
-# square-root: a few hundred tips crowd the page in proportion to their number,
-# not to its root, and a stroke coming down only as fast as that root still
-# filled a radial tree in.
-BRANCH_WIDTH_FALL <- 0.8
+# How hard the stroke falls with the tip count: in step with it, because that
+# is how the crowding grows. A square-root fall came down far too slowly — a
+# radial tree of a few hundred tips still filled in solid.
+BRANCH_WIDTH_FALL <- 1
 
 # Fitting limits
 TIP_GROWTH <- 1.5 # Cap size scaling relative to default (150%)

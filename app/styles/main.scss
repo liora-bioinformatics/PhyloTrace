@@ -798,6 +798,32 @@ $viz-tile-row-gap: 0.85rem;
     object-fit: contain;
 }
 
+// The AMR heatmap gets the Tree's second display mode as well: a screen of two
+// hundred isolates is drawn several times taller than the stage, and scaled to
+// fit it is a smear. `.is-zoom` presents it at its rendered size and lets the
+// stage scroll — same rules as `.tree-stage.is-zoom`, kept separate because the
+// two stages are not otherwise interchangeable.
+.amr-stage.is-zoom {
+    overflow: auto;
+    // Anchor top-left so the whole image stays reachable while scrolling
+    // (flex centering would push overflow out of reach on both sides).
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.amr-stage.is-zoom .shiny-plot-output {
+    width: max-content;
+    height: max-content !important;
+    // Still fill the stage when the plot is smaller than it.
+    min-width: 100%;
+    min-height: 100%;
+}
+
+.amr-stage.is-zoom .shiny-plot-output img {
+    max-width: none;
+    max-height: none;
+}
+
 // Guidance under a control: secondary to the control it explains.
 .epi-help,
 .amr-help {

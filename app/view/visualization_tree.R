@@ -415,67 +415,56 @@ tree_controls <- function(ns, options_ui = NULL) {
           step = 0.1,
           ticks = FALSE
         ),
-        accordion(
-          open = c("Tree Rooting", "Layout"),
-          accordion_panel(
-            "Tree Rooting",
-            icon = shiny$icon("seedling"),
-            virtualSelectInput(
-              ns("nj_root_isolate"),
-              "Outgroup",
-              choices = c("Automatic"),
-              selected = "Automatic",
-              search = TRUE,
-              searchPlaceholderText = "Search isolates ...",
-              placeholder = "Automatic",
-              # The isolate names only arrive at Generate; left on its default
-              # this would hand the selection to whichever name lands first,
-              # silently rooting the tree on an arbitrary tip.
-              autoSelectFirstOption = FALSE,
-              optionsCount = 8,
-              dropboxWrapper = "body",
-              showDropboxAsPopup = TRUE,
-              popupDropboxBreakpoint = "10000px",
-              width = "100%"
-            )
-          ),
-          accordion_panel(
-            "Layout",
-            icon = shiny$icon("project-diagram"),
-            pickerInput(
-              ns("nj_layout"),
-              "Layout",
-              list(
-                Linear = c(
-                  Rectangular = "rectangular",
-                  Roundrect = "roundrect",
-                  Slanted = "slanted",
-                  Ellipse = "ellipse"
-                ),
-                Circular = c(Circular = "circular", Inward = "inward")
-              )
+        pickerInput(
+          ns("nj_layout"),
+          "Layout",
+          list(
+            Linear = c(
+              Rectangular = "rectangular",
+              Roundrect = "roundrect",
+              Slanted = "slanted",
+              Ellipse = "ellipse"
             ),
-            # How far a radial tree opens between its last tip and its first.
-            # Generate solves it from what the ring headers need
-            # (tree_open_angle) and this is where that answer can be argued with
-            # — the one piece of geometry the engine cannot settle alone, because
-            # it trades the tree's sweep against the room its headers get. Hidden
-            # for the layouts that have no circle to open.
-            shiny$div(
-              id = ns("nj_open_angle_wrap"),
-              class = "d-none",
-              shiny$sliderInput(
-                ns("nj_open_angle"),
-                "Circle opening",
-                0,
-                90,
-                0,
-                step = 1,
-                post = "\u00b0",
-                ticks = FALSE
-              )
-            )
+            Circular = c(Circular = "circular", Inward = "inward")
           )
+        ),
+        # How far a radial tree opens between its last tip and its first.
+        # Generate solves it from what the ring headers need
+        # (tree_open_angle) and this is where that answer can be argued with
+        # — the one piece of geometry the engine cannot settle alone, because
+        # it trades the tree's sweep against the room its headers get. Hidden
+        # for the layouts that have no circle to open.
+        shiny$div(
+          id = ns("nj_open_angle_wrap"),
+          class = "d-none",
+          shiny$sliderInput(
+            ns("nj_open_angle"),
+            "Circle opening",
+            0,
+            90,
+            0,
+            step = 1,
+            post = "\u00b0",
+            ticks = FALSE
+          )
+        ),
+        virtualSelectInput(
+          ns("nj_root_isolate"),
+          "Outgroup",
+          choices = c("Automatic"),
+          selected = "Automatic",
+          search = TRUE,
+          searchPlaceholderText = "Search isolates ...",
+          placeholder = "Automatic",
+          # The isolate names only arrive at Generate; left on its default
+          # this would hand the selection to whichever name lands first,
+          # silently rooting the tree on an arbitrary tip.
+          autoSelectFirstOption = FALSE,
+          optionsCount = 8,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          width = "100%"
         )
       ),
       # Labels -----------------------------------------------------------------
@@ -2188,7 +2177,8 @@ server <- function(
             "Smallest text would print at %.1f pt — under the %g pt most",
             "journals ask for. Export wider, or show fewer columns."
           ),
-          pt, MIN_PRINT_PT
+          pt,
+          MIN_PRINT_PT
         )
       },
       # Rebuilt at the size it is going out at, not the size it was drawn at.

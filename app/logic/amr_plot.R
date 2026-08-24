@@ -649,6 +649,10 @@ AMR_GRID_MIN_IN <- 0.045
 #'   `block_titles`.
 #' @param dend_cm Numeric. Dendrogram depth the reader asked for, in cm.
 #' @param n_strips Integer. Annotation strips drawn beside the rows.
+#' @param aspect Numeric, or NULL to fit one. A ratio given here is used as-is
+#'   and every size that depends on the row pitch is solved against it, so a
+#'   reader who makes the figure taller gets larger isolate labels rather than
+#'   the same labels in more whitespace.
 #' @return A list of fitted sizes, plus `title_rot` and `legible`.
 #' @export
 amr_auto_layout <- function(
@@ -661,7 +665,8 @@ amr_auto_layout <- function(
   block_titles = NULL,
   block_cols = NULL,
   dend_cm = 1.5,
-  n_strips = 0L
+  n_strips = 0L,
+  aspect = NULL
 ) {
   n_rows <- max(as.integer(n_rows %||% 1L), 1L)
   n_cols <- max(as.integer(n_cols %||% 1L), 1L)
@@ -707,11 +712,14 @@ amr_auto_layout <- function(
   row_in <- if (isTRUE(show_row_names)) AMR_ROW_IN_LABELLED else AMR_ROW_IN_PLAIN
   row_h <- .clamp(cell_w, row_in, AMR_ROW_IN_MAX)
 
-  aspect <- .clamp(
-    (n_rows * row_h + overhead) / w,
-    AMR_ASPECT_MIN,
-    AMR_ASPECT_MAX
-  )
+  # The reader's ratio wins where they have set one; otherwise the row count
+  # picks it, within bounds that stop a six-isolate screen being a letterbox and
+  # a six-hundred-isolate one being four screens of scrolling.
+  aspect <- if (is.null(aspect) || !is.finite(aspect) || aspect <= 0) {
+    .clamp((n_rows * row_h + overhead) / w, AMR_ASPECT_MIN, AMR_ASPECT_MAX)
+  } else {
+    as.numeric(aspect)
+  }
   # What the clamp actually left for the body, which is the pitch the row
   # labels have to fit inside — not the pitch that was asked for.
   pitch <- max(aspect * w - overhead, 0.2) / n_rows
@@ -1215,29 +1223,53 @@ build_amr_class_heatmap <- function(mat, opts = list()) {
 
 #' Converts a ComplexHeatmap object or list into a standard ggplot2 object.
 #'
+#' `width_in`/`height_in` are the size the result will finally be drawn at, and
+#' they matter more than they look. ComplexHeatmap makes layout decisions
+#' against the *current device* — `packLegend()` takes its `max_height` from
+#' `par("din")` — and `grid.grabExpr()` opens a 7x7 inch device unless told
+#' otherwise. Grabbed on that default, a legend column taller than seven inches
+#' wraps into a second column beside the first, whatever the real canvas is:
+#' which is exactly what a tall heatmap with several annotation strips produces,
+#' and it wrapped no matter how tall the figure was made. Handing the grab
+#' device the true size is what makes the legends use the height they have.
+#'
 #' @param ht A `Heatmap` or `HeatmapList`.
 #' @param background Hex colour for the whole frame.
 #' @param gap_mm Numeric. Gutter between side-by-side panels, in millimetres.
+#' @param width_in,height_in Numeric. The canvas the result is bound for.
 #' @return A ggplot object.
 #' @export
-amr_as_ggplot <- function(ht, background = "#FFFFFF", gap_mm = 4) {
+amr_as_ggplot <- function(
+  ht,
+  background = "#FFFFFF",
+  gap_mm = 4,
+  width_in = 9,
+  height_in = 9
+) {
   opt <- ComplexHeatmap$ht_opt
   opt$message <- FALSE
   grob <- grid.grabExpr(
     ComplexHeatmap$draw(
       ht,
-      merge_legend = TRUE,
+      # `merge_legends`, plural. The formal sits after `...` in draw()'s
+      # signature, so R will not partial-match it: the singular spelling this
+      # carried for a long time fell into `...` and was discarded, which is why
+      # the annotation legends and the heatmap legends were drawn as two
+      # adjacent columns rather than as one list.
+      merge_legends = TRUE,
       background = "transparent",
       # The gutter between one element type's panel and the next. Wide enough to
       # read as a break, narrow enough that the panels still read as one matrix.
       ht_gap = unit(max(gap_mm, 0), "mm"),
       # Legends sit at the top of the matrix rather than centred against it. A
-      # screen of two hundred isolates is several screens tall, and a
-      # vertically centred legend lands halfway down it, out of sight of the
-      # plot it explains.
+      # screen of two hundred isolates is several screens tall, and a vertically
+      # centred legend lands halfway down it, out of sight of the plot it
+      # explains.
       align_heatmap_legend = "heatmap_top",
       align_annotation_legend = "heatmap_top"
-    )
+    ),
+    width = max(width_in, 1),
+    height = max(height_in, 1)
   )
   as.ggplot(grob) +
     theme(plot.background = element_rect(fill = background, colour = NA))
