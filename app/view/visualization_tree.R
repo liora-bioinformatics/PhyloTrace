@@ -532,7 +532,7 @@ tree_controls <- function(ns, options_ui = NULL) {
       # Variable mapping -------------------------------------------------------
       nav_panel(
         "Mapping",
-        icon = shiny$icon("palette"),
+        icon = shiny$icon("map-pin"),
         # One picker over the *variables*, not one panel per aesthetic. Picking
         # a variable adds a layer, and app/logic/mapping_engine.R decides which
         # aesthetic and palette it gets from the variable's own profile and

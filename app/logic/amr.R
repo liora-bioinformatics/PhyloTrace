@@ -29,6 +29,7 @@ box::use(
 )
 box::use(
   app / logic / db_connect[connect],
+  app / logic / field_labels[amr_class_label],
   app / logic / logging[log_event],
 )
 
@@ -166,8 +167,11 @@ parse_amrfinder_out <- function(path) {
     sequence_name = as.character(.col(df, "Sequence name")),
     element_type = as.character(.col(df, "Element type")),
     element_subtype = as.character(.col(df, "Element subtype")),
-    class = as.character(.col(df, "Class")),
-    subclass = as.character(.col(df, "Subclass")),
+    # AMRFinderPlus shouts its vocabulary; stored cased as it should read, so a
+    # legend need not undo it. Screens written before this still carry the caps,
+    # which is why the plot layer relabels as well.
+    class = amr_class_label(.col(df, "Class")),
+    subclass = amr_class_label(.col(df, "Subclass")),
     method = as.character(.col(df, "Method")),
     pct_coverage = suppressWarnings(as.numeric(
       .col(df, "% Coverage of reference sequence")

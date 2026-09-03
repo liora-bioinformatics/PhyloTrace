@@ -33,6 +33,7 @@ box::use(
 box::use(
   app / logic / db_connect[connect],
   app / logic / epi_plot[epi_fit_scale, epi_palette, epi_scale_choices],
+  app / logic / field_labels[amr_class_label],
 )
 
 # --- Constants & Vocabulary --------------------------------------------------
@@ -50,6 +51,31 @@ AMR_SECTIONS <- c(
   Partials = "partials",
   Virulence = "virulence"
 )
+
+#' Which curation the gene heatmap files a gene under.
+#'
+#' Two vocabularies describe the same screen and they do not agree. AMRFinderPlus
+#' stamps a broad functional class on every hit, so every beta-lactamase and
+#' every PBP mutation alike comes back "Beta-lactam"; abritamr re-files those
+#' same hits under the finer, clinically curated headings — AmpC, Carbapenemase,
+#' one per aminoglycoside — that the rest of the app already shows, because the
+#' database browser, the drug-class view and the tree's heatmap picker all read
+#' `amr_summary` rather than `amr_results`.
+#'
+#' The rollup leads so those agree: a gene the browser calls a carbapenemase
+#' reading "Beta-lactam" in the heatmap beside it is the mismatch this exists to
+#' settle. AMRFinder's stays on offer because its blocks are wider, and a panel
+#' split into thirteen single-column classes is harder to read than one split
+#' into nine — it is also the only vocabulary covering a hit abritamr never
+#' summarised.
+#' @export
+AMR_CLASS_VOCABULARIES <- c(
+  `abritamr (curated)` = "rollup",
+  AMRFinderPlus = "amrfinder"
+)
+
+#' @export
+AMR_CLASS_VOCABULARY_DEFAULT <- "rollup"
 
 #' @export
 AMR_CLASS_STATES <- c("Absent", "Partial", "Match")
@@ -103,14 +129,6 @@ AMR_CLUSTER_DISTANCES <- c(
 #' the panel happens to carry: Euclidean and Manhattan on 0/1 both count
 #' matching zeros into the denominator, so widening the screen from resistance
 #' to resistance-plus-virulence quietly pulls every isolate closer together.
-#'
-#' Measured rather than assumed. Over this repository's two screened databases
-#' (250 P. aeruginosa x 32 genes, 29 A. baumannii x 57 genes), the best mean
-#' silhouette width reachable in Jaccard space was:
-#'
-#'   axis        binary   euclidean   manhattan
-#'   isolates     0.978      0.980       0.980
-#'   genes        0.660      0.519       0.495
 #'
 #' Level on the isolate axis, decisive on the gene axis — which is the axis the
 #' argument above predicts, since two genes are jointly absent from most
@@ -281,8 +299,46 @@ filter_amr_hits <- function(
   hits[keep, , drop = FALSE]
 }
 
+#' Fits a threshold slider's range to the values a screen actually reported,
+#' rounded out to whole percent so genuine data is never excluded by rounding.
+#' `value` is the fitted floor, i.e. "no filter" for the new range - the same
+#' role 0 played for a flat 0-100 span. Falls back to that flat span when there
+#' is nothing numeric to fit (no screen loaded, or every hit's metric is NA,
+#' e.g. point mutations only).
+#' @export
+amr_threshold_bounds <- function(values) {
+  rng <- suppressWarnings(range(values, na.rm = TRUE))
+  if (!all(is.finite(rng))) {
+    rng <- c(0, 100)
+  }
+  list(min = floor(rng[1]), max = ceiling(rng[2]), value = floor(rng[1]))
+}
+
+# Gene symbol -> the class abritamr filed it under, read off the rollup rows.
+# abritamr carries its quality flags on the gene name ("blaOXA-2*") where the
+# hit table does not, so the key is the stripped symbol. A gene filed under more
+# than one class across the isolates takes the one it was filed under most
+# often, alphabetically on a tie, so two runs over the same data group it the
+# same way.
+.rollup_class_map <- function(sections) {
+  if (is.null(sections) || !nrow(sections)) {
+    return(character(0))
+  }
+  gene <- sub("[*^]+$", "", as.character(sections$genes))
+  class <- trimws(as.character(sections$drug_class))
+  keep <- !is.na(gene) & nzchar(gene) & !is.na(class) & nzchar(class)
+  if (!any(keep)) {
+    return(character(0))
+  }
+  tab <- table(gene[keep], class[keep])
+  setNames(
+    colnames(tab)[apply(tab, 1, which.max)],
+    rownames(tab)
+  )
+}
+
 .gene_group <- function(element_type, class) {
-  cls <- trimws(as.character(class %||% NA))
+  cls <- amr_class_label(class %||% NA)
   if (!is.na(cls) && nzchar(cls)) {
     return(cls)
   }
@@ -295,8 +351,20 @@ filter_amr_hits <- function(
 }
 
 #' Generates a gene metadata mapping table containing element types and functional groups.
+#'
+#' @param hits Gene hits from `load_amr_hits()`.
+#' @param genes Gene symbols to describe, in the order they are wanted.
+#' @param sections abritamr rollup rows, needed only for the "rollup"
+#'   vocabulary; without them every gene falls back to AMRFinder's class.
+#' @param vocabulary One of `AMR_CLASS_VOCABULARIES`.
+#' @return Data frame of `gene`, `element_type` and `group`.
 #' @export
-amr_gene_meta <- function(hits, genes) {
+amr_gene_meta <- function(
+  hits,
+  genes,
+  sections = NULL,
+  vocabulary = AMR_CLASS_VOCABULARY_DEFAULT
+) {
   genes <- as.character(genes)
   if (!length(genes)) {
     return(data.frame(
@@ -309,6 +377,13 @@ amr_gene_meta <- function(hits, genes) {
   idx <- match(genes, hits$gene_symbol)
   element_type <- hits$element_type[idx]
   class <- hits$class[idx]
+  # The curated class wherever the rollup covers the gene. AMRFinder's own is
+  # the fallback rather than an error: a partial hit to a gene family can reach
+  # `amr_results` without abritamr ever summarising it.
+  if (identical(vocabulary, "rollup")) {
+    curated <- unname(.rollup_class_map(sections)[genes])
+    class <- ifelse(is.na(curated), class, curated)
+  }
   data.frame(
     gene = genes,
     element_type = ifelse(is.na(element_type), AMR_UNCLASSIFIED, element_type),
@@ -322,13 +397,23 @@ amr_gene_meta <- function(hits, genes) {
 }
 
 #' Formats gene list into grouped select input choices structured by element type and drug class.
+#'
+#' Takes the vocabulary the heatmap is drawn in so the headings a reader
+#' searches under are the ones the plot files the gene under.
+#'
+#' @inheritParams amr_gene_meta
+#' @return Named list of gene vectors, one per heading.
 #' @export
-amr_gene_choices <- function(hits) {
+amr_gene_choices <- function(
+  hits,
+  sections = NULL,
+  vocabulary = AMR_CLASS_VOCABULARY_DEFAULT
+) {
   if (is.null(hits) || !nrow(hits)) {
     return(list())
   }
   genes <- sort(unique(hits$gene_symbol))
-  meta <- amr_gene_meta(hits, genes)
+  meta <- amr_gene_meta(hits, genes, sections, vocabulary)
 
   type_label <- vapply(
     meta$element_type,
@@ -354,7 +439,9 @@ amr_presence_matrix <- function(
   hits,
   isolates,
   genes = NULL,
-  drop_empty = TRUE
+  drop_empty = TRUE,
+  sections = NULL,
+  vocabulary = AMR_CLASS_VOCABULARY_DEFAULT
 ) {
   isolates <- unique(as.character(isolates))
   isolates <- isolates[!is.na(isolates) & nzchar(isolates)]
@@ -394,7 +481,12 @@ amr_presence_matrix <- function(
     genes <- genes[keep]
   }
 
-  attr(mat, "genes") <- amr_gene_meta(hits %||% .EMPTY_HITS, genes)
+  attr(mat, "genes") <- amr_gene_meta(
+    hits %||% .EMPTY_HITS,
+    genes,
+    sections,
+    vocabulary
+  )
   mat
 }
 
@@ -685,7 +777,11 @@ amr_auto_layout <- function(
   # Column labels are always drawn rotated (a horizontal gene name is wider
   # than any cell it could sit over), so their size is the cell width and the
   # room they need is vertical.
-  fontsize_col <- .clamp(72 * cell_w * AMR_LABEL_FILL, AMR_FONT_MIN, AMR_FONT_MAX)
+  fontsize_col <- .clamp(
+    72 * cell_w * AMR_LABEL_FILL,
+    AMR_FONT_MIN,
+    AMR_FONT_MAX
+  )
   fontsize_title <- .clamp(fontsize_col + 3, 8, 16)
   # The legend belongs to the page, not to the matrix: it has the same number of
   # keys whether the screen found six genes or six hundred.
@@ -702,14 +798,20 @@ amr_auto_layout <- function(
   } else {
     .pt_in(fontsize_title) * 2
   }
-  overhead <- .pt_in(fontsize_col) * AMR_CHAR_EM * max(col_label_chars, 1) +
+  overhead <- .pt_in(fontsize_col) *
+    AMR_CHAR_EM *
+    max(col_label_chars, 1) +
     max(dend_cm, 0) / 2.54 +
     title_in +
     0.5
 
   # Square cells where the matrix is small enough to allow it, the target pitch
   # where it is not.
-  row_in <- if (isTRUE(show_row_names)) AMR_ROW_IN_LABELLED else AMR_ROW_IN_PLAIN
+  row_in <- if (isTRUE(show_row_names)) {
+    AMR_ROW_IN_LABELLED
+  } else {
+    AMR_ROW_IN_PLAIN
+  }
   row_h <- .clamp(cell_w, row_in, AMR_ROW_IN_MAX)
 
   # The reader's ratio wins where they have set one; otherwise the row count
@@ -871,19 +973,68 @@ amr_auto_layout <- function(
   do.call(ComplexHeatmap$rowAnnotation, args)
 }
 
-.class_annotation <- function(groups, scale, text_color, legend_gp) {
-  cats <- sort(unique(groups))
-  cols <- amr_palette(cats, amr_fit_scale(scale, length(cats)))
-  ComplexHeatmap$HeatmapAnnotation(
-    Class = groups,
-    col = list(Class = cols),
+# One palette over every class in the screen, whichever panel each lands in.
+#
+# Tabulated per panel instead, it restarted at the first colour in every panel,
+# so the resistance panel's leading class and the stress panel's leading class
+# drew the same swatch — "Aminoglycoside" and "Mercury" were both the palette's
+# colour 1. The keys are split per panel (see `.class_annotation`), which is
+# exactly the arrangement in which a repeated colour is hardest to catch.
+.class_colors <- function(meta, scale) {
+  cats <- sort(unique(as.character(meta$group)))
+  if (!length(cats)) {
+    return(character(0))
+  }
+  amr_palette(cats, amr_fit_scale(scale, length(cats)))
+}
+
+# The element type a panel holds, as the reader sees it. One panel is one type
+# (see `amr_column_blocks`), so the panel's own columns name the whole of it.
+.panel_label <- function(meta) {
+  types <- .element_order(meta)
+  if (!length(types)) {
+    return("Drug class")
+  }
+  names(AMR_ELEMENT_TYPES)[match(types[[1]], AMR_ELEMENT_TYPES)] %||% types[[1]]
+}
+
+# The class strip over one panel's columns, and the key for that panel alone.
+#
+# One legend per panel rather than one for the plot, headed by the panel's own
+# element type: the stress panel's entries are not drug classes at all — filing
+# "Mercury" and "Quaternary ammonium" under a heading reading "Drug class" was
+# wrong, not merely long.
+#
+# Two things make that work. The annotation is *named* for its panel, because
+# ComplexHeatmap keys annotation legends by name and folds together every
+# annotation sharing one; and the strip is a factor over that panel's classes,
+# because a legend lists the levels it is given rather than the values it sees.
+#
+# Colours still come from one tabulation over the whole screen (see
+# `.class_colors`) and are only subset here, so no two classes share a swatch
+# across the legends that now sit above each other.
+.class_annotation <- function(groups, cols, legend_gp, name) {
+  cats <- intersect(names(cols), unique(as.character(groups)))
+  args <- list(
+    col = setNames(list(cols[cats]), name),
     show_annotation_name = FALSE,
-    annotation_legend_param = list(
-      title = "Drug class",
-      labels_gp = legend_gp$labels,
-      title_gp = legend_gp$title
+    annotation_legend_param = setNames(
+      list(list(
+        title = name,
+        labels_gp = legend_gp$labels,
+        title_gp = legend_gp$title
+      )),
+      name
     )
   )
+  # A panel holding no per-gene classes is one block labelled with the panel
+  # itself — a virulence screen carries no drug class — and a key reading
+  # "Virulence: Virulence" explains nothing the block title has not. The strip
+  # is still drawn; only its legend is dropped. Same rule as the one that heads
+  # those genes "Virulence" rather than "Virulence - Virulence" in the picker.
+  args$show_legend <- !identical(cats, name)
+  args[[name]] <- factor(as.character(groups), levels = cats)
+  do.call(ComplexHeatmap$HeatmapAnnotation, args)
 }
 
 .legend_gp <- function(text_color, size) {
@@ -979,10 +1130,12 @@ amr_column_blocks <- function(mat, grouping = "class") {
 # One panel of the gene heatmap: the columns of a single element type, with
 # their own column arrangement and their own dendrogram.
 #
-# Only the first panel carries the row dendrogram, the annotation strips and the
-# fill legend, and only the last carries the isolate names — repeated on every
-# panel they are the same information three times, and ComplexHeatmap takes the
-# row order from the first panel regardless, so the others must not cluster.
+# Only the first panel carries the row dendrogram and the annotation strips, and
+# only the last carries the isolate names and the fill legend — repeated on
+# every panel they are the same information three times, and ComplexHeatmap
+# takes the row order from the first panel regardless, so the others must not
+# cluster. Each panel does key its own drug classes, which is the one thing that
+# genuinely differs between them.
 .gene_panel <- function(
   mat,
   meta,
@@ -992,7 +1145,8 @@ amr_column_blocks <- function(mat, grouping = "class") {
   first,
   last,
   row_cluster,
-  anno
+  anno,
+  class_cols
 ) {
   text_color <- opts$text_color %||% "#000000"
   display <- matrix(
@@ -1038,6 +1192,9 @@ amr_column_blocks <- function(mat, grouping = "class") {
     show_row_names = last && !isFALSE(opts$show_row_names),
     cluster_rows = if (first) row_cluster else FALSE,
     show_row_dend = first && dend_cm > 0 && !isFALSE(row_cluster),
+    # Legends are merged into one list in panel order, so the fill key rides
+    # with whichever panel draws it: on the last, it follows every panel's class
+    # key instead of splitting them apart.
     cluster_columns = layout$cluster,
     show_column_dend = dend_cm > 0,
     column_split = layout$split,
@@ -1046,10 +1203,10 @@ amr_column_blocks <- function(mat, grouping = "class") {
     row_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
     column_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
     top_annotation = if (isTRUE(opts$show_class_anno) && ncol(mat)) {
-      .class_annotation(meta$group, opts$class_scale, text_color, legend_gp)
+      .class_annotation(meta$group, class_cols, legend_gp, .panel_label(meta))
     },
     left_annotation = if (first) anno,
-    show_heatmap_legend = first,
+    show_heatmap_legend = last,
     heatmap_legend_param = list(
       title = "Gene",
       labels_gp = legend_gp$labels,
@@ -1093,12 +1250,31 @@ build_amr_heatmap <- function(mat, opts = list()) {
   )
   anno <- .row_annotation(mat, opts$anno_layers, text_color, legend_gp)
 
-  types <- if (is.null(meta) || !nrow(meta)) character(0) else .element_order(meta)
+  # Tabulated once over the whole screen, before the columns are split into
+  # panels, so a class keeps its colour across them.
+  class_cols <- if (is.null(meta) || !nrow(meta)) {
+    character(0)
+  } else {
+    .class_colors(meta, opts$class_scale)
+  }
+
+  types <- if (is.null(meta) || !nrow(meta)) {
+    character(0)
+  } else {
+    .element_order(meta)
+  }
   if (length(types) < 2L) {
     return(.gene_panel(
-      mat, meta, opts, legend_gp,
-      title = NULL, first = TRUE, last = TRUE,
-      row_cluster = row_cluster, anno = anno
+      mat,
+      meta,
+      opts,
+      legend_gp,
+      title = NULL,
+      first = TRUE,
+      last = TRUE,
+      row_cluster = row_cluster,
+      anno = anno,
+      class_cols = class_cols
     ))
   }
 
@@ -1115,7 +1291,8 @@ build_amr_heatmap <- function(mat, opts = list()) {
       first = i == 1L,
       last = i == length(types),
       row_cluster = row_cluster,
-      anno = anno
+      anno = anno,
+      class_cols = class_cols
     )
   })
   Reduce(`+`, panels)

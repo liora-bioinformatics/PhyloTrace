@@ -743,6 +743,19 @@ test_that("a column with nothing missing gains no extra level", {
   expect_false(tree_plot$MISSING_LABEL %in% levels(m))
 })
 
+test_that("numeric-looking levels order by value, not as text", {
+  m <- tree_plot$mapped_values(c("10", "2", "1", "9"))
+  expect_identical(levels(m), c("1", "2", "9", "10"))
+})
+
+test_that("numeric-looking levels sort first, non-numeric ones after them", {
+  # A hospital ward numbered 1-25 plus a literal "ER": the numbers should read
+  # in order, with the one level that isn't a number placed after them rather
+  # than breaking the whole column back to lexical order.
+  m <- tree_plot$mapped_values(c("10", "ER", "2", "1"))
+  expect_identical(levels(m), c("1", "2", "10", "ER"))
+})
+
 test_that("numbers and dates pass through untouched", {
   expect_identical(tree_plot$mapped_values(c(1, 2, NA)), c(1, 2, NA))
   d <- as.Date(c("2024-01-01", NA))

@@ -132,6 +132,39 @@ AMR_GENE_PREFIX <- "g"
 #' @export
 AMR_SECTIONS <- c(resistance = "Resistance", virulence = "Virulence / stress")
 
+#' Drug class or subclass as it should read on screen.
+#'
+#' Two tools name the same classes in two styles. AMRFinderPlus writes its
+#' vocabulary in block capitals ("BETA-LACTAM", "QUATERNARY AMMONIUM"), while
+#' abritamr's rollup is already cased the way a reader expects ("Beta-lactam",
+#' "AmpC"). Both reach the same legends and pickers, so the shouted half is
+#' rewritten and anything already carrying lower case is returned untouched —
+#' "AmpC" must not come back as "Ampc".
+#'
+#' Each "/"-separated part leads with its own capital, because those name
+#' separate drugs ("AMIKACIN/KANAMYCIN/TOBRAMYCIN"); a hyphen or a space joins
+#' one name ("BETA-LACTAM", "QUATERNARY AMMONIUM"), so only its first word does.
+#'
+#' @param x Character vector of class or subclass values.
+#' @return Character vector of the same length; NA and empty values preserved.
+#' @export
+amr_class_label <- function(x) {
+  out <- trimws(as.character(x))
+  shout <- !is.na(out) & nzchar(out) & grepl("[A-Z]", out) & out == toupper(out)
+  if (!any(shout)) {
+    return(out)
+  }
+  out[shout] <- vapply(
+    strsplit(out[shout], "/", fixed = TRUE),
+    function(parts) {
+      paste(sub("^(.)(.*)$", "\\1\\L\\2", parts, perl = TRUE), collapse = "/")
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
+  out
+}
+
 #' Header a drug class is filed under in a variable picker.
 #'
 #' One header per drug class rather than one for all of AMR: a screen of any

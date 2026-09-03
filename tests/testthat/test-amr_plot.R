@@ -187,6 +187,31 @@ test_that("hits with no measured percentages survive a floor", {
   expect_true("blaTEM" %in% kept$gene_symbol[kept$isolate == "ISO-1"])
 })
 
+test_that("amr_threshold_bounds fits the slider to the reported range", {
+  b <- amr_plot$amr_threshold_bounds(c(87.3, 99.9, 92.0))
+
+  # Floored/ceilinged so the fitted bounds never exclude the data that set
+  # them, and the value starts at the floor - "no filter" for this range.
+  expect_identical(b, list(min = 87, max = 100, value = 87))
+})
+
+test_that("amr_threshold_bounds ignores NA metrics", {
+  b <- amr_plot$amr_threshold_bounds(c(NA, 95, NA, 100))
+
+  expect_identical(b, list(min = 95, max = 100, value = 95))
+})
+
+test_that("amr_threshold_bounds falls back to 0-100 with nothing numeric", {
+  expect_identical(
+    amr_plot$amr_threshold_bounds(c(NA_real_, NA_real_)),
+    list(min = 0, max = 100, value = 0)
+  )
+  expect_identical(
+    amr_plot$amr_threshold_bounds(numeric(0)),
+    list(min = 0, max = 100, value = 0)
+  )
+})
+
 # --- presence matrix ---------------------------------------------------------
 
 test_that("amr_presence_matrix keeps every isolate, including clean ones", {
@@ -237,9 +262,10 @@ test_that("the gene metadata attribute lines up with the columns", {
   meta <- attr(mat, "genes")
 
   expect_identical(meta$gene, colnames(mat))
+  # AMRFinderPlus shouts its vocabulary; the group is what a reader sees.
   expect_identical(
     meta$group[meta$gene == "blaTEM"],
-    "BETA-LACTAM"
+    "Beta-lactam"
   )
   # AMRFinderPlus leaves `class` empty for virulence genes, so they group under
   # their element type rather than under a made-up class.
@@ -353,8 +379,8 @@ test_that("prevalence over a screen with nothing in it is empty, not an error", 
 test_that("amr_gene_choices groups genes by element type and drug class", {
   choices <- amr_plot$amr_gene_choices(hits_fixture())
 
-  expect_true("Resistance - BETA-LACTAM" %in% names(choices))
-  expect_identical(choices[["Resistance - BETA-LACTAM"]], "blaTEM")
+  expect_true("Resistance - Beta-lactam" %in% names(choices))
+  expect_identical(choices[["Resistance - Beta-lactam"]], "blaTEM")
   # A virulence gene has no drug class, so its group is just the element type —
   # not "Virulence - Virulence".
   expect_identical(choices[["Virulence"]], "fimH")
@@ -362,6 +388,100 @@ test_that("amr_gene_choices groups genes by element type and drug class", {
     sort(unlist(choices, use.names = FALSE)),
     sort(unique(hits_fixture()$gene_symbol))
   )
+})
+
+# abritamr's rollup for the genes the hits fixture actually carries, so the two
+# vocabularies can be told apart: it files blaTEM under a carbapenemase heading
+# where AMRFinderPlus says only "Beta-lactam", and never mentions mexE at all.
+curated_fixture <- function() {
+  data.frame(
+    isolate = c("ISO-1", "ISO-2", "ISO-1", "ISO-2", "ISO-3"),
+    section = c("matches", "matches", "matches", "partials", "matches"),
+    drug_class = c(
+      "Carbapenemase", "Carbapenemase", "Quinolone", "Quinolone", "Sulfonamide"
+    ),
+    genes = c("blaTEM", "blaTEM*", "gyrA", "gyrA^", "sul1"),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("the curated vocabulary files a gene where the browser files it", {
+  mat <- amr_plot$amr_presence_matrix(
+    hits_fixture(),
+    ISOLATES,
+    sections = curated_fixture(),
+    vocabulary = "rollup"
+  )
+  meta <- attr(mat, "genes")
+
+  # The mismatch this vocabulary exists to settle: AMRFinderPlus calls blaTEM a
+  # beta-lactam, abritamr a carbapenemase, and the database browser shows the
+  # latter.
+  expect_identical(meta$group[meta$gene == "blaTEM"], "Carbapenemase")
+  expect_identical(meta$group[meta$gene == "sul1"], "Sulfonamide")
+  # abritamr's quality flags travel on its gene names, the hit table's do not.
+  expect_identical(meta$group[meta$gene == "gyrA"], "Quinolone")
+  # A hit the rollup never summarised keeps AMRFinder's class rather than
+  # falling out of the panel.
+  expect_identical(meta$group[meta$gene == "mexE"], "Efflux")
+})
+
+test_that("the AMRFinder vocabulary ignores the rollup entirely", {
+  mat <- amr_plot$amr_presence_matrix(
+    hits_fixture(),
+    ISOLATES,
+    sections = curated_fixture(),
+    vocabulary = "amrfinder"
+  )
+  meta <- attr(mat, "genes")
+
+  expect_identical(meta$group[meta$gene == "blaTEM"], "Beta-lactam")
+  expect_identical(meta$group[meta$gene == "gyrA"], "Quinolone")
+})
+
+test_that("the curated vocabulary without a rollup falls back throughout", {
+  with_rollup <- attr(
+    amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES, vocabulary = "rollup"),
+    "genes"
+  )
+  amrfinder <- attr(
+    amr_plot$amr_presence_matrix(
+      hits_fixture(),
+      ISOLATES,
+      vocabulary = "amrfinder"
+    ),
+    "genes"
+  )
+  expect_identical(with_rollup$group, amrfinder$group)
+})
+
+test_that("a gene the rollup files two ways takes the commoner class", {
+  split_rollup <- data.frame(
+    isolate = c("ISO-1", "ISO-2", "ISO-4"),
+    section = "matches",
+    drug_class = c("Carbapenemase", "Carbapenemase", "AmpC"),
+    genes = "blaTEM",
+    stringsAsFactors = FALSE
+  )
+  meta <- attr(
+    amr_plot$amr_presence_matrix(
+      hits_fixture(),
+      ISOLATES,
+      sections = split_rollup
+    ),
+    "genes"
+  )
+  expect_identical(meta$group[meta$gene == "blaTEM"], "Carbapenemase")
+})
+
+test_that("amr_gene_choices heads the picker in the vocabulary it is given", {
+  choices <- amr_plot$amr_gene_choices(
+    hits_fixture(),
+    curated_fixture(),
+    "rollup"
+  )
+  expect_identical(choices[["Resistance - Carbapenemase"]], "blaTEM")
+  expect_false("Resistance - Beta-lactam" %in% names(choices))
 })
 
 test_that("amr_gene_choices on an empty screen is an empty list", {
@@ -582,13 +702,127 @@ test_that("amr_column_blocks names the panels the reader will see", {
 
   # Grouped by class, the titles that can collide are the class names.
   by_class <- amr_plot$amr_column_blocks(mat, "class")
-  expect_true("BETA-LACTAM" %in% by_class$titles)
+  expect_true("Beta-lactam" %in% by_class$titles)
   expect_identical(sum(by_class$cols), ncol(mat))
 
   # Otherwise they are the element-type panels, in the vocabulary's own order.
   clustered <- amr_plot$amr_column_blocks(mat, "cluster")
   expect_identical(clustered$titles, c("Resistance", "Virulence"))
   expect_identical(sum(clustered$cols), ncol(mat))
+})
+
+test_that("one drug-class palette covers every panel of the heatmap", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  meta <- attr(mat, "genes")
+  cols <- impl$.class_colors(meta, NULL)
+
+  # Every class in the screen, resistance and virulence alike, gets a colour
+  # from one tabulation. Fitted per panel each restarted at the palette's first
+  # colour, which gave the leading class of every panel the same swatch under a
+  # legend that claimed they were different classes.
+  expect_identical(sort(names(cols)), sort(unique(meta$group)))
+  expect_identical(length(unique(unname(cols))), length(cols))
+
+  # The colour a class draws in does not depend on which panel it lands in.
+  resistance <- meta[meta$element_type == "AMR", , drop = FALSE]
+  expect_identical(
+    impl$.class_colors(meta, NULL)[resistance$group[[1]]],
+    cols[resistance$group[[1]]]
+  )
+})
+
+test_that("each panel keys its own classes under its own element type", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  meta <- attr(mat, "genes")
+  cols <- impl$.class_colors(meta, NULL)
+  gp <- impl$.legend_gp("#000000", 9)
+  resistance <- meta[meta$element_type == "AMR", , drop = FALSE]
+
+  anno <- impl$.class_annotation(
+    resistance$group,
+    cols,
+    gp,
+    impl$.panel_label(resistance)
+  )
+
+  # ComplexHeatmap keys annotation legends by name and folds together every
+  # annotation sharing one, so a key per panel needs a name per panel.
+  expect_named(anno@anno_list, "Resistance")
+  expect_identical(
+    anno@anno_list$Resistance@color_mapping@levels,
+    sort(unique(resistance$group))
+  )
+  # Only this panel's classes: the virulence gene is keyed by its own panel.
+  expect_false("Virulence" %in% anno@anno_list$Resistance@color_mapping@levels)
+})
+
+test_that("split class keys still draw from one screen-wide palette", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  meta <- attr(mat, "genes")
+  cols <- impl$.class_colors(meta, NULL)
+  gp <- impl$.legend_gp("#000000", 9)
+
+  panels <- lapply(c("AMR", "VIRULENCE"), function(et) {
+    rows <- meta[meta$element_type == et, , drop = FALSE]
+    impl$.class_annotation(rows$group, cols, gp, impl$.panel_label(rows))
+  })
+  swatches <- lapply(panels, function(a) {
+    a@anno_list[[1]]@color_mapping@colors
+  })
+
+  # A class keeps the colour the whole-screen tabulation gave it — compared on
+  # the RGB alone, since ComplexHeatmap appends an alpha channel of its own.
+  expect_identical(
+    substring(unname(swatches[[1]][["Beta-lactam"]]), 1, 7),
+    unname(cols[["Beta-lactam"]])
+  )
+  # ... so nothing is reused between one panel's key and the next, which is
+  # what a palette fitted per panel could not promise.
+  expect_identical(
+    length(intersect(swatches[[1]], swatches[[2]])),
+    0L
+  )
+})
+
+test_that("a panel whose only class names the panel drops its key", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  meta <- attr(mat, "genes")
+  cols <- impl$.class_colors(meta, NULL)
+  gp <- impl$.legend_gp("#000000", 9)
+
+  # AMRFinderPlus leaves `class` empty for virulence genes, so the panel's one
+  # block is labelled "Virulence" — the same word its key would be titled with.
+  virulence <- meta[meta$element_type == "VIRULENCE", , drop = FALSE]
+  vir <- impl$.class_annotation(
+    virulence$group,
+    cols,
+    gp,
+    impl$.panel_label(virulence)
+  )
+  resistance <- meta[meta$element_type == "AMR", , drop = FALSE]
+  res <- impl$.class_annotation(
+    resistance$group,
+    cols,
+    gp,
+    impl$.panel_label(resistance)
+  )
+
+  expect_false(vir@anno_list$Virulence@show_legend)
+  expect_true(res@anno_list$Resistance@show_legend)
+})
+
+test_that(".panel_label names a panel by the element type it holds", {
+  meta <- attr(amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES), "genes")
+
+  expect_identical(
+    impl$.panel_label(meta[meta$element_type == "AMR", , drop = FALSE]),
+    "Resistance"
+  )
+  expect_identical(
+    impl$.panel_label(meta[meta$element_type == "VIRULENCE", , drop = FALSE]),
+    "Virulence"
+  )
+  expect_identical(impl$.panel_label(meta[0, , drop = FALSE]), "Drug class")
 })
 
 test_that("the drug-class heatmap renders clustered and split", {

@@ -31,8 +31,6 @@
 
 box::use(
   bslib[
-    accordion,
-    accordion_panel,
     as_fill_carrier,
     card,
     card_body,
@@ -41,6 +39,8 @@ box::use(
     nav_panel,
     navset_tab,
     sidebar,
+    tooltip,
+    update_switch,
   ],
   rlang[`%||%`],
   shiny,
@@ -48,7 +48,6 @@ box::use(
     pickerInput,
     pickerOptions,
     radioGroupButtons,
-    updatePickerInput,
     updateVirtualSelect,
     virtualSelectInput
   ],
@@ -58,11 +57,13 @@ box::use(
   app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
-  app / logic / field_profile[
-    field_profiles_of = field_profiles,
-    profile_for,
-    scale_categories_for
-  ],
+  app /
+    logic /
+    field_profile[
+      field_profiles_of = field_profiles,
+      profile_for,
+      scale_categories_for
+    ],
   app / logic / functions[render_info],
   app /
     logic /
@@ -112,37 +113,30 @@ PLOT_MODES <- c(
 )
 PLOT_MODE_DEFAULT <- "heatmap"
 
-# How the heatmap's columns are arranged *inside* one element-type panel.
-# Grouping and clustering are mutually exclusive on that axis (ComplexHeatmap
-# cannot reconcile one dendrogram with a categorical split), so they share one
-# control rather than being two switches that would silently override each
-# other. See .column_layout in amr_plot.R.
-#
-# "Element type" is not among them any more: resistance, virulence and stress
-# genes are now always drawn as separate panels side by side, whatever this
-# says, so offering it as a grouping would have been a control that changed
-# nothing. Saved analyses still carry the value and the builder still accepts
-# it — see LEGACY_GROUPINGS.
-COLUMN_GROUPINGS <- c(
-  `Drug class` = "class",
-  Cluster = "cluster",
-  None = "none"
-)
+# How the heatmap's columns are arranged *inside* one element-type panel:
+# clustered, like "Cluster isolates" does for rows, or - when they are not -
+# grouped by drug class, the one arrangement that means something on every
+# view this control is shown for. There is no third position any more:
+# "Element type" went the same way it did for the row axis (resistance,
+# virulence and stress genes are now always drawn as separate panels side by
+# side, so grouping by it would have been a control that changed nothing),
+# and the old "None" (columns left in their natural, unarranged order) is
+# gone too — see amr_cluster_cols and .column_layout in amr_plot.R.
 COLUMN_GROUPING_DEFAULT <- "class"
 
-# Values an older snapshot may hold, and what they mean now. Read through
-# `.modern_grouping()`: `[[` on a name a vector does not carry is an error, not
-# a NULL, and every current value is such a name.
-LEGACY_GROUPINGS <- c(element = "none")
-
-.modern_grouping <- function(grouping) {
-  hit <- LEGACY_GROUPINGS[match(grouping, names(LEGACY_GROUPINGS))]
-  if (is.na(hit)) grouping else unname(hit)
+# What a pre-restructure snapshot's amr_column_grouping ("class"/"cluster"/
+# "none", plus the older "element") means for the switch that replaced it —
+# used only by restore() below, translating a saved value before it falls
+# through to the ordinary switch restore.
+.legacy_cluster_cols <- function(saved) {
+  identical(saved, "cluster")
 }
 
-# The drug-class matrix has no per-gene metadata to group its columns by, so it
-# offers only the two arrangements that mean something there.
-CLASS_COLUMN_GROUPINGS <- COLUMN_GROUPINGS[c("Cluster", "None")]
+# Which of the two drug-class vocabularies the gene heatmap groups and colours
+# by. The vocabularies, and why the curated rollup leads, are in amr_plot.R
+# beside the constant itself.
+CLASS_VOCABULARIES <- amr_plot$AMR_CLASS_VOCABULARIES
+CLASS_VOCABULARY_DEFAULT <- amr_plot$AMR_CLASS_VOCABULARY_DEFAULT
 
 LEVELS <- c(Genes = "gene", `Drug classes` = "class")
 LEVEL_DEFAULT <- "gene"
@@ -196,127 +190,208 @@ COND_HEATMAPS <- "input.amr_mode != 'prevalence'"
 
 # --- AMR control tabs --------------------------------------------------------
 
+# Which control tabs each view has anything to say in.
+#
+# Prevalence draws ranked bars off a count: it has no matrix to lay out, no
+# dendrogram to tune and no row strips to map, so three of the five tabs would
+# open on nothing but a note explaining why they are empty. Hiding them is the
+# same arrangement the Map makes for its own modes.
+#
+# Keyed on each nav_panel's explicit `value`, never on its title: a tab renamed
+# for the reader would otherwise stop matching here and silently stick — left
+# visible in a view with nothing to put in it, or hidden for good.
+TABS_BY_MODE <- list(
+  heatmap = c("data", "layout", "clustering", "mapping", "colors"),
+  classes = c("data", "layout", "clustering", "mapping", "colors"),
+  prevalence = c("data", "colors")
+)
+ALL_TABS <- c("data", "layout", "clustering", "mapping", "colors")
+
+# Show only the tabs the current view uses, and move off one that is being
+# hidden. Done in the browser rather than with bslib's nav_show()/nav_hide() for
+# the reason the Map gives at the same point: a server-side toggle can throw
+# "Node cannot be found" into the middle of a render batch.
+.mode_tabs_script <- function(ns) {
+  js_arr <- function(x) paste0("[", paste0("'", x, "'", collapse = ","), "]")
+  modes <- unname(PLOT_MODES)
+  by_mode <- paste0(
+    "{",
+    paste0(
+      modes,
+      ":",
+      vapply(modes, function(m) js_arr(TABS_BY_MODE[[m]]), character(1)),
+      collapse = ","
+    ),
+    "}"
+  )
+  shiny$tags$script(shiny$HTML(paste0(
+    "(function(){",
+    "var modeSel='#",
+    ns("amr_mode"),
+    "';",
+    "var tabsByMode=",
+    by_mode,
+    ";",
+    "var allTabs=",
+    js_arr(ALL_TABS),
+    ";",
+    "function apply(){",
+    "var modeEl=document.querySelector(modeSel);if(!modeEl)return;",
+    "var wrap=modeEl.closest('.viz-nav-wrap');if(!wrap)return;",
+    "var vis=(tabsByMode[modeEl.value]||allTabs).slice();",
+    "allTabs.forEach(function(v){",
+    "var link=wrap.querySelector('.nav-link[data-value='+JSON.stringify(v)+']');",
+    "if(link){var li=link.closest('.nav-item');",
+    "if(li){li.style.display=(vis.indexOf(v)>=0)?'':'none';}}",
+    "});",
+    "var active=wrap.querySelector('.nav-link.active');",
+    "if(active&&vis.indexOf(active.getAttribute('data-value'))<0){",
+    "var f=wrap.querySelector('.nav-link[data-value='+JSON.stringify(vis[0])+']');",
+    "if(f){f.click();}",
+    "}",
+    "}",
+    "$(document).on('change',modeSel,apply);",
+    "var n=0,t=setInterval(function(){n++;",
+    "if(document.querySelector(modeSel)){apply();}",
+    "if(n>40){clearInterval(t);}},300);",
+    "})();"
+  )))
+}
+
 amr_controls <- function(ns) {
   shiny$tagList(
     navset_tab(
       # Data -------------------------------------------------------------------
       nav_panel(
         "Data",
+        value = "data",
         icon = shiny$icon("table-cells"),
-        accordion(
-          open = "View",
-          accordion_panel(
-            "View",
-            icon = shiny$icon("chart-simple"),
-            pickerInput(
-              ns("amr_mode"),
-              "View",
-              choices = PLOT_MODES,
-              selected = PLOT_MODE_DEFAULT
-            ),
-            shiny$conditionalPanel(
-              condition = "input.amr_mode == 'prevalence'",
-              ns = ns,
-              radioGroupButtons(
-                ns("amr_level"),
-                "Count by",
-                choices = LEVELS,
-                selected = LEVEL_DEFAULT,
-                justified = TRUE,
-                size = "sm"
-              ),
-              shiny$sliderInput(
-                ns("amr_top_n"),
-                "Show top",
-                min = 5,
-                max = 100,
-                value = TOP_N_DEFAULT,
-                step = 5,
-                ticks = FALSE
-              )
+        # What the bars count, which decides which of the two filters below
+        # applies — the gene level reads `amr_results`, the class level the
+        # abritamr rollup.
+        shiny$conditionalPanel(
+          condition = "input.amr_mode == 'prevalence'",
+          ns = ns,
+          radioGroupButtons(
+            ns("amr_level"),
+            "Count by",
+            choices = LEVELS,
+            selected = LEVEL_DEFAULT,
+            justified = TRUE,
+            size = "sm"
+          ),
+          shiny$sliderInput(
+            ns("amr_top_n"),
+            "Show top",
+            min = 5,
+            max = 100,
+            value = TOP_N_DEFAULT,
+            step = 5,
+            ticks = FALSE
+          )
+        ),
+        shiny$conditionalPanel(
+          condition = COND_HITS,
+          ns = ns,
+          pickerInput(
+            ns("amr_elements"),
+            "Element types",
+            choices = amr_plot$AMR_ELEMENT_TYPES,
+            selected = unname(amr_plot$AMR_ELEMENT_TYPES),
+            multiple = TRUE,
+            width = "100%",
+            options = pickerOptions(
+              actionsBox = TRUE,
+              title = "None",
+              selectedTextFormat = "count > 2",
+              countSelectedText = "{0} types",
+              container = "body"
             )
           ),
-          accordion_panel(
-            "Elements",
-            icon = shiny$icon("dna"),
-            shiny$conditionalPanel(
-              condition = COND_HITS,
-              ns = ns,
-              pickerInput(
-                ns("amr_elements"),
-                "Element types",
-                choices = amr_plot$AMR_ELEMENT_TYPES,
-                selected = unname(amr_plot$AMR_ELEMENT_TYPES),
-                multiple = TRUE,
-                width = "100%",
-                options = pickerOptions(
-                  actionsBox = TRUE,
-                  title = "None",
-                  selectedTextFormat = "count > 2",
-                  countSelectedText = "{0} types",
-                  container = "body"
-                )
-              ),
-              # Rendered server-side: the choices are this database's detected
-              # genes, grouped by drug class, so the picker is built once they
-              # are known rather than declared empty and back-filled — the
-              # selection it carries is "every gene", which cannot be expressed
-              # before the gene list exists. Same reasoning as the Epi engine's
-              # stratify picker.
-              shiny$uiOutput(ns("genes_ui")),
-              # AMRFinderPlus reports partial and low-identity hits alongside
-              # confident ones and `amr_results` keeps both percentages, so the
-              # reader can set the bar. Point mutations report neither and are
-              # never filtered out by these (see filter_amr_hits).
-              shiny$sliderInput(
-                ns("amr_min_identity"),
-                "Minimum % identity",
-                min = 0,
-                max = 100,
-                value = 0,
-                step = 1,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("amr_min_coverage"),
-                "Minimum % coverage",
-                min = 0,
-                max = 100,
-                value = 0,
-                step = 1,
-                ticks = FALSE
-              )
-            ),
-            shiny$conditionalPanel(
-              condition = COND_SECTIONS,
-              ns = ns,
-              pickerInput(
-                ns("amr_sections"),
-                "Call sections",
-                choices = amr_plot$AMR_SECTIONS,
-                selected = unname(amr_plot$AMR_SECTIONS),
-                multiple = TRUE,
-                width = "100%",
-                options = pickerOptions(
-                  actionsBox = TRUE,
-                  title = "None",
-                  selectedTextFormat = "count > 2",
-                  countSelectedText = "{0} sections",
-                  container = "body"
-                )
-              ),
-              shiny$helpText(
-                class = "amr-help",
-                "Matches are confident calls, partials incomplete ones.",
-                "Virulence groups are reported separately from resistance."
-              )
+          # Rendered server-side: the choices are this database's detected
+          # genes, grouped by drug class, so the picker is built once they
+          # are known rather than declared empty and back-filled — the
+          # selection it carries is "every gene", which cannot be expressed
+          # before the gene list exists. Same reasoning as the Epi engine's
+          # stratify picker.
+          shiny$uiOutput(ns("genes_ui")),
+          # Which vocabulary the column blocks are named in. Only the gene heatmap
+          # has the choice to make: the drug-class view *is* the rollup, so there
+          # is no second vocabulary to draw it in.
+          shiny$conditionalPanel(
+            condition = "input.amr_mode == 'heatmap'",
+            ns = ns,
+            pickerInput(
+              ns("amr_class_vocab"),
+              "Drug classes from",
+              choices = CLASS_VOCABULARIES,
+              selected = CLASS_VOCABULARY_DEFAULT
             )
+          ),
+          # AMRFinderPlus reports partial and low-identity hits alongside
+          # confident ones and `amr_results` keeps both percentages, so the
+          # reader can set the bar. Point mutations report neither and are
+          # never filtered out by these (see filter_amr_hits). Bounds are
+          # fit to this screen's own reported range server-side (see
+          # fit_threshold_bounds) rather than declared as a flat 0-100 —
+          # these are placeholders until that fit runs.
+          tooltip(
+            shiny$sliderInput(
+              ns("amr_min_identity"),
+              "Minimum % identity",
+              min = 0,
+              max = 100,
+              value = 0,
+              step = 1,
+              ticks = FALSE
+            ),
+            "Range fits what this screen actually reported"
+          ),
+          tooltip(
+            shiny$sliderInput(
+              ns("amr_min_coverage"),
+              "Minimum % coverage",
+              min = 0,
+              max = 100,
+              value = 0,
+              step = 1,
+              ticks = FALSE
+            ),
+            "Range fits what this screen actually reported"
+          )
+        ),
+        shiny$conditionalPanel(
+          condition = COND_SECTIONS,
+          ns = ns,
+          pickerInput(
+            ns("amr_sections"),
+            "Call sections",
+            choices = amr_plot$AMR_SECTIONS,
+            selected = unname(amr_plot$AMR_SECTIONS),
+            multiple = TRUE,
+            width = "100%",
+            options = pickerOptions(
+              actionsBox = TRUE,
+              title = "None",
+              selectedTextFormat = "count > 2",
+              countSelectedText = "{0} sections",
+              container = "body"
+            )
+          ),
+          shiny$helpText(
+            class = "amr-help",
+            "Matches are confident calls, partials incomplete ones.",
+            "Virulence groups are reported separately from resistance."
           )
         )
       ),
       # Layout -----------------------------------------------------------------
+      #
+      # Both views this tab is shown for are matrices, so nothing here needs a
+      # per-mode condition of its own — see TABS_BY_MODE.
       nav_panel(
         "Layout",
+        value = "layout",
         icon = shiny$icon("sliders"),
         # Height per isolate, which is the one thing about the shape that is a
         # judgement rather than a fit: Generate solves it from the matrix so the
@@ -324,160 +399,95 @@ amr_controls <- function(ns) {
         # reader's call. Every size that hangs off the row pitch — the isolate
         # labels above all — is re-solved against whatever is set here, so a
         # taller figure means larger labels rather than more whitespace.
+        #
+        # Everything else about the matrix's proportions — the label sizes, the
+        # block-title size and the cell borders — is fitted to the shape of the
+        # data by amr_plot$amr_auto_layout(), exactly as the Tree fits its own.
+        # The six sliders that used to be here each had a right answer the
+        # module could work out, and getting one of them wrong made the plot
+        # unreadable in a way the reader then had to diagnose.
+        shiny$sliderInput(
+          ns("amr_aspect_ratio"),
+          "Aspect ratio",
+          min = 0.3,
+          max = 8,
+          value = ASPECT_DEFAULT,
+          step = 0.1,
+          ticks = FALSE
+        ),
+        input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
+        shiny$uiOutput(ns("row_name_warning"))
+      ),
+      # Clustering -------------------------------------------------------------
+      nav_panel(
+        "Clustering",
+        value = "clustering",
+        icon = shiny$icon("sitemap"),
+        input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
+        # The gene axis is a different question — how alike two *genes* are
+        # across the isolates, rather than two isolates across the genes — but
+        # not a different enough one to earn its own distance and linkage
+        # pickers: every reader who tuned one axis wanted the same pair on the
+        # other. One shared pair below, shown whenever either switch is on, and
+        # fed to whichever axis (or both) is actually clustering. Off, the
+        # gene axis falls back to drug-class grouping rather than an
+        # unarranged "None" — see amr_cluster_cols in .column_layout.
+        input_switch(ns("amr_cluster_cols"), "Cluster genes", FALSE),
         shiny$conditionalPanel(
-          condition = COND_HEATMAPS,
+          condition = "input.amr_cluster_rows || input.amr_cluster_cols",
           ns = ns,
-          shiny$sliderInput(
-            ns("amr_aspect_ratio"),
-            "Aspect ratio",
-            min = 0.3,
-            max = 8,
-            value = ASPECT_DEFAULT,
-            step = 0.1,
-            ticks = FALSE
+          pickerInput(
+            ns("amr_cluster_distance"),
+            "Distance",
+            choices = amr_plot$AMR_CLUSTER_DISTANCES,
+            selected = CLUSTER_DISTANCE_DEFAULT
+          ),
+          pickerInput(
+            ns("amr_cluster_method"),
+            "Linkage",
+            choices = amr_plot$AMR_CLUSTER_METHODS,
+            selected = CLUSTER_METHOD_DEFAULT
           )
         ),
-        accordion(
-          open = "Clustering",
-          accordion_panel(
-            "Clustering",
-            icon = shiny$icon("sitemap"),
-            shiny$conditionalPanel(
-              condition = COND_HEATMAPS,
-              ns = ns,
-              # Choices are swapped per view (the drug-class matrix has no gene
-              # metadata to group by) — see the amr_mode observer, and the
-              # reset checklist's bucket 4 for why the reset path must patch it
-              # up on a delay.
-              pickerInput(
-                ns("amr_column_grouping"),
-                "Group genes by",
-                choices = COLUMN_GROUPINGS,
-                selected = COLUMN_GROUPING_DEFAULT
-              ),
-              input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
-              shiny$conditionalPanel(
-                condition = "input.amr_cluster_rows",
-                ns = ns,
-                pickerInput(
-                  ns("amr_cluster_distance"),
-                  "Isolate distance",
-                  choices = amr_plot$AMR_CLUSTER_DISTANCES,
-                  selected = CLUSTER_DISTANCE_DEFAULT
-                ),
-                pickerInput(
-                  ns("amr_cluster_method"),
-                  "Isolate linkage",
-                  choices = amr_plot$AMR_CLUSTER_METHODS,
-                  selected = CLUSTER_METHOD_DEFAULT
-                )
-              ),
-              # The gene axis gets its own pair. It is a different question —
-              # how alike two *genes* are across the isolates, rather than two
-              # isolates across the genes — and sharing one setting meant a
-              # reader who tuned the isolate tree silently retuned the gene one.
-              shiny$conditionalPanel(
-                condition = "input.amr_column_grouping == 'cluster'",
-                ns = ns,
-                pickerInput(
-                  ns("amr_col_cluster_distance"),
-                  "Gene distance",
-                  choices = amr_plot$AMR_CLUSTER_DISTANCES,
-                  selected = CLUSTER_DISTANCE_DEFAULT
-                ),
-                pickerInput(
-                  ns("amr_col_cluster_method"),
-                  "Gene linkage",
-                  choices = amr_plot$AMR_CLUSTER_METHODS,
-                  selected = CLUSTER_METHOD_DEFAULT
-                )
-              ),
-              shiny$sliderInput(
-                ns("amr_dend_size"),
-                "Dendrogram depth (cm)",
-                min = 0,
-                max = 6,
-                value = DEND_DEFAULT,
-                step = 0.5,
-                ticks = FALSE
-              ),
-              shiny$helpText(
-                class = "amr-help",
-                "At 0 the dendrograms are hidden and the clustering still sets",
-                "the row and column order."
-              )
-            ),
-            shiny$conditionalPanel(
-              condition = "input.amr_mode == 'prevalence'",
-              ns = ns,
-              shiny$helpText(
-                class = "amr-help",
-                "Clustering applies to the heatmap views. Prevalence bars are",
-                "always ranked by count."
-              )
-            )
-          ),
-          # Everything else about the matrix's proportions — the label sizes,
-          # the block-title size, the cell borders and the aspect ratio — is
-          # fitted to the shape of the data by amr_plot$amr_auto_layout(),
-          # exactly as the Tree fits its own. The six sliders that used to be
-          # here each had a right answer the module could work out, and getting
-          # one of them wrong made the plot unreadable in a way the reader then
-          # had to diagnose.
-          accordion_panel(
-            "Labels",
-            icon = shiny$icon("tag"),
-            shiny$conditionalPanel(
-              condition = COND_HEATMAPS,
-              ns = ns,
-              input_switch(
-                ns("amr_show_row_names"),
-                "Show isolate names",
-                FALSE
-              ),
-              shiny$uiOutput(ns("row_name_warning"))
-            )
-          )
+        shiny$sliderInput(
+          ns("amr_dend_size"),
+          "Dendrogram depth (cm)",
+          min = 0,
+          max = 6,
+          value = DEND_DEFAULT,
+          step = 0.5,
+          ticks = FALSE
         )
       ),
-      # Annotation -------------------------------------------------------------
+      # Mapping -------------------------------------------------------------
       nav_panel(
-        "Annotation",
+        "Mapping",
+        value = "mapping",
         icon = shiny$icon("map-pin"),
+        # The same arrangement as the Tree and the MST: pick a *variable* and
+        # app/logic/mapping_engine.R decides the rest. Every variable this
+        # database holds is offered, each carrying its own value count and
+        # type, and each mapping becomes one colour strip beside the rows.
+        field_select(ns, "amr_layer_add", "Map a variable"),
+        shiny$uiOutput(ns("amr_layers_ui")),
+        shiny$hr(),
         shiny$conditionalPanel(
-          condition = COND_HEATMAPS,
+          condition = "input.amr_mode == 'heatmap'",
           ns = ns,
-          # The same arrangement as the Tree and the MST: pick a *variable* and
-          # app/logic/mapping_engine.R decides the rest. Every variable this
-          # database holds is offered, each carrying its own value count and
-          # type, and each mapping becomes one colour strip beside the rows.
-          field_select(ns, "amr_layer_add", "Map a variable"),
-          shiny$uiOutput(ns("amr_layers_ui")),
-          shiny$hr(),
-          shiny$conditionalPanel(
-            condition = "input.amr_mode == 'heatmap'",
-            ns = ns,
-            input_switch(
-              ns("amr_show_class_anno"),
-              "Show drug-class strip",
-              TRUE
-            ),
-            scale_select(ns, "amr_class_scale", categories = "Qualitative")
-          )
-        ),
-        shiny$conditionalPanel(
-          condition = "input.amr_mode == 'prevalence'",
-          ns = ns,
-          shiny$helpText(
-            class = "amr-help",
-            "Prevalence bars are coloured by element type or call section;",
-            "pick their palette under Colors."
-          )
+          input_switch(
+            ns("amr_show_class_anno"),
+            "Show drug-class strip",
+            TRUE
+          ),
+          scale_select(ns, "amr_class_scale", categories = "Qualitative")
         )
       ),
       # Colors -------------------------------------------------------------
+      #
+      # The one tab every view shows, so its rows keep their own conditions.
       nav_panel(
         "Colors",
+        value = "colors",
         icon = shiny$icon("palette"),
         shiny$conditionalPanel(
           condition = "input.amr_mode == 'prevalence'",
@@ -514,6 +524,18 @@ amr_controls <- function(ns) {
         )
       )
     ),
+    # Pinned under the tabs rather than filed inside one, as the Map pins its
+    # own mode picker: it is the control that decides which tabs there are, so
+    # it cannot live in a tab that one of its own values hides.
+    shiny$div(
+      class = "viz-mode-dropup",
+      pickerInput(
+        ns("amr_mode"),
+        "View",
+        choices = PLOT_MODES,
+        selected = PLOT_MODE_DEFAULT
+      )
+    ),
     shiny$div(
       class = "reset-buttons",
       radioGroupButtons(
@@ -532,7 +554,8 @@ amr_controls <- function(ns) {
         icon = shiny$icon("rotate-left"),
         width = "100%"
       )
-    )
+    ),
+    .mode_tabs_script(ns)
   )
 }
 
@@ -655,6 +678,13 @@ server <- function(
 
     mode <- function() input$amr_mode %||% PLOT_MODE_DEFAULT
 
+    # Which curation files a gene under a drug class, for both the heatmap's
+    # column blocks and the gene picker's headings — they have to agree, or a
+    # reader searches under a heading the plot does not draw.
+    class_vocab <- function() {
+      input$amr_class_vocab %||% CLASS_VOCABULARY_DEFAULT
+    }
+
     # --- data ---------------------------------------------------------------
 
     amr_hits <- shiny$reactive({
@@ -668,6 +698,31 @@ server <- function(
       shiny$req(db_path())
       amr_plot$load_amr_sections(db_path())
     })
+
+    # Fits both threshold sliders' min/max to what this screen actually
+    # reported, so a database whose weakest hit is 92% identity does not offer
+    # 90 wasted degrees of a slider that would filter nothing. Value moves to
+    # the new floor too — that is the "no filter" position for the new range,
+    # matching what 0 meant for the old flat 0-100 one. Falls back to 0-100
+    # when there is no numeric data to fit (no screen loaded, or every hit's
+    # metric is NA, e.g. point mutations only).
+    fit_threshold_bounds <- function() {
+      hits <- amr_hits()
+      fit_one <- function(id, values) {
+        b <- amr_plot$amr_threshold_bounds(values)
+        shiny$updateSliderInput(
+          session,
+          id,
+          min = b$min,
+          max = b$max,
+          value = b$value
+        )
+      }
+      fit_one("amr_min_identity", hits$pct_identity)
+      fit_one("amr_min_coverage", hits$pct_coverage)
+    }
+
+    shiny$observeEvent(amr_hits(), fit_threshold_bounds(), ignoreNULL = FALSE)
 
     # The isolates this plot covers: whatever the tab's Selection panel left in
     # the metadata table. Local only — an AMR screen is a property of a genome
@@ -700,7 +755,9 @@ server <- function(
       amr_plot$amr_presence_matrix(
         filtered_hits(),
         isolates(),
-        selected_genes()
+        selected_genes(),
+        sections = amr_sections(),
+        vocabulary = class_vocab()
       )
     })
 
@@ -732,7 +789,11 @@ server <- function(
     output$genes_ui <- shiny$renderUI({
       render_info("visualization_amr genes_ui")
       genes_rebuild()
-      choices <- amr_plot$amr_gene_choices(amr_hits())
+      choices <- amr_plot$amr_gene_choices(
+        amr_hits(),
+        amr_sections(),
+        class_vocab()
+      )
       if (!length(choices)) {
         return(NULL)
       }
@@ -1008,35 +1069,6 @@ server <- function(
       apply_scale_choices("amr_bar_scale", n, BAR_SCALE_DEFAULT)
     })
 
-    # The drug-class matrix has no gene metadata to group its columns by, so
-    # only Cluster / None mean anything there. Swapping the choices (rather than
-    # leaving dead options in the list) is what keeps the control honest; it
-    # makes this a bucket-4 input for the reset path.
-    shiny$observeEvent(
-      input$amr_mode,
-      {
-        choices <- if (identical(mode(), "classes")) {
-          CLASS_COLUMN_GROUPINGS
-        } else {
-          COLUMN_GROUPINGS
-        }
-        current <- input$amr_column_grouping
-        updatePickerInput(
-          session,
-          "amr_column_grouping",
-          choices = choices,
-          selected = if (isTRUE(current %in% choices)) {
-            current
-          } else if (identical(mode(), "classes")) {
-            "none"
-          } else {
-            COLUMN_GROUPING_DEFAULT
-          }
-        )
-      },
-      ignoreNULL = FALSE
-    )
-
     # --- reset --------------------------------------------------------------
 
     # Restore every sidebar control to its coded default. Shared by this
@@ -1078,12 +1110,6 @@ server <- function(
       # past shinyjs::reset()'s own asynchronous, stale restoration, which would
       # otherwise land a moment later and overwrite an immediate correction.
       shinyjs::delay(400, {
-        updatePickerInput(
-          session,
-          "amr_column_grouping",
-          choices = COLUMN_GROUPINGS,
-          selected = COLUMN_GROUPING_DEFAULT
-        )
         apply_scale_choices(
           "amr_class_scale",
           1L,
@@ -1096,6 +1122,9 @@ server <- function(
           BAR_SCALE_DEFAULT,
           force_default = TRUE
         )
+        # Same reasoning: shinyjs::reset() restores the two threshold sliders
+        # to their declared 0-100 placeholders, not the data-fitted range.
+        fit_threshold_bounds()
       })
     }
 
@@ -1186,7 +1215,7 @@ server <- function(
     }
 
     grouping <- function() {
-      .modern_grouping(input$amr_column_grouping %||% COLUMN_GROUPING_DEFAULT)
+      if (isTRUE(input$amr_cluster_cols)) "cluster" else COLUMN_GROUPING_DEFAULT
     }
 
     # The aspect the plot is actually drawn at, and the only thing the render
@@ -1288,6 +1317,11 @@ server <- function(
 
     heatmap_opts <- function() {
       fit <- layout_fit()
+      # One distance and one linkage, shared by both axes rather than a second
+      # pair for genes — see the Clustering tab's comment on amr_cluster_cols.
+      cluster_distance <- input$amr_cluster_distance %||%
+        CLUSTER_DISTANCE_DEFAULT
+      cluster_method <- input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT
       c(
         list(
           present_color = input$amr_present_color %||% PRESENT_COLOR_DEFAULT,
@@ -1298,13 +1332,10 @@ server <- function(
           text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
           column_grouping = grouping(),
           cluster_rows = isTRUE(input$amr_cluster_rows),
-          cluster_distance = input$amr_cluster_distance %||%
-            CLUSTER_DISTANCE_DEFAULT,
-          cluster_method = input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT,
-          col_cluster_distance = input$amr_col_cluster_distance %||%
-            CLUSTER_DISTANCE_DEFAULT,
-          col_cluster_method = input$amr_col_cluster_method %||%
-            CLUSTER_METHOD_DEFAULT,
+          cluster_distance = cluster_distance,
+          cluster_method = cluster_method,
+          col_cluster_distance = cluster_distance,
+          col_cluster_method = cluster_method,
           dend_size = input$amr_dend_size %||% DEND_DEFAULT,
           show_row_names = isTRUE(input$amr_show_row_names),
           show_class_anno = isTRUE(input$amr_show_class_anno),
@@ -1585,16 +1616,15 @@ server <- function(
         vals,
         switches = c(
           "amr_cluster_rows",
+          "amr_cluster_cols",
           "amr_show_row_names",
           "amr_show_class_anno"
         ),
         selects = c(
           "amr_mode",
-          "amr_column_grouping",
+          "amr_class_vocab",
           "amr_cluster_distance",
           "amr_cluster_method",
-          "amr_col_cluster_distance",
-          "amr_col_cluster_method",
           "amr_class_scale",
           "amr_bar_scale"
         ),
@@ -1625,15 +1655,17 @@ server <- function(
         virtual_selects = "amr_genes"
       )
 
-      # A saved column grouping the control no longer offers ("Element type",
-      # now always structural) would leave the picker on whatever it held, so it
-      # is translated rather than sent through unchanged.
-      saved <- vals$amr_column_grouping %||% ""
-      if (!saved %in% COLUMN_GROUPINGS && nzchar(saved)) {
-        updatePickerInput(
-          session,
-          "amr_column_grouping",
-          selected = .modern_grouping(saved)
+      # See .legacy_cluster_cols(). Such a snapshot's own
+      # amr_col_cluster_distance/method, from when the two axes still had
+      # separate pickers, is dropped rather than translated - the shared pair
+      # above already carries a sensible value either way.
+      if (
+        is.null(vals$amr_cluster_cols) && !is.null(vals$amr_column_grouping)
+      ) {
+        update_switch(
+          "amr_cluster_cols",
+          value = .legacy_cluster_cols(vals$amr_column_grouping),
+          session = session
         )
       }
 

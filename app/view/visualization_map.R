@@ -1451,9 +1451,9 @@ map_controls <- function(ns) {
       ),
       # Variable coloring ------------------------------------------------------
       nav_panel(
-        "Color",
+        "Mapping",
         value = "color",
-        icon = shiny$icon("palette"),
+        icon = shiny$icon("map-pin"),
         accordion(
           open = "Variable Mapping",
           accordion_panel(
@@ -1840,7 +1840,7 @@ map_controls <- function(ns) {
       )
     ),
     shiny$div(
-      class = "map-mode-dropup",
+      class = "viz-mode-dropup",
       pickerInput(
         ns("map_mode"),
         "Map mode",

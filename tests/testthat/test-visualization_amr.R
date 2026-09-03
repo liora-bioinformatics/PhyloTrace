@@ -1,5 +1,5 @@
 box::use(
-  shiny[reactive, reactiveVal, testServer],
+  shiny[NS, reactive, reactiveVal, testServer],
   testthat[
     expect_false,
     expect_identical,
@@ -14,6 +14,8 @@ box::use(
   app / logic / field_profile,
   app / view / visualization_amr,
 )
+
+impl <- attr(visualization_amr, "namespace")
 
 # A database carrying an AMR screen for three of its four isolates. ISO-4 was
 # never screened, which is what a freshly imported isolate looks like.
@@ -83,12 +85,10 @@ set_default_inputs <- function(session) {
     amr_sections = c("matches", "partials", "virulence"),
     amr_min_identity = 0,
     amr_min_coverage = 0,
-    amr_column_grouping = "class",
     amr_cluster_rows = TRUE,
+    amr_cluster_cols = FALSE,
     amr_cluster_distance = "binary",
     amr_cluster_method = "ward.D2",
-    amr_col_cluster_distance = "binary",
-    amr_col_cluster_method = "ward.D2",
     amr_dend_size = 1.5,
     amr_aspect_ratio = 0.9,
     zoom_view = "FALSE",
@@ -546,7 +546,7 @@ test_that("a pre-rewrite snapshot's single annotation field becomes a strip", {
   )
 })
 
-test_that("a saved 'Element type' grouping restores as one the picker offers", {
+test_that("the gene axis groups by drug class unless it is clustering", {
   path <- amr_db()
   meta <- meta_fixture()
 
@@ -561,12 +561,21 @@ test_that("a saved 'Element type' grouping restores as one the picker offers", {
     ),
     {
       set_default_inputs(session)
-      # Element type is structural now, so the grouping it named is gone from
-      # the control and the value has to be translated rather than passed on.
-      session$setInputs(amr_column_grouping = "element")
-      expect_identical(grouping(), "none")
+      expect_identical(grouping(), "class")
+
+      session$setInputs(amr_cluster_cols = TRUE)
+      expect_identical(grouping(), "cluster")
     }
   )
+})
+
+test_that("a pre-restructure column grouping translates to the cluster switch", {
+  expect_true(impl$.legacy_cluster_cols("cluster"))
+  expect_false(impl$.legacy_cluster_cols("class"))
+  expect_false(impl$.legacy_cluster_cols("none"))
+  # "Element type" is structural now, so this old value means "not clustered"
+  # exactly like the other two.
+  expect_false(impl$.legacy_cluster_cols("element"))
 })
 
 # --- aspect ratio -------------------------------------------------------------
@@ -679,4 +688,39 @@ test_that("the snapshot carries the display mode and the aspect ratio", {
       expect_identical(snap$zoom_view, TRUE)
     }
   )
+})
+
+# --- control tabs ------------------------------------------------------------
+
+test_that("every view names tabs the navset actually has", {
+  # A tab name that matches nothing is not an error at runtime — the toggle
+  # simply never finds the link, and the tab stays visible in a view that has
+  # nothing to put in it (or, the other way round, is hidden for good).
+  expect_true(all(names(impl$TABS_BY_MODE) %in% unname(impl$PLOT_MODES)))
+  expect_true(all(unname(impl$PLOT_MODES) %in% names(impl$TABS_BY_MODE)))
+  for (tabs in impl$TABS_BY_MODE) {
+    expect_true(all(tabs %in% impl$ALL_TABS))
+  }
+})
+
+test_that("prevalence drops the tabs that only describe a matrix", {
+  # It has no matrix to lay out, no dendrogram and no row strips, so those three
+  # would open on nothing; Data and Colors both still apply.
+  expect_identical(impl$TABS_BY_MODE$prevalence, c("data", "colors"))
+  expect_identical(impl$TABS_BY_MODE$heatmap, impl$ALL_TABS)
+  expect_identical(impl$TABS_BY_MODE$classes, impl$ALL_TABS)
+})
+
+test_that("the tab toggle carries the view picker's own id", {
+  ns <- NS("eng")
+  js <- as.character(impl$.mode_tabs_script(ns))
+
+  expect_true(grepl(ns("amr_mode"), js, fixed = TRUE))
+  # Written through HTML(): unescaped, or the script's own operators arrive as
+  # entities and it silently never runs.
+  expect_true(grepl("&&", js, fixed = TRUE))
+  expect_false(grepl("&amp;", js, fixed = TRUE))
+  for (tab in impl$ALL_TABS) {
+    expect_true(grepl(paste0("'", tab, "'"), js, fixed = TRUE))
+  }
 })

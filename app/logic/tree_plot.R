@@ -2036,6 +2036,17 @@ MISSING_COLOR <- "#9E9E9E"
 # six real values plus "not recorded" still has somewhere to put it.
 TREE_MISSING_SHAPE <- 4
 
+# A plain `sort()` on text orders "1, 10, 11, ..., 2, 20" — correct for names,
+# wrong for a category whose levels happen to be numbers (patient or ward
+# IDs). Levels that parse as a number are ordered by value and come first
+# (a ward numbered 1-25 alongside a literal "ER" is the case this is for);
+# whatever is left is ordered lexically after them.
+.level_order <- function(x) {
+  num <- suppressWarnings(as.numeric(x))
+  is_num <- !is.na(num)
+  c(x[is_num][order(num[is_num])], sort(x[!is_num]))
+}
+
 #' Normalise a mapped column: one explicit level for "not recorded", last.
 #'
 #' Also the fix for a crash. `field_levels()` counts distinct values *excluding*
@@ -2057,7 +2068,7 @@ mapped_values <- function(v) {
   }
   ch <- trimws(as.character(v))
   ch[!nzchar(ch)] <- NA_character_
-  present <- sort(unique(ch[!is.na(ch)]))
+  present <- .level_order(unique(ch[!is.na(ch)]))
   if (!anyNA(ch)) {
     return(factor(ch, levels = present))
   }

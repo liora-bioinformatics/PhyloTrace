@@ -4415,10 +4415,11 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// Open the "Map mode" selectize dropdown upwards instead of downwards. It's
-// pinned to the foot of the Map's control sidebar with no room below it, so
-// the menu has to open upwards or it would be clipped by the sidebar's edge.
-.map-mode-dropup {
+// Open a pinned mode picker's dropdown upwards instead of downwards. The Map's
+// "Map mode" and the AMR engine's "View" both sit at the foot of a control
+// sidebar with no room below them, so the menu has to open upwards or it would
+// be clipped by the sidebar's edge.
+.viz-mode-dropup {
     .selectize-dropdown {
         top: auto !important;
         bottom: calc(100% + 2px) !important;

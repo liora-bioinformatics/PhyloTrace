@@ -10,6 +10,7 @@ box::use(
   app /
     logic /
     field_labels[
+      amr_class_label,
       amr_field_map,
       CUSTOM_COL_PREFIX,
       field_label,
@@ -17,6 +18,36 @@ box::use(
       MLST_COL_PREFIX
     ],
 )
+
+test_that("amr_class_label cases AMRFinderPlus's vocabulary for reading", {
+  expect_identical(
+    amr_class_label(c("BETA-LACTAM", "QUATERNARY AMMONIUM", "AMINOGLYCOSIDE")),
+    c("Beta-lactam", "Quaternary ammonium", "Aminoglycoside")
+  )
+  # A class naming several drugs capitalises each of them, the way abritamr
+  # writes the same class in its own rollup.
+  expect_identical(
+    amr_class_label("AMIKACIN/KANAMYCIN/TOBRAMYCIN"),
+    "Amikacin/Kanamycin/Tobramycin"
+  )
+})
+
+test_that("amr_class_label leaves anything already cased alone", {
+  # abritamr's rollup and gene symbols reach the same legends; lowering these
+  # would be the regression the all-caps test guards against in reverse.
+  expect_identical(
+    amr_class_label(c("AmpC", "Beta-lactam", "blaOXA")),
+    c("AmpC", "Beta-lactam", "blaOXA")
+  )
+})
+
+test_that("amr_class_label preserves missing and empty values", {
+  expect_identical(
+    amr_class_label(c(NA, "", "  ", "MERCURY")),
+    c(NA, "", "", "Mercury")
+  )
+  expect_identical(amr_class_label(character(0)), character(0))
+})
 
 # A metadata frame as the two AMR appenders leave it: two drug-class columns and
 # two gene columns, with the attributes that say which gene and class each of

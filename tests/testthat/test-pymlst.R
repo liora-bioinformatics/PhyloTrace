@@ -15,7 +15,7 @@ AMBIGUOUS_STS <- "1953;3684;5029;5510;6853;1384;11;2193;5809;690;3348;1460;7123;
 
 test_that("typing_args asks for classical MLST only with a resolved scheme", {
   args <- function(...) {
-    impl$typing_args("/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace", ...)
+    impl$typing_args("/db/x.db", "/genomes/a.fna", 0.95, 0.9, ...)
   }
 
   # Both halves are needed: the reference path to build into and the spec that
@@ -34,7 +34,7 @@ test_that("typing_args asks for classical MLST only with a resolved scheme", {
 
 test_that("typing_args passes the classical search its own thresholds", {
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
     species = "Acinetobacter baumannii",
     cla_identity = 0.9,
     cla_coverage = 0.85,
@@ -52,7 +52,7 @@ test_that("typing_args passes the classical search its own thresholds", {
 
 test_that("typing_args defaults the classical thresholds to pyMLST's own", {
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
     species = "Acinetobacter baumannii",
     cla_db = "/tmp/c.db",
     cla_spec = "/tmp/c.spec"
@@ -75,7 +75,7 @@ test_that("typing_args omits classical thresholds when no scheme is built", {
   # Nothing to search, so the flags would be meaningless - and their absence is
   # what makes the script fall back to the allele-calling pair.
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9, "PhyloTrace",
+    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
     species = "Acinetobacter baumannii"
   )
   expect_false(any(c("-I", "-C") %in% args))

@@ -364,7 +364,7 @@ mst_controls <- function(ns, options_ui = NULL) {
       # Variable mapping -------------------------------------------------------
       nav_panel(
         "Mapping",
-        icon = shiny$icon("palette"),
+        icon = shiny$icon("map-pin"),
         # One picker, the same arrangement as the Tree, though the MST has only
         # one channel to give a variable: node fill. Picking a variable adds a
         # layer and app/logic/mapping_engine.R decides its palette, from the
@@ -381,7 +381,7 @@ mst_controls <- function(ns, options_ui = NULL) {
       # colors ----------------------------------------------------------------
       nav_panel(
         "Colors",
-        icon = shiny$icon("fill-drip"),
+        icon = shiny$icon("palette"),
         shiny$div(
           class = "viz-color-grid",
           viz_color(ns, "mst_text_color", "Text", "#000000"),
@@ -1014,7 +1014,10 @@ server <- function(
         easyClose = TRUE,
         if (is_date_profile(prof)) {
           granularity_select(
-            ns, "mst_layer_granularity", l$granularity, values = values
+            ns,
+            "mst_layer_granularity",
+            l$granularity,
+            values = values
           )
         },
         scale_select(
