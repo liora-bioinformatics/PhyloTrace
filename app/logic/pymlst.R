@@ -80,6 +80,24 @@ conda_exe <- function() {
   "conda"
 }
 
+#' Resolve Bash Executable Path
+#'
+#' @description Resolves the system path for `bash` by checking standard install
+#'   locations directly rather than relying on PATH lookup, since IDE-launched R
+#'   sessions (e.g. Positron) may not inherit the full PATH of the shell they were
+#'   started from, causing plain `"bash"` to fail process lookup.
+#'
+#' @return Character string specifying the bash executable path.
+#' @export
+bash_exe <- function() {
+  candidates <- c("/usr/bin/bash", "/bin/bash")
+  found <- candidates[file.exists(candidates)]
+  if (length(found) > 0) {
+    return(found[1])
+  }
+  "bash"
+}
+
 #' Download cgMLST Scheme via wgMLST
 #'
 #' @description Executes `wgMLST import` in the configured Conda environment to
@@ -102,6 +120,10 @@ download_cgmlst_scheme <- function(
     run(
       command = conda_exe(),
       args = c(
+        "run",
+        "-n",
+        env_name,
+        "wgMLST",
         "import",
         if (overwrite) {
           "--force"
@@ -212,7 +234,7 @@ type_genomes <- function(
 ) {
   # Invoking bash explicitly avoids depending on the wrapper script's execute permission bit
   typing_status <- run(
-    command = "bash",
+    command = bash_exe(),
     args = c(
       normalizePath(script_path, mustWork = TRUE),
       typing_args(db_path, genome_files, identity, coverage)
@@ -314,9 +336,20 @@ start_typing <- function(
   amr_species = NA_character_,
   amr_out = NA_character_
 ) {
+  # processx has no append mode for `stdout` (a plain path is opened truncated,
+  # and it silently fails to start the process at all if given a `>>` prefix -
+  # that syntax is shell redirection, not something processx's C exec layer
+  # understands). So the append the caller relies on - preserving a note
+  # already written into a fresh log_file before launching - is done by bash
+  # itself: `exec` replaces the wrapper shell with the real script in place
+  # (so cleanup_tree still tracks a single process), while "$0" "$@" hand the
+  # script path and every typing arg through untouched, exactly like passing
+  # them as a plain argv vector would.
   process$new(
-    command = "bash",
+    command = bash_exe(),
     args = c(
+      "-c",
+      paste("exec \"$0\" \"$@\" >>", shQuote(log_file), "2>&1"),
       normalizePath(script_path, mustWork = TRUE),
       typing_args(
         db_path,
@@ -334,12 +367,6 @@ start_typing <- function(
       )
     ),
     wd = dirname(db_path),
-    # Append rather than truncate: the caller may already have written a note
-    # (e.g. why classical MLST is being skipped this run) into a fresh log_file
-    # before launching, and a plain path here would silently erase it the
-    # instant the child's stdout is connected.
-    stdout = paste0(">>", log_file),
-    stderr = "2>&1",
     # cleanup_tree terminates child Python subprocesses to prevent orphaned locks on the SQLite database
     cleanup_tree = TRUE
   )
