@@ -67,6 +67,35 @@ amr_db <- function(env = parent.frame()) {
   path
 }
 
+# A screen wide enough that the fit turns its own labels off: sixty-four
+# genes, each the only one in its own drug class, which is the shape that both
+# crowds the gene names (past AMR_COL_MIN_PT) and leaves each class title too
+# little room beside its neighbour (past the pitch .title_pitch() measures).
+crowded_amr_db <- function(env = parent.frame()) {
+  path <- local_tempfile(fileext = ".db", .local_envir = env)
+  build_db(
+    path,
+    list(ref = c(acsA = "ACGT"), `ISO-1` = c(acsA = "ACGT")),
+    metadata = data.frame(isolate = "ISO-1", stringsAsFactors = FALSE)
+  )
+  # Creates the amr_results table; its own single gene is harmless alongside
+  # the sixty-four inserted below.
+  seed_results(path, "ISO-1", classical = FALSE, amr = TRUE)
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  for (i in seq_len(64)) {
+    DBI::dbExecute(
+      con,
+      "INSERT INTO amr_results
+         (isolate, gene_symbol, element_type, class, method, pct_identity,
+          pct_coverage, called_at)
+       VALUES ('ISO-1', ?, 'AMR', ?, 'EXACTX', 99, 100, '2026-01-01')",
+      list(sprintf("gene%02d", i), sprintf("CLASS-%02d", i))
+    )
+  }
+  path
+}
+
 meta_fixture <- function() {
   data.frame(
     isolate = paste0("ISO-", 1:4),
@@ -86,14 +115,13 @@ set_default_inputs <- function(session) {
     amr_min_identity = 0,
     amr_min_coverage = 0,
     amr_cluster_rows = TRUE,
-    amr_cluster_cols = FALSE,
+    amr_cluster_cols = TRUE,
     amr_cluster_distance = "binary",
     amr_cluster_method = "ward.D2",
-    amr_dend_size = 1.5,
+    amr_dend_size = 1,
     amr_aspect_ratio = 0.9,
     zoom_view = "FALSE",
     amr_show_row_names = FALSE,
-    amr_show_class_anno = TRUE,
     amr_level = "gene",
     amr_top_n = 30
   )
@@ -311,6 +339,177 @@ test_that("each view renders to a ggplot the export path can take", {
   )
 })
 
+test_that("the cell border always matches the background, with no picker of its own", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_background_color = "#123456")
+      generate(1L)
+      session$flushReact()
+
+      expect_identical(heatmap_opts()$grid_color, "#123456")
+
+      session$setInputs(amr_background_color = "#ABCDEF")
+      expect_identical(heatmap_opts()$grid_color, "#ABCDEF")
+    }
+  )
+})
+
+test_that("the gene heatmap's confidence tiers read the reader's own colors", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(
+        amr_present_color = "#111111",
+        amr_strong_color = "#222222",
+        amr_partial_color = "#333333",
+        amr_absent_color = "#444444"
+      )
+      generate(1L)
+      session$flushReact()
+
+      opts <- heatmap_opts()
+      expect_identical(opts$present_color, "#111111")
+      expect_identical(opts$strong_color, "#222222")
+      expect_identical(opts$partial_color, "#333333")
+      expect_identical(opts$absent_color, "#444444")
+    }
+  )
+})
+
+test_that("the gene-name switch and the class/cluster mode reach the builder", {
+  # There is no switch of its own for the drug-class labels any more - whether
+  # they draw as text or as a colour strip is amr_cluster_cols's call alone
+  # (see grouping() and .gene_panel's top_annotation), so this covers that
+  # instead of a dedicated show_class_titles input.
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_cluster_cols = TRUE, amr_show_col_names = TRUE)
+      generate(1L)
+      session$flushReact()
+      expect_identical(heatmap_opts()$column_grouping, "cluster")
+      expect_true(heatmap_opts()$show_col_names)
+
+      session$setInputs(
+        amr_cluster_cols = FALSE,
+        amr_show_col_names = FALSE
+      )
+      expect_identical(heatmap_opts()$column_grouping, "class")
+      expect_false(heatmap_opts()$show_col_names)
+    }
+  )
+})
+
+test_that("a shape with no room for its labels seeds them off, not on", {
+  # A roomy screen (amr_db()'s own four genes) leaves the switch exactly as
+  # the reader set it - Generate has nothing to correct.
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_show_col_names = TRUE)
+      generate(1L)
+      session$flushReact()
+
+      expect_true(layout_fit()$titles_legible)
+      expect_true(layout_fit()$cols_legible)
+      expect_true(heatmap_opts()$show_col_names)
+    }
+  )
+})
+
+test_that("a crowded screen seeds the gene names off on Generate", {
+  path <- crowded_amr_db()
+  meta <- data.frame(isolate = "ISO-1", stringsAsFactors = FALSE)
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      # Grouped by class rather than clustered, so the sixty-four single-gene
+      # classes actually draw as sixty-four titles rather than one label
+      # ("Resistance") spanning the whole panel.
+      session$setInputs(
+        amr_cluster_cols = FALSE,
+        amr_show_col_names = TRUE
+      )
+      generate(1L)
+      session$flushReact()
+
+      # Confirms the fixture actually is the crowded shape this test means to
+      # exercise, rather than passing by accident if the fit ever changes.
+      expect_false(layout_fit()$titles_legible)
+      expect_false(layout_fit()$cols_legible)
+
+      # Gene names: seeded off on this same draw - not merely reported, and
+      # not left for a stale updateSwitchInput echo to apply on a later one.
+      expect_false(heatmap_opts()$show_col_names)
+      # Drug-class titles are never auto-seeded off, illegible or not, and
+      # there is no switch to turn them off by hand either any more - the fit
+      # still budgets their floor size unconditionally (see refit_labels()).
+      expect_identical(heatmap_opts()$column_grouping, "class")
+
+      # A reader's own click still wins: turning one back on over a crowded
+      # shape is honoured rather than silently overridden.
+      session$setInputs(amr_show_col_names = TRUE)
+      expect_true(heatmap_opts()$show_col_names)
+
+      # A later Generate re-seeds it, the same way refit_aspect() re-seeds the
+      # aspect ratio on every press rather than only the first.
+      generate(2L)
+      session$flushReact()
+      expect_false(heatmap_opts()$show_col_names)
+    }
+  )
+})
+
 test_that("mapping a variable adds an annotation strip keyed by isolate", {
   path <- amr_db()
   meta <- meta_fixture()
@@ -432,7 +631,8 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       # `zoom_view` is the shared display-mode control; everything else is an
       # amr_ control.
       expect_true(all(startsWith(
-        setdiff(names(snap), c(".layers", "zoom_view")), "amr_"
+        setdiff(names(snap), c(".layers", "zoom_view")),
+        "amr_"
       )))
 
       # A snapshot taken before a control existed must restore everything else
@@ -494,17 +694,19 @@ test_that("a saved strip naming a missing column draws nothing", {
     ),
     {
       set_default_inputs(session)
-      restore(list(.layers = list(
-        list(
-          id = "L1",
-          field = "gone_from_this_database",
-          title = "Gone",
-          aesthetic = "annotation",
-          palette = "Set1",
-          n_levels = 2L,
-          auto = TRUE
+      restore(list(
+        .layers = list(
+          list(
+            id = "L1",
+            field = "gone_from_this_database",
+            title = "Gone",
+            aesthetic = "annotation",
+            palette = "Set1",
+            n_levels = 2L,
+            auto = TRUE
+          )
         )
-      )))
+      ))
       session$flushReact()
 
       # The record survives the restore — dropping it would lose the mapping if
@@ -561,10 +763,10 @@ test_that("the gene axis groups by drug class unless it is clustering", {
     ),
     {
       set_default_inputs(session)
-      expect_identical(grouping(), "class")
-
-      session$setInputs(amr_cluster_cols = TRUE)
       expect_identical(grouping(), "cluster")
+
+      session$setInputs(amr_cluster_cols = FALSE)
+      expect_identical(grouping(), "class")
     }
   )
 })
@@ -634,7 +836,7 @@ test_that("a reader's aspect ratio overrides the fit and survives a redraw", {
       expect_identical(layout_fit()$aspect, 5)
 
       # A cosmetic control must not quietly hand the plot back to the fit.
-      session$setInputs(amr_show_class_anno = FALSE)
+      session$setInputs(amr_show_element_names = FALSE)
       session$flushReact()
       expect_identical(plot_aspect(), 5)
     }

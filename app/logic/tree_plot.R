@@ -57,6 +57,7 @@ box::use(
 )
 
 box::use(
+  app / logic / amr_plot[AMR_CONFIDENCE_STATES, amr_confidence_palette],
   app / logic / date_bins[bin_date_values],
   app / logic / field_labels[field_labels_for],
   app / logic / field_profile[field_levels],
@@ -1167,7 +1168,7 @@ tree_legend_rows <- function(
   )
   heat <- vapply(
     Filter(function(h) length(h$cols) > 0L, heatmaps %||% list()),
-    function(h) rows(length(AMR_GENE_STATES), FALSE),
+    function(h) rows(length(AMR_CONFIDENCE_STATES), FALSE),
     integer(1)
   )
   sum(c(per, heat, 0L))
@@ -1326,7 +1327,7 @@ tree_legend_width_in <- function(
     heatmaps,
     function(h) {
       states <- if (identical(h$level, "gene")) {
-        AMR_GENE_STATES
+        AMR_CONFIDENCE_STATES
       } else {
         c(AMR_PRESENT, AMR_ABSENT)
       }
@@ -1362,32 +1363,30 @@ HEATMAP_GAP <- 0.02
 # gap, the last character of every tip label sits against the first strip.
 ANNOTATION_LEAD <- 0.01
 
-# Fixed two-colour fill for the AMR panel. Its cells hold comma-joined gene
-# symbols, so a shared categorical scale over the raw strings would give one
-# colour per distinct *combination* of genes — dozens of them, none comparable.
-# What the panel is actually read for is whether a class was hit at all.
+# Two-colour fill for the presence/absence branch of `.heatmap_frame()` — the
+# renderer's general "draw these metadata columns as a matrix" path. No tree
+# control now produces it, but a caller may still pass one and it has to render.
 AMR_PRESENT <- "Detected"
-AMR_ABSENT <- "Not detected"
+AMR_ABSENT <- "Absent"
 
-# Gene-level calls carry abritamr's own confidence, which a presence/absence
-# recode would throw away: an exact match and a partial hit are not the same
-# claim about the isolate. The states are ordered strongest first so the legend
-# reads as a scale.
-#' @export
-AMR_GENE_STATES <- c("Match", "Inexact", "Partial", AMR_ABSENT)
-
-#' Fills for the AMR heatmap, at either level.
-#'
-#' One family of reds so the panel reads as a single measurement, darkest for
-#' the strongest call, and a neutral grey for absence — which is most of the
-#' matrix and must not compete with the hits.
-#' @export
-AMR_HEATMAP_FILL <- c(
+AMR_PRESENCE_FILL <- c(
   Detected = "#B2182B",
-  Match = "#B2182B",
-  Inexact = "#E08214",
-  Partial = "#F4C99B",
-  `Not detected` = "#EDEDED"
+  Absent = "#EDEDED"
+)
+
+#' Fills for the gene heatmap's confidence tiers.
+#'
+#' AMRFinderPlus's own method tiers (`amr_plot$AMR_CONFIDENCE_STATES`), coloured
+#' by the AMR-plot engine's gene-heatmap defaults (visualization_amr.R's
+#' ABSENT / PARTIAL / STRONG / PRESENT colour pickers) so a gene reads at the
+#' same tier and the same colour in either engine. `AMR_CONFIDENCE_STATES` runs
+#' weakest-first; the legend lists it reversed, as a scale.
+#' @export
+AMR_CONFIDENCE_FILL <- amr_confidence_palette(
+  "#EFEFEF",
+  "#E5C494",
+  "#8C6E3D",
+  "#000000"
 )
 
 #' Inches of canvas the panel needs so the tree and its labels still get
@@ -1871,11 +1870,12 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
 
 # The frame one panel draws, with its rows keyed the way gheatmap matches them.
 #
-# At gene level the source is the separate call matrix
-# (database_functions$load_amr_matrix), which is already a factor of
-# Match/Inexact/Partial per gene; absence is simply the NA it leaves behind.
-# This is what the tree's own panels draw — both of them, resistance and
-# virulence/stress, which differ only in which genes they carry.
+# At gene level the source is `amr_matrix` — the wide confidence frame the view
+# builds from `amr_plot$amr_confidence_frame()`, one factor column per gene in
+# `AMR_CONFIDENCE_STATES` (Absent .. Perfect). Same table (`amr_results`) and
+# same method ranking as the AMR-plot engine's own gene heatmap, so a gene
+# reads at the identical tier in both. Both tree panels draw it — resistance
+# and virulence/stress — differing only in which genes they carry.
 #
 # The other branch takes a set of metadata columns and reads them as
 # presence/absence, one colour for "there is something here" and one for
@@ -1895,14 +1895,27 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
     if (!length(cols)) {
       return(NULL)
     }
+    labels <- panel$labels %||% cols
+    if (length(labels) == length(panel$cols)) {
+      labels <- labels[match(cols, panel$cols)]
+    }
+    # abritamr rolls one gene up under every drug class it acts on, so a single
+    # symbol can arrive as two positional matrix columns — aac(6')-Ib under both
+    # aminoglycoside and quinolone, say — carrying the same per-isolate calls
+    # under different classes. gheatmap gathers the frame by column name and
+    # rejects duplicates, so the repeat is dropped here rather than aborting the
+    # whole render; the first occurrence keeps the gene in its leading class run.
+    keep <- !duplicated(labels)
+    cols <- cols[keep]
+    labels <- labels[keep]
     idx <- match(md$isolate, amr_matrix$isolate)
     heat <- amr_matrix[idx, cols, drop = FALSE]
     heat[] <- lapply(heat, function(v) {
       v <- as.character(v)
       v[is.na(v)] <- AMR_ABSENT
-      factor(v, levels = AMR_GENE_STATES)
+      factor(v, levels = AMR_CONFIDENCE_STATES)
     })
-    names(heat) <- panel$labels %||% cols
+    names(heat) <- labels
     rownames(heat) <- md$label
     return(heat)
   }
@@ -3106,17 +3119,26 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # gheatmap installs a default fill scale of its own, so replacing it is the
     # intended move — but ggplot2 announces every replacement, and this one is
     # not news. Deliberate, so silenced here rather than logged on every draw.
+    # Gene panels colour by AMRFinderPlus's method tiers on the shared
+    # `amr_confidence_palette`; the dormant presence/absence branch keeps its
+    # two-colour fill. Either way the guide is one confidence scale.
+    fill <- if (identical(pan$level, "gene")) {
+      AMR_CONFIDENCE_FILL
+    } else {
+      AMR_PRESENCE_FILL
+    }
+    lvls <- levels(frame[[1]])
     p <- suppressMessages(
       p +
         scale_fill_manual(
-          values = AMR_HEATMAP_FILL[levels(frame[[1]])],
+          values = fill[lvls],
           # Without explicit breaks the legend sorts its keys alphabetically —
-          # "Inexact, Match, Not detected, Partial" — which reads as four
-          # unrelated categories. These are a confidence scale, so they are
-          # listed as one, strongest first.
-          breaks = levels(frame[[1]]),
+          # "Absent, Partial, Perfect, Putative, Strong" — which reads as five
+          # unrelated categories. These are a confidence scale, so the guide
+          # lists them as one, strongest tier first.
+          breaks = if (identical(pan$level, "gene")) rev(lvls) else lvls,
           name = pan$title,
-          na.value = AMR_HEATMAP_FILL[[AMR_ABSENT]],
+          na.value = fill[[AMR_ABSENT]],
           drop = FALSE
         )
     )

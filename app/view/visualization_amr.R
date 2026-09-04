@@ -11,12 +11,13 @@
 # carries allele identity and nothing else.
 #
 # Three views, chosen with one select (see PLOT_MODES):
-#   * Gene heatmap    - isolates x genes presence/absence, the successor to the
-#                       ComplexHeatmap on the master branch. Columns grouped by
-#                       element type or drug class, or clustered.
+#   * Gene heatmap    - isolates x genes, the successor to the ComplexHeatmap
+#                       on the master branch. Cells carry AMRFinderPlus's own
+#                       per-gene call confidence (see amr_method_confidence()
+#                       in amr_plot.R), not plain presence/absence. Columns
+#                       grouped by element type or drug class, or clustered.
 #   * Drug classes    - isolates x drug class, cells carrying abritamr's
-#                       confident/partial distinction. Coarser, and the only
-#                       view that shows that distinction at all.
+#                       coarser confident/partial rollup instead.
 #   * Prevalence      - ranked bars of how many isolates carry each gene or
 #                       class. The view that survives a screen reporting several
 #                       hundred genes.
@@ -48,6 +49,7 @@ box::use(
     pickerInput,
     pickerOptions,
     radioGroupButtons,
+    updateRadioGroupButtons,
     updateVirtualSelect,
     virtualSelectInput
   ],
@@ -114,14 +116,17 @@ PLOT_MODES <- c(
 PLOT_MODE_DEFAULT <- "heatmap"
 
 # How the heatmap's columns are arranged *inside* one element-type panel:
-# clustered, like "Cluster isolates" does for rows, or - when they are not -
-# grouped by drug class, the one arrangement that means something on every
-# view this control is shown for. There is no third position any more:
-# "Element type" went the same way it did for the row axis (resistance,
-# virulence and stress genes are now always drawn as separate panels side by
-# side, so grouping by it would have been a control that changed nothing),
-# and the old "None" (columns left in their natural, unarranged order) is
-# gone too — see amr_cluster_cols and .column_layout in amr_plot.R.
+# clustered across the whole panel, like "Cluster isolates" does for rows, or
+# - when they are not - grouped by drug class, the one arrangement that means
+# something on every view this control is shown for. Grouped is not the same
+# as unclustered: genes still cluster, just one drug class at a time, so a
+# block's own internal order is never arbitrary either. There is no third
+# position any more: "Element type" went the same way it did for the row axis
+# (resistance, virulence and stress genes are now always drawn as separate
+# panels side by side, so grouping by it would have been a control that
+# changed nothing), and the old "None" (columns left in their natural,
+# unarranged order) is gone too — see amr_cluster_cols and .column_layout in
+# amr_plot.R.
 COLUMN_GROUPING_DEFAULT <- "class"
 
 # What a pre-restructure snapshot's amr_column_grouping ("class"/"cluster"/
@@ -156,7 +161,7 @@ ASPECT_DEFAULT <- 0.9
 # One depth for both dendrograms, in centimetres. They are read together and
 # there was never a reason to give them different depths; 0 draws neither,
 # keeping the clustering's row and column *order* while dropping the trees.
-DEND_DEFAULT <- 1.5
+DEND_DEFAULT <- 1
 
 # The medium this engine maps variables onto, in mapping_engine.R's terms: a
 # repeatable colour strip beside the rows.
@@ -165,15 +170,15 @@ MEDIUM <- "amr"
 LAYER_DEFAULTS <- layer_defaults(MEDIUM)
 
 PRESENT_COLOR_DEFAULT <- "#000000"
+STRONG_COLOR_DEFAULT <- "#8C6E3D"
 PARTIAL_COLOR_DEFAULT <- "#E5C494"
 ABSENT_COLOR_DEFAULT <- "#EFEFEF"
-GRID_COLOR_DEFAULT <- "#FFFFFF"
 DEND_COLOR_DEFAULT <- "#000000"
 TEXT_COLOR_DEFAULT <- "#000000"
 BACKGROUND_DEFAULT <- "#FFFFFF"
 
 CLASS_SCALE_DEFAULT <- "Set2"
-BAR_SCALE_DEFAULT <- "Set2"
+BAR_SCALE_DEFAULT <- "Dark2"
 
 # Only shown while the element-type / hit-quality filters actually bite: they
 # read `amr_results`, which backs the gene heatmap and the gene-level prevalence
@@ -187,6 +192,8 @@ COND_SECTIONS <- paste(
   "(input.amr_mode == 'prevalence' && input.amr_level == 'class')"
 )
 COND_HEATMAPS <- "input.amr_mode != 'prevalence'"
+COND_GENE_HEATMAP <- "input.amr_mode == 'heatmap'"
+COND_CLASS_HEATMAP <- "input.amr_mode == 'classes'"
 
 # --- AMR control tabs --------------------------------------------------------
 
@@ -345,7 +352,10 @@ amr_controls <- function(ns) {
               step = 1,
               ticks = FALSE
             ),
-            "Range fits what this screen actually reported"
+            paste(
+              "How closely the hit matches the reference gene's sequence.",
+              "Range fits what this screen actually reported."
+            )
           ),
           tooltip(
             shiny$sliderInput(
@@ -357,7 +367,10 @@ amr_controls <- function(ns) {
               step = 1,
               ticks = FALSE
             ),
-            "Range fits what this screen actually reported"
+            paste(
+              "How much of the reference gene's length the hit spans.",
+              "Range fits what this screen actually reported."
+            )
           )
         ),
         shiny$conditionalPanel(
@@ -409,32 +422,79 @@ amr_controls <- function(ns) {
         shiny$sliderInput(
           ns("amr_aspect_ratio"),
           "Aspect ratio",
-          min = 0.3,
+          min = 0.65,
           max = 8,
           value = ASPECT_DEFAULT,
           step = 0.1,
           ticks = FALSE
         ),
         input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
-        shiny$uiOutput(ns("row_name_warning"))
+        shiny$uiOutput(ns("row_name_warning")),
+        # Both read off the gene heatmap alone: the drug-class view has no
+        # per-gene column to name, and its own Resistance/Virulence split is
+        # two labels at most — never the crowd either of these exists for.
+        #
+        # Whether the drug class itself is drawn as text or as a colour strip
+        # is not a switch here at all — see amr_cluster_cols in the
+        # Clustering tab, which decides that on its own (see .gene_panel's
+        # top_annotation). A separate on/off switch here used to fight that
+        # mechanism for the same row.
+        shiny$conditionalPanel(
+          condition = COND_GENE_HEATMAP,
+          ns = ns,
+          input_switch(ns("amr_show_col_names"), "Show gene names", TRUE),
+          # The element type (Resistance/Virulence/Stress) a panel's columns
+          # belong to — always one label per panel regardless of how its
+          # columns are grouped, drawn under the matrix rather than the drug
+          # class titles above it so the two never compete for the same row.
+          # See amr_elements in the Data tab for what decides which panels
+          # exist, and column_title_side in .gene_panel for where this draws.
+          input_switch(
+            ns("amr_show_element_names"),
+            "Show element-type labels",
+            TRUE
+          )
+        )
       ),
       # Clustering -------------------------------------------------------------
       nav_panel(
         "Clustering",
         value = "clustering",
         icon = shiny$icon("sitemap"),
-        input_switch(ns("amr_cluster_rows"), "Cluster isolates", TRUE),
+        radioGroupButtons(
+          ns("amr_cluster_rows"),
+          "Isolates",
+          choiceNames = c("Cluster Isolates", "No Isolate Cluster"),
+          choiceValues = c(TRUE, FALSE),
+          selected = TRUE,
+          justified = TRUE,
+          size = "sm",
+          width = "100%"
+        ),
         # The gene axis is a different question — how alike two *genes* are
         # across the isolates, rather than two isolates across the genes — but
         # not a different enough one to earn its own distance and linkage
         # pickers: every reader who tuned one axis wanted the same pair on the
-        # other. One shared pair below, shown whenever either switch is on, and
-        # fed to whichever axis (or both) is actually clustering. Off, the
-        # gene axis falls back to drug-class grouping rather than an
-        # unarranged "None" — see amr_cluster_cols in .column_layout.
-        input_switch(ns("amr_cluster_cols"), "Cluster genes", FALSE),
+        # other. "Cluster Class" keeps the drug-class grouping rather than an
+        # unarranged "None" — but genes still cluster within their own class
+        # block there, so the pair below stays live for that case too. See
+        # amr_cluster_cols in .column_layout.
+        radioGroupButtons(
+          ns("amr_cluster_cols"),
+          "Genes",
+          choiceNames = c("Cluster Class", "Cluster All"),
+          choiceValues = c(FALSE, TRUE),
+          selected = TRUE,
+          justified = TRUE,
+          size = "sm",
+          width = "100%"
+        ),
         shiny$conditionalPanel(
-          condition = "input.amr_cluster_rows || input.amr_cluster_cols",
+          condition = paste(
+            "input.amr_cluster_rows == 'TRUE' ||",
+            "input.amr_cluster_cols == 'TRUE' ||",
+            "input.amr_mode == 'heatmap'"
+          ),
           ns = ns,
           pickerInput(
             ns("amr_cluster_distance"),
@@ -471,14 +531,13 @@ amr_controls <- function(ns) {
         field_select(ns, "amr_layer_add", "Map a variable"),
         shiny$uiOutput(ns("amr_layers_ui")),
         shiny$hr(),
+        # Whether a drug class is drawn as a colour strip here or as text over
+        # its own block on the matrix is not a switch either — see
+        # amr_cluster_cols in the Clustering tab. This scale only styles the
+        # strip for the mode that draws one.
         shiny$conditionalPanel(
           condition = "input.amr_mode == 'heatmap'",
           ns = ns,
-          input_switch(
-            ns("amr_show_class_anno"),
-            "Show drug-class strip",
-            TRUE
-          ),
           scale_select(ns, "amr_class_scale", categories = "Qualitative")
         )
       ),
@@ -496,14 +555,32 @@ amr_controls <- function(ns) {
         ),
         shiny$div(
           class = "viz-color-grid",
+          # The drug-class view has one confident state (Match, labelled
+          # "Present" here); the gene view has two (Strong and Perfect,
+          # AMRFinderPlus's own BLAST-grade and exact-match tiers), so each
+          # gets its own picker under the same amr_present_color input rather
+          # than trying to share one label across two different scales.
           shiny$conditionalPanel(
-            condition = COND_HEATMAPS,
+            condition = COND_CLASS_HEATMAP,
             ns = ns,
             viz_color(ns, "amr_present_color", "Present", PRESENT_COLOR_DEFAULT)
           ),
-          # Only the drug-class matrix has a third cell state to colour.
           shiny$conditionalPanel(
-            condition = "input.amr_mode == 'classes'",
+            condition = COND_GENE_HEATMAP,
+            ns = ns,
+            viz_color(
+              ns,
+              "amr_present_color",
+              "Perfect",
+              PRESENT_COLOR_DEFAULT
+            ),
+            viz_color(ns, "amr_strong_color", "Strong", STRONG_COLOR_DEFAULT)
+          ),
+          # Both heatmaps have a middle cell state to colour: the drug-class
+          # view's own Partial, and the gene view's own Partial tier (see
+          # amr_confidence_palette()) so "Partial" reads the same on both.
+          shiny$conditionalPanel(
+            condition = COND_HEATMAPS,
             ns = ns,
             viz_color(ns, "amr_partial_color", "Partial", PARTIAL_COLOR_DEFAULT)
           ),
@@ -511,7 +588,6 @@ amr_controls <- function(ns) {
             condition = COND_HEATMAPS,
             ns = ns,
             viz_color(ns, "amr_absent_color", "Absent", ABSENT_COLOR_DEFAULT),
-            viz_color(ns, "amr_grid_color", "Cell border", GRID_COLOR_DEFAULT),
             viz_color(ns, "amr_dend_color", "Dendrogram", DEND_COLOR_DEFAULT)
           ),
           viz_color(ns, "amr_text_color", "Text", TEXT_COLOR_DEFAULT),
@@ -1084,9 +1160,9 @@ server <- function(
       reset_viz_colors(
         session,
         amr_present_color = PRESENT_COLOR_DEFAULT,
+        amr_strong_color = STRONG_COLOR_DEFAULT,
         amr_partial_color = PARTIAL_COLOR_DEFAULT,
         amr_absent_color = ABSENT_COLOR_DEFAULT,
-        amr_grid_color = GRID_COLOR_DEFAULT,
         amr_dend_color = DEND_COLOR_DEFAULT,
         amr_text_color = TEXT_COLOR_DEFAULT,
         amr_background_color = BACKGROUND_DEFAULT
@@ -1105,6 +1181,7 @@ server <- function(
       amr_layer_seq(0L)
       editing(NULL)
       aspect_mirror(ASPECT_DEFAULT)
+      show_col_names_mirror(TRUE)
 
       # Bucket 4: controls whose *choices* are swapped in at runtime. Deferred
       # past shinyjs::reset()'s own asynchronous, stale restoration, which would
@@ -1194,6 +1271,7 @@ server <- function(
       # right ratio rather than being drawn once at the old one and again at the
       # new one.
       refit_aspect()
+      refit_labels()
       generated(TRUE)
     })
 
@@ -1214,8 +1292,15 @@ server <- function(
       if (identical(mode(), "classes")) class_mat() else presence_mat()
     }
 
+    # A radioGroupButtons round-trips its boolean choiceValues as the strings
+    # "TRUE"/"FALSE", never as a logical — see the zoom_view comment further
+    # down for why as.logical() is doing the work here rather than isTRUE().
     grouping <- function() {
-      if (isTRUE(input$amr_cluster_cols)) "cluster" else COLUMN_GROUPING_DEFAULT
+      if (isTRUE(as.logical(input$amr_cluster_cols))) {
+        "cluster"
+      } else {
+        COLUMN_GROUPING_DEFAULT
+      }
     }
 
     # The aspect the plot is actually drawn at, and the only thing the render
@@ -1236,6 +1321,21 @@ server <- function(
       value <- input$amr_aspect_ratio
       if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), value))) {
         aspect_mirror(value)
+      }
+    })
+
+    # refit_labels() below writes a Generate-time auto-off straight in here
+    # rather than only sending updateSwitchInput's message, which the render
+    # would not see until the echo arrived a flush later. A reader's own
+    # click lands here too, so turning it back on after an auto-off — the
+    # whole point of seeding rather than disabling — takes effect on the
+    # same draw.
+    show_col_names_mirror <- shiny$reactiveVal(TRUE)
+
+    shiny$observeEvent(input$amr_show_col_names, {
+      value <- isTRUE(input$amr_show_col_names)
+      if (!isTRUE(all.equal(shiny$isolate(show_col_names_mirror()), value))) {
+        show_col_names_mirror(value)
       }
     })
 
@@ -1261,7 +1361,12 @@ server <- function(
         block_titles = blocks$titles,
         block_cols = blocks$cols,
         dend_cm = input$amr_dend_size %||% DEND_DEFAULT,
-        n_strips = length(anno_layers())
+        n_strips = length(anno_layers()),
+        # Grouped by class, the fit budgets a second row below the block
+        # titles for the panel's own element-type label — the two are drawn
+        # separately (see .gene_panel), so they need separate room. See
+        # column_grouping in amr_auto_layout().
+        column_grouping = grouping()
       )
     }
 
@@ -1315,6 +1420,29 @@ server <- function(
       )
     })
 
+    # Gene names default to on, unlike the isolate names, so a shape with no
+    # room for them needs to act rather than only report: seeded off on
+    # Generate the same way refit_aspect() seeds the aspect ratio, so the first
+    # draw already leaves them off instead of drawing an illegible smear once
+    # and a clean plot on the redraw that follows. Only ever seeded off, never
+    # back on — a reader who turns it on by hand over a crowded shape keeps
+    # it, and gets whatever that draws instead of a switch that quietly does
+    # nothing.
+    #
+    # The drug-class titles get no such treatment: amr_auto_layout() still
+    # shrinks their font to whatever room a block has (down to
+    # AMR_TITLE_MIN_PT), but is never allowed to turn them off outright — and,
+    # unlike gene names, there is no reader-facing switch for them at all
+    # right now (see amr_cluster_cols): whether a class is titled or strip-
+    # coloured is column_grouping's call alone.
+    refit_labels <- function() {
+      fit <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
+      if (!isTRUE(fit$cols_legible)) {
+        update_switch("amr_show_col_names", value = FALSE, session = session)
+        show_col_names_mirror(FALSE)
+      }
+    }
+
     heatmap_opts <- function() {
       fit <- layout_fit()
       # One distance and one linkage, shared by both axes rather than a second
@@ -1322,23 +1450,33 @@ server <- function(
       cluster_distance <- input$amr_cluster_distance %||%
         CLUSTER_DISTANCE_DEFAULT
       cluster_method <- input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT
+      # The cell border has no picker of its own: drawn any other color it
+      # reads as a grid superimposed on the matrix rather than the thin gap
+      # between cells it is meant to be, so it always matches the background.
+      background_color <- input$amr_background_color %||% BACKGROUND_DEFAULT
       c(
         list(
           present_color = input$amr_present_color %||% PRESENT_COLOR_DEFAULT,
+          strong_color = input$amr_strong_color %||% STRONG_COLOR_DEFAULT,
           partial_color = input$amr_partial_color %||% PARTIAL_COLOR_DEFAULT,
           absent_color = input$amr_absent_color %||% ABSENT_COLOR_DEFAULT,
-          grid_color = input$amr_grid_color %||% GRID_COLOR_DEFAULT,
+          grid_color = background_color,
           dend_color = input$amr_dend_color %||% DEND_COLOR_DEFAULT,
           text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
           column_grouping = grouping(),
-          cluster_rows = isTRUE(input$amr_cluster_rows),
+          cluster_rows = isTRUE(as.logical(input$amr_cluster_rows)),
           cluster_distance = cluster_distance,
           cluster_method = cluster_method,
           col_cluster_distance = cluster_distance,
           col_cluster_method = cluster_method,
           dend_size = input$amr_dend_size %||% DEND_DEFAULT,
           show_row_names = isTRUE(input$amr_show_row_names),
-          show_class_anno = isTRUE(input$amr_show_class_anno),
+          # Read from the mirror, never from the input directly - same reason
+          # as aspect_mirror above: refit_labels()'s auto-off would otherwise
+          # not reach the first draw until updateSwitchInput's echo arrived a
+          # flush later.
+          show_col_names = show_col_names_mirror(),
+          show_element_names = isTRUE(input$amr_show_element_names),
           class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
           anno_layers = anno_layers()
         ),
@@ -1615,10 +1753,9 @@ server <- function(
         session,
         vals,
         switches = c(
-          "amr_cluster_rows",
-          "amr_cluster_cols",
           "amr_show_row_names",
-          "amr_show_class_anno"
+          "amr_show_col_names",
+          "amr_show_element_names"
         ),
         selects = c(
           "amr_mode",
@@ -1637,14 +1774,22 @@ server <- function(
         ),
         colors = c(
           "amr_present_color",
+          "amr_strong_color",
           "amr_partial_color",
           "amr_absent_color",
-          "amr_grid_color",
           "amr_dend_color",
           "amr_text_color",
           "amr_background_color"
         ),
-        radio_groups = c("amr_level", "zoom_view"),
+        # amr_cluster_rows/amr_cluster_cols round-trip as radioGroupButtons'
+        # "TRUE"/"FALSE" strings now, not switch booleans — see .legacy_cluster_cols
+        # just below for what a pre-restructure snapshot's own boolean value means.
+        radio_groups = c(
+          "amr_level",
+          "zoom_view",
+          "amr_cluster_rows",
+          "amr_cluster_cols"
+        ),
         pickers = c(
           "amr_elements",
           "amr_sections"
@@ -1662,10 +1807,10 @@ server <- function(
       if (
         is.null(vals$amr_cluster_cols) && !is.null(vals$amr_column_grouping)
       ) {
-        update_switch(
+        updateRadioGroupButtons(
+          session,
           "amr_cluster_cols",
-          value = .legacy_cluster_cols(vals$amr_column_grouping),
-          session = session
+          selected = .legacy_cluster_cols(vals$amr_column_grouping)
         )
       }
 
@@ -1674,6 +1819,9 @@ server <- function(
       # not change. Writing it here makes a restore take effect on this flush.
       if (!is.null(vals$amr_aspect_ratio)) {
         aspect_mirror(vals$amr_aspect_ratio)
+      }
+      if (!is.null(vals$amr_show_col_names)) {
+        show_col_names_mirror(isTRUE(vals$amr_show_col_names))
       }
 
       layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)

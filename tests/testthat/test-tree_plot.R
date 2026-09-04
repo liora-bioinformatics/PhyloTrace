@@ -1,4 +1,5 @@
 box::use(
+  app / logic / amr_plot[AMR_CONFIDENCE_STATES],
   app / logic / tree_plot,
 )
 
@@ -653,6 +654,74 @@ test_that("two heatmap panels build as two independent fill scales", {
     expect_identical(nrow(built$data[[i]]), as.integer(n))
     expect_false(any(is.na(built$data[[i]]$fill)))
   }
+})
+
+test_that("a gene heatmap renders in the shared confidence palette", {
+  # The full path the AMR heatmap crashed on: level = "gene" with an
+  # amr_matrix, and a gene (aac(6')-Ib) filed under two drug classes so the
+  # panel carries its column twice. It must render, drop the repeat, and colour
+  # every tile from amr_confidence_palette — the same colours the AMR-plot
+  # engine's gene heatmap uses.
+  set.seed(21)
+  n <- 10
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  states <- AMR_CONFIDENCE_STATES
+  pick <- rep(states, length.out = n)
+  amr_matrix <- data.frame(
+    isolate = tree$tip.label,
+    amr_g1 = factor(pick, levels = states),
+    amr_g2 = factor(rev(pick), levels = states),
+    amr_g3 = factor(rev(pick), levels = states),
+    stringsAsFactors = FALSE
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_color = "#000000",
+    tippoint_show = FALSE, tippoint_alpha = 1, tippoint_size = 3,
+    tippoint_color = "#3A4657", tippoint_shape = 16, nodelabel_show = FALSE,
+    parentnodes = character(0), clade_color = "#D0F221",
+    heatmaps = list(list(
+      kind = "amr", level = "gene", section = "amr",
+      cols = c("amr_g1", "amr_g2", "amr_g3"),
+      labels = c("blaOXA-2", "aac(6')-Ib", "aac(6')-Ib"),
+      classes = c("Beta-lactam", "Aminoglycoside", "Quinolone"),
+      palette = "Reds", title = "AMR genes"
+    )),
+    amr_matrix = amr_matrix,
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+
+  p <- suppressWarnings(suppressMessages(build(tree, meta, opts)))
+  expect_true(inherits(p, "ggplot"))
+
+  built <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(inner)))
+  tiles <- which(vapply(
+    inner$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  ))
+  fills <- unique(unlist(lapply(tiles, function(i) built$data[[i]]$fill)))
+  palette <- tree_plot$AMR_CONFIDENCE_FILL
+  expect_true(all(fills %in% palette))
+  # The doubled aac(6')-Ib column is drawn once: two distinct gene columns.
+  expect_identical(
+    length(unique(unlist(lapply(tiles, function(i) built$data[[i]]$x)))),
+    2L
+  )
 })
 
 test_that("a layer naming a column the database no longer has is dropped", {
@@ -1364,6 +1433,59 @@ test_that("a wide gene matrix still gets headers a reader can read", {
   )
   # Against the tree's budget alone — the old fit — it would be far smaller.
   expect_lt(tree_plot$tree_header_size(cell, axis_units, 5.5), impl$HEADER_SIZE_MAX)
+})
+
+test_that("the gene heatmap frame carries AMRFinderPlus's confidence tiers", {
+  md <- data.frame(
+    isolate = c("ISO-1", "ISO-2"),
+    label = c("ISO-1", "ISO-2"),
+    stringsAsFactors = FALSE
+  )
+  states <- AMR_CONFIDENCE_STATES
+  amr_matrix <- data.frame(
+    isolate = c("ISO-1", "ISO-2"),
+    amr_g1 = factor(c("Perfect", "Absent"), levels = states),
+    amr_g2 = factor(c("Putative", "Strong"), levels = states),
+    stringsAsFactors = FALSE
+  )
+  panel <- list(
+    level = "gene",
+    cols = c("amr_g1", "amr_g2"),
+    labels = c("blaOXA-2", "exoU")
+  )
+
+  frame <- impl$.heatmap_frame(panel, md, amr_matrix)
+  expect_identical(names(frame), c("blaOXA-2", "exoU"))
+  # Every cell is one of the shared five tiers, levelled the same way.
+  expect_identical(levels(frame[["blaOXA-2"]]), states)
+  expect_identical(as.character(frame[["exoU"]]), c("Putative", "Strong"))
+})
+
+test_that("a gene column that repeats a label draws once", {
+  # amr_field_map can hand the same gene symbol to two positional columns when
+  # abritamr filed it under two drug classes. gheatmap reshapes the frame by
+  # column name and rejects duplicates, so the repeat is dropped here.
+  md <- data.frame(
+    isolate = c("ISO-1", "ISO-2"),
+    label = c("ISO-1", "ISO-2"),
+    stringsAsFactors = FALSE
+  )
+  states <- AMR_CONFIDENCE_STATES
+  amr_matrix <- data.frame(
+    isolate = c("ISO-1", "ISO-2"),
+    amr_g1 = factor(c("Strong", "Absent"), levels = states),
+    amr_g2 = factor(c("Strong", "Absent"), levels = states),
+    stringsAsFactors = FALSE
+  )
+  panel <- list(
+    level = "gene",
+    cols = c("amr_g1", "amr_g2"),
+    labels = c("aac(6')-Ib", "aac(6')-Ib")
+  )
+
+  frame <- impl$.heatmap_frame(panel, md, amr_matrix)
+  expect_identical(names(frame), "aac(6')-Ib")
+  expect_identical(as.character(frame[["aac(6')-Ib"]]), c("Strong", "Absent"))
 })
 
 # --- Legends a reader can actually use ---------------------------------------

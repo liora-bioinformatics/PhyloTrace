@@ -22,6 +22,7 @@ box::use(
     reactive,
     reactiveVal,
     req,
+    conditionalPanel,
     div,
     icon,
     actionButton,
@@ -38,7 +39,6 @@ box::use(
     renderUI,
     textInput,
     updateTextInput,
-    h4,
     p,
   ],
   bslib[
@@ -47,8 +47,6 @@ box::use(
     nav_insert,
     nav_remove,
     nav_select,
-    card,
-    card_header,
     card_body,
     layout_columns,
     as_fill_carrier,
@@ -104,22 +102,25 @@ box::use(
 # The creator form. Emitted exactly once, in the permanent first tab — the
 # whole point of keeping that tab rather than inserting a fresh copy of the
 # form per "Add", which would put duplicate input ids in the page.
+#
+# Layout is a pinned tile strip over a row of two separate cards. The picker
+# keeps one fixed height for every plot type (see .viz-type-picker's
+# `flex: 0 0 auto` in main.scss) so the strip never jumps when the selection
+# changes; the card row is the flexible half and takes whatever height is left.
+# Left card: the picked type's identity, its description, its badges and the
+# create form (static markup, so typing a name is never interrupted by a
+# re-render). Right card: a segmented toggle switching between what the type can
+# display and how to read the result, so only one list is on screen at a time.
 .creator_ui <- function(ns) {
   meta <- visualization_plot$plot_type_meta
   div(
     # html-fill-container/-item: the creator sits in a fillable, height="100%"
     # card_body (see the caller below), but a plain div doesn't join bslib's
     # fill system on its own. Tagging it both roles lets it claim the card's
-    # full height *and* hand that height down to its own children — see
-    # viz-type-picker below, and .viz-creator-cols' layout_columns() which
-    # already carries html-fill-item but had no fill-container parent to act on.
+    # full height and hand that height down to .viz-creator-cols.
     class = "viz-creator html-fill-container html-fill-item",
     div(
-      # html-fill-item: without this the picker takes only its natural content
-      # height and every byte of the card's leftover height goes to the
-      # sibling form card instead — see .viz-type-tile-preview's CSS for the
-      # rest of the chain this feeds.
-      class = "viz-type-picker html-fill-item",
+      class = "viz-type-picker",
       radioGroupButtons(
         ns("plot_type"),
         label = NULL,
@@ -134,12 +135,13 @@ box::use(
     ),
     layout_columns(
       class = "viz-creator-cols",
-      col_widths = c(7, 5),
-      uiOutput(ns("type_info")),
-      card(
-        class = "viz-creator-form",
-        card_header(uiOutput(ns("create_header"), inline = TRUE)),
-        card_body(
+      col_widths = c(5, 7),
+      div(
+        class = "viz-creator-left",
+        uiOutput(ns("type_summary")),
+        div(
+          class = "viz-creator-form",
+          div(class = "viz-type-section-label", "Create plot"),
           div(
             # Plot names are display text, not identifiers: opt out of the
             # global charset filter in app/js/index.js so spaces and
@@ -159,6 +161,34 @@ box::use(
             icon = icon("plus"),
             class = "btn-primary btn-lg w-100"
           )
+        )
+      ),
+      div(
+        class = "viz-detail-col",
+        div(
+          class = "viz-detail-toggle",
+          radioGroupButtons(
+            ns("detail_view"),
+            label = NULL,
+            choices = c(
+              "What it shows" = "shows",
+              "How to read it" = "reading"
+            ),
+            selected = "shows",
+            justified = TRUE
+          )
+        ),
+        # `!= 'reading'` rather than `== 'shows'` so the shows list is up before
+        # the toggle input reports its initial value, avoiding an empty frame.
+        conditionalPanel(
+          "input.detail_view != 'reading'",
+          ns = ns,
+          uiOutput(ns("detail_shows"))
+        ),
+        conditionalPanel(
+          "input.detail_view == 'reading'",
+          ns = ns,
+          uiOutput(ns("detail_reading"))
         )
       )
     )
@@ -651,55 +681,54 @@ server <- function(
     }
 
     # ---------------------------------------------------- creator form -----
-    # "Create <Plot Type>" — keeps the form header in sync with the picker
-    # without the header needing its own copy of the type-name lookup.
-    output$create_header <- renderUI({
+    # Left column of the detail panel: the picked type's identity, its prose
+    # description and its capability badges. The create form beneath it in the
+    # same column is static markup (see .creator_ui), so this re-render never
+    # interrupts typing a plot name. Copy comes from the engine registry
+    # (visualization_plot$plot_type_meta).
+    output$type_summary <- renderUI({
       m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
       req(m)
-      sprintf("Create %s", m$title)
-    })
-
-    # What the currently picked plot type draws, and what it needs to draw it.
-    # Copy and preview images come from the engine registry
-    # (visualization_plot$plot_type_meta), so this reacts to the picker without
-    # knowing anything about the engines itself.
-    output$type_info <- renderUI({
-      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
-      req(m)
-      # The two distance engines are the ones that can fold staged peer
-      # isolates in and that consume the missing-value handling; the other
-      # three read metadata straight off the local database.
-      badges <- if (isTRUE(m$distance)) {
-        list(
-          c("diagram-project", "Pairwise allelic distances"),
-          c("layer-group", "Staged peer isolates can be included")
-        )
-      } else {
-        list(
-          c("database", "Reads isolate metadata directly"),
-          c("house", "Local isolates only")
-        )
-      }
-
-      card(
-        class = "viz-type-info",
-        card_header(
+      tagList(
+        div(
+          class = "viz-type-info-head",
           span(class = "viz-type-info-icon", icon(m$icon)),
           span(class = "viz-type-info-title", m$title)
         ),
-        card_body(
-          p(class = "viz-type-info-about", m$about),
-          div(
-            class = "viz-type-badges",
-            lapply(badges, function(b) {
-              span(class = "viz-type-badge", icon(b[[1]]), span(b[[2]]))
-            })
-          ),
-          tags$ul(
-            class = "viz-type-tech",
-            lapply(m$technical, function(t) tags$li(t))
-          )
+        p(class = "viz-type-info-about", m$about),
+        div(
+          class = "viz-type-badges",
+          lapply(m$badges, function(b) {
+            span(class = "viz-type-badge", icon(b[[1]]), span(b[[2]]))
+          })
         )
+      )
+    })
+
+    # Right column, "What it shows": the capabilities list for the picked type.
+    # The sibling "How to read it" view is the glossary below; the toggle in
+    # .creator_ui swaps between them client-side so neither re-renders on the
+    # switch, only on a plot-type change.
+    output$detail_shows <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      tags$ul(
+        class = "viz-type-tech",
+        lapply(m$shows, function(t) tags$li(t))
+      )
+    })
+
+    # Right column, "How to read it": the term -> definition glossary for the
+    # picked type (allelic distance, cluster thresholds, the AMR gene-call
+    # tiers, and so on), from the engine registry.
+    output$detail_reading <- renderUI({
+      m <- visualization_plot$plot_type_meta[[input$plot_type %||% "MST"]]
+      req(m)
+      tags$dl(
+        class = "viz-type-reading",
+        lapply(names(m$reading), function(k) {
+          tagList(tags$dt(k), tags$dd(m$reading[[k]]))
+        })
       )
     })
 

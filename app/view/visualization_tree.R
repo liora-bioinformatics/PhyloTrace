@@ -35,6 +35,13 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
+  app /
+    logic /
+    amr_plot[
+      amr_confidence_frame,
+      AMR_CONFIDENCE_STATES,
+      load_amr_hits,
+    ],
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app /
@@ -86,7 +93,7 @@ box::use(
       tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
-  app / logic / database_functions[AMR_ABSENT, load_amr_matrix],
+  app / logic / database_functions[AMR_ABSENT],
   app / logic / phylo[compute_phylo_tree],
   app / logic / viz_export[CM_PER_IN, save_plot_export],
   app /
@@ -126,9 +133,8 @@ LAYER_DEFAULTS <- layer_defaults("tree", aesthetic = "tiplab_color")
 # user-defined custom variables is a bag of unrelated fields, and drawing them
 # under one scale produced a legend that explained none of them.
 #
-# Two levels, because abritamr reports at two:
-#   class — one column per drug class / virulence group, presence or absence.
-#   gene  — one column per gene, carrying abritamr's own confidence in the call.
+# One column per gene, coloured by the AMRFinderPlus method tier of the call
+# (Absent .. Perfect), the same tiers the AMR-plot engine's gene heatmap uses.
 
 # Does any mapping draw on the tip points? Three answers hang off this one
 # question — whether the points come on with the mapping, whether their switch
@@ -1068,10 +1074,9 @@ server <- function(
       }
 
       # Past a certain tip count the labels are a grey smudge at any size that
-      # fits, so the fit draws the tree without them — and says so, rather than
-      # silently moving a toggle the user may have set deliberately. Only on a
-      # Generate: a re-fit triggered by adding a mapping must not countermand a
-      # toggle the user has just set by hand.
+      # fits, so the fit draws the tree without them. Only on a Generate: a
+      # re-fit triggered by adding a mapping must not countermand a toggle the
+      # user has just set by hand.
       # Two reasons to give up on them, and they are the same reason: room per
       # tip. `labels_legible` is the fitted type size falling under the floor;
       # TIP_MAPPING_MAX is the count past which a per-tip mark stops carrying
@@ -1085,16 +1090,6 @@ server <- function(
       ) {
         set_fitted("nj_tiplab_show", FALSE)
         bslib::update_switch("nj_tiplab_show", value = FALSE)
-        shiny$showNotification(
-          paste0(
-            length(tree$tip.label),
-            " isolates leave no room for readable tip labels — they have ",
-            "been switched off. Narrow the isolate selection to bring them ",
-            "back, or re-enable them under Labels > Isolate Labels."
-          ),
-          type = "warning",
-          duration = 12
-        )
       }
       invisible(fit)
     }
@@ -1959,22 +1954,50 @@ server <- function(
       )
     )
 
-    # The gene-level call matrix, in the shape a heatmap needs: one column per
-    # gene, every gene, whether or not it is in the current selection. Read
-    # separately from viz_metadata (which now carries the same genes as mappable
-    # variables) because a heatmap panel draws the matrix itself, not a variable
-    # off it, and needs the call states unfilled.
-    # No req(): this is read from an observer that also builds the *class*
-    # panel, and a req() there would abort the whole observer — so a database
-    # with no gene matrix silently dropped the class heatmap as well. Absence
-    # is a value here, not a reason to stop.
+    # The gene-level matrix the heatmap panels draw: one column per gene column
+    # of the metadata table (`amr_field_map`), holding the AMRFinderPlus method
+    # tier of that isolate/gene from `amr_results`. Re-sourced through
+    # `amr_confidence_frame()` so a gene reads at the same tier and colour as the
+    # AMR-plot engine's own gene heatmap — the metadata columns' own values are
+    # abritamr's coarser rollup and are not read here.
+    # No req(): this is pulled from an observer building both panels, and a
+    # req() would abort it — a database with no AMR screen is a value, not a
+    # reason to stop.
     amr_matrix <- shiny$reactive({
       db_events$depend(db_rev, "amr", "isolates")
       path <- db_path()
-      if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
+      meta <- viz_metadata()
+      if (
+        is.null(path) || !length(path) || is.na(path) || !nzchar(path) ||
+          is.null(meta)
+      ) {
         return(NULL)
       }
-      load_amr_matrix(path)
+      map <- amr_field_map(meta)
+      map <- map[map$role == "gene" & map$field %in% names(meta), , drop = FALSE]
+      if (!nrow(map)) {
+        return(NULL)
+      }
+      conf <- amr_confidence_frame(
+        load_amr_hits(path),
+        meta$isolate,
+        genes = unique(map$gene)
+      )
+      # gheatmap keys the frame by column name, so it must carry the positional
+      # `amr_gN` names the panels select on; the tier data is looked up by the
+      # gene each column stands for. A gene the screen never reported reads
+      # Absent across the board.
+      absent <- factor(rep("Absent", nrow(meta)), levels = AMR_CONFIDENCE_STATES)
+      out <- data.frame(
+        isolate = meta$isolate,
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+      )
+      for (i in seq_len(nrow(map))) {
+        col <- conf[[map$gene[i]]]
+        out[[map$field[i]]] <- if (is.null(col)) absent else col
+      }
+      out
     })
 
     # Every column one level could draw, with what the picker needs to describe

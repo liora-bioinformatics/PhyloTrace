@@ -121,12 +121,21 @@ box::use(
 plot_types <- names(.ENGINES)
 
 # What the creator's plot-type picker shows for each engine: the preview image
-# that backs its tile, a one-line tagline, the prose description and the
-# technical notes shown once a type is selected. It lives here, beside
-# .ENGINES, so the copy cannot drift away from the engines it describes —
+# that backs its tile, a one-line tagline, and — once a type is picked — a short
+# description, a row of capability badges, and two switchable lists (what the
+# view can display, and how to read the result). It lives here, beside
+# .ENGINES, so the copy cannot drift away from the engines it describes;
 # `distance` is read from .ENGINES below rather than restated. Preview images
 # are resolved by the browser against the app root (Rhino serves app/static at
 # /static), exactly like the logos in app/main.R.
+#
+# Every entry carries the same fields:
+#   about   two sentences: what the view is and what it plots.
+#   badges  list of c(icon, label): capabilities at a glance.
+#   shows   character vector: what the view can display.
+#   reading named character vector, term -> definition: the conventions a
+#           reader must know (allelic distance, cluster thresholds, the AMR
+#           gene-call tiers, and so on).
 .TYPE_INFO <- list(
   MST = list(
     title = "Minimum-Spanning Tree",
@@ -134,17 +143,55 @@ plot_types <- names(.ENGINES)
     tagline = "Allelic distances as an interactive network",
     image = "static/images/tiles/tile_mst.png",
     about = paste(
-      "The minimum-spanning tree over the pairwise allelic distance matrix:",
-      "every isolate is a node, every edge is labelled with the number of",
-      "differing loci. Positions are computed, not dragged; pan and zoom the",
-      "canvas and hover a node to see its members, and single-linkage",
-      "clusters below a chosen threshold are shaded behind the network."
+      "A minimum-spanning tree over the pairwise allelic-distance matrix: one",
+      "node per isolate, each edge labelled with the number of differing loci.",
+      "Isolates with identical profiles share a node."
     ),
-    technical = c(
-      "visNetwork (vis.js) over a distance matrix built in app/logic/phylo.R",
-      "Nodes can be drawn as pie charts over any categorical metadata field",
-      "Missing loci follow the missing-value handling set in the Options panel",
-      "Export as a self-contained interactive HTML file or as a canvas PNG"
+    badges = list(
+      c("diagram-project", "Allelic distances"),
+      c("layer-group", "Staged peers"),
+      c("chart-pie", "Pie-chart nodes"),
+      c("circle-nodes", "Threshold clusters")
+    ),
+    shows = c(
+      paste(
+        "Node fill mapped to any metadata, custom, classical-MLST or AMR",
+        "variable; a merged node is drawn as a pie over the values its isolates",
+        "hold"
+      ),
+      "Node area scaled to the number of isolates represented",
+      paste(
+        "Edge length proportional to allelic distance, uniform, or capped to",
+        "limit the effect of a single divergent branch"
+      ),
+      paste(
+        "Single-linkage clusters at an allelic-distance threshold, shaded as",
+        "hulls and available as a mappable variable"
+      ),
+      paste(
+        "Collapsing of branches below a chosen distance, merging near-identical",
+        "sub-trees into one node"
+      ),
+      "Export as a self-contained interactive HTML network or a high-resolution PNG"
+    ),
+    reading = c(
+      "Edge label" = paste(
+        "The number of loci at which the two profiles differ (allelic",
+        "distance); zero denotes identical profiles, which share a node."
+      ),
+      "Shaded cluster" = paste(
+        "Isolates connected by a path of edges each at or below the threshold,",
+        "which defaults to the scheme's published complex-type distance (for",
+        "example, 12 alleles for P. aeruginosa and 1 for F. tularensis)."
+      ),
+      "Node size" = paste(
+        "The number of identical isolates merged into the node; the pie shows",
+        "the distribution of a mapped variable across them."
+      ),
+      "Missing loci" = paste(
+        "Governed by the Options panel: excluded per pair, removed across the",
+        "analysis, or treated as a distinct allele state."
+      )
     )
   ),
   Tree = list(
@@ -153,16 +200,55 @@ plot_types <- names(.ENGINES)
     tagline = "Neighbour-Joining or UPGMA dendrogram",
     image = "static/images/tiles/tile_tree.png",
     about = paste(
-      "A dendrogram inferred from the same allelic distance matrix, using",
-      "either Neighbour-Joining or UPGMA. Tips carry metadata as coloured",
-      "symbols and rings, so host, country and collection date can be read",
-      "off the tree alongside its topology."
+      "A dendrogram inferred from the same allelic-distance matrix using",
+      "Neighbour-Joining or UPGMA. Branch lengths are in allelic-distance",
+      "units, and tip symbols, labels and rings carry metadata alongside the",
+      "topology."
     ),
-    technical = c(
-      "ggtree/ape; algorithm chosen per plot in the engine's control panel",
-      "Rectangular, slanted and circular layouts with adjustable tip labels",
-      "Metadata mapped onto tip shape, tip colour and surrounding heat rings",
-      "Export via ggsave: PNG, JPEG, PDF or SVG at a chosen size and DPI"
+    badges = list(
+      c("diagram-project", "Allelic distances"),
+      c("layer-group", "Staged peers"),
+      c("palette", "Tip & ring mapping"),
+      c("shield-virus", "Gene rings")
+    ),
+    shows = c(
+      paste(
+        "Neighbour-Joining (rates may vary between lineages; rootable on an",
+        "outgroup) or UPGMA (constant rate; tips aligned)"
+      ),
+      paste(
+        "Rectangular, slanted, ellipse, circular and inward layouts, with",
+        "adjustable tip labels and circle opening"
+      ),
+      paste(
+        "Any variable mapped to tip-label colour, tip-point colour, tip-point",
+        "shape or a tile strip, the channel selected from the variable's",
+        "profile"
+      ),
+      paste(
+        "Resistance and virulence / stress gene heatmap columns beside the",
+        "tips, shaded by call confidence"
+      ),
+      "Clade highlighting, a distance axis or scale bar, and branch labels",
+      "Export as PNG, JPEG, PDF or SVG at a chosen size and resolution"
+    ),
+    reading = c(
+      "Branch length" = paste(
+        "The allelic distance accumulated along the branch; the axis or scale",
+        "bar calibrates it in loci."
+      ),
+      "NJ vs UPGMA" = paste(
+        "Neighbour-Joining permits different rates across lineages and requires",
+        "a root; UPGMA assumes a constant rate and aligns all tips."
+      ),
+      "Tip rings" = paste(
+        "One concentric band per mapped variable; the channel that remains",
+        "legible beyond roughly sixty tips, where points and shapes do not."
+      ),
+      "Outgroup" = paste(
+        "The isolate on which the tree is rooted, if one is selected; otherwise",
+        "the algorithm's default rooting applies."
+      )
     )
   ),
   Map = list(
@@ -171,16 +257,51 @@ plot_types <- names(.ENGINES)
     tagline = "Isolates placed on an interactive world map",
     image = "static/images/tiles/tile_map.png",
     about = paste(
-      "Plots isolates at the places their metadata names. City, state and",
-      "country fields are geocoded once per distinct location when you press",
-      "Generate, then drawn in one of four modes: markers, a country",
-      "choropleth, a density heatmap, or a mini-chart per location."
+      "Isolates plotted at the locations named in their metadata. City, state",
+      "and country fields are geocoded once per distinct place on Generate, and",
+      "the results are cached for reuse."
     ),
-    technical = c(
-      "leaflet; coordinates from OSM/Nominatim, cached per distinct place",
-      "Reads geo_loc_name_city, _state_province and _country from the metadata",
-      "Choropleth shading uses Natural Earth country polygons",
-      "Export as an interactive HTML map; timeline playback over collection date"
+    badges = list(
+      c("location-dot", "Geocoded locations"),
+      c("clock", "Time animation"),
+      c("chart-pie", "Location charts"),
+      c("house", "Local isolates")
+    ),
+    shows = c(
+      "Markers — one point per isolate, clustered adaptively by zoom level",
+      paste(
+        "Choropleth — Natural Earth countries shaded by isolate count on a",
+        "linear or logarithmic scale"
+      ),
+      "Heatmap — a kernel-density surface of isolate locations",
+      paste(
+        "Charts — a pie, bar or polar-area chart per location over a",
+        "categorical variable"
+      ),
+      paste(
+        "Timeline — bin by hour to year, step either end of the window, or",
+        "animate playback; the colour scale can be fixed across frames"
+      ),
+      "Configurable popup and hover fields; export as an interactive HTML map"
+    ),
+    reading = c(
+      "Cluster count" = paste(
+        "The number of isolates within a marker cluster at the current zoom;",
+        "select it to expand."
+      ),
+      "Choropleth shade" = paste(
+        "The isolate count for the country; values are not normalised to",
+        "population and do not represent incidence."
+      ),
+      "Fixed colour scale" = paste(
+        "When enabled, every animation frame uses the maximum across the full",
+        "date range, keeping frames comparable; when disabled, each frame is",
+        "scaled independently."
+      ),
+      "Missing location" = paste(
+        "Isolates whose location cannot be geocoded are listed separately and",
+        "omitted from the map, not placed at a default coordinate."
+      )
     )
   ),
   Epi = list(
@@ -189,16 +310,53 @@ plot_types <- names(.ENGINES)
     tagline = "Case counts binned over collection date",
     image = "static/images/tiles/tile_epi.png",
     about = paste(
-      "The classic epi curve: collection dates binned into equal intervals,",
-      "one bar per interval, optionally stacked or faceted by a metadata",
-      "field. A moving average can be laid over the bars, and playback walks",
-      "the curve forward one interval at a time."
+      "Collection dates binned into equal calendar intervals and drawn as one",
+      "bar per interval. Each bar spans exactly one interval, so an interval",
+      "with no cases appears as a gap rather than a missing bar."
     ),
-    technical = c(
-      "ggplot2; day/week/month/year bins with integer-only count axes",
-      "Bars are exactly one interval wide, so gaps are real gaps in the data",
-      "Optional moving average, cumulative view and per-group faceting",
-      "Export via ggsave: PNG, JPEG, PDF or SVG"
+    badges = list(
+      c("calendar-day", "Calendar bins"),
+      c("clock", "Timeline playback"),
+      c("layer-group", "Split by variable"),
+      c("chart-line", "Trend overlays")
+    ),
+    shows = c(
+      paste(
+        "Stacked bars, optionally split by a metadata, custom, MLST or AMR",
+        "variable"
+      ),
+      "Square-blocks mode — one cell per case (a unit chart), suited to small series",
+      paste(
+        "Cumulative mode — a running total, one line per group, labelled at",
+        "its end point"
+      ),
+      paste(
+        "A moving average over the bars: centred (no phase lag) or trailing",
+        "(the “last N intervals” convention)"
+      ),
+      paste(
+        "Playback advancing one interval at a time; period shading and dated",
+        "annotations mark events"
+      ),
+      "Integer count axis; export as PNG, JPEG, PDF or SVG"
+    ),
+    reading = c(
+      "Bar width" = paste(
+        "One full binning interval; a gap between bars represents an interval",
+        "with no cases, not absent data."
+      ),
+      "Centred vs trailing average" = paste(
+        "A centred window has no phase lag, so its peak aligns with the bars';",
+        "a trailing window is the mean of the N intervals ending at each point."
+      ),
+      "Cumulative curve" = paste(
+        "The total number of cases to date; its slope indicates the current",
+        "rate and a plateau indicates no further growth."
+      ),
+      "Stacked segment" = paste(
+        "One level of the split variable; segment height is that group's count",
+        "in the interval."
+      )
     )
   ),
   AMR = list(
@@ -207,16 +365,58 @@ plot_types <- names(.ENGINES)
     tagline = "Screening results across isolates and genes",
     image = "static/images/tiles/tile_amr.png",
     about = paste(
-      "Views over the antimicrobial-resistance screening stored with your",
-      "isolates: a presence/absence heatmap of isolates against genes, a",
-      "coarser isolates-against-drug-classes grid keeping abritamr's",
-      "confident/partial distinction, or a ranked prevalence bar chart."
+      "Antimicrobial-resistance screening results, produced by NCBI",
+      "AMRFinderPlus and curated by abritamr. Shows the",
+      "resistance, virulence and stress determinants ",
+      "and the confidence of each call."
     ),
-    technical = c(
-      "ggplot2 plots built in app/logic/amr_plot.R from the amr_results tables",
-      "Screening comes from abritamr/NCBI AMRFinderPlus, run alongside typing",
-      "Genes group by element type or drug class, or cluster hierarchically",
-      "Only isolates screened in this database appear; export via ggsave"
+    badges = list(
+      c("shield-virus", "AMRFinder + abritamr"),
+      c("table-cells", "Gene & class heatmaps"),
+      c("palette", "Variable strips"),
+      c("sitemap", "Profile clustering")
+    ),
+    shows = c(
+      paste(
+        "Gene heatmap — isolates against genes, cells shaded by call",
+        "confidence, separated into Resistance / Virulence / Stress panels"
+      ),
+      paste(
+        "Drug-class grid — a coarser Match / Partial / Absent view, using",
+        "abritamr's curated classes or AMRFinderPlus's broader classes"
+      ),
+      "Prevalence bars — genes or drug classes ranked by isolate count",
+      paste(
+        "Isolates and genes clustered by Jaccard distance and Ward linkage;",
+        "identity and coverage thresholds adjustable"
+      ),
+      paste(
+        "Any metadata, custom, MLST or AMR variable added as a colour strip",
+        "beside the rows"
+      ),
+      "Export as PNG, JPEG, PDF or SVG"
+    ),
+    reading = c(
+      "Perfect" = paste(
+        "An exact, full-length match to a reference allele (100% identity and",
+        "coverage)."
+      ),
+      "Strong" = paste(
+        "Meets AMRFinderPlus's curated per-gene identity and coverage",
+        "thresholds; a high-confidence call but not an exact allele."
+      ),
+      "Partial" = paste(
+        "Identity is met but the gene is truncated or contains an internal",
+        "stop; the determinant may be non-functional."
+      ),
+      "Putative" = paste(
+        "A protein-family HMM motif match with no supporting alignment; the",
+        "lowest-confidence tier AMRFinderPlus reports."
+      ),
+      "Absent" = paste(
+        "Not detected. An entirely blank row indicates the isolate was not",
+        "screened."
+      )
     )
   )
 )
@@ -1278,7 +1478,8 @@ server <- function(
         dpi = unname(export_qualities[quality %||% "Print"]) %||% 300,
         target_px = unname(
           export_widget_px[quality %||% names(export_widget_px)[[2]]]
-        ) %||% 4000L
+        ) %||%
+          4000L
       )
     })
 

@@ -195,9 +195,15 @@ html.pt-busy-hold {
 // container-type lives here rather than on .viz-type-picker itself so the
 // picker can be *styled* by the container query below (a container can't
 // size itself off its own queried containment).
+// html-fill-container makes this a flex column; the gap spaces the pinned tile
+// strip from the detail panel below. overflow-y is a last-resort fallback for a
+// window too short to hold the panel — the panel itself never scrolls, so the
+// selection never produces a per-panel scrollbar.
 .viz-creator {
     padding: 1rem;
     container-type: inline-size;
+    gap: 1rem;
+    overflow-y: auto;
 }
 
 .viz-creator-intro h4 {
@@ -219,14 +225,12 @@ html.pt-busy-hold {
 // hands every label `btn-outline-primary`, whose checked state would flood the
 // tile with solid primary — hence the explicit background/colour resets below.
 //
-// One tile row's height range. Growing .viz-type-picker's own min/max-height
-// per breakpoint (below) turned out to be the reliable way to size it: with
-// nothing but flex-grow + grid-auto-rows relying on content to propagate a
-// size up through the shinyWidgets/bslib wrapper chain, browsers reliably
-// under-computed it to ~0, collapsing every tile to the grid's bare row
-// floor regardless of how much room the card actually had.
-$viz-tile-row-min: 118px;
-$viz-tile-row-max: 222px;
+// One tile row's height, and the gutter between rows once the picker wraps.
+// Adaptive: large on a tall display so the preview thumbnails carry detail,
+// scaled down by viewport height on a short one so the strip plus the detail
+// panel still fit without the creator overflowing. The container queries below
+// multiply this for the 2- and 3-row wraps.
+$viz-tile-row: clamp(120px, 23vh, 232px);
 $viz-tile-row-gap: 0.85rem;
 
 // display:flex/column makes this a fill *container* for its own children,
@@ -235,17 +239,17 @@ $viz-tile-row-gap: 0.85rem;
 // themselves, so the flex/min-height chain has to be spelled out by hand down
 // to .btn-group-container-sw.
 //
-// min/max-height bound how tall the picker (and so the tiles in it, whose
-// preview + caption are both absolutely positioned and carry no intrinsic
-// height of their own — see .viz-type-tile) may grow. Sized here for one row
-// of five; the container queries below scale both up for the 2- and 3-row
-// layouts narrower widths fall back to, so a row is never starved just
-// because the flat number was written for a wider one.
+// `flex: 0 0 auto` with a fixed height pins the strip: it used to be a
+// fill-item and split the creator's height with the detail panel, so a plot
+// type with more copy shrank the tiles and the whole strip jumped between
+// selections. The detail panel is the flexible half now (see
+// .viz-creator-cols); the picker keeps this height for every type. The
+// container queries below scale it for the 2- and 3-row wraps.
 .viz-type-picker {
     display: flex;
     flex-direction: column;
-    min-height: $viz-tile-row-min;
-    max-height: $viz-tile-row-max;
+    flex: 0 0 auto;
+    height: $viz-tile-row;
 }
 
 // The two shinyWidgets/Shiny wrappers between .viz-type-picker and the grid
@@ -262,27 +266,26 @@ $viz-tile-row-gap: 0.85rem;
 
 // Grid rather than the inherited flex row: with wrapping flex the tiles size
 // off their caption text and break one-per-row. `!important` beats the `d-flex`
-// utility bslib leaves on the container. grid-auto-rows mirrors the picker's
-// own min/max so that once there's more than one row, the extra height the
-// picker claims (see the container queries below) is shared evenly between
-// rows instead of piling onto whichever row happens to size first.
+// utility bslib leaves on the container. `1fr` auto-rows split the picker's
+// fixed height evenly between however many rows the container query below asks
+// for, so every tile row is the same height.
 .viz-type-picker .btn-group-container-sw {
     display: grid !important;
     grid-template-columns: repeat(5, 1fr);
-    grid-auto-rows: minmax($viz-tile-row-min, $viz-tile-row-max);
+    grid-auto-rows: minmax(0, 1fr);
     gap: $viz-tile-row-gap;
     flex: 1 1 auto;
     min-height: 0;
 }
 
 // One row of five while it fits, then a deliberate 3 + 2 (and 2 + 2 + 1 once
-// even that is cramped) rather than whatever a ragged wrap would give.
+// even that is cramped) rather than whatever a ragged wrap would give. The
+// picker height grows one tile row per extra wrap so the rows keep their pitch.
 @container (max-width: 1000px) {
 
     // 3 columns of 5 tiles wrap to 2 rows.
     .viz-type-picker {
-        min-height: calc(#{$viz-tile-row-min} * 2 + #{$viz-tile-row-gap});
-        max-height: calc(#{$viz-tile-row-max} * 2 + #{$viz-tile-row-gap});
+        height: calc(#{$viz-tile-row} * 2 + #{$viz-tile-row-gap});
     }
 
     .viz-type-picker .btn-group-container-sw {
@@ -294,8 +297,7 @@ $viz-tile-row-gap: 0.85rem;
 
     // 2 columns of 5 tiles wrap to 3 rows.
     .viz-type-picker {
-        min-height: calc(#{$viz-tile-row-min} * 3 + #{$viz-tile-row-gap} * 2);
-        max-height: calc(#{$viz-tile-row-max} * 3 + #{$viz-tile-row-gap} * 2);
+        height: calc(#{$viz-tile-row} * 3 + #{$viz-tile-row-gap} * 2);
     }
 
     .viz-type-picker .btn-group-container-sw {
@@ -422,28 +424,58 @@ $viz-tile-row-gap: 0.85rem;
     color: var(--bs-secondary-color);
 }
 
-// Details of the selected type, beside the name/Initiate card.
+// The flexible half of the creator, below the pinned tile strip. It takes
+// whatever height the strip leaves, so its height no longer tracks which plot
+// type's copy is showing — that is what stopped the panel jumping between
+// selections. The grid itself carries no frame: each column is its own card
+// (see .viz-creator-left and .viz-detail-col), separated by the column gap.
 .viz-creator-cols {
-    margin-top: 1.25rem;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-bottom: 0;
+    align-items: stretch;
+    column-gap: 1.25rem;
+}
+
+// Shared card frame for both detail columns.
+.viz-creator-left,
+.viz-detail-col {
+    height: 100%;
+    min-height: 0;
+    padding: 1.1rem 1.25rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+    background-color: var(--bs-body-bg);
+}
+
+// Left card: identity, description and badges at the top; the create form
+// sinks to the bottom on its own auto margin.
+.viz-creator-left {
+    display: flex;
+    flex-direction: column;
+}
+
+.viz-type-info-head {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.55rem;
 }
 
 .viz-type-info-icon {
     margin-right: 0.5rem;
     color: var(--bs-primary);
-    font-size: 1.5em;
+    font-size: 1.4em;
 }
 
 .viz-type-info-title {
     font-weight: 600;
-    font-size: 1.5em;
+    font-size: 1.4em;
+    line-height: 1.15;
 }
 
 .viz-type-info-about {
-    margin-bottom: 0.85rem;
-}
-
-#app-visualization-type_info>.bslib-card {
-    padding-right: 1rem;
+    margin-bottom: 0.7rem;
+    color: var(--bs-secondary-color);
 }
 
 .viz-type-badges {
@@ -463,6 +495,40 @@ $viz-tile-row-gap: 0.85rem;
     color: var(--bs-secondary-color);
 }
 
+// "Create plot" label above the name field.
+.viz-type-section-label {
+    margin-bottom: 0.4rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+}
+
+// Right card: the segmented toggle, then whichever list it selects. gap spaces
+// the toggle from the list; only one list is ever in the DOM flow.
+.viz-detail-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+// Both halves of the segmented toggle get identical type — only the fill and
+// text colour change between the selected and unselected state. The app
+// italicises bare <label>s (see the `label` rule) and bslib's rewrite turns
+// each choice into one, so font-style is reset here, the same fix
+// .viz-type-tile-caption applies. Taller than a default `.btn-sm` so the click
+// target is comfortable.
+.viz-detail-toggle .btn,
+.viz-detail-toggle .radiobtn {
+    padding: 0.6rem 0.9rem;
+    min-height: 2.5rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    font-style: normal;
+    line-height: 1.2;
+}
+
 .viz-type-tech {
     margin: 0;
     padding-left: 1.1rem;
@@ -471,23 +537,52 @@ $viz-tile-row-gap: 0.85rem;
 }
 
 .viz-type-tech li {
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.35rem;
 }
 
 .viz-type-tech li::marker {
     color: var(--bs-primary);
 }
 
-.viz-creator-form .card-body {
-    gap: 0.75rem;
+// Reading glossary: term -> plain-language meaning. Bold term, indented
+// definition, one block each rather than a table.
+.viz-type-reading {
+    margin: 0;
+    font-size: 0.85rem;
 }
 
-.viz-creator-form .card-header {
-    font-size: 1.5em;
+.viz-type-reading dt {
+    font-weight: 600;
+    color: var(--bs-body-color);
 }
 
-// The preset banner is only rendered when the dashboard sent the user here, and
-// bslib's card gap would otherwise reserve a slot for the empty placeholder.
+.viz-type-reading dd {
+    margin: 0 0 0.55rem;
+    color: var(--bs-secondary-color);
+}
+
+.viz-type-reading dd:last-child {
+    margin-bottom: 0;
+}
+
+// Anchored to the bottom of the left column, with a rule above it so the gap
+// over it (large when the type's description is short) reads as a divider
+// rather than an empty panel.
+.viz-creator-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin-top: auto;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--bs-border-color);
+}
+
+.viz-creator-form .form-group {
+    margin-bottom: 0;
+}
+
+// The preset banner only renders when the dashboard sent the user here; without
+// this the flex gap would still reserve a slot for the empty placeholder.
 .viz-creator-form .shiny-html-output:empty {
     display: none;
 }
