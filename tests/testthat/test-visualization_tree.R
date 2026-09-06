@@ -4,13 +4,17 @@ box::use(
     expect_equal,
     expect_false,
     expect_identical,
+    expect_setequal,
     expect_true,
     test_that
   ],
+  stats[setNames],
   withr[local_tempdir],
 )
 box::use(
+  app / logic / amr_plot,
   app / logic / field_profile[field_profiles],
+  app / logic / tree_plot,
   app / view / visualization_tree,
 )
 
@@ -547,102 +551,140 @@ test_that("Generate draws the tree exactly once, already fitted", {
 
 # --- The AMR heatmap controls ------------------------------------------------
 
-amr_meta <- function() {
+# Two resistance genes (one under each of two drug classes) and one virulence
+# gene, across 8 isolates. gene_catalog()/amr_matrix() read amr_results (and
+# amr_summary for the rollup class) straight off the database now, so the
+# heatmap tests need a real one rather than metadata attributes.
+amr_fixture_db <- function(dir) {
+  path <- file.path(dir, "amr.db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con))
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE amr_results (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT, gene_symbol TEXT, element_type TEXT, element_subtype TEXT,
+       class TEXT, subclass TEXT, method TEXT, pct_identity REAL,
+       pct_coverage REAL, called_at TEXT)"
+  )
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE amr_summary (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT, section TEXT, drug_class TEXT, genes TEXT, called_at TEXT)"
+  )
+
+  # `class` and `drug_class` deliberately disagree, the way the real tables do:
+  # AMRFinderPlus writes a broad heading in caps, abritamr re-files the same hit
+  # under a finer curated one. The vocabulary switch is the difference between
+  # them, so a fixture where they matched could not tell them apart.
+  isolates <- sprintf("ISO-%02d", 1:8)
+  genes <- list(
+    list(
+      gene = "blaOXA-2", element = "AMR",
+      class = "BETA-LACTAM", drug_class = "Carbapenemase",
+      section = "matches", isolates = isolates[c(TRUE, FALSE)]
+    ),
+    list(
+      gene = "aac(6')-Ib3", element = "AMR",
+      class = "AMINOGLYCOSIDE", drug_class = "Aminoglycoside (AAC)",
+      section = "matches", isolates = isolates[1:4]
+    ),
+    list(
+      gene = "exoU", element = "VIRULENCE",
+      class = "VIRULENCE", drug_class = "Secretion system",
+      section = "virulence", isolates = isolates[c(TRUE, FALSE)]
+    )
+  )
+  for (g in genes) {
+    for (iso in g$isolates) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_results
+           (isolate, gene_symbol, element_type, class, method, called_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        list(iso, g$gene, g$element, g$class, "EXACTX", "2026-01-01")
+      )
+      DBI::dbExecute(
+        con,
+        "INSERT INTO amr_summary (isolate, section, drug_class, genes, called_at)
+         VALUES (?, ?, ?, ?, ?)",
+        list(iso, g$section, g$drug_class, g$gene, "2026-01-01")
+      )
+    }
+  }
+  path
+}
+
+# What one heatmap card's own gene picker reports. Its input id is per panel,
+# so the name has to be built rather than written.
+set_genes <- function(session, id, genes) {
+  do.call(
+    session$setInputs,
+    setNames(list(genes), paste0("nj_heatmap_cols_", id))
+  )
+  session$flushReact()
+}
+
+amr_args <- function(db) {
   meta <- data.frame(
     isolate = sprintf("ISO-%02d", 1:8),
     purpose = rep(c("outbreak", "surveillance"), 4),
-    `amr_Beta-lactam` = rep(c("blaOXA", ""), 4),
-    amr_Aminoglycoside = rep(c("aac(6')", "", "", ""), 2),
-    # The gene columns are what the panels draw: two from the resistance
-    # report, one from virulence/stress, so each panel has something of its
-    # own and neither can be shown the other's.
-    amr_g1 = rep(c("Match", "Absent"), 4),
-    amr_g2 = rep(c("Partial", "Absent"), 4),
-    amr_g3 = rep(c("Match", "Absent"), 4),
-    stringsAsFactors = FALSE,
-    check.names = FALSE
+    stringsAsFactors = FALSE
   )
-  attr(meta, "amr_cols") <- c(
-    "amr_Beta-lactam",
-    "amr_Aminoglycoside",
-    "amr_g1",
-    "amr_g2",
-    "amr_g3"
-  )
-  attr(meta, "amr_class_sections") <- c(
-    `amr_Beta-lactam` = "Resistance",
-    amr_Aminoglycoside = "Resistance"
-  )
-  attr(meta, "amr_gene_labels") <- c(
-    amr_g1 = "blaOXA-2", amr_g2 = "aac(6')-Ib3", amr_g3 = "exoU"
-  )
-  attr(meta, "amr_gene_groups") <- c(
-    amr_g1 = "Beta-lactam", amr_g2 = "Aminoglycoside", amr_g3 = "Secretion"
-  )
-  attr(meta, "amr_gene_sections") <- c(
-    amr_g1 = "Resistance", amr_g2 = "Resistance", amr_g3 = "Virulence / stress"
-  )
-  meta
-}
-
-amr_args <- function(meta) {
   list(
+    db_path = reactive(db),
     viz_metadata = reactive(meta),
-    field_profiles = reactive(field_profiles(
-      meta,
-      amr_cols = attr(meta, "amr_cols")
-    )),
+    field_profiles = reactive(field_profiles(meta)),
     plot_type = reactiveVal("Tree")
   )
 }
 
-test_that("switching a gene heatmap on draws every column of its section", {
-  meta <- amr_meta()
-  testServer(visualization_tree$server, args = amr_args(meta), {
+test_that("adding a heatmap draws every gene of its element type", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
     set_tree_inputs(session)
     session$flushReact()
     expect_identical(length(tree_opts()$heatmaps), 0L)
 
-    session$setInputs(nj_heatmap_amr = TRUE)
+    session$setInputs(nj_heatmap_add = "AMR")
     session$flushReact()
 
     hs <- tree_opts()$heatmaps
     expect_identical(length(hs), 1L)
     expect_identical(hs[[1]]$level, "gene")
-    expect_identical(hs[[1]]$section, "amr")
-    # An empty picker means "all of them", not an empty matrix — and only this
-    # panel's own section: the virulence gene belongs to the other card.
-    expect_setequal(hs[[1]]$cols, c("amr_g1", "amr_g2"))
-    # The drug-class columns are not offered at all any more.
-    expect_false("amr_Beta-lactam" %in% hs[[1]]$cols)
+    expect_identical(hs[[1]]$element, "AMR")
+    # Default settings mean every gene of the element type — and only that
+    # type: the virulence gene belongs to a panel of its own.
+    expect_setequal(hs[[1]]$cols, c("blaOXA-2", "aac(6')-Ib3"))
   })
 })
 
-test_that("the virulence panel draws its own section and nothing else", {
-  meta <- amr_meta()
-  testServer(visualization_tree$server, args = amr_args(meta), {
+test_that("the virulence element draws its own genes and nothing else", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
     set_tree_inputs(session)
-    session$setInputs(nj_heatmap_vir = TRUE)
+    session$setInputs(nj_heatmap_add = "VIRULENCE")
     session$flushReact()
 
     hs <- tree_opts()$heatmaps
     expect_identical(length(hs), 1L)
-    expect_identical(hs[[1]]$section, "vir")
-    expect_identical(hs[[1]]$cols, "amr_g3")
-    # And it carries the gene's name, not its positional column id.
-    expect_identical(hs[[1]]$labels, "exoU")
+    expect_identical(hs[[1]]$element, "VIRULENCE")
+    expect_identical(hs[[1]]$cols, "exoU")
+    expect_identical(hs[[1]]$title, "Virulence genes")
   })
 })
 
-test_that("a chosen subset survives, and costs exactly one redraw", {
-  # The reported fault: choosing a subset re-rendered the controls, which
-  # re-created the picker empty and discarded the selection — so the tree drew
-  # twice and the choice was gone. The controls are static now.
-  meta <- amr_meta()
-  testServer(visualization_tree$server, args = amr_args(meta), {
+test_that("choosing genes narrows a heatmap, and costs exactly one redraw", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
     set_tree_inputs(session)
-    session$setInputs(nj_heatmap_amr = TRUE)
+    session$setInputs(nj_heatmap_add = "AMR")
     session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
 
     draws <- 0L
     observe({
@@ -652,42 +694,325 @@ test_that("a chosen subset survives, and costs exactly one redraw", {
     session$flushReact()
     draws <- 0L
 
-    session$setInputs(nj_heatcols_amr = "amr_g1")
-    session$flushReact()
+    # The picker lives in the card, so what the browser reports first is the
+    # selection the card was drawn from — not a change, and not a redraw.
+    set_genes(session, id, c("blaOXA-2", "aac(6')-Ib3"))
+    expect_identical(draws, 0L)
 
+    set_genes(session, id, "blaOXA-2")
     expect_identical(draws, 1L)
-    expect_identical(tree_opts()$heatmaps[[1]]$cols, "amr_g1")
-    # And it is still what the input holds — nothing reset it.
-    expect_identical(isolate(input$nj_heatcols_amr), "amr_g1")
+    hs <- tree_opts()$heatmaps
+    expect_identical(hs[[1]]$cols, "blaOXA-2")
+    expect_identical(hs[[1]]$labels, "blaOXA-2")
   })
 })
 
-test_that("both heatmap panels can be shown at once, resistance first", {
-  meta <- amr_meta()
-  testServer(visualization_tree$server, args = amr_args(meta), {
+test_that("a heatmap starts on the AMR plot's own colours and unclustered", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
     set_tree_inputs(session)
-    session$setInputs(nj_heatmap_amr = TRUE, nj_heatmap_vir = TRUE)
+    session$setInputs(nj_heatmap_add = "AMR")
     session$flushReact()
 
-    hs <- tree_opts()$heatmaps
-    expect_identical(length(hs), 2L)
-    # Fixed order, whichever was switched on first.
+    h <- tree_opts()$heatmaps[[1]]
+    expect_false(isTRUE(h$cluster))
+    expect_identical(h$cluster_distance, amr_plot$AMR_CLUSTER_DISTANCE_DEFAULT)
+    expect_identical(h$cluster_method, amr_plot$AMR_CLUSTER_METHOD_DEFAULT)
     expect_identical(
-      vapply(hs, function(h) h$section, character(1)),
-      c("amr", "vir")
+      c(h$color_absent, h$color_partial, h$color_strong, h$color_present),
+      unname(tree_plot$AMR_CONFIDENCE_COLORS)
     )
   })
 })
 
-test_that("switching a heatmap off removes its panel", {
-  meta <- amr_meta()
-  testServer(visualization_tree$server, args = amr_args(meta), {
+test_that("the colour modal sets one panel's colours, not its genes", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
     set_tree_inputs(session)
-    session$setInputs(nj_heatmap_amr = TRUE)
+    session$setInputs(nj_heatmap_add = "AMR")
     session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
+    before <- tree_opts()$heatmaps[[1]]$cols
+
+    session$setInputs(nj_heatmap_colors = id)
+    session$setInputs(
+      nj_heatmap_present = "#112233",
+      nj_heatmap_strong = "#445566",
+      nj_heatmap_partial = "#778899",
+      nj_heatmap_absent = "#AABBCC"
+    )
+    session$setInputs(nj_heatmap_apply = 1)
+    session$flushReact()
+
+    h <- tree_opts()$heatmaps[[1]]
+    expect_identical(h$color_present, "#112233")
+    expect_identical(h$color_absent, "#AABBCC")
+    # The modal declares no gene picker, so applying it leaves the panel's
+    # columns exactly where the gene picker left them.
+    expect_identical(h$cols, before)
+  })
+})
+
+test_that("colour is per panel where clustering and labels are shared", {
+  # The split the sidebar makes: two panels, one recoloured, and only that one
+  # changes \u2014 while a shared switch moves both.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    session$setInputs(nj_heatmap_add = "VIRULENCE")
+    session$flushReact()
+    hs <- tree_opts()$heatmaps
+    skip_if_not(length(hs) == 2L, "fixture has only one element type")
+
+    session$setInputs(nj_heatmap_colors = hs[[1]]$id)
+    session$setInputs(nj_heatmap_present = "#112233")
+    session$setInputs(nj_heatmap_apply = 1)
+    session$flushReact()
+
+    after <- tree_opts()$heatmaps
+    expect_identical(after[[1]]$color_present, "#112233")
+    expect_false(identical(after[[2]]$color_present, "#112233"))
+
+    # And a shared control reaches both.
+    session$setInputs(nj_heatmap_cluster = TRUE)
+    session$flushReact()
+    expect_true(all(vapply(
+      tree_opts()$heatmaps, function(h) isTRUE(h$cluster), logical(1)
+    )))
+  })
+})
+
+test_that("the shared switches ride into every panel", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+
+    # Sidebar inputs now, so there is no modal to open and no Apply to press:
+    # setting one applies it to the block.
+    session$setInputs(
+      nj_heatmap_cluster = TRUE,
+      nj_heatmap_dend = 15,
+      nj_heatmap_gene_names = FALSE,
+      nj_heatmap_class_names = FALSE,
+      nj_heatmap_strip = FALSE
+    )
+    session$flushReact()
+
+    h <- tree_opts()$heatmaps[[1]]
+    expect_identical(h$dend_depth, 15)
+    expect_false(h$show_gene_names)
+    expect_false(h$show_class_names)
+    expect_false(h$show_class_strip)
+  })
+})
+
+test_that("a panel added later adopts the shared settings already set", {
+  # The reason the shared observer reads the panel list as well as the inputs:
+  # a matrix must join the block arranged like the ones beside it, not on the
+  # defaults it was born with.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_cluster = TRUE, nj_heatmap_gene_names = FALSE)
+    session$flushReact()
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+
+    h <- tree_opts()$heatmaps[[1]]
+    expect_true(h$cluster)
+    expect_false(h$show_gene_names)
+  })
+})
+
+test_that("the element-type label is off by default and switchable to either end", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    expect_false(isTRUE(tree_opts()$heatmaps[[1]]$show_element_type))
+
+    session$setInputs(nj_heatmap_element = TRUE)
+    session$flushReact()
+    expect_true(tree_opts()$heatmaps[[1]]$show_element_type)
+    expect_identical(
+      tree_opts()$heatmaps[[1]]$element_pos,
+      tree_plot$ELEMENT_POS_DEFAULT
+    )
+
+    session$setInputs(nj_heatmap_element_pos = "bottom")
+    session$flushReact()
+    expect_identical(tree_opts()$heatmaps[[1]]$element_pos, "bottom")
+  })
+})
+
+test_that("the strip's colour scale is the reader's to pick", {
+  # A new panel starts on the shared default so a class matches the AMR tab;
+  # the colour modal's scale picker rides into that one panel.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
+    expect_identical(
+      tree_opts()$heatmaps[[1]]$strip_scale,
+      tree_plot$CLASS_STRIP_SCALE
+    )
+
+    session$setInputs(nj_heatmap_colors = id)
+    session$setInputs(nj_heatmap_strip_scale = "Dark2")
+    session$setInputs(nj_heatmap_apply = 1)
+    session$flushReact()
+
+    expect_identical(tree_opts()$heatmaps[[1]]$strip_scale, "Dark2")
+  })
+})
+
+test_that("the colour mode picks which of the two colour controls is live", {
+  # Both sets of values survive the switch \u2014 the modal keeps whichever half
+  # was hidden, so flipping back does not lose the swatches.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
+    expect_identical(tree_opts()$heatmaps[[1]]$color_mode, "tiers")
+
+    session$setInputs(nj_heatmap_colors = id)
+    session$setInputs(
+      nj_heatmap_present = "#112233",
+      nj_heatmap_color_mode = "scale",
+      nj_heatmap_heat_scale = "Blues"
+    )
+    session$setInputs(nj_heatmap_apply = 1)
+    session$flushReact()
+
+    h <- tree_opts()$heatmaps[[1]]
+    expect_identical(h$color_mode, "scale")
+    expect_identical(h$heat_scale, "Blues")
+    # The swatch the reader set before switching away is still on the record.
+    expect_identical(h$color_present, "#112233")
+  })
+})
+
+test_that("switching classification re-files the genes it keeps", {
+  # The two vocabularies are two readings of the same hits, so changing one
+  # rewrites the panel's classes (and its column order, which is class order)
+  # without touching which genes it draws.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    before <- tree_opts()$heatmaps[[1]]
+    expect_identical(before$vocabulary, amr_plot$AMR_CLASS_VOCABULARY_DEFAULT)
+
+    session$setInputs(nj_heatmap_vocabulary = "amrfinder")
+    session$flushReact()
+
+    after <- tree_opts()$heatmaps[[1]]
+    expect_identical(after$vocabulary, "amrfinder")
+    expect_setequal(after$cols, before$cols)
+    # Same genes, re-filed: abritamr calls blaOXA-2 a carbapenemase, where
+    # AMRFinderPlus files it under the broad beta-lactam heading.
+    expect_identical(
+      before$classes[match("blaOXA-2", before$cols)],
+      "Carbapenemase"
+    )
+    expect_identical(
+      after$classes[match("blaOXA-2", after$cols)],
+      "Beta-lactam"
+    )
+  })
+})
+
+test_that("clearing the gene picker keeps every gene", {
+  # The picker's placeholder says an empty selection means "all genes", not an
+  # empty matrix — same contract the old always-visible picker made.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
+
+    set_genes(session, id, "blaOXA-2")
+    expect_identical(tree_opts()$heatmaps[[1]]$cols, "blaOXA-2")
+
+    set_genes(session, id, character(0))
+    expect_setequal(tree_opts()$heatmaps[[1]]$cols, c("blaOXA-2", "aac(6')-Ib3"))
+  })
+})
+
+test_that("each heatmap card's gene picker moves only its own panel", {
+  # One observer per card, and each closes over its own panel id — a loop
+  # variable shared between them would have made every pick land on the last
+  # card drawn.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    session$setInputs(nj_heatmap_add = "VIRULENCE")
+    session$flushReact()
+    ids <- vapply(tree_opts()$heatmaps, function(h) h$id, character(1))
+
+    set_genes(session, ids[[1]], "blaOXA-2")
+    hs <- tree_opts()$heatmaps
+    expect_identical(hs[[1]]$cols, "blaOXA-2")
+    expect_identical(hs[[2]]$cols, "exoU")
+  })
+})
+
+test_that("heatmap panels draw in the order they were added", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "VIRULENCE")
+    session$flushReact()
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+
+    hs <- tree_opts()$heatmaps
+    expect_identical(length(hs), 2L)
+    # Add order, not a fixed element order — the same rule mapping layers draw
+    # by.
+    expect_identical(
+      vapply(hs, function(h) h$element, character(1)),
+      c("VIRULENCE", "AMR")
+    )
+  })
+})
+
+test_that("removing a heatmap drops its panel", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    id <- tree_opts()$heatmaps[[1]]$id
     expect_identical(length(tree_opts()$heatmaps), 1L)
 
-    session$setInputs(nj_heatmap_amr = FALSE)
+    session$setInputs(nj_heatmap_delete = id)
     session$flushReact()
     expect_identical(length(tree_opts()$heatmaps), 0L)
   })
@@ -699,10 +1024,19 @@ test_that("a database with no AMR results offers no heatmap", {
     purpose = rep(c("outbreak", "surveillance"), 4),
     stringsAsFactors = FALSE
   )
-  testServer(visualization_tree$server, args = amr_args(meta), {
-    set_tree_inputs(session)
-    session$setInputs(nj_heatmap_amr = TRUE)
-    session$flushReact()
-    expect_identical(length(tree_opts()$heatmaps), 0L)
-  })
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      # A stale or forced value still cannot add a panel with nothing behind it.
+      session$setInputs(nj_heatmap_add = "AMR")
+      session$flushReact()
+      expect_identical(length(tree_opts()$heatmaps), 0L)
+    }
+  )
 })

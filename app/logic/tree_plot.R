@@ -48,7 +48,7 @@ box::use(
     expansion,
   ],
   ape[root],
-  stats[setNames],
+  stats[dist, hclust, setNames],
   utils[head],
   RColorBrewer[brewer.pal, brewer.pal.info],
   viridisLite[viridis],
@@ -57,7 +57,16 @@ box::use(
 )
 
 box::use(
-  app / logic / amr_plot[AMR_CONFIDENCE_STATES, amr_confidence_palette],
+  app /
+    logic /
+    amr_plot[
+      AMR_CLUSTER_DISTANCE_DEFAULT,
+      AMR_CLUSTER_METHOD_DEFAULT,
+      AMR_CONFIDENCE_STATES,
+      amr_confidence_palette,
+      amr_fit_scale,
+      amr_palette
+    ],
   app / logic / date_bins[bin_date_values],
   app / logic / field_labels[field_labels_for],
   app / logic / field_profile[field_levels],
@@ -879,8 +888,183 @@ CLASS_LABEL_GAP_ROWS <- 0.45
 # tells one run from the next.
 CLASS_BRACKET_FILL <- 0.86
 # Most of the panel's height the whole band may take, brackets and names
-# together. Past this the class names are longer than the tree is tall.
-CLASS_FRAC_MAX <- 0.35
+# together. The class names are shrunk to keep the band inside this
+# (`.class_name_size()`), rather than the band being clamped and the names
+# clipped at their far end; matched to HEADER_FRAC_MAX, the same ceiling the
+# column headers above the matrix answer to.
+CLASS_FRAC_MAX <- 0.45
+
+# What a *clustered* panel puts in that same band instead of the brackets.
+#
+# Clustering orders the columns by call pattern, so the classes are scattered
+# and a bracket over them would claim a grouping the matrix does not have (see
+# heatmap_class_runs). A colour strip says the same thing without claiming
+# contiguity — one tile per column, keyed in the guide — which is the swap the
+# AMR-plot engine makes for the same reason under "Cluster All".
+#
+# Under it hangs the dendrogram the ordering came from, leaves up against the
+# strip. Outward from the matrix that reads matrix / annotation / tree, the
+# same order ComplexHeatmap stacks a column dendrogram and its annotations in
+# on the AMR tab, mirrored because the room here is below rather than above —
+# above is spoken for by the gene names.
+CLASS_STRIP_GAP_ROWS <- 0.4
+CLASS_STRIP_ROWS <- 0.9
+DEND_GAP_ROWS <- 0.5
+
+# --- The element-type label over (or under) a panel --------------------------
+#
+# "Resistance" / "Virulence" / "Stress" — which screen the panel's columns came
+# out of. Two panels side by side are otherwise told apart only by their guide
+# titles, which sit off to the side of the figure and pair with a matrix by
+# colour rather than by position.
+#
+# Set horizontally and centred on the panel's own run of columns, unlike every
+# other annotation here, which is vertical. It is one short word over a run
+# several columns wide, so it reads across; and horizontal is what keeps it to a
+# single row of pitch whatever it says, which is the whole reason the reserve it
+# costs can be a constant rather than a measurement.
+#
+# Which end it goes to is the reader's (`element_pos`): over the gene names, or
+# under whatever the band below already holds.
+ELEMENT_LABEL_GAP_ROWS <- 0.55
+
+# Default end for that label, when a panel names none.
+#' @export
+ELEMENT_POS_DEFAULT <- "top"
+
+# Rows of tip pitch one horizontal line of type at `size` mm claims. The
+# vertical headers' own measure with a single character's worth of height, which
+# is exactly what a horizontal line is.
+.element_label_rows <- function(size) {
+  HEADER_CHAR_ROWS * size / HEADER_SIZE_MAX
+}
+
+# Millimetres of tip pitch the plot is actually drawn at.
+#
+# Not `height_in / n_tip`. The reserves above and below the tips are *expansion*
+# on the y scale, so booking them compresses the rows into what is left — a tall
+# stack of gene names and a deep class band together can take a third of the
+# panel, and the rows then come out a third shorter than the nominal pitch.
+#
+# Every other annotation here is placed in rows and rides that compression
+# without noticing, because it is measured in rows too. The element label is the
+# exception: it has to clear a stack of *rotated text*, whose height is fixed in
+# millimetres however the rows move under it. Converting that height at the
+# nominal pitch is what drew it through the middle of the gene names.
+#
+# One pass, not a fixed point: the label's own row is already in the reserves
+# this reads, so re-solving would move the pitch by less than the gap absorbs.
+.drawn_row_mm <- function(height_in, span_rows, top_frac, bottom_frac) {
+  if (
+    is.null(height_in) ||
+      !is.finite(height_in) ||
+      height_in <= 0 ||
+      !is.finite(span_rows) ||
+      span_rows <= 0
+  ) {
+    return(25.4 * TIP_ROW_IN)
+  }
+  25.4 * height_in / (span_rows * (1 + top_frac + bottom_frac))
+}
+
+# Rows that a stack of `chars` rotated characters at `size` mm occupies, at the
+# pitch the plot is really drawn at.
+.rotated_text_rows <- function(chars, size, row_mm) {
+  if (!is.finite(row_mm) || row_mm <= 0) {
+    return(0)
+  }
+  HEADER_ROW_PACK * chars * TIP_CHAR_EM * size / row_mm
+}
+
+# Type size the element label is set at: fitted so the whole word fits across
+# the run of columns it names, and never larger than a column header.
+#
+# The floor is that panel's *own* header size, not HEADER_SIZE_MIN — a title
+# set smaller than the names it titles reads as a footnote, and a three-column
+# panel fitted honestly to "Virulence" lands far below legible. A word too wide
+# for its panel at that floor overhangs into the gutter beside it instead, which
+# is the one place on the figure there is room to lend: the panels are held
+# apart by HEATMAP_GAP and the outermost one has the legend's own margin past
+# it.
+.element_label_size <- function(
+  label,
+  run_units,
+  axis_units,
+  panel_in,
+  scale,
+  floor_size = HEADER_SIZE_MIN * scale
+) {
+  lo <- floor_size
+  hi <- max(HEADER_SIZE_MAX * scale, lo)
+  chars <- suppressWarnings(max(nchar(label %||% ""), 1L))
+  if (
+    !is.finite(run_units) ||
+      !is.finite(axis_units) ||
+      axis_units <= 0 ||
+      !is.finite(chars)
+  ) {
+    return(lo)
+  }
+  run_mm <- 25.4 * panel_in * run_units / axis_units
+  .clamp(run_mm * HEADER_FILL / (chars * TIP_CHAR_EM), lo, hi)
+}
+
+# Whether a panel draws its element-type label at all. Gene-level panels only:
+# the dormant presence/absence branch has no element type to name.
+.element_label_drawn <- function(panel) {
+  isTRUE(panel$show_element_type) &&
+    identical(panel$level, "gene") &&
+    nzchar(.element_label_text(panel))
+}
+
+# What that label says. The panel's own title minus the " genes" the view
+# appends to it, so the label is the element type itself rather than a second
+# copy of the guide's heading.
+.element_label_text <- function(panel) {
+  txt <- as.character(panel$title %||% "")
+  if (!length(txt) || is.na(txt[[1]])) {
+    return("")
+  }
+  trimws(sub("\\s+genes$", "", txt[[1]]))
+}
+
+# Which end a panel's element label goes to, defaulted and validated — an
+# unrecognised value reads as the default rather than drawing nothing.
+.element_pos <- function(panel) {
+  pos <- panel$element_pos %||% ELEMENT_POS_DEFAULT
+  if (identical(pos, "bottom")) "bottom" else "top"
+}
+
+# Depth of the dendrogram, as a percentage of the tip count — so it stays the
+# same share of the figure whatever the tree's height, the way the AMR tab's
+# dendrogram keeps the centimetres it was given. The panel carries its own
+# (`dend_depth`, the edit modal's slider); this is what a panel that carries
+# none falls back to. Zero — the default — keeps the clustered column order but
+# draws no tree, which is what a reader who wants the blocks but not the
+# dendrogram gets without touching the slider.
+#' @export
+DEND_DEPTH_DEFAULT <- 0
+
+# The floor under that share, for the small trees a percentage would leave
+# invisible. Not applied at zero, which is a deliberate "no dendrogram".
+DEND_MIN_ROWS <- 2.5
+
+.dend_rows <- function(n_tip, panel) {
+  pct <- suppressWarnings(as.numeric(panel$dend_depth %||% DEND_DEPTH_DEFAULT))
+  if (!is.finite(pct) || pct <= 0) {
+    return(0)
+  }
+  max(as.numeric(n_tip) * pct / 100, DEND_MIN_ROWS)
+}
+
+# The class strip's default palette. visualization_amr.R's own
+# CLASS_SCALE_DEFAULT, so a drug class starts the same colour on both engines'
+# heatmaps. A panel may override it with its own `strip_scale`.
+#' @export
+CLASS_STRIP_SCALE <- "Set2"
+
+# Title over the class strip's guide.
+CLASS_STRIP_TITLE <- "Drug class"
 
 # Rows of tip pitch one header character claims when set vertically, at
 # HEADER_SIZE_MAX; heatmap_header_frac() scales it down with the fitted size.
@@ -1166,12 +1350,23 @@ tree_legend_rows <- function(
     },
     integer(1)
   )
+  drawn <- Filter(function(h) length(h$cols) > 0L, heatmaps %||% list())
   heat <- vapply(
-    Filter(function(h) length(h$cols) > 0L, heatmaps %||% list()),
+    drawn,
     function(h) rows(length(AMR_CONFIDENCE_STATES), FALSE),
     integer(1)
   )
-  sum(c(per, heat, 0L))
+  # A clustered panel carries a second guide: the drug-class strip that
+  # replaced its brackets.
+  strip <- vapply(
+    drawn,
+    function(h) {
+      n <- length(.class_guide_levels(h))
+      if (!n) 0L else rows(n, n > LEGEND_MAX_KEYS)
+    },
+    integer(1)
+  )
+  sum(c(per, heat, strip, 0L))
 }
 
 #' Rows one guide box has room for, at the height the plot is drawn.
@@ -1213,8 +1408,11 @@ tree_legend_max_rows <- function(
   height_in = NULL,
   scale = 1
 ) {
+  drawn <- Filter(function(h) length(h$cols) > 0L, heatmaps %||% list())
+  # A clustered panel shows two guides, its tiers and its drug-class strip.
   guides <- length(layers %||% list()) +
-    length(Filter(function(h) length(h$cols) > 0L, heatmaps %||% list()))
+    length(drawn) +
+    sum(vapply(drawn, function(h) length(.class_guide_levels(h)) > 0L, logical(1)))
   room <- tree_legend_room(legend_size, height_in, scale)
   if (guides < 1L) {
     return(LEGEND_MAX_ROWS)
@@ -1338,7 +1536,21 @@ tree_legend_width_in <- function(
     },
     numeric(1)
   )
-  widest <- max(c(per, heat, 0))
+  # A clustered panel's second guide names drug classes, which run far longer
+  # than a tier does — left out, the strip's keys were drawn over the tips.
+  strip <- vapply(
+    heatmaps,
+    function(h) {
+      lvls <- head(.class_guide_levels(h), LEGEND_MAX_KEYS)
+      if (!length(lvls)) {
+        return(0)
+      }
+      chars <- suppressWarnings(max(nchar(c(lvls, CLASS_STRIP_TITLE)), 1L))
+      guide_in(chars, tree_legend_ncol(length(lvls)))
+    },
+    numeric(1)
+  )
+  widest <- max(c(per, heat, strip, 0))
   if (widest <= 0) {
     return(0)
   }
@@ -1374,20 +1586,87 @@ AMR_PRESENCE_FILL <- c(
   Absent = "#EDEDED"
 )
 
-#' Fills for the gene heatmap's confidence tiers.
+#' The four colours a gene heatmap's confidence scale is built from.
 #'
-#' AMRFinderPlus's own method tiers (`amr_plot$AMR_CONFIDENCE_STATES`), coloured
-#' by the AMR-plot engine's gene-heatmap defaults (visualization_amr.R's
-#' ABSENT / PARTIAL / STRONG / PRESENT colour pickers) so a gene reads at the
-#' same tier and the same colour in either engine. `AMR_CONFIDENCE_STATES` runs
-#' weakest-first; the legend lists it reversed, as a scale.
+#' The AMR-plot engine's own gene-heatmap defaults (visualization_amr.R's
+#' ABSENT / PARTIAL / STRONG / PRESENT pickers), so a panel left on its defaults
+#' reads at the same tier *and* the same colour in either engine. Putative is
+#' not among them: `amr_confidence_palette()` blends it out of absent and
+#' partial (see its own note on why it has no picker).
+#'
+#' A heatmap panel carries these four as `color_absent` / `color_partial` /
+#' `color_strong` / `color_present`; this is what it starts on and what
+#' `.heatmap_fill()` falls back to.
+#' @export
+AMR_CONFIDENCE_COLORS <- c(
+  absent = "#EFEFEF",
+  partial = "#E5C494",
+  strong = "#8C6E3D",
+  present = "#000000"
+)
+
+#' Fills for the gene heatmap's confidence tiers, on the shared defaults.
+#'
+#' `AMR_CONFIDENCE_STATES` runs weakest-first; the legend lists it reversed, as
+#' a scale.
 #' @export
 AMR_CONFIDENCE_FILL <- amr_confidence_palette(
-  "#EFEFEF",
-  "#E5C494",
-  "#8C6E3D",
-  "#000000"
+  AMR_CONFIDENCE_COLORS[["absent"]],
+  AMR_CONFIDENCE_COLORS[["partial"]],
+  AMR_CONFIDENCE_COLORS[["strong"]],
+  AMR_CONFIDENCE_COLORS[["present"]]
 )
+
+#' The sequential palette a panel in "scale" colour mode falls back to.
+#'
+#' Light-to-dark is what makes a sequential family readable as a confidence
+#' ladder at all — Absent takes the palette's lightest stop and Perfect its
+#' darkest, the same direction the four hand-picked tiers run in.
+#' @export
+HEAT_SCALE_DEFAULT <- "Greys"
+
+# The five tier fills a sequential palette gives, weakest stop to strongest.
+#
+# No `amr_fit_scale()` in front of it, unlike the class strip's: that fitter
+# only drops *qualitative* families too small for the level count, and every
+# sequential family carries at least five stops natively — so for five tiers it
+# is a no-op, and nothing here is interpolated.
+.heat_scale_fill <- function(scale) {
+  amr_palette(AMR_CONFIDENCE_STATES, scale %||% HEAT_SCALE_DEFAULT)
+}
+
+# The fill scale one panel draws under. A gene panel carries its own four
+# confidence colours (the Heatmap tab's colour modal), so two panels on one tree
+# can be told apart by more than their headers; a panel that carries none — a
+# restored Analysis saved before they existed — falls back to the shared
+# defaults and looks exactly as it did. The presence/absence branch has no
+# tiers to colour and keeps its fixed two-colour key.
+#
+# `color_mode` picks which of the two the modal's segmented control left live:
+# the four pickers ("tiers", the default) or one sequential ramp ("scale")
+# spread across the same five tiers.
+.heatmap_fill <- function(panel) {
+  if (!identical(panel$level, "gene")) {
+    return(AMR_PRESENCE_FILL)
+  }
+  if (identical(panel$color_mode, "scale")) {
+    return(.heat_scale_fill(panel$heat_scale))
+  }
+  pick <- function(key) {
+    v <- panel[[paste0("color_", key)]]
+    if (is.null(v) || !length(v) || is.na(v[[1]]) || !nzchar(v[[1]])) {
+      AMR_CONFIDENCE_COLORS[[key]]
+    } else {
+      as.character(v[[1]])
+    }
+  }
+  amr_confidence_palette(
+    pick("absent"),
+    pick("partial"),
+    pick("strong"),
+    pick("present")
+  )
+}
 
 #' Inches of canvas the panel needs so the tree and its labels still get
 #' `panel_in` of it once the annotations have taken their share.
@@ -1558,9 +1837,46 @@ heatmap_header_frac <- function(
   # a tile strip's header is its variable's *name*, which is far longer than a
   # gene symbol, over a column several times as wide. Sizing this from the
   # heatmap alone is what clipped the strip headers off the top of the panel.
+  # The element-type label a panel puts *above* its gene names, at the size it
+  # will actually be set at — the same solve the drawing runs, so the reserve
+  # and the label cannot disagree about how deep it is. Its gap is charged even
+  # when the names below it are off, because the label still has to clear the
+  # matrix edge.
+  element_rows <- function(h) {
+    if (!.element_label_drawn(h) || !identical(.element_pos(h), "top")) {
+      return(0)
+    }
+    size <- if (is.null(tree_span) || !is.finite(axis_units)) {
+      HEADER_SIZE_MAX * .scale_of(opts)
+    } else {
+      .element_label_size(
+        .element_label_text(h),
+        length(h$cols) * .heat_span(opts) * squeeze * tree_span,
+        axis_units,
+        width_in,
+        .scale_of(opts),
+        # Never smaller than the gene names it titles — the same floor the
+        # drawing uses, so the reserve matches what goes in it.
+        floor_size = tree_header_size(
+          .heat_span(opts) * squeeze * tree_span,
+          axis_units,
+          width_in,
+          .scale_of(opts)
+        )
+      )
+    }
+    ELEMENT_LABEL_GAP_ROWS + .element_label_rows(size)
+  }
+
   heat_rows <- vapply(
     hs,
     function(h) {
+      # A panel drawn without its gene names needs no room above it for them —
+      # but may still have an element label up there, which then sits where the
+      # names would have.
+      if (isFALSE(h$show_gene_names)) {
+        return(0)
+      }
       labs <- if (identical(h$level, "gene")) {
         h$labels %||% h$cols
       } else {
@@ -1584,6 +1900,11 @@ heatmap_header_frac <- function(
   if (!is.finite(rows)) {
     rows <- 1
   }
+  # The element labels sit on one line clear of the *tallest* set of headers on
+  # the figure, not each above its own panel's — so they are added once, on top
+  # of that maximum, which is exactly where the drawing puts them.
+  rows <- rows +
+    suppressWarnings(max(c(vapply(hs, element_rows, numeric(1)), 0)))
   # Plus the gap the headers are held off the columns by, which is room above
   # the last tip just as much as the text is.
   rows <- rows + TILE_HEADER_OFFSET
@@ -1614,6 +1935,14 @@ heatmap_class_runs <- function(panel, drawn) {
   classes <- panel$classes
   labels <- panel$labels %||% panel$cols
   if (is.null(classes) || !length(classes) || !length(drawn)) {
+    return(.empty_class_runs())
+  }
+  # A clustered panel is ordered by call pattern, not by class, so its classes
+  # are no longer contiguous — the same reason an unknown class breaks a run
+  # below, one step further: a bracket over what is left would claim a grouping
+  # the drawn order does not have. (The AMR plot draws no class split under
+  # "Cluster All" either.) It gets a colour strip instead.
+  if (isTRUE(panel$cluster) || isFALSE(panel$show_class_names)) {
     return(.empty_class_runs())
   }
   hit <- match(drawn, labels)
@@ -1747,11 +2076,74 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
   .clamp(round(max(needed) * OPEN_ANGLE_PAD * 180 / pi), 0, OPEN_ANGLE_MAX)
 }
 
+# Rows of tip pitch the band under the matrices already holds, before any
+# element-type label is hung below it — the deeper of what a bracketed panel
+# and a clustered one put there.
+#
+# One function rather than two copies because the reserve
+# (`heatmap_class_frac()`) and the drawing both have to place the element label
+# under exactly this, and a second copy is how they would come to disagree.
+.bottom_band_rows <- function(opts, n_tip, runs = list(), size = NULL) {
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+
+  # A clustered panel spends the band on a colour strip and the dendrogram
+  # under it instead of on brackets and vertical names, so its reserve is
+  # geometry rather than text — and the two kinds of panel can be on the same
+  # tree, in which case the band has to hold whichever is deeper.
+  clustered <- Filter(
+    function(h) isTRUE(h$cluster) && length(h$cols),
+    opts$heatmaps %||% list()
+  )
+  cluster_band <- suppressWarnings(max(
+    vapply(
+      clustered,
+      function(h) .cluster_band(n, h, .strip_drawn(h))$rows,
+      numeric(1)
+    ),
+    0
+  ))
+
+  runs <- Filter(function(r) nrow(r) > 0L, runs %||% list())
+  bracket_band <- if (!length(runs)) {
+    0
+  } else {
+    chars <- suppressWarnings(max(
+      vapply(
+        runs,
+        function(r) suppressWarnings(max(nchar(r$class), 1L)),
+        numeric(1)
+      ),
+      1
+    ))
+    if (!is.finite(chars)) {
+      chars <- 1
+    }
+    rows_per_char <- HEADER_CHAR_ROWS *
+      (size %||% HEADER_SIZE_MAX) /
+      HEADER_SIZE_MAX
+    CLASS_GAP_ROWS +
+      CLASS_TICK_ROWS +
+      CLASS_LABEL_GAP_ROWS +
+      chars * rows_per_char
+  }
+
+  max(bracket_band, cluster_band)
+}
+
+# Whether any panel hangs its element-type label under that band.
+.element_label_below <- function(opts) {
+  any(vapply(
+    opts$heatmaps %||% list(),
+    function(h) .element_label_drawn(h) && identical(.element_pos(h), "bottom"),
+    logical(1)
+  ))
+}
+
 #' Fraction of the panel to keep clear below the tree for the class band.
 #'
 #' The vertical counterpart of `heatmap_header_frac()`, and measured the same
 #' way: from the longest name that will actually go in it, at the size it will
-#' be set at.
+#' be set at — plus the element-type label, when one hangs below the band.
 #'
 #' @param opts List. Resolved tree options.
 #' @param n_tip Integer. Number of tips.
@@ -1760,9 +2152,44 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
 #' @return Numeric multiplicative expansion for the bottom of the y scale.
 #' @export
 heatmap_class_frac <- function(opts, n_tip, runs = list(), size = NULL) {
-  runs <- Filter(function(r) nrow(r) > 0L, runs %||% list())
-  if (!length(runs)) {
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  band <- .bottom_band_rows(opts, n, runs, size)
+
+  # An element-type label sent to the bottom hangs under whichever of the two
+  # bands is deeper, so every panel's label sits on one line rather than each
+  # under its own. Reserved at the size the band names are set at, which is the
+  # size the drawing caps it to — so the reserve is never the smaller of the two.
+  if (.element_label_below(opts)) {
+    band <- band +
+      ELEMENT_LABEL_GAP_ROWS +
+      .element_label_rows(size %||% HEADER_SIZE_MAX)
+  }
+
+  if (band <= 0) {
     return(0.02)
+  }
+  .clamp(band / n, 0.02, CLASS_FRAC_MAX)
+}
+
+#' The type size the class names under a bracketed panel are set at.
+#'
+#' They would otherwise take the column-header size, and a long class name at
+#' that size wants a band deeper than `CLASS_FRAC_MAX` of the plot — which
+#' `heatmap_class_frac()` then clamps, leaving the name clipped at its far end.
+#' Shrink the size until the band it needs fits the cap, with the same floor the
+#' headers have: below `HEADER_SIZE_MIN` a name is not worth reading, and the
+#' reserve carries whatever still hangs past the cap.
+#'
+#' @param size Numeric. The size the names would be set at (the header size).
+#' @param n_tip Integer. Number of tips.
+#' @param runs List of class-run frames, one per drawn panel.
+#' @param scale Numeric. The plot's design scale, for the floor.
+#' @return Numeric type size, never larger than `size`.
+#' @export
+.class_name_size <- function(size, n_tip, runs, scale = 1) {
+  runs <- Filter(function(r) nrow(r) > 0L, runs %||% list())
+  if (!length(runs) || !is.finite(size) || size <= 0) {
+    return(size)
   }
   chars <- suppressWarnings(max(
     vapply(
@@ -1772,18 +2199,60 @@ heatmap_class_frac <- function(opts, n_tip, runs = list(), size = NULL) {
     ),
     1
   ))
-  if (!is.finite(chars)) {
-    chars <- 1
-  }
-  rows_per_char <- HEADER_CHAR_ROWS *
-    (size %||% HEADER_SIZE_MAX) /
-    HEADER_SIZE_MAX
-  band <- CLASS_GAP_ROWS +
-    CLASS_TICK_ROWS +
-    CLASS_LABEL_GAP_ROWS +
-    chars * rows_per_char
   n <- max(as.integer(n_tip %||% 1L), 1L)
-  .clamp(band / n, 0.02, CLASS_FRAC_MAX)
+  gaps <- CLASS_GAP_ROWS + CLASS_TICK_ROWS + CLASS_LABEL_GAP_ROWS
+  budget <- CLASS_FRAC_MAX * n - gaps
+  floor_size <- HEADER_SIZE_MIN * scale
+  if (budget <= 0 || !is.finite(chars) || chars <= 0) {
+    return(min(size, floor_size))
+  }
+  fit <- budget * HEADER_SIZE_MAX / (chars * HEADER_CHAR_ROWS)
+  min(size, max(fit, floor_size))
+}
+
+# The element-type labels, one per panel that asked for one, at a single y.
+#
+# `specs` are the per-panel records the panel loop collected: what the label
+# says, where its run of columns is centred, and the size it fits that run at.
+# They are emitted together and after the loop because the y they share is only
+# known once every panel has reported — the top one clears the tallest set of
+# gene names on the figure, and the bottom one clears the deepest band under it.
+# Drawn at one y and, at the bottom, one size, so a row of them reads as one
+# annotation rather than as a caption per matrix.
+.element_label_layers <- function(specs, y, colour, cap = NULL) {
+  if (!length(specs)) {
+    return(NULL)
+  }
+  # One layer per panel, each at its own fitted size — not one size for the
+  # whole row. A three-column panel beside a thirty-column one is honestly
+  # constrained, and shrinking the wide panel's title to match the narrow one's
+  # cost both of them their legibility to buy a consistency the reader was not
+  # going to notice: the two sit over visibly different widths.
+  #
+  # Separate layers rather than one with `size` mapped, because a mapped size
+  # needs a size *scale*, and this plot already spends that scale on a mapped
+  # tip-point aesthetic. At most three panels, so at most three layers.
+  lapply(specs, function(s) {
+    size <- if (!is.null(cap) && is.finite(cap)) min(s$size, cap) else s$size
+    geom_text(
+      data = data.frame(
+        x = s$x,
+        y = y,
+        label = s$label,
+        stringsAsFactors = FALSE
+      ),
+      mapping = aes(
+        x = .data[["x"]],
+        y = .data[["y"]],
+        label = .data[["label"]]
+      ),
+      inherit.aes = FALSE,
+      hjust = 0.5,
+      vjust = 0.5,
+      size = size,
+      colour = colour
+    )
+  })
 }
 
 # The bracket-and-name layers for one panel's class runs.
@@ -1868,6 +2337,219 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
   .clamp(col_mm * HEADER_FILL, lo, hi)
 }
 
+# Gene columns reordered so that genes carried by the same isolates sit
+# together, the way the AMR-plot engine's own gene axis is ordered — same
+# distance and same linkage (amr_plot's AMR_CLUSTER_DISTANCES /
+# AMR_CLUSTER_METHODS), so a pair that clusters together there clusters
+# together here.
+#
+# Only the gene axis. The AMR plot clusters both, but this heatmap's rows are
+# the tree's tips in the tree's own order, and reordering them is the one thing
+# a tree panel cannot do — the tree *is* the row order. So there is no isolate
+# dendrogram to offer and none is implied.
+#
+# Clustered on presence, not on the drawn tier: the default distance is
+# Jaccard, which `dist()` only defines against 0/1, and presence is what the
+# AMR plot clusters on too (.column_dist_fn there closes over the presence
+# matrix for exactly this reason). Non-finite distances — two genes with
+# identical all-absent columns under Jaccard — become 0 rather than aborting
+# the render, and a linkage that fails leaves the catalogue order in place.
+.cluster_heat_cols <- function(heat, distance, method) {
+  if (ncol(heat) < 3L || !nrow(heat)) {
+    return(heat)
+  }
+  mat <- matrix(
+    unlist(lapply(heat, function(v) as.integer(as.integer(v) > 1L))),
+    nrow = nrow(heat),
+    dimnames = list(NULL, names(heat))
+  )
+  d <- dist(t(mat), method = distance)
+  d[!is.finite(d)] <- 0
+  hc <- tryCatch(hclust(d, method = method), error = function(e) NULL)
+  if (is.null(hc)) {
+    return(heat)
+  }
+  out <- heat[, hc$order, drop = FALSE]
+  # Carried on the frame rather than recomputed where the dendrogram is drawn:
+  # it is the same tree, and clustering the matrix twice would be the one way
+  # for the drawn dendrogram and the drawn column order to disagree.
+  attr(out, "hclust") <- hc
+  out
+}
+
+# The clustering as segments, hung from `top` and running `depth` rows down.
+#
+# hclust's own coordinates, read the way every dendrogram plot reads them:
+# leaves sit where `$order` puts them (so leaf k is at drawn position
+# `order(hc$order)[k]`), an internal node sits at its merge height and midway
+# between its children, and each merge draws two uprights and the crossbar
+# between them. Heights are normalised to the tallest merge, so the depth is
+# the reader's to size rather than the distance metric's.
+.dendrogram_segments <- function(hc, centres, top, depth) {
+  n <- if (is.null(hc$merge)) 0L else nrow(hc$merge)
+  if (n < 1L || length(centres) != n + 1L) {
+    return(NULL)
+  }
+  at <- order(hc$order)
+  tallest <- suppressWarnings(max(hc$height))
+  if (!is.finite(tallest) || tallest <= 0) {
+    tallest <- 1
+  }
+  node_x <- numeric(n)
+  node_y <- numeric(n)
+  seg <- vector("list", n)
+  for (k in seq_len(n)) {
+    kids <- hc$merge[k, ]
+    kx <- numeric(2)
+    ky <- numeric(2)
+    for (s in 1:2) {
+      if (kids[[s]] < 0) {
+        kx[[s]] <- centres[[at[[-kids[[s]]]]]]
+        ky[[s]] <- top
+      } else {
+        kx[[s]] <- node_x[[kids[[s]]]]
+        ky[[s]] <- node_y[[kids[[s]]]]
+      }
+    }
+    y <- top - hc$height[[k]] / tallest * depth
+    node_x[[k]] <- mean(kx)
+    node_y[[k]] <- y
+    seg[[k]] <- data.frame(
+      x = c(kx[[1]], kx[[2]], kx[[1]]),
+      xend = c(kx[[1]], kx[[2]], kx[[2]]),
+      y = c(ky[[1]], ky[[2]], y),
+      yend = c(y, y, y)
+    )
+  }
+  do.call(rbind, seg)
+}
+
+# Which drug classes a clustered panel's guide lists — nothing for a panel that
+# is not clustered, or whose columns carry no class. The legend solves are
+# sized from this, so it is the one place that decides whether the strip earns
+# a guide.
+.class_guide_levels <- function(panel) {
+  # `!isFALSE` rather than `isTRUE` for the switch, here and for the other
+  # show_* flags, so a snapshot saved before these switches existed restores
+  # with them on — which is how it was drawn when it was saved.
+  if (!isTRUE(panel$cluster) || isFALSE(panel$show_class_strip)) {
+    return(character(0))
+  }
+  cls <- panel$classes %||% character(0)
+  cls <- cls[!is.na(cls) & nzchar(trimws(cls))]
+  sort(unique(as.character(cls)))
+}
+
+# Where a clustered panel's annotations sit under the matrix, and how deep the
+# band is altogether — solved in one place so the reserve
+# (`heatmap_class_frac()`) and the drawing cannot disagree about it.
+#
+# `has_strip` is false for a panel whose genes carry no drug class at all: the
+# strip and the gap under it collapse, and the dendrogram moves up into the
+# room they were holding rather than hanging below an empty band.
+.cluster_band <- function(n_tip, panel, has_strip) {
+  strip_top <- 0.5 - CLASS_STRIP_GAP_ROWS
+  strip_bottom <- if (has_strip) strip_top - CLASS_STRIP_ROWS else strip_top
+  depth <- .dend_rows(n_tip, panel)
+  dend_top <- if (has_strip && depth > 0) {
+    strip_bottom - DEND_GAP_ROWS
+  } else {
+    strip_bottom
+  }
+  list(
+    strip_y = (strip_top + strip_bottom) / 2,
+    dend_top = dend_top,
+    depth = depth,
+    rows = 0.5 - (dend_top - depth)
+  )
+}
+
+# Whether a clustered panel draws its drug-class strip — which is exactly
+# whether its guide has classes to list.
+.strip_drawn <- function(panel) {
+  length(.class_guide_levels(panel)) > 0L
+}
+
+# The colour strip and the dendrogram one clustered panel draws under its
+# matrix, with the fill scale the strip is keyed by.
+#
+# `classes` runs alongside `centres`: one drug class per drawn column, NA where
+# the column has none. Those columns get no tile rather than a grey one — a
+# gap in the strip says "not classified" where a swatch would have to be
+# explained in the guide.
+.heatmap_cluster_layers <- function(
+  panel,
+  classes,
+  centres,
+  cell,
+  hc,
+  n_tip,
+  colour,
+  levels
+) {
+  if (!length(centres)) {
+    return(NULL)
+  }
+  band <- .cluster_band(n_tip, panel, length(levels) > 0L)
+  out <- list()
+
+  if (length(levels)) {
+    keep <- !is.na(classes) & nzchar(trimws(as.character(classes)))
+    fills <- amr_palette(
+      levels,
+      amr_fit_scale(panel$strip_scale %||% CLASS_STRIP_SCALE, length(levels))
+    )
+    tiles <- data.frame(
+      x = centres[keep],
+      y = band$strip_y,
+      class = factor(as.character(classes)[keep], levels = levels),
+      stringsAsFactors = FALSE
+    )
+    out <- list(
+      new_scale_fill(),
+      geom_tile(
+        data = tiles,
+        mapping = aes(
+          x = .data[["x"]],
+          y = .data[["y"]],
+          fill = .data[["class"]]
+        ),
+        inherit.aes = FALSE,
+        width = cell,
+        height = CLASS_STRIP_ROWS
+      ),
+      scale_fill_manual(
+        values = fills,
+        breaks = head(levels, LEGEND_MAX_KEYS),
+        name = CLASS_STRIP_TITLE,
+        drop = FALSE
+      )
+    )
+  }
+
+  segs <- if (band$depth > 0) {
+    .dendrogram_segments(hc, centres, band$dend_top, band$depth)
+  }
+  if (!is.null(segs)) {
+    out <- c(
+      out,
+      list(geom_segment(
+        data = segs,
+        mapping = aes(
+          x = .data[["x"]],
+          xend = .data[["xend"]],
+          y = .data[["y"]],
+          yend = .data[["yend"]]
+        ),
+        inherit.aes = FALSE,
+        colour = colour,
+        linewidth = 0.25
+      ))
+    )
+  }
+  out
+}
+
 # The frame one panel draws, with its rows keyed the way gheatmap matches them.
 #
 # At gene level the source is `amr_matrix` — the wide confidence frame the view
@@ -1917,6 +2599,13 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
     })
     names(heat) <- labels
     rownames(heat) <- md$label
+    if (isTRUE(panel$cluster)) {
+      heat <- .cluster_heat_cols(
+        heat,
+        panel$cluster_distance %||% AMR_CLUSTER_DISTANCE_DEFAULT,
+        panel$cluster_method %||% AMR_CLUSTER_METHOD_DEFAULT
+      )
+    }
     return(heat)
   }
 
@@ -3073,6 +3762,12 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # band below them can be sized from the longest name before it is placed.
   class_runs <- list()
   class_layers <- list()
+  # The element-type labels, split by which end they were sent to, and the
+  # tallest stack of column headers any panel drew — the top labels clear that.
+  element_specs <- list(top = list(), bottom = list())
+  # Held in millimetres, not rows: a stack of rotated names is a fixed physical
+  # height, and the rows under it move with the reserves (see `.drawn_row_mm()`).
+  header_mm_max <- 0
   panels <- if (tree_annotations_drawn(opts)) {
     heatmap_panels(opts, tree_span, label_reserve)$panels
   } else {
@@ -3099,6 +3794,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       offset = pan$offset - cell / 2,
       width = pan$width,
       legend_title = pan$title,
+      # A panel of a hundred genes is a texture rather than a list, and the
+      # names over it are a smear; switched off, the matrix keeps its meaning
+      # through the guide and the class strip.
+      colnames = !isFALSE(pan$show_gene_names),
       # Headers above the matrix, reading upward. Below it they ran into the
       # tree scale bar and off the bottom of the panel, because a drug class
       # name set vertically is taller than the row of space under the last tip.
@@ -3119,14 +3818,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # gheatmap installs a default fill scale of its own, so replacing it is the
     # intended move — but ggplot2 announces every replacement, and this one is
     # not news. Deliberate, so silenced here rather than logged on every draw.
-    # Gene panels colour by AMRFinderPlus's method tiers on the shared
+    # Gene panels colour by AMRFinderPlus's method tiers on this panel's own
     # `amr_confidence_palette`; the dormant presence/absence branch keeps its
     # two-colour fill. Either way the guide is one confidence scale.
-    fill <- if (identical(pan$level, "gene")) {
-      AMR_CONFIDENCE_FILL
-    } else {
-      AMR_PRESENCE_FILL
-    }
+    fill <- .heatmap_fill(pan)
     lvls <- levels(frame[[1]])
     p <- suppressMessages(
       p +
@@ -3146,12 +3841,51 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # Which classes this panel's columns fall into, and where they sit. A
     # circular panel has no room under it — "below the matrix" is the centre of
     # the disc — so the band is a linear-layout annotation only.
+    #
+    # Column k is centred one cell past the offset gheatmap was given, which is
+    # `pan$offset - cell / 2` — so the first column lands on pan$offset +
+    # cell / 2, the middle of the space reserved for it.
+    centres <- max_x + pan$offset - cell / 2 + seq_len(ncol(frame)) * cell
+
+    # How tall this panel's own headers stand *in millimetres*, so the element
+    # labels above them can clear the tallest set on the figure once the drawn
+    # row pitch is known. Zero when the names are off — the element label then
+    # takes the row they would have had.
+    if (!isFALSE(pan$show_gene_names)) {
+      header_mm_max <- max(
+        header_mm_max,
+        HEADER_ROW_PACK *
+          suppressWarnings(max(nchar(names(frame)), 1L)) *
+          TIP_CHAR_EM *
+          tree_header_size(cell, axis_units, axis_in, scale)
+      )
+    }
+
+    # This panel's element-type label, filed under the end it was sent to. The
+    # x is the middle of its own run of columns, so the label reads as naming
+    # that matrix and no other.
+    if (!circular && .element_label_drawn(pan)) {
+      pos <- .element_pos(pan)
+      element_specs[[pos]] <- c(
+        element_specs[[pos]],
+        list(list(
+          label = .element_label_text(pan),
+          x = (centres[[1L]] + centres[[length(centres)]]) / 2,
+          size = .element_label_size(
+            .element_label_text(pan),
+            pan$width * tree_span,
+            axis_units,
+            axis_in,
+            scale,
+            # Never smaller than this panel's own gene names.
+            floor_size = tree_header_size(cell, axis_units, axis_in, scale)
+          )
+        ))
+      )
+    }
+
     runs <- heatmap_class_runs(pan, names(frame))
     if (!circular && nrow(runs)) {
-      # Column k is centred one cell past the offset gheatmap was given, which
-      # is `pan$offset - cell / 2` — so the first column lands on pan$offset +
-      # cell / 2, the middle of the space reserved for it.
-      centres <- max_x + pan$offset - cell / 2 + seq_len(ncol(frame)) * cell
       class_runs <- c(class_runs, list(runs))
       class_layers <- c(
         class_layers,
@@ -3165,27 +3899,109 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         ))
       )
     }
+
+    # A clustered panel gets the strip and the dendrogram in place of those
+    # brackets (heatmap_class_runs returns none for it). Added inside the loop
+    # so the strip's own fill scale is closed by the next panel's
+    # `new_scale_fill()`, which is what keeps two panels' guides apart.
+    if (!circular && isTRUE(pan$cluster)) {
+      for (layer in .heatmap_cluster_layers(
+        pan,
+        (pan$classes %||% character(0))[
+          match(names(frame), pan$labels %||% pan$cols)
+        ],
+        centres,
+        cell,
+        attr(frame, "hclust"),
+        sum(tree_data$isTip),
+        opts$line_color %||% "#000000",
+        .class_guide_levels(pan)
+      )) {
+        p <- suppressMessages(p + layer)
+      }
+    }
   }
 
   # Placed after the loop so every panel's band is set at one size — two panels
   # whose classes were named at different sizes would read as two kinds of
-  # thing rather than one row of annotation.
-  if (length(class_layers)) {
-    band_size <- min(vapply(class_layers, function(l) l$size, numeric(1)))
-    for (l in class_layers) {
-      for (layer in .heatmap_class_layers(
-        l$runs,
-        l$centres,
-        l$cell,
-        band_size,
+  # thing rather than one row of annotation. Shrunk from the header size when a
+  # long class name would otherwise want a band deeper than the reserve can
+  # hold, so the names are never clipped at their far end.
+  band_size <- if (length(class_layers)) {
+    .class_name_size(
+      min(vapply(class_layers, function(l) l$size, numeric(1))),
+      sum(tree_data$isTip),
+      class_runs,
+      .scale_of(opts)
+    )
+  } else {
+    NULL
+  }
+  for (l in class_layers) {
+    for (layer in .heatmap_class_layers(
+      l$runs,
+      l$centres,
+      l$cell,
+      band_size,
+      opts$line_color %||% "#000000"
+    )) {
+      p <- p + layer
+    }
+  }
+
+  # The element-type labels, placed once the two things they have to clear are
+  # known: above, the tallest stack of column headers; below, the deepest band —
+  # the same `.bottom_band_rows()` the reserve under them was measured from.
+  #
+  # The headers' height is physical, so it is converted at the pitch the plot is
+  # really drawn at rather than the nominal one. The reserves it needs for that
+  # are the very ones set on the scale below, asked for here first.
+  if (length(element_specs$top) || length(element_specs$bottom)) {
+    n_tip_drawn <- sum(tree_data$isTip)
+    band_rows <- .bottom_band_rows(opts, n_tip_drawn, class_runs, band_size)
+    row_mm <- .drawn_row_mm(
+      plot_height_in,
+      .header_y(opts, n_tip_drawn) + band_rows,
+      heatmap_header_frac(
+        opts,
+        n_tip_drawn,
+        tree_span,
+        axis_units,
+        panel_in,
+        plot_height_in
+      ),
+      heatmap_class_frac(opts, n_tip_drawn, class_runs, band_size)
+    )
+    nudge <- 25.4 * TIP_ROW_IN / row_mm
+
+    if (length(element_specs$top)) {
+      for (layer in .element_label_layers(
+        element_specs$top,
+        .header_y(opts, n_tip_drawn) +
+          header_mm_max / row_mm +
+          ELEMENT_LABEL_GAP_ROWS * nudge,
         opts$line_color %||% "#000000"
       )) {
         p <- p + layer
       }
     }
-    # Room under the last tip for the names hanging there, measured the same
-    # way the header reserve above is. Replacing the y scale a second time is
-    # deliberate, and its announcement is not news.
+    if (length(element_specs$bottom)) {
+      for (layer in .element_label_layers(
+        element_specs$bottom,
+        0.5 - band_rows - ELEMENT_LABEL_GAP_ROWS * nudge,
+        opts$line_color %||% "#000000",
+        cap = band_size
+      )) {
+        p <- p + layer
+      }
+    }
+  }
+  # Room under the last tip for whatever hangs there — the class names, or a
+  # clustered panel's strip and dendrogram, which were drawn in the loop but
+  # need the same reserve. Measured the same way the header reserve above is.
+  # Replacing the y scale a second time is deliberate, and its announcement is
+  # not news.
+  if (length(panels)) {
     p <- suppressMessages(
       p +
         scale_y_continuous(

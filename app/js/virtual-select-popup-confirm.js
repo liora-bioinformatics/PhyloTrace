@@ -98,6 +98,13 @@ document.addEventListener("keydown", function (event) {
 $(document).on("shiny:value", function () {
   setTimeout(scan, 0);
 });
+// A renderUI'd select is not initialised yet when shiny:value fires - the
+// input binding runs after - so that scan finds no instance to bind and the
+// popup came up without its Confirm button. shiny:bound fires per input once
+// its binding has run, which is exactly when there is something to bind.
+$(document).on("shiny:bound", function (event) {
+  if (event.bindingType === "input") setTimeout(scan, 0);
+});
 $(document).on("shown.bs.modal", function () {
   setTimeout(scan, 0);
 });

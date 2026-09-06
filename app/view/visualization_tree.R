@@ -35,20 +35,13 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
-  app /
-    logic /
-    amr_plot[
-      amr_confidence_frame,
-      AMR_CONFIDENCE_STATES,
-      load_amr_hits,
-    ],
+  app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
   app /
     logic /
     field_labels[
       amr_field_map,
-      AMR_SECTIONS,
       grouped_field_choices,
     ],
   app /
@@ -81,7 +74,12 @@ box::use(
   app /
     logic /
     tree_plot[
+      AMR_CONFIDENCE_COLORS,
       build_tree_ggtree,
+      CLASS_STRIP_SCALE,
+      DEND_DEPTH_DEFAULT,
+      ELEMENT_POS_DEFAULT,
+      HEAT_SCALE_DEFAULT,
       LEGEND_MAX_KEYS,
       MIN_PRINT_PT,
       scale_tree_opts,
@@ -93,7 +91,6 @@ box::use(
       tree_panel_width_in,
       TREE_FIT_DEFAULTS
     ],
-  app / logic / database_functions[AMR_ABSENT],
   app / logic / phylo[compute_phylo_tree],
   app / logic / viz_export[CM_PER_IN, save_plot_export],
   app /
@@ -105,6 +102,7 @@ box::use(
       viz_color,
       field_select,
       granularity_select,
+      layer_action_btn,
       update_field_select,
       update_scale_select,
       scale_select,
@@ -135,6 +133,11 @@ LAYER_DEFAULTS <- layer_defaults("tree", aesthetic = "tiplab_color")
 #
 # One column per gene, coloured by the AMRFinderPlus method tier of the call
 # (Absent .. Perfect), the same tiers the AMR-plot engine's gene heatmap uses.
+#
+# One panel per element type (Resistance / Virulence / Stress), each carrying
+# its own gene set, its own four confidence colours and its own column order —
+# the Heatmap tab's two modals, genes and style. The gene axis is the only one
+# a panel can order: its rows are the tree's tips.
 
 # Does any mapping draw on the tip points? Three answers hang off this one
 # question — whether the points come on with the mapping, whether their switch
@@ -148,58 +151,236 @@ LAYER_DEFAULTS <- layer_defaults("tree", aesthetic = "tiplab_color")
   ))
 }
 
-# One heatmap panel's controls: a switch and a column picker. One card per
-# report abritamr writes, and both can be shown at once — resistance genes and
-# virulence/stress genes are different findings about the same isolate, and
-# reading one against the other is what having two panels is for.
+# How a heatmap panel is drawn, as opposed to what it draws. Split out from the
+# rest of the record because these are exactly the fields the edit modal owns,
+# and because a snapshot saved before they existed has to restore with them —
+# .normalize_heatmaps() fills them in from here.
 #
-# Rendered statically, and only their *choices* are filled in server-side. Built
-# in a renderUI they were re-created on every interaction (changing a control is
-# what changes the record the renderUI read), each time from
-# `choices = character(0)` — which is why the list came up empty, why a chosen
-# subset vanished, and why the tree drew twice.
-.heatmap_card <- function(ns, panel, title, hint) {
+# The four colours are the AMR-plot engine's own gene-heatmap defaults, taken
+# from tree_plot rather than written out again, so a panel left alone still
+# reads at the same colour as the same gene on the AMR tab. The cluster
+# distance and linkage are amr_plot's defaults for the same reason, and are
+# inert until clustering is switched on.
+HEATMAP_STYLE_DEFAULTS <- list(
+  cluster = FALSE,
+  cluster_distance = amr_plot$AMR_CLUSTER_DISTANCE_DEFAULT,
+  cluster_method = amr_plot$AMR_CLUSTER_METHOD_DEFAULT,
+  dend_depth = DEND_DEPTH_DEFAULT,
+  color_absent = AMR_CONFIDENCE_COLORS[["absent"]],
+  color_partial = AMR_CONFIDENCE_COLORS[["partial"]],
+  color_strong = AMR_CONFIDENCE_COLORS[["strong"]],
+  color_present = AMR_CONFIDENCE_COLORS[["present"]],
+  # Which class vocabulary files this panel's genes: abritamr's curated rollup
+  # or AMRFinderPlus's own. Per panel rather than per plot, because a virulence
+  # panel and a resistance panel are not filed by the same authority anyway.
+  vocabulary = amr_plot$AMR_CLASS_VOCABULARY_DEFAULT,
+  show_gene_names = TRUE,
+  show_class_names = TRUE,
+  show_class_strip = TRUE,
+  # Whether the panel names its element type on the figure, and at which end.
+  # Two matrices side by side are otherwise told apart only by their guide
+  # titles, which sit off at the edge of the plot.
+  show_element_type = FALSE,
+  element_pos = ELEMENT_POS_DEFAULT,
+  # Which of the two colour controls the panel is drawn from: the four tier
+  # pickers ("tiers") or one sequential ramp across the same tiers ("scale").
+  # The modal's segmented control sets it; tree_plot's `.heatmap_fill()` reads
+  # it. Both values are kept, so switching back and forth loses neither.
+  color_mode = "tiers",
+  heat_scale = HEAT_SCALE_DEFAULT,
+  # Palette the drug-class strip is keyed by. Defaulted to the shared
+  # CLASS_STRIP_SCALE so a class reads the same colour as on the AMR tab until
+  # the reader picks another in the colour modal.
+  strip_scale = CLASS_STRIP_SCALE
+)
+
+# The fields the sidebar's Labels and Clustering accordions own, as opposed to
+# the ones the per-panel colour modal owns.
+#
+# Every panel on a tree carries the same value for these: they describe how the
+# heatmap block as a whole is arranged and labelled, and two matrices side by
+# side with one clustered and one not — or one naming its classes and one not —
+# read as a mistake rather than as a choice. Colour is the opposite case, which
+# is why it stayed per panel.
+HEATMAP_SHARED_FIELDS <- c(
+  "show_gene_names",
+  "show_class_names",
+  "show_element_type",
+  "element_pos",
+  "vocabulary",
+  "cluster",
+  "cluster_distance",
+  "cluster_method",
+  "show_class_strip",
+  "dend_depth"
+)
+
+# The sidebar's list of heatmap panels — one card per AMR element type the user
+# has added (Resistance / Virulence / Stress), each with a genes, an edit and a
+# remove button. Deliberately the same card as viz_layers$layer_cards() draws
+# for a mapping layer (same CSS classes, same layer_action_btn), because both
+# are "a list of removable things configured in a sidebar" — a heatmap panel
+# just is not shaped like a mapping layer (no aesthetic/palette/granularity),
+# so it gets its own summary line rather than being forced through
+# .layer_meta().
+#
+# Two buttons rather than one, because a panel is configured along two
+# unrelated axes: *which* genes it carries, and how they are drawn. Folding the
+# gene picker into the style modal put a searchable list of a hundred symbols
+# above four colour swatches, and the swatches were below the fold.
+#
+# The genes button opens the picker itself rather than a dialog around it — the
+# picker is already a full-screen popup with its own search, Confirm and Cancel
+# (showDropboxAsPopup, plus app/js/virtual-select-popup-confirm.js), so the
+# modal it used to sit in was a second frame around a frame. Each card carries
+# its own select, parked off-screen; the button calls the widget's own open().
+.heatmap_gene_input_id <- function(record_id) {
+  paste0("nj_heatmap_cols_", record_id)
+}
+
+# The button that opens one card's gene picker. Not layer_action_btn: this one
+# reaches straight into the widget instead of setting an input, so nothing has
+# to round-trip through the server before the list appears.
+#
+# Deferred a tick, which is the whole reason a plain `e.open()` here did
+# nothing: virtual-select closes an open dropbox from a click handler on
+# `document`, so the very click that opened it went on bubbling and closed it
+# again in the same event. Opening from a timeout puts it after that handler
+# has run, rather than relying on stopPropagation to outrun a listener whose
+# phase this code does not control.
+.heatmap_genes_btn <- function(ns, record_id) {
+  target <- ns(.heatmap_gene_input_id(record_id))
+  shiny$tags$button(
+    type = "button",
+    class = "btn btn-sm tree-layer_btn",
+    title = "Choose genes",
+    `aria-label` = "Choose genes",
+    onclick = sprintf(
+      paste0(
+        "var e=document.getElementById('%s');",
+        "if(e&&e.open){setTimeout(function(){e.open();},0);}"
+      ),
+      target
+    ),
+    shiny$icon("dna")
+  )
+}
+
+.heatmap_layer_cards <- function(ns, layers, catalog_for) {
+  if (!length(layers)) {
+    return(shiny$div(
+      class = "text-muted fst-italic mb-2 tree-layer-empty",
+      "No heatmaps yet."
+    ))
+  }
   shiny$div(
-    class = "tree-heatmap-card",
-    id = ns(paste0("nj_heatcard_", panel)),
-    input_switch(ns(paste0("nj_heatmap_", panel)), title, FALSE),
-    shiny$div(class = "text-muted small mb-2", hint),
-    virtualSelectInput(
-      ns(paste0("nj_heatcols_", panel)),
-      "Columns",
-      choices = character(0),
-      selected = character(0),
-      multiple = TRUE,
-      search = TRUE,
-      # Without this, the header checkbox selects every column, not just the
-      # ones the search term currently matches.
-      selectAllOnlyVisible = TRUE,
-      searchPlaceholderText = "Search columns ...",
-      placeholder = "All columns",
-      hasOptionDescription = TRUE,
-      optionsCount = 5,
-      noOfDisplayValues = 2,
-      dropboxWrapper = "body",
-      showDropboxAsPopup = TRUE,
-      popupDropboxBreakpoint = "10000px",
-      updateOn = "close",
-      width = "100%"
-    )
+    class = "tree-layer-list",
+    lapply(layers, function(h) {
+      cat <- catalog_for(h)
+      total <- nrow(cat)
+      n_sel <- length(h$cols)
+      meta <- if (!total) {
+        "No genes available"
+      } else if (n_sel >= total) {
+        sprintf("%d gene%s", total, if (total == 1L) "" else "s")
+      } else {
+        sprintf("%d of %d genes", n_sel, total)
+      }
+      if (isTRUE(h$cluster)) {
+        meta <- paste(meta, "· clustered")
+      }
+      shiny$div(
+        class = "tree-layer-card",
+        shiny$div(
+          class = "tree-layer_body",
+          shiny$div(class = "tree-layer_title", title = h$title, h$title),
+          shiny$div(class = "tree-layer_meta", meta)
+        ),
+        .heatmap_genes_btn(ns, h$id),
+        # Colours only. How the panel is *arranged* — its labels and its
+        # clustering — is shared across every panel and lives in the accordions
+        # under the card list, so the one thing left that is this panel's alone
+        # is what it is coloured with.
+        layer_action_btn(
+          ns,
+          "nj_heatmap_colors",
+          h$id,
+          "palette",
+          "Heatmap colours"
+        ),
+        layer_action_btn(
+          ns,
+          "nj_heatmap_delete",
+          h$id,
+          "xmark",
+          "Remove heatmap"
+        ),
+        # Parked off-screen, opened by the button above. It has to be in the
+        # document for virtual-select to have initialised it — and in the card,
+        # so it is torn down with the card it belongs to.
+        shiny$div(
+          class = "tree-layer_genes",
+          .heatmap_gene_select(ns, h, cat)
+        )
+      )
+    })
+  )
+}
+
+# One card's gene picker. Multi-select popups in this app stage their edits and
+# commit on Confirm (virtual-select-popup-confirm.js), so `updateOn = "close"`
+# reports once, with what the reader confirmed — the Apply button the old modal
+# needed is the popup's own.
+.heatmap_gene_select <- function(ns, h, cat) {
+  virtualSelectInput(
+    ns(.heatmap_gene_input_id(h$id)),
+    label = NULL,
+    choices = if (nrow(cat)) {
+      prepare_choices(
+        cat,
+        label = label,
+        value = col,
+        group_by = group,
+        description = description
+      )
+    } else {
+      character(0)
+    },
+    selected = h$cols,
+    multiple = TRUE,
+    search = TRUE,
+    # Without this, the header checkbox selects every gene, not just the ones
+    # the search term currently matches.
+    selectAllOnlyVisible = TRUE,
+    searchPlaceholderText = "Search genes ...",
+    placeholder = "All genes",
+    hasOptionDescription = TRUE,
+    optionsCount = 5,
+    noOfDisplayValues = 2,
+    dropboxWrapper = "body",
+    showDropboxAsPopup = TRUE,
+    popupDropboxBreakpoint = "10000px",
+    updateOn = "close",
+    width = "100%"
   )
 }
 
 .normalize_heatmaps <- function(x) {
   out <- normalize_layer_records(
     x,
-    list(
-      kind = NA_character_,
-      level = "gene",
-      section = NA_character_,
-      cols = character(0),
-      labels = character(0),
-      classes = character(0),
-      palette = "Reds",
-      title = NA_character_
+    c(
+      list(
+        id = NA_character_,
+        kind = NA_character_,
+        level = "gene",
+        element = NA_character_,
+        cols = character(0),
+        labels = character(0),
+        classes = character(0),
+        palette = "Reds",
+        title = NA_character_
+      ),
+      HEATMAP_STYLE_DEFAULTS
     )
   )
   if (is.null(out)) {
@@ -421,10 +602,10 @@ tree_controls <- function(ns, options_ui = NULL) {
           step = 0.1,
           ticks = FALSE
         ),
-        pickerInput(
+        virtualSelectInput(
           ns("nj_layout"),
           "Layout",
-          list(
+          choices = list(
             Linear = c(
               Rectangular = "rectangular",
               Roundrect = "roundrect",
@@ -432,7 +613,16 @@ tree_controls <- function(ns, options_ui = NULL) {
               Ellipse = "ellipse"
             ),
             Circular = c(Circular = "circular", Inward = "inward")
-          )
+          ),
+          selected = "rectangular",
+          # A fixed six-item list, so no search — but the same body-appended
+          # popup the other right-sidebar selects use, so the dropdown clears
+          # the sidebar rather than being clipped inside it.
+          search = FALSE,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          width = "100%"
         ),
         # How far a radial tree opens between its last tip and its first.
         # Generate solves it from what the ring headers need
@@ -547,31 +737,137 @@ tree_controls <- function(ns, options_ui = NULL) {
         # silently withheld, which is what left the old shape picker missing
         # entries with no explanation.
         field_select(ns, "nj_layer_add", "Map a variable"),
-        shiny$uiOutput(ns("nj_layers_ui")),
-        shiny$hr(),
-        accordion(
-          open = FALSE,
-          accordion_panel(
-            "Heatmaps",
-            icon = shiny$icon("border-all"),
-            # Static, not a renderUI. The controls used to be rebuilt whenever
-            # the heatmap record changed — and since changing a control *is*
-            # what changes the record, every interaction re-created the picker
-            # from `choices = character(0)` and discarded the selection. That is
-            # why the column list came up empty, why a chosen subset vanished,
-            # and why the tree drew twice. Only the choices are server-side now.
-            shiny$uiOutput(ns("nj_heatmap_none")),
-            .heatmap_card(
-              ns,
-              "amr",
-              "Resistance genes",
-              "One column per gene, shaded by how confident the call is."
+        shiny$uiOutput(ns("nj_layers_ui"))
+      ),
+      # AMR heatmap ------------------------------------------------------------
+      nav_panel(
+        "Heatmap",
+        icon = shiny$icon("border-all"),
+        # Same shape as Mapping: a picker adds a panel with default settings —
+        # every gene of that element type — and the panel appears below as a
+        # card, editable and removable exactly like a mapping layer. Editing
+        # opens a modal to include/exclude genes, rather than an always-visible
+        # picker per panel: with three possible panels a static control per one
+        # spent sidebar space on the two the reader had not turned on yet.
+        shiny$uiOutput(ns("nj_heatmap_none")),
+        virtualSelectInput(
+          ns("nj_heatmap_add"),
+          "Add a heatmap",
+          choices = character(0),
+          selected = character(0),
+          multiple = FALSE,
+          search = FALSE,
+          placeholder = "Add a heatmap ...",
+          autoSelectFirstOption = FALSE,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          width = "100%"
+        ),
+        shiny$uiOutput(ns("nj_heatmap_layers_ui")),
+        # Shared across every panel, so they sit under the card list rather
+        # than inside any one card's dialog. Static rather than rendered: an
+        # input that is torn down and rebuilt loses the value the browser holds
+        # for it, and these have to survive a panel being added or removed.
+        # Hidden wholesale while there is no panel to apply them to
+        # (`sync_heatmap_shared_state()`).
+        shiny$div(
+          id = ns("nj_heatmap_shared"),
+          accordion(
+            open = FALSE,
+            accordion_panel(
+              "Labels",
+              icon = shiny$icon("tag"),
+              input_switch(
+                ns("nj_heatmap_gene_names"),
+                "Gene names",
+                HEATMAP_STYLE_DEFAULTS$show_gene_names
+              ),
+              # Clustered columns are not in class order to bracket and name,
+              # so this is disabled while clustering is on and the drug-class
+              # strip says the same thing instead.
+              input_switch(
+                ns("nj_heatmap_class_names"),
+                "Class names",
+                HEATMAP_STYLE_DEFAULTS$show_class_names
+              ),
+              input_switch(
+                ns("nj_heatmap_element"),
+                "Element type",
+                HEATMAP_STYLE_DEFAULTS$show_element_type
+              ),
+              # Which end of the matrix that label goes to. Shown only once it
+              # has something to place — an orphan Top/Bottom control above a
+              # switch that is off reads as a setting with no subject.
+              shiny$conditionalPanel(
+                condition = "input.nj_heatmap_element",
+                ns = ns,
+                radioGroupButtons(
+                  ns("nj_heatmap_element_pos"),
+                  NULL,
+                  choiceNames = c("Top", "Bottom"),
+                  choiceValues = c("top", "bottom"),
+                  selected = HEATMAP_STYLE_DEFAULTS$element_pos,
+                  justified = TRUE,
+                  size = "sm",
+                  width = "100%"
+                )
+              ),
+              # Which authority files the genes. It re-groups every card's
+              # picker and re-orders every panel's columns, so it is a decision
+              # about the whole heatmap block rather than about one matrix.
+              pickerInput(
+                ns("nj_heatmap_vocabulary"),
+                "Classification",
+                choices = amr_plot$AMR_CLASS_VOCABULARIES,
+                selected = HEATMAP_STYLE_DEFAULTS$vocabulary
+              )
             ),
-            .heatmap_card(
-              ns,
-              "vir",
-              "Virulence / stress genes",
-              "The same, for abritamr's virulence and stress report."
+            accordion_panel(
+              "Clustering",
+              icon = shiny$icon("sitemap"),
+              input_switch(
+                ns("nj_heatmap_cluster"),
+                "Cluster genes",
+                HEATMAP_STYLE_DEFAULTS$cluster
+              ),
+              # Always on screen, disabled until "Cluster genes" is on
+              # (`sync_heatmap_shared_state()`). They describe an ordering only
+              # computed while clustering, but a reader deciding whether to turn
+              # it on can see what it will offer.
+              #
+              # Plain selectInputs, not pickerInputs: shinyjs greys a native
+              # <select> outright, where a disabled pickerInput keeps its own
+              # button drawn as live.
+              shiny$selectInput(
+                ns("nj_heatmap_distance"),
+                "Distance",
+                choices = amr_plot$AMR_CLUSTER_DISTANCES,
+                selected = HEATMAP_STYLE_DEFAULTS$cluster_distance
+              ),
+              shiny$selectInput(
+                ns("nj_heatmap_method"),
+                "Linkage",
+                choices = amr_plot$AMR_CLUSTER_METHODS,
+                selected = HEATMAP_STYLE_DEFAULTS$cluster_method
+              ),
+              input_switch(
+                ns("nj_heatmap_strip"),
+                "Drug class strip",
+                HEATMAP_STYLE_DEFAULTS$show_class_strip
+              ),
+              # Zero (the default) draws no dendrogram while keeping the
+              # clustered order.
+              shiny$sliderInput(
+                ns("nj_heatmap_dend"),
+                "Dendrogram depth",
+                min = 0,
+                max = 20,
+                value = HEATMAP_STYLE_DEFAULTS$dend_depth,
+                step = 1,
+                post = "%",
+                ticks = FALSE
+              )
             )
           )
         )
@@ -1174,6 +1470,15 @@ server <- function(
     reset_tree_settings <- function() {
       shinyjs::reset(id = "controls_wrap")
 
+      # virtual-select is a custom binding shinyjs::reset() does not restore —
+      # the layout picker has to be put back to its default by hand, the same
+      # as the metadata-backed selects below.
+      updateVirtualSelect(
+        inputId = "nj_layout",
+        session = session,
+        selected = "rectangular"
+      )
+
       reset_viz_colors(
         session,
         nj_color = "#000000",
@@ -1203,13 +1508,22 @@ server <- function(
     # stale button's id to the layer that replaced it.
     nj_layer_seq <- shiny$reactiveVal(0L)
 
-    # The heatmap panels, in draw order: drug classes then genes.
+    # The heatmap panels, one per AMR element type the user has added, in the
+    # order they were added. Same id discipline as the mapping layers, kept in
+    # its own sequence so a heatmap card and a mapping card never share an id.
     nj_heatmaps <- shiny$reactiveVal(list())
+    nj_heatmap_layer_seq <- shiny$reactiveVal(0L)
 
     next_layer_id <- function() {
       n <- nj_layer_seq() + 1L
       nj_layer_seq(n)
       paste0("L", n)
+    }
+
+    next_heatmap_layer_id <- function() {
+      n <- nj_heatmap_layer_seq() + 1L
+      nj_heatmap_layer_seq(n)
+      paste0("H", n)
     }
 
     profiles <- shiny$reactive({
@@ -1943,134 +2257,124 @@ server <- function(
     # resolutions is not a comparison, it is a duplicate — and it cost a column
     # run and a legend to say so.
 
-    # What the two panels are, and which of abritamr's sections each draws.
-    # Keyed by the suffix their controls carry, so the id, the catalogue and
-    # the record it produces all come off one table.
-    HEATMAP_PANELS <- list(
-      amr = list(section = AMR_SECTIONS[["resistance"]], title = "AMR genes"),
-      vir = list(
-        section = AMR_SECTIONS[["virulence"]],
-        title = "Virulence / stress genes"
-      )
-    )
-
-    # The gene-level matrix the heatmap panels draw: one column per gene column
-    # of the metadata table (`amr_field_map`), holding the AMRFinderPlus method
-    # tier of that isolate/gene from `amr_results`. Re-sourced through
-    # `amr_confidence_frame()` so a gene reads at the same tier and colour as the
-    # AMR-plot engine's own gene heatmap — the metadata columns' own values are
-    # abritamr's coarser rollup and are not read here.
-    # No req(): this is pulled from an observer building both panels, and a
-    # req() would abort it — a database with no AMR screen is a value, not a
-    # reason to stop.
+    # The gene-level matrix the heatmap panels draw: one factor column per gene
+    # symbol found in `amr_results`, holding the AMRFinderPlus method tier of
+    # that isolate/gene (`amr_confidence_frame()`) — the same tiers and the same
+    # source table the AMR-plot engine's own gene heatmap draws from, so a gene
+    # reads at the identical tier and colour in both.
+    # No req(): a database with no AMR screen is a value here, not a reason for
+    # this (or the catalogue below) to stop.
     amr_matrix <- shiny$reactive({
       db_events$depend(db_rev, "amr", "isolates")
       path <- db_path()
       meta <- viz_metadata()
       if (
-        is.null(path) || !length(path) || is.na(path) || !nzchar(path) ||
+        is.null(path) ||
+          !length(path) ||
+          is.na(path) ||
+          !nzchar(path) ||
           is.null(meta)
       ) {
         return(NULL)
       }
-      map <- amr_field_map(meta)
-      map <- map[map$role == "gene" & map$field %in% names(meta), , drop = FALSE]
-      if (!nrow(map)) {
-        return(NULL)
-      }
-      conf <- amr_confidence_frame(
-        load_amr_hits(path),
-        meta$isolate,
-        genes = unique(map$gene)
-      )
-      # gheatmap keys the frame by column name, so it must carry the positional
-      # `amr_gN` names the panels select on; the tier data is looked up by the
-      # gene each column stands for. A gene the screen never reported reads
-      # Absent across the board.
-      absent <- factor(rep("Absent", nrow(meta)), levels = AMR_CONFIDENCE_STATES)
-      out <- data.frame(
-        isolate = meta$isolate,
-        stringsAsFactors = FALSE,
-        check.names = FALSE
-      )
-      for (i in seq_len(nrow(map))) {
-        col <- conf[[map$gene[i]]]
-        out[[map$field[i]]] <- if (is.null(col)) absent else col
-      }
-      out
+      amr_plot$amr_confidence_frame(amr_plot$load_amr_hits(path), meta$isolate)
     })
 
-    # Every column one level could draw, with what the picker needs to describe
-    # it: a label, the group to file it under, and a sub-text. Both levels
-    # answer in the same shape, so the picker does not care which it is showing.
+    # Every gene one panel could draw, with what the picker needs to describe
+    # it: a label, the drug class to file it under, and a sub-text. Read
+    # straight off `amr_results` (via `load_amr_hits`/`amr_gene_meta`) rather
+    # than the metadata table, restricted to isolates actually in this tree —
+    # a gene only some other isolate carries has nothing to show here.
+    #
+    # Both class vocabularies are carried, one column each, rather than one
+    # `group` resolved from a setting: they are two readings of the same hits
+    # (see amr_plot$AMR_CLASS_VOCABULARIES), the switch is per panel, and
+    # re-reading the database every time a panel changes vocabulary would cost
+    # a query to answer a question already in hand.
     .empty_catalog <- data.frame(
       col = character(0),
       label = character(0),
-      group = character(0),
+      rollup = character(0),
+      amrfinder = character(0),
+      element = character(0),
       description = character(0),
       stringsAsFactors = FALSE
     )
 
-    # A named-attribute lookup answers NA for a column the attribute does not
-    # cover, and abritamr itself can hand over an empty drug class or gene name.
-    # Both have to fall back: virtual-select draws a row per group whatever its
-    # label says, so a blank one reaches the dropdown as an empty, unselectable
-    # line.
-    .or_default <- function(x, default) {
-      unname(ifelse(is.na(x) | !nzchar(trimws(x)), default, x))
-    }
-
-    # Read off the metadata table rather than the call matrix. Both carry the
-    # same gene columns — the matrix is what the panel *draws*, because it keeps
-    # the call states unfilled — but the metadata frame is what the variable
-    # pickers are already built from, so listing the columns from it is what
-    # makes a gene describe itself the same way wherever it is offered.
     gene_catalog <- shiny$reactive({
+      db_events$depend(db_rev, "amr", "isolates")
+      path <- db_path()
       meta <- viz_metadata()
-      if (is.null(meta)) {
+      if (
+        is.null(path) ||
+          !length(path) ||
+          is.na(path) ||
+          !nzchar(path) ||
+          is.null(meta) ||
+          !nrow(meta)
+      ) {
         return(.empty_catalog)
       }
-      map <- amr_field_map(meta)
-      map <- map[
-        map$role == "gene" & map$field %in% names(meta),
-        ,
-        drop = FALSE
-      ]
-      if (!nrow(map)) {
+      hits <- amr_plot$load_amr_hits(path)
+      hits <- hits[hits$isolate %in% meta$isolate, , drop = FALSE]
+      if (!nrow(hits)) {
         return(.empty_catalog)
       }
-      hits <- vapply(
-        map$field,
-        function(c) {
-          v <- trimws(as.character(meta[[c]]))
-          sum(!is.na(v) & nzchar(v) & v != AMR_ABSENT)
-        },
+      genes <- sort(unique(hits$gene_symbol))
+      sections <- amr_plot$load_amr_sections(path)
+      # The curated rollup class per gene — the same grouping the AMR-plot
+      # engine's heatmap files its columns under by default — and AMRFinder's
+      # own beside it. The element type is the same either way.
+      rollup <- amr_plot$amr_gene_meta(hits, genes, sections, "rollup")
+      amrfinder <- amr_plot$amr_gene_meta(hits, genes, sections, "amrfinder")
+      counts <- vapply(
+        genes,
+        function(g) length(unique(hits$isolate[hits$gene_symbol == g])),
         integer(1)
       )
       data.frame(
-        col = map$field,
-        label = .or_default(map$gene, map$field),
-        # Filed under the drug class, which is how a reader looks for a gene.
-        group = .or_default(map$class, "Other"),
-        # Which panel the gene belongs to. The section is the report abritamr
-        # found it in, and it is what splits the two panels' catalogues.
-        section = .or_default(map$section, AMR_SECTIONS[["resistance"]]),
+        col = genes,
+        label = genes,
+        rollup = rollup$group,
+        amrfinder = amrfinder$group,
+        element = rollup$element_type,
         description = sprintf(
           "%d isolate%s",
-          hits,
-          ifelse(hits == 1L, "", "s")
+          counts,
+          ifelse(counts == 1L, "", "s")
         ),
         stringsAsFactors = FALSE
       )
     })
 
-    # One panel's columns: the genes from its own section, in catalogue order.
-    heatmap_catalog <- function(panel) {
+    # One element type's genes, filed under the vocabulary the panel asked for
+    # and ordered by it — the column order is the class order, so switching
+    # vocabulary re-files *and* re-orders the panel.
+    element_catalog <- function(element, vocabulary = NULL) {
       cat <- gene_catalog()
       if (!nrow(cat)) {
+        cat$group <- character(0)
         return(cat)
       }
-      cat[cat$section == HEATMAP_PANELS[[panel]]$section, , drop = FALSE]
+      cat <- cat[cat$element == element, , drop = FALSE]
+      key <- if (identical(vocabulary, "amrfinder")) "amrfinder" else "rollup"
+      cat$group <- cat[[key]]
+      cat[order(cat$group, cat$label), , drop = FALSE]
+    }
+
+    # Element types with at least one gene, in Resistance/Virulence/Stress
+    # order — the order a heatmap added for each reads top to bottom in too.
+    available_elements <- shiny$reactive({
+      cat <- gene_catalog()
+      if (!nrow(cat)) {
+        return(character(0))
+      }
+      intersect(unname(amr_plot$AMR_ELEMENT_TYPES), unique(cat$element))
+    })
+
+    element_title <- function(element) {
+      types <- amr_plot$AMR_ELEMENT_TYPES
+      paste(names(types)[match(element, types)], "genes")
     }
 
     output$nj_heatmap_none <- shiny$renderUI({
@@ -2083,87 +2387,378 @@ server <- function(
       )
     })
 
-    # Fill each picker's choices once its catalogue is known, and again if the
-    # database changes. A selection that still exists is kept — this is an
-    # update, not a rebuild, which is the whole reason the controls are static.
-    for (key in names(HEATMAP_PANELS)) {
-      local({
-        panel <- key
-        picker <- paste0("nj_heatcols_", panel)
+    # The "Add a heatmap" picker offers only element types the screen actually
+    # found and that do not already have a panel — once all three are added
+    # there is nothing left to pick, same as a mapping picker running out of
+    # variables it makes sense to map twice.
+    shiny$observe({
+      added <- vapply(nj_heatmaps(), function(h) h$element, character(1))
+      choices <- setdiff(available_elements(), added)
+      types <- amr_plot$AMR_ELEMENT_TYPES
+      updateVirtualSelect(
+        inputId = "nj_heatmap_add",
+        session = session,
+        choices = setNames(choices, names(types)[match(choices, types)]),
+        selected = character(0)
+      )
+    })
 
-        shiny$observe({
-          cat <- heatmap_catalog(panel)
-          shiny$req(nrow(cat))
-          keep <- intersect(
-            shiny$isolate(input[[picker]]) %||% character(0),
-            cat$col
-          )
-          updateVirtualSelect(
-            inputId = picker,
-            session = session,
-            choices = prepare_choices(
-              cat,
-              label = label,
-              value = col,
-              group_by = group,
-              description = description
-            ),
-            selected = keep
-          )
-        })
+    shiny$observeEvent(input$nj_heatmap_add, {
+      element <- input$nj_heatmap_add
+      shiny$req(nzchar(element %||% ""))
+      updateVirtualSelect(
+        inputId = "nj_heatmap_add",
+        session = session,
+        selected = character(0)
+      )
 
-        # A panel with nothing to show cannot be switched on: a database whose
-        # screen found no virulence gene has nothing to put in that column run.
-        shiny$observe({
-          shinyjs::toggleState(
-            id = paste0("nj_heatmap_", panel),
-            condition = nrow(heatmap_catalog(panel)) > 0L
-          )
-        })
-      })
+      layers <- nj_heatmaps()
+      if (
+        any(vapply(
+          layers,
+          function(h) identical(h$element, element),
+          logical(1)
+        ))
+      ) {
+        return()
+      }
+      cat <- element_catalog(element, HEATMAP_STYLE_DEFAULTS$vocabulary)
+      if (!nrow(cat)) {
+        return()
+      }
+      # Default settings: every gene of this element type in catalogue order,
+      # on the shared confidence colours and unclustered — exactly as picking a
+      # variable in Mapping starts the layer on its own automatic choices.
+      nj_heatmaps(c(
+        layers,
+        list(c(
+          list(
+            id = next_heatmap_layer_id(),
+            kind = "amr",
+            level = "gene",
+            element = element,
+            cols = cat$col,
+            labels = cat$label,
+            classes = cat$group,
+            palette = "Reds",
+            title = element_title(element)
+          ),
+          HEATMAP_STYLE_DEFAULTS
+        ))
+      ))
+    })
+
+    shiny$observeEvent(input$nj_heatmap_delete, {
+      nj_heatmaps(Filter(
+        function(h) !identical(h$id, input$nj_heatmap_delete),
+        nj_heatmaps()
+      ))
+    })
+
+    output$nj_heatmap_layers_ui <- shiny$renderUI({
+      # Passed as a function, not a frame: each card's picker lists its own
+      # panel's element type filed under that panel's own vocabulary.
+      .heatmap_layer_cards(
+        ns,
+        nj_heatmaps(),
+        function(h) element_catalog(h$element, h$vocabulary)
+      )
+    })
+
+    # ---- Settings shared by every panel --------------------------------------
+
+    # The panel a card button names, or NULL when it names none.
+    heatmap_by_id <- function(id) {
+      hit <- Filter(function(h) identical(h$id, id), nj_heatmaps())
+      if (length(hit)) hit[[1]] else NULL
     }
 
-    # One record per switched-on panel, in HEATMAP_PANELS order so resistance
-    # always draws before virulence however they were switched on. An empty
-    # picker means "all columns" rather than an empty matrix — the placeholder
-    # says so, and a panel with no columns draws nothing at all.
-    shiny$observe({
-      out <- list()
-      for (key in names(HEATMAP_PANELS)) {
-        if (!isTRUE(input[[paste0("nj_heatmap_", key)]])) {
-          next
-        }
-        cat <- heatmap_catalog(key)
-        if (!nrow(cat)) {
-          next
-        }
-        # Catalogue order, not the picker's: the catalogue files the genes by
-        # drug class, and the panel brackets each class under its own run of
-        # columns. A run has to be contiguous to be bracketed.
-        chosen <- cat$col[
-          cat$col %in% (input[[paste0("nj_heatcols_", key)]] %||% character(0))
-        ]
-        if (!length(chosen)) {
-          chosen <- cat$col
-        }
-        idx <- match(chosen, cat$col)
-        out[[length(out) + 1L]] <- list(
-          kind = "amr",
-          # Both panels draw the gene matrix; `section` is what separates them.
-          level = "gene",
-          section = key,
-          cols = chosen,
-          labels = cat$label[idx],
-          # The drug class each gene belongs to, in column order. The panel
-          # draws its columns grouped by it and brackets the runs below the
-          # matrix, which is the only place the grouping is visible: a gene
-          # symbol does not say which class it belongs to.
-          classes = cat$group[idx],
-          palette = "Reds",
-          title = HEATMAP_PANELS[[key]]$title
-        )
+    # The clustering controls stay on screen whether or not clustering is on,
+    # disabled until it is — and the class-names switch is their mirror, usable
+    # only while it is off, since clustered columns are not in class order to
+    # bracket. shinyjs rather than a conditionalPanel so the ordering options
+    # are visible before the reader commits to them.
+    #
+    # The whole block is hidden while no panel exists: these apply to every
+    # heatmap, and with none added they apply to nothing.
+    sync_heatmap_shared_state <- function() {
+      on <- isTRUE(input$nj_heatmap_cluster)
+      for (id in c(
+        "nj_heatmap_distance",
+        "nj_heatmap_method",
+        "nj_heatmap_strip",
+        "nj_heatmap_dend"
+      )) {
+        shinyjs::toggleState(id, condition = on)
       }
-      nj_heatmaps(out)
+      shinyjs::toggleState("nj_heatmap_class_names", condition = !on)
+      shinyjs::toggle("nj_heatmap_shared", condition = length(nj_heatmaps()) > 0)
+    }
+
+    shiny$observe(sync_heatmap_shared_state())
+
+    # The shared controls, written onto every panel at once.
+    #
+    # One observer rather than one per control: they all write the same record
+    # list, and ten observers each rewriting it would cost ten redraws for a
+    # change that is one. `%||%` on every read so a control that has not
+    # round-tripped yet leaves the field as it was rather than nulling it.
+    #
+    # It also reads `nj_heatmaps()`, which is what stamps the current shared
+    # settings onto a panel the moment it is added — a new matrix joins the
+    # block already arranged like the ones beside it. The identical() guard is
+    # what stops that self-reference from looping.
+    shiny$observe({
+      layers <- nj_heatmaps()
+      if (!length(layers)) {
+        return()
+      }
+      shared <- list(
+        show_gene_names = isTRUE(input$nj_heatmap_gene_names),
+        show_class_names = isTRUE(input$nj_heatmap_class_names),
+        show_element_type = isTRUE(input$nj_heatmap_element),
+        element_pos = input$nj_heatmap_element_pos %||% ELEMENT_POS_DEFAULT,
+        cluster = isTRUE(input$nj_heatmap_cluster),
+        show_class_strip = isTRUE(input$nj_heatmap_strip)
+      )
+      updated <- lapply(layers, function(h) {
+        for (key in names(shared)) {
+          h[[key]] <- shared[[key]]
+        }
+        h$cluster_distance <- input$nj_heatmap_distance %||% h$cluster_distance
+        h$cluster_method <- input$nj_heatmap_method %||% h$cluster_method
+        h$dend_depth <- input$nj_heatmap_dend %||% h$dend_depth
+        h
+      })
+      if (!identical(updated, layers)) {
+        nj_heatmaps(updated)
+      }
+    })
+
+    # Classification is shared too, but changing it re-files every gene and
+    # re-orders every panel's columns, so it rebuilds each panel's labels and
+    # classes from the catalogue rather than just setting a field. Its own
+    # observer because that rebuild must not run on every switch flip.
+    shiny$observeEvent(
+      input$nj_heatmap_vocabulary,
+      {
+        vocab <- input$nj_heatmap_vocabulary
+        layers <- lapply(nj_heatmaps(), function(h) {
+          if (identical(h$vocabulary, vocab)) {
+            return(h)
+          }
+          h$vocabulary <- vocab
+          cat <- element_catalog(h$element, vocab)
+          if (nrow(cat)) {
+            # The panel's *selection* survives; its order and its filing are
+            # the new vocabulary's to decide.
+            keep <- cat$col[cat$col %in% h$cols]
+            idx <- match(keep, cat$col)
+            h$cols <- keep
+            h$labels <- cat$label[idx]
+            h$classes <- cat$group[idx]
+          }
+          h
+        })
+        if (!identical(layers, nj_heatmaps())) {
+          nj_heatmaps(layers)
+        }
+      },
+      ignoreInit = TRUE
+    )
+
+    # One card's gene picker reports what the reader confirmed. The picker
+    # lives in the card, so its input id is per panel and there is one observer
+    # per panel — created once and kept, because the cards are redrawn whenever
+    # the panel list changes and a fresh observer per redraw would apply the
+    # same pick several times over.
+    gene_observers <- new.env(parent = emptyenv())
+
+    set_heatmap_genes <- function(id, chosen) {
+      layers <- lapply(nj_heatmaps(), function(h) {
+        if (!identical(h$id, id)) {
+          return(h)
+        }
+        cat <- element_catalog(h$element, h$vocabulary)
+        if (!nrow(cat)) {
+          return(h)
+        }
+        # Catalogue order, not the picker's: unclustered, the catalogue files
+        # the genes by drug class and the panel brackets each class under its
+        # own run of columns, which has to be contiguous to be bracketed. An
+        # empty selection means "every gene" rather than an empty matrix, same
+        # as the picker's own placeholder says.
+        keep <- cat$col[cat$col %in% (chosen %||% character(0))]
+        if (!length(keep)) {
+          keep <- cat$col
+        }
+        idx <- match(keep, cat$col)
+        h$cols <- keep
+        h$labels <- cat$label[idx]
+        h$classes <- cat$group[idx]
+        h
+      })
+      # Guarded so the value the browser reports back when a card is first
+      # drawn — which is the selection the card was drawn *from* — is not a
+      # change, and does not redraw the tree.
+      if (!identical(layers, nj_heatmaps())) {
+        nj_heatmaps(layers)
+      }
+    }
+
+    shiny$observe({
+      for (h in nj_heatmaps()) {
+        key <- .heatmap_gene_input_id(h$id)
+        if (!is.null(gene_observers[[key]])) {
+          next
+        }
+        # `local()` so each observer closes over its own panel id rather than
+        # over the loop variable, which by the time it fires is the last card.
+        gene_observers[[key]] <- local({
+          id <- h$id
+          field <- key
+          shiny$observeEvent(
+            input[[field]],
+            set_heatmap_genes(id, input[[field]]),
+            ignoreInit = TRUE,
+            # Clearing the picker sends NULL, and that is the "every gene"
+            # case rather than nothing to do.
+            ignoreNULL = FALSE
+          )
+        })
+      }
+    })
+
+    # ---- One panel's colours -------------------------------------------------
+
+    # Which panel the colour modal is open for. The gene picker needs no such
+    # state: it is a control inside the card, so it already knows.
+    coloring_heatmap <- shiny$reactiveVal(NULL)
+
+    # Colour is the one thing left that is a single panel's own. Everything else
+    # about how a panel is drawn — its labels, its clustering, which vocabulary
+    # files its genes — is shared across the block and lives in the sidebar
+    # accordions, so this dialog is one column rather than the two the old
+    # combined one needed.
+    #
+    # Two ways to colour the same five tiers, and exactly one of them is live:
+    # the four hand-picked swatches, or one sequential ramp spread across them.
+    # A segmented control picks which, and swaps the body under it rather than
+    # greying the other half — a disabled colour swatch still reads as a colour,
+    # which is precisely the confusion to avoid here. Both sets of values are
+    # kept on the record, so switching back and forth loses neither.
+    shiny$observeEvent(input$nj_heatmap_colors, {
+      h <- heatmap_by_id(input$nj_heatmap_colors)
+      shiny$req(!is.null(h))
+      coloring_heatmap(h$id)
+
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Colours:", h$title),
+        size = "m",
+        easyClose = TRUE,
+        radioGroupButtons(
+          ns("nj_heatmap_color_mode"),
+          "Confidence tiers",
+          choiceNames = c("Pick each", "Colour scale"),
+          choiceValues = c("tiers", "scale"),
+          selected = h$color_mode %||% "tiers",
+          justified = TRUE,
+          size = "sm",
+          width = "100%"
+        ),
+        # conditionalPanel rather than a server-side swap: the toggle is a
+        # preview of the reader's own choice and has no business waiting on a
+        # round-trip to redraw.
+        shiny$conditionalPanel(
+          condition = "input.nj_heatmap_color_mode == 'tiers'",
+          ns = ns,
+          shiny$div(
+            class = "viz-color-grid",
+            # Labelled by tier, strongest first, the order the panel's own
+            # legend lists them in. Putative has no swatch: it is blended out
+            # of Absent and Partial (amr_plot$amr_confidence_palette), same as
+            # on the AMR tab.
+            viz_color(ns, "nj_heatmap_present", "Perfect", h$color_present),
+            viz_color(ns, "nj_heatmap_strong", "Strong", h$color_strong),
+            viz_color(ns, "nj_heatmap_partial", "Partial", h$color_partial),
+            viz_color(ns, "nj_heatmap_absent", "Absent", h$color_absent)
+          )
+        ),
+        shiny$conditionalPanel(
+          condition = "input.nj_heatmap_color_mode == 'scale'",
+          ns = ns,
+          # Sequential families only. The tiers are a ladder from Absent to
+          # Perfect, and only a light-to-dark ramp reads as one — a qualitative
+          # palette would colour five ordered things as five unrelated ones.
+          scale_select(
+            ns,
+            "nj_heatmap_heat_scale",
+            categories = "Sequential",
+            selected = h$heat_scale %||% HEAT_SCALE_DEFAULT
+          ),
+          shiny$div(
+            class = "text-muted fst-italic small mb-2",
+            "Absent takes the lightest stop, Perfect the darkest."
+          )
+        ),
+        shiny$tags$h6("Drug class strip", class = "viz-modal_heading"),
+        # The strip only exists on a clustered panel, so with clustering off
+        # there is nothing here to colour. Swapped for the reason rather than
+        # greyed: a disabled pickerInput keeps its own button drawn as live, so
+        # greying this one would say nothing at all.
+        shiny$conditionalPanel(
+          condition = "input.nj_heatmap_cluster",
+          ns = ns,
+          # Qualitative families only — it names drug classes, a factor —
+          # starting on the shared default so a class matches the AMR tab until
+          # the reader overrides it.
+          scale_select(
+            ns,
+            "nj_heatmap_strip_scale",
+            categories = "Qualitative",
+            selected = h$strip_scale %||% CLASS_STRIP_SCALE
+          )
+        ),
+        shiny$conditionalPanel(
+          condition = "!input.nj_heatmap_cluster",
+          ns = ns,
+          shiny$div(
+            class = "text-muted fst-italic small mb-2",
+            "Turn on Cluster genes to colour the drug-class strip."
+          )
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("nj_heatmap_apply"), "Apply")
+        )
+      ))
+    })
+
+    shiny$observeEvent(input$nj_heatmap_apply, {
+      id <- coloring_heatmap()
+      shiny$req(!is.null(id))
+      layers <- lapply(nj_heatmaps(), function(h) {
+        if (!identical(h$id, id)) {
+          return(h)
+        }
+        # `%||%` on every read: the modal is torn down after Apply, so a field
+        # whose widget never reported a value keeps what the panel already had
+        # rather than becoming NULL and losing its colour. That also covers the
+        # half of the dialog the segmented control had hidden — a
+        # conditionalPanel's inputs stop reporting while hidden, and the values
+        # they held must survive being switched away from.
+        h$color_present <- input$nj_heatmap_present %||% h$color_present
+        h$color_strong <- input$nj_heatmap_strong %||% h$color_strong
+        h$color_partial <- input$nj_heatmap_partial %||% h$color_partial
+        h$color_absent <- input$nj_heatmap_absent %||% h$color_absent
+        h$color_mode <- input$nj_heatmap_color_mode %||% h$color_mode
+        h$heat_scale <- input$nj_heatmap_heat_scale %||% h$heat_scale
+        h$strip_scale <- input$nj_heatmap_strip_scale %||% h$strip_scale
+        h
+      })
+      nj_heatmaps(layers)
+      coloring_heatmap(NULL)
+      shiny$removeModal()
     })
 
     # ---- Export contract ----------------------------------------------------
@@ -2264,19 +2859,27 @@ server <- function(
           "nj_rootedge_show",
           "nj_treescale_show",
           "nj_axis_show",
-          paste0("nj_heatmap_", names(HEATMAP_PANELS))
+          # The heatmap block's shared controls. Real sidebar inputs since the
+          # style modal was split up, so they snapshot and restore like any
+          # other control rather than riding along inside the panel records.
+          "nj_heatmap_gene_names",
+          "nj_heatmap_class_names",
+          "nj_heatmap_element",
+          "nj_heatmap_cluster",
+          "nj_heatmap_strip"
         ),
-        selects = c(
-          "nj_tippoint_shape",
-          "nj_layout"
-        ),
+        selects = c("nj_tippoint_shape", "nj_heatmap_vocabulary"),
+        # A virtualSelectInput now, so it cannot ride in `selects` — a picker
+        # update message is ignored by the widget entirely.
+        virtual_selects = "nj_layout",
         sliders = c(
           "nj_tiplab_size",
           "nj_branch_size",
           "nj_tippoint_alpha",
           "nj_tippoint_size",
           "nj_aspect_ratio",
-          "nj_open_angle"
+          "nj_open_angle",
+          "nj_heatmap_dend"
         ),
         colors = c(
           "nj_color",
@@ -2286,8 +2889,16 @@ server <- function(
           "nj_tippoint_color",
           "nj_clade_scale"
         ),
-        radio_groups = "zoom_view"
+        radio_groups = c("zoom_view", "nj_heatmap_element_pos")
       )
+
+      # Plain selectInputs, not pickers, so they cannot ride in `selects` —
+      # a picker's update message leaves a native <select> untouched.
+      for (id in c("nj_heatmap_distance", "nj_heatmap_method")) {
+        if (!is.null(vals[[id]])) {
+          shiny$updateSelectInput(session, id, selected = vals[[id]])
+        }
+      }
 
       # Put the fitted controls' saved values straight into the mirrors the
       # render reads, so restoring an Analysis redraws the tree once rather than
@@ -2360,7 +2971,18 @@ server <- function(
       }
       heatmaps <- .normalize_heatmaps(vals$.heatmaps)
       if (!is.null(heatmaps)) {
+        # A panel saved before ids existed (or one whose element type is no
+        # longer offered) gets a fresh one — the edit/delete buttons address a
+        # panel by id, and NA cannot tell two such panels apart.
+        heatmaps <- lapply(seq_along(heatmaps), function(i) {
+          h <- heatmaps[[i]]
+          if (is.na(h$id %||% NA)) {
+            h$id <- paste0("H", i)
+          }
+          h
+        })
         nj_heatmaps(heatmaps)
+        nj_heatmap_layer_seq(length(heatmaps))
       }
     }
 

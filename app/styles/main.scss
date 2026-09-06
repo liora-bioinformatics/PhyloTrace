@@ -600,6 +600,7 @@ $viz-tile-row-gap: 0.85rem;
     flex: 1 1 auto;
     min-height: 0;
     height: 100%;
+    border-bottom: 1px solid var(--bs-border-color);
 }
 
 // Tab buttons wrap to extra rows instead of crushing when the sidebar narrows.
@@ -650,11 +651,21 @@ $viz-tile-row-gap: 0.85rem;
     background: var(--bs-tertiary-bg);
 }
 
+.bslib-grid-item {
+    padding: 1rem;
+    border: 1px solid var(--bs-border-color);
+
+}
+
+.viz-modal_heading {
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+}
+
 .viz-nav-wrap .tab-content {
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
-    padding-top: 1rem;
+    padding: 1rem 0.5rem;
 }
 
 // Applied to an .accordion-item when it's the only panel left visible in its
@@ -720,6 +731,23 @@ $viz-tile-row-gap: 0.85rem;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+}
+
+// Section label inside a settings modal (the heatmap panel's edit dialog),
+// where the controls are grouped into columns and each column needs saying
+// what it is. Quieter than a real heading: it separates, it does not announce.
+.viz-modal_heading {
+    margin-top: 1rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+}
+
+.viz-modal_heading:first-child {
+    margin-top: 0;
 }
 
 .viz-color-row {
@@ -1007,7 +1035,8 @@ $viz-tile-row-gap: 0.85rem;
     background-color: var(--bs-tertiary-bg);
 }
 
-// The title/meta column, kept clear of the two round buttons on its right.
+// The title/meta column, kept clear of the round buttons on its right — two
+// for a mapping layer, three for a heatmap panel (genes / edit / remove).
 .tree-layer_body {
     flex: 1 1 auto;
     min-width: 0;
@@ -1029,6 +1058,17 @@ $viz-tile-row-gap: 0.85rem;
     white-space: nowrap;
 }
 
+// One heatmap card's gene picker, parked off-screen: the card's dna button
+// calls the widget's own open(), and the dropbox is a centered popup appended
+// to <body>, so the trigger never has to be visible. Kept in the document
+// rather than dropped, because open() only exists once virtual-select has
+// initialised it. Given a real width so the widget measures against something.
+.tree-layer_genes {
+    position: absolute;
+    left: -10000px;
+    width: 260px;
+}
+
 .tree-layer_btn {
     display: flex;
     align-items: center;
@@ -1046,17 +1086,6 @@ $viz-tile-row-gap: 0.85rem;
 .tree-layer_btn:hover {
     background-color: var(--bs-border-color);
     color: var(--bs-body-color);
-}
-
-// The heatmap kinds, one card each.
-.tree-heatmap-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-}
-
-.tree-heatmap-card.is-empty {
-    opacity: 0.6;
 }
 
 // A colour swatch whose element is switched off, or whose aesthetic a mapping
@@ -3364,7 +3393,11 @@ table.dataTable thead>tr>th.sorting {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
-    margin-top: 1rem;
+    margin-top: 0.5rem;
+
+    .form-group {
+        margin-bottom: 0;
+    }
 
     .btn-default,
     .btn-group>.btn {

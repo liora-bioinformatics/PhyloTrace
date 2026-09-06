@@ -283,37 +283,6 @@ test_that("the identity floor drops hits it was set above", {
   )
 })
 
-test_that("the drug-class view carries abritamr's partial/confident split", {
-  path <- amr_db()
-  generate <- reactiveVal(0L)
-
-  testServer(
-    visualization_amr$server,
-    args = list(
-      db_path = reactive(path),
-      viz_metadata = reactive(meta_fixture()),
-      generate = generate,
-      plot_type = reactiveVal("AMR")
-    ),
-    {
-      set_default_inputs(session)
-      session$setInputs(amr_mode = "classes")
-      generate(1L)
-      session$flushReact()
-
-      mat <- class_mat()
-      expect_true(generated())
-      expect_identical(mat["ISO-1", "Beta-lactam"], 2L)
-      expect_identical(mat["ISO-2", "Quinolone"], 1L)
-      # ISO-4 was never screened, so it has a row and nothing in it.
-      expect_identical(unname(sum(mat["ISO-4", ])), 0L)
-
-      session$setInputs(amr_sections = "matches")
-      expect_identical(colnames(class_mat()), "Beta-lactam")
-    }
-  )
-})
-
 test_that("each view renders to a ggplot the export path can take", {
   path <- amr_db()
   generate <- reactiveVal(0L)
@@ -331,7 +300,7 @@ test_that("each view renders to a ggplot the export path can take", {
       generate(1L)
       session$flushReact()
 
-      for (view in c("heatmap", "classes", "prevalence")) {
+      for (view in c("heatmap", "prevalence")) {
         session$setInputs(amr_mode = view)
         expect_s3_class(amr_ggplot(), "ggplot")
       }
@@ -606,6 +575,48 @@ test_that("prevalence counts distinct isolates and honours the top-n cap", {
   )
 })
 
+test_that("switching the drug-class vocabulary re-counts the class-level bars", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(amr_mode = "prevalence", amr_level = "class")
+      generate(1L)
+      session$flushReact()
+
+      # abritamr's own rollup never got a row for ISO-1's gyrA hit (only
+      # ISO-2's), so the curated vocabulary counts Quinolone under just one
+      # isolate.
+      session$setInputs(amr_class_vocab = "rollup")
+      rollup <- prevalence_df()
+      expect_identical(rollup$n[rollup$item == "Quinolone"], 1L)
+
+      # AMRFinderPlus's own class field on the gyrA hit itself carries no such
+      # gap, so switching vocabularies counts both isolates that actually
+      # carry the gene.
+      session$setInputs(amr_class_vocab = "amrfinder")
+      amrfinder <- prevalence_df()
+      expect_identical(amrfinder$n[amrfinder$item == "Quinolone"], 2L)
+
+      # fimH has no rollup row at all (abritamr never summarised it), so it is
+      # invisible to the curated vocabulary but counted under AMRFinderPlus's
+      # own, falling back to its element type the same way the gene heatmap's
+      # own AMRFinderPlus vocabulary would.
+      expect_false("Virulence" %in% rollup$item)
+      expect_identical(amrfinder$n[amrfinder$item == "Virulence"], 2L)
+    }
+  )
+})
+
 test_that("the snapshot carries the amr_ controls and restore accepts it", {
   path <- amr_db()
   generate <- reactiveVal(0L)
@@ -620,12 +631,12 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
     ),
     {
       set_default_inputs(session)
-      session$setInputs(amr_mode = "classes", amr_top_n = 15)
+      session$setInputs(amr_mode = "heatmap", amr_top_n = 15)
       generate(1L)
       session$flushReact()
 
       snap <- snapshot()
-      expect_identical(snap$amr_mode, "classes")
+      expect_identical(snap$amr_mode, "heatmap")
       expect_identical(snap$amr_top_n, 15)
       # `.layers` is the annotation strips (reactiveVal state, not an input) and
       # `zoom_view` is the shared display-mode control; everything else is an
@@ -910,7 +921,6 @@ test_that("prevalence drops the tabs that only describe a matrix", {
   # would open on nothing; Data and Colors both still apply.
   expect_identical(impl$TABS_BY_MODE$prevalence, c("data", "colors"))
   expect_identical(impl$TABS_BY_MODE$heatmap, impl$ALL_TABS)
-  expect_identical(impl$TABS_BY_MODE$classes, impl$ALL_TABS)
 })
 
 test_that("the tab toggle carries the view picker's own id", {

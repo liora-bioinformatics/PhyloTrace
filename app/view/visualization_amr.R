@@ -10,19 +10,17 @@
 # isolates typed in *this* database, and a staged peer's imported profile table
 # carries allele identity and nothing else.
 #
-# Three views, chosen with one select (see PLOT_MODES):
+# Two views, chosen with one select (see PLOT_MODES):
 #   * Gene heatmap    - isolates x genes, the successor to the ComplexHeatmap
 #                       on the master branch. Cells carry AMRFinderPlus's own
 #                       per-gene call confidence (see amr_method_confidence()
 #                       in amr_plot.R), not plain presence/absence. Columns
 #                       grouped by element type or drug class, or clustered.
-#   * Drug classes    - isolates x drug class, cells carrying abritamr's
-#                       coarser confident/partial rollup instead.
 #   * Prevalence      - ranked bars of how many isolates carry each gene or
 #                       class. The view that survives a screen reporting several
 #                       hundred genes.
 #
-# All three arrive from app/logic/amr_plot.R as ggplot objects, so - exactly as
+# Both arrive from app/logic/amr_plot.R as ggplot objects, so - exactly as
 # in the Epi engine - there is one renderImage, one download handler and one
 # thumbnail function rather than a device block per format (which is what the
 # master implementation had). Binning and filtering are cheap, so once Generate
@@ -106,11 +104,10 @@ box::use(
     ],
 )
 
-# The three views. "heatmap" is the default because it is the one that answers
+# The two views. "heatmap" is the default because it is the one that answers
 # the question the screen was run for: which isolate carries what.
 PLOT_MODES <- c(
   `Gene heatmap` = "heatmap",
-  `Drug classes` = "classes",
   Prevalence = "prevalence"
 )
 PLOT_MODE_DEFAULT <- "heatmap"
@@ -138,10 +135,10 @@ COLUMN_GROUPING_DEFAULT <- "class"
 }
 
 # Which of the two drug-class vocabularies the gene heatmap groups and colours
-# by. The vocabularies, and why the curated rollup leads, are in amr_plot.R
-# beside the constant itself.
+# by. The vocabularies are in amr_plot.R beside the constant itself; this tab
+# defaults to AMRFinderPlus rather than the curated rollup amr_plot.R leads with.
 CLASS_VOCABULARIES <- amr_plot$AMR_CLASS_VOCABULARIES
-CLASS_VOCABULARY_DEFAULT <- amr_plot$AMR_CLASS_VOCABULARY_DEFAULT
+CLASS_VOCABULARY_DEFAULT <- "amrfinder"
 
 LEVELS <- c(Genes = "gene", `Drug classes` = "class")
 LEVEL_DEFAULT <- "gene"
@@ -181,19 +178,29 @@ CLASS_SCALE_DEFAULT <- "Set2"
 BAR_SCALE_DEFAULT <- "Dark2"
 
 # Only shown while the element-type / hit-quality filters actually bite: they
-# read `amr_results`, which backs the gene heatmap and the gene-level prevalence
-# bars but not the abritamr rollup behind the drug-class views.
+# read `amr_results`, which backs the gene heatmap, the gene-level prevalence
+# bars, and — under the AMRFinderPlus vocabulary — the drug-class prevalence
+# count too, since that reads amr_results the same way rather than the
+# abritamr rollup.
 COND_HITS <- paste(
   "input.amr_mode == 'heatmap' ||",
-  "(input.amr_mode == 'prevalence' && input.amr_level == 'gene')"
+  "(input.amr_mode == 'prevalence' && input.amr_level == 'gene') ||",
+  "(input.amr_mode == 'prevalence' && input.amr_level == 'class' &&",
+  "input.amr_class_vocab == 'amrfinder')"
 )
+# The abritamr-only call-section filter: meaningless once the drug-class
+# count reads amr_results (AMRFinderPlus vocabulary) instead of the rollup.
 COND_SECTIONS <- paste(
-  "input.amr_mode == 'classes' ||",
+  "input.amr_mode == 'prevalence' && input.amr_level == 'class' &&",
+  "input.amr_class_vocab == 'rollup'"
+)
+# Which vocabulary the drug classes are filed under: the gene heatmap's own
+# column grouping, and — when Prevalence counts by class — its own items.
+COND_CLASS_VOCAB <- paste(
+  "input.amr_mode == 'heatmap' ||",
   "(input.amr_mode == 'prevalence' && input.amr_level == 'class')"
 )
 COND_HEATMAPS <- "input.amr_mode != 'prevalence'"
-COND_GENE_HEATMAP <- "input.amr_mode == 'heatmap'"
-COND_CLASS_HEATMAP <- "input.amr_mode == 'classes'"
 
 # --- AMR control tabs --------------------------------------------------------
 
@@ -209,7 +216,6 @@ COND_CLASS_HEATMAP <- "input.amr_mode == 'classes'"
 # visible in a view with nothing to put in it, or hidden for good.
 TABS_BY_MODE <- list(
   heatmap = c("data", "layout", "clustering", "mapping", "colors"),
-  classes = c("data", "layout", "clustering", "mapping", "colors"),
   prevalence = c("data", "colors")
 )
 ALL_TABS <- c("data", "layout", "clustering", "mapping", "colors")
@@ -274,8 +280,9 @@ amr_controls <- function(ns) {
         value = "data",
         icon = shiny$icon("table-cells"),
         # What the bars count, which decides which of the two filters below
-        # applies — the gene level reads `amr_results`, the class level the
-        # abritamr rollup.
+        # applies — the gene level reads `amr_results`, the class level either
+        # the abritamr rollup or `amr_results` too, depending on the
+        # vocabulary picker just below (see COND_CLASS_VOCAB).
         shiny$conditionalPanel(
           condition = "input.amr_mode == 'prevalence'",
           ns = ns,
@@ -295,6 +302,20 @@ amr_controls <- function(ns) {
             value = TOP_N_DEFAULT,
             step = 5,
             ticks = FALSE
+          )
+        ),
+        # Which vocabulary the drug classes are filed under: the gene
+        # heatmap's own column grouping, and — while Prevalence counts by
+        # class — its own items. Kept as one control shared by both, so a
+        # reader who switches it on one sees the same classes on the other.
+        shiny$conditionalPanel(
+          condition = COND_CLASS_VOCAB,
+          ns = ns,
+          pickerInput(
+            ns("amr_class_vocab"),
+            "Drug classes from",
+            choices = CLASS_VOCABULARIES,
+            selected = CLASS_VOCABULARY_DEFAULT
           )
         ),
         shiny$conditionalPanel(
@@ -322,19 +343,6 @@ amr_controls <- function(ns) {
           # before the gene list exists. Same reasoning as the Epi engine's
           # stratify picker.
           shiny$uiOutput(ns("genes_ui")),
-          # Which vocabulary the column blocks are named in. Only the gene heatmap
-          # has the choice to make: the drug-class view *is* the rollup, so there
-          # is no second vocabulary to draw it in.
-          shiny$conditionalPanel(
-            condition = "input.amr_mode == 'heatmap'",
-            ns = ns,
-            pickerInput(
-              ns("amr_class_vocab"),
-              "Drug classes from",
-              choices = CLASS_VOCABULARIES,
-              selected = CLASS_VOCABULARY_DEFAULT
-            )
-          ),
           # AMRFinderPlus reports partial and low-identity hits alongside
           # confident ones and `amr_results` keeps both percentages, so the
           # reader can set the bar. Point mutations report neither and are
@@ -430,9 +438,8 @@ amr_controls <- function(ns) {
         ),
         input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
         shiny$uiOutput(ns("row_name_warning")),
-        # Both read off the gene heatmap alone: the drug-class view has no
-        # per-gene column to name, and its own Resistance/Virulence split is
-        # two labels at most — never the crowd either of these exists for.
+        # Both read off the heatmap alone: not shown for Prevalence, which has
+        # no per-gene column to name.
         #
         # Whether the drug class itself is drawn as text or as a colour strip
         # is not a switch here at all — see amr_cluster_cols in the
@@ -440,7 +447,7 @@ amr_controls <- function(ns) {
         # top_annotation). A separate on/off switch here used to fight that
         # mechanism for the same row.
         shiny$conditionalPanel(
-          condition = COND_GENE_HEATMAP,
+          condition = COND_HEATMAPS,
           ns = ns,
           input_switch(ns("amr_show_col_names"), "Show gene names", TRUE),
           # The element type (Resistance/Virulence/Stress) a panel's columns
@@ -555,18 +562,11 @@ amr_controls <- function(ns) {
         ),
         shiny$div(
           class = "viz-color-grid",
-          # The drug-class view has one confident state (Match, labelled
-          # "Present" here); the gene view has two (Strong and Perfect,
-          # AMRFinderPlus's own BLAST-grade and exact-match tiers), so each
-          # gets its own picker under the same amr_present_color input rather
-          # than trying to share one label across two different scales.
+          # The gene heatmap has two confident states — Strong and Perfect,
+          # AMRFinderPlus's own BLAST-grade and exact-match tiers — so each
+          # gets its own picker.
           shiny$conditionalPanel(
-            condition = COND_CLASS_HEATMAP,
-            ns = ns,
-            viz_color(ns, "amr_present_color", "Present", PRESENT_COLOR_DEFAULT)
-          ),
-          shiny$conditionalPanel(
-            condition = COND_GENE_HEATMAP,
+            condition = COND_HEATMAPS,
             ns = ns,
             viz_color(
               ns,
@@ -576,9 +576,7 @@ amr_controls <- function(ns) {
             ),
             viz_color(ns, "amr_strong_color", "Strong", STRONG_COLOR_DEFAULT)
           ),
-          # Both heatmaps have a middle cell state to colour: the drug-class
-          # view's own Partial, and the gene view's own Partial tier (see
-          # amr_confidence_palette()) so "Partial" reads the same on both.
+          # The heatmap's own Partial tier (see amr_confidence_palette()).
           shiny$conditionalPanel(
             condition = COND_HEATMAPS,
             ns = ns,
@@ -604,10 +602,10 @@ amr_controls <- function(ns) {
     # own mode picker: it is the control that decides which tabs there are, so
     # it cannot live in a tab that one of its own values hides.
     shiny$div(
-      class = "viz-mode-dropup",
+      class = "viz-mode-dropup reset-buttons",
       pickerInput(
         ns("amr_mode"),
-        "View",
+        NULL,
         choices = PLOT_MODES,
         selected = PLOT_MODE_DEFAULT
       )
@@ -800,6 +798,53 @@ server <- function(
 
     shiny$observeEvent(amr_hits(), fit_threshold_bounds(), ignoreNULL = FALSE)
 
+    # Fits the "Show top" slider's range to how many genes or drug classes
+    # this screen (and the current vocabulary, at class level) actually
+    # offers, rather than some flat 5-100 that neither shrinks for a small
+    # demo database nor grows for one with several hundred genes. Kept as its
+    # own observer, distinct from fit_threshold_bounds() above, because it has
+    # to re-run on a "Count by"/vocabulary switch too, not only on a new
+    # screen loading.
+    fit_top_n_bounds <- function() {
+      level <- input$amr_level %||% LEVEL_DEFAULT
+      n_items <- if (identical(level, "class")) {
+        if (identical(class_vocab(), "amrfinder")) {
+          hits <- amr_hits()
+          length(unique(amr_plot$amr_gene_meta(
+            hits,
+            unique(hits$gene_symbol),
+            sections = NULL,
+            vocabulary = "amrfinder"
+          )$group))
+        } else {
+          length(unique(amr_sections()$drug_class))
+        }
+      } else {
+        length(unique(amr_hits()$gene_symbol))
+      }
+      b <- amr_plot$amr_top_n_bounds(
+        n_items,
+        default = TOP_N_DEFAULT,
+        current = input$amr_top_n
+      )
+      shiny$updateSliderInput(
+        session,
+        "amr_top_n",
+        min = b$min,
+        max = b$max,
+        value = b$value,
+        step = b$step
+      )
+    }
+
+    shiny$observe({
+      amr_hits()
+      amr_sections()
+      input$amr_level
+      input$amr_class_vocab
+      fit_top_n_bounds()
+    })
+
     # The isolates this plot covers: whatever the tab's Selection panel left in
     # the metadata table. Local only — an AMR screen is a property of a genome
     # assembly typed here.
@@ -825,8 +870,8 @@ server <- function(
       if (!length(g)) NULL else g
     })
 
-    # The two expensive reactives. Everything cosmetic reads the built plot
-    # below, so moving a colour picker never re-clusters.
+    # The expensive reactive. Everything cosmetic reads the built plot below,
+    # so moving a colour picker never re-clusters.
     presence_mat <- shiny$reactive({
       amr_plot$amr_presence_matrix(
         filtered_hits(),
@@ -837,14 +882,6 @@ server <- function(
       )
     })
 
-    class_mat <- shiny$reactive({
-      amr_plot$amr_class_matrix(
-        amr_sections(),
-        isolates(),
-        keep_sections = input$amr_sections
-      )
-    })
-
     prevalence_df <- shiny$reactive({
       amr_plot$amr_prevalence(
         filtered_hits(),
@@ -852,8 +889,15 @@ server <- function(
         isolates(),
         level = input$amr_level %||% LEVEL_DEFAULT,
         top_n = input$amr_top_n %||% TOP_N_DEFAULT,
-        keep_sections = input$amr_sections
+        keep_sections = input$amr_sections,
+        vocabulary = class_vocab()
       )
+    })
+
+    # The bar chart's own fit, standing in for layout_fit() in that mode: the
+    # heatmap fit has a matrix to solve against and this has one bar per row.
+    prevalence_fit <- shiny$reactive({
+      amr_plot$amr_prevalence_layout(nrow(prevalence_df()), canvas_in())
     })
 
     # --- controls fitted to the data ----------------------------------------
@@ -1122,13 +1166,22 @@ server <- function(
     # Restrict a colour-scale picker to the palettes that can carry the number
     # of categories currently mapped to it, and move the selection when the one
     # in force no longer can. Mirrors apply_scale_choices() in the Epi engine,
-    # generalised over the picker id since this engine has two of them.
-    apply_scale_choices <- function(id, n, default, force_default = FALSE) {
+    # generalised over the picker id since this engine has two of them. `fit`
+    # is swappable because the bar scale does not want the general ladder of
+    # qualitative palettes amr_fit_scale() falls through — see
+    # amr_bar_scale_fit().
+    apply_scale_choices <- function(
+      id,
+      n,
+      default,
+      force_default = FALSE,
+      fit = amr_plot$amr_fit_scale
+    ) {
       choices <- amr_plot$amr_scale_choices(max(1L, as.integer(n)))
       selected <- if (force_default) {
-        amr_plot$amr_fit_scale(default, n)
+        fit(default, n)
       } else {
-        amr_plot$amr_fit_scale(input[[id]], n)
+        fit(input[[id]], n)
       }
       update_scale_select(session, id, choices, selected)
     }
@@ -1142,7 +1195,12 @@ server <- function(
     shiny$observe({
       df <- prevalence_df()
       n <- if (!nrow(df)) 1L else length(unique(df$group))
-      apply_scale_choices("amr_bar_scale", n, BAR_SCALE_DEFAULT)
+      apply_scale_choices(
+        "amr_bar_scale",
+        n,
+        BAR_SCALE_DEFAULT,
+        fit = amr_plot$amr_bar_scale_fit
+      )
     })
 
     # --- reset --------------------------------------------------------------
@@ -1197,11 +1255,14 @@ server <- function(
           "amr_bar_scale",
           1L,
           BAR_SCALE_DEFAULT,
-          force_default = TRUE
+          force_default = TRUE,
+          fit = amr_plot$amr_bar_scale_fit
         )
-        # Same reasoning: shinyjs::reset() restores the two threshold sliders
-        # to their declared 0-100 placeholders, not the data-fitted range.
+        # Same reasoning: shinyjs::reset() restores the two threshold sliders,
+        # and the "Show top" slider, to their declared placeholders rather
+        # than the data-fitted range.
         fit_threshold_bounds()
+        fit_top_n_bounds()
       })
     }
 
@@ -1256,7 +1317,6 @@ server <- function(
 
       empty <- switch(
         mode(),
-        classes = !ncol(class_mat()),
         prevalence = !nrow(prevalence_df()),
         !ncol(presence_mat())
       )
@@ -1284,12 +1344,6 @@ server <- function(
       w <- session$clientData[[paste0("output_", ns("amr_plot"), "_width")]]
       w <- suppressWarnings(as.numeric(w))
       if (!length(w) || !is.finite(w) || w <= 0) 9 else w / 96
-    }
-
-    # Which matrix the current view draws, so the fit and the plot agree on the
-    # shape they are describing.
-    current_mat <- function() {
-      if (identical(mode(), "classes")) class_mat() else presence_mat()
     }
 
     # A radioGroupButtons round-trips its boolean choiceValues as the strings
@@ -1339,18 +1393,26 @@ server <- function(
       }
     })
 
+    # The element-type row is seeded off the same way and for the same reason,
+    # so it needs the same mirror — see show_col_names_mirror above.
+    show_element_names_mirror <- shiny$reactiveVal(TRUE)
+
+    shiny$observeEvent(input$amr_show_element_names, {
+      value <- isTRUE(input$amr_show_element_names)
+      if (!isTRUE(all.equal(shiny$isolate(show_element_names_mirror()), value))) {
+        show_element_names_mirror(value)
+      }
+    })
+
     # Everything the fit needs to describe the matrix on screen. Split out
     # because it is asked for twice: once at the ratio the reader has set (what
     # gets drawn) and once with no ratio at all (what Generate seeds the slider
     # from).
     fit_args <- function() {
-      mat <- current_mat()
+      mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
-      blocks <- if (identical(mode(), "classes")) {
-        list(titles = character(0), cols = integer(0))
-      } else {
-        amr_plot$amr_column_blocks(mat, grouping())
-      }
+      blocks <- amr_plot$amr_column_blocks(mat, grouping())
+      elements <- amr_plot$amr_element_blocks(mat, grouping())
       list(
         n_rows = nrow(mat),
         n_cols = ncol(mat),
@@ -1360,12 +1422,13 @@ server <- function(
         col_label_chars = max(nchar(colnames(mat)), 1L),
         block_titles = blocks$titles,
         block_cols = blocks$cols,
+        element_titles = elements$titles,
+        element_cols = elements$cols,
         dend_cm = input$amr_dend_size %||% DEND_DEFAULT,
         n_strips = length(anno_layers()),
-        # Grouped by class, the fit budgets a second row below the block
-        # titles for the panel's own element-type label — the two are drawn
-        # separately (see .gene_panel), so they need separate room. See
-        # column_grouping in amr_auto_layout().
+        # Only whether the drug classes are named as text over each block or
+        # coloured into a strip - the element-type row below the body answers
+        # to element_titles above now, not to this. See amr_auto_layout().
         column_grouping = grouping()
       )
     }
@@ -1396,9 +1459,10 @@ server <- function(
       aspect_mirror(value)
     }
 
-    # The one place the automatic fit is allowed to answer back: at this many
-    # isolates a name cannot be set large enough to read, and saying so is
-    # better than drawing a grey smear and leaving the reader to work out why.
+    # The one place the fit reports rather than acts. The isolate names are off
+    # until a reader asks for them, so there is no initial draw to keep clean,
+    # and a reader who has asked is better answered with the reason than with a
+    # switch that silently undoes itself.
     output$row_name_warning <- shiny$renderUI({
       if (!isTRUE(input$amr_show_row_names)) {
         return(NULL)
@@ -1414,32 +1478,37 @@ server <- function(
             "%d isolates leave about %.1f pt per name, which is below what",
             "prints legibly. Narrow the selection or map a variable instead."
           ),
-          nrow(current_mat()),
+          nrow(presence_mat()),
           fit$fontsize_row
         )
       )
     })
 
-    # Gene names default to on, unlike the isolate names, so a shape with no
-    # room for them needs to act rather than only report: seeded off on
-    # Generate the same way refit_aspect() seeds the aspect ratio, so the first
-    # draw already leaves them off instead of drawing an illegible smear once
-    # and a clean plot on the redraw that follows. Only ever seeded off, never
-    # back on — a reader who turns it on by hand over a crowded shape keeps
-    # it, and gets whatever that draws instead of a switch that quietly does
-    # nothing.
+    # The two labels that are on by default. A shape with no room for one of
+    # them needs the fit to act rather than only report: seeded off on Generate
+    # the same way refit_aspect() seeds the aspect ratio, so the first draw
+    # already leaves it off instead of drawing an illegible smear once and a
+    # clean plot on the redraw that follows. Only ever seeded off, never back
+    # on — a reader who turns one on by hand over a crowded shape keeps it, and
+    # gets whatever that draws instead of a switch that quietly does nothing.
     #
-    # The drug-class titles get no such treatment: amr_auto_layout() still
-    # shrinks their font to whatever room a block has (down to
-    # AMR_TITLE_MIN_PT), but is never allowed to turn them off outright — and,
-    # unlike gene names, there is no reader-facing switch for them at all
-    # right now (see amr_cluster_cols): whether a class is titled or strip-
-    # coloured is column_grouping's call alone.
+    # The drug-class titles have no switch of their own to seed (see
+    # amr_cluster_cols): where they will not fit, heatmap_opts() hands the
+    # verdict to the builder, which draws the class strip and its key in their
+    # place rather than a row of smudges.
     refit_labels <- function() {
       fit <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
       if (!isTRUE(fit$cols_legible)) {
         update_switch("amr_show_col_names", value = FALSE, session = session)
         show_col_names_mirror(FALSE)
+      }
+      # Only reached by a panel narrower than a single line of type, since the
+      # element row turns on its side before it gives up on fitting (see
+      # element_rot) - but a two-column virulence panel beside two hundred
+      # resistance genes is exactly that shape.
+      if (!isTRUE(fit$elements_legible)) {
+        update_switch("amr_show_element_names", value = FALSE, session = session)
+        show_element_names_mirror(FALSE)
       }
     }
 
@@ -1476,7 +1545,7 @@ server <- function(
           # not reach the first draw until updateSwitchInput's echo arrived a
           # flush later.
           show_col_names = show_col_names_mirror(),
-          show_element_names = isTRUE(input$amr_show_element_names),
+          show_element_names = show_element_names_mirror(),
           class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
           anno_layers = anno_layers()
         ),
@@ -1497,11 +1566,14 @@ server <- function(
         shiny$req(nrow(df) > 0)
         return(amr_plot$build_amr_prevalence(
           df,
-          list(
-            bar_scale = input$amr_bar_scale %||% BAR_SCALE_DEFAULT,
-            text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
-            background = background,
-            n_isolates = length(isolates())
+          c(
+            list(
+              bar_scale = input$amr_bar_scale %||% BAR_SCALE_DEFAULT,
+              text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
+              background = background,
+              n_isolates = length(isolates())
+            ),
+            prevalence_fit()
           )
         ))
       }
@@ -1512,17 +1584,6 @@ server <- function(
       # amr_plot$amr_as_ggplot().
       width_in <- canvas_in()
       height_in <- width_in * plot_aspect()
-
-      if (identical(mode(), "classes")) {
-        mat <- class_mat()
-        shiny$req(ncol(mat) > 0)
-        return(amr_plot$amr_as_ggplot(
-          amr_plot$build_amr_class_heatmap(mat, heatmap_opts()),
-          background,
-          width_in = width_in,
-          height_in = height_in
-        ))
-      }
 
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
@@ -1597,8 +1658,7 @@ server <- function(
     # they scale with the bar count and not with the isolates.
     plot_aspect <- shiny$reactive({
       if (identical(mode(), "prevalence")) {
-        n <- nrow(prevalence_df())
-        return(max(0.35, min(1.6, 0.22 + n * 0.035)))
+        return(prevalence_fit()$aspect)
       }
       layout_fit()$aspect
     })
@@ -1822,6 +1882,9 @@ server <- function(
       }
       if (!is.null(vals$amr_show_col_names)) {
         show_col_names_mirror(isTRUE(vals$amr_show_col_names))
+      }
+      if (!is.null(vals$amr_show_element_names)) {
+        show_element_names_mirror(isTRUE(vals$amr_show_element_names))
       }
 
       layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)

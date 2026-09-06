@@ -1,13 +1,16 @@
 box::use(
   ComplexHeatmap,
-  grid[convertHeight, grid.grabExpr, grobHeight],
+  grid[convertHeight, convertWidth, grid.grabExpr, grobHeight],
+  stats[setNames],
   testthat[
     expect_equal,
     expect_false,
     expect_gt,
+    expect_gte,
     expect_identical,
     expect_length,
     expect_lt,
+    expect_lte,
     expect_named,
     expect_null,
     expect_s3_class,
@@ -216,6 +219,27 @@ test_that("amr_threshold_bounds falls back to 0-100 with nothing numeric", {
   )
 })
 
+test_that("amr_top_n_bounds caps the slider at how many items there are", {
+  b <- amr_plot$amr_top_n_bounds(8, default = 30L)
+  expect_identical(b, list(min = 5L, max = 8L, value = 8L, step = 1L))
+
+  # A screen with plenty of genes/classes keeps the old floor and default.
+  wide <- amr_plot$amr_top_n_bounds(300, default = 30L)
+  expect_identical(wide$min, 5L)
+  expect_identical(wide$max, 300L)
+  expect_identical(wide$value, 30L)
+  expect_identical(wide$step, 5L)
+})
+
+test_that("amr_top_n_bounds keeps the reader's own value, only clamping it", {
+  # Fits inside the new range untouched.
+  expect_identical(amr_plot$amr_top_n_bounds(50, current = 20L)$value, 20L)
+  # Past the new ceiling, clamps down to it rather than snapping to default.
+  expect_identical(amr_plot$amr_top_n_bounds(10, current = 40L)$value, 10L)
+  # Below the new floor (a screen shrunk to fewer items than 5), clamps up.
+  expect_identical(amr_plot$amr_top_n_bounds(3, current = 1L)$value, 3L)
+})
+
 # --- presence matrix ---------------------------------------------------------
 
 test_that("amr_presence_matrix keeps every isolate, including clean ones", {
@@ -387,53 +411,6 @@ test_that("amr_confidence_palette runs through the reader's own four colors", {
   expect_false(unname(pal["Putative"]) %in% c("#EFEFEF", "#E5C494"))
 })
 
-# --- class matrix ------------------------------------------------------------
-
-test_that("amr_class_matrix ranks a confident call above a partial one", {
-  mat <- amr_plot$amr_class_matrix(sections_fixture(), ISOLATES)
-
-  expect_identical(mat["ISO-1", "Beta-lactam"], 2L)
-  expect_identical(mat["ISO-1", "Quinolone"], 1L)
-  expect_identical(mat["ISO-3", "Quinolone"], 1L)
-  # Nothing reported for ISO-5 at all.
-  expect_identical(unname(sum(mat["ISO-5", ])), 0L)
-})
-
-test_that("the strongest call wins when an isolate appears in two sections", {
-  sections <- sections_fixture()
-  sections <- rbind(
-    sections,
-    data.frame(
-      isolate = "ISO-1",
-      section = "matches",
-      drug_class = "Quinolone",
-      genes = "x",
-      stringsAsFactors = FALSE
-    )
-  )
-  mat <- amr_plot$amr_class_matrix(sections, ISOLATES)
-  expect_identical(mat["ISO-1", "Quinolone"], 2L)
-})
-
-test_that("the virulence attribute flags only virulence-only columns", {
-  mat <- amr_plot$amr_class_matrix(sections_fixture(), ISOLATES)
-  virulence <- attr(mat, "virulence")
-
-  expect_identical(length(virulence), ncol(mat))
-  expect_true(virulence[match("Adhesion", colnames(mat))])
-  expect_false(virulence[match("Beta-lactam", colnames(mat))])
-})
-
-test_that("keep_sections restricts which calls are counted", {
-  mat <- amr_plot$amr_class_matrix(
-    sections_fixture(),
-    ISOLATES,
-    keep_sections = "matches"
-  )
-  expect_identical(colnames(mat), "Beta-lactam")
-  expect_identical(unname(sum(mat["ISO-3", ])), 0L)
-})
-
 # --- prevalence --------------------------------------------------------------
 
 test_that("gene prevalence counts distinct isolates, ranked", {
@@ -463,6 +440,36 @@ test_that("class prevalence labels each class by its strongest section", {
   expect_identical(df$group[df$item == "Beta-lactam"], "Matches")
   expect_identical(df$group[df$item == "Quinolone"], "Partials")
   expect_identical(df$group[df$item == "Adhesion"], "Virulence")
+})
+
+test_that("the AMRFinderPlus vocabulary counts classes off amr_results, not the rollup", {
+  # sections_fixture() is passed but must be ignored entirely under this
+  # vocabulary — passing NULL instead must not change the result.
+  df <- amr_plot$amr_prevalence(
+    hits_fixture(),
+    sections_fixture(),
+    ISOLATES,
+    level = "class",
+    vocabulary = "amrfinder"
+  )
+  same <- amr_plot$amr_prevalence(
+    hits_fixture(),
+    NULL,
+    ISOLATES,
+    level = "class",
+    vocabulary = "amrfinder"
+  )
+  expect_identical(df, same)
+
+  # Filed straight off amr_results' own class field (Title Case via
+  # amr_class_label()), not abritamr's curated rollup - "gyrA" is filed under
+  # its raw AMRFinder class here, same as the gene heatmap's own AMRFinderPlus
+  # vocabulary would file it.
+  expect_true("Quinolone" %in% df$item)
+  # fimH carries no AMRFinder class at all, so it falls back to its element
+  # type the same way amr_gene_meta()'s own fallback chain does.
+  expect_identical(df$group[df$item == "Virulence"], "Virulence")
+  expect_identical(df$group[df$item == "Beta-lactam"], "Resistance")
 })
 
 test_that("prevalence truncates to the top n", {
@@ -635,7 +642,7 @@ strip_fixture <- function(label = "Country", palette = "Set1") {
     label = label,
     palette = palette,
     continuous = FALSE,
-    values = stats::setNames(rep(c("DE", "FR", "IT"), 2), ISOLATES)
+    values = setNames(rep(c("DE", "FR", "IT"), 2), ISOLATES)
   )
 }
 
@@ -677,7 +684,7 @@ test_that("several annotation strips travel in one rowAnnotation", {
   mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
   host <- strip_fixture("Host", "Set2")
   host$field <- "host"
-  host$values <- stats::setNames(rep(c("Human", "Env"), 3), ISOLATES)
+  host$values <- setNames(rep(c("Human", "Env"), 3), ISOLATES)
 
   anno <- impl$.row_annotation(
     mat,
@@ -699,7 +706,7 @@ test_that("a continuous strip gets a ramp rather than a colour per value", {
     label = "Depth",
     palette = "viridis",
     continuous = TRUE,
-    values = stats::setNames(seq_along(ISOLATES) * 1.5, ISOLATES)
+    values = setNames(seq_along(ISOLATES) * 1.5, ISOLATES)
   )
   spec <- impl$.strip_spec(layer, mat)
   expect_true(is.function(spec$col))
@@ -718,7 +725,7 @@ test_that("a strip's unrecorded category is coloured last, never first", {
 
   mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
   layer <- strip_fixture()
-  layer$values <- stats::setNames(
+  layer$values <- setNames(
     c("Urine", NA, "Blood", "", "Wound", "Urine")[seq_along(ISOLATES)],
     ISOLATES
   )
@@ -804,18 +811,6 @@ test_that("only the call states a screen reached are keyed", {
   ht <- amr_plot$build_amr_heatmap(mat, list())
   states <- .legend_titles(ht, amr_plot$AMR_CONFIDENCE_STATES)
   expect_identical(states, c("Absent", "Perfect"))
-})
-
-test_that("the class heatmap's own legends travel the same way", {
-  mat <- amr_plot$amr_class_matrix(sections_fixture(), ISOLATES)
-  ht <- amr_plot$build_amr_class_heatmap(
-    mat,
-    list(anno_layers = list(strip_fixture()))
-  )
-  expect_identical(
-    .legend_titles(ht, c("Call", "Country")),
-    c("Call", "Country")
-  )
 })
 
 test_that("the legend column is packed against the height it is drawn into", {
@@ -928,6 +923,33 @@ test_that("the class heading draws as text only where columns are split by class
   expect_false(.grob_has_text(draw_grob("cluster"), "Beta-lactam"))
 })
 
+test_that("classes too narrow to name are coloured into a strip instead", {
+  # The other half of the same choice: split by class, but so finely that no
+  # legible title fits (titles_legible, from the fit). Drawing them anyway put
+  # a row of four-point smudges above the matrix and charged the page a full
+  # title row for them; the strip says the same thing at a size that reads.
+  amr_only <- amr_plot$amr_presence_matrix(
+    hits_fixture()[hits_fixture()$element_type == "AMR", , drop = FALSE],
+    ISOLATES
+  )
+  named <- amr_plot$build_amr_heatmap(
+    amr_only,
+    list(column_grouping = "class", titles_legible = TRUE)
+  )
+  strip <- amr_plot$build_amr_heatmap(
+    amr_only,
+    list(column_grouping = "class", titles_legible = FALSE)
+  )
+  expect_length(attr(named, "class_decorations"), 1L)
+  expect_null(attr(strip, "class_decorations"))
+  expect_s4_class(strip@top_annotation, "HeatmapAnnotation")
+
+  # And the key that names the colours comes with it - the classes are only
+  # unnamed on the plot, never unnamed altogether.
+  expect_length(.legend_titles(named, "Resistance"), 0L)
+  expect_identical(.legend_titles(strip, "Resistance"), "Resistance")
+})
+
 test_that("the class strip draws at the exact height the fit budgets for it", {
   # Both read AMR_CLASS_STRIP_IN, but from two different places (.class_
   # annotation's simple_anno_size and amr_auto_layout's overhead) - a bottom
@@ -958,14 +980,14 @@ test_that("the class strip draws at the exact height the fit budgets for it", {
     column_grouping = "class",
     aspect = 2
   )
-  # "class" still reserves its own (bigger) bottom row for the element-type
-  # label, so this only isolates the strip's own contribution rather than
-  # asserting a direction the two grouping modes would agree on anyway.
+  # The two are alternatives, so what separates their budgets is exactly one
+  # title row against one strip - the element-type row below the body is the
+  # same in both and cancels. Getting this wrong is a band of white under one
+  # of them and a title running off the page under the other.
   expect_equal(fit_no_strip$fontsize_title, fit$fontsize_title)
-  elem_in <- 2 * impl$.pt_in(fit$fontsize_title)
   expect_equal(
-    fit_no_strip$row_pitch_in - fit$row_pitch_in,
-    (impl$AMR_CLASS_STRIP_IN - elem_in) / 100,
+    fit$row_pitch_in - fit_no_strip$row_pitch_in,
+    (fit_no_strip$title_in - impl$AMR_CLASS_STRIP_IN) / 100,
     tolerance = 0.001
   )
 })
@@ -979,6 +1001,80 @@ test_that("hiding gene names is read straight through to the panel", {
   hidden <- amr_plot$build_amr_heatmap(amr_only, list(show_col_names = FALSE))
   expect_true(shown@column_names_param$show)
   expect_false(hidden@column_names_param$show)
+})
+
+test_that("gene names kept on over a crowded shape still get room to sit in", {
+  # The fit only seeds the switch off (refit_labels() in visualization_amr.R);
+  # a reader is free to turn the names back on. Budgeting against `cols_
+  # legible` rather than against the switch left that reader a zero-height
+  # band: the names ran off the foot of the page and through the element-type
+  # row, which is laid out under the room they were given rather than under
+  # the room they take.
+  crowded <- function(...) {
+    amr_plot$amr_auto_layout(
+      100, 244,
+      width_in = 9,
+      col_label_chars = 14,
+      block_titles = paste0("Class-", 1:20),
+      block_cols = rep(12L, 20),
+      column_grouping = "class",
+      aspect = 0.65,
+      ...
+    )
+  }
+  kept <- crowded(show_col_names = TRUE)
+  expect_false(kept$cols_legible)
+  expect_gt(kept$col_label_in, 0)
+
+  # And the room comes back to the rows where the names are off, rather than
+  # leaving a band of white under the matrix.
+  dropped <- crowded(show_col_names = FALSE)
+  expect_equal(dropped$col_label_in, 0)
+  expect_gt(dropped$row_pitch_in, kept$row_pitch_in)
+})
+
+test_that("the panel draws its gene names into exactly the room fitted", {
+  # The same pinning as the class strip above, on the other side of the
+  # matrix: the fit's col_label_in and the panel's column_names_max_height
+  # have to be one number, since the element-type title sits directly below
+  # whatever height that reserves.
+  amr_only <- amr_plot$amr_presence_matrix(
+    hits_fixture()[hits_fixture()$element_type == "AMR", , drop = FALSE],
+    ISOLATES
+  )
+  fit <- amr_plot$amr_auto_layout(
+    6, ncol(amr_only),
+    col_label_chars = max(nchar(colnames(amr_only))),
+    show_col_names = TRUE
+  )
+  ht <- amr_plot$build_amr_heatmap(amr_only, c(list(show_col_names = TRUE), fit))
+  cap <- as.numeric(convertHeight(ht@column_names_param$max_height, "in"))
+  # Not equality: ComplexHeatmap adds a small gap of its own on top of the
+  # height it is handed. The bounds are what matter - never less than the fit
+  # set aside, and never the 2.4in fallback that would mean the two had come
+  # apart.
+  expect_gte(cap, fit$col_label_in)
+  expect_lt(cap, fit$col_label_in + 0.2)
+})
+
+test_that("the element-type row is only budgeted where it is drawn", {
+  # Grouped by class it is a row of its own below the block titles; clustered
+  # it *is* the block-title row, moved to the foot of the matrix - so the room
+  # switching it off gives back comes out of a different budget in each case.
+  fitted <- function(...) {
+    amr_plot$amr_auto_layout(
+      100, 40,
+      block_titles = c("Resistance", "Virulence"),
+      block_cols = c(20L, 20L),
+      aspect = 2,
+      ...
+    )
+  }
+  for (grouping in c("class", "cluster")) {
+    shown <- fitted(column_grouping = grouping, show_element_names = TRUE)
+    hidden <- fitted(column_grouping = grouping, show_element_names = FALSE)
+    expect_gt(hidden$row_pitch_in, shown$row_pitch_in)
+  }
 })
 
 # --- automatic layout --------------------------------------------------------
@@ -1178,6 +1274,167 @@ test_that("a reader's aspect ratio is used as given and re-solves the sizes", {
   )
 })
 
+test_that("the element-type row is fitted to its panel, not to a class block", {
+  # Forty drug classes over two hundred genes leaves each class title a
+  # fraction of an inch to sit in - and the element-type label under a
+  # seven-inch panel used to be set at that same size, because the two shared
+  # one number. They are separate rooms and now separate fits.
+  fit <- amr_plot$amr_auto_layout(
+    100, 244,
+    width_in = 12.5,
+    block_titles = paste0("Class-", 1:40),
+    block_cols = rep(6L, 40),
+    element_titles = c("Resistance", "Virulence", "Stress"),
+    element_cols = c(219L, 8L, 17L),
+    aspect = 0.65
+  )
+  expect_gt(fit$fontsize_element, fit$fontsize_title)
+  expect_gte(fit$fontsize_element, impl$AMR_ELEMENT_MIN_PT)
+  expect_true(fit$elements_legible)
+})
+
+test_that("a panel too narrow to carry its name flat turns it on its side", {
+  wide <- amr_plot$amr_auto_layout(
+    100, 200,
+    width_in = 10,
+    element_titles = "Resistance",
+    element_cols = 200L,
+    aspect = 1
+  )
+  expect_identical(wide$element_rot, 0)
+
+  # Five virulence genes beside a hundred and ninety-five resistance ones:
+  # "Virulence" is many times wider than the panel it belongs to, so the whole
+  # row turns rather than any one label shrinking past reading.
+  narrow <- amr_plot$amr_auto_layout(
+    100, 200,
+    width_in = 10,
+    element_titles = c("Resistance", "Virulence"),
+    element_cols = c(195L, 5L),
+    aspect = 1
+  )
+  expect_identical(narrow$element_rot, 90)
+  expect_gte(narrow$fontsize_element, impl$AMR_ELEMENT_MIN_PT)
+  # Turned, what it costs the page is its length rather than two lines of
+  # type, and the rows are what pay for it.
+  expect_lt(narrow$row_pitch_in, wide$row_pitch_in)
+})
+
+test_that("the page, not the panel, is what caps the element-type row", {
+  # One label under one whole panel has room to grow to a size nobody wants to
+  # read a heading at, so the ceiling comes off the canvas width instead.
+  args <- list(
+    100, 40,
+    element_titles = "Resistance",
+    element_cols = 40L,
+    aspect = 1
+  )
+  small <- do.call(amr_plot$amr_auto_layout, c(args, list(width_in = 5)))
+  large <- do.call(amr_plot$amr_auto_layout, c(args, list(width_in = 20)))
+  expect_lt(small$fontsize_element, large$fontsize_element)
+  expect_lte(large$fontsize_element, impl$AMR_ELEMENT_MAX_PT)
+  expect_gte(small$fontsize_element, impl$AMR_ELEMENT_MIN_PT)
+})
+
+test_that("no label is ever set below the floor for its own role", {
+  # The rule the whole fit runs on: fit the type to the room, and where even
+  # the floor will not fit, say so (so the builders can drop the label) rather
+  # than set it smaller. A four-point label is a smudge that still costs the
+  # page a full row.
+  crowded <- amr_plot$amr_auto_layout(
+    400, 400,
+    width_in = 6,
+    col_label_chars = 20,
+    block_titles = paste0("Class-", 1:40),
+    block_cols = rep(10L, 40),
+    element_titles = c("Resistance", "Virulence"),
+    element_cols = c(395L, 5L),
+    n_strips = 3L,
+    aspect = 1
+  )
+  expect_gte(crowded$fontsize_title, impl$AMR_TITLE_MIN_PT)
+  expect_gte(crowded$fontsize_element, impl$AMR_ELEMENT_MIN_PT)
+  expect_gte(crowded$fontsize_anno, impl$AMR_ANNO_NAME_MIN_PT)
+  expect_gte(crowded$fontsize_legend, impl$AMR_LEGEND_MIN_PT)
+  expect_false(crowded$titles_legible)
+  expect_false(crowded$cols_legible)
+})
+
+test_that("a mapped strip is drawn as wide as the body the fit took it from", {
+  # The same pinning as the class strip's height: amr_auto_layout() takes
+  # AMR_STRIP_IN out of the body for each mapped variable, so that is what the
+  # annotation has to draw at - ComplexHeatmap's own 5mm default left the body
+  # narrower than every column width had been solved against.
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  layers <- list(list(
+    label = "Country",
+    values = setNames(rep(c("DE", "FR"), length.out = nrow(mat)), rownames(mat)),
+    palette = "Set2"
+  ))
+  legend_gp <- impl$.legend_gp("#000000", 8)
+  anno <- impl$.row_annotation(mat, layers, "#000000", legend_gp, list())
+  expect_equal(
+    as.numeric(convertWidth(anno$anno@width, "in")),
+    impl$AMR_STRIP_IN
+  )
+
+  # And its name is set to that width rather than to the legend's size, and
+  # goes off entirely where the width will not carry the floor - the legend it
+  # keys is titled with the same variable name either way.
+  named <- impl$.row_annotation(
+    mat, layers, "#000000", legend_gp,
+    list(anno_names_legible = TRUE, fontsize_anno = 6.2)
+  )
+  unnamed <- impl$.row_annotation(
+    mat, layers, "#000000", legend_gp,
+    list(anno_names_legible = FALSE, fontsize_anno = 6.2)
+  )
+  expect_true(named$anno@anno_list[[1]]@name_param$show)
+  expect_false(unnamed$anno@anno_list[[1]]@name_param$show)
+  expect_equal(named$anno@anno_list[[1]]@name_param$gp$fontsize, 6.2)
+})
+
+test_that("the element panels are measured before the heatmap exists", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  blocks <- amr_plot$amr_element_blocks(mat)
+  expect_identical(blocks$titles, c("Resistance", "Virulence"))
+  expect_identical(sum(blocks$cols), ncol(mat))
+})
+
+test_that("the prevalence chart grows with its bars and sets type to the pitch", {
+  few <- amr_plot$amr_prevalence_layout(8, 10)
+  many <- amr_plot$amr_prevalence_layout(80, 10)
+  expect_gt(many$aspect, few$aspect)
+  # ... and stops, rather than a chart nobody can scroll.
+  expect_lte(many$aspect, impl$AMR_PREVALENCE_MAX)
+  expect_lt(many$fontsize_row, few$fontsize_row)
+
+  # The same bar count on a narrower canvas is less room per bar, which the
+  # step table of counts this replaced could not see at all.
+  expect_lt(amr_plot$amr_prevalence_layout(80, 5)$fontsize_row, many$fontsize_row)
+  expect_true(few$legible)
+
+  # The legend and axis title scale off the same bar pitch too, so a crowded
+  # chart never leaves them looking oversized beside tiny bar labels - though,
+  # unlike the row labels, they only start shrinking once the page is
+  # genuinely packed.
+  crowded <- amr_plot$amr_prevalence_layout(500, 10)
+  expect_lt(crowded$fontsize_legend, few$fontsize_legend)
+  expect_lte(few$fontsize_legend, 11)
+})
+
+test_that("the Prevalence bar scale only ever lands on Dark2 or viridis", {
+  # The reader's own pick stands while it still names every group.
+  expect_identical(amr_plot$amr_bar_scale_fit("Set3", 4), "Set3")
+  # Dark2 is the default, and covers up to its own eight colors.
+  expect_identical(amr_plot$amr_bar_scale_fit(NULL, 3), "Dark2")
+  expect_identical(amr_plot$amr_bar_scale_fit("Dark2", 8), "Dark2")
+  # Past that, it is viridis - never some other qualitative palette in
+  # between, unlike amr_fit_scale()'s general ladder.
+  expect_identical(amr_plot$amr_bar_scale_fit("Dark2", 9), "viridis")
+  expect_identical(amr_plot$amr_bar_scale_fit("Set3", 20), "viridis")
+})
+
 test_that("the fit reports when the row labels are past reading", {
   expect_true(amr_plot$amr_auto_layout(20, 20, show_row_names = TRUE)$legible)
   expect_false(
@@ -1316,17 +1573,6 @@ test_that(".panel_label names a panel by the element type it holds", {
   expect_identical(impl$.panel_label(meta[0, , drop = FALSE]), "Drug class")
 })
 
-test_that("the drug-class heatmap renders clustered and split", {
-  mat <- amr_plot$amr_class_matrix(sections_fixture(), ISOLATES)
-
-  for (grouping in c("none", "cluster")) {
-    plot <- amr_plot$amr_as_ggplot(
-      amr_plot$build_amr_class_heatmap(mat, list(column_grouping = grouping))
-    )
-    expect_s3_class(plot, "ggplot")
-  }
-})
-
 test_that("a dendrogram depth of zero hides the trees but keeps the order", {
   mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
   hidden <- amr_plot$build_amr_heatmap(
@@ -1379,6 +1625,22 @@ test_that("a screen with several strips still renders at its true canvas", {
     )
     expect_true(file.exists(file))
   }
+})
+
+test_that("every text element on the prevalence chart takes the fitted sizes", {
+  df <- amr_plot$amr_prevalence(
+    hits_fixture(),
+    sections_fixture(),
+    ISOLATES,
+    level = "gene"
+  )
+  plot <- amr_plot$build_amr_prevalence(
+    df,
+    list(fontsize_row = 6, fontsize_legend = 8)
+  )
+  expect_equal(plot$theme$axis.text$size, 6)
+  expect_equal(plot$theme$axis.title$size, 8)
+  expect_equal(plot$theme$legend.text$size, 8)
 })
 
 test_that("the prevalence chart renders to a real image", {

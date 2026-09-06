@@ -27,7 +27,16 @@ box::use(
   ],
   ggplotify[as.ggplot],
   grDevices[colorRampPalette],
-  grid[gpar, grid.grabExpr, grid.text, popViewport, pushViewport, unit, viewport],
+  grid[
+    gpar,
+    grid.grabExpr,
+    grid.text,
+    popViewport,
+    pushViewport,
+    unit,
+    viewport
+  ],
+  RColorBrewer[brewer.pal.info],
   rlang[`%||%`],
   stats[dist, hclust, setNames],
 )
@@ -76,10 +85,7 @@ AMR_CLASS_VOCABULARIES <- c(
 )
 
 #' @export
-AMR_CLASS_VOCABULARY_DEFAULT <- "rollup"
-
-#' @export
-AMR_CLASS_STATES <- c("Absent", "Partial", "Match")
+AMR_CLASS_VOCABULARY_DEFAULT <- "amrfinder"
 
 #' The gene heatmap's cell states, coarse-to-fine. Not a plain presence/absence
 #' pair: AMRFinderPlus already curates a per-gene identity/coverage cutoff for
@@ -173,6 +179,41 @@ amr_fit_scale <- function(scale, n) epi_fit_scale(scale, n)
 
 #' @export
 amr_palette <- function(cats, scale) epi_palette(cats, scale)
+
+#' Resolves the Prevalence chart's bar scale to just two states.
+#'
+#' Every other scale picker in this module (see `amr_fit_scale()`) falls
+#' through a ladder of qualitative palettes before it reaches a gradient one.
+#' This control does not: the reader's own pick stays in force while it can
+#' still name every group distinctly, the Dark2 default takes over the moment
+#' it cannot but Dark2 itself still could, and the continuous viridis scale is
+#' the only place left to land once neither can - never some other
+#' qualitative palette in between.
+#'
+#' @param scale Requested palette name.
+#' @param n_groups How many distinct groups the bars must be colored by.
+#' @return `scale` unchanged when it still fits, else "Dark2", else "viridis".
+#' @export
+amr_bar_scale_fit <- function(scale, n_groups) {
+  n_groups <- max(as.integer(n_groups %||% 1L), 1L)
+  fits <- function(s) {
+    if (is.null(s) || !nzchar(s %||% "")) {
+      return(FALSE)
+    }
+    if (s %in% rownames(brewer.pal.info)) {
+      brewer.pal.info[s, "maxcolors"] >= n_groups
+    } else {
+      TRUE
+    }
+  }
+  if (fits(scale)) {
+    scale
+  } else if (fits("Dark2")) {
+    "Dark2"
+  } else {
+    "viridis"
+  }
+}
 
 # --- Database Interface ------------------------------------------------------
 
@@ -320,6 +361,32 @@ amr_threshold_bounds <- function(values) {
   list(min = floor(rng[1]), max = ceiling(rng[2]), value = floor(rng[1]))
 }
 
+#' Fits the Prevalence "Show top" slider's range to how many items there
+#' actually are to rank - a screen of eight genes offers nothing past eight,
+#' and a database of several hundred should not stay capped at some flat 100
+#' the way the old slider was. `value` keeps the caller's own current setting
+#' where it still fits, so switching "Count by" or the drug-class vocabulary
+#' never clobbers a deliberate choice - it only clamps one the new range can
+#' no longer hold.
+#' @param n_items Distinct genes or drug classes the current level counts.
+#' @param default Value to open on when `current` is NULL.
+#' @param current The slider's own value before this fit, or NULL to use
+#'   `default`.
+#' @return List with `min`, `max`, `value` and `step`.
+#' @export
+amr_top_n_bounds <- function(n_items, default = 30L, current = NULL) {
+  n_items <- max(as.integer(n_items %||% 0L), 1L)
+  min_v <- min(5L, n_items)
+  step <- if (n_items > 20L) 5L else 1L
+  want <- as.integer(current %||% default %||% 30L)
+  list(
+    min = min_v,
+    max = n_items,
+    value = min(max(want, min_v), n_items),
+    step = step
+  )
+}
+
 # Gene symbol -> the class abritamr filed it under, read off the rollup rows.
 # abritamr carries its quality flags on the gene name ("blaOXA-2*") where the
 # hit table does not, so the key is the stripped symbol. A gene filed under more
@@ -447,12 +514,20 @@ amr_gene_choices <- function(
 # AMRFinderPlus itself, not a single global identity/coverage percentage of
 # ours.
 .METHOD_CONFIDENCE <- c(
-  ALLELE = 4L, ALLELEX = 4L, EXACT = 4L, EXACTX = 4L,
-  BLAST = 3L, BLASTX = 3L,
-  INTERNAL_STOP = 2L, INTERNAL_STOPX = 2L,
-  PARTIAL = 2L, PARTIALX = 2L,
-  PARTIAL_CONTIG_END = 2L, PARTIAL_CONTIG_ENDX = 2L,
-  HMM = 1L, HMM_PARTIAL = 1L
+  ALLELE = 4L,
+  ALLELEX = 4L,
+  EXACT = 4L,
+  EXACTX = 4L,
+  BLAST = 3L,
+  BLASTX = 3L,
+  INTERNAL_STOP = 2L,
+  INTERNAL_STOPX = 2L,
+  PARTIAL = 2L,
+  PARTIALX = 2L,
+  PARTIAL_CONTIG_END = 2L,
+  PARTIAL_CONTIG_ENDX = 2L,
+  HMM = 1L,
+  HMM_PARTIAL = 1L
 )
 
 #' Ranks a hit's `method` against `AMR_CONFIDENCE_STATES` (1-4; 0 is reserved
@@ -517,8 +592,7 @@ amr_presence_matrix <- function(
       )
       mat[idx] <- 1L
       # Two hits can land in the same cell (e.g. two copies of a gene) with
-      # different confidence; the strongest one wins, same reduction rule as
-      # amr_class_matrix's .section_rank.
+      # different confidence; the strongest one wins.
       rank <- amr_method_confidence(present$method)
       for (i in seq_len(nrow(idx))) {
         cell <- confidence[idx[i, 1L], idx[i, 2L]]
@@ -579,79 +653,28 @@ amr_confidence_frame <- function(hits, isolates, genes = NULL) {
   out
 }
 
-.section_rank <- function(section) {
-  ifelse(section == "partials", 1L, ifelse(is.na(section), 0L, 2L))
-}
-
-#' Constructs a ranked confidence matrix (0 = Absent, 1 = Partial, 2 = Match/Virulence).
-#' Takes the highest confidence rank when duplicate hits exist per cell.
-#' @export
-amr_class_matrix <- function(
-  sections,
-  isolates,
-  keep_sections = NULL,
-  drop_empty = TRUE
-) {
-  isolates <- unique(as.character(isolates))
-  isolates <- isolates[!is.na(isolates) & nzchar(isolates)]
-
-  rows <- if (is.null(sections) || !nrow(sections)) {
-    .EMPTY_SECTIONS
-  } else {
-    sections[sections$isolate %in% isolates, , drop = FALSE]
-  }
-  if (!is.null(keep_sections) && length(keep_sections)) {
-    rows <- rows[rows$section %in% keep_sections, , drop = FALSE]
-  }
-
-  classes <- sort(unique(rows$drug_class))
-  mat <- matrix(
-    0L,
-    nrow = length(isolates),
-    ncol = length(classes),
-    dimnames = list(isolates, classes)
-  )
-  if (nrow(rows) && length(classes) && length(isolates)) {
-    ri <- match(rows$isolate, isolates)
-    ci <- match(rows$drug_class, classes)
-    rank <- .section_rank(rows$section)
-    for (i in seq_along(ri)) {
-      mat[ri[i], ci[i]] <- max(mat[ri[i], ci[i]], rank[i])
-    }
-  }
-
-  if (isTRUE(drop_empty) && ncol(mat)) {
-    keep <- colSums(mat) > 0L
-    mat <- mat[, keep, drop = FALSE]
-    classes <- classes[keep]
-  }
-
-  virulence <- vapply(
-    classes,
-    function(cl) {
-      secs <- unique(rows$section[rows$drug_class == cl])
-      length(secs) > 0 && all(secs == "virulence")
-    },
-    logical(1),
-    USE.NAMES = FALSE
-  )
-  attr(mat, "virulence") <- virulence
-  mat
-}
-
 # --- Prevalence Calculations --------------------------------------------------
 
 #' Computes gene or drug-class occurrence counts across selected isolates.
 #'
 #' Returns top `top_n` items ordered by prevalence.
 #'
-#' @param hits Gene hits, for `level = "gene"`.
-#' @param sections abritamr rollup rows, for `level = "class"`.
+#' @param hits Gene hits, for `level = "gene"` and for `level = "class"` under
+#'   the "amrfinder" vocabulary.
+#' @param sections abritamr rollup rows, for `level = "class"` under the
+#'   "rollup" vocabulary.
 #' @param isolates Character vector of isolates the count covers.
 #' @param level Either "gene" or "class".
 #' @param top_n Integer. Items to keep; 0 or less keeps every one.
 #' @param keep_sections Call sections to count, or NULL for every one. Applies
-#'   at class level only — a gene hit carries no section.
+#'   at class level under the "rollup" vocabulary only — AMRFinderPlus's own
+#'   class field carries no section, and a gene hit carries neither.
+#' @param vocabulary One of `AMR_CLASS_VOCABULARIES`. Read at class level
+#'   only: "rollup" counts off abritamr's own summary, unchanged; "amrfinder"
+#'   counts off `hits` instead, filed under the class the gene heatmap's own
+#'   AMRFinderPlus vocabulary would file the same gene under (see
+#'   `amr_gene_meta()`), so switching vocabularies here and on the heatmap
+#'   files a gene under the same heading in both places.
 #' @return A data frame of `item`, `group`, `n` and `frac`.
 #' @export
 amr_prevalence <- function(
@@ -660,7 +683,8 @@ amr_prevalence <- function(
   isolates,
   level = "gene",
   top_n = 30L,
-  keep_sections = NULL
+  keep_sections = NULL,
+  vocabulary = AMR_CLASS_VOCABULARY_DEFAULT
 ) {
   isolates <- unique(as.character(isolates))
   n_iso <- length(isolates)
@@ -672,7 +696,49 @@ amr_prevalence <- function(
     stringsAsFactors = FALSE
   )
 
-  if (identical(level, "class")) {
+  if (identical(level, "class") && identical(vocabulary, "amrfinder")) {
+    rows <- if (is.null(hits) || !nrow(hits)) {
+      .EMPTY_HITS
+    } else {
+      hits[hits$isolate %in% isolates, , drop = FALSE]
+    }
+    if (!nrow(rows)) {
+      return(empty)
+    }
+    # Filed the same way the gene heatmap's own AMRFinderPlus vocabulary files
+    # a column: straight off amr_results' own class field, no rollup override
+    # (see amr_gene_meta()) - so a reader who switches vocabularies here and
+    # there sees the same class names in both places.
+    genes <- unique(rows$gene_symbol)
+    meta <- amr_gene_meta(
+      rows,
+      genes,
+      sections = NULL,
+      vocabulary = "amrfinder"
+    )
+    class_of <- setNames(meta$group, meta$gene)
+    element_of <- setNames(meta$element_type, meta$gene)
+    item <- unname(class_of[rows$gene_symbol])
+    et_label <- vapply(
+      element_of,
+      function(et) {
+        names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)] %||%
+          AMR_UNCLASSIFIED
+      },
+      character(1)
+    )
+    group <- vapply(
+      unique(item),
+      function(cl) {
+        ets <- unique(et_label[names(class_of)[class_of == cl]])
+        if ("Virulence" %in% ets) "Virulence" else ets[1]
+      },
+      character(1),
+      USE.NAMES = FALSE
+    )
+    group <- setNames(group, unique(item))
+    isolate <- rows$isolate
+  } else if (identical(level, "class")) {
     rows <- if (is.null(sections) || !nrow(sections)) {
       .EMPTY_SECTIONS
     } else {
@@ -827,12 +893,55 @@ AMR_GRID_MIN_IN <- 0.045
 # draws it into are guaranteed to be the same number.
 AMR_CLASS_STRIP_IN <- 0.16
 
-# Where a label stops being worth drawing at all. Below these a gene name or a
-# block title is a smear rather than a word, and the fit turns it off instead
-# of drawing it — the drug-class strip and its key still say which class a
-# column belongs to, which is the whole of what the title was for.
+# Clearance between a class title and whatever sits directly under it — the
+# block's own dendrogram, or the matrix itself where the dendrogram is off.
+# Budgeted into title_in as well as drawn (see .decorate_class_dend), so the
+# gap comes out of the title's own room rather than pushing it into the gene
+# names above.
+AMR_TITLE_GAP_IN <- 0.03
+
+# Clearance under the gene names, between the longest of them and the
+# element-type row below. AMR_CHAR_EM is an average over the alphabet, so a
+# name made of wide characters overruns the room budgeted for it by a little;
+# this is what keeps that overrun off the label underneath.
+AMR_COL_LABEL_GAP_IN <- 0.08
+
+# Where each label stops being worth drawing at all. Below its own floor a
+# label is a smear rather than a word, and the rule across every one of them is
+# the same: fit the type to the room the label actually has, and where even the
+# floor will not fit, drop the label rather than set it smaller. Nothing in an
+# AMR plot is ever drawn below the floor for its role — what differs between
+# the roles is only what stands in for a dropped label (the class strip and its
+# key for a block title, the class strip's legend heading for an element-type
+# name, nothing at all for a gene name, which the reader can always switch back
+# on) and how far each can be trusted to shrink before that point.
 AMR_TITLE_MIN_PT <- 7
+AMR_ELEMENT_MIN_PT <- 7
 AMR_COL_MIN_PT <- 5
+AMR_ROW_MIN_PT <- 5
+AMR_ANNO_NAME_MIN_PT <- 5
+
+# Ceiling on the element-type row, and the share of the canvas width that
+# picks a size below it. One label under a whole panel has room to grow far
+# past anything worth reading it at, so what caps it is the page rather than
+# the panel: set much larger than the legend titles beside it, an element name
+# reads as a second plot title rather than as the axis label it is.
+AMR_ELEMENT_MAX_PT <- 12
+AMR_ELEMENT_PT_PER_IN <- 0.9
+
+# Width of one mapped-variable strip beside the rows. Budgeted out of the body
+# in amr_auto_layout() and handed to the annotation as its simple_anno_size, so
+# the room taken and the room reserved are the same number — the same pinning
+# AMR_CLASS_STRIP_IN does on the other axis.
+AMR_STRIP_IN <- 0.12
+
+# Clearance between the matrix (isolate names included) and the legend column.
+# ComplexHeatmap measures the row names on whatever device is current when the
+# heatmap is laid out and they are redrawn on the device the figure is finally
+# rendered to, whose font metrics are a few percent wider - so a name measured
+# to end exactly where the legend begins is drawn a character or two into it.
+# ComplexHeatmap's own 2mm default is inside that error; this is not.
+AMR_LEGEND_PAD_MM <- 6
 
 # Share of the room between two block titles that the type may take, leaving
 # the rest as clearance. A rotated title's footprint across the page is its
@@ -914,42 +1023,115 @@ amr_legend_ncol <- function(n_keys, max_rows) {
   as.integer(min(AMR_LEGEND_MAX_COLS, ceiling(n_keys / max_rows)))
 }
 
+# The prevalence chart's own shape. One bar per item and no matrix to solve
+# against, so the page grows with the bar count rather than with the isolates,
+# and stops where a chart nobody can scroll begins.
+AMR_PREVALENCE_BASE <- 0.22
+AMR_PREVALENCE_PER_BAR <- 0.035
+AMR_PREVALENCE_MIN <- 0.35
+AMR_PREVALENCE_MAX <- 1.6
+
+# What the axis title, the legend row and the plot's margins take off the top
+# and bottom of that page before the bars get their share.
+AMR_PREVALENCE_OVERHEAD_IN <- 0.9
+
+#' Fits the prevalence chart's height and type to the bars it draws.
+#'
+#' The same rule as `amr_auto_layout()` on a much simpler shape: the page grows
+#' with the row count up to a ceiling, and the labels are set to the row pitch
+#' that leaves rather than to a step table of counts, which was blind to how
+#' tall the chart had actually come out.
+#'
+#' Unlike every other label in this module a bar label is never dropped: a bar
+#' chart whose bars are not named says nothing at all, and there is no strip,
+#' key or heading elsewhere on the page carrying the same names. What keeps it
+#' readable instead is the page growing with the bar count - within the
+#' `top_n` the reader can ask for, that is enough on its own, and `legible`
+#' reports the case it would not be.
+#'
+#' @param n_items Integer. Bars the chart draws.
+#' @param width_in Numeric. Canvas width in inches.
+#' @return A list with `aspect`, `fontsize_row`, `fontsize_legend` and
+#'   `legible`.
+#' @export
+amr_prevalence_layout <- function(n_items, width_in = 9) {
+  n <- max(as.integer(n_items %||% 1L), 1L)
+  w <- if (is.null(width_in) || !is.finite(width_in) || width_in <= 0) {
+    9
+  } else {
+    as.numeric(width_in)
+  }
+  aspect <- .clamp(
+    AMR_PREVALENCE_BASE + n * AMR_PREVALENCE_PER_BAR,
+    AMR_PREVALENCE_MIN,
+    AMR_PREVALENCE_MAX
+  )
+  pitch <- max(w * aspect - AMR_PREVALENCE_OVERHEAD_IN, 0.2) / n
+  pt <- 72 * pitch * AMR_LABEL_FILL
+  fontsize_row <- .clamp(pt, AMR_FONT_MIN, AMR_FONT_MAX)
+  # The legend key and the axis title scale off the same bar pitch rather
+  # than a flat 11pt, so they never read oversized beside bar labels a
+  # crowded screen has already shrunk down - the same floor and ceiling
+  # amr_auto_layout() fits the gene heatmap's own legend to.
+  fontsize_legend <- .clamp(fontsize_row * 1.3, AMR_LEGEND_MIN_PT, 11)
+  list(
+    aspect = round(aspect, 2),
+    fontsize_row = round(fontsize_row, 1),
+    fontsize_legend = round(fontsize_legend, 1),
+    legible = pt >= AMR_ROW_MIN_PT
+  )
+}
+
 #' Fit every size in an AMR heatmap to the shape of its matrix.
 #'
 #' @param n_rows Integer. Isolates the heatmap draws.
 #' @param n_cols Integer. Genes or drug classes it draws.
 #' @param width_in Numeric. Canvas width in inches.
 #' @param show_row_names Logical. Whether isolate names are drawn.
+#' @param show_col_names Logical. Whether gene names are drawn.
+#' @param show_element_names Logical. Whether the element-type row is drawn.
 #' @param row_label_chars Numeric. Longest isolate name, in characters.
 #' @param col_label_chars Numeric. Longest column name, in characters.
 #' @param block_titles Character vector of column-block titles, or NULL.
 #' @param block_cols Integer vector of columns per block, aligned to
 #'   `block_titles`.
+#' @param element_titles Character vector of element-type panel labels, or
+#'   NULL. Separate from `block_titles` because the two only coincide under one
+#'   of the two groupings, and each is fitted to its own room.
+#' @param element_cols Integer vector of columns per panel, aligned to
+#'   `element_titles`.
 #' @param dend_cm Numeric. Dendrogram depth the reader asked for, in cm.
 #' @param n_strips Integer. Annotation strips drawn beside the rows.
 #' @param aspect Numeric, or NULL to fit one. A ratio given here is used as-is
 #'   and every size that depends on the row pitch is solved against it, so a
 #'   reader who makes the figure taller gets larger isolate labels rather than
 #'   the same labels in more whitespace.
-#' @return A list of fitted sizes, plus `title_rot` and `legible`.
+#' @return A list of fitted sizes and rotations, plus one legibility verdict
+#'   per text role (`legible` for the isolate names, `cols_legible`,
+#'   `titles_legible`, `elements_legible`, `anno_names_legible`). A size is
+#'   never returned below the floor for its role; the verdict is what says the
+#'   floor did not fit, so the caller drops the label rather than drawing it.
 #' @export
 amr_auto_layout <- function(
   n_rows,
   n_cols,
   width_in = 9,
   show_row_names = FALSE,
+  show_col_names = TRUE,
+  show_element_names = TRUE,
   row_label_chars = 12,
   col_label_chars = 12,
   block_titles = NULL,
   block_cols = NULL,
+  element_titles = NULL,
+  element_cols = NULL,
   dend_cm = 1.5,
   n_strips = 0L,
-  # "class" or "cluster" (see .column_layout). Grouped by class, the block
-  # titles this fits against are drug-class names drawn above the body, and
-  # the panel's own element-type name is a second, separate row below it
-  # (see .gene_panel) - the two need their own budget apiece. Clustered, the
-  # block titles already *are* the element-type names, drawn in that same
-  # single row just moved to the bottom, so there is nothing extra to add.
+  # "class" or "cluster" (see .column_layout). What it decides here is whether
+  # the drug classes are named as text over each block or coloured into a strip
+  # with a key - two quite different demands on the page. The element-type row
+  # below the body is drawn either way and is fitted separately (see
+  # element_titles), so it no longer rides on this.
   column_grouping = "cluster",
   aspect = NULL
 ) {
@@ -963,7 +1145,7 @@ amr_auto_layout <- function(
 
   # The body loses width to whatever sits beside it, and the strips are the one
   # part of that which the reader controls.
-  body_w <- w * AMR_BODY_FRAC - n_strips * 0.12
+  body_w <- w * AMR_BODY_FRAC - n_strips * AMR_STRIP_IN
   body_w <- max(body_w, w * 0.25)
   cell_w <- body_w / n_cols
 
@@ -991,51 +1173,99 @@ amr_auto_layout <- function(
     )
   }
   # Past a point no size fits: forty drug classes over two hundred genes leaves
-  # each title a third of a millimetre of page to sit in. `titles_legible`
-  # still flags that, but only the gene names under the matrix act on it by
-  # going off outright (see refit_labels() in visualization_amr.R) — a drug
-  # class title stays on screen at its floor size regardless, since the class
-  # strip and its key are not always a substitute for it (see cols_legible)
-  # for the room the fit reserves either way.
+  # each title a third of a millimetre of page to sit in. Where that happens
+  # the titles come off the plot entirely and the class strip takes their place
+  # (see .class_strip_drawn), so the floor below is a floor on what is *drawn*
+  # rather than a size anything is squeezed down to — a title set at four
+  # points was a smudge that still cost the page a full row.
   titles_legible <- fontsize_title >= AMR_TITLE_MIN_PT
   cols_legible <- fontsize_col >= AMR_COL_MIN_PT
-  fontsize_title <- max(fontsize_title, AMR_FONT_MIN)
+  fontsize_title <- max(fontsize_title, AMR_TITLE_MIN_PT)
+
+  # The element-type row. One label under a whole panel, not one per drug-class
+  # block — it only ever shared fontsize_title by accident, and that size is
+  # solved against the *tightest* class block on the screen, which is what set
+  # "Resistance" in four-point type under a seven-inch panel. Fitted to its own
+  # panel's width instead, and, like a block title, turned on its side rather
+  # than shrunk past reading when a narrow panel cannot carry it flat.
+  elem_cap <- .clamp(
+    w * AMR_ELEMENT_PT_PER_IN,
+    AMR_ELEMENT_MIN_PT,
+    AMR_ELEMENT_MAX_PT
+  )
+  elem_flat <- .element_fontsize(element_titles, element_cols, body_w, elem_cap)
+  elem_rot <- if (elem_flat >= AMR_ELEMENT_MIN_PT) 0 else 90
+  fontsize_element <- if (identical(elem_rot, 0)) {
+    elem_flat
+  } else {
+    # Turned, the label's footprint across the page is its line height and it
+    # has its panel's whole width to sit in — the length that would not fit
+    # flat now runs down the page instead, where elem_in reserves for it.
+    min(72 * .panel_width(element_cols, body_w) * AMR_TITLE_FILL, elem_cap)
+  }
+  elements_legible <- fontsize_element >= AMR_ELEMENT_MIN_PT
+  fontsize_element <- max(fontsize_element, AMR_ELEMENT_MIN_PT)
 
   # Everything stacked above and below the body: the rotated column labels, the
-  # column dendrogram, the block titles and the plot's own margins. Subtracted
-  # from the canvas before the rows get their share, so a screen with long gene
-  # names does not lose the room to draw them — and, where those labels are not
-  # being drawn at all, so the rows get that room back instead of leaving a
-  # band of white where the titles would have been.
-  title_in <- if (identical(rot, 90)) {
-    .pt_in(fontsize_title) * AMR_CHAR_EM * max(nchar(block_titles %||% ""), 0)
-  } else {
-    .pt_in(fontsize_title) * 2
-  }
-  # The element-type row below the matrix, only ever a second row when the
-  # block titles above already spent theirs on drug classes instead - see
-  # column_grouping above.
-  elem_in <- if (identical(column_grouping, "class")) {
-    .pt_in(fontsize_title) * 2
-  } else {
+  # column dendrogram, the block titles, the element-type row and the plot's
+  # own margins. Subtracted from the canvas before the rows get their share, so
+  # a screen with long gene names does not lose the room to draw them.
+  #
+  # Each part is budgeted if and only if it is drawn, and those three
+  # conditions are the same ones the builders read (see .class_strip_drawn and
+  # .gene_panel) rather than a second set that could drift from them. Room set
+  # aside for a label nobody draws is a band of white under the matrix; a label
+  # drawn into room nobody set aside runs through whatever sits below it.
+  # The switches decide the budget; the verdicts above decide only whether the
+  # fit seeds a switch off in the first place (see refit_labels() in
+  # visualization_amr.R). Budgeting against a verdict instead would hand a
+  # reader who overrules one a label with no room to sit in — which is the
+  # zero-height band the gene names used to be drawn into.
+  has_blocks <- length(block_titles %||% character(0)) > 0
+  class_titles_drawn <- has_blocks &&
+    identical(column_grouping, "class") &&
+    titles_legible
+  strip_drawn <- has_blocks && !class_titles_drawn
+  element_row_drawn <- !isFALSE(show_element_names)
+
+  title_in <- AMR_TITLE_GAP_IN +
+    if (identical(rot, 90)) {
+      .pt_in(fontsize_title) * AMR_CHAR_EM * max(nchar(block_titles %||% ""), 0)
+    } else {
+      .pt_in(fontsize_title) * 2
+    }
+  # Turned, the element label runs down the page rather than across it, so what
+  # it costs is its length rather than two lines of type.
+  elem_in <- if (!element_row_drawn) {
     0
-  }
-  # The class colour strip itself, only ever drawn where the columns are not
-  # already split by class - there, the block titles above say which class a
-  # column belongs to, and a strip repeating that would just be a second copy
-  # of the same information the class-grouped branch already reserves
-  # title_in for. See .class_annotation/AMR_CLASS_STRIP_IN.
-  strip_in <- if (identical(column_grouping, "class")) 0 else AMR_CLASS_STRIP_IN
-  col_label_in <- if (cols_legible) {
-    .pt_in(fontsize_col) * AMR_CHAR_EM * max(col_label_chars, 1)
+  } else if (identical(elem_rot, 90)) {
+    AMR_TITLE_GAP_IN +
+      .pt_in(fontsize_element) *
+        AMR_CHAR_EM *
+        max(nchar(element_titles %||% ""), 1)
   } else {
+    .pt_in(fontsize_element) * 2
+  }
+  # Answers to the switch, not to `cols_legible`: the fit only ever *seeds* the
+  # switch off over a crowded shape (see refit_labels() in
+  # visualization_amr.R), and a reader who turns the names back on there still
+  # gets names — reserving nothing for them left ComplexHeatmap a zero-height
+  # band to draw them in, so they ran off the foot of the page and straight
+  # through the element-type row below (which is laid out under the room the
+  # names were given, not under the room they actually take).
+  col_label_in <- if (isFALSE(show_col_names)) {
     0
+  } else {
+    .pt_in(fontsize_col) *
+      AMR_CHAR_EM *
+      max(col_label_chars, 1) +
+      AMR_COL_LABEL_GAP_IN
   }
   overhead <- col_label_in +
     max(dend_cm, 0) / 2.54 +
-    title_in +
+    (if (class_titles_drawn) title_in else 0) +
+    (if (strip_drawn) AMR_CLASS_STRIP_IN else 0) +
     elem_in +
-    strip_in +
     0.5
 
   # Square cells where the matrix is small enough to allow it, the target pitch
@@ -1059,20 +1289,26 @@ amr_auto_layout <- function(
   # What the clamp actually left for the body, which is the pitch the row
   # labels have to fit inside — not the pitch that was asked for.
   pitch <- max(aspect * w - overhead, 0.2) / n_rows
-  fontsize_row <- .clamp(
+  # Read off the room rather than off the clamped size: an isolate name whose
+  # pitch is worth two points is still *set* at the floor, since a name drawn
+  # at all has to be drawn at a size, and the verdict on whether to draw one at
+  # all (`legible`, which the view reports on) has to be able to tell that
+  # apart from a name that genuinely fits at the floor. A name wider than the
+  # margin kept for it is the other way this fails.
+  row_pt <- min(
     72 * pitch * AMR_LABEL_FILL,
-    AMR_FONT_MIN,
-    AMR_FONT_MAX
+    72 * (w - body_w) * 0.45 / (AMR_CHAR_EM * max(row_label_chars, 1))
   )
-  # A name wider than the room kept for it is the other way this fails.
-  fontsize_row <- min(
-    fontsize_row,
-    .clamp(
-      72 * (w - body_w) * 0.45 / (AMR_CHAR_EM * max(row_label_chars, 1)),
-      AMR_FONT_MIN,
-      AMR_FONT_MAX
-    )
-  )
+  rows_legible <- row_pt >= AMR_ROW_MIN_PT
+  fontsize_row <- .clamp(row_pt, AMR_FONT_MIN, AMR_FONT_MAX)
+
+  # A mapped variable's name, turned on its side over a strip AMR_STRIP_IN
+  # wide: that width is its line height, and a strip too narrow to carry the
+  # floor goes unnamed rather than smudged - its own legend, which is titled
+  # with the same variable name, is what a reader has left to read it from.
+  fontsize_anno <- 72 * AMR_STRIP_IN * AMR_LABEL_FILL
+  anno_names_legible <- n_strips > 0L && fontsize_anno >= AMR_ANNO_NAME_MIN_PT
+  fontsize_anno <- .clamp(fontsize_anno, AMR_ANNO_NAME_MIN_PT, AMR_FONT_MAX)
 
   # The legend column belongs to the page rather than to the matrix, so its
   # type does not answer to cell_w the way everything above does. What it does
@@ -1116,6 +1352,8 @@ amr_auto_layout <- function(
     fontsize_row = round(fontsize_row, 1),
     fontsize_col = round(fontsize_col, 1),
     fontsize_title = round(fontsize_title, 1),
+    fontsize_element = round(fontsize_element, 1),
+    fontsize_anno = round(fontsize_anno, 1),
     fontsize_legend = round(fontsize_legend, 1),
     legend_rows = as.integer(legend_rows),
     # The height the legend column is drawn into, which the builders pack it
@@ -1135,16 +1373,53 @@ amr_auto_layout <- function(
     title_in = round(title_in, 3),
     grid_width = if (min(cell_w, pitch) < AMR_GRID_MIN_IN) 0 else 0.5,
     title_rot = rot,
+    element_rot = elem_rot,
     # Whether the row labels came out at a size worth drawing. The view uses
-    # this to say so rather than to override the switch.
-    legible = fontsize_row > AMR_FONT_MIN,
-    # Whether the block titles and the gene names did. Unlike the row labels,
-    # which are off unless the reader asks for them, these are on by default —
-    # so the fit turns them off itself rather than only reporting on them.
+    # this to say so rather than to override the switch: isolate names are off
+    # until a reader asks for them, so there is no initial draw for the fit to
+    # keep clean, and a reader who has asked is better answered with the reason
+    # than with a switch that silently undoes itself.
+    legible = rows_legible,
+    # The same verdict for every label the plot draws without being asked.
+    # Each is acted on rather than only reported: the gene names are seeded off
+    # (refit_labels() in visualization_amr.R, so a reader can still overrule
+    # it), and the block titles, the element-type row and the strip names are
+    # dropped outright by the builders, each falling back to whatever names the
+    # same thing in the legend column.
     titles_legible = titles_legible,
     cols_legible = cols_legible,
+    elements_legible = elements_legible,
+    anno_names_legible = anno_names_legible,
     row_pitch_in = round(pitch, 4),
     cell_width_in = round(cell_w, 4)
+  )
+}
+
+# The width one column block gets on the page, and the narrowest of them —
+# which is the one that decides whether a label fits, since every element-type
+# label is set at one size.
+.panel_width <- function(cols, body_w) {
+  cols <- as.numeric(cols %||% numeric(0))
+  if (!length(cols) || sum(cols) <= 0) {
+    return(body_w)
+  }
+  min(body_w * cols / sum(cols))
+}
+
+# The largest type, up to `cap`, that fits every element-type label flat inside
+# its own panel. Returns the cap where there is nothing to label, so a screen
+# of one unnamed panel is never forced into the rotated branch by an empty
+# title.
+.element_fontsize <- function(titles, cols, body_w, cap) {
+  titles <- as.character(titles %||% character(0))
+  cols <- as.numeric(cols %||% numeric(0))
+  if (!length(titles) || length(titles) != length(cols) || sum(cols) <= 0) {
+    return(cap)
+  }
+  widths <- body_w * cols / sum(cols)
+  min(
+    cap,
+    72 * widths * AMR_TITLE_FILL / (AMR_CHAR_EM * pmax(nchar(titles), 1))
   )
 }
 
@@ -1308,7 +1583,7 @@ amr_auto_layout <- function(
 #
 # @return A list with `anno` (a rowAnnotation, or NULL) and `legends` (a list
 #   of Legend objects, one per mapped variable, empty when `anno` is NULL).
-.row_annotation <- function(mat, layers, text_color, legend_gp) {
+.row_annotation <- function(mat, layers, text_color, legend_gp, opts = list()) {
   layers <- Filter(
     function(l) length(l$values) && nzchar(l$label %||% l$field %||% ""),
     layers %||% list()
@@ -1322,10 +1597,22 @@ amr_auto_layout <- function(
   labels <- make.unique(vapply(specs, function(x) x$label, character(1)))
 
   args <- list(
-    show_annotation_name = TRUE,
-    annotation_name_gp = gpar(col = text_color, fontsize = legend_gp$size),
+    # Turned on its side over a strip a tenth of an inch wide, the name's own
+    # line height is what has to fit that width - not the legend's size, which
+    # answers to the page and had the names spilling across their neighbours.
+    # Where even the floor will not fit it goes unnamed (the strip's key, which
+    # carries the same variable name as its title, is what names it then).
+    show_annotation_name = !isFALSE(opts$anno_names_legible),
+    annotation_name_gp = gpar(
+      col = text_color,
+      fontsize = opts$fontsize_anno %||% legend_gp$size
+    ),
     annotation_name_side = "top",
     annotation_name_rot = 90,
+    # Pinned to the width amr_auto_layout() takes out of the body for each
+    # strip, rather than left at ComplexHeatmap's own 5mm - the two drifting
+    # apart is a body narrower than the fit solved every column width against.
+    simple_anno_size = unit(AMR_STRIP_IN, "in"),
     col = setNames(lapply(specs, function(x) x$col), labels),
     show_legend = FALSE
   )
@@ -1366,6 +1653,21 @@ amr_auto_layout <- function(
     return("Drug class")
   }
   names(AMR_ELEMENT_TYPES)[match(types[[1]], AMR_ELEMENT_TYPES)] %||% types[[1]]
+}
+
+# Whether the drug classes are identified by a colour strip and its key rather
+# than by a title over each block. The two are alternatives, never both and
+# never neither, so both the panel that draws them and the fit that budgets for
+# them ask this one question rather than re-deriving the answer apiece.
+#
+# Clustered, there are no blocks left to title. Grouped by class there are, but
+# a screen split into forty of them leaves each title a third of a millimetre
+# of page: `titles_legible` says so, and the strip - which costs a sixth of an
+# inch whatever the class count - is what a reader is left to read the classes
+# off instead.
+.class_strip_drawn <- function(opts) {
+  !identical(opts$column_grouping %||% "class", "class") ||
+    isFALSE(opts$titles_legible)
 }
 
 # The class strip over one panel's columns. Its legend is built separately by
@@ -1426,54 +1728,97 @@ amr_auto_layout <- function(
 # .class_dend_reserve() set aside for it — called once per block, after the
 # panel it belongs to has been drawn (see amr_as_ggplot's decorations loop).
 #
-# Rotated, a title is drawn flush against the dendrogram below it and grows
-# upward, the same way ComplexHeatmap's own column_title does when rotated —
-# matched here because a reader comparing classes of very different name
-# length reads the ragged tops as "these titles are the same size", not as
-# misalignment. Unrotated, there is no such comparison to preserve — a short
-# word center itself in the room instead.
+# Neither piece is drawn by pushing a child viewport offset within the
+# reserved region (giving that child its own `y`, `height` and `just`) - a
+# pushed viewport's `y`/`just` are silently ignored inside a
+# decorate_annotation() callback, and the child always collapses to the
+# reserved region's own bottom edge regardless of what position was asked
+# for (reproduced in isolation against a bare ComplexHeatmap annotation, so
+# this is not specific to how this module calls it). Two workarounds that
+# don't hit it instead:
+#   - the title is `grid.text()`ed directly against the *reserved region's*
+#     own coordinates (no child viewport at all) - a plain grob's own
+#     `y`/`just` position correctly even though the same values on a pushed
+#     viewport do not.
+#   - the dendrogram still needs a `native`-scaled viewport for
+#     grid.dendrogram() to draw into, so instead of pushing one sized to just
+#     the bottom portion, a *full-size* child is pushed (untouched `y`/
+#     `height` default to the whole region, which is unaffected by the bug)
+#     and its `yscale` is stretched past the tree's own max height by
+#     total/dend_cm, so the tree's real data range only ever reaches the
+#     bottom dend_cm fraction of that full-size viewport - visually
+#     identical to a viewport confined to that fraction, without needing one.
+#
+# Rotated, the title starts a hair above the dendrogram below it (or above the
+# matrix, where the dendrogram is off) and grows upward, the same way
+# ComplexHeatmap's own column_title does when rotated — matched here because a
+# reader comparing classes of very different name length reads the ragged tops
+# as "these titles are the same size", not as misalignment. Unrotated, there
+# is no such comparison to preserve - a short word centres itself in the room
+# instead.
 .decorate_class_dend <- function(
-  annotation, slice, label, dend, title_in, dend_cm, text_color, size, rot
+  annotation,
+  slice,
+  label,
+  dend,
+  title_in,
+  dend_cm,
+  text_color,
+  size,
+  rot
 ) {
   ComplexHeatmap$decorate_annotation(
     annotation,
     {
-      pushViewport(viewport(
-        y = unit(dend_cm, "cm"), height = unit(title_in, "in"), just = "bottom"
-      ))
+      base <- unit(dend_cm, "cm") + unit(AMR_TITLE_GAP_IN, "in")
       if (identical(rot, 90)) {
-        # Flush against the dendrogram immediately below (y=0 is this
-        # viewport's own bottom edge) and growing upward, the same way
-        # ComplexHeatmap's own column_title does when rotated - so two
-        # blocks of very different name length still read as "these titles
-        # are the same size" rather than one looking adrift above its tree.
+        # Justification on rotated text is read in the text's own turned
+        # frame, so it is the *horizontal* half that decides where the label
+        # sits on the page here: "left" starts it at the anchor and grows it
+        # upward, where "center" would straddle the anchor and lay half the
+        # word over the dendrogram (or the matrix) below.
         grid.text(
           label,
-          x = unit(0.5, "npc"), y = unit(0, "npc"), just = "bottom", rot = rot,
+          x = unit(0.5, "npc"),
+          y = base,
+          just = c("left", "center"),
+          rot = rot,
           gp = gpar(col = text_color, fontsize = size)
         )
       } else {
         grid.text(
           label,
-          x = unit(0.5, "npc"), y = unit(0.5, "npc"), rot = rot,
+          x = unit(0.5, "npc"),
+          y = base + (unit(title_in - AMR_TITLE_GAP_IN, "in")) * 0.5,
+          rot = rot,
           gp = gpar(col = text_color, fontsize = size)
         )
       }
-      popViewport()
       # A one-column block clusters against nothing and column_dend() hands
       # back a degenerate, zero-height "dendrogram" for it - drawing that is
       # skipped rather than fed to grid.dendrogram(), which errors on a
       # height scale of zero width.
       n <- length(labels(dend))
       heights <- ComplexHeatmap$dend_heights(dend)
-      if (n > 1L && max(heights, 0) > 0) {
+      if (n > 1L && max(heights, 0) > 0 && dend_cm > 0) {
+        dend_in <- dend_cm / 2.54
+        total_in <- title_in + dend_in
         pushViewport(viewport(
-          y = unit(0, "cm"), height = unit(dend_cm, "cm"), just = "bottom",
-          xscale = c(0.5, n + 0.5), yscale = c(0, max(heights))
+          xscale = c(0, n),
+          yscale = c(0, max(heights) * total_in / dend_in)
         ))
+        # Matched to draw_dend()'s own "top"-side branch (ComplexHeatmap's
+        # internal dendrogram drawer: `xscale = c(0, nobs)` / `facing =
+        # "bottom"` for a dendrogram sitting above its body) rather than
+        # guessed: `xscale = c(0.5, n + 0.5)` drew every leaf half a column
+        # short of where the matrix underneath actually put it, and `facing
+        # = "top"` hung the tree from its leaves instead of its root - the
+        # "upside down" a reader saw was this, not a bug in grid.dendrogram
+        # itself.
         ComplexHeatmap$grid.dendrogram(
           dend,
-          facing = "top", gp = gpar(col = text_color)
+          facing = "bottom",
+          gp = gpar(col = text_color)
         )
         popViewport()
       }
@@ -1572,17 +1917,11 @@ amr_column_blocks <- function(mat, grouping = "class") {
   if (is.null(meta) || !nrow(meta) || !ncol(mat)) {
     return(list(titles = character(0), cols = integer(0)))
   }
-  types <- .element_order(meta)
-  labels <- vapply(
-    types,
-    function(et) names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)] %||% et,
-    character(1),
-    USE.NAMES = FALSE
-  )
   # Grouped by drug class, the titles a reader actually sees are the class names
   # inside each panel — those are the ones that collide, so those are the ones
   # the fit is asked about.
   if (identical(grouping, "class")) {
+    types <- .element_order(meta)
     groups <- unlist(lapply(types, function(et) {
       sort(unique(meta$group[meta$element_type == et]))
     }))
@@ -1593,8 +1932,43 @@ amr_column_blocks <- function(mat, grouping = "class") {
     )
     return(list(titles = as.character(groups), cols = cols))
   }
+  amr_element_blocks(mat, grouping)
+}
+
+#' The element-type panels a heatmap will be drawn in, and how wide each is.
+#'
+#' The other half of what the fit needs before the heatmap exists: the
+#' element-type row under the body is one label per panel, so the room each has
+#' is its own panel's width — quite unrelated to the drug-class blocks
+#' `amr_column_blocks()` measures, which is why the two are asked for
+#' separately and sized separately.
+#'
+#' @param mat A presence matrix from `amr_presence_matrix()`.
+#' @param grouping Unused; accepted so the signature matches
+#'   `amr_column_blocks()`, which falls back to this when not grouping by
+#'   class — a gene matrix is split by element type structurally, regardless
+#'   of grouping.
+#' @return A list with `titles` and `cols`, one entry per panel.
+#' @export
+amr_element_blocks <- function(mat, grouping = "class") {
+  none <- list(titles = character(0), cols = integer(0))
+  if (!ncol(mat)) {
+    return(none)
+  }
+  meta <- attr(mat, "genes")
+  if (is.null(meta) || !nrow(meta)) {
+    return(none)
+  }
+  types <- .element_order(meta)
   list(
-    titles = labels,
+    titles = vapply(
+      types,
+      function(et) {
+        names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)] %||% et
+      },
+      character(1),
+      USE.NAMES = FALSE
+    ),
     cols = vapply(types, function(et) sum(meta$element_type == et), integer(1))
   )
 }
@@ -1602,9 +1976,7 @@ amr_column_blocks <- function(mat, grouping = "class") {
 # --- Heatmap Builders --------------------------------------------------------
 
 #' Colors for the gene heatmap's four named confidence tiers, running through
-#' the reader's own absent/partial/strong/perfect colors. `partial` doubles as
-#' the drug-class matrix's own Partial color, so that state reads the same on
-#' both views and recoloring the plot recolors this too.
+#' the reader's own absent/partial/strong/perfect colors.
 #'
 #' Putative (an HMM motif match with no alignment behind it - the weakest tier
 #' AMRFinderPlus reports, and rare enough in practice that a fifth picker
@@ -1664,11 +2036,13 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
   # A panel with a single class equal to its own element type (a virulence
   # screen, or the stress genes with no more specific class - see
   # .class_legend for the same case) draws no class titles: they would only
-  # repeat the bottom element-type label. Computed up front because it also
-  # decides whether ComplexHeatmap's own column dendrogram is used as-is or
-  # taken over by .class_dend_reserve()/.decorate_class_dend() below.
+  # repeat the bottom element-type label. Nor does a screen whose classes came
+  # out too narrow to name (see .class_strip_drawn) - there the strip and its
+  # key take the titles' place. Computed up front because it also decides
+  # whether ComplexHeatmap's own column dendrogram is used as-is or taken over
+  # by .class_dend_reserve()/.decorate_class_dend() below.
   cats <- if (!is.null(layout$split)) levels(layout$split) else character(0)
-  class_titles_needed <- identical(grouping, "class") &&
+  class_titles_needed <- !.class_strip_drawn(opts) &&
     length(cats) &&
     !identical(cats, elem_label) &&
     ncol(mat) > 0
@@ -1689,15 +2063,19 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
       col = opts$grid_color %||% "#FFFFFF",
       lwd = opts$grid_width %||% 0.5
     ),
+    # The element-type row's own size, not the class titles' - those are solved
+    # against the tightest drug-class block on the screen, which has nothing to
+    # do with the width of the panel this label sits under (see
+    # .element_fontsize).
     column_title_gp = gpar(
       col = text_color,
-      fontsize = opts$fontsize_title %||% 12
+      fontsize = opts$fontsize_element %||% 12
     ),
-    # Always horizontal: the element-type name this now titles (see below) is
-    # one short word, never the crowd of narrow drug-class blocks title_rot
-    # was fit for - that rotation now belongs to the class titles' own
-    # anno_block instead (see top_annotation).
-    column_title_rot = 0,
+    # Flat wherever the panel is wide enough to carry the name, and turned on
+    # its side where it is not - the same choice, for the same reason, that
+    # title_rot makes for the class titles above, just answering to the panel's
+    # width rather than to a class block's.
+    column_title_rot = opts$element_rot %||% 0,
     row_title = NULL,
     row_names_gp = gpar(
       col = text_color,
@@ -1742,16 +2120,17 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
     column_dend_height = unit(max(dend_cm, 0.1), "cm"),
     row_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
     column_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
-    # Which of these draws is decided by opts$column_grouping alone, not by a
-    # switch of its own: grouped by class, the columns are already split into
-    # blocks, so a title (plus its own dendrogram, taken over above) over each
-    # one says which class it is and a colour strip repeating that would be
-    # redundant; clustered, there is no split left to title, so the strip
-    # (with .class_legend's key) is what carries the same information
-    # instead. Never both at once.
+    # Which of these draws is decided by .class_strip_drawn, never by a switch
+    # of the reader's: grouped by class with room to name them, the columns are
+    # already split into blocks, so a title (plus its own dendrogram, taken
+    # over above) over each one says which class it is and a colour strip
+    # repeating that would be redundant; clustered, or split so finely that no
+    # legible title fits, there is nothing left to title and the strip (with
+    # .class_legend's key) carries the same information instead. Never both at
+    # once, and never neither.
     top_annotation = if (class_titles_needed) {
       .class_dend_reserve(reserve_height, reserve_name)
-    } else if (!identical(grouping, "class") && ncol(mat) > 0) {
+    } else if (.class_strip_drawn(opts) && ncol(mat) > 0) {
       .class_annotation(meta$group, class_cols, legend_gp, .panel_label(meta))
     },
     left_annotation = if (first) anno,
@@ -1843,7 +2222,13 @@ build_amr_heatmap <- function(mat, opts = list()) {
     opts$cluster_distance %||% AMR_CLUSTER_DISTANCE_DEFAULT,
     opts$cluster_method %||% AMR_CLUSTER_METHOD_DEFAULT
   )
-  row_anno <- .row_annotation(mat, opts$anno_layers, text_color, legend_gp)
+  row_anno <- .row_annotation(
+    mat,
+    opts$anno_layers,
+    text_color,
+    legend_gp,
+    opts
+  )
   anno <- row_anno$anno
 
   # Tabulated once over the whole screen, before the columns are split into
@@ -1890,9 +2275,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
   # .gene_panel's top_annotation) - a class-split screen already has its
   # classes named as text over each block, so a key repeating them would
   # explain nothing the plot has not already said.
-  class_legends <- if (
-    !identical(opts$column_grouping %||% "class", "class") && length(types)
-  ) {
+  class_legends <- if (.class_strip_drawn(opts) && length(types)) {
     Filter(
       Negate(is.null),
       lapply(types, function(et) {
@@ -1934,7 +2317,10 @@ build_amr_heatmap <- function(mat, opts = list()) {
   } else {
     panels <- lapply(seq_along(types), function(i) {
       keep <- meta$element_type == types[[i]]
-      label <- names(AMR_ELEMENT_TYPES)[match(types[[i]], AMR_ELEMENT_TYPES)] %||%
+      label <- names(AMR_ELEMENT_TYPES)[match(
+        types[[i]],
+        AMR_ELEMENT_TYPES
+      )] %||%
         types[[i]]
       .gene_panel(
         mat[, keep, drop = FALSE],
@@ -1957,130 +2343,6 @@ build_amr_heatmap <- function(mat, opts = list()) {
     c,
     lapply(panels, function(p) attr(p, "class_decorations"))
   )
-  ht
-}
-
-#' Builds a ComplexHeatmap instance for drug-class call confidence matrices.
-#'
-#' One panel only: the abritamr rollup has no per-gene metadata, so there is no
-#' element type to separate it by. Resistance and virulence classes are still
-#' split apart where both are present, which is the one distinction it does
-#' carry.
-#'
-#' @param mat A class matrix from `amr_class_matrix()`.
-#' @param opts Named list of display options.
-#' @return A ComplexHeatmap `Heatmap`.
-#' @export
-build_amr_class_heatmap <- function(mat, opts = list()) {
-  text_color <- opts$text_color %||% "#000000"
-  legend_gp <- .legend_gp(
-    text_color,
-    opts$fontsize_legend %||% 9,
-    opts$legend_rows %||% 40L
-  )
-  virulence <- attr(mat, "virulence") %||% rep(FALSE, ncol(mat))
-  dend_cm <- max(opts$dend_size %||% 1.5, 0)
-
-  display <- matrix(
-    AMR_CLASS_STATES[mat + 1L],
-    nrow = nrow(mat),
-    ncol = ncol(mat),
-    dimnames = dimnames(mat)
-  )
-
-  cluster_columns <- identical(opts$column_grouping, "cluster")
-  split <- if (!cluster_columns && any(virulence) && !all(virulence)) {
-    factor(
-      ifelse(virulence, "Virulence", "Resistance"),
-      levels = c("Resistance", "Virulence")
-    )
-  }
-  row_cluster <- .dendrogram(
-    mat,
-    opts$cluster_rows %||% TRUE,
-    opts$cluster_distance %||% AMR_CLUSTER_DISTANCE_DEFAULT,
-    opts$cluster_method %||% AMR_CLUSTER_METHOD_DEFAULT
-  )
-  # Kept off ComplexHeatmap's own legend collection and packed by hand instead
-  # — the same arrangement, and for the same two reasons, as the gene
-  # heatmap's: see build_amr_heatmap's extra_legends.
-  row_anno <- .row_annotation(mat, opts$anno_layers, text_color, legend_gp)
-  call_palette <- setNames(
-    c(
-      opts$absent_color %||% "#EFEFEF",
-      opts$partial_color %||% "#E5C494",
-      opts$present_color %||% "#000000"
-    ),
-    AMR_CLASS_STATES
-  )
-  seen <- AMR_CLASS_STATES[sort(unique(as.vector(mat))) + 1L]
-  extra_legends <- .pack_legends(
-    c(
-      list(if (length(seen)) {
-        .discrete_legend(call_palette[seen], "Call", legend_gp)
-      }),
-      row_anno$legends
-    ),
-    legend_gp,
-    opts$legend_height_in
-  )
-
-  ht <- ComplexHeatmap$Heatmap(
-    display,
-    name = "Call",
-    col = setNames(
-      c(
-        opts$absent_color %||% "#EFEFEF",
-        opts$partial_color %||% "#E5C494",
-        opts$present_color %||% "#000000"
-      ),
-      AMR_CLASS_STATES
-    ),
-    rect_gp = gpar(
-      col = opts$grid_color %||% "#FFFFFF",
-      lwd = opts$grid_width %||% 0.5
-    ),
-    column_title_gp = gpar(
-      col = text_color,
-      fontsize = opts$fontsize_title %||% 12
-    ),
-    column_title_rot = opts$title_rot %||% 0,
-    row_title = NULL,
-    row_names_gp = gpar(
-      col = text_color,
-      fontsize = opts$fontsize_row %||% amr_fit_fontsize(nrow(mat))
-    ),
-    column_names_gp = gpar(
-      col = text_color,
-      fontsize = opts$fontsize_col %||% amr_fit_fontsize(ncol(mat))
-    ),
-    show_row_names = !isFALSE(opts$show_row_names),
-    show_column_names = !isFALSE(opts$show_col_names),
-    # As in .gene_panel(): the room the fit reserved, not a flat 6cm.
-    column_names_max_height = unit(opts$col_label_in %||% 2.4, "in"),
-    row_names_max_width = unit(opts$row_label_in %||% 2.4, "in"),
-    cluster_rows = row_cluster,
-    show_row_dend = dend_cm > 0 && !isFALSE(row_cluster),
-    cluster_columns = if (cluster_columns) {
-      .column_dendrogram(
-        mat,
-        TRUE,
-        opts$col_cluster_distance %||% AMR_CLUSTER_DISTANCE_DEFAULT,
-        opts$col_cluster_method %||% AMR_CLUSTER_METHOD_DEFAULT
-      )
-    } else {
-      FALSE
-    },
-    show_column_dend = dend_cm > 0,
-    column_split = split,
-    row_dend_width = unit(max(dend_cm, 0.1), "cm"),
-    column_dend_height = unit(max(dend_cm, 0.1), "cm"),
-    row_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
-    column_dend_gp = gpar(col = opts$dend_color %||% "#000000"),
-    left_annotation = row_anno$anno,
-    show_heatmap_legend = FALSE
-  )
-  attr(ht, "extra_legends") <- extra_legends
   ht
 }
 
@@ -2111,6 +2373,7 @@ amr_as_ggplot <- function(
 ) {
   opt <- ComplexHeatmap$ht_opt
   opt$message <- FALSE
+  opt$HEATMAP_LEGEND_PADDING <- unit(AMR_LEGEND_PAD_MM, "mm")
   grob <- grid.grabExpr(
     {
       # Captured rather than discarded: draw() is what finalises a heatmap's
@@ -2125,12 +2388,12 @@ amr_as_ggplot <- function(
         # which is why the annotation legends and the heatmap legends were
         # drawn as two adjacent columns rather than as one list.
         merge_legends = TRUE,
-        # The fill legend (Gene call / Call) is the only one left for
+        # The fill legend (Gene call) is the only one left for
         # ComplexHeatmap to collect on its own - every class and
         # mapped-variable key was built by hand and is handed in here
-        # instead, in the fixed order build_amr_heatmap()/
-        # build_amr_class_heatmap() chose. Passed this way rather than left
-        # automatic, they are guaranteed to land *after* the fill legend
+        # instead, in the fixed order build_amr_heatmap() chose. Passed this
+        # way rather than left automatic, they are guaranteed to land *after*
+        # the fill legend
         # rather than wherever their own panel happens to fall in the
         # drawing order - which is what kept pushing it out of first place,
         # and past the bottom of the page, once a screen had enough classes
@@ -2168,8 +2431,15 @@ amr_as_ggplot <- function(
         }
         for (k in seq_along(d$cats)) {
           .decorate_class_dend(
-            d$annotation, k, d$cats[[k]], cd[[k]],
-            d$title_in, d$dend_cm, d$text_color, d$size, d$rot
+            d$annotation,
+            k,
+            d$cats[[k]],
+            cd[[k]],
+            d$title_in,
+            d$dend_cm,
+            d$text_color,
+            d$size,
+            d$rot
           )
         }
       }
@@ -2189,9 +2459,11 @@ build_amr_prevalence <- function(df, opts = list()) {
   text_color <- opts$text_color %||% "#000000"
   background <- opts$background %||% "#FFFFFF"
   n_iso <- opts$n_isolates %||% NA_integer_
+  row_size <- opts$fontsize_row %||% amr_fit_fontsize(nrow(df))
+  legend_size <- opts$fontsize_legend %||% 11
 
   cats <- sort(unique(df$group))
-  cols <- amr_palette(cats, amr_fit_scale(opts$bar_scale, length(cats)))
+  cols <- amr_palette(cats, amr_bar_scale_fit(opts$bar_scale, length(cats)))
 
   df$item <- factor(df$item, levels = rev(df$item))
 
@@ -2209,15 +2481,12 @@ build_amr_prevalence <- function(df, opts = list()) {
         sprintf("Isolates (of %d)", n_iso)
       }
     ) +
-    theme_minimal(base_size = opts$fontsize_legend %||% 11) +
+    theme_minimal(base_size = legend_size) +
     theme(
       text = element_text(colour = text_color),
-      axis.text = element_text(
-        colour = text_color,
-        size = opts$fontsize_row %||% amr_fit_fontsize(nrow(df))
-      ),
-      axis.title = element_text(colour = text_color),
-      legend.text = element_text(colour = text_color),
+      axis.text = element_text(colour = text_color, size = row_size),
+      axis.title = element_text(colour = text_color, size = legend_size),
+      legend.text = element_text(colour = text_color, size = legend_size),
       panel.grid.major.y = element_blank(),
       panel.grid.minor = element_blank(),
       plot.background = element_rect(fill = background, colour = NA),

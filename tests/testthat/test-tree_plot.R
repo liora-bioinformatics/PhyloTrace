@@ -1,5 +1,5 @@
 box::use(
-  app / logic / amr_plot[AMR_CONFIDENCE_STATES],
+  app / logic / amr_plot,
   app / logic / tree_plot,
 )
 
@@ -668,7 +668,7 @@ test_that("a gene heatmap renders in the shared confidence palette", {
   tree$tip.label <- sprintf("iso%02d", seq_len(n))
   meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
 
-  states <- AMR_CONFIDENCE_STATES
+  states <- amr_plot$AMR_CONFIDENCE_STATES
   pick <- rep(states, length.out = n)
   amr_matrix <- data.frame(
     isolate = tree$tip.label,
@@ -722,6 +722,262 @@ test_that("a gene heatmap renders in the shared confidence palette", {
     length(unique(unlist(lapply(tiles, function(i) built$data[[i]]$x)))),
     2L
   )
+})
+
+test_that("a clustered gene heatmap renders in the panel's own colours", {
+  # The same path with both of the edit modal's settings on it: the panel is
+  # clustered and carries four colours of its own, so nothing it draws may come
+  # from the shared defaults.
+  set.seed(23)
+  n <- 12
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  tier <- function(on) factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  first <- rep(c(TRUE, FALSE), each = n / 2L)
+  amr_matrix <- data.frame(
+    isolate = tree$tip.label,
+    g1 = tier(first),
+    g2 = tier(!first),
+    g3 = tier(first),
+    stringsAsFactors = FALSE
+  )
+  colors <- c(
+    absent = "#AABBCC", partial = "#778899",
+    strong = "#445566", present = "#112233"
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_color = "#000000",
+    tippoint_show = FALSE, tippoint_alpha = 1, tippoint_size = 3,
+    tippoint_color = "#3A4657", tippoint_shape = 16, nodelabel_show = FALSE,
+    parentnodes = character(0), clade_color = "#D0F221",
+    heatmaps = list(list(
+      kind = "amr", level = "gene", element = "AMR",
+      cols = c("g1", "g2", "g3"), labels = c("g1", "g2", "g3"),
+      classes = c("Beta-lactam", "Aminoglycoside", "Quinolone"),
+      palette = "Reds", title = "Resistance genes",
+      cluster = TRUE, dend_depth = 10,
+      cluster_distance = "binary", cluster_method = "ward.D2",
+      color_absent = colors[["absent"]], color_partial = colors[["partial"]],
+      color_strong = colors[["strong"]], color_present = colors[["present"]]
+    )),
+    amr_matrix = amr_matrix,
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+
+  p <- suppressWarnings(suppressMessages(build(tree, meta, opts)))
+  expect_true(inherits(p, "ggplot"))
+
+  built <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(inner)))
+  tiles <- which(vapply(
+    inner$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  ))
+  # Two tile layers now: the matrix itself, one cell per isolate per gene, and
+  # the drug-class strip under it, one tile per gene.
+  cells <- vapply(tiles, function(i) nrow(built$data[[i]]), integer(1))
+  matrix_fills <- unique(built$data[[tiles[[which.max(cells)]]]]$fill)
+  strip_fills <- unique(built$data[[tiles[[which.min(cells)]]]]$fill)
+
+  expect_true(all(matrix_fills %in% do.call(
+    amr_plot$amr_confidence_palette, as.list(unname(colors))
+  )))
+  expect_false(any(matrix_fills %in% tree_plot$AMR_CONFIDENCE_FILL))
+  # All three genes still drawn, only reordered — and each carries a strip tile
+  # of its own class, three classes so three colours.
+  expect_identical(length(unique(built$data[[tiles[[which.max(cells)]]]]$x)), 3L)
+  expect_identical(min(cells), 3L)
+  expect_identical(length(strip_fills), 3L)
+
+  # And the dendrogram the ordering came from, drawn under the strip.
+  segs <- which(vapply(
+    inner$layers, function(l) grepl("Segment", class(l$geom)[1]), logical(1)
+  ))
+  expect_true(length(segs) > 0L)
+  expect_true(any(vapply(
+    segs, function(i) nrow(built$data[[i]]) == 6L, logical(1)
+  )))
+})
+
+test_that("a clustered panel's strip honours the panel's own strip_scale", {
+  # The strip defaults to CLASS_STRIP_SCALE so a class matches the AMR tab, but
+  # a panel may name another qualitative palette and the strip must be keyed by
+  # that one rather than the shared default.
+  set.seed(23)
+  n <- 12
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  tier <- function(on) factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  first <- rep(c(TRUE, FALSE), each = n / 2L)
+  amr_matrix <- data.frame(
+    isolate = tree$tip.label,
+    g1 = tier(first), g2 = tier(!first), g3 = tier(first),
+    stringsAsFactors = FALSE
+  )
+  colors <- c(
+    absent = "#AABBCC", partial = "#778899",
+    strong = "#445566", present = "#112233"
+  )
+  classes <- c("Beta-lactam", "Aminoglycoside", "Quinolone")
+  levels <- sort(unique(classes))
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_color = "#000000",
+    tippoint_show = FALSE, tippoint_alpha = 1, tippoint_size = 3,
+    tippoint_color = "#3A4657", tippoint_shape = 16, nodelabel_show = FALSE,
+    parentnodes = character(0), clade_color = "#D0F221",
+    heatmaps = list(list(
+      kind = "amr", level = "gene", element = "AMR",
+      cols = c("g1", "g2", "g3"), labels = c("g1", "g2", "g3"),
+      classes = classes, palette = "Reds", title = "Resistance genes",
+      cluster = TRUE, dend_depth = 0, strip_scale = "Dark2",
+      cluster_distance = "binary", cluster_method = "ward.D2",
+      color_absent = colors[["absent"]], color_partial = colors[["partial"]],
+      color_strong = colors[["strong"]], color_present = colors[["present"]]
+    )),
+    amr_matrix = amr_matrix,
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    ggplotify::as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+
+  suppressWarnings(suppressMessages(build(tree, meta, opts)))
+  built <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(inner)))
+  tiles <- which(vapply(
+    inner$layers, function(l) grepl("Tile", class(l$geom)[1]), logical(1)
+  ))
+  cells <- vapply(tiles, function(i) nrow(built$data[[i]]), integer(1))
+  strip_fills <- sort(unique(built$data[[tiles[[which.min(cells)]]]]$fill))
+
+  want <- sort(unname(amr_plot$amr_palette(
+    levels, amr_plot$amr_fit_scale("Dark2", length(levels))
+  )))
+  expect_identical(strip_fills, want)
+  # And not the shared default the panel opted out of.
+  default <- sort(unname(amr_plot$amr_palette(
+    levels, amr_plot$amr_fit_scale(tree_plot$CLASS_STRIP_SCALE, length(levels))
+  )))
+  expect_false(identical(strip_fills, default))
+})
+
+test_that("the element-type label draws above the names, or below the band", {
+  # The reserve tests say the room is booked; this says the text is actually in
+  # it, and at the end it was sent to.
+  set.seed(23)
+  n <- 10
+  tree <- ape::rtree(n)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  meta <- data.frame(isolate = tree$tip.label, stringsAsFactors = FALSE)
+
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  tier <- function(on) factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  first <- rep(c(TRUE, FALSE), each = n / 2L)
+  amr_matrix <- data.frame(
+    isolate = tree$tip.label,
+    g1 = tier(first), g2 = tier(!first), g3 = tier(first),
+    stringsAsFactors = FALSE
+  )
+
+  opts <- list(
+    root = "Automatic", layout = "rectangular", line_color = "#000000",
+    bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+    tiplab_color = "#000000", layers = list(),
+    branch_show = FALSE, branch_size = 3, branch_color = "#000000",
+    tippoint_show = FALSE, tippoint_alpha = 1, tippoint_size = 3,
+    tippoint_color = "#3A4657", tippoint_shape = 16, nodelabel_show = FALSE,
+    parentnodes = character(0), clade_color = "#D0F221",
+    heatmaps = list(list(
+      kind = "amr", level = "gene", element = "AMR",
+      cols = c("g1", "g2", "g3"), labels = c("g1", "g2", "g3"),
+      classes = c("Beta-lactam", "Beta-lactam", "Aminoglycoside"),
+      palette = "Reds", title = "Resistance genes",
+      show_gene_names = TRUE, show_class_names = TRUE,
+      show_element_type = TRUE, element_pos = "top"
+    )),
+    amr_matrix = amr_matrix,
+    rootedge_show = TRUE, treescale_show = TRUE, width_in = 7,
+    zoom = 1, h = 0, v = 0, legend_orientation = "vertical", legend_size = 9
+  )
+
+  draw <- function(o) {
+    inner <- NULL
+    build <- impl$.build_tree_ggtree
+    shadow <- new.env(parent = environment(build))
+    assign("as.ggplot", function(plot, ...) {
+      inner <<- plot
+      ggplotify::as.ggplot(plot, ...)
+    }, envir = shadow)
+    environment(build) <- shadow
+    suppressWarnings(suppressMessages(build(tree, meta, o)))
+    inner
+  }
+
+  # The layer carrying exactly our one label, and the y it sits at.
+  label_row <- function(p) {
+    hits <- Filter(
+      function(d) is.data.frame(d) &&
+        !is.null(d$label) &&
+        identical(as.character(d$label), "Resistance"),
+      lapply(p$layers, function(l) l$data)
+    )
+    expect_identical(length(hits), 1L)
+    hits[[1]]
+  }
+
+  top <- label_row(draw(opts))
+  # Above the last tip, and clear of the gene names that start there.
+  expect_true(top$y > n + 0.5)
+
+  opts$heatmaps[[1]]$element_pos <- "bottom"
+  bottom <- label_row(draw(opts))
+  # Under the first tip, below the class band rather than above the matrix.
+  expect_true(bottom$y < 0.5)
+
+  # Both sit over the middle of the run of columns they name, not over the tree.
+  expect_equal(top$x, bottom$x, tolerance = 1e-8)
+
+  # Switched off, no such layer is added at all.
+  opts$heatmaps[[1]]$show_element_type <- FALSE
+  off <- draw(opts)
+  expect_false(any(vapply(
+    off$layers,
+    function(l) {
+      d <- l$data
+      is.data.frame(d) &&
+        !is.null(d$label) &&
+        any(as.character(d$label) == "Resistance")
+    },
+    logical(1)
+  )))
 })
 
 test_that("a layer naming a column the database no longer has is dropped", {
@@ -1441,7 +1697,7 @@ test_that("the gene heatmap frame carries AMRFinderPlus's confidence tiers", {
     label = c("ISO-1", "ISO-2"),
     stringsAsFactors = FALSE
   )
-  states <- AMR_CONFIDENCE_STATES
+  states <- amr_plot$AMR_CONFIDENCE_STATES
   amr_matrix <- data.frame(
     isolate = c("ISO-1", "ISO-2"),
     amr_g1 = factor(c("Perfect", "Absent"), levels = states),
@@ -1470,7 +1726,7 @@ test_that("a gene column that repeats a label draws once", {
     label = c("ISO-1", "ISO-2"),
     stringsAsFactors = FALSE
   )
-  states <- AMR_CONFIDENCE_STATES
+  states <- amr_plot$AMR_CONFIDENCE_STATES
   amr_matrix <- data.frame(
     isolate = c("ISO-1", "ISO-2"),
     amr_g1 = factor(c("Strong", "Absent"), levels = states),
@@ -1486,6 +1742,377 @@ test_that("a gene column that repeats a label draws once", {
   frame <- impl$.heatmap_frame(panel, md, amr_matrix)
   expect_identical(names(frame), "aac(6')-Ib")
   expect_identical(as.character(frame[["aac(6')-Ib"]]), c("Strong", "Absent"))
+})
+
+# --- Clustering one heatmap panel's gene columns -----------------------------
+
+# The gene axis is the only one a tree heatmap can reorder — the rows are the
+# tree's tips — so this is the whole of what "cluster" means on this panel.
+
+test_that("a clustered panel puts genes with the same carriers together", {
+  # Two genes carried by the same four isolates and one carried by the other
+  # four, handed to the panel interleaved. Clustered, the pair has to end up
+  # adjacent whichever end of the order it lands at.
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  isolates <- sprintf("ISO-%d", 1:8)
+  md <- data.frame(
+    isolate = isolates,
+    label = isolates,
+    stringsAsFactors = FALSE
+  )
+  tier <- function(on) {
+    factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  }
+  first <- rep(c(TRUE, FALSE), each = 4L)
+  amr_matrix <- data.frame(
+    isolate = isolates,
+    twinA = tier(first),
+    lone = tier(!first),
+    twinB = tier(first),
+    stringsAsFactors = FALSE
+  )
+  panel <- list(
+    level = "gene",
+    cols = c("twinA", "lone", "twinB"),
+    labels = c("twinA", "lone", "twinB"),
+    cluster = TRUE
+  )
+
+  drawn <- names(impl$.heatmap_frame(panel, md, amr_matrix))
+  expect_setequal(drawn, c("twinA", "lone", "twinB"))
+  expect_equal(abs(diff(match(c("twinA", "twinB"), drawn))), 1)
+
+  # Off, the panel keeps the order the catalogue filed the genes in.
+  panel$cluster <- FALSE
+  expect_identical(
+    names(impl$.heatmap_frame(panel, md, amr_matrix)),
+    c("twinA", "lone", "twinB")
+  )
+})
+
+test_that("a clustered panel draws no class band", {
+  # Its columns are no longer in class order, so a bracket over them would
+  # claim a grouping the drawn matrix does not have.
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2", "g3"),
+    labels = c("g1", "g2", "g3"),
+    classes = c("Beta-lactam", "Beta-lactam", "Aminoglycoside"),
+    cluster = TRUE
+  )
+  expect_identical(
+    nrow(tree_plot$heatmap_class_runs(panel, c("g1", "g2", "g3"))),
+    0L
+  )
+
+  panel$cluster <- FALSE
+  runs <- tree_plot$heatmap_class_runs(panel, c("g1", "g2", "g3"))
+  expect_identical(runs$class, c("Beta-lactam", "Aminoglycoside"))
+})
+
+test_that("a clustered panel keeps the tree it was ordered by", {
+  # The dendrogram is drawn from this rather than clustered a second time,
+  # which is the one way the drawn tree and the drawn column order could
+  # disagree.
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  isolates <- sprintf("ISO-%d", 1:8)
+  md <- data.frame(isolate = isolates, label = isolates)
+  tier <- function(on) factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  first <- rep(c(TRUE, FALSE), each = 4L)
+  amr_matrix <- data.frame(
+    isolate = isolates,
+    a = tier(first),
+    b = tier(!first),
+    c = tier(first)
+  )
+  panel <- list(
+    level = "gene",
+    cols = c("a", "b", "c"),
+    labels = c("a", "b", "c"),
+    cluster = TRUE
+  )
+
+  frame <- impl$.heatmap_frame(panel, md, amr_matrix)
+  hc <- attr(frame, "hclust")
+  expect_true(inherits(hc, "hclust"))
+  # The drawn order *is* the tree's leaf order.
+  expect_identical(names(frame), c("a", "b", "c")[hc$order])
+})
+
+test_that("the dendrogram hangs from the columns it was built over", {
+  hc <- impl$.cluster_heat_cols
+  # Three leaves at known x positions, two merges: six segments, all inside
+  # the band, and every leaf upright starting at the top.
+  frame <- data.frame(
+    a = factor(c("Perfect", "Absent"), levels = amr_plot$AMR_CONFIDENCE_STATES),
+    b = factor(c("Absent", "Perfect"), levels = amr_plot$AMR_CONFIDENCE_STATES),
+    c = factor(c("Perfect", "Absent"), levels = amr_plot$AMR_CONFIDENCE_STATES)
+  )
+  tree <- attr(hc(frame, "binary", "ward.D2"), "hclust")
+  centres <- c(1, 2, 3)
+  segs <- impl$.dendrogram_segments(tree, centres, top = 0, depth = 2)
+
+  expect_identical(nrow(segs), 6L)
+  expect_true(all(segs$y <= 0 & segs$yend <= 0))
+  expect_true(all(segs$y >= -2 & segs$yend >= -2))
+  # Every leaf is reached, at its own column's centre.
+  expect_setequal(intersect(segs$x, centres), centres)
+})
+
+test_that("a clustered panel's class strip earns its own legend room", {
+  clustered <- list(
+    level = "gene",
+    cols = c("g1", "g2", "g3"),
+    classes = c("Beta-lactam", "Aminoglycoside", "Beta-lactam"),
+    cluster = TRUE
+  )
+  plain <- clustered
+  plain$cluster <- FALSE
+
+  # Two guides for the clustered panel — its tiers and its classes — against
+  # one for the same panel unclustered.
+  expect_true(
+    tree_plot$tree_legend_rows(list(), list(clustered)) >
+      tree_plot$tree_legend_rows(list(), list(plain))
+  )
+  # And "Aminoglycoside" is a longer key than any confidence tier, so the
+  # guide column has to widen for it.
+  md <- data.frame(isolate = c("A", "B"))
+  expect_true(
+    tree_plot$tree_legend_width_in(list(), md, 10, 5.5, list(clustered)) >
+      tree_plot$tree_legend_width_in(list(), md, 10, 5.5, list(plain))
+  )
+})
+
+test_that("the band under a clustered panel holds its strip and dendrogram", {
+  clustered <- list(
+    level = "gene",
+    cols = c("g1", "g2"),
+    classes = c("Beta-lactam", "Aminoglycoside"),
+    cluster = TRUE,
+    # The default depth is 0 (no tree), so a test about the dendrogram's room
+    # has to ask for one.
+    dend_depth = 10
+  )
+  opts <- list(heatmaps = list(clustered))
+  # No class runs, because the columns are no longer in class order — yet the
+  # bottom of the plot still has to make room for what replaced them.
+  expect_true(tree_plot$heatmap_class_frac(opts, 40, list()) > 0.02)
+  expect_identical(
+    tree_plot$heatmap_class_frac(list(heatmaps = list()), 40, list()),
+    0.02
+  )
+
+  # A clustered panel whose genes carry no class draws no strip, so it needs a
+  # shallower band — but it still draws its dendrogram, so it needs one.
+  unclassed <- clustered
+  unclassed$classes <- NULL
+  bare <- tree_plot$heatmap_class_frac(list(heatmaps = list(unclassed)), 40)
+  expect_true(bare > 0.02)
+  expect_true(bare < tree_plot$heatmap_class_frac(opts, 40, list()))
+})
+
+test_that("what a panel labels is the panel's to say", {
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2", "g3"),
+    labels = c("g1", "g2", "g3"),
+    classes = c("Beta-lactam", "Beta-lactam", "Aminoglycoside")
+  )
+  # Class names on (the default, and what a snapshot saved before the switch
+  # existed restores as) bracket the runs; off draws none.
+  expect_identical(
+    nrow(tree_plot$heatmap_class_runs(panel, panel$labels)),
+    2L
+  )
+  panel$show_class_names <- FALSE
+  expect_identical(
+    nrow(tree_plot$heatmap_class_runs(panel, panel$labels)),
+    0L
+  )
+
+  # Gene names off costs the top of the plot nothing, since the reserve above
+  # the matrix is measured from the names that go in it.
+  opts <- list(heatmaps = list(panel), layers = list())
+  named <- tree_plot$heatmap_header_frac(opts, 40)
+  opts$heatmaps[[1]]$show_gene_names <- FALSE
+  expect_true(tree_plot$heatmap_header_frac(opts, 40) < named)
+})
+
+test_that("the class strip and the dendrogram can each be switched off", {
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2"),
+    classes = c("Beta-lactam", "Aminoglycoside"),
+    cluster = TRUE,
+    # A dendrogram to switch off — the default depth draws none.
+    dend_depth = 10
+  )
+  full <- tree_plot$heatmap_class_frac(list(heatmaps = list(panel)), 40)
+
+  # No strip: no class guide to size a legend from, and a shallower band.
+  no_strip <- panel
+  no_strip$show_class_strip <- FALSE
+  expect_identical(
+    tree_plot$tree_legend_rows(list(), list(no_strip)),
+    tree_plot$tree_legend_rows(list(), list(within(panel, cluster <- FALSE)))
+  )
+  expect_true(
+    tree_plot$heatmap_class_frac(list(heatmaps = list(no_strip)), 40) < full
+  )
+
+  # Depth zero keeps the clustered order but draws no tree, so the band is
+  # shallower again — and shallower than dropping the strip alone.
+  flat <- panel
+  flat$dend_depth <- 0
+  expect_true(
+    tree_plot$heatmap_class_frac(list(heatmaps = list(flat)), 40) < full
+  )
+  # A deeper dendrogram claims more room, which is what the slider is for.
+  deep <- panel
+  deep$dend_depth <- 20
+  expect_true(
+    tree_plot$heatmap_class_frac(list(heatmaps = list(deep)), 40) > full
+  )
+})
+
+test_that("a sequential scale can stand in for the four tier colours", {
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2"),
+    color_absent = "#AABBCC", color_partial = "#778899",
+    color_strong = "#445566", color_present = "#112233"
+  )
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+
+  # "tiers" is the default, and reads the four pickers.
+  tiers <- impl$.heatmap_fill(panel)
+  expect_identical(unname(tiers[["Absent"]]), "#AABBCC")
+  expect_identical(unname(tiers[["Perfect"]]), "#112233")
+
+  # "scale" ignores them and spreads one sequential ramp across the same five
+  # tiers, in the same order the guide lists them.
+  panel$color_mode <- "scale"
+  panel$heat_scale <- "Blues"
+  scaled <- impl$.heatmap_fill(panel)
+  expect_identical(names(scaled), states)
+  expect_identical(
+    unname(scaled),
+    unname(amr_plot$amr_palette(states, "Blues"))
+  )
+  # Five stops come straight out of the family, so nothing is interpolated and
+  # every tier is a distinct colour.
+  expect_identical(length(unique(unname(scaled))), 5L)
+
+  # Light to dark: Absent is the palette's lightest stop, Perfect its darkest.
+  luma <- function(hex) sum(grDevices::col2rgb(hex))
+  expect_true(luma(scaled[["Absent"]]) > luma(scaled[["Perfect"]]))
+
+  # A panel naming no scale still draws, on the shared default.
+  panel$heat_scale <- NULL
+  expect_identical(
+    unname(impl$.heatmap_fill(panel)),
+    unname(amr_plot$amr_palette(states, tree_plot$HEAT_SCALE_DEFAULT))
+  )
+})
+
+test_that("the element-type label claims room at whichever end it is sent to", {
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2", "g3"),
+    labels = c("g1", "g2", "g3"),
+    classes = c("Beta-lactam", "Beta-lactam", "Aminoglycoside"),
+    title = "Resistance genes"
+  )
+  opts <- list(heatmaps = list(panel), layers = list())
+
+  top_off <- tree_plot$heatmap_header_frac(opts, 40)
+  bottom_off <- tree_plot$heatmap_class_frac(opts, 40, list())
+
+  # On top, it costs the header reserve and leaves the band below alone.
+  on_top <- opts
+  on_top$heatmaps[[1]]$show_element_type <- TRUE
+  expect_true(tree_plot$heatmap_header_frac(on_top, 40) > top_off)
+  expect_identical(
+    tree_plot$heatmap_class_frac(on_top, 40, list()),
+    bottom_off
+  )
+
+  # Sent to the bottom, the two swap over.
+  on_bottom <- on_top
+  on_bottom$heatmaps[[1]]$element_pos <- "bottom"
+  expect_identical(tree_plot$heatmap_header_frac(on_bottom, 40), top_off)
+  expect_true(tree_plot$heatmap_class_frac(on_bottom, 40, list()) > bottom_off)
+})
+
+test_that("the element label takes the gene names' row when they are off", {
+  # The placement rule: above the names when there are names, in their place
+  # when there are not — so switching the names off with the label on must not
+  # cost the reserve *more* than the names did.
+  panel <- list(
+    level = "gene",
+    cols = c("g1", "g2"),
+    labels = c("aac(6')-Ib-cr", "blaOXA-48"),
+    title = "Resistance genes",
+    show_element_type = TRUE
+  )
+  opts <- list(heatmaps = list(panel), layers = list())
+  with_names <- tree_plot$heatmap_header_frac(opts, 40)
+  opts$heatmaps[[1]]$show_gene_names <- FALSE
+  expect_true(tree_plot$heatmap_header_frac(opts, 40) < with_names)
+
+  # And it is still charged for: the label alone needs more than no annotation
+  # above the matrix at all.
+  bare <- opts
+  bare$heatmaps[[1]]$show_element_type <- FALSE
+  expect_true(tree_plot$heatmap_header_frac(opts, 40) > (
+    tree_plot$heatmap_header_frac(bare, 40)
+  ))
+})
+
+test_that("the element label says the element, not the guide's heading", {
+  panel <- list(level = "gene", cols = "g1", title = "Resistance genes")
+  expect_identical(impl$.element_label_text(panel), "Resistance")
+  # A title that is already bare survives unchanged.
+  expect_identical(
+    impl$.element_label_text(list(level = "gene", title = "Stress")),
+    "Stress"
+  )
+  # Off unless switched on, and never for the presence/absence branch, which
+  # has no element type to name.
+  expect_false(impl$.element_label_drawn(panel))
+  panel$show_element_type <- TRUE
+  expect_true(impl$.element_label_drawn(panel))
+  expect_false(impl$.element_label_drawn(within(panel, level <- "class")))
+  # An unrecognised end reads as the default rather than drawing nothing.
+  expect_identical(impl$.element_pos(panel), tree_plot$ELEMENT_POS_DEFAULT)
+  expect_identical(impl$.element_pos(within(panel, element_pos <- "sideways")),
+    tree_plot$ELEMENT_POS_DEFAULT)
+  expect_identical(
+    impl$.element_pos(within(panel, element_pos <- "bottom")),
+    "bottom"
+  )
+})
+
+test_that("a panel's own colours replace the shared confidence defaults", {
+  panel <- list(
+    level = "gene",
+    color_absent = "#AABBCC",
+    color_partial = "#778899",
+    color_strong = "#445566",
+    color_present = "#112233"
+  )
+  fill <- impl$.heatmap_fill(panel)
+  expect_identical(names(fill), amr_plot$AMR_CONFIDENCE_STATES)
+  expect_identical(unname(fill[["Perfect"]]), "#112233")
+  expect_identical(unname(fill[["Absent"]]), "#AABBCC")
+
+  # A panel carrying none — a restored Analysis saved before the pickers
+  # existed — draws exactly as it did.
+  expect_identical(
+    impl$.heatmap_fill(list(level = "gene")),
+    tree_plot$AMR_CONFIDENCE_FILL
+  )
 })
 
 # --- Legends a reader can actually use ---------------------------------------
