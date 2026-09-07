@@ -1,0 +1,41 @@
+name: Scheme Update Monitor
+
+on:
+  schedule:
+    - cron: '0 8 * * 0'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run cgMLST Scan
+        id: cgmlst_scan
+        run: |
+          chmod +x ./app/logic/data/scheme_monitor.sh
+          DIFF=$(./app/logic/data/scheme_monitor.sh)
+          echo "diff=$DIFF" >> "$GITHUB_OUTPUT"
+          echo "Scheme count difference: $DIFF"
+
+      - name: Send Notification Mail
+        if: steps.cgmlst_scan.outputs.diff != '0'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "cgMLST scheme update detected (diff ${{ steps.cgmlst_scan.outputs.diff }})"
+          to: ${{ secrets.MAIL_TO }}
+          from: cgMLST Scheme Monitor <${{ secrets.MAIL_USERNAME }}>
+          body: |
+            The cgMLST scheme monitor found a difference between the local
+            scheme list and the online repository at https://www.cgmlst.org/ncs/.
+
+            Difference (local - online): ${{ steps.cgmlst_scan.outputs.diff }}
+
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
