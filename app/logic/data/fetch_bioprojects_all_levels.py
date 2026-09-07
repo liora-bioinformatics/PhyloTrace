@@ -21,6 +21,28 @@ fetched individually and cheaply via
     datasets summary genome accession <BioProjectAccession> --limit 1
 
 Requires the NCBI `datasets` command-line tool (ncbi-datasets-cli) on PATH.
+
+Usage:
+    python3 fetch_bioprojects_all_levels.py [--species ABB [ABB ...]]
+                                             [--max-assemblies N] [--top-n N]
+
+    --out-dir           Output Directory
+    --species           One or more 'abb' values (cgmlst_schemes.csv column) to
+                        restrict the search to. Default: all rows in the CSV.
+    --max-assemblies    Exclude BioProjects with more than this many assemblies
+                        for a row before ranking (filters out huge automated
+                        collections like NCBI's Pathogen Detection Assembly
+                        Project). Default: no cap.
+    --top-n             Number of largest BioProjects to report per row.
+                        Default: 3.
+
+Examples:
+    python3 fetch_bioprojects_all_levels.py
+    python3 fetch_bioprojects_all_levels.py --species Ecoli Senterica --top-n 5
+    python3 fetch_bioprojects_all_levels.py --max-assemblies 10000 --top-n 5
+
+Output: a single results_all_levels<suffix>.csv next to this script, where
+<suffix> encodes any non-default --max-assemblies/--top-n/--species used.
 """
 
 import argparse
@@ -28,6 +50,7 @@ import csv
 import json
 import re
 import subprocess
+import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,7 +58,9 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 CSV_PATH = HERE / "cgmlst_schemes.csv"
-SUMMARY_URL = "https://ftp.ncbi.nlm.nih.gov/genomes/genbank/bacteria/assembly_summary.txt"
+SUMMARY_URL = (
+    "https://ftp.ncbi.nlm.nih.gov/genomes/genbank/bacteria/assembly_summary.txt"
+)
 LOCAL_SUMMARY_PATH = HERE / "assembly_summary.txt"
 LOG = HERE / "fetch_all_levels_log.txt"
 
@@ -86,17 +111,21 @@ def load_rows():
     rows = []
     with open(CSV_PATH) as f:
         for r in csv.DictReader(f):
-            rows.append({
-                "id": r[""], "raw": r["species"], "abb": r["abb"],
-                "taxa": species_query_names(r["species"]),
-            })
+            rows.append(
+                {
+                    "id": r[""],
+                    "raw": r["species"],
+                    "abb": r["abb"],
+                    "taxa": species_query_names(r["species"]),
+                }
+            )
     return rows
 
 
 def stream_and_count(rows):
     """One pass over the bulk assembly_summary.txt, tallying
     taxon -> Counter(bioproject_accession -> assembly count), all levels included."""
-    two_word_targets = {}   # (genus, species) -> taxon string
+    two_word_targets = {}  # (genus, species) -> taxon string
     genus_only_targets = {}  # genus -> taxon string
     for row in rows:
         for t in row["taxa"]:
@@ -115,8 +144,10 @@ def stream_and_count(rows):
     if not LOCAL_SUMMARY_PATH.exists():
         download_verified(SUMMARY_URL, LOCAL_SUMMARY_PATH)
     else:
-        log(f"Using existing local file {LOCAL_SUMMARY_PATH} "
-            f"({LOCAL_SUMMARY_PATH.stat().st_size} bytes) - assumed already verified")
+        log(
+            f"Using existing local file {LOCAL_SUMMARY_PATH} "
+            f"({LOCAL_SUMMARY_PATH.stat().st_size} bytes) - assumed already verified"
+        )
 
     log(f"Scanning {LOCAL_SUMMARY_PATH} ...")
     n_total = 0
@@ -155,7 +186,9 @@ def download_verified(url, dest_path, max_attempts=15):
     the expected size on each attempt rather than trusting a stale value)."""
     for attempt in range(1, max_attempts + 1):
         head = subprocess.run(
-            ["curl", "-sI", "-m", "20", url], capture_output=True, text=True,
+            ["curl", "-sI", "-m", "20", url],
+            capture_output=True,
+            text=True,
         )
         expected = None
         for line in head.stdout.splitlines():
@@ -165,11 +198,25 @@ def download_verified(url, dest_path, max_attempts=15):
         if expected is not None and cur_size == expected:
             log(f"Download verified complete: {cur_size} bytes")
             return
-        log(f"Download attempt {attempt}: local={cur_size} expected={expected}, fetching...")
+        log(
+            f"Download attempt {attempt}: local={cur_size} expected={expected}, fetching..."
+        )
         subprocess.run(
-            ["curl", "-sS", "--fail", "-C", "-", "--retry", "10",
-             "--retry-delay", "5", "--retry-all-errors",
-             "-o", str(dest_path), url],
+            [
+                "curl",
+                "-sS",
+                "--fail",
+                "-C",
+                "-",
+                "--retry",
+                "10",
+                "--retry-delay",
+                "5",
+                "--retry-all-errors",
+                "-o",
+                str(dest_path),
+                url,
+            ],
             timeout=1800,
         )
     raise RuntimeError(f"Failed to fully download {url} after {max_attempts} attempts")
@@ -179,9 +226,19 @@ def fetch_bioproject_title(accession, retries=3):
     for attempt in range(1, retries + 1):
         try:
             result = subprocess.run(
-                ["datasets", "summary", "genome", "accession", accession,
-                 "--limit", "1", "--as-json-lines"],
-                capture_output=True, text=True, timeout=60,
+                [
+                    "datasets",
+                    "summary",
+                    "genome",
+                    "accession",
+                    accession,
+                    "--limit",
+                    "1",
+                    "--as-json-lines",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             for line in result.stdout.splitlines():
                 if not line.strip():
@@ -204,7 +261,9 @@ def parse_args():
         description="Rank BioProjects per cgMLST species/complex by assembly count."
     )
     parser.add_argument(
-        "--max-assemblies", type=int, default=None,
+        "--max-assemblies",
+        type=int,
+        default=None,
         help=(
             "Exclude BioProjects with more than this many assemblies for a given "
             "species/complex row before ranking. Useful for filtering out huge "
@@ -214,8 +273,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--top-n", type=int, default=3,
+        "--top-n",
+        type=int,
+        default=3,
         help="Number of largest BioProjects to report per species/complex row. Default: 3.",
+    )
+    parser.add_argument(
+        "--species",
+        nargs="*",
+        default=None,
+        help="One or more 'abb' values to restrict the search to. "
+        "Default: all species/rows in the CSV.",
     )
     return parser.parse_args()
 
@@ -228,9 +296,24 @@ def main():
     suffix += f"_top{top_n}" if top_n != 3 else ""
 
     rows = load_rows()
-    log(f"Loaded {len(rows)} CSV rows, "
+
+    if args.species is not None:
+        wanted = set(args.species)
+        known = {row["abb"] for row in rows}
+        unknown = wanted - known
+        if unknown:
+            sys.exit(
+                f"Unknown --species value(s) (no matching 'abb' in {CSV_PATH}): "
+                f"{sorted(unknown)}"
+            )
+        rows = [row for row in rows if row["abb"] in wanted]
+        suffix += "_subset"
+
+    log(
+        f"Loaded {len(rows)} CSV rows, "
         f"{len(set(t for r in rows for t in r['taxa']))} unique taxa, "
-        f"max_assemblies={max_assemblies}, top_n={top_n}")
+        f"max_assemblies={max_assemblies}, top_n={top_n}"
+    )
 
     taxon_counts = stream_and_count(rows)
 
@@ -240,18 +323,24 @@ def main():
         for t in row["taxa"]:
             combined.update(taxon_counts.get(t, Counter()))
         if max_assemblies is not None:
-            combined = Counter({
-                acc: cnt for acc, cnt in combined.items() if cnt <= max_assemblies
-            })
+            combined = Counter(
+                {acc: cnt for acc, cnt in combined.items() if cnt <= max_assemblies}
+            )
         top = combined.most_common(top_n)
-        final_rows.append({
-            "id": row["id"], "raw": row["raw"], "taxa": row["taxa"],
-            "total_assemblies": sum(combined.values()),
-            "n_bioprojects": len(combined),
-            "top": [{"accession": a, "count": c} for a, c in top],
-        })
+        final_rows.append(
+            {
+                "id": row["id"],
+                "raw": row["raw"],
+                "taxa": row["taxa"],
+                "total_assemblies": sum(combined.values()),
+                "n_bioprojects": len(combined),
+                "top": [{"accession": a, "count": c} for a, c in top],
+            }
+        )
 
-    winning_accessions = sorted({bp["accession"] for r in final_rows for bp in r["top"]})
+    winning_accessions = sorted(
+        {bp["accession"] for r in final_rows for bp in r["top"]}
+    )
     log(f"Fetching titles for {len(winning_accessions)} winning BioProjects...")
     titles = {}
     with ThreadPoolExecutor(max_workers=6) as ex:
@@ -265,25 +354,34 @@ def main():
         for bp in r["top"]:
             bp["title"] = titles.get(bp["accession"], "")
 
-    out_json = HERE / f"results_all_levels{suffix}.json"
-    with open(out_json, "w") as f:
-        json.dump(final_rows, f, indent=2)
-    log(f"Wrote {out_json.name}")
-
-    out_md = HERE / f"results_all_levels{suffix}.md"
-    with open(out_md, "w") as f:
-        count_label = (
-            f"Assembly Count (all levels, capped at {max_assemblies}/BioProject)"
-            if max_assemblies is not None else "Assembly Count (all levels)"
+    count_label = (
+        f"assembly_count_all_levels_capped_{max_assemblies}"
+        if max_assemblies is not None
+        else "assembly_count_all_levels"
+    )
+    out_csv = HERE / f"results_all_levels{suffix}.csv"
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "species_complex",
+                "bioproject_accession",
+                "bioproject_title",
+                count_label,
+            ]
         )
-        f.write(f"| Species / Complex Name | BioProject Accession | BioProject Title / Summary | {count_label} |\n")
-        f.write("| :--- | :--- | :--- | :--- |\n")
         for r in final_rows:
             display = r["raw"].replace("_", " ")
             for bp in r["top"]:
-                title = bp["title"] or "_(title unavailable)_"
-                f.write(f"| {display} | {bp['accession']} | {title} | {bp['count']} |\n")
-    log(f"Wrote {out_md.name}")
+                writer.writerow(
+                    [
+                        display,
+                        bp["accession"],
+                        bp["title"] or "(title unavailable)",
+                        bp["count"],
+                    ]
+                )
+    log(f"Wrote {out_csv.name}")
     log("DONE")
 
 

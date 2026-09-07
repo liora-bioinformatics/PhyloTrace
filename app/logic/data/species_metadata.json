@@ -237,6 +237,23 @@
     "summary_source": "synthesized"
   },
   {
+    "species": "Dermatophilus_congolensis",
+    "abb": "Dcongolensis",
+    "query_name": "Dermatophilus congolensis",
+    "ncbi_taxid": 1863,
+    "scientific_name": "Dermatophilus congolensis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Actinomycetota",
+      "class": "Actinomycetes",
+      "order": "Micrococcales",
+      "family": "Dermatophilaceae",
+      "genus": "Dermatophilus"
+    },
+    "summary": "Dermatophilus congolensis is a Gram-positive, facultatively anaerobic actinomycete of the family Dermatophilaceae that grows as branching filaments which fragment into motile, flagellated zoospores. It is the causative agent of dermatophilosis (also called streptothricosis, lumpy wool or strawberry footrot), an exudative, crusting dermatitis of cattle, sheep, goats and horses, with occasional zoonotic infection of humans. Infection is favoured by persistent moisture and skin damage and spreads by contact, arthropod vectors and fomites, making it an important veterinary pathogen in tropical and subtropical regions.",
+    "summary_source": "synthesized"
+  },
+  {
     "species": "Enterococcus_faecalis",
     "abb": "Efaecalis",
     "query_name": "Enterococcus faecalis",

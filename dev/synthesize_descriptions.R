@@ -126,6 +126,17 @@ descriptions <- c(
     "— frequently linked to powdered infant formula. cgMLST supports species",
     "delineation and source tracing during outbreaks."
   ),
+  "Dermatophilus_congolensis" = paste(
+    "Dermatophilus congolensis is a Gram-positive, facultatively anaerobic",
+    "actinomycete of the family Dermatophilaceae that grows as branching",
+    "filaments which fragment into motile, flagellated zoospores. It is the",
+    "causative agent of dermatophilosis (also called streptothricosis, lumpy",
+    "wool or strawberry footrot), an exudative, crusting dermatitis of cattle,",
+    "sheep, goats and horses, with occasional zoonotic infection of humans.",
+    "Infection is favoured by persistent moisture and skin damage and spreads",
+    "by contact, arthropod vectors and fomites, making it an important",
+    "veterinary pathogen in tropical and subtropical regions."
+  ),
   "Enterococcus_faecalis" = paste(
     "Enterococcus faecalis is a Gram-positive, ovoid coccus, facultatively",
     "anaerobic, of the family Enterococcaceae. A gut commensal, it is also a",

@@ -22,6 +22,33 @@ than querying NCBI per-species, and the same species_query_names()/
 GENUS_RENAME_ALIASES/download_verified() helpers are imported from that script.
 
 Requires the NCBI `datasets` command-line tool (ncbi-datasets-cli) on PATH.
+
+Usage:
+    python3 download_bioproject_assemblies.py [CSV] [--species ABB [ABB ...]]
+                                               [--out-dir DIR]
+                                               [--assembly-summary PATH]
+                                               [--include TYPES]
+
+    CSV                 Path to cgmlst_schemes.csv (must have a 'bioproject'
+                         column). Default: cgmlst_schemes.csv next to this script.
+    --species            One or more 'abb' values to restrict the download to.
+                         Default: all rows in the CSV (can be tens of GB - see
+                         the script's disk-usage estimate before running unset).
+    --out-dir            Directory under which per-species '<abb>/' folders are
+                         created. Default: the current user's home directory.
+    --assembly-summary   Path to a local copy of NCBI's bulk assembly_summary.txt
+                         (downloaded and verified automatically if missing).
+    --include            Data types to fetch, per `datasets download genome
+                         accession --include` (default: genome, i.e. FASTA only).
+
+Examples:
+    python3 download_bioproject_assemblies.py --species Bmallei_fli Mgallisepticum
+    python3 download_bioproject_assemblies.py --out-dir ~/Desktop/PhyloTrace_TEST_DATA
+    python3 download_bioproject_assemblies.py
+
+Output per selected species: <out-dir>/<abb>/<abb>.zip (genome FASTAs) and
+<out-dir>/<abb>/manifest.json (accessions, BioProject URL, publication URLs);
+plus <out-dir>/download_summary.json summarizing every processed row.
 """
 
 import argparse
@@ -40,7 +67,9 @@ from fetch_bioprojects_all_levels import (  # noqa: E402
 )
 
 DEFAULT_CSV_PATH = HERE / "cgmlst_schemes.csv"
-DEFAULT_OUT_DIR = HERE / "assemblies"
+# Downloads can run to tens of GB per species, so default outside the repo
+# working tree.
+DEFAULT_OUT_DIR = Path.home()
 DEFAULT_SUMMARY_PATH = HERE / "assembly_summary.txt"
 
 
