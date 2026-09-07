@@ -11,7 +11,11 @@ For every selected row, this:
   2. Downloads only the latest version of each matching assembly (no GCF/RefSeq
      pair, no superseded/replaced duplicate versions).
   3. Writes them as a single zip archive named "<abb>.zip" inside a folder
-     named "<abb>" (the cgMLST scheme's short species code).
+     named "<abb>" (the cgMLST scheme's short species code). The zip is then
+     rewritten to hold ONLY the assembly sequence files, flattened to the
+     archive root - NCBI's directory nesting and all packaging metadata
+     (README.md, md5sum.txt, assembly_data_report.jsonl, dataset_catalog.json,
+     fetch.txt) are removed.
   4. Writes a manifest.json alongside the zip with the assembly accessions,
      the BioProject accession/URL, and publication URL(s) (PubMed, when the
      assembly_summary.txt "pubmed_id" column has one) for that BioProject.
@@ -57,6 +61,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -131,6 +136,40 @@ def find_matches(rows, summary_path):
     return matches, pubmed_ids
 
 
+# NCBI's `datasets` zip ships these packaging/metadata entries alongside the
+# actual sequence files; drop them so only the assembly data remains.
+_ZIP_METADATA_NAMES = frozenset({
+    "README.md", "md5sum.txt", "assembly_data_report.jsonl",
+    "dataset_catalog.json", "fetch.txt", "data_summary.tsv",
+})
+
+
+def strip_zip_metadata(zip_path):
+    """Rewrite the datasets zip in place so it contains ONLY the assembly
+    sequence files, flattened to the archive root.
+
+    NCBI's directory nesting (ncbi_dataset/data/<accession>/) and every
+    packaging/metadata entry (README.md, md5sum.txt, assembly_data_report.jsonl,
+    dataset_catalog.json, fetch.txt) are dropped. Returns the number of files
+    kept."""
+    tmp_path = zip_path.with_name(zip_path.name + ".tmp")
+    kept = 0
+    with zipfile.ZipFile(zip_path) as src, \
+            zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
+        for name in src.namelist():
+            parts = name.split("/")
+            base = parts[-1]
+            # keep only real files sitting under ncbi_dataset/data/<accession>/,
+            # which excludes the top-level and data-level metadata entries
+            if (not base or parts[:2] != ["ncbi_dataset", "data"]
+                    or len(parts) < 4 or base in _ZIP_METADATA_NAMES):
+                continue
+            dst.writestr(base, src.read(name))
+            kept += 1
+    tmp_path.replace(zip_path)
+    return kept
+
+
 def download_species(row, accessions, pubmed_ids, out_dir, include):
     abb = row["abb"]
     species_dir = out_dir / abb
@@ -179,10 +218,12 @@ def download_species(row, accessions, pubmed_ids, out_dir, include):
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
+    kept = strip_zip_metadata(zip_path)
+
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"[{abb}] done: {zip_path} ({zip_path.stat().st_size} bytes), "
-          f"{len(publication_urls)} publication URL(s)")
+    print(f"[{abb}] done: {zip_path} ({zip_path.stat().st_size} bytes, "
+          f"{kept} assembly file(s)), {len(publication_urls)} publication URL(s)")
     return manifest
 
 

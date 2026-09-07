@@ -33,3 +33,4 @@ Rplots.pdf
 app/logic/data/*_subset.csv
 app/logic/data/assembly_summary.txt
 app/logic/data/*_log.txt
+app/logic/data/__pycache__/
