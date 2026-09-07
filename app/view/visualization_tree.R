@@ -79,7 +79,6 @@ box::use(
       CLASS_STRIP_SCALE,
       DEND_DEPTH_DEFAULT,
       ELEMENT_POS_DEFAULT,
-      HEAT_SCALE_DEFAULT,
       LEGEND_MAX_KEYS,
       MIN_PRINT_PT,
       scale_tree_opts,
@@ -161,8 +160,31 @@ LAYER_DEFAULTS <- layer_defaults("tree", aesthetic = "tiplab_color")
 # reads at the same colour as the same gene on the AMR tab. The cluster
 # distance and linkage are amr_plot's defaults for the same reason, and are
 # inert until clustering is switched on.
+# The sequential ramps newly added panels are handed, in order. Two matrices
+# side by side are read as one picture, so drawing both in the same grey says
+# their tiles are the same measurement; a hue apiece says which panel a call
+# came from without the reader having to find the guide. Taken in order and
+# skipping any ramp a panel on the tree already holds, so deleting the middle
+# panel and adding another does not hand out a duplicate.
+HEATMAP_SCALE_CYCLE <- c("Purples", "Oranges", "Blues")
+
+# The ramp the next panel gets. Wraps once all three are spoken for, which
+# needs a fourth element type to happen at all.
+.next_heat_scale <- function(layers) {
+  used <- vapply(
+    layers %||% list(),
+    function(h) as.character(h$heat_scale %||% ""),
+    character(1)
+  )
+  free <- setdiff(HEATMAP_SCALE_CYCLE, used)
+  if (length(free)) {
+    return(free[[1L]])
+  }
+  HEATMAP_SCALE_CYCLE[[length(layers) %% length(HEATMAP_SCALE_CYCLE) + 1L]]
+}
+
 HEATMAP_STYLE_DEFAULTS <- list(
-  cluster = FALSE,
+  cluster = TRUE,
   cluster_distance = amr_plot$AMR_CLUSTER_DISTANCE_DEFAULT,
   cluster_method = amr_plot$AMR_CLUSTER_METHOD_DEFAULT,
   dend_depth = DEND_DEPTH_DEFAULT,
@@ -182,12 +204,17 @@ HEATMAP_STYLE_DEFAULTS <- list(
   # titles, which sit off at the edge of the plot.
   show_element_type = FALSE,
   element_pos = ELEMENT_POS_DEFAULT,
-  # Which of the two colour controls the panel is drawn from: the four tier
-  # pickers ("tiers") or one sequential ramp across the same tiers ("scale").
+  # Which of the two colour controls the panel is drawn from: one sequential
+  # ramp across the four tiers ("scale") or the four tier pickers ("tiers").
   # The modal's segmented control sets it; tree_plot's `.heatmap_fill()` reads
   # it. Both values are kept, so switching back and forth loses neither.
-  color_mode = "tiers",
-  heat_scale = HEAT_SCALE_DEFAULT,
+  #
+  # The ramp leads because confidence is ordered — Absent to Perfect — and a
+  # ramp is the only one of the two that says so on the figure. The four
+  # pickers stay one click away for a reader who wants a particular tier to
+  # carry a particular colour.
+  color_mode = "scale",
+  heat_scale = HEATMAP_SCALE_CYCLE[[1L]],
   # Palette the drug-class strip is keyed by. Defaulted to the shared
   # CLASS_STRIP_SCALE so a class reads the same colour as on the AMR tab until
   # the reader picks another in the colour modal.
@@ -2426,8 +2453,10 @@ server <- function(
       if (!nrow(cat)) {
         return()
       }
+      style <- HEATMAP_STYLE_DEFAULTS
+      style$heat_scale <- .next_heat_scale(layers)
       # Default settings: every gene of this element type in catalogue order,
-      # on the shared confidence colours and unclustered — exactly as picking a
+      # on its own confidence ramp and unclustered — exactly as picking a
       # variable in Mapping starts the layer on its own automatic choices.
       nj_heatmaps(c(
         layers,
@@ -2443,7 +2472,7 @@ server <- function(
             palette = "Reds",
             title = element_title(element)
           ),
-          HEATMAP_STYLE_DEFAULTS
+          style
         ))
       ))
     })
@@ -2492,7 +2521,10 @@ server <- function(
         shinyjs::toggleState(id, condition = on)
       }
       shinyjs::toggleState("nj_heatmap_class_names", condition = !on)
-      shinyjs::toggle("nj_heatmap_shared", condition = length(nj_heatmaps()) > 0)
+      shinyjs::toggle(
+        "nj_heatmap_shared",
+        condition = length(nj_heatmaps()) > 0
+      )
     }
 
     shiny$observe(sync_heatmap_shared_state())
@@ -2659,9 +2691,9 @@ server <- function(
         radioGroupButtons(
           ns("nj_heatmap_color_mode"),
           "Confidence tiers",
-          choiceNames = c("Pick each", "Colour scale"),
-          choiceValues = c("tiers", "scale"),
-          selected = h$color_mode %||% "tiers",
+          choiceNames = c("Colour scale", "Pick each"),
+          choiceValues = c("scale", "tiers"),
+          selected = h$color_mode %||% HEATMAP_STYLE_DEFAULTS$color_mode,
           justified = TRUE,
           size = "sm",
           width = "100%"
@@ -2694,7 +2726,7 @@ server <- function(
             ns,
             "nj_heatmap_heat_scale",
             categories = "Sequential",
-            selected = h$heat_scale %||% HEAT_SCALE_DEFAULT
+            selected = h$heat_scale %||% HEATMAP_STYLE_DEFAULTS$heat_scale
           ),
           shiny$div(
             class = "text-muted fst-italic small mb-2",

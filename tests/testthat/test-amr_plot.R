@@ -813,6 +813,56 @@ test_that("only the call states a screen reached are keyed", {
   expect_identical(states, c("Absent", "Perfect"))
 })
 
+test_that("panels carrying different confidence palettes each key their own", {
+  # Resistance on its own sequential ramp, Virulence on the hand-picked tiers:
+  # two different fills over the same tier ladder, so the fill key splits into
+  # one per panel, each titled with its element type.
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  ht <- amr_plot$build_amr_heatmap(
+    mat,
+    list(
+      column_grouping = "cluster",
+      element_colors = list(
+        Resistance = list(color_mode = "scale", heat_scale = "Purples"),
+        Virulence = list(
+          color_mode = "tiers",
+          present_color = "#000000",
+          strong_color = "#8C6E3D",
+          partial_color = "#E5C494",
+          absent_color = "#EFEFEF"
+        )
+      )
+    )
+  )
+  expect_identical(
+    .legend_titles(
+      ht,
+      c("Gene call", "Resistance gene call", "Virulence gene call")
+    ),
+    c("Resistance gene call", "Virulence gene call")
+  )
+})
+
+test_that("panels sharing a palette keep the one combined Gene call key", {
+  # Both panels left on the same explicit ramp — nothing tells them apart, so
+  # one key covers the lot, exactly as a screen with no per-panel config.
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  ht <- amr_plot$build_amr_heatmap(
+    mat,
+    list(
+      column_grouping = "cluster",
+      element_colors = list(
+        Resistance = list(color_mode = "scale", heat_scale = "Greys"),
+        Virulence = list(color_mode = "scale", heat_scale = "Greys")
+      )
+    )
+  )
+  expect_identical(
+    .legend_titles(ht, c("Gene call", "Resistance gene call")),
+    "Gene call"
+  )
+})
+
 test_that("the legend column is packed against the height it is drawn into", {
   # The regression this guards: ComplexHeatmap packs legends against the whole
   # device while drawing the column from the top of the matrix body downwards,

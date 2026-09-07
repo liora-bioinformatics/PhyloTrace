@@ -98,6 +98,34 @@ AMR_CONFIDENCE_STATES <- c("Absent", "Putative", "Partial", "Strong", "Perfect")
 #' @export
 AMR_UNCLASSIFIED <- "Unclassified"
 
+#' Sequential ramp each element-type panel's gene heatmap defaults to.
+#'
+#' One hue per element type, so two panels side by side are told apart by more
+#' than their headers — the same families, in the same roles, as the Tree's own
+#' gene-heatmap panels (`tree_plot`'s `HEATMAP_SCALE_CYCLE`). A panel in "scale"
+#' colour mode spreads its family light-to-dark across the confidence tiers:
+#' Absent takes the lightest stop, Perfect the darkest.
+#' @export
+AMR_ELEMENT_HEAT_SCALES <- c(
+  Resistance = "Purples",
+  Virulence = "Oranges",
+  Stress = "Blues",
+  Unclassified = "Greys"
+)
+
+#' The default sequential ramp for one element-type panel, by its display label.
+#'
+#' @param element_label One of the names of `AMR_ELEMENT_HEAT_SCALES`.
+#' @return A Brewer sequential palette name; `"Greys"` for an unknown label.
+#' @export
+amr_element_heat_scale <- function(element_label) {
+  hit <- AMR_ELEMENT_HEAT_SCALES[match(
+    element_label %||% "",
+    names(AMR_ELEMENT_HEAT_SCALES)
+  )]
+  if (length(hit) && !is.na(hit)) unname(hit) else "Greys"
+}
+
 #' Label for isolates a mapped variable has no value for.
 #' @export
 AMR_MISSING_LABEL <- "NA"
@@ -1322,10 +1350,17 @@ amr_auto_layout <- function(
   # allowance per mapped variable, whose categories are not tabulated yet at
   # this point. The class strip is what makes the stack long — forty drug
   # classes against the four or five states the fill legend ever lists.
+  #
+  # Budgeted for the worst case of the per-panel fill keys (see
+  # build_amr_heatmap): where the element-type panels carry different palettes
+  # each keys its own tiers under its own title, so allow one full state block
+  # plus a title per panel. One combined "Gene call" key costs less than this,
+  # which only makes the solved size a touch smaller than it strictly needs.
   legend_h <- max(aspect * w - overhead, 1)
+  n_elem <- max(length(element_titles), 1L)
   legend_keys <- length(block_titles) +
     length(AMR_ELEMENT_TYPES) +
-    length(AMR_CONFIDENCE_STATES) +
+    n_elem * (length(AMR_CONFIDENCE_STATES) + 1L) +
     2L +
     n_strips * 10L
   # Solved by trying sizes rather than by rearranging for one, because the
@@ -1645,6 +1680,15 @@ amr_auto_layout <- function(
   amr_palette(cats, amr_fit_scale(scale, length(cats)))
 }
 
+# One element type's display label: the names of `AMR_ELEMENT_TYPES`, or the
+# code itself for the unclassified bucket, which has no name there. `match()`
+# returns NA for that bucket and `NA %||% x` keeps the NA, so this cannot lean
+# on the `%||%` idiom the rest of the module reaches for.
+.element_display_label <- function(et) {
+  hit <- names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)]
+  ifelse(is.na(hit), as.character(et), hit)
+}
+
 # The element type a panel holds, as the reader sees it. One panel is one type
 # (see `amr_column_blocks`), so the panel's own columns name the whole of it.
 .panel_label <- function(meta) {
@@ -1652,7 +1696,7 @@ amr_auto_layout <- function(
   if (!length(types)) {
     return("Drug class")
   }
-  names(AMR_ELEMENT_TYPES)[match(types[[1]], AMR_ELEMENT_TYPES)] %||% types[[1]]
+  .element_display_label(types[[1]])
 }
 
 # Whether the drug classes are identified by a colour strip and its key rather
@@ -1961,14 +2005,7 @@ amr_element_blocks <- function(mat, grouping = "class") {
   }
   types <- .element_order(meta)
   list(
-    titles = vapply(
-      types,
-      function(et) {
-        names(AMR_ELEMENT_TYPES)[match(et, AMR_ELEMENT_TYPES)] %||% et
-      },
-      character(1),
-      USE.NAMES = FALSE
-    ),
+    titles = vapply(types, .element_display_label, character(1), USE.NAMES = FALSE),
     cols = vapply(types, function(et) sum(meta$element_type == et), integer(1))
   )
 }
@@ -1991,6 +2028,49 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
   setNames(
     c(absent, putative, partial, strong, present),
     AMR_CONFIDENCE_STATES
+  )
+}
+
+# The five confidence-tier fills for one element-type panel, keyed by
+# `AMR_CONFIDENCE_STATES`.
+#
+# A panel's colour config rides on `opts$element_colors[[<element label>]]`,
+# written by the Colors tab's per-panel modal — the same two-way choice the
+# Tree's gene heatmap offers: one sequential ramp spread across the tiers
+# ("scale", the default, keyed by element type via `amr_element_heat_scale()`)
+# or the four hand-picked tier colours ("tiers"). A screen built by hand rather
+# than through the view — or one whose config predates this — carries no
+# `element_colors` and falls through to the flat `opts$*_color` keys, exactly
+# as before.
+.flat_confidence_palette <- function(opts) {
+  amr_confidence_palette(
+    opts$absent_color %||% "#EFEFEF",
+    opts$partial_color %||% "#E5C494",
+    opts$strong_color %||% "#8C6E3D",
+    opts$present_color %||% "#000000"
+  )
+}
+
+.panel_confidence_palette <- function(opts, element_label) {
+  # `[[NA]]` on a list errors, and the unclassified bucket has no display name
+  # (see .element_display_label), so a missing label resolves to no config.
+  label <- element_label %||% ""
+  if (!length(label) || is.na(label)) {
+    label <- ""
+  }
+  cfg <- (opts$element_colors %||% list())[[label]]
+  if (is.null(cfg)) {
+    return(.flat_confidence_palette(opts))
+  }
+  if (identical(cfg$color_mode %||% "scale", "scale")) {
+    scale <- cfg$heat_scale %||% amr_element_heat_scale(element_label)
+    return(amr_palette(AMR_CONFIDENCE_STATES, scale))
+  }
+  amr_confidence_palette(
+    cfg$absent_color %||% opts$absent_color %||% "#EFEFEF",
+    cfg$partial_color %||% opts$partial_color %||% "#E5C494",
+    cfg$strong_color %||% opts$strong_color %||% "#8C6E3D",
+    cfg$present_color %||% opts$present_color %||% "#000000"
   )
 }
 
@@ -2053,12 +2133,10 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
   args <- list(
     display,
     name = panel_name,
-    col = amr_confidence_palette(
-      opts$absent_color %||% "#EFEFEF",
-      opts$partial_color %||% "#E5C494",
-      opts$strong_color %||% "#8C6E3D",
-      opts$present_color %||% "#000000"
-    ),
+    # This panel's own confidence-tier fills — its element type's sequential
+    # ramp by default, or the four hand-picked tiers if the reader switched
+    # this panel to "Pick each" in the Colors tab (see .panel_confidence_palette).
+    col = .panel_confidence_palette(opts, elem_label),
     rect_gp = gpar(
       col = opts$grid_color %||% "#FFFFFF",
       lwd = opts$grid_width %||% 0.5
@@ -2260,15 +2338,54 @@ build_amr_heatmap <- function(mat, opts = list()) {
   # Only the states the screen actually reached are keyed, which is what
   # ComplexHeatmap's own fill legend did: a screen with no HMM-only call has
   # no "Putative" cell to explain.
-  fill_palette <- amr_confidence_palette(
-    opts$absent_color %||% "#EFEFEF",
-    opts$partial_color %||% "#E5C494",
-    opts$strong_color %||% "#8C6E3D",
-    opts$present_color %||% "#000000"
+  #
+  # One key per element-type panel where the panels carry different palettes —
+  # the Colors tab's per-panel modal, and the "scale" default, which hands each
+  # type its own hue — each titled with its element type and listing only the
+  # tiers that panel reached. Where every panel resolves to the same palette (a
+  # hand-built screen, or one whose panels were all left on the same choice)
+  # there is one "Gene call" key for the lot, exactly as before.
+  seen_in <- function(conf) {
+    AMR_CONFIDENCE_STATES[sort(unique(as.vector(conf))) + 1L]
+  }
+  panel_labels <- vapply(
+    types,
+    .element_display_label,
+    character(1),
+    USE.NAMES = FALSE
   )
-  seen <- AMR_CONFIDENCE_STATES[sort(unique(as.vector(confidence))) + 1L]
-  fill_legend <- if (length(seen)) {
-    .discrete_legend(fill_palette[seen], "Gene call", legend_gp)
+  panel_palettes <- lapply(panel_labels, function(lab) {
+    .panel_confidence_palette(opts, lab)
+  })
+  distinct_palettes <- length(panel_palettes) >= 2L &&
+    length(unique(lapply(panel_palettes, unname))) > 1L
+
+  fill_legends <- if (!length(types)) {
+    seen <- seen_in(confidence)
+    list(if (length(seen)) {
+      .discrete_legend(
+        .flat_confidence_palette(opts)[seen],
+        "Gene call",
+        legend_gp
+      )
+    })
+  } else if (distinct_palettes) {
+    lapply(seq_along(types), function(i) {
+      seen <- seen_in(confidence[, meta$element_type == types[[i]], drop = FALSE])
+      if (!length(seen)) {
+        return(NULL)
+      }
+      .discrete_legend(
+        panel_palettes[[i]][seen],
+        paste0(panel_labels[[i]], " gene call"),
+        legend_gp
+      )
+    })
+  } else {
+    seen <- seen_in(confidence)
+    list(if (length(seen)) {
+      .discrete_legend(panel_palettes[[1L]][seen], "Gene call", legend_gp)
+    })
   }
 
   # The strip's own key, drawn only where the strip itself is (see
@@ -2291,7 +2408,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
     list()
   }
   extra_legends <- .pack_legends(
-    c(list(fill_legend), class_legends, row_anno$legends),
+    c(fill_legends, class_legends, row_anno$legends),
     legend_gp,
     opts$legend_height_in
   )
@@ -2317,11 +2434,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
   } else {
     panels <- lapply(seq_along(types), function(i) {
       keep <- meta$element_type == types[[i]]
-      label <- names(AMR_ELEMENT_TYPES)[match(
-        types[[i]],
-        AMR_ELEMENT_TYPES
-      )] %||%
-        types[[i]]
+      label <- .element_display_label(types[[i]])
       .gene_panel(
         mat[, keep, drop = FALSE],
         confidence[, keep, drop = FALSE],

@@ -1839,6 +1839,10 @@ map_controls <- function(ns) {
         )
       )
     ),
+    # Geocoding feedback: how many isolates the last Generate was able to
+    # place on the map, with a warning + a few example place names when some
+    # couldn't be resolved. See output$map_geocode_status_ui in the server.
+    shiny$uiOutput(ns("map_geocode_status_ui"), class = "map-geocode-status"),
     shiny$div(
       class = "viz-mode-dropup",
       pickerInput(
@@ -1847,10 +1851,6 @@ map_controls <- function(ns) {
         choices = c("Markers", "Choropleth", "Heatmap", "Charts")
       )
     ),
-    # Geocoding feedback: how many isolates the last Generate was able to
-    # place on the map, with a warning + a few example place names when some
-    # couldn't be resolved. See output$map_geocode_status_ui in the server.
-    shiny$uiOutput(ns("map_geocode_status_ui"), class = "map-geocode-status"),
     shiny$div(
       class = "reset-buttons",
       shiny$actionButton(
@@ -2125,7 +2125,10 @@ server <- function(
     # warning + a few example place names when some couldn't be resolved. NULL
     # (the "Not available" placeholder) until a Generate has produced a status.
     output$map_geocode_status_ui <- shiny$renderUI({
-      not_available <- shiny$div(class = "text-muted small", "Not available")
+      not_available <- shiny$tagList(
+        shiny$div(class = "text-muted small", "No isolates mapped"),
+        shiny$div(class = "text-muted small mb-2", "No location geocoded")
+      )
       s <- map_geocode_status()
       if (is.null(s) || s$n_isolates == 0) {
         return(not_available)
@@ -2145,7 +2148,7 @@ server <- function(
         ""
       }
       locations_line <- shiny$div(
-        class = "small text-muted",
+        class = "small text-muted mb-2",
         sprintf(
           "%d location%s geocoded%s",
           s$n_locations,

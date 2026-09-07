@@ -600,6 +600,9 @@ $viz-tile-row-gap: 0.85rem;
     flex: 1 1 auto;
     min-height: 0;
     height: 100%;
+}
+
+.viz-nav-wrap .tabbable {
     border-bottom: 1px solid var(--bs-border-color);
 }
 
@@ -651,11 +654,11 @@ $viz-tile-row-gap: 0.85rem;
     background: var(--bs-tertiary-bg);
 }
 
-.bslib-grid-item {
-    padding: 1rem;
-    border: 1px solid var(--bs-border-color);
+// .bslib-grid-item {
+//     padding: 1rem;
+//     border: 1px solid var(--bs-border-color);
 
-}
+// }
 
 .viz-modal_heading {
     border-bottom: 1px solid var(--bs-border-color-translucent);
@@ -1020,8 +1023,9 @@ $viz-tile-row-gap: 0.85rem;
 .tree-layer-list {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    margin-top: 0.6rem;
+    gap: .4rem;
+    margin-top: .6rem;
+    margin-bottom: 1rem;
 }
 
 .tree-layer-card {

@@ -890,7 +890,8 @@ test_that("the colour mode picks which of the two colour controls is live", {
     session$setInputs(nj_heatmap_add = "AMR")
     session$flushReact()
     id <- tree_opts()$heatmaps[[1]]$id
-    expect_identical(tree_opts()$heatmaps[[1]]$color_mode, "tiers")
+    # The ramp leads, because the tiers are ordered and only a ramp says so.
+    expect_identical(tree_opts()$heatmaps[[1]]$color_mode, "scale")
 
     session$setInputs(nj_heatmap_colors = id)
     session$setInputs(
@@ -906,6 +907,27 @@ test_that("the colour mode picks which of the two colour controls is live", {
     expect_identical(h$heat_scale, "Blues")
     # The swatch the reader set before switching away is still on the record.
     expect_identical(h$color_present, "#112233")
+  })
+})
+
+test_that("each panel added gets a ramp of its own", {
+  # Two matrices side by side are read as one picture, so the second panel has
+  # to be told apart from the first by hue and not only by position.
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_heatmap_add = "AMR")
+    session$flushReact()
+    session$setInputs(nj_heatmap_add = "VIRULENCE")
+    session$flushReact()
+
+    scales <- vapply(
+      tree_opts()$heatmaps,
+      function(h) h$heat_scale,
+      character(1)
+    )
+    expect_identical(scales, c("Purples", "Oranges"))
   })
 })
 

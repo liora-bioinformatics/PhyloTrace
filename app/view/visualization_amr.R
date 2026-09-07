@@ -30,6 +30,8 @@
 
 box::use(
   bslib[
+    accordion,
+    accordion_panel,
     as_fill_carrier,
     card,
     card_body,
@@ -84,6 +86,7 @@ box::use(
       collect_input_snapshot,
       field_select,
       granularity_select,
+      layer_action_btn,
       reset_viz_colors,
       scale_select,
       suitable_scale_categories,
@@ -173,6 +176,18 @@ ABSENT_COLOR_DEFAULT <- "#EFEFEF"
 DEND_COLOR_DEFAULT <- "#000000"
 TEXT_COLOR_DEFAULT <- "#000000"
 BACKGROUND_DEFAULT <- "#FFFFFF"
+
+# The element-type panels the gene heatmap can draw, as the Colors tab's
+# per-panel confidence-colour modal names them. Each present panel gets one
+# "Edit colours" button; its choices are stored in amr_element_colors(),
+# keyed by these labels. "scale" is the starting colour mode — each panel on
+# its element type's own sequential ramp (amr_plot$AMR_ELEMENT_HEAT_SCALES),
+# the same arrangement the Tree's heatmap panels default to.
+CONFIDENCE_ELEMENT_LABELS <- c(
+  names(amr_plot$AMR_ELEMENT_TYPES),
+  amr_plot$AMR_UNCLASSIFIED
+)
+CONFIDENCE_MODE_DEFAULT <- "scale"
 
 CLASS_SCALE_DEFAULT <- "Set2"
 BAR_SCALE_DEFAULT <- "Dark2"
@@ -343,41 +358,48 @@ amr_controls <- function(ns) {
           # before the gene list exists. Same reasoning as the Epi engine's
           # stratify picker.
           shiny$uiOutput(ns("genes_ui")),
-          # AMRFinderPlus reports partial and low-identity hits alongside
-          # confident ones and `amr_results` keeps both percentages, so the
-          # reader can set the bar. Point mutations report neither and are
-          # never filtered out by these (see filter_amr_hits). Bounds are
-          # fit to this screen's own reported range server-side (see
-          # fit_threshold_bounds) rather than declared as a flat 0-100 —
-          # these are placeholders until that fit runs.
-          tooltip(
-            shiny$sliderInput(
-              ns("amr_min_identity"),
-              "Minimum % identity",
-              min = 0,
-              max = 100,
-              value = 0,
-              step = 1,
-              ticks = FALSE
-            ),
-            paste(
-              "How closely the hit matches the reference gene's sequence.",
-              "Range fits what this screen actually reported."
-            )
-          ),
-          tooltip(
-            shiny$sliderInput(
-              ns("amr_min_coverage"),
-              "Minimum % coverage",
-              min = 0,
-              max = 100,
-              value = 0,
-              step = 1,
-              ticks = FALSE
-            ),
-            paste(
-              "How much of the reference gene's length the hit spans.",
-              "Range fits what this screen actually reported."
+          accordion(
+            open = FALSE,
+            accordion_panel(
+              "Minimum %",
+              icon = shiny$icon("bars-staggered"),
+              # AMRFinderPlus reports partial and low-identity hits alongside
+              # confident ones and `amr_results` keeps both percentages, so the
+              # reader can set the bar. Point mutations report neither and are
+              # never filtered out by these (see filter_amr_hits). Bounds are
+              # fit to this screen's own reported range server-side (see
+              # fit_threshold_bounds) rather than declared as a flat 0-100 —
+              # these are placeholders until that fit runs.
+              tooltip(
+                shiny$sliderInput(
+                  ns("amr_min_identity"),
+                  "Minimum % identity",
+                  min = 0,
+                  max = 100,
+                  value = 0,
+                  step = 1,
+                  ticks = FALSE
+                ),
+                paste(
+                  "How closely the hit matches the reference gene's sequence.",
+                  "Range fits what this screen actually reported."
+                )
+              ),
+              tooltip(
+                shiny$sliderInput(
+                  ns("amr_min_coverage"),
+                  "Minimum % coverage",
+                  min = 0,
+                  max = 100,
+                  value = 0,
+                  step = 1,
+                  ticks = FALSE
+                ),
+                paste(
+                  "How much of the reference gene's length the hit spans.",
+                  "Range fits what this screen actually reported."
+                )
+              )
             )
           )
         ),
@@ -496,6 +518,12 @@ amr_controls <- function(ns) {
           size = "sm",
           width = "100%"
         ),
+        # Only "Cluster All" draws the drug class as a colour strip rather than
+        # as text block titles (see .gene_panel's top_annotation), so this scale
+        # has nothing to style under "Cluster Class". Kept visible but disabled
+        # by the sync observer below rather than hidden, so the reader sees it
+        # exists before committing to the grouping.
+        scale_select(ns, "amr_class_scale", categories = "Qualitative"),
         shiny$conditionalPanel(
           condition = paste(
             "input.amr_cluster_rows == 'TRUE' ||",
@@ -536,17 +564,7 @@ amr_controls <- function(ns) {
         # database holds is offered, each carrying its own value count and
         # type, and each mapping becomes one colour strip beside the rows.
         field_select(ns, "amr_layer_add", "Map a variable"),
-        shiny$uiOutput(ns("amr_layers_ui")),
-        shiny$hr(),
-        # Whether a drug class is drawn as a colour strip here or as text over
-        # its own block on the matrix is not a switch either — see
-        # amr_cluster_cols in the Clustering tab. This scale only styles the
-        # strip for the mode that draws one.
-        shiny$conditionalPanel(
-          condition = "input.amr_mode == 'heatmap'",
-          ns = ns,
-          scale_select(ns, "amr_class_scale", categories = "Qualitative")
-        )
+        shiny$uiOutput(ns("amr_layers_ui"))
       ),
       # Colors -------------------------------------------------------------
       #
@@ -560,32 +578,24 @@ amr_controls <- function(ns) {
           ns = ns,
           scale_select(ns, "amr_bar_scale", categories = "Qualitative")
         ),
+        # The gene-call confidence tiers are coloured per element-type panel,
+        # not once for the whole screen: one "Edit colours" button per panel the
+        # current screen carries, each opening a modal with the same colour-
+        # scale / pick-each choice the Tree's heatmap panels use (see
+        # amr_confidence_colors_ui and the modal in the server). The dendrogram,
+        # text and background pickers below stay flat — they belong to the plot,
+        # not to a panel.
+        shiny$conditionalPanel(
+          condition = COND_HEATMAPS,
+          ns = ns,
+          shiny$tags$label("Gene call confidence", class = "control-label"),
+          shiny$uiOutput(ns("amr_confidence_colors_ui"))
+        ),
         shiny$div(
           class = "viz-color-grid",
-          # The gene heatmap has two confident states — Strong and Perfect,
-          # AMRFinderPlus's own BLAST-grade and exact-match tiers — so each
-          # gets its own picker.
           shiny$conditionalPanel(
             condition = COND_HEATMAPS,
             ns = ns,
-            viz_color(
-              ns,
-              "amr_present_color",
-              "Perfect",
-              PRESENT_COLOR_DEFAULT
-            ),
-            viz_color(ns, "amr_strong_color", "Strong", STRONG_COLOR_DEFAULT)
-          ),
-          # The heatmap's own Partial tier (see amr_confidence_palette()).
-          shiny$conditionalPanel(
-            condition = COND_HEATMAPS,
-            ns = ns,
-            viz_color(ns, "amr_partial_color", "Partial", PARTIAL_COLOR_DEFAULT)
-          ),
-          shiny$conditionalPanel(
-            condition = COND_HEATMAPS,
-            ns = ns,
-            viz_color(ns, "amr_absent_color", "Absent", ABSENT_COLOR_DEFAULT),
             viz_color(ns, "amr_dend_color", "Dendrogram", DEND_COLOR_DEFAULT)
           ),
           viz_color(ns, "amr_text_color", "Text", TEXT_COLOR_DEFAULT),
@@ -750,6 +760,42 @@ server <- function(
     amr_layer_seq <- shiny$reactiveVal(0L)
     next_layer_id <- layer_id_source(amr_layer_seq)
 
+    # Per-element-type gene-call confidence colours, keyed by the panel labels
+    # in CONFIDENCE_ELEMENT_LABELS. Each entry is a list of `color_mode`
+    # ("scale" or "tiers"), `heat_scale`, and the four tier hex colours. Written
+    # only by the colour modal's Apply and by a restore; a label with no entry
+    # falls back to element_cfg()'s coded defaults. Handed to the builder as
+    # `element_colors` (see heatmap_opts and amr_plot$.panel_confidence_palette).
+    amr_element_colors <- shiny$reactiveVal(list())
+
+    # The stored config for one panel label, merged over its defaults so the
+    # builder and the modal always see all five fields. "scale" mode starts on
+    # the element type's own sequential ramp; "tiers" mode on the shared
+    # confidence-tier defaults.
+    element_cfg <- function(label) {
+      stored <- amr_element_colors()[[label]] %||% list()
+      list(
+        color_mode = stored$color_mode %||% CONFIDENCE_MODE_DEFAULT,
+        heat_scale = stored$heat_scale %||%
+          amr_plot$amr_element_heat_scale(label),
+        present_color = stored$present_color %||% PRESENT_COLOR_DEFAULT,
+        strong_color = stored$strong_color %||% STRONG_COLOR_DEFAULT,
+        partial_color = stored$partial_color %||% PARTIAL_COLOR_DEFAULT,
+        absent_color = stored$absent_color %||% ABSENT_COLOR_DEFAULT
+      )
+    }
+
+    # The element-type panels the current screen actually contains, by display
+    # label — what the Colors tab draws a button for, and the panels the modal
+    # can edit.
+    present_elements <- shiny$reactive({
+      mat <- presence_mat()
+      if (!ncol(mat)) {
+        return(character(0))
+      }
+      amr_plot$amr_element_blocks(mat)$titles
+    })
+
     mode <- function() input$amr_mode %||% PLOT_MODE_DEFAULT
 
     # Which curation files a gene under a drug class, for both the heatmap's
@@ -810,22 +856,28 @@ server <- function(
       n_items <- if (identical(level, "class")) {
         if (identical(class_vocab(), "amrfinder")) {
           hits <- amr_hits()
-          length(unique(amr_plot$amr_gene_meta(
-            hits,
-            unique(hits$gene_symbol),
-            sections = NULL,
-            vocabulary = "amrfinder"
-          )$group))
+          length(unique(
+            amr_plot$amr_gene_meta(
+              hits,
+              unique(hits$gene_symbol),
+              sections = NULL,
+              vocabulary = "amrfinder"
+            )$group
+          ))
         } else {
           length(unique(amr_sections()$drug_class))
         }
       } else {
         length(unique(amr_hits()$gene_symbol))
       }
+      # Isolated for the same reason as apply_scale_choices() below: this
+      # answers to how many items there are to rank, and a slider it refits
+      # reports its own value straight back — depended on, that echo would
+      # re-enter the observer that caused it.
       b <- amr_plot$amr_top_n_bounds(
         n_items,
         default = TOP_N_DEFAULT,
-        current = input$amr_top_n
+        current = shiny$isolate(input$amr_top_n)
       )
       shiny$updateSliderInput(
         session,
@@ -907,12 +959,19 @@ server <- function(
     # time the identity slider moves would drop the reader's selection under
     # them.
     output$genes_ui <- shiny$renderUI({
+      # The vocabulary picker itself, not class_vocab()'s fallback, and ahead
+      # of everything else: every input is NULL for the flush before the
+      # browser reports it, and falling back there builds the whole list once
+      # against the default only to build it again when the picker checks in a
+      # moment later — several hundred genes grouped, sorted and re-bound twice
+      # for nothing.
+      vocabulary <- shiny$req(input$amr_class_vocab)
       render_info("visualization_amr genes_ui")
       genes_rebuild()
       choices <- amr_plot$amr_gene_choices(
         amr_hits(),
         amr_sections(),
-        class_vocab()
+        vocabulary
       )
       if (!length(choices)) {
         return(NULL)
@@ -1163,6 +1222,12 @@ server <- function(
       Filter(Negate(is.null), out)
     })
 
+    # What each picker was last refilled with, so the same refill is never sent
+    # twice. Plain environment rather than reactive state: nothing reads it but
+    # the function below, and a reactive value here would be one more thing for
+    # the refill to invalidate.
+    scale_sent <- new.env(parent = emptyenv())
+
     # Restrict a colour-scale picker to the palettes that can carry the number
     # of categories currently mapped to it, and move the selection when the one
     # in force no longer can. Mirrors apply_scale_choices() in the Epi engine,
@@ -1178,11 +1243,25 @@ server <- function(
       fit = amr_plot$amr_fit_scale
     ) {
       choices <- amr_plot$amr_scale_choices(max(1L, as.integer(n)))
-      selected <- if (force_default) {
-        fit(default, n)
-      } else {
-        fit(input[[id]], n)
+      # Read through isolate(), never as a dependency. updatePickerInput
+      # rebuilds the control, and a rebuilt picker reports back twice — the
+      # list's own first entry as it is rebuilt, then the value actually
+      # selected. Depended on, those echoes re-enter the observer that sent
+      # them, which refills the picker again: with a fitted palette that is not
+      # the first on offer (Dark2 over Set1) the two chase each other for as
+      # long as the session lives, R never goes idle, and the whole UI stays
+      # behind the busy shield. What this answers to is the data, which the
+      # observers below still read reactively.
+      current <- shiny$isolate(input[[id]])
+      selected <- if (force_default) fit(default, n) else fit(current, n)
+      # A reset has to land whatever was sent before it, since the reader's own
+      # pick since then is exactly what it is undoing.
+      if (
+        !force_default && identical(scale_sent[[id]], list(choices, selected))
+      ) {
+        return(invisible(NULL))
       }
+      scale_sent[[id]] <- list(choices, selected)
       update_scale_select(session, id, choices, selected)
     }
 
@@ -1190,6 +1269,17 @@ server <- function(
       meta <- attr(presence_mat(), "genes")
       n <- if (is.null(meta) || !nrow(meta)) 1L else length(unique(meta$group))
       apply_scale_choices("amr_class_scale", n, CLASS_SCALE_DEFAULT)
+    })
+
+    # The class colour scale only styles the strip "Cluster All" draws; under
+    # "Cluster Class" the class is text and the scale has nothing to colour, so
+    # disable it there rather than remove it from the Clustering tab. The
+    # radioGroupButtons round-trips its boolean choiceValues as "TRUE"/"FALSE".
+    shiny$observe({
+      shinyjs::toggleState(
+        id = "amr_class_scale",
+        condition = isTRUE(as.logical(input$amr_cluster_cols))
+      )
     })
 
     shiny$observe({
@@ -1201,6 +1291,133 @@ server <- function(
         BAR_SCALE_DEFAULT,
         fit = amr_plot$amr_bar_scale_fit
       )
+    })
+
+    # --- confidence colours (per element-type panel) ----------------------
+
+    # One "Edit colours" button per element-type panel the screen carries. The
+    # panel set is the data's, not the reader's — the same list amr_plot splits
+    # the heatmap into — so this is a button row rather than an add/remove list.
+    output$amr_confidence_colors_ui <- shiny$renderUI({
+      labels <- present_elements()
+      if (!length(labels)) {
+        return(shiny$div(
+          class = "text-muted fst-italic mb-2 tree-layer-empty",
+          "Generate the plot to colour its panels."
+        ))
+      }
+      shiny$div(
+        class = "tree-layer-list",
+        lapply(labels, function(label) {
+          cfg <- element_cfg(label)
+          meta <- if (identical(cfg$color_mode, "scale")) {
+            paste("Scale ·", cfg$heat_scale)
+          } else {
+            "Tier colours"
+          }
+          shiny$div(
+            class = "tree-layer-card",
+            shiny$div(
+              class = "tree-layer_body",
+              shiny$div(class = "tree-layer_title", title = label, label),
+              shiny$div(class = "tree-layer_meta", meta)
+            ),
+            layer_action_btn(
+              ns,
+              "amr_confidence_colors",
+              label,
+              "palette",
+              "Edit confidence colours"
+            )
+          )
+        })
+      )
+    })
+
+    # Which panel the colour modal is editing. NULL when it is closed.
+    coloring_element <- shiny$reactiveVal(NULL)
+
+    # Two ways to colour the same five confidence tiers, exactly one live at a
+    # time — one sequential ramp spread across them, or the four tiers picked by
+    # hand — swapped by a segmented control rather than greyed, since a disabled
+    # swatch still reads as a colour. The same dialog, for the same reason, as
+    # the Tree's per-panel heatmap colour modal.
+    shiny$observeEvent(input$amr_confidence_colors, {
+      label <- input$amr_confidence_colors
+      shiny$req(label %in% CONFIDENCE_ELEMENT_LABELS)
+      coloring_element(label)
+      cfg <- element_cfg(label)
+
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Confidence colours:", label),
+        size = "m",
+        easyClose = TRUE,
+        radioGroupButtons(
+          ns("amr_conf_mode"),
+          "Confidence tiers",
+          choiceNames = c("Colour scale", "Pick each"),
+          choiceValues = c("scale", "tiers"),
+          selected = cfg$color_mode,
+          justified = TRUE,
+          size = "sm",
+          width = "100%"
+        ),
+        shiny$conditionalPanel(
+          condition = "input.amr_conf_mode == 'tiers'",
+          ns = ns,
+          shiny$div(
+            class = "viz-color-grid",
+            # Strongest first, the order the panel's own legend lists them.
+            # Putative has no swatch — it is blended out of Absent and Partial
+            # (amr_plot$amr_confidence_palette), same as everywhere else.
+            viz_color(ns, "amr_conf_present", "Perfect", cfg$present_color),
+            viz_color(ns, "amr_conf_strong", "Strong", cfg$strong_color),
+            viz_color(ns, "amr_conf_partial", "Partial", cfg$partial_color),
+            viz_color(ns, "amr_conf_absent", "Absent", cfg$absent_color)
+          )
+        ),
+        shiny$conditionalPanel(
+          condition = "input.amr_conf_mode == 'scale'",
+          ns = ns,
+          # Sequential families only: the tiers are a ladder from Absent to
+          # Perfect and only a light-to-dark ramp reads as one.
+          scale_select(
+            ns,
+            "amr_conf_heat_scale",
+            categories = "Sequential",
+            selected = cfg$heat_scale
+          ),
+          shiny$div(
+            class = "text-muted fst-italic small mb-2",
+            "Absent takes the lightest stop, Perfect the darkest."
+          )
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("amr_conf_apply"), "Apply")
+        )
+      ))
+    })
+
+    # Commit the modal's choices onto the panel it was opened for. `%||%` on
+    # every read: the half of the dialog the segmented control had hidden stops
+    # reporting, and its values must survive being switched away from.
+    shiny$observeEvent(input$amr_conf_apply, {
+      label <- coloring_element()
+      shiny$req(label %in% CONFIDENCE_ELEMENT_LABELS)
+      current <- element_cfg(label)
+      store <- amr_element_colors()
+      store[[label]] <- list(
+        color_mode = input$amr_conf_mode %||% current$color_mode,
+        heat_scale = input$amr_conf_heat_scale %||% current$heat_scale,
+        present_color = input$amr_conf_present %||% current$present_color,
+        strong_color = input$amr_conf_strong %||% current$strong_color,
+        partial_color = input$amr_conf_partial %||% current$partial_color,
+        absent_color = input$amr_conf_absent %||% current$absent_color
+      )
+      amr_element_colors(store)
+      coloring_element(NULL)
+      shiny$removeModal()
     })
 
     # --- reset --------------------------------------------------------------
@@ -1217,10 +1434,6 @@ server <- function(
       # recognise.
       reset_viz_colors(
         session,
-        amr_present_color = PRESENT_COLOR_DEFAULT,
-        amr_strong_color = STRONG_COLOR_DEFAULT,
-        amr_partial_color = PARTIAL_COLOR_DEFAULT,
-        amr_absent_color = ABSENT_COLOR_DEFAULT,
         amr_dend_color = DEND_COLOR_DEFAULT,
         amr_text_color = TEXT_COLOR_DEFAULT,
         amr_background_color = BACKGROUND_DEFAULT
@@ -1233,10 +1446,13 @@ server <- function(
       genes_force_default(TRUE)
       genes_rebuild(genes_rebuild() + 1L)
 
-      # Bucket 6: the annotation strips are reactiveVal state rather than an
-      # input, so nothing shinyjs does touches them.
+      # Bucket 6: the annotation strips and the per-panel confidence colours are
+      # reactiveVal state rather than inputs, so nothing shinyjs does touches
+      # them. Cleared to empty — element_cfg() then hands every panel its coded
+      # default (its element type's sequential ramp) again.
       amr_layers(list())
       amr_layer_seq(0L)
+      amr_element_colors(list())
       editing(NULL)
       aspect_mirror(ASPECT_DEFAULT)
       show_col_names_mirror(TRUE)
@@ -1399,7 +1615,9 @@ server <- function(
 
     shiny$observeEvent(input$amr_show_element_names, {
       value <- isTRUE(input$amr_show_element_names)
-      if (!isTRUE(all.equal(shiny$isolate(show_element_names_mirror()), value))) {
+      if (
+        !isTRUE(all.equal(shiny$isolate(show_element_names_mirror()), value))
+      ) {
         show_element_names_mirror(value)
       }
     })
@@ -1471,17 +1689,6 @@ server <- function(
       if (isTRUE(fit$legible)) {
         return(NULL)
       }
-      shiny$helpText(
-        class = "amr-help",
-        sprintf(
-          paste(
-            "%d isolates leave about %.1f pt per name, which is below what",
-            "prints legibly. Narrow the selection or map a variable instead."
-          ),
-          nrow(presence_mat()),
-          fit$fontsize_row
-        )
-      )
     })
 
     # The two labels that are on by default. A shape with no room for one of
@@ -1507,7 +1714,11 @@ server <- function(
       # element_rot) - but a two-column virulence panel beside two hundred
       # resistance genes is exactly that shape.
       if (!isTRUE(fit$elements_legible)) {
-        update_switch("amr_show_element_names", value = FALSE, session = session)
+        update_switch(
+          "amr_show_element_names",
+          value = FALSE,
+          session = session
+        )
         show_element_names_mirror(FALSE)
       }
     }
@@ -1525,10 +1736,20 @@ server <- function(
       background_color <- input$amr_background_color %||% BACKGROUND_DEFAULT
       c(
         list(
-          present_color = input$amr_present_color %||% PRESENT_COLOR_DEFAULT,
-          strong_color = input$amr_strong_color %||% STRONG_COLOR_DEFAULT,
-          partial_color = input$amr_partial_color %||% PARTIAL_COLOR_DEFAULT,
-          absent_color = input$amr_absent_color %||% ABSENT_COLOR_DEFAULT,
+          # The flat tier keys are the fallback the builder blends Putative out
+          # of for a panel with no per-element entry (a hand-built matrix, or a
+          # label outside CONFIDENCE_ELEMENT_LABELS); every real panel is
+          # coloured from element_colors below instead.
+          present_color = PRESENT_COLOR_DEFAULT,
+          strong_color = STRONG_COLOR_DEFAULT,
+          partial_color = PARTIAL_COLOR_DEFAULT,
+          absent_color = ABSENT_COLOR_DEFAULT,
+          # One confidence-colour config per element-type panel, keyed by the
+          # panel's display label (see element_cfg and the colour modal).
+          element_colors = setNames(
+            lapply(CONFIDENCE_ELEMENT_LABELS, element_cfg),
+            CONFIDENCE_ELEMENT_LABELS
+          ),
           grid_color = background_color,
           dend_color = input$amr_dend_color %||% DEND_COLOR_DEFAULT,
           text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
@@ -1756,8 +1977,8 @@ server <- function(
     shiny$outputOptions(output, "amr_plot", suspendWhenHidden = TRUE)
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
-    # Every amr_* control, plus the annotation strips, which are reactiveVal
-    # state rather than an input.
+    # Every amr_* control, plus the annotation strips and the per-panel
+    # confidence colours, which are reactiveVal state rather than inputs.
     snapshot <- shiny$reactive(
       c(
         collect_input_snapshot(input, "amr_"),
@@ -1766,7 +1987,8 @@ server <- function(
           # the same here as in the Tree, so the prefix sweep never picks it up.
           # Saved as a logical, as the Tree saves it.
           zoom_view = isTRUE(as.logical(input$zoom_view)),
-          .layers = amr_layers()
+          .layers = amr_layers(),
+          .element_colors = amr_element_colors()
         )
       )
     )
@@ -1832,11 +2054,9 @@ server <- function(
           "amr_dend_size",
           "amr_aspect_ratio"
         ),
+        # The confidence-tier colours are per element-type panel now and travel
+        # in `.element_colors` (a reactiveVal), restored below — not here.
         colors = c(
-          "amr_present_color",
-          "amr_strong_color",
-          "amr_partial_color",
-          "amr_absent_color",
           "amr_dend_color",
           "amr_text_color",
           "amr_background_color"
@@ -1894,6 +2114,17 @@ server <- function(
       if (!is.null(layers)) {
         amr_layers(layers)
         amr_layer_seq(length(layers))
+      }
+
+      # Per-panel confidence colours. Only the labels the save actually carried
+      # are restored; any panel it did not touch keeps element_cfg()'s default.
+      # A pre-feature save has no `.element_colors` and its flat amr_*_color
+      # keys, if any, are left behind — the panels open on their ramp defaults.
+      stored <- vals$.element_colors
+      if (is.list(stored)) {
+        amr_element_colors(stored[
+          intersect(names(stored), CONFIDENCE_ELEMENT_LABELS)
+        ])
       }
     }
 

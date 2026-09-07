@@ -5,6 +5,21 @@ box::use(
 
 impl <- attr(tree_plot, "namespace")
 
+# Rows of tip pitch that actually end up under the last tip: what the strip,
+# the dendrogram and the class-name anchors draw for themselves, plus what the
+# expansion reserves on top. The reserve alone says nothing — it is a fraction
+# of a range the drawn band is already part of, so a deeper dendrogram grows
+# the room while leaving the fraction where it was.
+rows_below <- function(opts, n = 40, runs = list()) {
+  impl$.bottom_band_drawn(opts, n, runs) +
+    tree_plot$heatmap_class_frac(opts, n, runs) * impl$.y_span_rows(opts, n, runs)
+}
+
+# The same for the top, where nothing but the header offset is drawn.
+rows_above <- function(opts, n = 40) {
+  tree_plot$heatmap_header_frac(opts, n) * impl$.y_span_rows(opts, n)
+}
+
 # The calibration anchor. tree_auto_layout's constants were chosen so that the
 # fit reproduces the values this module shipped as fixed defaults at the one
 # dataset size they suited — if this drifts, every other fitted plot has moved
@@ -1570,7 +1585,9 @@ test_that("the label reserve is a width, not a share of the grown canvas", {
     tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.3, width_in = 5.5,
     rootedge_show = FALSE, layers = list(), heatmaps = list()
   )
-  needed <- 36 * impl$TIP_CHAR_EM * 2.3 / 25.4 * impl$X_EXPANSION
+  # Label text plus the tip-point nudge the reserve now carries, at X_EXPANSION.
+  needed <- (36 * impl$TIP_CHAR_EM * 2.3 / 25.4 +
+    impl$.tiplab_point_gap_mm(opts) / 25.4) * impl$X_EXPANSION
 
   narrow <- opts
   narrow$heatmaps <- list(list(kind = "amr", cols = paste0("c", 1:3)))
@@ -1591,7 +1608,8 @@ test_that("what the labels stop taking goes to the tree, not the annotations", {
     rootedge_show = FALSE, layers = list(),
     heatmaps = list(list(kind = "amr", cols = paste0("c", 1:30)))
   )
-  needed <- 36 * impl$TIP_CHAR_EM * 2.3 / 25.4 * impl$X_EXPANSION
+  needed <- (36 * impl$TIP_CHAR_EM * 2.3 / 25.4 +
+    impl$.tiplab_point_gap_mm(opts) / 25.4) * impl$X_EXPANSION
 
   expect_equal(5.5 - .reserve_in(opts, md), 5.5 - needed, tolerance = 0.02)
 })
@@ -1897,19 +1915,39 @@ test_that("the band under a clustered panel holds its strip and dendrogram", {
   opts <- list(heatmaps = list(clustered))
   # No class runs, because the columns are no longer in class order — yet the
   # bottom of the plot still has to make room for what replaced them.
-  expect_true(tree_plot$heatmap_class_frac(opts, 40, list()) > 0.02)
-  expect_identical(
-    tree_plot$heatmap_class_frac(list(heatmaps = list()), 40, list()),
-    0.02
-  )
+  empty <- list(heatmaps = list())
+  expect_true(rows_below(opts) > rows_below(empty))
 
   # A clustered panel whose genes carry no class draws no strip, so it needs a
   # shallower band — but it still draws its dendrogram, so it needs one.
   unclassed <- clustered
   unclassed$classes <- NULL
-  bare <- tree_plot$heatmap_class_frac(list(heatmaps = list(unclassed)), 40)
-  expect_true(bare > 0.02)
-  expect_true(bare < tree_plot$heatmap_class_frac(opts, 40, list()))
+  bare <- rows_below(list(heatmaps = list(unclassed)))
+  expect_true(bare > rows_below(empty))
+  expect_true(bare < rows_below(opts))
+})
+
+test_that("the dendrogram's own depth is not reserved a second time", {
+  # The band is drawn geometry, so ggplot trains the y scale on it. Expansion
+  # measured against that range and charged for the same rows again is what
+  # hung a page of white under a deep dendrogram: the reserve has to stay flat
+  # while the room the band takes grows with the slider.
+  panel <- function(depth) {
+    list(
+      heatmaps = list(list(
+        level = "gene",
+        cols = c("g1", "g2"),
+        classes = c("Beta-lactam", "Aminoglycoside"),
+        cluster = TRUE,
+        dend_depth = depth
+      ))
+    )
+  }
+  expect_identical(
+    tree_plot$heatmap_class_frac(panel(20), 40, list()),
+    tree_plot$heatmap_class_frac(panel(0), 40, list())
+  )
+  expect_true(rows_below(panel(20)) > rows_below(panel(0)))
 })
 
 test_that("what a panel labels is the panel's to say", {
@@ -1948,7 +1986,7 @@ test_that("the class strip and the dendrogram can each be switched off", {
     # A dendrogram to switch off — the default depth draws none.
     dend_depth = 10
   )
-  full <- tree_plot$heatmap_class_frac(list(heatmaps = list(panel)), 40)
+  full <- rows_below(list(heatmaps = list(panel)))
 
   # No strip: no class guide to size a legend from, and a shallower band.
   no_strip <- panel
@@ -1957,23 +1995,17 @@ test_that("the class strip and the dendrogram can each be switched off", {
     tree_plot$tree_legend_rows(list(), list(no_strip)),
     tree_plot$tree_legend_rows(list(), list(within(panel, cluster <- FALSE)))
   )
-  expect_true(
-    tree_plot$heatmap_class_frac(list(heatmaps = list(no_strip)), 40) < full
-  )
+  expect_true(rows_below(list(heatmaps = list(no_strip))) < full)
 
   # Depth zero keeps the clustered order but draws no tree, so the band is
   # shallower again — and shallower than dropping the strip alone.
   flat <- panel
   flat$dend_depth <- 0
-  expect_true(
-    tree_plot$heatmap_class_frac(list(heatmaps = list(flat)), 40) < full
-  )
+  expect_true(rows_below(list(heatmaps = list(flat))) < full)
   # A deeper dendrogram claims more room, which is what the slider is for.
   deep <- panel
   deep$dend_depth <- 20
-  expect_true(
-    tree_plot$heatmap_class_frac(list(heatmaps = list(deep)), 40) > full
-  )
+  expect_true(rows_below(list(heatmaps = list(deep))) > full)
 })
 
 test_that("a sequential scale can stand in for the four tier colours", {
@@ -2026,23 +2058,20 @@ test_that("the element-type label claims room at whichever end it is sent to", {
   )
   opts <- list(heatmaps = list(panel), layers = list())
 
-  top_off <- tree_plot$heatmap_header_frac(opts, 40)
-  bottom_off <- tree_plot$heatmap_class_frac(opts, 40, list())
+  top_off <- rows_above(opts)
+  bottom_off <- rows_below(opts)
 
   # On top, it costs the header reserve and leaves the band below alone.
   on_top <- opts
   on_top$heatmaps[[1]]$show_element_type <- TRUE
-  expect_true(tree_plot$heatmap_header_frac(on_top, 40) > top_off)
-  expect_identical(
-    tree_plot$heatmap_class_frac(on_top, 40, list()),
-    bottom_off
-  )
+  expect_true(rows_above(on_top) > top_off)
+  expect_equal(rows_below(on_top), bottom_off)
 
   # Sent to the bottom, the two swap over.
   on_bottom <- on_top
   on_bottom$heatmaps[[1]]$element_pos <- "bottom"
-  expect_identical(tree_plot$heatmap_header_frac(on_bottom, 40), top_off)
-  expect_true(tree_plot$heatmap_class_frac(on_bottom, 40, list()) > bottom_off)
+  expect_equal(rows_above(on_bottom), top_off)
+  expect_true(rows_below(on_bottom) > bottom_off)
 })
 
 test_that("the element label takes the gene names' row when they are off", {

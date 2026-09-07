@@ -334,7 +334,7 @@ test_that("the cell border always matches the background, with no picker of its 
   )
 })
 
-test_that("the gene heatmap's confidence tiers read the reader's own colors", {
+test_that("each element-type panel defaults to its own sequential ramp", {
   path <- amr_db()
   generate <- reactiveVal(0L)
 
@@ -348,20 +348,52 @@ test_that("the gene heatmap's confidence tiers read the reader's own colors", {
     ),
     {
       set_default_inputs(session)
-      session$setInputs(
-        amr_present_color = "#111111",
-        amr_strong_color = "#222222",
-        amr_partial_color = "#333333",
-        amr_absent_color = "#444444"
-      )
       generate(1L)
       session$flushReact()
 
-      opts <- heatmap_opts()
-      expect_identical(opts$present_color, "#111111")
-      expect_identical(opts$strong_color, "#222222")
-      expect_identical(opts$partial_color, "#333333")
-      expect_identical(opts$absent_color, "#444444")
+      ec <- heatmap_opts()$element_colors
+      expect_identical(ec$Resistance$color_mode, "scale")
+      expect_identical(ec$Resistance$heat_scale, "Purples")
+      expect_identical(ec$Virulence$heat_scale, "Oranges")
+      expect_identical(ec$Stress$heat_scale, "Blues")
+    }
+  )
+})
+
+test_that("the per-panel colour modal writes that panel's confidence colors", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      # Open the Resistance panel's modal, switch it to hand-picked tiers.
+      session$setInputs(amr_confidence_colors = "Resistance")
+      session$setInputs(
+        amr_conf_mode = "tiers",
+        amr_conf_present = "#111111",
+        amr_conf_strong = "#222222",
+        amr_conf_partial = "#333333",
+        amr_conf_absent = "#444444"
+      )
+      session$setInputs(amr_conf_apply = 1L)
+
+      res <- heatmap_opts()$element_colors$Resistance
+      expect_identical(res$color_mode, "tiers")
+      expect_identical(res$present_color, "#111111")
+      expect_identical(res$absent_color, "#444444")
+      # A panel left alone keeps its ramp default.
+      expect_identical(heatmap_opts()$element_colors$Virulence$color_mode, "scale")
     }
   )
 })
@@ -638,11 +670,11 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       snap <- snapshot()
       expect_identical(snap$amr_mode, "heatmap")
       expect_identical(snap$amr_top_n, 15)
-      # `.layers` is the annotation strips (reactiveVal state, not an input) and
-      # `zoom_view` is the shared display-mode control; everything else is an
-      # amr_ control.
+      # `.layers` (annotation strips) and `.element_colors` (per-panel confidence
+      # colours) are reactiveVal state rather than inputs, and `zoom_view` is the
+      # shared display-mode control; everything else is an amr_ control.
       expect_true(all(startsWith(
-        setdiff(names(snap), c(".layers", "zoom_view")),
+        setdiff(names(snap), c(".layers", ".element_colors", "zoom_view")),
         "amr_"
       )))
 
