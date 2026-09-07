@@ -1,6 +1,7 @@
 box::use(
-  shiny[NS, reactive, reactiveVal, testServer],
+  shiny[isolate, NS, reactive, reactiveVal, testServer],
   testthat[
+    expect_equal,
     expect_false,
     expect_identical,
     expect_null,
@@ -12,6 +13,7 @@ box::use(
 )
 box::use(
   app / logic / field_profile,
+  app / logic / viz_helpers[control_ids],
   app / view / visualization_amr,
 )
 
@@ -967,4 +969,205 @@ test_that("the tab toggle carries the view picker's own id", {
   for (tab in impl$ALL_TABS) {
     expect_true(grepl(paste0("'", tab, "'"), js, fixed = TRUE))
   }
+})
+
+# --- Reset settings and Auto-fit ----------------------------------------------
+
+test_that("every control the sidebar renders is in the reset catalogue", {
+  # Checked against the panel rather than against itself: the catalogue exists
+  # because shinyjs::reset() silently skipped whole widget families, and only
+  # the rendered markup says which families the panel actually holds.
+  ids <- rendered_control_ids(
+    impl$amr_controls(NS("x")),
+    drop = c(
+      "auto_fit",
+      "reset_settings",
+      # A renderUI mount point that does not end in _ui.
+      "row_name_warning",
+      # Clears itself the moment it is picked from.
+      "amr_layer_add"
+    )
+  )
+  expect_catalogued(ids, impl$AMR_CONTROL_DEFAULTS)
+})
+
+test_that("every catalogued control is filed under exactly one family", {
+  families <- control_ids(impl$AMR_CONTROLS)
+  expect_identical(anyDuplicated(families), 0L)
+  # Every default is filed, so every default is actually sent.
+  expect_equal(
+    setdiff(names(impl$AMR_CONTROL_DEFAULTS), families),
+    character(0)
+  )
+  # The one filed id with no default: the gene picker is rendered from this
+  # database's own gene list, so a reset rebuilds it rather than sending a value.
+  expect_equal(setdiff(families, names(impl$AMR_CONTROL_DEFAULTS)), "amr_genes")
+})
+
+test_that("a reset returns the pickers and radios shinyjs::reset() skipped", {
+  path <- amr_db()
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      sent <- record_input_messages(session)
+
+      session$setInputs(reset_settings_confirm = 1)
+      session$flushReact()
+
+      ids <- c(
+        "amr_mode",
+        "amr_class_vocab",
+        "amr_elements",
+        "amr_sections",
+        "amr_cluster_distance",
+        "amr_cluster_method",
+        "amr_level",
+        "amr_cluster_rows",
+        "amr_cluster_cols",
+        "zoom_view"
+      )
+      for (id in ids) {
+        expect_true(any(endsWith(names(sent()), id)))
+      }
+    }
+  )
+})
+
+test_that("a reset clears the mapping strips and the panel colours", {
+  path <- amr_db()
+  meta <- meta_fixture()
+  generate <- reactiveVal(0L)
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+      session$setInputs(amr_layer_add = "geo_loc_name_country")
+      session$flushReact()
+      expect_identical(length(amr_layers()), 1L)
+
+      # The button only opens the confirmation dialog.
+      session$setInputs(reset_settings = 1)
+      session$flushReact()
+      expect_identical(length(amr_layers()), 1L)
+
+      session$setInputs(reset_settings_confirm = 1)
+      session$flushReact()
+      expect_identical(amr_layers(), list())
+      expect_identical(amr_element_colors(), list())
+    }
+  )
+})
+
+test_that("Auto-fit re-solves the aspect and leaves the rest alone", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+      fit <- aspect_mirror()
+
+      session$setInputs(amr_aspect_ratio = 8, amr_text_color = "#FF0000")
+      session$flushReact()
+      expect_equal(aspect_mirror(), 8)
+
+      session$setInputs(auto_fit = 1)
+      session$flushReact()
+      expect_equal(aspect_mirror(), fit)
+      # Only the geometry: a colour is a deliberate choice.
+      expect_equal(isolate(input$amr_text_color), "#FF0000")
+    }
+  )
+})
+
+test_that("Auto-fit leaves the filters and clustering alone", {
+  # The line between Auto-fit and Reset: it re-solves geometry only. Every
+  # filter and clustering choice is the reader's, and a fit that quietly reset
+  # one would be a reset the reader did not ask for.
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$setInputs(
+        amr_elements = "AMR",
+        amr_cluster_rows = FALSE,
+        amr_min_identity = 90
+      )
+      session$flushReact()
+
+      session$setInputs(auto_fit = 1)
+      session$flushReact()
+
+      expect_identical(isolate(input$amr_elements), "AMR")
+      expect_false(isTRUE(as.logical(isolate(input$amr_cluster_rows))))
+      expect_equal(isolate(input$amr_min_identity), 90)
+    }
+  )
+})
+
+test_that("a reset's coded default cannot land on top of the re-fit", {
+  # The aspect slider is sent twice in a reset's single flush: once with the
+  # coded default, then again with the value the fit solved. The browser keeps
+  # the last message per input, so the fit has to be that message — a guard
+  # that skipped the second send (because the *stale* input already held the
+  # fitted value) let the default's echo win.
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+      fit <- aspect_mirror()
+
+      sent <- record_input_messages(session)
+      session$setInputs(reset_settings_confirm = 1)
+      session$flushReact()
+
+      key <- grep("amr_aspect_ratio$", names(sent()), value = TRUE)
+      expect_identical(length(key), 1L)
+      # updateSliderInput formats its value on the way out.
+      expect_equal(as.numeric(sent()[[key]]$value), fit)
+    }
+  )
 })

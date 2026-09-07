@@ -1,10 +1,12 @@
 box::use(
-  shiny[reactive, reactiveVal, testServer],
+  shiny[NS, reactive, reactiveVal, testServer],
   testthat[
+    expect_equal,
     expect_false,
     expect_gt,
     expect_identical,
     expect_s3_class,
+    expect_setequal,
     expect_true,
     test_that
   ],
@@ -12,8 +14,11 @@ box::use(
 box::use(
   app / logic / epi_plot,
   app / logic / field_profile,
+  app / logic / viz_helpers[control_ids],
   app / view / visualization_epi,
 )
+
+impl <- attr(visualization_epi, "namespace")
 
 meta_fixture <- function() {
   data.frame(
@@ -378,7 +383,7 @@ test_that("Reset settings clears the annotation list", {
       session$setInputs(epi_add_anno = 1)
       expect_identical(nrow(annotations()), 1L)
 
-      session$setInputs(reset_settings = 1)
+      session$setInputs(reset_settings_confirm = 1)
       expect_identical(nrow(annotations()), 0L)
     }
   )
@@ -399,7 +404,7 @@ test_that("Reset settings clears the mapping", {
       map_variable(session, "organism")
       expect_identical(length(epi_layers()), 1L)
 
-      session$setInputs(reset_settings = 1)
+      session$setInputs(reset_settings_confirm = 1)
 
       expect_identical(length(epi_layers()), 0L)
     }
@@ -896,7 +901,7 @@ test_that("Reset settings rebuilds the interval and date-range controls", {
       set_default_inputs(session)
       before <- interval_rebuild()
 
-      session$setInputs(reset_settings = 1)
+      session$setInputs(reset_settings_confirm = 1)
 
       expect_gt(interval_rebuild(), before)
     }
@@ -1113,6 +1118,107 @@ test_that("a restore with no saved stratifier at all adds nothing", {
       session$flushReact()
 
       expect_identical(length(epi_layers()), 0L)
+    }
+  )
+})
+
+# --- Reset settings and Auto-fit ----------------------------------------------
+
+test_that("every control the sidebar renders is in the reset catalogue", {
+  # Checked against the panel rather than against itself: the catalogue exists
+  # because shinyjs::reset() silently skipped whole widget families, and only
+  # the rendered markup says which families the panel actually holds.
+  ids <- rendered_control_ids(
+    impl$epi_controls(NS("x")),
+    drop = c(
+      "auto_fit",
+      "reset_settings",
+      # Buttons, not settings.
+      "epi_add_anno",
+      "epi_clear_anno",
+      "epi_play",
+      "epi_step_start_prev",
+      "epi_step_start_next",
+      "epi_step_end_prev",
+      "epi_step_end_next",
+      # Clears itself the moment it is picked from.
+      "epi_layer_add"
+    )
+  )
+  expect_catalogued(ids, impl$epi_control_defaults())
+})
+
+test_that("every catalogued control is filed under exactly one family", {
+  families <- control_ids(impl$EPI_CONTROLS)
+  expect_identical(anyDuplicated(families), 0L)
+  expect_setequal(families, names(impl$epi_control_defaults()))
+})
+
+test_that("a reset returns the pickers shinyjs::reset() used to skip", {
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      sent <- record_input_messages(session)
+
+      session$setInputs(reset_settings_confirm = 1)
+      session$flushReact()
+
+      for (id in c("epi_plot_mode", "epi_moving_avg_align", "epi_anno_type")) {
+        expect_true(any(endsWith(names(sent()), id)))
+      }
+    }
+  )
+})
+
+test_that("Auto-fit re-fits the interval and leaves the rest alone", {
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      map_variable(session, "organism")
+      session$flushReact()
+      before <- interval_rebuild()
+
+      session$setInputs(auto_fit = 1)
+      session$flushReact()
+
+      expect_gt(interval_rebuild(), before)
+      # Only the interval and the window: the mapping is a deliberate choice.
+      expect_identical(length(epi_layers()), 1L)
+    }
+  )
+})
+
+test_that("Auto-fit before a curve exists changes nothing", {
+  meta <- meta_fixture()
+  meta$sample_collection_date <- NA_character_
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      session$flushReact()
+      before <- interval_rebuild()
+
+      session$setInputs(auto_fit = 1)
+      session$flushReact()
+      expect_equal(interval_rebuild(), before)
     }
   )
 })

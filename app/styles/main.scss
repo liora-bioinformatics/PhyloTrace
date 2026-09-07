@@ -3399,6 +3399,18 @@ table.dataTable thead>tr>th.sorting {
     gap: 1rem;
     margin-top: 0.5rem;
 
+    // Equal shares whatever the row holds. The rule names the buttons rather
+    // than the row's children because a tooltip's trigger is wrapped in a
+    // <bslib-tooltip> that is display:contents — the flex item is the button
+    // inside it, so a `> *` rule lands on a box that does not exist and the
+    // untouched sibling collapses to a column of single letters.
+    >.btn,
+    >bslib-tooltip>.btn,
+    >.form-group {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
     .form-group {
         margin-bottom: 0;
     }

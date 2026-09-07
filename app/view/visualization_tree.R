@@ -108,8 +108,11 @@ box::use(
       color_scales,
       suitable_scale_categories,
       reset_viz_colors,
+      apply_controls,
+      control_families,
+      on_confirmed_reset,
+      reset_button_row,
       collect_input_snapshot,
-      apply_input_snapshot,
     ],
   app / logic / viz_layers[layer_cards, layer_defaults, normalize_layers],
 )
@@ -525,12 +528,114 @@ MIRRORED_SELECTS <- c(
 )
 
 # Everything mirrored, in one list: the fitted sliders, the tip-label switch the
-# fit can turn off, and those selects.
+# fit can turn off, the layout, and those selects.
+#
+# The layout is mirrored because a reset resolves it — and because the layout
+# fit reads it. Left on `input`, a reset that sends "rectangular" to the browser
+# re-fits in the same flush against the *circular* value the picker still holds,
+# so the tree is drawn once for a layout it is leaving and again when the echo
+# lands. Every other server-resolved control is here for exactly that reason.
 MIRRORED_IDS <- c(
   names(FITTED_DEFAULTS),
   "nj_tiplab_show",
   "nj_tippoint_show",
+  "nj_layout",
   MIRRORED_SELECTS
+)
+
+# --- The sidebar's controls, by widget family --------------------------------
+#
+# Every control this panel renders, filed under the family whose update path
+# restores it, and the value each is declared with. Together they drive both
+# "Reset settings" and the Analysis restore -- see control_families() and the
+# reset reference at the top of viz_helpers.R.
+#
+# `nj_layer_add` and `nj_heatmap_add` are deliberately absent: both clear
+# themselves the moment they are picked from, and the heatmap picker's choices
+# are recomputed from the panel list, so clearing the panels refills it. The
+# three metadata-backed selects (MIRRORED_SELECTS) are absent for a different
+# reason -- a catalogue restores a control by value alone, and a value is no use
+# to a picker whose *choices* the loaded database replaced
+# (populate_metadata_selects does those).
+TREE_CONTROLS <- control_families(
+  switches = c(
+    "nj_tiplab_show",
+    "nj_axis_show",
+    "nj_show_branch_label",
+    "nj_treescale_show",
+    "nj_tippoint_show",
+    "nj_nodelabel_show",
+    "nj_rootedge_show",
+    # The heatmap block's shared controls. Real sidebar inputs since the style
+    # modal was split up, so they reset and restore like any other control
+    # rather than riding along inside the panel records.
+    "nj_heatmap_gene_names",
+    "nj_heatmap_class_names",
+    "nj_heatmap_element",
+    "nj_heatmap_cluster",
+    "nj_heatmap_strip"
+  ),
+  pickers = c("nj_tippoint_shape", "nj_heatmap_vocabulary"),
+  plain_selects = c("nj_heatmap_distance", "nj_heatmap_method"),
+  virtual_selects = "nj_layout",
+  sliders = c(
+    "nj_aspect_ratio",
+    "nj_open_angle",
+    "nj_tiplab_size",
+    "nj_branch_size",
+    "nj_tippoint_alpha",
+    "nj_tippoint_size",
+    "nj_heatmap_dend"
+  ),
+  radio_groups = c("zoom_view", "nj_heatmap_element_pos"),
+  colors = c(
+    "nj_color",
+    "nj_bg",
+    "nj_tiplab_color",
+    "nj_branch_color",
+    "nj_tippoint_color",
+    "nj_clade_scale"
+  )
+)
+
+# Every catalogued control's coded default. Written out once here rather than at
+# each widget so a reset and the UI cannot disagree; the ones that are already
+# named constants are taken from the constant rather than repeated.
+#
+# `zoom_view` is a string because radioGroupButtons' choiceValues are: the
+# browser reports "FALSE", not FALSE, and updateRadioGroupButtons matches on the
+# value as written.
+TREE_CONTROL_DEFAULTS <- c(
+  as.list(FITTED_DEFAULTS),
+  list(
+    nj_layout = "rectangular",
+    nj_tiplab_show = TRUE,
+    nj_axis_show = TRUE,
+    nj_show_branch_label = FALSE,
+    nj_treescale_show = FALSE,
+    nj_tippoint_show = FALSE,
+    nj_tippoint_shape = unname(point_shapes[[1L]]),
+    nj_tippoint_alpha = 0.5,
+    nj_nodelabel_show = FALSE,
+    nj_rootedge_show = FALSE,
+    nj_heatmap_gene_names = HEATMAP_STYLE_DEFAULTS$show_gene_names,
+    nj_heatmap_class_names = HEATMAP_STYLE_DEFAULTS$show_class_names,
+    nj_heatmap_element = HEATMAP_STYLE_DEFAULTS$show_element_type,
+    nj_heatmap_element_pos = HEATMAP_STYLE_DEFAULTS$element_pos,
+    nj_heatmap_vocabulary = HEATMAP_STYLE_DEFAULTS$vocabulary,
+    nj_heatmap_cluster = HEATMAP_STYLE_DEFAULTS$cluster,
+    nj_heatmap_distance = HEATMAP_STYLE_DEFAULTS$cluster_distance,
+    nj_heatmap_method = HEATMAP_STYLE_DEFAULTS$cluster_method,
+    nj_heatmap_strip = HEATMAP_STYLE_DEFAULTS$show_class_strip,
+    nj_heatmap_dend = HEATMAP_STYLE_DEFAULTS$dend_depth,
+    nj_color = "#000000",
+    nj_bg = "#ffffff",
+    nj_tiplab_color = "#000000",
+    nj_branch_color = "#000000",
+    nj_tippoint_color = "#3A4657",
+    nj_clade_scale = "#D0F221",
+    zoom_view = "FALSE"
+  )
 )
 
 # Diagnostic for "why did the tree just redraw?", kept commented rather than
@@ -1001,13 +1106,11 @@ tree_controls <- function(ns, options_ui = NULL) {
         width = "100%"
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      shiny$actionButton(
-        ns("reset_settings"),
-        "Reset settings",
-        icon = shiny$icon("rotate-left"),
-        width = "100%"
+    reset_button_row(
+      ns,
+      paste(
+        "Re-solve text sizes, element sizes and the aspect ratio for the",
+        "number of isolates currently drawn. Colours and mappings are kept."
       )
     )
   )
@@ -1130,7 +1233,10 @@ server <- function(
     # echoes back exactly as a slider's does.
     fitted <- do.call(
       shiny$reactiveValues,
-      c(FITTED_DEFAULTS, list(nj_tiplab_show = TRUE))
+      c(
+        FITTED_DEFAULTS,
+        list(nj_tiplab_show = TRUE, nj_layout = "rectangular")
+      )
     )
 
     # all.equal, not identical: the browser can echo 0.6 back as 0.6000000000001
@@ -1157,11 +1263,9 @@ server <- function(
     # *choices* are all swapped out at Generate time for the loaded
     # database's actual metadata columns / isolate names (see the generate()
     # observer below) — the UI-declared choices are just placeholders shown
-    # before any data is loaded. Nothing else restores them: they are
-    # virtual-select widgets, which shinyjs::reset() does not recognize at all,
-    # and even for a widget it does recognize it only ever restores the
-    # selected *value* captured at page load — never `choices`, which after
-    # Generate no longer contains that value anyway. force_default =
+    # before any data is loaded. This is why they are not in the reset
+    # catalogue: a control there is restored by value alone, and a value is no
+    # use to a picker whose choices no longer contain it. force_default =
     # TRUE (Reset settings) always jumps to the same default Generate would
     # use for a metadata set it's never seen a selection for; force_default =
     # FALSE (Generate) keeps the current selection when it's still valid, so
@@ -1366,14 +1470,19 @@ server <- function(
     # was chosen and stays the place to adjust it. The slider is only touched
     # when the value really changed — its echo is harmless (see `fitted`) but
     # pointless.
-    refit_layout <- function(tree, notify = FALSE) {
+    #
+    # `relabel` is the "Auto-fit" button's half of the tip-label rule. `notify`
+    # only ever switches the labels *off*; asking for the best layout for this
+    # data is also the one moment it is right to switch them back on, because
+    # the request is explicit and is not a side effect of some other edit.
+    refit_layout <- function(tree, notify = FALSE, relabel = FALSE) {
       if (is.null(tree)) {
         return(invisible(NULL))
       }
       fit <- tree_auto_layout(
         length(tree$tip.label),
         plot_width_in(),
-        shiny$isolate(input$nj_layout),
+        shiny$isolate(fitted$nj_layout),
         .label_chars(
           tree,
           shiny$isolate(viz_metadata()),
@@ -1390,29 +1499,37 @@ server <- function(
             shiny$isolate(viz_metadata()) %||% data.frame()
           )
         }
-        if (!isTRUE(all.equal(shiny$isolate(input[[id]]), value))) {
-          shiny$updateSliderInput(session, id, value = value)
-        }
+        # Sent unconditionally. Guarding on `input[[id]]` — "the slider already
+        # shows this" — reads a value the browser may be about to replace: a
+        # reset pushes the coded defaults first and re-fits in the same flush,
+        # so the guard saw the *pre-reset* value, skipped the send, and let the
+        # default's echo land on top of the fit. Aspect ratio came back 0.6 on
+        # a tree the engine had fitted to 1. Two messages for one input in a
+        # flush coalesce to the last one anyway, so this simply wins; a
+        # needless echo is harmless (see `fitted`).
+        shiny$updateSliderInput(session, id, value = value)
         set_fitted(id, value)
       }
 
       # Past a certain tip count the labels are a grey smudge at any size that
-      # fits, so the fit draws the tree without them. Only on a Generate: a
-      # re-fit triggered by adding a mapping must not countermand a toggle the
-      # user has just set by hand.
+      # fits, so the fit draws the tree without them — but only where the caller
+      # armed it (Generate, a layout switch, Auto-fit, a reset). A re-fit
+      # triggered by adding a mapping must not countermand a toggle the user has
+      # just set by hand.
       # Two reasons to give up on them, and they are the same reason: room per
       # tip. `labels_legible` is the fitted type size falling under the floor;
       # TIP_MAPPING_MAX is the count past which a per-tip mark stops carrying
       # anything at all, which is the same ceiling the mapping engine uses to
       # stop reaching for the per-tip channels.
-      crowded <- crowded_tips(length(tree$tip.label))
-      if (
-        notify &&
-          (crowded || !fit$labels_legible) &&
-          isTRUE(shiny$isolate(fitted$nj_tiplab_show))
-      ) {
+      legible <- !crowded_tips(length(tree$tip.label)) &&
+        isTRUE(fit$labels_legible)
+      shown <- isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+      if (notify && !legible && shown) {
         set_fitted("nj_tiplab_show", FALSE)
         bslib::update_switch("nj_tiplab_show", value = FALSE)
+      } else if (relabel && legible && !shown) {
+        set_fitted("nj_tiplab_show", TRUE)
+        bslib::update_switch("nj_tiplab_show", value = TRUE)
       }
       invisible(fit)
     }
@@ -1432,7 +1549,7 @@ server <- function(
       shinyjs::toggleClass(
         id = "nj_open_angle_wrap",
         class = "d-none",
-        condition = !identical(input$nj_layout, "circular")
+        condition = !identical(fitted$nj_layout, "circular")
       )
     })
 
@@ -1441,7 +1558,7 @@ server <- function(
     fitted_layout <- shiny$reactiveVal(NULL)
 
     shiny$observeEvent(
-      list(input$nj_layout, fitted$nj_tiplab, fitted$nj_tiplab_show),
+      list(fitted$nj_layout, fitted$nj_tiplab, fitted$nj_tiplab_show),
       {
         shiny$req(tree_obj())
         # A layout switch is re-fitted with the legibility warning armed. Room
@@ -1450,8 +1567,8 @@ server <- function(
         # be a grey smudge around a disc — the switch is exactly the moment the
         # user needs telling. The other triggers here leave it disarmed, since
         # neither of them may countermand a toggle just set by hand.
-        switched <- !identical(fitted_layout(), input$nj_layout)
-        fitted_layout(input$nj_layout)
+        switched <- !identical(fitted_layout(), fitted$nj_layout)
+        fitted_layout(fitted$nj_layout)
         refit_layout(tree_obj(), notify = switched)
       },
       ignoreInit = TRUE
@@ -1473,52 +1590,103 @@ server <- function(
     )
 
     # Reset settings: restore every control in this engine's own sidebar to
-    # its coded default. Local to this module (see the "Reset settings"
-    # button in tree_controls()) — no confirmation modal, mirroring the
-    # directness of the "Reset view" button in Map.
+    # its coded default, and drop the state that is not a control at all —
+    # the mapping layers and the heatmap panels.
     #
-    # shinyjs::reset() alone can't reach colorPickr (every "colors" tab
-    # swatch) — see reset_viz_colors() in viz_helpers.R for why — so those are
-    # patched up explicitly right after the blanket reset.
+    # The catalogue (TREE_CONTROL_DEFAULTS and the per-family id lists above)
+    # is what makes that complete. This used to be shinyjs::reset() plus a
+    # hand-written patch list, which returned the sliders and switches and
+    # silently left the layout picker's siblings, the two pickerInputs, both
+    # radio-group buttons, the mapping layers and the heatmap panels exactly
+    # as the reader had set them. See the reference at the top of
+    # viz_helpers.R for which widget families that helper cannot reach and
+    # why.
     #
-    # populate_metadata_selects() is what returns nj_tiplab / nj_root_isolate /
-    # nj_parentnode to their defaults — shinyjs::reset() cannot: virtual-select
-    # is a custom binding and is not among the widget types it knows how to
-    # restore. It stays deferred with shinyjs::delay() regardless, because
-    # shinyjs::reset() restores the rest of the panel asynchronously (it
-    # round-trips through the browser to read back each resettable element's
-    # page-load value before calling the matching update*Input() on the
-    # server), and letting that pass finish first keeps the fitted sliders'
-    # echoes from landing on top of the mirrors this call writes.
-    # Restore every sidebar control to its coded default. Shared by this
-    # engine's own "Reset settings" button and the top-level app-reset
-    # (session_reset) path below, so both routes return the controls
-    # identically.
+    # Order matters at the end: populate_metadata_selects() resolves the label
+    # source, which is half of what the layout fit measures, so it runs before
+    # the fit. Both write their answers into the mirrors the render reads
+    # (`fitted`) rather than only to the browser, so the whole reset settles
+    # inside one flush and redraws the tree once.
     reset_tree_settings <- function() {
-      shinyjs::reset(id = "controls_wrap")
+      nj_layers(list())
+      nj_layer_seq(0L)
+      nj_heatmaps(list())
+      nj_heatmap_layer_seq(0L)
+      # The tip points are nobody's doing again once the mappings that asked
+      # for them are gone.
+      tippoint_auto_on(FALSE)
+      editing(NULL)
+      coloring_heatmap(NULL)
 
-      # virtual-select is a custom binding shinyjs::reset() does not restore —
-      # the layout picker has to be put back to its default by hand, the same
-      # as the metadata-backed selects below.
-      updateVirtualSelect(
-        inputId = "nj_layout",
-        session = session,
-        selected = "rectangular"
-      )
+      apply_controls(session, TREE_CONTROL_DEFAULTS, TREE_CONTROLS)
+      for (id in MIRRORED_IDS) {
+        value <- TREE_CONTROL_DEFAULTS[[id]]
+        if (!is.null(value)) {
+          set_fitted(id, value)
+        }
+      }
 
-      reset_viz_colors(
-        session,
-        nj_color = "#000000",
-        nj_bg = "#ffffff",
-        nj_tiplab_color = "#000000",
-        nj_branch_color = "#000000",
-        nj_tippoint_color = "#3A4657",
-        nj_clade_scale = "#D0F221"
-      )
-      shinyjs::delay(400, populate_metadata_selects(force_default = TRUE))
+      populate_metadata_selects(force_default = TRUE)
+      # A reset restores the *defaults*, and for the five fitted controls the
+      # default is the fit: the values they are declared with are only what
+      # they hold before any data is loaded (see FITTED_DEFAULTS). Resetting a
+      # three-hundred-tip tree to aspect 0.6 would hand back a plot no setting
+      # in the panel had produced.
+      fitted_layout(shiny$isolate(fitted$nj_layout))
+      refit_layout(tree_obj(), notify = TRUE)
     }
 
-    shiny$observeEvent(input$reset_settings, reset_tree_settings())
+    on_confirmed_reset(
+      input,
+      session,
+      reset_tree_settings,
+      paste(
+        "Mapped variables and heatmap panels are removed with the rest of",
+        "the settings."
+      )
+    )
+
+    # Auto-fit: re-solve the layout for the data on screen — the same solve
+    # Generate runs, on demand.
+    #
+    # It exists because every fitted control is also the reader's to set, and
+    # a hand-set one goes stale as soon as anything else about the plot moves:
+    # widening the aspect ratio spreads the rows without growing the type, a
+    # label source with longer names outgrows the width the labels were sized
+    # for, and a layout that was legible at twenty tips is a smear at three
+    # hundred. Rather than have the reader guess their way back, this puts the
+    # engine's own answer back into the sliders, where it can be argued with
+    # again.
+    #
+    # Only the geometry: colours, mappings, heatmap panels and every other
+    # deliberate choice are untouched. That is the line between this and
+    # "Reset settings".
+    shiny$observeEvent(input$auto_fit, {
+      tree <- tree_obj()
+      if (is.null(tree)) {
+        shiny$showNotification(
+          "Generate a tree first — there is nothing to fit yet.",
+          type = "warning"
+        )
+        return()
+      }
+      before <- isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+      refit_layout(tree, notify = TRUE, relabel = TRUE)
+      hidden <- before && !isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+      shiny$showNotification(
+        paste0(
+          sprintf(
+            "Sizes and spacing fitted to %d isolates.",
+            length(tree$tip.label)
+          ),
+          if (hidden) {
+            " Isolate labels hidden: no legible size fits this many tips."
+          }
+        ),
+        type = "message",
+        duration = 5
+      )
+    })
 
     # The computed phylo tree. Held in a reactiveVal (not an eventReactive) so a
     # Generate for the *other* engine — which also ticks the shared `generate()`
@@ -1578,7 +1746,7 @@ server <- function(
         # An inward tree has no room past its tips for a strip — that space is
         # the middle of the disc (see tree_plot$tree_annotations_drawn), so a
         # variable is drawn onto the tips there instead.
-        if (identical(input$nj_layout, "inward")) "tile" else NULL
+        if (identical(fitted$nj_layout, "inward")) "tile" else NULL
       ) %||%
         character(0)
     })
@@ -1588,7 +1756,7 @@ server <- function(
       list(
         # Layout / rooting.
         root = fitted$nj_root_isolate,
-        layout = input$nj_layout,
+        layout = fitted$nj_layout,
         line_color = input$nj_color,
         bg = input$nj_bg,
         # Tip labels.
@@ -2880,57 +3048,9 @@ server <- function(
     ))
 
     restore <- function(vals) {
-      apply_input_snapshot(
-        session,
-        vals,
-        switches = c(
-          "nj_tiplab_show",
-          "nj_show_branch_label",
-          "nj_tippoint_show",
-          "nj_nodelabel_show",
-          "nj_rootedge_show",
-          "nj_treescale_show",
-          "nj_axis_show",
-          # The heatmap block's shared controls. Real sidebar inputs since the
-          # style modal was split up, so they snapshot and restore like any
-          # other control rather than riding along inside the panel records.
-          "nj_heatmap_gene_names",
-          "nj_heatmap_class_names",
-          "nj_heatmap_element",
-          "nj_heatmap_cluster",
-          "nj_heatmap_strip"
-        ),
-        selects = c("nj_tippoint_shape", "nj_heatmap_vocabulary"),
-        # A virtualSelectInput now, so it cannot ride in `selects` — a picker
-        # update message is ignored by the widget entirely.
-        virtual_selects = "nj_layout",
-        sliders = c(
-          "nj_tiplab_size",
-          "nj_branch_size",
-          "nj_tippoint_alpha",
-          "nj_tippoint_size",
-          "nj_aspect_ratio",
-          "nj_open_angle",
-          "nj_heatmap_dend"
-        ),
-        colors = c(
-          "nj_color",
-          "nj_bg",
-          "nj_tiplab_color",
-          "nj_branch_color",
-          "nj_tippoint_color",
-          "nj_clade_scale"
-        ),
-        radio_groups = c("zoom_view", "nj_heatmap_element_pos")
-      )
-
-      # Plain selectInputs, not pickers, so they cannot ride in `selects` —
-      # a picker's update message leaves a native <select> untouched.
-      for (id in c("nj_heatmap_distance", "nj_heatmap_method")) {
-        if (!is.null(vals[[id]])) {
-          shiny$updateSelectInput(session, id, selected = vals[[id]])
-        }
-      }
+      # Same catalogue a reset applies, holding saved values instead of the
+      # coded ones.
+      apply_controls(session, vals, TREE_CONTROLS)
 
       # Put the fitted controls' saved values straight into the mirrors the
       # render reads, so restoring an Analysis redraws the tree once rather than

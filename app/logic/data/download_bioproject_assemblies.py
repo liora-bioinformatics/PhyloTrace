@@ -11,9 +11,11 @@ For every selected row, this:
   2. Downloads only the latest version of each matching assembly (no GCF/RefSeq
      pair, no superseded/replaced duplicate versions).
   3. Writes them as a single zip archive named "<abb>.zip" inside a folder
-     named "<abb>" (the cgMLST scheme's short species code). The zip is then
-     rewritten to hold ONLY the assembly sequence files, flattened to the
-     archive root - NCBI's directory nesting and all packaging metadata
+     named "<abb>" (the cgMLST scheme's short species code). Large accession
+     lists are fetched in batches (NCBI's `datasets` service throws a transient
+     "invalid zip archive" error on big requests) and each batch is retried
+     before giving up. The archive holds ONLY the assembly sequence files,
+     flattened to its root - NCBI's directory nesting and all packaging metadata
      (README.md, md5sum.txt, assembly_data_report.jsonl, dataset_catalog.json,
      fetch.txt) are removed.
   4. Writes a manifest.json alongside the zip with the assembly accessions,
@@ -61,14 +63,24 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from collections import defaultdict
 from pathlib import Path
 
+# NCBI's `datasets` service returns a transient "Internal error (invalid zip
+# archive)" on large accession batches; splitting the request and retrying each
+# batch works around it.
+CHUNK_SIZE = 1000
+DOWNLOAD_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = 10
+
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 from fetch_bioprojects_all_levels import (  # noqa: E402
-    SUMMARY_URL, download_verified, species_query_names,
+    SUMMARY_URL,
+    download_verified,
+    species_query_names,
 )
 
 DEFAULT_CSV_PATH = HERE / "cgmlst_schemes.csv"
@@ -82,11 +94,15 @@ def load_rows(csv_path):
     rows = []
     with open(csv_path) as f:
         for r in csv.DictReader(f):
-            rows.append({
-                "id": r[""], "raw": r["species"], "abb": r["abb"],
-                "bioproject": (r.get("bioproject") or "").strip(),
-                "taxa": species_query_names(r["species"]),
-            })
+            rows.append(
+                {
+                    "id": r[""],
+                    "raw": r["species"],
+                    "abb": r["abb"],
+                    "bioproject": (r.get("bioproject") or "").strip(),
+                    "taxa": species_query_names(r["species"]),
+                }
+            )
     return rows
 
 
@@ -126,7 +142,9 @@ def find_matches(rows, summary_path):
             two_word = tuple(words[:2]) if len(words) >= 2 else None
             for row in candidates:
                 taxa_set = set(row["taxa"])
-                is_match = genus in taxa_set or (two_word and " ".join(two_word) in taxa_set)
+                is_match = genus in taxa_set or (
+                    two_word and " ".join(two_word) in taxa_set
+                )
                 if not is_match:
                     continue
                 matches[row["id"]].append(assembly_accession)
@@ -138,44 +156,111 @@ def find_matches(rows, summary_path):
 
 # NCBI's `datasets` zip ships these packaging/metadata entries alongside the
 # actual sequence files; drop them so only the assembly data remains.
-_ZIP_METADATA_NAMES = frozenset({
-    "README.md", "md5sum.txt", "assembly_data_report.jsonl",
-    "dataset_catalog.json", "fetch.txt", "data_summary.tsv",
-})
+_ZIP_METADATA_NAMES = frozenset(
+    {
+        "README.md",
+        "md5sum.txt",
+        "assembly_data_report.jsonl",
+        "dataset_catalog.json",
+        "fetch.txt",
+        "data_summary.tsv",
+    }
+)
 
 
-def strip_zip_metadata(zip_path):
-    """Rewrite the datasets zip in place so it contains ONLY the assembly
-    sequence files, flattened to the archive root.
+def merge_sequence_files(src_zip_path, dst_zip, seen):
+    """Copy only the assembly sequence files out of one datasets batch zip into
+    the already-open combined destination zip, flattened to its root.
 
     NCBI's directory nesting (ncbi_dataset/data/<accession>/) and every
     packaging/metadata entry (README.md, md5sum.txt, assembly_data_report.jsonl,
-    dataset_catalog.json, fetch.txt) are dropped. Returns the number of files
-    kept."""
-    tmp_path = zip_path.with_name(zip_path.name + ".tmp")
-    kept = 0
-    with zipfile.ZipFile(zip_path) as src, \
-            zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
+    dataset_catalog.json, fetch.txt) are dropped; `seen` tracks basenames already
+    written so re-downloaded batches can't duplicate an entry. Returns the number
+    of files added."""
+    added = 0
+    with zipfile.ZipFile(src_zip_path) as src:
         for name in src.namelist():
             parts = name.split("/")
             base = parts[-1]
             # keep only real files sitting under ncbi_dataset/data/<accession>/,
             # which excludes the top-level and data-level metadata entries
-            if (not base or parts[:2] != ["ncbi_dataset", "data"]
-                    or len(parts) < 4 or base in _ZIP_METADATA_NAMES):
+            if (
+                not base
+                or parts[:2] != ["ncbi_dataset", "data"]
+                or len(parts) < 4
+                or base in _ZIP_METADATA_NAMES
+            ):
                 continue
-            dst.writestr(base, src.read(name))
-            kept += 1
-    tmp_path.replace(zip_path)
-    return kept
+            if base in seen:
+                continue
+            seen.add(base)
+            dst_zip.writestr(base, src.read(name))
+            added += 1
+    return added
 
 
-def download_species(row, accessions, pubmed_ids, out_dir, include):
+def download_batch(accessions, zip_path, include):
+    """Run `datasets download` for one batch of accessions, retrying the
+    transient NCBI 'invalid zip archive' server error before giving up."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
+        tmp.write("\n".join(accessions))
+        tmp_path = tmp.name
+    try:
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            zip_path.unlink(missing_ok=True)
+            proc = subprocess.run(
+                [
+                    "datasets",
+                    "download",
+                    "genome",
+                    "accession",
+                    "--inputfile",
+                    tmp_path,
+                    "--assembly-source",
+                    "GenBank",
+                    "--assembly-version",
+                    "latest",
+                    "--include",
+                    include,
+                    "--filename",
+                    str(zip_path),
+                    "--no-progressbar",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0 and zipfile.is_zipfile(zip_path):
+                return
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            detail = detail[-1] if detail else f"exit status {proc.returncode}"
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise RuntimeError(f"datasets download failed: {detail}")
+            wait = RETRY_BACKOFF_SECONDS * attempt
+            print(
+                f"    datasets download failed ({detail}); "
+                f"retry {attempt}/{DOWNLOAD_ATTEMPTS - 1} in {wait}s"
+            )
+            time.sleep(wait)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def download_species(row, accessions, pubmed_ids, out_dir, include, force):
     abb = row["abb"]
     species_dir = out_dir / abb
     species_dir.mkdir(parents=True, exist_ok=True)
     zip_path = species_dir / f"{abb}.zip"
     manifest_path = species_dir / "manifest.json"
+
+    # A completed run leaves both files; skip it on re-run (e.g. after a
+    # mid-batch failure) unless --force was given.
+    if not force and manifest_path.exists() and zipfile.is_zipfile(zip_path):
+        print(
+            f"[{abb}] already downloaded ({zip_path}) - skipping (use --force "
+            f"to redownload)"
+        )
+        with open(manifest_path) as f:
+            return json.load(f)
 
     bioproject_url = f"https://www.ncbi.nlm.nih.gov/bioproject/{row['bioproject']}"
     publication_urls = sorted(
@@ -193,37 +278,42 @@ def download_species(row, accessions, pubmed_ids, out_dir, include):
     }
 
     if not accessions:
-        print(f"[{abb}] no matching assemblies found for BioProject "
-              f"{row['bioproject']} - skipping download, writing empty manifest")
+        print(
+            f"[{abb}] no matching assemblies found for BioProject "
+            f"{row['bioproject']} - skipping download, writing empty manifest"
+        )
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
         return manifest
 
-    print(f"[{abb}] downloading {len(accessions)} assemblies from "
-          f"{row['bioproject']} -> {zip_path}")
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
-        tmp.write("\n".join(accessions))
-        tmp_path = tmp.name
-    try:
-        subprocess.run(
-            ["datasets", "download", "genome", "accession",
-             "--inputfile", tmp_path,
-             "--assembly-source", "GenBank",
-             "--assembly-version", "latest",
-             "--include", include,
-             "--filename", str(zip_path),
-             "--no-progressbar"],
-            check=True,
-        )
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    chunks = [
+        accessions[i : i + CHUNK_SIZE] for i in range(0, len(accessions), CHUNK_SIZE)
+    ]
+    print(
+        f"[{abb}] downloading {len(accessions)} assemblies from "
+        f"{row['bioproject']} in {len(chunks)} batch(es) -> {zip_path}"
+    )
 
-    kept = strip_zip_metadata(zip_path)
+    batch_zip = zip_path.with_name(zip_path.name + ".part")
+    kept = 0
+    seen = set()
+    zip_path.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as dst:
+            for n, chunk in enumerate(chunks, 1):
+                if len(chunks) > 1:
+                    print(f"[{abb}] batch {n}/{len(chunks)} ({len(chunk)} accessions)")
+                download_batch(chunk, batch_zip, include)
+                kept += merge_sequence_files(batch_zip, dst, seen)
+    finally:
+        batch_zip.unlink(missing_ok=True)
 
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"[{abb}] done: {zip_path} ({zip_path.stat().st_size} bytes, "
-          f"{kept} assembly file(s)), {len(publication_urls)} publication URL(s)")
+    print(
+        f"[{abb}] done: {zip_path} ({zip_path.stat().st_size} bytes, "
+        f"{kept} assembly file(s)), {len(publication_urls)} publication URL(s)"
+    )
     return manifest
 
 
@@ -235,30 +325,43 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "csv", nargs="?", default=str(DEFAULT_CSV_PATH),
+        "csv",
+        nargs="?",
+        default=str(DEFAULT_CSV_PATH),
         help="Path to cgmlst_schemes.csv (must have a 'bioproject' column). "
-             f"Default: {DEFAULT_CSV_PATH}",
+        f"Default: {DEFAULT_CSV_PATH}",
     )
     parser.add_argument(
-        "--species", nargs="*", default=None,
+        "--species",
+        nargs="*",
+        default=None,
         help="One or more 'abb' values to restrict the download to. "
-             "Default: all species/rows in the CSV.",
+        "Default: all species/rows in the CSV.",
     )
     parser.add_argument(
-        "--out-dir", default=str(DEFAULT_OUT_DIR),
+        "--out-dir",
+        default=str(DEFAULT_OUT_DIR),
         help=f"Directory under which per-species '<abb>/' folders are created. "
-             f"Default: {DEFAULT_OUT_DIR}",
+        f"Default: {DEFAULT_OUT_DIR}",
     )
     parser.add_argument(
-        "--assembly-summary", default=str(DEFAULT_SUMMARY_PATH),
+        "--assembly-summary",
+        default=str(DEFAULT_SUMMARY_PATH),
         help="Path to a local copy of NCBI's bulk assembly_summary.txt "
-             "(downloaded and verified automatically if missing).",
+        "(downloaded and verified automatically if missing).",
     )
     parser.add_argument(
-        "--include", default="genome",
+        "--force",
+        action="store_true",
+        help="Redownload species whose '<abb>.zip' and manifest.json already "
+        "exist (by default those are skipped on re-run).",
+    )
+    parser.add_argument(
+        "--include",
+        default="genome",
         help="Data types to download, as accepted by `datasets download genome "
-             "accession --include` (comma-separated: genome,rna,protein,cds,gff3,"
-             "gtf,gbff,seq-report,all,none). Default: genome (FASTA only).",
+        "accession --include` (comma-separated: genome,rna,protein,cds,gff3,"
+        "gtf,gbff,seq-report,all,none). Default: genome (FASTA only).",
     )
     return parser.parse_args()
 
@@ -276,14 +379,18 @@ def main():
         known = {row["abb"] for row in rows}
         unknown = wanted - known
         if unknown:
-            sys.exit(f"Unknown --species value(s) (no matching 'abb' in {csv_path}): "
-                      f"{sorted(unknown)}")
+            sys.exit(
+                f"Unknown --species value(s) (no matching 'abb' in {csv_path}): "
+                f"{sorted(unknown)}"
+            )
         rows = [row for row in rows if row["abb"] in wanted]
 
     missing_bioproject = [row["abb"] for row in rows if not row["bioproject"]]
     if missing_bioproject:
-        print(f"Skipping {len(missing_bioproject)} row(s) with no 'bioproject' "
-              f"set: {missing_bioproject}")
+        print(
+            f"Skipping {len(missing_bioproject)} row(s) with no 'bioproject' "
+            f"set: {missing_bioproject}"
+        )
     rows = [row for row in rows if row["bioproject"]]
 
     if not rows:
@@ -302,7 +409,12 @@ def main():
     manifests = []
     for row in rows:
         manifest = download_species(
-            row, matches[row["id"]], pubmed_ids[row["id"]], out_dir, args.include,
+            row,
+            matches[row["id"]],
+            pubmed_ids[row["id"]],
+            out_dir,
+            args.include,
+            args.force,
         )
         manifests.append(manifest)
 

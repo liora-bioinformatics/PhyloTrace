@@ -1,9 +1,10 @@
 box::use(
-  shiny[isolate, observe, reactive, reactiveVal, testServer],
+  shiny[isolate, NS, observe, reactive, reactiveVal, testServer],
   testthat[
     expect_equal,
     expect_false,
     expect_identical,
+    expect_length,
     expect_setequal,
     expect_true,
     test_that
@@ -15,6 +16,7 @@ box::use(
   app / logic / amr_plot,
   app / logic / field_profile[field_profiles],
   app / logic / tree_plot,
+  app / logic / viz_helpers[control_ids],
   app / view / visualization_tree,
 )
 
@@ -1059,6 +1061,208 @@ test_that("a database with no AMR results offers no heatmap", {
       session$setInputs(nj_heatmap_add = "AMR")
       session$flushReact()
       expect_identical(length(tree_opts()$heatmaps), 0L)
+    }
+  )
+})
+
+# --- Reset settings and Auto-fit ---------------------------------------------
+
+test_that("every control the sidebar renders is in the reset catalogue", {
+  # The bug this pins: "Reset settings" was shinyjs::reset() plus a short
+  # hand-written patch list, so a control whose widget family that helper
+  # cannot reach — and there are four of them — was simply never returned. The
+  # catalogue has to be checked against the panel rather than against itself,
+  # which is why this reads the ids out of the rendered UI.
+  ids <- rendered_control_ids(
+    impl$tree_controls(NS("x")),
+    drop = c(
+      "auto_fit",
+      "reset_settings",
+      # renderUI mount points that do not end in _ui.
+      "nj_heatmap_none",
+      "nj_heatmap_shared",
+      # Both adders clear themselves the moment they are picked from, and the
+      # heatmap one's choices are rebuilt from the panel list.
+      "nj_layer_add",
+      "nj_heatmap_add",
+      # Restored by populate_metadata_selects(), which has to set their choices
+      # from the loaded database as well as their value.
+      impl$MIRRORED_SELECTS
+    )
+  )
+  expect_catalogued(ids, impl$TREE_CONTROL_DEFAULTS)
+})
+
+test_that("every catalogued control is filed under exactly one family", {
+  families <- control_ids(impl$TREE_CONTROLS)
+  # A control filed twice would be sent two update messages of different kinds,
+  # one of which its binding ignores — which is the failure mode the families
+  # exist to prevent.
+  expect_identical(anyDuplicated(families), 0L)
+  expect_setequal(families, names(impl$TREE_CONTROL_DEFAULTS))
+})
+
+test_that("Reset settings discards nothing until it is confirmed", {
+  dir <- local_tempdir()
+  db <- amr_fixture_db(dir)
+  testServer(visualization_tree$server, args = amr_args(db), {
+    set_tree_inputs(session)
+    session$setInputs(nj_layer_add = "purpose", nj_heatmap_add = "AMR")
+    session$flushReact()
+    expect_length(nj_layers(), 1L)
+    expect_length(nj_heatmaps(), 1L)
+
+    # The button only opens the dialog.
+    session$setInputs(reset_settings = 1L)
+    session$flushReact()
+    expect_length(nj_layers(), 1L)
+    expect_length(nj_heatmaps(), 1L)
+
+    session$setInputs(reset_settings_confirm = 1L)
+    session$flushReact()
+    expect_length(nj_layers(), 0L)
+    expect_length(nj_heatmaps(), 0L)
+  })
+})
+
+test_that("a reset returns the fitted controls to the fit, not to the code", {
+  # The five fitted sliders are declared with the values they hold before any
+  # data is loaded, so restoring *those* would hand back a plot no setting in
+  # the panel had produced — a four-tip tree at the aspect ratio meant for
+  # fifteen.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$flushReact()
+      fit <- isolate(fitted$nj_aspect_ratio)
+      expect_false(isTRUE(all.equal(fit, impl$FITTED_DEFAULTS$nj_aspect_ratio)))
+
+      session$setInputs(nj_aspect_ratio = 8)
+      session$flushReact()
+      expect_equal(isolate(fitted$nj_aspect_ratio), 8)
+
+      session$setInputs(reset_settings_confirm = 1L)
+      session$flushReact()
+      expect_equal(isolate(fitted$nj_aspect_ratio), fit)
+    }
+  )
+})
+
+test_that("Auto-fit re-solves the geometry and leaves the rest alone", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(
+    isolate = c("A", "B", "C", "D"),
+    purpose = c("outbreak", "surveillance", "outbreak", "surveillance"),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$setInputs(nj_layer_add = "purpose")
+      session$flushReact()
+      fit <- isolate(fitted$nj_aspect_ratio)
+
+      # The reported shape of the problem: a hand-set aspect ratio spreads the
+      # rows without growing the type, and nothing tells the reader how to get
+      # back.
+      session$setInputs(
+        nj_aspect_ratio = 8,
+        nj_tiplab_size = 0.6,
+        nj_tiplab_color = "#FF0000"
+      )
+      session$flushReact()
+
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+
+      expect_equal(isolate(fitted$nj_aspect_ratio), fit)
+      expect_true(isolate(fitted$nj_tiplab_size) > 0.6)
+      # Only the geometry: a colour and a mapping are deliberate choices and
+      # are not the fit's to overrule.
+      expect_equal(tree_opts()$tiplab_color, "#FF0000")
+      expect_length(nj_layers(), 1L)
+    }
+  )
+})
+
+test_that("Auto-fit before a tree exists changes nothing", {
+  testServer(
+    visualization_tree$server,
+    args = list(plot_type = reactiveVal("Tree")),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_aspect_ratio = 8)
+      session$flushReact()
+
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+      expect_equal(isolate(fitted$nj_aspect_ratio), 8)
+    }
+  )
+})
+
+test_that("a reset's coded default cannot land on top of the re-fit", {
+  # The fitted sliders are sent twice in a reset's single flush: once with the
+  # coded default, then again with the value the fit solved. The browser keeps
+  # the last message per input, so the fit has to be that message — a guard
+  # that skipped the second send (because the *stale* input already held the
+  # fitted value) let the default's echo win, and a tree fitted to aspect 1
+  # came back at 0.6.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$flushReact()
+      fit <- isolate(fitted$nj_aspect_ratio)
+
+      sent <- record_input_messages(session)
+
+      session$setInputs(reset_settings_confirm = 1L)
+      session$flushReact()
+      key <- grep("nj_aspect_ratio$", names(sent()), value = TRUE)
+      expect_length(key, 1L)
+      # updateSliderInput formats its value on the way out.
+      expect_equal(as.numeric(sent()[[key]]$value), fit)
     }
   )
 })

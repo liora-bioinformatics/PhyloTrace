@@ -1,9 +1,10 @@
 box::use(
-  shiny[reactive, reactiveVal, testServer],
+  shiny[isolate, NS, reactive, reactiveVal, testServer],
   testthat[
     expect_equal,
     expect_false,
     expect_identical,
+    expect_setequal,
     expect_true,
     test_that
   ],
@@ -13,6 +14,7 @@ box::use(
   app / logic / mst_plot,
   app / logic / mst_plot[mst_node_sizes],
   app / logic / tree_plot[MISSING_COLOR],
+  app / logic / viz_helpers[control_ids],
   app / view / visualization_mst,
 )
 
@@ -289,7 +291,12 @@ test_that("the mapping list is emptied by a reset", {
     set_mst_inputs(session)
     session$setInputs(mst_layer_add = "host")
     expect_identical(length(mst_layers()), 1L)
+
+    # The button only opens the confirmation dialog.
     session$setInputs(reset_settings = 1)
+    expect_identical(length(mst_layers()), 1L)
+
+    session$setInputs(reset_settings_confirm = 1)
     expect_identical(mst_layers(), list())
   })
 })
@@ -588,7 +595,7 @@ test_that("a saved analysis restores its layers, mirrors included", {
     set_mst_inputs(session)
     session$setInputs(mst_layer_add = "host")
     snap <- snapshot()
-    session$setInputs(reset_settings = 1)
+    session$setInputs(reset_settings_confirm = 1)
     expect_identical(mst_layers(), list())
 
     restore(snap)
@@ -651,5 +658,86 @@ test_that("a snapshot with no mapping at all restores no layers", {
     set_mst_inputs(session)
     restore(list(mst_color_var = FALSE, mst_show_label = FALSE))
     expect_identical(mst_layers(), list())
+  })
+})
+
+# --- Reset settings and Auto-fit ----------------------------------------------
+
+test_that("every control the sidebar renders is in the reset catalogue", {
+  # Checked against the panel rather than against itself: the catalogue exists
+  # because shinyjs::reset() silently skipped whole widget families, and only
+  # the rendered markup says which families the panel actually holds.
+  ids <- rendered_control_ids(
+    impl$mst_controls(NS("x"), options_ui = ""),
+    drop = c(
+      "auto_fit",
+      "reset_settings",
+      # Clears itself the moment it is picked from.
+      "mst_layer_add",
+      # Restored by populate_metadata_selects(), which has to set its choices
+      # from the loaded database as well as its value.
+      "mst_node_label"
+    )
+  )
+  expect_catalogued(ids, impl$MST_CONTROL_DEFAULTS)
+})
+
+test_that("every catalogued control is filed under exactly one family", {
+  families <- control_ids(impl$MST_CONTROLS)
+  expect_identical(anyDuplicated(families), 0L)
+  # mst_node_size is catalogued but rendered server-side, so it is the one id
+  # the panel walk above cannot see.
+  expect_setequal(families, names(impl$MST_CONTROL_DEFAULTS))
+})
+
+test_that("a reset returns the pickers shinyjs::reset() used to skip", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session)
+    sent <- record_input_messages(session)
+
+    session$setInputs(reset_settings_confirm = 1)
+    session$flushReact()
+
+    for (id in c("mst_length_mode", "mst_legend_ori", "mst_cluster_col_scale")) {
+      expect_true(any(endsWith(names(sent()), id)))
+    }
+  })
+})
+
+test_that("Auto-fit re-solves the geometry and leaves the rest alone", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    fit <- isolate(fitted$mst_node_label_fontsize)
+
+    session$setInputs(mst_node_label_fontsize = 30, mst_color_node = "#FF0000")
+    session$setInputs(mst_layer_add = "host")
+    session$flushReact()
+    expect_equal(isolate(fitted$mst_node_label_fontsize), 30)
+
+    session$setInputs(auto_fit = 1)
+    session$flushReact()
+    expect_equal(isolate(fitted$mst_node_label_fontsize), fit)
+    # Only the geometry: a colour and a mapping are deliberate choices.
+    expect_identical(length(mst_layers()), 1L)
+    expect_equal(isolate(input$mst_color_node), "#FF0000")
+  })
+})
+
+test_that("Auto-fit before a network exists changes nothing", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  testServer(visualization_mst$server, args = args_for(db, reactiveVal(0L)), {
+    set_mst_inputs(session, mst_node_label_fontsize = 30)
+    session$flushReact()
+    session$setInputs(auto_fit = 1)
+    session$flushReact()
+    expect_equal(isolate(fitted$mst_node_label_fontsize), 30)
   })
 })

@@ -86,11 +86,13 @@ box::use(
   app /
     logic /
     viz_helpers[
-      apply_input_snapshot,
+      apply_controls,
       collect_input_snapshot,
+      control_families,
       field_select,
       granularity_select,
-      reset_viz_colors,
+      on_confirmed_reset,
+      reset_button_row,
       scale_select,
       suitable_scale_categories,
       update_field_select,
@@ -146,6 +148,91 @@ MIRRORED_IDS <- c(
   "mst_edge_length_scale",
   "mst_node_label",
   "mst_cluster_threshold"
+)
+
+# --- The sidebar's controls, by widget family --------------------------------
+#
+# Every control this panel renders, filed under the family whose update path
+# restores it, and the value each is declared with. Together they drive both
+# "Reset settings" and the Analysis restore -- see control_families() and the
+# reset reference at the top of viz_helpers.R.
+#
+# Two ids are deliberately absent. `mst_layer_add` clears itself the moment it
+# is picked from. `mst_node_label` is metadata-backed: a catalogue restores a
+# control by value alone, and a value is no use to a picker whose *choices* the
+# loaded database replaced (populate_metadata_selects does that one).
+#
+# `mst_node_size` is here even though the panel does not declare it -- it is
+# rendered server-side, one handle or two depending on "Scale by duplicates"
+# (output$mst_node_size_ui), and the fit is what puts a value back in it.
+MST_CONTROLS <- control_families(
+  switches = c(
+    "mst_show_clusters",
+    "mst_cluster_label_tint",
+    "mst_show_label",
+    "mst_scale_nodes",
+    "mst_shadow",
+    "mst_shorten_long",
+    "mst_show_edge_label",
+    "mst_background_transparent",
+    "mst_show_legend",
+    "mst_show_scale_caption"
+  ),
+  pickers = c(
+    "mst_cluster_col_scale",
+    "mst_length_mode",
+    "mst_legend_ori"
+  ),
+  sliders = c(
+    "mst_cluster_width",
+    "mst_cluster_opacity",
+    "mst_cluster_label_size",
+    "mst_node_label_fontsize",
+    "mst_node_size",
+    "mst_edge_length_scale",
+    "mst_cap_mult",
+    "mst_edge_font_size",
+    "mst_rotation"
+  ),
+  numerics = c("mst_cluster_threshold", "mst_collapse_threshold"),
+  colors = c(
+    "mst_text_color",
+    "mst_color_node",
+    "mst_color_edge",
+    "mst_edge_font_color",
+    "mst_background_color"
+  )
+)
+
+# Every catalogued control's coded default, taken from the named constant where
+# there is one so the reset and the widget cannot disagree.
+MST_CONTROL_DEFAULTS <- c(
+  FITTED_DEFAULTS,
+  list(
+    mst_show_clusters = TRUE,
+    mst_cluster_threshold = THRESHOLD_PLACEHOLDER,
+    mst_cluster_col_scale = "turbo",
+    mst_cluster_width = 15,
+    mst_cluster_opacity = 66,
+    mst_cluster_label_size = 18,
+    mst_cluster_label_tint = FALSE,
+    mst_collapse_threshold = 0,
+    mst_scale_nodes = TRUE,
+    mst_shadow = FALSE,
+    mst_edge_length_scale = MST_FIT_DEFAULTS$spread,
+    mst_shorten_long = TRUE,
+    mst_cap_mult = MST_MAX_EDGE_MULT,
+    mst_background_transparent = TRUE,
+    mst_rotation = 0,
+    mst_show_legend = TRUE,
+    mst_legend_ori = "left",
+    mst_show_scale_caption = TRUE,
+    mst_text_color = "#000000",
+    mst_color_node = "#B2FACA",
+    mst_color_edge = "#000000",
+    mst_edge_font_color = "#000000",
+    mst_background_color = "#ffffff"
+  )
 )
 
 # --- MST control tabs --------------------------------------------------------
@@ -440,13 +527,12 @@ mst_controls <- function(ns, options_ui = NULL) {
         )
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      shiny$actionButton(
-        ns("reset_settings"),
-        "Reset settings",
-        icon = shiny$icon("rotate-left"),
-        width = "100%"
+    reset_button_row(
+      ns,
+      paste(
+        "Re-solve node and font sizes, the edge-length model and the label",
+        "switches for the network currently drawn. Colours and mappings are",
+        "kept."
       )
     )
   )
@@ -671,11 +757,9 @@ server <- function(
 
     # mst_node_label's and mst_layer_add's *choices* are swapped out for the
     # loaded database's actual metadata columns — the UI-declared choices are
-    # placeholders shown before any data is loaded. shinyjs::reset() only knows
-    # how to restore the selected *value* it captured at page load (back when
-    # those placeholders were current); it never restores `choices`, so after
-    # Generate has swapped them out that captured value usually is not among the
-    # select's current options any more, leaving the control visibly blank.
+    # placeholders shown before any data is loaded. This is why neither is in
+    # the reset catalogue: a catalogue restores a control by value alone, and a
+    # value is no use to a picker whose choices no longer contain it.
     # force_default = TRUE (Reset settings) always jumps to Isolate;
     # force_default = FALSE (Generate, a fresh database) keeps a still-valid
     # selection, so re-Generating does not clobber a deliberate choice.
@@ -858,47 +942,72 @@ server <- function(
 
     # --- Reset --------------------------------------------------------------
 
-    # Restore every sidebar control to its coded default. Shared by this
-    # engine's own "Reset settings" button and the top-level app-reset
-    # (session_reset) path below, so both routes return the controls
-    # identically.
+    # Reset settings: restore every control in this engine's own sidebar to its
+    # coded default, and drop the state that is not a control at all -- the
+    # mapping layers.
     #
-    # shinyjs::reset() can't reach colorPickr (every "colors" tab swatch) — see
-    # reset_viz_colors() in viz_helpers.R for why — so those are patched up
-    # explicitly right after the blanket reset.
+    # The catalogue (MST_CONTROLS / MST_CONTROL_DEFAULTS above) is what makes
+    # that complete. This used to be shinyjs::reset() plus a hand-written patch
+    # list, which returned the sliders and switches and silently left both
+    # pickerInputs -- "Length" and the legend's "Position" -- exactly as the
+    # reader had set them. See the reference at the top of viz_helpers.R for
+    # which widget families that helper cannot reach and why.
     #
-    # populate_metadata_selects() has to be deferred with shinyjs::delay()
-    # rather than called right after shinyjs::reset(): mst_node_label *is* a
-    # plain <select> that shinyjs::reset() recognises and restores — but only
-    # asynchronously (it round-trips through the browser to read back each
-    # resettable element's page-load value before calling the matching
-    # update*Input() on the server). A same-tick call would run first and
-    # shinyjs's own stale restoration would land after it and overwrite it: the
-    # control resets fine, then silently reverts to blank a moment later.
+    # Order matters at the end: the two data-fitted answers (the label source
+    # and the scheme's own cluster threshold) are applied after the catalogue,
+    # so the fit wins over the coded placeholder, and the layout fit runs last
+    # for the same reason -- for the fitted controls the default *is* the fit,
+    # and returning a two-hundred-node network to the sizes meant for a dozen
+    # would hand back a picture no setting in the panel had produced.
     reset_mst_settings <- function() {
-      shinyjs::reset(id = "controls_wrap")
-
-      reset_viz_colors(
-        session,
-        mst_text_color = "#000000",
-        mst_color_node = "#B2FACA",
-        mst_color_edge = "#000000",
-        mst_edge_font_color = "#000000",
-        mst_background_color = "#ffffff"
-      )
       mst_layers(list())
       mst_layer_seq(0L)
-      for (id in names(FITTED_DEFAULTS)) {
-        set_fitted(id, FITTED_DEFAULTS[[id]])
+
+      apply_controls(session, MST_CONTROL_DEFAULTS, MST_CONTROLS)
+      for (id in MIRRORED_IDS) {
+        value <- MST_CONTROL_DEFAULTS[[id]]
+        if (!is.null(value)) {
+          set_fitted(id, value)
+        }
       }
-      set_fitted("mst_edge_length_scale", MST_FIT_DEFAULTS$spread)
-      shinyjs::delay(400, {
-        populate_metadata_selects(force_default = TRUE)
-        apply_scheme_threshold(force_default = TRUE)
-      })
+
+      populate_metadata_selects(force_default = TRUE)
+      apply_scheme_threshold(force_default = TRUE)
+      refit_layout(mst_obj(), notify = FALSE)
     }
 
-    shiny$observeEvent(input$reset_settings, reset_mst_settings())
+    on_confirmed_reset(
+      input,
+      session,
+      reset_mst_settings,
+      "Mapped variables are removed with the rest of the settings."
+    )
+
+    # Auto-fit: re-solve the layout for the network on screen -- the same solve
+    # Generate runs, on demand.
+    #
+    # It exists because every fitted control is also the reader's to set, and a
+    # hand-set one goes stale as soon as anything else about the graph moves: a
+    # spread that suited fifty nodes crowds two hundred, and a font size chosen
+    # for short labels is unreadable once the source is a long metadata field.
+    # Only the geometry -- colours, mappings and the clustering settings are
+    # deliberate choices and are not the fit's to overrule.
+    shiny$observeEvent(input$auto_fit, {
+      graph <- mst_obj()
+      if (is.null(graph)) {
+        shiny$showNotification(
+          "Generate a network first \u2014 there is nothing to fit yet.",
+          type = "warning"
+        )
+        return()
+      }
+      refit_layout(graph, notify = TRUE)
+      shiny$showNotification(
+        sprintf("Sizes and spacing fitted to %d nodes.", vcount(graph)),
+        type = "message",
+        duration = 5
+      )
+    })
 
     # --- Variable mapping layers -------------------------------------------
 
@@ -1594,46 +1703,9 @@ server <- function(
     # choices set alongside the value so the saved field sticks even before
     # Generate repopulates them.
     restore <- function(vals) {
-      apply_input_snapshot(
-        session,
-        vals,
-        switches = c(
-          "mst_show_label",
-          "mst_show_edge_label",
-          "mst_background_transparent",
-          "mst_scale_nodes",
-          "mst_shorten_long",
-          "mst_shadow",
-          "mst_show_clusters",
-          "mst_cluster_label_tint",
-          "mst_show_legend",
-          "mst_show_scale_caption"
-        ),
-        selects = c(
-          "mst_length_mode",
-          "mst_cluster_col_scale",
-          "mst_legend_ori"
-        ),
-        sliders = c(
-          "mst_node_size",
-          "mst_edge_length_scale",
-          "mst_edge_font_size",
-          "mst_node_label_fontsize",
-          "mst_rotation",
-          "mst_cap_mult",
-          "mst_cluster_width",
-          "mst_cluster_opacity",
-          "mst_cluster_label_size"
-        ),
-        numerics = c("mst_cluster_threshold", "mst_collapse_threshold"),
-        colors = c(
-          "mst_text_color",
-          "mst_color_node",
-          "mst_color_edge",
-          "mst_edge_font_color",
-          "mst_background_color"
-        )
-      )
+      # Same catalogue a reset applies, holding saved values instead of the
+      # coded ones.
+      apply_controls(session, vals, MST_CONTROLS)
       # The mirrors are what the render reads, and a restored input reaches them
       # only via the browser's echo — which never arrives for a control whose
       # value did not change. Writing them here makes a restore take effect on

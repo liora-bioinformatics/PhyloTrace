@@ -4,18 +4,8 @@
 # modules (app/view/visualization_tree.R and app/view/visualization_mst.R).
 
 box::use(
-  shiny[
-    div,
-    icon,
-    tags,
-    HTML,
-    singleton,
-    reactiveValuesToList,
-    updateSliderInput,
-    updateNumericInput,
-    updateTextInput,
-  ],
-  bslib[update_switch],
+  shiny,
+  bslib[tooltip, update_switch],
   RColorBrewer[brewer.pal, brewer.pal.info],
   stats[setNames],
   shinyWidgets[
@@ -43,14 +33,32 @@ box::use(
 )
 
 # --- Control Reset Handling Reference ----------------------------------------
-# Sidebar controls require specific reset handlers when triggering "Reset settings":
-# 1. Static inputs (slider/text/numeric/switch): Handled natively by shinyjs::reset().
-# 2. Color pickers (colorPickr): Handled via reset_viz_colors() to trigger JS 'changestop'.
-# 3. Radio group buttons: Handled via reset_viz_radio_buttons() (updateRadioGroupButtons).
-# 4. Dynamic metadata selects: Reset via populate_metadata_selects() in shinyjs::delay(400)
-#    to prevent race conditions with async shinyjs::reset() client round-trips.
-# 5. Server-rendered UI (renderUI): Must bump a reactiveVal counter to re-render.
-# 6. Non-input reactive state: Reset manually inside the module's reset observer.
+#
+# "Reset settings" is a per-engine catalogue of every control the sidebar owns
+# and the value it is declared with, applied through apply_input_snapshot() --
+# the same code path an Analysis restore takes, so the two cannot drift.
+#
+# It is deliberately *not* shinyjs::reset(). That helper reads each control's
+# page-load value out of the DOM and sends it back through shiny's own update
+# functions, which silently drops four of the widget families these sidebars are
+# built from:
+#
+#  - virtualSelectInput -- a custom binding whose markup shinyjs does not
+#    recognise at all, so it is never even collected.
+#  - colorPickr -- likewise; see reset_viz_colors() for the message it does
+#    take.
+#  - pickerInput -- recognised (it is a <select> underneath) and then sent an
+#    updateSelectInput message its own JS binding ignores.
+#  - radioGroupButtons -- recognised as a radio group, but the id shinyjs reads
+#    lives on an inner <div>, not on the .shiny-input-container it scans, so the
+#    control is collected without an id and dropped.
+#
+# It can say nothing at all about state held outside `input` -- mapping layers,
+# heatmap panels, renderUI-backed cards -- which every engine keeps in
+# reactiveVals. Those are cleared by hand in the module's own reset function.
+#
+# Data-fitted controls (anything solved from the loaded data rather than coded)
+# are restored last, after the catalogue, so the fit wins over the coded value.
 
 # --- Shared Option Sets ------------------------------------------------------
 
@@ -184,7 +192,7 @@ any_invalid_date <- function(...) {
 # Custom JS handler emitting 'changestop' events for pickr color inputs.
 # Programmatic pickr.setColor() calls emit 'save' rather than 'changestop', which
 # leaves Shiny bindings and UI swatch state out of sync without this listener.
-viz_color_reset_script <- singleton(tags$script(HTML(
+viz_color_reset_script <- shiny$singleton(shiny$tags$script(shiny$HTML(
   "if (!window.__vizColorResetHandlerRegistered) {
     window.__vizColorResetHandlerRegistered = true;
     Shiny.addCustomMessageHandler('viz-reset-color', function(msg) {
@@ -211,15 +219,15 @@ viz_color_reset_script <- singleton(tags$script(HTML(
 #' @return Shiny UI tag list.
 #' @export
 viz_color <- function(ns, id, label, value) {
-  div(
+  shiny$div(
     class = "viz-color-row",
     # The row carries an id so a module can grey out a swatch whose element is
     # switched off. It has to be the *row*: colorPickr puts `id` on a hidden
     # input and renders the swatch as a sibling, so shinyjs::toggleState() on
     # the input disables nothing the user can see or click.
     id = ns(paste0(id, "_row")),
-    tags$label(label, class = "viz-color-label"),
-    div(
+    shiny$tags$label(label, class = "viz-color-label"),
+    shiny$div(
       class = "viz-color-pick",
       colorPickr(
         inputId = ns(id),
@@ -402,7 +410,7 @@ update_field_select <- function(
 #' @export
 scale_select <- function(ns, id, categories = names(color_scales), selected = NULL) {
   palettes <- unlist(color_scales[categories], use.names = FALSE)
-  div(
+  shiny$div(
     class = "viz-scale-select",
     pickerInput(
       ns(id),
@@ -473,7 +481,7 @@ granularity_select <- function(ns, id, selected = NULL, label = "Group dates by"
   if (is.null(selected) || !nzchar(selected %||% "")) {
     selected <- mapped_granularity(values) %||% DATE_GRANULARITY_NONE
   }
-  div(
+  shiny$div(
     class = "viz-granularity-select",
     pickerInput(
       ns(id),
@@ -501,7 +509,7 @@ granularity_select <- function(ns, id, selected = NULL, label = "Group dates by"
 #' @return A `<button>` tag.
 #' @export
 layer_action_btn <- function(ns, input_id, record_id, icon_name, title) {
-  tags$button(
+  shiny$tags$button(
     type = "button",
     class = "btn btn-sm tree-layer_btn",
     title = title,
@@ -511,7 +519,7 @@ layer_action_btn <- function(ns, input_id, record_id, icon_name, title) {
       ns(input_id),
       record_id
     ),
-    icon(icon_name)
+    shiny$icon(icon_name)
   )
 }
 
@@ -548,6 +556,180 @@ reset_viz_radio_buttons <- function(session, ...) {
   }
 }
 
+#' Confirmation Dialog for "Reset settings"
+#'
+#' A reset discards every control the reader has set, including mapping layers
+#' and heatmap panels that took several steps to build, and there is no undo --
+#' so it asks first. Shared by every visualization engine so the wording, the
+#' shape and the confirm button's ID are the same in all of them.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param extra Character. One sentence naming what else goes with the controls
+#'   (mapping layers, heatmap panels), or NULL.
+#' @param confirm_id Character. Input ID of the confirm button (unnamespaced).
+#' @return A `modalDialog`.
+#' @export
+confirm_reset_modal <- function(
+  ns,
+  extra = NULL,
+  confirm_id = "reset_settings_confirm"
+) {
+  shiny$modalDialog(
+    title = "Reset settings",
+    size = "s",
+    easyClose = TRUE,
+    shiny$tags$p("Return every control in this panel to its default?"),
+    if (!is.null(extra)) {
+      shiny$tags$p(class = "text-muted fst-italic small mb-0", extra)
+    },
+    footer = shiny$tagList(
+      shiny$modalButton("Cancel"),
+      shiny$actionButton(
+        ns(confirm_id),
+        "Reset",
+        icon = shiny$icon("rotate-left")
+      )
+    )
+  )
+}
+
+# --- The sidebar control catalogue -------------------------------------------
+
+#' Name Every Sidebar Control, Filed by Widget Family
+#'
+#' One catalogue per engine, listing each control the panel renders under the
+#' family whose update path restores it. It drives both "Reset settings" (with
+#' the engine's coded defaults) and the Analysis restore (with a saved
+#' snapshot), which is the point: the two used to carry separate hand-written
+#' lists, and the reset's was always the shorter one.
+#'
+#' Which family a control belongs to is not cosmetic -- see the reset reference
+#' at the top of this file. A control filed twice, or under the wrong family,
+#' is sent an update message its binding ignores and silently does not move.
+#'
+#' @param switches,pickers,plain_selects,virtual_selects Character vectors of
+#'   input IDs, one per widget family.
+#' @param sliders,numerics,texts,dates,radio_groups,pretty_radios,colors
+#'   Likewise.
+#' @return A named list of ID vectors, for `apply_controls()`.
+#' @export
+control_families <- function(
+  switches = character(),
+  pickers = character(),
+  plain_selects = character(),
+  virtual_selects = character(),
+  sliders = character(),
+  numerics = character(),
+  texts = character(),
+  dates = character(),
+  radio_groups = character(),
+  pretty_radios = character(),
+  colors = character()
+) {
+  list(
+    switches = switches,
+    pickers = pickers,
+    plain_selects = plain_selects,
+    virtual_selects = virtual_selects,
+    sliders = sliders,
+    numerics = numerics,
+    texts = texts,
+    dates = dates,
+    radio_groups = radio_groups,
+    pretty_radios = pretty_radios,
+    colors = colors
+  )
+}
+
+#' Every Control ID in a Catalogue
+#'
+#' @param families List from `control_families()`.
+#' @return Character vector of input IDs, in family order.
+#' @export
+control_ids <- function(families) {
+  unname(unlist(families, use.names = FALSE))
+}
+
+#' Push a Set of Values Into a Catalogued Sidebar
+#'
+#' The single path a reset and a restore both take. `vals` holding no entry for
+#' a control leaves that control alone, so a snapshot saved before a control
+#' existed restores everything else.
+#'
+#' @param session Shiny session object.
+#' @param vals Named list of values, keyed by input ID.
+#' @param families List from `control_families()`.
+#' @export
+apply_controls <- function(session, vals, families) {
+  if (is.null(vals)) {
+    return(invisible(NULL))
+  }
+  do.call(
+    apply_input_snapshot,
+    c(list(session = session, vals = vals), families)
+  )
+}
+
+# --- The sidebar's two footer buttons ----------------------------------------
+
+#' Auto-fit and Reset Settings, the Sidebar's Footer Row
+#'
+#' The two ways back from a panel that has drifted: Auto-fit puts the engine's
+#' own answer for the geometry back into the controls that have one, Reset
+#' throws the whole panel away. Shared so all engines carry the same pair, in
+#' the same order, under the same input IDs.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param auto_fit_tip Character. What Auto-fit re-solves for this engine, for
+#'   the tooltip. NULL leaves the button out (the Map has no fit to re-run).
+#' @return A `<div>` for the bottom of the control panel.
+#' @export
+reset_button_row <- function(ns, auto_fit_tip = NULL) {
+  shiny$div(
+    class = "reset-buttons",
+    if (!is.null(auto_fit_tip)) {
+      tooltip(
+        shiny$actionButton(
+          ns("auto_fit"),
+          "Auto-fit",
+          icon = shiny$icon("wand-magic-sparkles"),
+          width = "100%"
+        ),
+        auto_fit_tip
+      )
+    },
+    shiny$actionButton(
+      ns("reset_settings"),
+      "Reset settings",
+      icon = shiny$icon("rotate-left"),
+      width = "100%"
+    )
+  )
+}
+
+#' Wire "Reset settings" Up Behind Its Confirmation Dialog
+#'
+#' Installs both halves: the button opens the dialog, and only the dialog's own
+#' button runs the reset. A reset discards mapping layers and annotations that
+#' took several steps to build, and there is no undo.
+#'
+#' @param input,session Shiny input and session objects.
+#' @param reset_fn Function of no arguments. Performs the reset.
+#' @param extra Character. Passed to `confirm_reset_modal()`.
+#' @export
+on_confirmed_reset <- function(input, session, reset_fn, extra = NULL) {
+  ns <- session$ns
+  shiny$observeEvent(
+    input$reset_settings,
+    shiny$showModal(confirm_reset_modal(ns, extra))
+  )
+  shiny$observeEvent(input$reset_settings_confirm, {
+    shiny$removeModal()
+    reset_fn()
+  })
+  invisible(NULL)
+}
+
 # --- Plot Snapshot & Restoration Helpers ------------------------------------
 
 #' Collect Module Input Snapshot
@@ -560,7 +742,7 @@ reset_viz_radio_buttons <- function(session, ...) {
 #' @return Named list of matching input values.
 #' @export
 collect_input_snapshot <- function(input, prefix) {
-  vals <- reactiveValuesToList(input)
+  vals <- shiny$reactiveValuesToList(input)
   vals[startsWith(names(vals), prefix)]
 }
 
@@ -576,10 +758,12 @@ collect_input_snapshot <- function(input, prefix) {
 #' @param sliders Character vector of slider input IDs.
 #' @param numerics Character vector of numeric input IDs.
 #' @param texts Character vector of text input IDs.
+#' @param dates Character vector of `dateInput` IDs.
 #' @param colors Character vector of color pickr input IDs.
 #' @param radio_groups Character vector of radio group button input IDs.
 #' @param pretty_radios Character vector of pretty radio button input IDs.
 #' @param pickers Character vector of picker input IDs.
+#' @param plain_selects Character vector of native `selectInput` IDs.
 #' @param virtual_selects Character vector of `virtualSelectInput` IDs.
 #' @export
 apply_input_snapshot <- function(
@@ -590,10 +774,12 @@ apply_input_snapshot <- function(
   sliders = character(),
   numerics = character(),
   texts = character(),
+  dates = character(),
   colors = character(),
   radio_groups = character(),
   pretty_radios = character(),
   pickers = character(),
+  plain_selects = character(),
   virtual_selects = character()
 ) {
   if (is.null(vals)) {
@@ -611,15 +797,26 @@ apply_input_snapshot <- function(
   }
   for (id in sliders) {
     v <- get(id)
-    if (!is.null(v)) updateSliderInput(session, id, value = v)
+    if (!is.null(v)) shiny$updateSliderInput(session, id, value = v)
   }
   for (id in numerics) {
     v <- get(id)
-    if (!is.null(v)) updateNumericInput(session, id, value = v)
+    if (!is.null(v)) shiny$updateNumericInput(session, id, value = v)
   }
   for (id in texts) {
     v <- get(id)
-    if (!is.null(v)) updateTextInput(session, id, value = v)
+    if (!is.null(v)) shiny$updateTextInput(session, id, value = v)
+  }
+  for (id in dates) {
+    v <- get(id)
+    if (!is.null(v)) shiny$updateDateInput(session, id, value = v)
+  }
+  # A pickerInput's update message leaves a native <select> untouched, so these
+  # cannot ride with `pickers` -- and the reverse is just as true, which is what
+  # the two separate families are for.
+  for (id in plain_selects) {
+    v <- get(id)
+    if (!is.null(v)) shiny$updateSelectInput(session, id, selected = v)
   }
   for (id in radio_groups) {
     v <- get(id)

@@ -71,11 +71,13 @@ box::use(
   app /
     logic /
     viz_helpers[
-      apply_input_snapshot,
+      apply_controls,
       collect_input_snapshot,
+      control_families,
       field_select,
       granularity_select,
-      reset_viz_colors,
+      on_confirmed_reset,
+      reset_button_row,
       scale_select,
       suitable_scale_categories,
       update_field_select,
@@ -165,6 +167,69 @@ MOVING_AVG_WINDOW_MAX <- 30L
 ANNO_COLOR_DEFAULT <- "#f39c12"
 
 ANNO_PERIOD <- "period"
+
+# --- The sidebar's controls, by widget family --------------------------------
+#
+# Every control this panel renders, filed under the family whose update path
+# restores it, and the value each is declared with. Together they drive both
+# "Reset settings" and the Analysis restore -- see control_families() and the
+# reset reference at the top of viz_helpers.R.
+#
+# Three sidebar controls are deliberately absent. `epi_layer_add` clears itself
+# the moment it is picked from; `epi_interval` and `epi_daterange` are rendered
+# server-side, carrying the fit for the loaded data (interval_ui, daterange_ui),
+# so they are returned by a rebuild rather than by a value.
+EPI_CONTROLS <- control_families(
+  switches = c(
+    "epi_show_cumulative",
+    "epi_show_moving_avg",
+    "epi_label_ends",
+    "epi_show_x_label",
+    "epi_zoom_axis"
+  ),
+  pickers = c("epi_plot_mode", "epi_moving_avg_align", "epi_anno_type"),
+  sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
+  texts = "epi_anno_label",
+  dates = c("epi_anno_start", "epi_anno_end"),
+  colors = c(
+    "epi_single_color",
+    "epi_text_color",
+    "epi_background_color",
+    "epi_cumulative_color",
+    "epi_moving_avg_color",
+    "epi_anno_color"
+  )
+)
+
+# Every catalogued control's coded default, taken from the named constant where
+# there is one so the reset and the widget cannot disagree. The annotation
+# composer's own fields are here too: they are the form a reader half-fills,
+# and a reset that left a stale label and last year's date behind is a reset
+# that did not happen.
+epi_control_defaults <- function() {
+  list(
+    epi_plot_mode = PLOT_MODE_DEFAULT,
+    epi_show_cumulative = FALSE,
+    epi_show_moving_avg = FALSE,
+    epi_moving_avg_window = epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT,
+    epi_moving_avg_align = MOVING_AVG_ALIGN_DEFAULT,
+    epi_label_ends = TRUE,
+    epi_show_x_label = TRUE,
+    epi_aspect_ratio = ASPECT_DEFAULT,
+    epi_zoom_axis = FALSE,
+    epi_anno_type = "milestone",
+    # Today, the same as the widget: a date default cannot be a constant.
+    epi_anno_start = Sys.Date(),
+    epi_anno_end = Sys.Date(),
+    epi_anno_label = "",
+    epi_single_color = SINGLE_COLOR_DEFAULT,
+    epi_text_color = TEXT_COLOR_DEFAULT,
+    epi_background_color = BACKGROUND_DEFAULT,
+    epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
+    epi_moving_avg_color = MOVING_AVG_COLOR_DEFAULT,
+    epi_anno_color = ANNO_COLOR_DEFAULT
+  )
+}
 
 # --- Epi control tabs --------------------------------------------------------
 
@@ -471,13 +536,11 @@ epi_controls <- function(ns) {
         )
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      shiny$actionButton(
-        ns("reset_settings"),
-        "Reset settings",
-        icon = shiny$icon("rotate-left"),
-        width = "100%"
+    reset_button_row(
+      ns,
+      paste(
+        "Re-fit the interval to the span this data covers and rewind the",
+        "window to all of it. Colours, mappings and annotations are kept."
       )
     )
   )
@@ -1007,53 +1070,86 @@ server <- function(
 
     # --- reset --------------------------------------------------------------
 
-    # Restore every sidebar control to its coded default. Shared by this
-    # engine's own "Reset settings" button and the top-level app-reset
-    # (session_reset) path below, so both routes return the controls
-    # identically. See the reset checklist in app/logic/viz_helpers.R.
+    # Reset settings: restore every control in this engine's own sidebar to its
+    # coded default, and drop the state that is not a control at all -- the
+    # mapping, the annotations, and wherever playback had got to.
     #
-    # Three things shinyjs::reset() cannot do on its own are patched up here:
-    # colorPickr swatches (it doesn't recognise them), the state that isn't an
-    # input at all (the annotation list and the playback/window position), and
-    # the colour scale, whose *choices* are swapped in at runtime — the
-    # checklist's bucket 4, hence the delay. The mode select and the "Label
-    # lines"/"Square blocks" switches are plain bucket-1 controls with choices
-    # fixed at declaration, so the blanket reset already covers them. The
-    # Interval buttons and the date-range slider are bucket 5 — server-rendered,
-    # so shinyjs::reset() has no page-load value to restore them from — hence
-    # the rebuild bump.
+    # The catalogue (EPI_CONTROLS / epi_control_defaults() above) is what makes
+    # that complete. This used to be shinyjs::reset() plus a hand-written patch
+    # list, which returned the sliders and switches and silently left all three
+    # pickerInputs -- plot mode, the moving average's alignment and the
+    # annotation type -- exactly as the reader had set them. See the reference
+    # at the top of viz_helpers.R for which widget families that helper cannot
+    # reach and why.
+    #
+    # The interval buttons and the date-range slider are server-rendered, so
+    # there is no value to send them: bumping their counter rebuilds both,
+    # which re-applies the fit and rewinds the window to the whole span.
     reset_epi_settings <- function() {
-      shinyjs::reset(id = "controls_wrap")
-
-      reset_viz_colors(
-        session,
-        epi_single_color = SINGLE_COLOR_DEFAULT,
-        epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
-        epi_moving_avg_color = MOVING_AVG_COLOR_DEFAULT,
-        epi_text_color = TEXT_COLOR_DEFAULT,
-        epi_background_color = BACKGROUND_DEFAULT,
-        epi_anno_color = ANNO_COLOR_DEFAULT
-      )
       annotations(epi_plot$empty_epi_annotations())
       anim_playing(FALSE)
       win_start_idx(0L)
       win_end_idx(0L)
       anim_target_idx(0L)
-      # The mapping is reactiveVal state, not an input, so shinyjs::reset()
-      # cannot clear it — and the seq goes back to zero with it, which is safe
-      # only because no card survives to address an id that will be handed out
-      # again.
+      # The mapping is reactiveVal state, not an input; the seq goes back to
+      # zero with it, which is safe only because no card survives to address an
+      # id that will be handed out again.
       epi_layers(list())
       epi_layer_seq(0L)
-      # The interval picker is rendered by renderUI, so shinyjs::reset() has no
-      # page-load value to restore it from — rebuild it instead, which drops
-      # any selection and re-applies the fit. daterange_ui shares the counter
-      # because its bounds are just this dataset's bins at the (possibly
-      # just-reset) interval — one bump keeps both in step.
-      interval_rebuild(interval_rebuild() + 1L)
+
+      apply_controls(session, epi_control_defaults(), EPI_CONTROLS)
+      refit_interval()
     }
 
-    shiny$observeEvent(input$reset_settings, reset_epi_settings())
+    on_confirmed_reset(
+      input,
+      session,
+      reset_epi_settings,
+      "Mapped variables and timeline annotations are removed with the rest."
+    )
+
+    # Re-fit the interval to the span this data covers and rewind the window to
+    # all of it. Both controls are server-rendered (interval_ui, daterange_ui),
+    # so this is a rebuild rather than an update: the fit is applied as they are
+    # created, which is the only way it reaches a control the browser has not
+    # built yet.
+    refit_interval <- function() {
+      win_start_idx(0L)
+      win_end_idx(0L)
+      interval_rebuild(shiny$isolate(interval_rebuild()) + 1L)
+    }
+
+    # Auto-fit: put the interval back to the one this dataset's date span
+    # actually calls for, and show all of it.
+    #
+    # It exists because the interval is the one thing about an epi curve that
+    # has a right answer the engine can work out -- the finest bin that keeps
+    # the curve under EPI_MAX_BARS -- and it is also the reader's to override.
+    # An override goes stale the moment the isolate selection changes: "Day"
+    # over a decade is five hundred hairlines, and nothing in the panel says
+    # which of the four buttons to press instead. Colours, the mapping and the
+    # annotations are deliberate choices and are left alone.
+    shiny$observeEvent(input$auto_fit, {
+      bins <- epi_bins()
+      if (length(bins) < 2L) {
+        shiny$showNotification(
+          "Generate a curve first \u2014 there is nothing to fit yet.",
+          type = "warning"
+        )
+        return()
+      }
+      refit_interval()
+      shiny$showNotification(
+        sprintf(
+          "Interval fitted to this data's span: %s.",
+          names(epi_plot$EPI_INTERVALS)[
+            match(fitted_interval(), epi_plot$EPI_INTERVALS)
+          ]
+        ),
+        type = "message",
+        duration = 5
+      )
+    })
 
     # --- annotations -------------------------------------------------------
 
@@ -1806,32 +1902,9 @@ server <- function(
     }
 
     restore <- function(vals) {
-      apply_input_snapshot(
-        session,
-        vals,
-        switches = c(
-          "epi_label_ends",
-          "epi_show_cumulative",
-          "epi_show_moving_avg",
-          "epi_show_x_label",
-          "epi_zoom_axis"
-        ),
-        selects = c(
-          "epi_plot_mode",
-          "epi_moving_avg_align",
-          "epi_anno_type"
-        ),
-        sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
-        texts = "epi_anno_label",
-        colors = c(
-          "epi_single_color",
-          "epi_text_color",
-          "epi_anno_color",
-          "epi_cumulative_color",
-          "epi_background_color",
-          "epi_moving_avg_color"
-        ),
-      )
+      # Same catalogue a reset applies, holding saved values instead of the
+      # coded ones.
+      apply_controls(session, vals, EPI_CONTROLS)
 
       # Interval is renderUI-owned too (interval_ui fits it to the data), so it
       # takes the same treatment as the two below rather than an update.

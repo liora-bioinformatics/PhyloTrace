@@ -82,12 +82,14 @@ box::use(
   app /
     logic /
     viz_helpers[
-      apply_input_snapshot,
+      apply_controls,
       collect_input_snapshot,
       field_select,
       granularity_select,
+      control_families,
       layer_action_btn,
-      reset_viz_colors,
+      on_confirmed_reset,
+      reset_button_row,
       scale_select,
       suitable_scale_categories,
       update_field_select,
@@ -216,6 +218,82 @@ COND_CLASS_VOCAB <- paste(
   "(input.amr_mode == 'prevalence' && input.amr_level == 'class')"
 )
 COND_HEATMAPS <- "input.amr_mode != 'prevalence'"
+
+# --- The sidebar's controls, by widget family --------------------------------
+#
+# Every control this panel renders, filed under the family whose update path
+# restores it, and the value each is declared with. Together they drive both
+# "Reset settings" and the Analysis restore -- see control_families() and the
+# reset reference at the top of viz_helpers.R.
+#
+# `amr_layer_add` is absent because it clears itself the moment it is picked
+# from. `amr_genes` is filed but carries no default: it is rendered server-side
+# from the database's own gene list, so a reset rebuilds it (genes_rebuild)
+# rather than sending it a value.
+AMR_CONTROLS <- control_families(
+  switches = c(
+    "amr_show_row_names",
+    "amr_show_col_names",
+    "amr_show_element_names"
+  ),
+  pickers = c(
+    "amr_mode",
+    "amr_class_vocab",
+    "amr_elements",
+    "amr_sections",
+    "amr_class_scale",
+    "amr_bar_scale",
+    "amr_cluster_distance",
+    "amr_cluster_method"
+  ),
+  virtual_selects = "amr_genes",
+  sliders = c(
+    "amr_top_n",
+    "amr_min_identity",
+    "amr_min_coverage",
+    "amr_aspect_ratio",
+    "amr_dend_size"
+  ),
+  radio_groups = c(
+    "amr_level",
+    "amr_cluster_rows",
+    "amr_cluster_cols",
+    "zoom_view"
+  ),
+  colors = c("amr_dend_color", "amr_text_color", "amr_background_color")
+)
+
+# Every catalogued control's coded default, taken from the named constant where
+# there is one so the reset and the widget cannot disagree.
+#
+# The cluster and zoom values are strings because radioGroupButtons'
+# choiceValues are: the browser reports "TRUE", not TRUE, and
+# updateRadioGroupButtons matches on the value as written.
+AMR_CONTROL_DEFAULTS <- list(
+  amr_mode = PLOT_MODE_DEFAULT,
+  amr_level = LEVEL_DEFAULT,
+  amr_top_n = TOP_N_DEFAULT,
+  amr_class_vocab = CLASS_VOCABULARY_DEFAULT,
+  amr_elements = unname(amr_plot$AMR_ELEMENT_TYPES),
+  amr_sections = unname(amr_plot$AMR_SECTIONS),
+  amr_min_identity = 0,
+  amr_min_coverage = 0,
+  amr_aspect_ratio = ASPECT_DEFAULT,
+  amr_show_row_names = FALSE,
+  amr_show_col_names = TRUE,
+  amr_show_element_names = TRUE,
+  amr_cluster_rows = "TRUE",
+  amr_cluster_cols = "TRUE",
+  amr_class_scale = CLASS_SCALE_DEFAULT,
+  amr_cluster_distance = CLUSTER_DISTANCE_DEFAULT,
+  amr_cluster_method = CLUSTER_METHOD_DEFAULT,
+  amr_dend_size = DEND_DEFAULT,
+  amr_bar_scale = BAR_SCALE_DEFAULT,
+  amr_dend_color = DEND_COLOR_DEFAULT,
+  amr_text_color = TEXT_COLOR_DEFAULT,
+  amr_background_color = BACKGROUND_DEFAULT,
+  zoom_view = "FALSE"
+)
 
 # --- AMR control tabs --------------------------------------------------------
 
@@ -630,13 +708,11 @@ amr_controls <- function(ns) {
         width = "100%"
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      shiny$actionButton(
-        ns("reset_settings"),
-        "Reset settings",
-        icon = shiny$icon("rotate-left"),
-        width = "100%"
+    reset_button_row(
+      ns,
+      paste(
+        "Re-solve the aspect ratio, the label sizes and the filter ranges for",
+        "the matrix currently drawn. Colours and mappings are kept."
       )
     ),
     .mode_tabs_script(ns)
@@ -1422,67 +1498,103 @@ server <- function(
 
     # --- reset --------------------------------------------------------------
 
-    # Restore every sidebar control to its coded default. Shared by this
-    # engine's "Reset settings" button and the app-level session_reset path, so
-    # both routes return the controls identically. See the reset checklist in
-    # app/logic/viz_helpers.R for why a blanket shinyjs::reset() is not enough
-    # on its own.
+    # Reset settings: restore every control in this engine's own sidebar to its
+    # coded default, and drop the state that is not a control at all -- the
+    # mapping strips and the per-panel confidence colours.
+    #
+    # The catalogue (AMR_CONTROLS / AMR_CONTROL_DEFAULTS above) is what makes
+    # that complete. This used to be shinyjs::reset() plus a hand-written patch
+    # list, which returned the sliders and switches and silently left all six
+    # pickerInputs and all four radio-group buttons -- the view mode, the
+    # vocabulary, both filters, the clustering pair and the count level --
+    # exactly as the reader had set them. See the reference at the top of
+    # viz_helpers.R for which widget families that helper cannot reach and why.
+    #
+    # The data-fitted answers come after the catalogue, so the fit wins over the
+    # coded placeholder: the two palette pickers whose *choices* are swapped in
+    # at runtime, the filter sliders whose bounds are this screen's own reported
+    # range, and the layout fit -- for the aspect ratio and the two label
+    # switches the default *is* the fit, and returning a 250-isolate matrix to
+    # the ratio meant for a few dozen would hand back a picture no setting in
+    # the panel had produced.
     reset_amr_settings <- function() {
-      shinyjs::reset(id = "controls_wrap")
-
-      # Bucket 2: colorPickr swatches, which shinyjs::reset() does not even
-      # recognise.
-      reset_viz_colors(
-        session,
-        amr_dend_color = DEND_COLOR_DEFAULT,
-        amr_text_color = TEXT_COLOR_DEFAULT,
-        amr_background_color = BACKGROUND_DEFAULT
-      )
-
-      # Bucket 5: the gene picker is rendered by renderUI, so shinyjs::reset()
-      # has no page-load value to restore it from — rebuild it instead, forcing
-      # the default for this one rebuild rather than preserving the current
-      # choice. Set before the bump so the re-render sees it.
-      genes_force_default(TRUE)
-      genes_rebuild(genes_rebuild() + 1L)
-
-      # Bucket 6: the annotation strips and the per-panel confidence colours are
-      # reactiveVal state rather than inputs, so nothing shinyjs does touches
-      # them. Cleared to empty — element_cfg() then hands every panel its coded
-      # default (its element type's sequential ramp) again.
       amr_layers(list())
       amr_layer_seq(0L)
       amr_element_colors(list())
       editing(NULL)
+
+      # The gene picker is rendered server-side from this database's own gene
+      # list, so there is no value to send it: forcing the default for one
+      # rebuild is how it goes back to "every gene". Set before the bump so the
+      # re-render sees it.
+      genes_force_default(TRUE)
+      genes_rebuild(genes_rebuild() + 1L)
+
+      apply_controls(session, AMR_CONTROL_DEFAULTS, AMR_CONTROLS)
       aspect_mirror(ASPECT_DEFAULT)
       show_col_names_mirror(TRUE)
+      show_element_names_mirror(TRUE)
 
-      # Bucket 4: controls whose *choices* are swapped in at runtime. Deferred
-      # past shinyjs::reset()'s own asynchronous, stale restoration, which would
-      # otherwise land a moment later and overwrite an immediate correction.
-      shinyjs::delay(400, {
-        apply_scale_choices(
-          "amr_class_scale",
-          1L,
-          CLASS_SCALE_DEFAULT,
-          force_default = TRUE
-        )
-        apply_scale_choices(
-          "amr_bar_scale",
-          1L,
-          BAR_SCALE_DEFAULT,
-          force_default = TRUE,
-          fit = amr_plot$amr_bar_scale_fit
-        )
-        # Same reasoning: shinyjs::reset() restores the two threshold sliders,
-        # and the "Show top" slider, to their declared placeholders rather
-        # than the data-fitted range.
-        fit_threshold_bounds()
-        fit_top_n_bounds()
-      })
+      apply_scale_choices(
+        "amr_class_scale",
+        1L,
+        CLASS_SCALE_DEFAULT,
+        force_default = TRUE
+      )
+      apply_scale_choices(
+        "amr_bar_scale",
+        1L,
+        BAR_SCALE_DEFAULT,
+        force_default = TRUE,
+        fit = amr_plot$amr_bar_scale_fit
+      )
+      fit_threshold_bounds()
+      fit_top_n_bounds()
+      auto_fit_layout()
     }
 
-    shiny$observeEvent(input$reset_settings, reset_amr_settings())
+    on_confirmed_reset(
+      input,
+      session,
+      reset_amr_settings,
+      "Mapped variables and the per-panel gene-call colours go with the rest."
+    )
+
+    # The layout fit, applied on demand: the aspect ratio the matrix's shape
+    # calls for, and the two label rows switched to whatever that shape has room
+    # for. Wrapped together because they are one answer -- refit_aspect() writes
+    # the ratio every size is then solved against, so the labels have to be
+    # judged after it, not beside it.
+    auto_fit_layout <- function() {
+      refit_aspect()
+      refit_labels(relabel = TRUE)
+    }
+
+    # Auto-fit: re-solve the geometry for the matrix on screen -- the same solve
+    # Generate runs, on demand.
+    #
+    # It exists because the aspect ratio is the reader's to set and goes stale
+    # as soon as anything else about the matrix moves: filtering two hundred
+    # genes down to twenty leaves a ratio that spreads the rows without growing
+    # the type, and switching the isolate names on over a shape with no room for
+    # them draws a smear. Only the geometry -- colours, mappings, the filters
+    # and the clustering settings are deliberate choices and are not the fit's
+    # to overrule.
+    shiny$observeEvent(input$auto_fit, {
+      if (!isTRUE(generated())) {
+        shiny$showNotification(
+          "Generate a plot first \u2014 there is nothing to fit yet.",
+          type = "warning"
+        )
+        return()
+      }
+      auto_fit_layout()
+      shiny$showNotification(
+        "Sizes and spacing fitted to the matrix on screen.",
+        type = "message",
+        duration = 5
+      )
+    })
 
     shiny$observeEvent(
       session_reset(),
@@ -1671,9 +1783,13 @@ server <- function(
     refit_aspect <- function() {
       fitted <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
       value <- fitted$aspect
-      if (!isTRUE(all.equal(shiny$isolate(input$amr_aspect_ratio), value))) {
-        shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
-      }
+      # Sent unconditionally. Guarding on `input$amr_aspect_ratio` -- "the
+      # slider already shows this" -- reads a value the browser may be about to
+      # replace: a reset pushes the coded default first and re-fits in the same
+      # flush, so the guard would see the *pre-reset* value, skip the send, and
+      # let the default's echo land on top of the fit. Two messages for one
+      # input in a flush coalesce to the last one, so this simply wins.
+      shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
       aspect_mirror(value)
     }
 
@@ -1703,11 +1819,18 @@ server <- function(
     # amr_cluster_cols): where they will not fit, heatmap_opts() hands the
     # verdict to the builder, which draws the class strip and its key in their
     # place rather than a row of smudges.
-    refit_labels <- function() {
+    # `relabel` is Auto-fit's half of the rule. A seed only ever switches a row
+    # *off*; asking for the best layout for this shape is also the one moment it
+    # is right to switch one back on, because the request is explicit and is not
+    # a side effect of some other edit.
+    refit_labels <- function(relabel = FALSE) {
       fit <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
       if (!isTRUE(fit$cols_legible)) {
         update_switch("amr_show_col_names", value = FALSE, session = session)
         show_col_names_mirror(FALSE)
+      } else if (relabel && !isTRUE(shiny$isolate(show_col_names_mirror()))) {
+        update_switch("amr_show_col_names", value = TRUE, session = session)
+        show_col_names_mirror(TRUE)
       }
       # Only reached by a panel narrower than a single line of type, since the
       # element row turns on its side before it gives up on fitting (see
@@ -1720,6 +1843,11 @@ server <- function(
           session = session
         )
         show_element_names_mirror(FALSE)
+      } else if (
+        relabel && !isTRUE(shiny$isolate(show_element_names_mirror()))
+      ) {
+        update_switch("amr_show_element_names", value = TRUE, session = session)
+        show_element_names_mirror(TRUE)
       }
     }
 
@@ -2031,54 +2159,12 @@ server <- function(
     }
 
     restore <- function(vals) {
-      apply_input_snapshot(
-        session,
-        vals,
-        switches = c(
-          "amr_show_row_names",
-          "amr_show_col_names",
-          "amr_show_element_names"
-        ),
-        selects = c(
-          "amr_mode",
-          "amr_class_vocab",
-          "amr_cluster_distance",
-          "amr_cluster_method",
-          "amr_class_scale",
-          "amr_bar_scale"
-        ),
-        sliders = c(
-          "amr_top_n",
-          "amr_min_identity",
-          "amr_min_coverage",
-          "amr_dend_size",
-          "amr_aspect_ratio"
-        ),
-        # The confidence-tier colours are per element-type panel now and travel
-        # in `.element_colors` (a reactiveVal), restored below — not here.
-        colors = c(
-          "amr_dend_color",
-          "amr_text_color",
-          "amr_background_color"
-        ),
-        # amr_cluster_rows/amr_cluster_cols round-trip as radioGroupButtons'
-        # "TRUE"/"FALSE" strings now, not switch booleans — see .legacy_cluster_cols
-        # just below for what a pre-restructure snapshot's own boolean value means.
-        radio_groups = c(
-          "amr_level",
-          "zoom_view",
-          "amr_cluster_rows",
-          "amr_cluster_cols"
-        ),
-        pickers = c(
-          "amr_elements",
-          "amr_sections"
-        ),
-        # Server-rendered and rebuilt on a counter, but bound the same way
-        # regardless of when its HTML lands — what sets it apart is the widget:
-        # a virtual-select ignores updatePickerInput() outright.
-        virtual_selects = "amr_genes"
-      )
+      # Same catalogue a reset applies, holding saved values instead of the
+      # coded ones. amr_cluster_rows/amr_cluster_cols round-trip as
+      # radioGroupButtons' "TRUE"/"FALSE" strings, not switch booleans -- see
+      # .legacy_cluster_cols just below for what a pre-restructure snapshot's
+      # own boolean value means.
+      apply_controls(session, vals, AMR_CONTROLS)
 
       # See .legacy_cluster_cols(). Such a snapshot's own
       # amr_col_cluster_distance/method, from when the two axes still had
