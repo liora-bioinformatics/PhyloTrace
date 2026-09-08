@@ -129,7 +129,13 @@ ui <- function(id) {
                           "Pick a target folder and enter a name for the new",
                           "database, then 'Download Scheme' to fetch the selected",
                           "cgMLST scheme into it. Once the download completes,",
-                          "'Load Database' opens it for typing and analysis."
+                          "'Load Database' opens it for typing and analysis.",
+                          "Choose a folder on this computer's own disk: SQLite",
+                          "relies on file locking that network and shared drives",
+                          "(NFS, SMB/Windows shares, cloud-synced folders) do not",
+                          "implement reliably, so a database kept there can be",
+                          "corrupted by a typing run - and the app will freeze if",
+                          "the connection drops while a database is open."
                         ),
                         placement = "bottom"
                       )
@@ -147,6 +153,14 @@ ui <- function(id) {
                           multiple = FALSE
                         ),
                         uiOutput(ns("db_name_input")),
+                      ),
+                      div(
+                        class = "storage-location-hint",
+                        icon("circle-info"),
+                        " ",
+                        "Choose a folder on this computer. Databases kept on",
+                        " network or shared drives (NFS, SMB, cloud-synced",
+                        " folders) can be corrupted by a typing run."
                       ),
                       div(
                         id = "location-selected-ui",

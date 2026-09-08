@@ -619,25 +619,46 @@ server <- function(
       desc <- wizard_desc()
       desc <- if (nzchar(desc)) desc else NULL
 
-      if (is.null(editing_analysis())) {
-        new_id <- analysis_store$add_analysis(
-          db_path(),
-          nm,
-          desc,
-          sel_json,
-          universe_json
-        )
-        current_view(as.character(new_id))
-      } else {
-        analysis_store$update_analysis_settings(
-          db_path(),
-          editing_analysis(),
-          nm,
-          desc,
-          sel_json,
-          universe_json
-        )
+      # The write is guarded because the database can be gone by the time the
+      # user confirms - deleted or unmounted while the wizard was open - and an
+      # error escaping this observer would end the session rather than the
+      # click. The modal stays up so the entered settings are not lost.
+      written <- tryCatch(
+        {
+          if (is.null(editing_analysis())) {
+            new_id <- analysis_store$add_analysis(
+              db_path(),
+              nm,
+              desc,
+              sel_json,
+              universe_json
+            )
+            current_view(as.character(new_id))
+          } else {
+            analysis_store$update_analysis_settings(
+              db_path(),
+              editing_analysis(),
+              nm,
+              desc,
+              sel_json,
+              universe_json
+            )
+          }
+          TRUE
+        },
+        error = function(e) {
+          showNotification(
+            paste("Could not save the Analysis:", conditionMessage(e)),
+            type = "error",
+            duration = 8
+          )
+          FALSE
+        }
+      )
+      if (!isTRUE(written)) {
+        return(invisible(FALSE))
       }
+
       db_events$bump(db_rev, "analyses")
       removeModal()
     }

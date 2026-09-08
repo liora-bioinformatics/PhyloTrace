@@ -46,14 +46,45 @@ LIVE_BUSY_TIMEOUT_MS <- 250L
 #' stretch of work - see `persist_results()` in the typing module, the one place
 #' that sets it - rather than every reader having to thread a timeout through.
 #'
+#' The file must already exist unless `create = TRUE`: opening a database and
+#' making one are different intentions, and only the caller knows which it has.
+#' See the guard in the body for why the default is the strict one.
+#'
 #' Callers remain responsible for [DBI::dbDisconnect()].
 #'
 #' @param db_path Character path to the SQLite database file.
 #' @param ... Further arguments passed to [DBI::dbConnect()], e.g.
 #'   `synchronous = NULL` or `flags`.
+#' @param create Logical. `TRUE` to allow SQLite to create `db_path` when it
+#'   does not exist - for a caller whose job is to build a new database file,
+#'   such as the export module's atomic `.part` file. Defaults to `FALSE`.
 #' @return DBI connection object.
 #' @export
-connect <- function(db_path, ...) {
+connect <- function(db_path, ..., create = FALSE) {
+  # Do not conjure the database. RSQLite's default flags include SQLITE_CREATE,
+  # so a path that no longer resolves - a database deleted, renamed or unmounted
+  # while the session is open - comes back as a brand new *empty* file. That is
+  # far worse than an error: it destroys the evidence (file.exists() now says
+  # the database is fine, so the missing-file watcher never fires and the
+  # landing page keeps offering the corpse as loadable), and every read that
+  # follows dies on "no such table: mlst" instead. Refusing up front keeps a
+  # deleted database deleted, which is the state the recovery paths can act on.
+  if (
+    !isTRUE(create) &&
+      (length(db_path) != 1 ||
+        is.na(db_path) ||
+        !nzchar(db_path) ||
+        !file.exists(db_path))
+  ) {
+    stop(
+      sprintf(
+        "Database file not found: %s",
+        if (length(db_path) == 1 && !is.na(db_path)) db_path else "<none>"
+      ),
+      call. = FALSE
+    )
+  }
+
   con <- dbConnect(SQLite(), db_path, ...)
   # Succeeds even when the file is not a database - the PRAGMA touches no page,
   # so probing callers still get their error from the first real query.

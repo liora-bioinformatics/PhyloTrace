@@ -307,15 +307,39 @@ server <- function(id) {
       session_reset = session_reset
     )
 
+    # TRUE once the loaded database file has been found missing (see the watcher
+    # further down). Cleared when a database loads successfully.
+    db_gone <- reactiveVal(FALSE)
+
+    # The database path every module actually reads - deliberately not Landing
+    # Page's raw one.
+    #
+    # When the file disappears mid-session the teardown that follows bumps
+    # db_rev and data_reset, which makes every module re-run its queries. Those
+    # re-runs would still carry the dead path: connect() then *recreates* it as
+    # an empty file and the query dies with "no such table: mlst", inside a
+    # reactive, which ends the session - exactly the crash the teardown was
+    # meant to avoid. Landing Page does null its own path on session_reset, but
+    # that is an observer, so it may or may not have run by the time those reads
+    # do.
+    #
+    # Gating here makes it deterministic instead: db_gone is a dependency of
+    # this reactive, so the instant it flips, every reader in the same flush
+    # sees NULL - the same state they all start the session in and already
+    # handle - and no query is issued at all.
+    db_path <- reactive({
+      if (isTRUE(db_gone())) NULL else LANDING_PAGE_vals$db_path()
+    })
+
     # The shared metadata cache (app/logic/db_store.R): one reactive read of
     # the `metadata` table, passed to every module that displays it, so the
     # question "does the whole app agree on the isolate table" has exactly one
     # answer rather than one per consumer.
-    store <- new_store(db_path = LANDING_PAGE_vals$db_path, db_rev = db_rev)
+    store <- new_store(db_path = db_path, db_rev = db_rev)
 
     TYPING_vals <- typing$server(
       "typing",
-      db_path = LANDING_PAGE_vals$db_path,
+      db_path = db_path,
       session_reset = data_reset,
       db_rev = db_rev
     )
@@ -345,7 +369,7 @@ server <- function(id) {
 
     DATABASE_vals <- database$server(
       "database",
-      db_path = LANDING_PAGE_vals$db_path,
+      db_path = db_path,
       session_reset = data_reset,
       show_browse = show_browse,
       ui_mounted = ui_mounted,
@@ -423,14 +447,14 @@ server <- function(id) {
 
     ANALYSIS_DASHBOARD_vals <- analysis_dashboard$server(
       "analysis_dashboard",
-      db_path = LANDING_PAGE_vals$db_path,
+      db_path = db_path,
       session_reset = data_reset,
       db_rev = db_rev,
       store = store
     )
     visualization$server(
       "visualization",
-      db_path = LANDING_PAGE_vals$db_path,
+      db_path = db_path,
       # The true session_reset, NOT data_reset — the one module wired this way.
       #
       # Visualization tears its plot tabs down on this signal, and does so
@@ -518,11 +542,15 @@ server <- function(id) {
           easyClose = TRUE,
           footer = modalButton("OK")
         ))
-        # Send Landing Page back to its pre-load state so nothing downstream
+        # Send the session back to its pre-load state so nothing downstream
         # queries the missing file.
-        reset_session()
+        return_to_start()
         return()
       }
+
+      # The path is good, so whatever the last database did is history.
+      db_gone(FALSE)
+      db_gone_handled(FALSE)
 
       # Full-page loading overlay. The panel HTML below is built synchronously
       # here; the outputs inside those panels that opt out of suspendWhenHidden
@@ -721,26 +749,53 @@ server <- function(id) {
     # Watch the loaded database file for the whole session. If it disappears
     # (deleted, moved, renamed, drive unmounted) every subsequent query would
     # crash the session, so detect it within a few seconds, explain what
-    # happened, and fall back to the start screen cleanly. `db_gone_handled`
-    # keeps the poll from re-firing the modal every tick; it clears once
-    # db_path() is NULL again (i.e. after the reset below).
+    # happened, and fall back to the start screen cleanly.
+    #
+    # Reads Landing Page's raw path rather than the gated db_path(): the gate is
+    # what this observer closes, so watching through it would mean losing sight
+    # of the file the moment it is reported missing. `db_gone_handled` keeps the
+    # poll from re-firing the modal every tick; it clears when a database loads.
+    #
+    # ASSUMPTION: file.exists() returns promptly. It costs ~2 microseconds on a
+    # local disk, which is why polling it every 5s is free. On a *hung* network
+    # mount (NFS/SMB) the same call can block indefinitely, and R is
+    # single-threaded, so it would take the whole UI with it.
+    #
+    # Deliberately not defended against here, for two reasons. First, this
+    # observer would not be what breaks: every database read opens the same
+    # file and does far more with it, so an unreachable mount freezes the
+    # session at the next query regardless - fixing it properly means making
+    # all ~60 connect() sites timeout-aware, not hardening one poll. Second,
+    # PhyloTrace databases are not supposed to live there at all: SQLite needs
+    # file locking that network filesystems do not implement reliably, and a
+    # typing run has two writers (this session and the pyMLST process), so such
+    # a database risks corruption long before anyone notices a stall. The
+    # Scheme Browser's "Initiate New Database" card says so at the point the
+    # location is chosen.
     db_gone_handled <- reactiveVal(FALSE)
     observe({
-      db_path <- LANDING_PAGE_vals$db_path()
-      if (is.null(db_path) || is.na(db_path) || !nzchar(db_path)) {
-        db_gone_handled(FALSE)
+      loaded <- LANDING_PAGE_vals$db_path()
+      if (is.null(loaded) || is.na(loaded) || !nzchar(loaded)) {
         return()
       }
 
       invalidateLater(5000)
 
-      if (file.exists(db_path) || isTRUE(db_gone_handled())) {
+      if (file.exists(loaded) || isTRUE(db_gone_handled())) {
         return()
       }
       db_gone_handled(TRUE)
+      log_event("DB", "Database file vanished", loaded)
 
-      log_event("DB", "Database file vanished", db_path)
-      hide_db_notification()
+      # Close the gate BEFORE tearing down. return_to_start() bumps db_rev and
+      # data_reset, which re-runs every module's queries in this same flush;
+      # with db_gone set they all read NULL and issue nothing, instead of
+      # querying a path whose connect() would recreate it as an empty file and
+      # then die on "no such table: mlst" inside a reactive - ending the very
+      # session the teardown is trying to save.
+      db_gone(TRUE)
+      return_to_start()
+
       removeModal()
       showModal(modalDialog(
         title = tagList(
@@ -748,7 +803,7 @@ server <- function(id) {
           " Database connection lost"
         ),
         tags$p("The loaded database file is no longer accessible:"),
-        tags$pre(db_path),
+        tags$pre(loaded),
         tags$p(
           "It may have been deleted, moved, or on a disconnected drive. ",
           "PhyloTrace has returned to the start screen to avoid errors — ",
@@ -757,7 +812,6 @@ server <- function(id) {
         easyClose = FALSE,
         footer = modalButton("Back to start")
       ))
-      reset_session()
     })
 
     # Reload the database: reset all module-internal state (so every module
@@ -805,7 +859,9 @@ server <- function(id) {
 
       # Read the reactive here (Step 1 runs in a reactive context); the later()
       # callback below does not, so it must work off this captured plain value.
-      db_path <- LANDING_PAGE_vals$db_path()
+      # Through the gate, so a reload attempted after the file vanished carries
+      # NULL rather than a path whose every use would recreate it empty.
+      path <- db_path()
 
       # Step 2 (deferred to a later tick, so the nav switch + overlay actually
       # paint before the potentially blocking work runs behind it): backfill
@@ -824,7 +880,14 @@ server <- function(id) {
       # withReactiveDomain() restores the session so waiter/reactiveVal writes
       # resolve; isolate() supplies the reactive context reload_data() needs to
       # read/bump data_reset(). finally = guarantees the overlay clears even if
-      # hashing errors.
+      # the backfill errors.
+      #
+      # error = matters as much: this runs from later(), outside any observer
+      # Shiny would isolate the failure to, so an escaping error takes the
+      # session down. The database can be gone by now (deleted between the click
+      # and this tick, before the watcher's next poll), which makes connect()
+      # refuse - a reload that reports it cannot re-read the database is a far
+      # better outcome than a dead session.
       later::later(function() {
         shiny::withReactiveDomain(session, {
           shiny::isolate({
@@ -835,16 +898,24 @@ server <- function(id) {
             tryCatch(
               {
                 if (
-                  length(db_path) &&
-                    !is.na(db_path) &&
-                    hashes_pending(db_path)
+                  length(path) &&
+                    !is.na(path) &&
+                    hashes_pending(path)
                 ) {
-                  hash_database(db_path)
+                  hash_database(path)
                 }
-                if (length(db_path) && !is.na(db_path)) {
-                  sync_metadata_table(db_path)
+                if (length(path) && !is.na(path)) {
+                  sync_metadata_table(path)
                 }
                 reload_data()
+              },
+              error = function(e) {
+                log_event("DB", "Reload failed", conditionMessage(e))
+                showNotification(
+                  paste("Could not reload the database:", conditionMessage(e)),
+                  type = "error",
+                  duration = 8
+                )
               },
               finally = reload_waiter$hide()
             )
@@ -853,8 +924,13 @@ server <- function(id) {
       })
     })
 
-    observeEvent(input$reset, {
-      log_event("APP", "Session reset")
+    # Return the whole session to the start screen: drop the loaded database's
+    # panels and navbar items, reveal the landing page again, then reset every
+    # module's state. Shared by the reset button and by the watcher above, which
+    # needs exactly the same teardown - anything less leaves the panels mounted,
+    # their outputs live, and their next read pointed at a database that is no
+    # longer there.
+    return_to_start <- function() {
       hide_db_notification()
       nav_show(id = "tabs", target = "landing_page_panel", select = TRUE)
       nav_show(id = "tabs", target = "scheme_browser_panel")
@@ -871,6 +947,11 @@ server <- function(id) {
       remove_navbar_items()
 
       reset_session()
+    }
+
+    observeEvent(input$reset, {
+      log_event("APP", "Session reset")
+      return_to_start()
     })
   })
 }

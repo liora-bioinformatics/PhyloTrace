@@ -3967,6 +3967,19 @@ table.dataTable thead>tr>th.sorting {
     align-content: center;
 }
 
+// Storage-location guidance under the new-database location picker. Muted
+// rather than an alert: it is advice at a decision point, not a fault report.
+.storage-location-hint {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--bs-secondary-color);
+
+    i {
+        margin-right: 0.15rem;
+    }
+}
+
 #app-scheme_browser-db_name_input .form-group {
     margin-bottom: unset;
     width: 50%;

@@ -331,7 +331,7 @@ export_database <- function(
     unlink(part)
   }
 
-  con <- connect(part)
+  con <- connect(part, create = TRUE)
   ok <- FALSE
   on.exit(
     {
