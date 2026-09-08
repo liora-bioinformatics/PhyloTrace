@@ -6,6 +6,8 @@ box::use(
   testthat[
     expect_false,
     expect_identical,
+    expect_no_error,
+    expect_null,
     expect_setequal,
     expect_true,
     test_that
@@ -13,6 +15,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / db_connect[BUSY_TIMEOUT_MS, LIVE_BUSY_TIMEOUT_MS],
   app / logic / genome_hash[store_genome_hash],
   app / logic / provenance[scheme_provenance],
   app / logic / pymlst[cg_outcome, parse_typing_log],
@@ -185,6 +188,94 @@ test_that("the closing sweep picks up the last isolate without rewriting the res
       "SELECT isolate, COUNT(*) AS n FROM classical_mlst GROUP BY isolate"
     )
     expect_identical(rows$n, c(7L, 7L))
+  })
+})
+
+test_that("a database that cannot be read mid-run defers the isolate, it does not error", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+  intact <- file.path(dir, "intact.db")
+  file.copy(path, intact)
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+  amr_out <- file.path(dir, "amr")
+  seed_amr_dir(amr_out, "A")
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- genome
+    Typing$cla_enabled <- TRUE
+    Typing$amr_enabled <- TRUE
+    Typing$amr_organism <- "Klebsiella_pneumoniae"
+    Typing$amr_out <- amr_out
+
+    lines <- c(strain_section("A"), "Done!")
+    results <- parse_typing_log(lines, Typing$queued_strains)
+
+    # Every database call this poll makes can fail while pyMLST holds the write
+    # lock through a genome's allele inserts. Standing in for that lock here: a
+    # file no query gets anything out of. This has to stay survivable - the poll
+    # runs inside an observer, and an error escaping one ends the session, which
+    # kills the typing process and with it a run that may be hours in.
+    writeLines("not a database", path)
+    # Warnings suppressed: RSQLite grumbles about the pragmas it cannot set on
+    # the stand-in file, which a genuinely locked database would take fine.
+    expect_no_error(suppressWarnings(persist_results(results, lines)))
+    expect_identical(persisted$done$cla, character(0))
+    expect_identical(persisted$done$amr, character(0))
+    expect_identical(persisted$done$hash, character(0))
+    expect_identical(persisted$done$prov, character(0))
+
+    # The closing sweep runs once the pyMLST process, and its lock, are gone.
+    file.copy(intact, path, overwrite = TRUE)
+    persist_results(results, lines, retry = TRUE)
+    expect_identical(isolates_in(path, "classical_mlst"), "A")
+    expect_identical(isolates_in(path, "amr_results"), "A")
+    expect_identical(isolates_in(path, "genome_hashes"), "A")
+    expect_identical(isolates_in(path, "typing_provenance"), "A")
+  })
+})
+
+test_that("a live pass gives up on the lock quickly, the closing sweep waits", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+
+  genome <- file.path(dir, "A.fna")
+  writeLines(c(">A_contig1", "ATGCATGCATGCATGCATGC"), genome)
+
+  # Every store asks for the database path first, so the accessor doubles as a
+  # probe of the wait in force at the moment the connection is opened.
+  probe <- new.env(parent = emptyenv())
+  probe$seen <- integer(0)
+  db_path <- function() {
+    probe$seen <- c(probe$seen, getOption("phylotrace.busy_timeout", BUSY_TIMEOUT_MS))
+    path
+  }
+
+  testServer(typing$server, args = list(db_path = db_path), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- genome
+    Typing$cla_enabled <- TRUE
+
+    lines <- c(strain_section("A", amr = FALSE), "Done!")
+    results <- parse_typing_log(lines, Typing$queued_strains)
+
+    # Mid-run: pyMLST holds the lock, and every second spent waiting on it is a
+    # second the whole UI is frozen for nothing the sweep could not redo.
+    persist_results(results, lines)
+    expect_true(length(probe$seen) > 0)
+    expect_true(all(probe$seen == LIVE_BUSY_TIMEOUT_MS))
+    # And the interactive wait is back the moment the pass is over.
+    expect_null(getOption("phylotrace.busy_timeout"))
+
+    # The sweep runs once the process is gone and is each step's last chance, so
+    # it waits rather than giving up.
+    probe$seen <- integer(0)
+    persist_results(results, lines, retry = TRUE)
+    expect_true(all(probe$seen == BUSY_TIMEOUT_MS))
   })
 })
 

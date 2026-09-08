@@ -1297,6 +1297,17 @@ strain_gene_counts <- function(db_path, strains) {
 #' @return Logical indicating whether `hash_database()` needs to run.
 #' @export
 hashes_pending <- function(db_path) {
+  # A path that no longer resolves (database deleted or moved mid-session) would
+  # otherwise make connect() create an empty file here; treat it as "nothing to do".
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    return(FALSE)
+  }
+
   con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
 
@@ -1322,8 +1333,27 @@ hashes_pending <- function(db_path) {
 hash_database <- function(db_path) {
   message("Checking database hashing status ...")
 
+  # Bail out quietly when the database is gone or is not a pyMLST file: the load
+  # and reload paths call this before any module reads, so an uncaught error
+  # here (e.g. "no such table: sequences" on a database deleted mid-session)
+  # would abort the whole Shiny session.
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !file.exists(db_path)
+  ) {
+    message("Database file not found; skipping hash maintenance")
+    return(invisible(FALSE))
+  }
+
   con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
+
+  if (!any("sequences" == dbListTables(con))) {
+    message("Database has no 'sequences' table; skipping hash maintenance")
+    return(invisible(FALSE))
+  }
 
   sequences <- dbReadTable(con, "sequences")
   updated <- FALSE

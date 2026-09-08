@@ -11,7 +11,14 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
-  app / logic / db_compat[read_db_signature, check_import_compatibility, attach_ro],
+  app /
+    logic /
+    db_compat[
+      attach_ro,
+      check_db_loadable,
+      check_import_compatibility,
+      read_db_signature
+    ],
 )
 
 status_of <- function(checks, name) checks$status[checks$check == name]
@@ -52,6 +59,40 @@ test_that("attach_ro keeps a peer database read-only, even when its name has a '
   )
   # No stray file was conjured by a mis-parsed URI.
   expect_setequal(list.files(dir), "odd?name.db")
+})
+
+test_that("check_db_loadable accepts a real database and rejects the rest", {
+  dir <- local_tempdir()
+  good <- file.path(dir, "good.db")
+  build_db(good, default_local())
+
+  expect_true(check_db_loadable(good)$ok)
+
+  # Nothing selected.
+  expect_false(check_db_loadable(NULL)$ok)
+  expect_false(check_db_loadable(NA_character_)$ok)
+
+  # Selected but gone from disk (deleted/moved mid-session) — and the read-only
+  # probe must not resurrect it as an empty file.
+  gone <- file.path(dir, "gone.db")
+  res <- check_db_loadable(gone)
+  expect_false(res$ok)
+  expect_true(grepl("no longer", res$reason))
+  expect_false(file.exists(gone))
+
+  # A file that exists but carries no pyMLST schema.
+  empty <- file.path(dir, "empty.db")
+  con <- DBI::dbConnect(RSQLite::SQLite(), empty)
+  DBI::dbExecute(con, "CREATE TABLE placeholder (a)")
+  DBI::dbDisconnect(con)
+  res <- check_db_loadable(empty)
+  expect_false(res$ok)
+  expect_true(grepl("not a valid PhyloTrace database", res$reason))
+
+  # Not an SQLite file at all.
+  junk <- file.path(dir, "notes.txt")
+  writeLines("hello", junk)
+  expect_false(check_db_loadable(junk)$ok)
 })
 
 test_that("read_db_signature summarises a well-formed database", {

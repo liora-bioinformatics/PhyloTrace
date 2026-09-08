@@ -1,6 +1,5 @@
 box::use(
   testthat[
-    expect_error,
     expect_false,
     expect_identical,
     expect_setequal,
@@ -130,14 +129,26 @@ test_that("hashes_pending tracks exactly when hash_database would write", {
   expect_false(hashes_pending(empty))
 })
 
-test_that("a database without a sequences table is a hard error", {
-  # Documents the caller's contract: hash_database() assumes a valid pyMLST
-  # schema and does not defend against a missing `sequences` table.
+test_that("a database without a sequences table is a graceful no-op", {
+  # A database deleted or replaced mid-session can leave a file with no pyMLST
+  # schema at the loaded path. hash_database() runs on the load/reload paths
+  # before any module reads, so it must return quietly rather than abort the
+  # Shiny session with "no such table: sequences".
   dir <- local_tempdir()
   db <- file.path(dir, "empty.db")
   con <- DBI::dbConnect(RSQLite::SQLite(), db)
   DBI::dbExecute(con, "CREATE TABLE placeholder (a)")
   DBI::dbDisconnect(con)
 
-  expect_error(suppressMessages(hash_database(db)))
+  expect_false(suppressMessages(hash_database(db)))
+})
+
+test_that("a missing database path is a graceful no-op and creates no file", {
+  dir <- local_tempdir()
+  gone <- file.path(dir, "gone.db")
+
+  expect_false(suppressMessages(hash_database(gone)))
+  expect_false(suppressMessages(hashes_pending(gone)))
+  # SQLite would create an empty file at a missing path; the guards must not.
+  expect_false(file.exists(gone))
 })

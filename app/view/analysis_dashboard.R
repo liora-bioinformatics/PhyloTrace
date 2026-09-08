@@ -42,6 +42,7 @@ box::use(
 
 box::use(
   app / logic / analysis_store,
+  app / logic / db_compat[check_db_loadable],
   app / logic / db_events,
   app / logic / database_functions[append_classical_mlst],
   app / logic / db_store,
@@ -84,13 +85,12 @@ ui <- function(id) {
   as.character(fromJSON(raw))
 }
 
-# Validates if a file path is a valid non-empty string referencing an existing file
+# TRUE only for a path that is a genuine PhyloTrace database. A file that merely
+# exists is not enough: a database deleted mid-session can be silently recreated
+# empty at the same path, and writing the Analyses schema into that junk file
+# (as sync_db() would) both masks the problem and corrupts recovery.
 .usable_path <- function(path) {
-  !is.null(path) &&
-    length(path) == 1 &&
-    !is.na(path) &&
-    nzchar(path) &&
-    file.exists(path)
+  isTRUE(check_db_loadable(path)$ok)
 }
 
 #' @export

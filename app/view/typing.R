@@ -76,6 +76,7 @@ box::use(
   fs[path_home],
 )
 box::use(
+  app / logic / db_connect[LIVE_BUSY_TIMEOUT_MS],
   app / logic / db_events,
   app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[sync_metadata_table],
@@ -857,6 +858,11 @@ server <- function(
       # the run is over.
       cla_enabled = FALSE,
       amr_enabled = FALSE,
+      # The abritamr `--species` token this run screened against, resolved from
+      # the database once at launch. Held here rather than re-read per poll: the
+      # value cannot change mid-run, and the database it would be read from is
+      # being written by the pyMLST process for the length of the run.
+      amr_organism = NA_character_,
       terminated = FALSE,
       refresh = 0L
     )
@@ -929,6 +935,22 @@ server <- function(
     persist_results <- function(results, lines, retry = FALSE) {
       if (is.null(results) || !nrow(results)) {
         return(invisible(NULL))
+      }
+      # How long the writes below wait on pyMLST's lock. A live pass gives up
+      # quickly: R is single-threaded, so every second spent waiting is a second
+      # the whole UI is frozen, and a step that gives up is redone by the sweep
+      # anyway. The sweep itself keeps the full wait - it runs once the process
+      # is gone, and it is the last chance each step gets.
+      #
+      # Set as an option rather than passed down because it has to reach every
+      # connection the calls below open, several functions deep. The scope is
+      # exactly this pass: R runs it start to finish without yielding, and
+      # `on.exit` restores the previous value however the pass ends. Should any
+      # of this ever become asynchronous, that reasoning goes with it and the
+      # timeout would have to be threaded through as an argument instead.
+      if (!retry) {
+        previous <- options(phylotrace.busy_timeout = LIVE_BUSY_TIMEOUT_MS)
+        on.exit(options(previous), add = TRUE)
       }
       ready <- cg_outcome(results) == "Added"
       if (!any(ready)) {
@@ -1005,7 +1027,7 @@ server <- function(
       )]
       if (isTRUE(Typing$amr_enabled) && !is.null(Typing$amr_out) && length(amr_rows)) {
         amr_meta <- parse_amr_meta(lines)
-        organism <- amr_species(db_species(db_path()))
+        organism <- Typing$amr_organism
         for (i in amr_rows) {
           strain <- results$strain[i]
           stored <- tryCatch(
@@ -1062,7 +1084,7 @@ server <- function(
         cla_meta <- parse_clamlst_meta(lines)
         amr_meta <- parse_amr_meta(lines)
         amr_organism <- if (isTRUE(Typing$amr_enabled)) {
-          amr_species(db_species(db_path()))
+          Typing$amr_organism
         } else {
           NA_character_
         }
@@ -1093,19 +1115,21 @@ server <- function(
 
         for (strain in touched) {
           i <- match(strain, results$strain)
-          hashes <- genome_hash_row(db_path(), strain)
           # "screening" is a state the log passes through, never one to record.
           amr_observed <- results$amr_status[i]
           if (!is.na(amr_observed) && !(amr_observed %in% c("done", "failed"))) {
             amr_observed <- NA_character_
           }
+          # The digest read is inside the guard with the write it feeds: both
+          # touch the database pyMLST is writing, and a row assembled from a
+          # failed read would record NA digests as if the isolate had none.
           stored <- tryCatch(
             store_provenance(
               db_path(),
               strain,
               c(
                 Typing$scheme_context,
-                hashes,
+                genome_hash_row(db_path(), strain),
                 list(
                   run_id = if (is.null(Typing$log_file)) {
                     NA_character_
@@ -1217,6 +1241,7 @@ server <- function(
         Typing$amr_out <- NULL
         Typing$cla_enabled <- FALSE
         Typing$amr_enabled <- FALSE
+        Typing$amr_organism <- NA_character_
         Typing$status <- "idle"
         Typing$results <- NULL
         Typing$terminated <- FALSE
@@ -2423,8 +2448,25 @@ server <- function(
     # (filling the progress bar to 100%, interruptible via Terminate) before
     # handing off to launch_typing().
     start_checking_phase <- function() {
-      chk$recorded <- genome_hash_map(db_path())
-      chk$known <- existing()
+      # The pass's database reads, taken before any state is touched: a typing
+      # process orphaned by an earlier session can still hold this file's lock,
+      # and an error escaping here would end the session rather than the click.
+      known <- tryCatch(
+        list(recorded = genome_hash_map(db_path()), strains = existing()),
+        error = function(e) e
+      )
+      if (inherits(known, "error")) {
+        log_typing("Database unreadable, check not started", conditionMessage(known))
+        reset_to_idle()
+        showNotification(
+          paste("Could not read the database:", conditionMessage(known)),
+          type = "error",
+          duration = 6
+        )
+        return(invisible(FALSE))
+      }
+      chk$recorded <- known$recorded
+      chk$known <- known$strains
       chk$out <- data.frame(
         strain = Typing$queued_strains,
         file = Typing$queued_files,
@@ -2635,10 +2677,35 @@ server <- function(
       Typing$terminated <- FALSE
       # Nothing of this run has reached the database yet.
       reset_persisted()
-      # The scheme every isolate of this run is typed against, read once and
-      # stamped onto each provenance row: a snapshot, so a later scheme refresh
-      # cannot rewrite what these calls were made against.
-      Typing$scheme_context <- scheme_provenance(db_path())
+      # Everything this run needs out of the database, read before anything is
+      # launched: the scheme every isolate is typed against - a snapshot, so a
+      # later scheme refresh cannot rewrite what these calls were made against -
+      # and the scheme's species. Read together and guarded together, because
+      # both fail the same way: an orphaned writer from an earlier run still
+      # holding the file's lock. Unguarded that error would leave the observer
+      # and end the session; here it is a run that refuses to start, and says
+      # why. Degrading to "unreadable" is not an option - it would silently type
+      # the whole run with no scheme provenance and no classical MLST.
+      preflight <- tryCatch(
+        list(
+          scheme = scheme_provenance(db_path()),
+          species = db_species(db_path())
+        ),
+        error = function(e) e
+      )
+      if (inherits(preflight, "error")) {
+        log_typing("Database unreadable, run not started", conditionMessage(preflight))
+        # Stops the bar that has been animating since the checking phase.
+        reset_to_idle()
+        Typing$status <- "failed"
+        showNotification(
+          paste("Could not read the database:", conditionMessage(preflight)),
+          type = "error",
+          duration = 6
+        )
+        return()
+      }
+      Typing$scheme_context <- preflight$scheme
       Typing$cla_refs <- NULL
       # Seed an all-Pending table so the queue is visible immediately.
       Typing$results <- parse_typing_log(character(0), Typing$queued_strains)
@@ -2649,7 +2716,7 @@ server <- function(
       # per genome. The reference DB is read back on finalize (for reference
       # sequences / metadata), then deleted. No species or no scheme resolvable
       # => classical MLST is skipped for the whole run.
-      species <- db_species(db_path())
+      species <- preflight$species
       cla_scheme <- if (!is.na(species)) {
         # Blocks on the repository APIs for a moment - logged so a slow or
         # unreachable repository is visible as such rather than as a stall.
@@ -2705,6 +2772,7 @@ server <- function(
       }
       live_amr_out <<- Typing$amr_out
       Typing$amr_enabled <- run_amr
+      Typing$amr_organism <- amr_sp
 
       log_typing(
         "Launching typing run",
@@ -2875,7 +2943,18 @@ server <- function(
 
       # Bank each isolate's results the moment its step is over, rather than
       # holding the whole run's worth until the process exits.
-      persist_results(results, lines)
+      #
+      # Nothing this poll does may take the session down with it. This tick runs
+      # every 700ms for the length of a run, it shares the database file with
+      # the pyMLST process, and an error escaping an observer ends the Shiny
+      # session - which kills the typing process with it, losing a run that may
+      # be hours in. Every store below is individually guarded already; this
+      # catches whatever a future step adds around them, and the pass is simply
+      # left for the next poll (or, failing that, the closing sweep) to redo.
+      tryCatch(
+        persist_results(results, lines),
+        error = function(e) log_typing("Persisting results failed", conditionMessage(e))
+      )
       # Genomes whose whole pipeline is over - allele calling, classical MLST and
       # the AMR screen alike. The bar counts genomes, so a genome still being
       # screened is not one of them; the phase it is in is named by the status
@@ -2931,7 +3010,12 @@ server <- function(
       # genome, whose steps finished after the final poll. Both the interim
       # reference DB and the AMR output directory are still around at this
       # point, so a retry has everything it needs; they are deleted below.
-      persist_results(results, lines, retry = TRUE)
+      tryCatch(
+        persist_results(results, lines, retry = TRUE),
+        error = function(e) {
+          log_typing("Final persistence sweep failed", conditionMessage(e))
+        }
+      )
 
       meta <- parse_clamlst_meta(lines)
       if (Typing$cla_enabled) {
@@ -3008,7 +3092,10 @@ server <- function(
       # bump - regardless of which one runs first - sees the same, already
       # -synced table. See `sync_metadata_table()`'s docs for the full case.
       if (added > 0L) {
-        sync_metadata_table(db_path())
+        tryCatch(
+          sync_metadata_table(db_path()),
+          error = function(e) log_typing("Metadata sync failed", conditionMessage(e))
+        )
       }
 
       # Signal other modules that the DB has new data.

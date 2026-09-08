@@ -11,6 +11,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_compat[check_db_loadable],
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
 )
@@ -68,6 +69,28 @@ server <- function(
     # Currently selected database location, as c(label, path) or c(label, NA).
     db_location <- shiny$reactiveVal(NULL)
 
+    # Why the currently selected file cannot be loaded (missing, not SQLite, not
+    # a PhyloTrace database), or NULL when the selection is fine / absent. Shown
+    # in place of the metadata table so the user learns why Load is disabled.
+    db_invalid_reason <- shiny$reactiveVal(NULL)
+
+    # Resolve a candidate path to the c(label, path) pair db_location() expects,
+    # applying the same validity check the app runs before opening a database. A
+    # missing file or a file that is not a PhyloTrace database resolves to
+    # c(label, NA) - which disables Load - and records the reason. This is the
+    # single gate that keeps db_path() from ever turning non-NULL for a file
+    # every downstream module would then query and crash on.
+    resolve_selection <- function(label, path) {
+      chk <- check_db_loadable(path)
+      if (isTRUE(chk$ok)) {
+        db_invalid_reason(NULL)
+        c(label, path)
+      } else {
+        db_invalid_reason(chk$reason)
+        c(label, NA)
+      }
+    }
+
     # Combined load trigger: incremented by the UI button and by the external
     # db observer so that both paths share one downstream observeEvent.
     load_trigger <- shiny$reactiveVal(NULL)
@@ -94,17 +117,30 @@ server <- function(
       db_path <- external_db()
       shiny$req(!is.null(db_path), length(db_path), is.character(db_path))
 
-      loc <- if (file.exists(db_path)) {
-        c("Currently selected:", db_path)
-      } else {
-        c("Currently selected:", NA)
-      }
+      loc <- resolve_selection("Currently selected:", db_path)
       db_location(loc)
 
       if (!is.na(loc[2])) fire_load()
     })
 
     shiny$observeEvent(input$load_database, {
+      loc <- db_location()
+      path <- if (is.null(loc)) NA_character_ else loc[2]
+
+      # The button is only enabled for a resolved path; a NA here means a stale
+      # click on a disabled control - ignore it, the reason is already shown.
+      if (is.na(path)) {
+        return()
+      }
+
+      # Re-check at click time: the file can be deleted or replaced between the
+      # selection rendering and this click. A newly-bad path re-resolves the
+      # selection (disabling Load and showing why) instead of firing the load.
+      if (!isTRUE(check_db_loadable(path)$ok)) {
+        db_location(resolve_selection(loc[1], path))
+        return()
+      }
+
       fire_load()
     })
 
@@ -146,11 +182,7 @@ server <- function(
       )$datapath
 
       if (length(location_input)) {
-        if (is.character(location_input) && file.exists(location_input)) {
-          loc <- c("Currently selected:", location_input)
-        } else {
-          loc <- c("Currently selected:", NA)
-        }
+        loc <- resolve_selection("Currently selected:", location_input)
       } else {
         state_file <- file.path(app_local_share_path, "state.json")
         disk_stat <- tryCatch(
@@ -163,7 +195,12 @@ server <- function(
             file.exists(disk_stat$last_db) &&
             endsWith(disk_stat$last_db, ".db")
         ) {
-          loc <- c("Last used:", disk_stat$last_db)
+          # The remembered database is still on disk - but "on disk" is not
+          # "loadable": it may have been emptied or replaced. Validate before
+          # offering it as "Last used".
+          loc <- resolve_selection("Last used:", disk_stat$last_db)
+        } else {
+          db_invalid_reason(NULL)
         }
       }
 
@@ -184,8 +221,19 @@ server <- function(
       )
 
       if (db_unselected) {
-        # Case no database selected
-        table <- "No database selected"
+        # No database selected, or one was picked but is not loadable - show the
+        # reason (missing file, not a PhyloTrace database, ...) when we have one.
+        reason <- db_invalid_reason()
+        table <- if (!is.null(reason)) {
+          shiny$div(
+            class = "db-selection-invalid",
+            shiny$icon("triangle-exclamation"),
+            " ",
+            reason
+          )
+        } else {
+          "No database selected"
+        }
         load_button <- disabled(load_button)
       } else {
         # Case valid database selected

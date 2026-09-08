@@ -70,6 +70,60 @@ connect_ro <- function(db_path) {
 
 .connect_ro <- connect_ro
 
+#' Check Whether a File Can Be Loaded as a PhyloTrace Database
+#'
+#' Cheap pre-flight used before a database is opened for a session. Opens the
+#' file read-only (so a missing path is *not* silently created) and confirms the
+#' core pyMLST tables are present.
+#'
+#' @param db_path Character path to a candidate SQLite database file.
+#' @return A list with `ok` (logical) and, when `ok` is `FALSE`, a
+#'   human-readable `reason` naming the failure.
+#' @export
+check_db_loadable <- function(db_path) {
+  if (
+    is.null(db_path) ||
+      length(db_path) != 1 ||
+      is.na(db_path) ||
+      !nzchar(db_path)
+  ) {
+    return(list(ok = FALSE, reason = "No database file is selected."))
+  }
+
+  if (!file.exists(db_path)) {
+    return(list(
+      ok = FALSE,
+      reason = paste0(
+        "The database file is no longer at this location. It may have been ",
+        "moved, renamed, deleted, or is on a disconnected drive."
+      )
+    ))
+  }
+
+  con <- tryCatch(.connect_ro(db_path), error = function(e) NULL)
+  if (is.null(con)) {
+    return(list(
+      ok = FALSE,
+      reason = "The file could not be opened as an SQLite database."
+    ))
+  }
+  on.exit(dbDisconnect(con), add = TRUE)
+
+  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
+  missing <- setdiff(CORE_TABLES, tables)
+  if (length(missing)) {
+    return(list(
+      ok = FALSE,
+      reason = sprintf(
+        "The file is not a valid PhyloTrace database (missing table(s): %s).",
+        paste(missing, collapse = ", ")
+      )
+    ))
+  }
+
+  list(ok = TRUE, reason = NA_character_)
+}
+
 # Formats a file path into a SQLite-safe file: URI string with encoded path segments.
 .db_uri <- function(path) {
   # Normalize slashes and clean up leading slash sequences

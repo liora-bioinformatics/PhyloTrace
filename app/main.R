@@ -3,7 +3,9 @@ box::use(
     stopApp,
     moduleServer,
     NS,
+    observe,
     observeEvent,
+    invalidateLater,
     tags,
     div,
     actionButton,
@@ -47,6 +49,7 @@ box::use(
 box::use(
   app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[migrate_species_name, sync_metadata_table],
+  app / logic / db_compat[check_db_loadable],
   app / logic / db_events[bump_all, new_bus],
   app / logic / db_store[new_store],
   app / logic / functions[render_info],
@@ -497,6 +500,30 @@ server <- function(id) {
       # handler land in the new file.
       start_session_log(if (length(db_path)) db_path else NA_character_)
 
+      # Guard against a database that vanished or was replaced between selection
+      # and load (deleted or moved on disk, drive unmounted). Without this,
+      # SQLite silently creates an empty file at the missing path and every
+      # downstream read ("no such table: mlst" / "sequences") aborts the
+      # session. Abort the load, tell the user, and stay on the start screen.
+      db_check <- check_db_loadable(db_path)
+      if (!isTRUE(db_check$ok)) {
+        log_event("DB", "Load aborted", db_check$reason)
+        showModal(modalDialog(
+          title = tagList(icon("triangle-exclamation"), " Database unavailable"),
+          tags$p(db_check$reason),
+          tags$p(
+            class = "text-muted mb-0",
+            "Select another database or create a new one to continue."
+          ),
+          easyClose = TRUE,
+          footer = modalButton("OK")
+        ))
+        # Send Landing Page back to its pre-load state so nothing downstream
+        # queries the missing file.
+        reset_session()
+        return()
+      }
+
       # Full-page loading overlay. The panel HTML below is built synchronously
       # here; the outputs inside those panels that opt out of suspendWhenHidden
       # pre-render on the following flushes, i.e. underneath this overlay.
@@ -690,6 +717,48 @@ server <- function(id) {
       }
       db_notification_ids <<- character(0)
     }
+
+    # Watch the loaded database file for the whole session. If it disappears
+    # (deleted, moved, renamed, drive unmounted) every subsequent query would
+    # crash the session, so detect it within a few seconds, explain what
+    # happened, and fall back to the start screen cleanly. `db_gone_handled`
+    # keeps the poll from re-firing the modal every tick; it clears once
+    # db_path() is NULL again (i.e. after the reset below).
+    db_gone_handled <- reactiveVal(FALSE)
+    observe({
+      db_path <- LANDING_PAGE_vals$db_path()
+      if (is.null(db_path) || is.na(db_path) || !nzchar(db_path)) {
+        db_gone_handled(FALSE)
+        return()
+      }
+
+      invalidateLater(5000)
+
+      if (file.exists(db_path) || isTRUE(db_gone_handled())) {
+        return()
+      }
+      db_gone_handled(TRUE)
+
+      log_event("DB", "Database file vanished", db_path)
+      hide_db_notification()
+      removeModal()
+      showModal(modalDialog(
+        title = tagList(
+          icon("triangle-exclamation"),
+          " Database connection lost"
+        ),
+        tags$p("The loaded database file is no longer accessible:"),
+        tags$pre(db_path),
+        tags$p(
+          "It may have been deleted, moved, or on a disconnected drive. ",
+          "PhyloTrace has returned to the start screen to avoid errors — ",
+          "re-select the database once it is available again."
+        ),
+        easyClose = FALSE,
+        footer = modalButton("Back to start")
+      ))
+      reset_session()
+    })
 
     # Reload the database: reset all module-internal state (so every module
     # re-queries the updated DB) without removing panels or returning to the
