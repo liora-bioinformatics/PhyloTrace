@@ -230,7 +230,7 @@ plot_types <- names(.ENGINES)
         "tips, shaded by call confidence"
       ),
       "Clade highlighting, a distance axis or scale bar, and branch labels",
-      "Export as PNG, JPEG, PDF or SVG at a chosen size and resolution"
+      "Export exactly as displayed, as PNG, JPEG, TIFF, PDF or SVG"
     ),
     reading = c(
       "Branch length" = paste(
@@ -1466,15 +1466,25 @@ server <- function(
 
     export_format <- reactive(input$export_filetype %||% "png")
 
-    # Two independent choices, resolved separately: how big the figure is made
-    # and — for raster only — how finely it is rasterised. Each falls back to
-    # its control's own default, so this never has to represent "nothing
-    # chosen yet".
+    # An engine that draws at a known physical size exports at that size, and
+    # the figure-size picker is dropped for it: its plot is fitted to one
+    # canvas, so any other width is either a different figure or a stretched
+    # one. Everything else keeps the picker.
+    export_fixed_size <- is.function(exporter$width_cm)
+
+    # How big the figure is made and — for raster only — how finely it is
+    # rasterised. Each falls back to its control's own default, so this never
+    # has to represent "nothing chosen yet".
     export_opts <- reactive({
       size <- export_size(input$export_size) %||% export_size("double")
       quality <- input$export_quality
+      width_cm <- if (export_fixed_size) {
+        tryCatch(exporter$width_cm(), error = function(e) size$width_cm)
+      } else {
+        size$width_cm
+      }
       list(
-        width_cm = size$width_cm,
+        width_cm = width_cm,
         dpi = unname(export_qualities[quality %||% "Print"]) %||% 300,
         target_px = unname(
           export_widget_px[quality %||% names(export_widget_px)[[2]]]
@@ -1518,7 +1528,8 @@ server <- function(
         ns,
         "export",
         spec$export_kind,
-        isolate(export_settings())
+        isolate(export_settings()),
+        sizes = !export_fixed_size
       ))
     }))
 
@@ -1547,7 +1558,8 @@ server <- function(
         export_format(),
         opts$width_cm,
         if (export_widget) opts$target_px else opts$dpi,
-        aspect
+        aspect,
+        fixed = export_fixed_size
       )
       # An engine may have something to say about the size that only it can
       # know — the tree reports when the figure's smallest type would print

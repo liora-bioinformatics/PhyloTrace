@@ -2149,21 +2149,93 @@ test_that("a panel's own colours replace the shared confidence defaults", {
 test_that("a long variable lists a few keys and counts the rest", {
   # 81 patient ids ran the guide box off the bottom of the canvas, and would
   # have been unusable had it fit. Dropping the guide outright lost the reader
-  # the values entirely; this keeps the first few and says how many it is not
-  # showing, the way the MST legend does.
+  # the values entirely; this keeps a few and says how many it is not showing,
+  # the way the MST legend does.
   n_over <- tree_plot$LEGEND_MAX_KEYS + 144L
   levels <- sprintf("p%03d", seq_len(n_over))
   keys <- tree_plot$tree_legend_breaks(levels)
 
   expect_identical(length(keys$breaks), tree_plot$LEGEND_MAX_KEYS)
   expect_identical(keys$hidden, 144L)
+  expect_identical(keys$total, n_over)
+  # No frequency to go on, so a nominal scale falls back to its own order.
   expect_identical(keys$breaks, levels[seq_len(tree_plot$LEGEND_MAX_KEYS)])
-  expect_match(tree_plot$tree_legend_title("Patient Id", 144L), "\\+ 144 more")
+  expect_match(
+    tree_plot$tree_legend_title("Patient Id", 144L, n_over),
+    "9 of 153 shown",
+    fixed = TRUE
+  )
 
   # A variable that fits lists all of it and says nothing extra.
   short <- tree_plot$tree_legend_breaks(sprintf("p%03d", 1:4))
   expect_identical(short$hidden, 0L)
   expect_identical(tree_plot$tree_legend_title("Ward", 0L), "Ward")
+})
+
+test_that("an ordered scale keeps both of its ends", {
+  # Nine consecutive keys off the front of eighty say nothing about the other
+  # seventy-one. The reader of an ordered scale needs the extremes every colour
+  # on the figure lies between, so the budget is split across them.
+  keys <- tree_plot$tree_legend_breaks(as.character(1:80))
+  expect_identical(keys$breaks, c("1", "2", "3", "4", "5", "77", "78", "79", "80"))
+  expect_identical(keys$hidden, 71L)
+
+  # Binned dates are ordered too, in all four shapes date_bins produces.
+  for (lv in list(
+    sprintf("%d", 1990:2030),
+    sprintf("2024-%02d", 1:12),
+    sprintf("2024-W%02d", 1:20),
+    format(as.Date("2024-01-01") + 0:40)
+  )) {
+    ends <- tree_plot$tree_legend_breaks(lv)$breaks
+    if (length(lv) > tree_plot$LEGEND_MAX_KEYS) {
+      expect_identical(ends[[1L]], lv[[1L]])
+      expect_identical(ends[[length(ends)]], lv[[length(lv)]])
+    }
+  }
+})
+
+test_that("a nominal scale gives its keys to the values on the plot", {
+  # "First nine alphabetically" is an accident of the alphabet. The keys a
+  # reader can use are the ones they will actually meet on the tree.
+  levels <- sprintf("ward%02d", 1:30)
+  values <- c(rep("ward17", 40), rep("ward04", 25), rep("ward29", 10), levels)
+  keys <- tree_plot$tree_legend_breaks(levels, values)
+
+  expect_true(all(c("ward04", "ward17", "ward29") %in% keys$breaks))
+  # Still in the scale's own order, so the guide reads down the palette rather
+  # than down a ranking.
+  expect_identical(keys$breaks, sort(keys$breaks))
+})
+
+test_that("\"Not recorded\" never loses its key", {
+  # It is the one level whose colour cannot be guessed from the others, and an
+  # unexplained grey swatch is worse than one fewer real category.
+  levels <- c(sprintf("ward%02d", 1:30), tree_plot$MISSING_LABEL)
+  keys <- tree_plot$tree_legend_breaks(levels)
+  expect_true(tree_plot$MISSING_LABEL %in% keys$breaks)
+  expect_identical(keys$breaks[[length(keys$breaks)]], tree_plot$MISSING_LABEL)
+})
+
+test_that("the key budget shrinks as guides compete for the height", {
+  # Four variables mapped on a squat tree get four keys each rather than nine
+  # each off the bottom of the canvas.
+  layers <- lapply(1:4, function(i) {
+    list(field = paste0("v", i), title = paste("V", i), n_levels = 40L)
+  })
+  squat <- tree_plot$tree_legend_max_rows(layers, list(), 10, 2.5)
+  tall <- tree_plot$tree_legend_max_rows(layers[1], list(), 10, 12)
+
+  expect_identical(tree_plot$tree_legend_max_keys(squat), 4L)
+  expect_identical(tree_plot$tree_legend_max_keys(tall), tree_plot$LEGEND_MAX_KEYS)
+  expect_identical(
+    length(tree_plot$tree_legend_breaks(
+      sprintf("p%02d", 1:40),
+      NULL,
+      tree_plot$tree_legend_max_keys(squat)
+    )$breaks),
+    4L
+  )
 })
 
 test_that("a capped guide still gets a scale, and only its keys are budgeted", {
@@ -2174,7 +2246,7 @@ test_that("a capped guide still gets a scale, and only its keys are budgeted", {
 
   expect_s3_class(sc$guide, "Guide")
   expect_identical(length(sc$breaks), tree_plot$LEGEND_MAX_KEYS)
-  expect_match(sc$name, "\\+ 40 more")
+  expect_match(sc$name, "9 of 49 shown", fixed = TRUE)
 
   md <- data.frame(
     isolate = sprintf("i%03d", 1:60),
@@ -2746,4 +2818,238 @@ test_that("the distance axis is sized for a page, not for a tip row", {
     sizes[!is.na(sizes)]
   }
   expect_identical(axis_size(0.6), axis_size(4))
+})
+
+# --- One control over every piece of type ------------------------------------
+
+# A tree with something of every kind of type on it: tip labels, branch
+# numbers, a distance axis, a scale bar, an annotation strip with a header and
+# a legend beside it.
+.type_fixture <- function(n = 16) {
+  fx <- .annot_fixture(n)
+  opts <- .annot_opts(n)
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+  opts$branch_show <- TRUE
+  opts$axis_show <- TRUE
+  opts$treescale_show <- TRUE
+  list(tree = fx$tree, meta = fx$meta, opts = opts)
+}
+
+# Every `size` a built plot's layers were given, in layer order.
+.layer_sizes <- function(p) {
+  sizes <- vapply(
+    p$layers,
+    function(l) l$aes_params$size %||% NA_real_,
+    numeric(1)
+  )
+  sizes[!is.na(sizes)]
+}
+
+test_that("the text scale moves every kind of type and nothing else", {
+  fx <- .type_fixture()
+  small <- fx$opts
+  small$text_scale <- 0.8
+  large <- fx$opts
+  large$text_scale <- 1.6
+
+  # Type sizes: the tip labels, the branch numbers, the axis and the legend.
+  expect_gt(impl$.tiplab_size(large, fx$meta), impl$.tiplab_size(small, fx$meta))
+  expect_gt(impl$.branch_size(large), impl$.branch_size(small))
+  expect_gt(tree_plot$tree_legend_size(large), tree_plot$tree_legend_size(small))
+  expect_gt(
+    impl$tree_axis_layer(large, 1, -1)[[3]]$aes_params$size,
+    impl$tree_axis_layer(small, 1, -1)[[3]]$aes_params$size
+  )
+
+  # Geometry: an annotation column, a key square and a branch stroke are the
+  # layout the type has to fit inside, so they do not move with it.
+  expect_identical(impl$.heat_col_in(large), impl$.heat_col_in(small))
+  expect_identical(impl$.tile_col_in(large), impl$.tile_col_in(small))
+  expect_identical(impl$.scale_of(large), impl$.scale_of(small))
+})
+
+test_that("the text scale is bounded at both ends", {
+  # Outside the range the control offers, and for anything that is not a
+  # number at all, the plot falls back to its own fitted size rather than to
+  # whatever arithmetic a bad value would produce.
+  expect_equal(impl$.text_of(list(text_scale = 99)), impl$TEXT_SCALE_MAX)
+  expect_equal(impl$.text_of(list(text_scale = 0.01)), impl$TEXT_SCALE_MIN)
+  for (bad in list(NULL, NA, "big", c(1, 2), -1, Inf)) {
+    expect_equal(
+      impl$.text_of(list(text_scale = bad)),
+      tree_plot$TEXT_SCALE_DEFAULT
+    )
+  }
+})
+
+test_that("type grows into the room it has and no further", {
+  # "As big as possible": the reader can ask for more and gets it until the
+  # label fills its slot, and asking for more again changes nothing.
+  at <- function(fx, k) {
+    o <- fx$opts
+    o$text_scale <- k
+    impl$.tiplab_size(o, fx$meta)
+  }
+  roomy <- .type_fixture(16)
+  expect_gt(at(roomy, 1.2), at(roomy, 1))
+
+  # Sixteen isolate names on a square panel have room to spare; forty do not,
+  # and there the control runs out of effect rather than running the labels
+  # into each other.
+  tight <- .type_fixture(40)
+  room <- impl$.tiplab_room(tight$opts, tight$meta)
+  expect_lte(at(tight, 2), room + impl$TIPLAB_ROOM_SLACK_MM + 1e-9)
+  expect_equal(at(tight, 2), at(tight, 1.9))
+})
+
+test_that("type shrinks to what can be read and no further", {
+  # "As small as necessary": the floor is a floor, not a suggestion — a tree
+  # with room to spare does not get illegible labels because the control was
+  # wound down.
+  fx <- .type_fixture(16)
+  at <- function(k) {
+    o <- fx$opts
+    o$text_scale <- k
+    impl$.tiplab_size(o, fx$meta)
+  }
+  expect_gte(at(impl$TEXT_SCALE_MIN), impl$TIP_SIZE_FLOOR)
+  expect_lt(at(impl$TEXT_SCALE_MIN), at(1))
+})
+
+test_that("labels the rows cannot hold legibly are not drawn at all", {
+  # The one way an element disappears: no size satisfies both rules, because
+  # the room itself is under the floor.
+  fx <- .type_fixture(16)
+  crowded <- fx$opts
+  crowded$aspect <- 0.05
+  expect_false(tree_plot$tree_tiplab_drawn(crowded, fx$meta))
+  expect_true(tree_plot$tree_tiplab_drawn(fx$opts, fx$meta))
+
+  # And the reserve beside the tree goes with them, rather than holding a band
+  # of empty page for labels that are not there.
+  expect_lt(impl$.tiplab_frac(crowded, fx$meta), 0.01)
+})
+
+test_that("no tip label is set larger than the row the plot really draws", {
+  # The rows are not `height / n_tip`: a heatmap's column names stand in a band
+  # that is *taken out of* the height, so thirty names fitted to the nominal
+  # pitch printed as one black bar. Measured off the finished plot's own y
+  # range rather than off the engine's estimate of it.
+  fx <- .annot_fixture(24)
+  opts <- .annot_opts(24)
+  opts$axis_show <- TRUE
+  opts$heatmaps <- list(list(
+    id = "H1", kind = "amr", level = "amr", title = "Resistance",
+    cols = c("amr_Beta-lactam", "amr_Colistin", "amr_Quinolone"),
+    show_gene_names = TRUE, show_class_names = FALSE,
+    show_element_type = FALSE, cluster = FALSE, dend_depth = 0
+  ))
+  for (ts in c(0.6, 1, 1.5, 2)) {
+    o <- opts
+    o$text_scale <- ts
+    o$aspect <- tree_plot$tree_fitted_aspect(0.5, o, 24)
+    p <- .built_tree(fx$tree, fx$meta, o)
+    b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+    pitch <- 25.4 * (o$width_in * o$aspect) /
+      diff(b$layout$panel_params[[1]]$y.range)
+    # ggtree's own text geom, which is what `geom_tiplab()` builds — not the
+    # branch numbers or the column headers, which answer to their own room.
+    tiplab <- Filter(
+      function(l) grepl("GGtree", class(l$geom)[[1]], fixed = TRUE),
+      p$layers
+    )
+    expect_gt(length(tiplab), 0L)
+    for (l in tiplab) {
+      expect_lte(l$aes_params$size %||% 0, pitch, label = paste("ts", ts))
+    }
+  }
+})
+
+test_that("a column too narrow for a legible name carries none", {
+  # Clamped up to the floor and drawn anyway, thirty gene names over a
+  # thirty-column matrix are a smear rather than a set of labels.
+  wide <- tree_plot$tree_header_size(1, 4, 5.5)
+  narrow <- tree_plot$tree_header_size(1, 400, 5.5)
+
+  expect_true(tree_plot$tree_header_drawn(wide))
+  expect_false(tree_plot$tree_header_drawn(narrow))
+  # Returned below the floor rather than clamped up to it, which is what makes
+  # the two cases distinguishable at all.
+  expect_lt(narrow, wide)
+})
+
+test_that("a header grows with the text scale until it fills its column", {
+  size <- function(text) tree_plot$tree_header_size(1, 10, 5.5, 1, text)
+  expect_gt(size(1.5), size(1))
+  # HEADER_FILL of the column is the ceiling: past it neighbouring names touch.
+  expect_lte(size(4), 25.4 * 5.5 / 10 * impl$HEADER_FILL + 1e-9)
+})
+
+test_that("the guide box is cut back to the height it has beside the tree", {
+  # ggplot2 draws the box at whatever its contents need and lets it run off the
+  # bottom; `legend.box = "vertical"` means one column and there is no wrapping
+  # to fall back on. Size is the only lever left.
+  opts <- .annot_opts(20)
+  opts$layers <- lapply(1:3, function(i) {
+    list(field = paste0("v", i), title = paste("Variable", i), n_levels = 6L)
+  })
+  opts$legend_size <- 10
+  opts$text_scale <- 2
+
+  asked <- tree_plot$tree_legend_size(opts)
+  fitted <- tree_plot$tree_legend_size(opts, height_in = 3)
+  expect_lt(fitted, asked)
+  # Never past a journal's own floor, whatever it would take to fit.
+  expect_gte(tree_plot$tree_legend_size(opts, height_in = 0.2), tree_plot$MIN_PRINT_PT)
+  # A plot with room to spare gets the size it asked for.
+  expect_equal(tree_plot$tree_legend_size(opts, height_in = 40), asked)
+})
+
+test_that("the aspect fit grows for the band a heatmap's names stand in", {
+  # `tree_auto_layout()` is handed a tip count and a width and knows nothing of
+  # what is drawn beside the tree, so twelve isolates under a matrix of long
+  # gene names came out with three quarters of a millimetre per row.
+  bare <- .annot_opts(12)
+  with_heat <- bare
+  with_heat$heatmaps <- list(list(
+    id = "H1", kind = "amr", level = "gene", title = "Resistance genes",
+    cols = paste0("g", 1:20),
+    labels = rep("aac(6')-Ie/aph(2'')-Ia", 20),
+    classes = rep("Beta-lactam", 20),
+    show_gene_names = TRUE, show_class_names = TRUE,
+    show_element_type = TRUE, element_pos = "top",
+    cluster = FALSE, dend_depth = 0
+  ))
+
+  expect_equal(tree_plot$tree_band_in(bare, 12), 0)
+  expect_gt(tree_plot$tree_band_in(with_heat, 12), 1)
+  expect_equal(tree_plot$tree_fitted_aspect(0.5, bare, 12), 0.5)
+  expect_gt(tree_plot$tree_fitted_aspect(0.5, with_heat, 12), 0.5)
+
+  # A radial panel is square and its annotations are rings, which grow it in
+  # both directions at once — there is nothing to correct.
+  radial <- with_heat
+  radial$layout <- "circular"
+  expect_equal(tree_plot$tree_band_in(radial, 12), 0)
+})
+
+test_that("the room a label has and the size the fit picks are one solve", {
+  # They were separate arithmetic once, and drifted: the fit measured a label
+  # against the ring it wanted while the drawing measured it against the ring
+  # it got, so a radial tree hid labels that fitted and drew labels that did
+  # not.
+  for (layout in c("rectangular", "circular", "inward")) {
+    for (n in c(8, 40, 200)) {
+      fit <- tree_plot$tree_auto_layout(n, 5.5, layout, 20)
+      room <- tree_plot$tree_tiplab_room(n, 5.5, layout, 20, fit$aspect)
+      # The fit rounds both the aspect and the size it returns to one decimal,
+      # and this asks for the room at the rounded aspect — so it may land two
+      # roundings above.
+      expect_lte(
+        fit$tiplab_size,
+        max(room, impl$TIP_SIZE_MIN) + 0.1,
+        label = paste(layout, n)
+      )
+    }
+  }
 })

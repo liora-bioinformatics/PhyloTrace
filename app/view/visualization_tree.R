@@ -71,25 +71,7 @@ box::use(
       TIP_MAPPING_MAX
     ],
   app / logic / functions[render_info],
-  app /
-    logic /
-    tree_plot[
-      AMR_CONFIDENCE_COLORS,
-      build_tree_ggtree,
-      CLASS_STRIP_SCALE,
-      DEND_DEPTH_DEFAULT,
-      ELEMENT_POS_DEFAULT,
-      LEGEND_MAX_KEYS,
-      MIN_PRINT_PT,
-      scale_tree_opts,
-      save_tree_plot,
-      tree_auto_layout,
-      tree_open_angle,
-      tree_legend_width_in,
-      tree_min_type_pt,
-      tree_panel_width_in,
-      TREE_FIT_DEFAULTS
-    ],
+  app / logic / tree_plot,
   app / logic / phylo[compute_phylo_tree],
   app / logic / viz_export[CM_PER_IN, save_plot_export],
   app /
@@ -190,11 +172,11 @@ HEATMAP_STYLE_DEFAULTS <- list(
   cluster = TRUE,
   cluster_distance = amr_plot$AMR_CLUSTER_DISTANCE_DEFAULT,
   cluster_method = amr_plot$AMR_CLUSTER_METHOD_DEFAULT,
-  dend_depth = DEND_DEPTH_DEFAULT,
-  color_absent = AMR_CONFIDENCE_COLORS[["absent"]],
-  color_partial = AMR_CONFIDENCE_COLORS[["partial"]],
-  color_strong = AMR_CONFIDENCE_COLORS[["strong"]],
-  color_present = AMR_CONFIDENCE_COLORS[["present"]],
+  dend_depth = tree_plot$DEND_DEPTH_DEFAULT,
+  color_absent = tree_plot$AMR_CONFIDENCE_COLORS[["absent"]],
+  color_partial = tree_plot$AMR_CONFIDENCE_COLORS[["partial"]],
+  color_strong = tree_plot$AMR_CONFIDENCE_COLORS[["strong"]],
+  color_present = tree_plot$AMR_CONFIDENCE_COLORS[["present"]],
   # Which class vocabulary files this panel's genes: abritamr's curated rollup
   # or AMRFinderPlus's own. Per panel rather than per plot, because a virulence
   # panel and a resistance panel are not filed by the same authority anyway.
@@ -206,7 +188,7 @@ HEATMAP_STYLE_DEFAULTS <- list(
   # Two matrices side by side are otherwise told apart only by their guide
   # titles, which sit off at the edge of the plot.
   show_element_type = FALSE,
-  element_pos = ELEMENT_POS_DEFAULT,
+  element_pos = tree_plot$ELEMENT_POS_DEFAULT,
   # Which of the two colour controls the panel is drawn from: one sequential
   # ramp across the four tiers ("scale") or the four tier pickers ("tiers").
   # The modal's segmented control sets it; tree_plot's `.heatmap_fill()` reads
@@ -221,7 +203,7 @@ HEATMAP_STYLE_DEFAULTS <- list(
   # Palette the drug-class strip is keyed by. Defaulted to the shared
   # CLASS_STRIP_SCALE so a class reads the same colour as on the AMR tab until
   # the reader picks another in the colour modal.
-  strip_scale = CLASS_STRIP_SCALE
+  strip_scale = tree_plot$CLASS_STRIP_SCALE
 )
 
 # The fields the sidebar's Labels and Clustering accordions own, as opposed to
@@ -501,7 +483,7 @@ FITTED_FIELDS <- c(
 # calibration anchor (tree_auto_layout returns exactly these at ~15 tips) — a
 # slider declared with anything else would quietly move the anchor.
 FITTED_DEFAULTS <- setNames(
-  TREE_FIT_DEFAULTS[FITTED_FIELDS],
+  tree_plot$TREE_FIT_DEFAULTS[FITTED_FIELDS],
   names(FITTED_FIELDS)
 )
 
@@ -540,8 +522,19 @@ MIRRORED_IDS <- c(
   "nj_tiplab_show",
   "nj_tippoint_show",
   "nj_layout",
+  # Auto-fit and Reset both put it back to TEXT_SIZE_DEFAULT, so it echoes
+  # exactly as a fitted slider does.
+  "nj_text_size",
   MIRRORED_SELECTS
 )
+
+# The "Text size" slider's own units. The engine reasons in a multiplier
+# (tree_plot's text_scale, 1 = the fitted size); the sidebar states it as a
+# percentage, because "110%" says what it does to the figure and "1.1" does
+# not.
+TEXT_SIZE_DEFAULT <- 100
+TEXT_SIZE_MIN <- 60
+TEXT_SIZE_MAX <- 200
 
 # --- The sidebar's controls, by widget family --------------------------------
 #
@@ -580,6 +573,7 @@ TREE_CONTROLS <- control_families(
   virtual_selects = "nj_layout",
   sliders = c(
     "nj_aspect_ratio",
+    "nj_text_size",
     "nj_open_angle",
     "nj_tiplab_size",
     "nj_branch_size",
@@ -609,6 +603,7 @@ TREE_CONTROL_DEFAULTS <- c(
   as.list(FITTED_DEFAULTS),
   list(
     nj_layout = "rectangular",
+    nj_text_size = TEXT_SIZE_DEFAULT,
     nj_tiplab_show = TRUE,
     nj_axis_show = TRUE,
     nj_show_branch_label = FALSE,
@@ -734,6 +729,27 @@ tree_controls <- function(ns, options_ui = NULL) {
           step = 0.1,
           ticks = FALSE
         ),
+        # One control over every piece of type on the figure — the isolate
+        # labels, the branch numbers, the distance axis and the scale bar, the
+        # annotation and heatmap headers, the element and class names, and the
+        # legend. A bias on what the engine already solved, not a size: each
+        # label still grows only into the room it has and shrinks only to what
+        # can be read, and one that no longer fits either way is left off (see
+        # the text-size note in app/logic/tree_plot.R).
+        #
+        # It is here rather than in Labels because it is a property of the
+        # whole figure, like the aspect ratio beside it — the per-element size
+        # sliders stay where the elements are.
+        shiny$sliderInput(
+          ns("nj_text_size"),
+          "Text size",
+          TEXT_SIZE_MIN,
+          TEXT_SIZE_MAX,
+          TEXT_SIZE_DEFAULT,
+          step = 5,
+          post = "%",
+          ticks = FALSE
+        ),
         virtualSelectInput(
           ns("nj_layout"),
           "Layout",
@@ -805,6 +821,15 @@ tree_controls <- function(ns, options_ui = NULL) {
             "Isolate Labels",
             icon = shiny$icon("tag"),
             input_switch(ns("nj_tiplab_show"), "Show isolate labels", TRUE),
+            # The engine leaves the labels off when no legible size fits the
+            # rows (tree_tiplab_drawn). Switched on but not drawn reads as a
+            # bug unless the panel says why, and says what to do about it.
+            shiny$div(
+              id = ns("nj_tiplab_fit_hint"),
+              class = "text-muted fst-italic small mb-2 d-none",
+              "No legible label size fits here. Try a shorter label source, ",
+              "a taller aspect ratio, or a linear layout."
+            ),
             virtualSelectInput(
               ns("nj_tiplab"),
               "Label source",
@@ -1235,7 +1260,11 @@ server <- function(
       shiny$reactiveValues,
       c(
         FITTED_DEFAULTS,
-        list(nj_tiplab_show = TRUE, nj_layout = "rectangular")
+        list(
+          nj_tiplab_show = TRUE,
+          nj_layout = "rectangular",
+          nj_text_size = TEXT_SIZE_DEFAULT
+        )
       )
     )
 
@@ -1458,6 +1487,22 @@ server <- function(
       )
     })
 
+    # Say so when the engine has decided the rows cannot carry a legible label.
+    # The switch stays the reader's — this only explains why turning it on
+    # changed nothing, and names the control (aspect ratio) that can undo it.
+    shiny$observe({
+      meta <- viz_metadata()
+      opts <- tree_opts()
+      fits <- is.null(meta) ||
+        !isTRUE(opts$tiplab_show) ||
+        tree_plot$tree_tiplab_drawn(opts, meta)
+      shinyjs::toggleClass(
+        id = "nj_tiplab_fit_hint",
+        class = "d-none",
+        condition = fits
+      )
+    })
+
     # Fit the layout controls to the data, the way the Map fits its "Max
     # intensity" slider to the busiest place. The coded defaults (aspect 0.6,
     # tip label size 4) suit roughly fifteen tips and nothing else — five
@@ -1479,7 +1524,7 @@ server <- function(
       if (is.null(tree)) {
         return(invisible(NULL))
       }
-      fit <- tree_auto_layout(
+      fit <- tree_plot$tree_auto_layout(
         length(tree$tip.label),
         plot_width_in(),
         shiny$isolate(fitted$nj_layout),
@@ -1491,12 +1536,23 @@ server <- function(
       )
       for (id in names(FITTED_DEFAULTS)) {
         value <- fit[[FITTED_FIELDS[[id]]]]
-        # The layout fit sees only the tree, so the one value that depends on
-        # what is drawn *beside* it is solved separately and applied over it.
+        # The layout fit sees only the tree, so the two values that depend on
+        # what is drawn *beside* it are solved separately and applied over it.
         if (identical(id, "nj_open_angle")) {
-          value <- tree_open_angle(
+          value <- tree_plot$tree_open_angle(
             shiny$isolate(tree_opts()),
             shiny$isolate(viz_metadata()) %||% data.frame()
+          )
+        }
+        # The heatmap's column names stand in a band that is taken *out of* the
+        # plot's height rather than added to it, so a figure with one needs to
+        # be taller by that much or its rows are squeezed to nothing. This is
+        # the height counterpart of the width the canvas grows by.
+        if (identical(id, "nj_aspect_ratio")) {
+          value <- tree_plot$tree_fitted_aspect(
+            value,
+            shiny$isolate(tree_opts()),
+            length(tree$tip.label)
           )
         }
         # Sent unconditionally. Guarding on `input[[id]]` — "the slider already
@@ -1557,8 +1613,18 @@ server <- function(
     # things that trigger one.
     fitted_layout <- shiny$reactiveVal(NULL)
 
+    # `nj_heatmaps()` is here and the mapping layers are not, and the difference
+    # is which direction the annotation grows in. A tile strip or a legend is
+    # paid for by a wider canvas, so the tree is unaffected and a re-fit would
+    # redraw for nothing; a heatmap's column names are a band across the top,
+    # and that comes out of the height the rows had (see tree_band_in).
     shiny$observeEvent(
-      list(fitted$nj_layout, fitted$nj_tiplab, fitted$nj_tiplab_show),
+      list(
+        fitted$nj_layout,
+        fitted$nj_tiplab,
+        fitted$nj_tiplab_show,
+        nj_heatmaps()
+      ),
       {
         shiny$req(tree_obj())
         # A layout switch is re-fitted with the legibility warning armed. Room
@@ -1671,6 +1737,12 @@ server <- function(
         return()
       }
       before <- isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+      # Text size is a bias on the fit, so re-solving the fit means dropping
+      # it: leaving a hand-set 160% on top of a freshly fitted layout is not
+      # "the engine's answer for this data", it is the engine's answer with the
+      # reader's old thumb still on the scale.
+      shiny$updateSliderInput(session, "nj_text_size", value = TEXT_SIZE_DEFAULT)
+      set_fitted("nj_text_size", TEXT_SIZE_DEFAULT)
       refit_layout(tree, notify = TRUE, relabel = TRUE)
       hidden <- before && !isTRUE(shiny$isolate(fitted$nj_tiplab_show))
       shiny$showNotification(
@@ -1744,8 +1816,8 @@ server <- function(
       c(
         if (isTRUE(fitted$nj_tiplab_show)) NULL else "tiplab_color",
         # An inward tree has no room past its tips for a strip — that space is
-        # the middle of the disc (see tree_plot$tree_annotations_drawn), so a
-        # variable is drawn onto the tips there instead.
+        # the middle of the disc (see tree_plot's tree_annotations_drawn), so
+        # a variable is drawn onto the tips there instead.
         if (identical(fitted$nj_layout, "inward")) "tile" else NULL
       ) %||%
         character(0)
@@ -1825,6 +1897,9 @@ server <- function(
         v = 0,
         legend_orientation = LEGEND_ORIENTATION,
         legend_size = LEGEND_SIZE,
+        # The reader's bias on every type size, as the multiplier the engine
+        # works in.
+        text_scale = (fitted$nj_text_size %||% TEXT_SIZE_DEFAULT) / 100,
         # The tree's own aspect. The builder turns it into a plot height, which
         # for a radial layout is not this at all (see tree_legend_cols).
         aspect = fitted$nj_aspect_ratio,
@@ -1852,7 +1927,7 @@ server <- function(
       # Solved in tree_plot.R, beside the axis split it has to agree with: the
       # annotations' share is a fraction of the tree's *span*, not of the panel,
       # so the panel a given annotation set needs is not simply the sum.
-      panel_in <- tree_panel_width_in(opts, md, TREE_PANEL_IN)
+      panel_in <- tree_plot$tree_panel_width_in(opts, md, TREE_PANEL_IN)
 
       circular <- identical(opts$layout, "circular") ||
         identical(opts$layout, "inward")
@@ -1868,10 +1943,14 @@ server <- function(
 
       # After the height, because how many columns the guides need depends on
       # it — and so, in turn, does how much width they claim.
-      legend_in <- tree_legend_width_in(
+      legend_in <- tree_plot$tree_legend_width_in(
         opts$layers,
         md,
-        opts$legend_size,
+        # At the size the guides will really be set at, not the size the
+        # constant declares: the reader's text scale moves them, and a box
+        # budgeted at one size and drawn at another takes the difference out of
+        # the tip labels.
+        tree_plot$tree_legend_size(opts, height_in),
         TREE_PANEL_IN,
         opts$heatmaps,
         height_in
@@ -1935,7 +2014,7 @@ server <- function(
     tree_plot_built <- shiny$reactive({
       p <- plot_inputs()
       shiny$req(p)
-      build_tree_ggtree(p$tree, p$metadata, p$opts)
+      tree_plot$build_tree_ggtree(p$tree, p$metadata, p$opts)
     })
 
     # Top-level app-reset: clear the computed tree so the stale plot image is
@@ -2156,7 +2235,7 @@ server <- function(
         "tree",
         "nj_layer_edit",
         "nj_layer_delete",
-        legend_max = LEGEND_MAX_KEYS
+        legend_max = tree_plot$LEGEND_MAX_KEYS
       )
     })
 
@@ -2717,7 +2796,7 @@ server <- function(
         show_gene_names = isTRUE(input$nj_heatmap_gene_names),
         show_class_names = isTRUE(input$nj_heatmap_class_names),
         show_element_type = isTRUE(input$nj_heatmap_element),
-        element_pos = input$nj_heatmap_element_pos %||% ELEMENT_POS_DEFAULT,
+        element_pos = input$nj_heatmap_element_pos %||% tree_plot$ELEMENT_POS_DEFAULT,
         cluster = isTRUE(input$nj_heatmap_cluster),
         show_class_strip = isTRUE(input$nj_heatmap_strip)
       )
@@ -2916,7 +2995,7 @@ server <- function(
             ns,
             "nj_heatmap_strip_scale",
             categories = "Qualitative",
-            selected = h$strip_scale %||% CLASS_STRIP_SCALE
+            selected = h$strip_scale %||% tree_plot$CLASS_STRIP_SCALE
           )
         ),
         shiny$conditionalPanel(
@@ -2963,62 +3042,68 @@ server <- function(
 
     # ---- Export contract ----------------------------------------------------
     # The tab's sidebar owns the export panel and the download itself; this
-    # engine only says what it can produce and how to write it. Exported on the
-    # preview's own aspect ratio so the tip labels keep the proportion they were
-    # tuned to and whatever sits beside the tree gets the room it had on screen
-    # — the *width* comes from the export panel, since that is the one thing the
-    # user sets in physical units.
+    # engine only says what it can produce and how to write it.
+    #
+    # The file is the figure on screen, at the size it is on screen. Nothing
+    # about the drawing is decided in the export dialog: the canvas is already
+    # a physical size (TREE_PANEL_IN wide, grown for whatever sits beside the
+    # tree), the aspect ratio is a control in the sidebar, and every type size
+    # on it was fitted to that canvas. Offering a second width there meant
+    # either rebuilding the design for it — a different figure from the one the
+    # reader approved — or printing this one at a size it was not designed for,
+    # and both were wrong in ways nobody could see until the file was open.
+    # `width_cm` below is what tells the export panel to stop asking.
+    #
+    # What is left is the file format and, for a raster, how finely that one
+    # figure is rasterised. Resolution changes no geometry, so a 600 dpi PNG
+    # and a PDF of the same plot are the same picture.
     export <- list(
       kind = "ggplot",
       label = "tree",
       ready = shiny$reactive(isTRUE(generated())),
       aspect = shiny$reactive(plot_canvas()$aspect),
-      # What the chosen size will do to the smallest type on the figure.
-      #
-      # Scaling the design keeps it proportioned at any width, which is what
-      # makes the export faithful — but proportion is not legibility. A dense
-      # tree on a journal column is correctly drawn and still unreadable, and
-      # the honest thing is to say so before the file is written rather than
-      # to quietly enlarge the type and put the labels back on top of each
-      # other.
+      # The canvas's own width. Reported in centimetres because that is what
+      # the export panel states sizes in.
+      width_cm = shiny$reactive(plot_canvas()$canvas_in * CM_PER_IN),
+      # Legibility is a property of the figure now, not of the export: the
+      # file carries the design as drawn, so if its smallest type is under what
+      # a journal accepts, that is true on screen too. Said here because the
+      # export is the moment it starts to matter, and the two ways out — a
+      # taller aspect ratio for the tip labels, fewer columns for the headers —
+      # are both in the sidebar behind the reader. `width_cm` is ignored: there
+      # is no longer a width to be warned about.
       note = function(width_cm) {
-        canvas <- plot_canvas()
         meta <- viz_metadata()
         md <- if (is.null(meta)) data.frame() else meta
-        k <- (max(1, width_cm) / CM_PER_IN) / canvas$canvas_in
-        pt <- tree_min_type_pt(scale_tree_opts(tree_opts(), k), md)
-        if (!is.finite(pt) || pt >= MIN_PRINT_PT) {
+        pt <- tree_plot$tree_min_type_pt(tree_opts(), md)
+        if (!is.finite(pt) || pt >= tree_plot$MIN_PRINT_PT) {
           return(NULL)
         }
         sprintf(
           paste(
-            "Smallest text would print at %.1f pt — under the %g pt most",
-            "journals ask for. Export wider, or show fewer columns."
+            "Smallest text prints at %.1f pt — under the %g pt most journals",
+            "ask for. Raise the aspect ratio, or show fewer columns."
           ),
           pt,
-          MIN_PRINT_PT
+          tree_plot$MIN_PRINT_PT
         )
       },
-      # Rebuilt at the size it is going out at, not the size it was drawn at.
-      # A ggplot cannot be rescaled: its type is in millimetres and the
-      # reserves around it are fractions, so printing the preview at another
-      # width moves one and not the other — which is how a 25cm export came out
-      # with its tip labels colliding and a 40cm one with them lost in a
-      # gutter. `scale_tree_opts()` scales the design instead, so the export is
-      # the preview at another size rather than the preview stretched.
+      # Built from exactly what the preview was built from, at exactly the
+      # canvas it was drawn on. `plot_inputs()` is the barrier the live render
+      # reads, so the export cannot pick up a control the preview has not shown
+      # yet.
       save = function(file, format, opts) {
         canvas <- plot_canvas()
-        target_in <- max(1, opts$width_cm) / CM_PER_IN
-        built <- build_tree_ggtree(
+        built <- tree_plot$build_tree_ggtree(
           plot_inputs()$tree,
           plot_inputs()$metadata,
-          scale_tree_opts(plot_inputs()$opts, target_in / canvas$canvas_in)
+          plot_inputs()$opts
         )
         save_plot_export(
           built,
           file,
           format,
-          width_cm = opts$width_cm,
+          width_cm = canvas$canvas_in * CM_PER_IN,
           aspect = canvas$aspect,
           dpi = opts$dpi
         )
@@ -3217,7 +3302,7 @@ server <- function(
     # requested pixel width.
     save_thumb <- function(file, w, h) {
       canvas <- plot_canvas()
-      save_tree_plot(
+      tree_plot$save_tree_plot(
         tree_plot_built(),
         file,
         "png",

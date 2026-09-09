@@ -5,6 +5,7 @@ box::use(
     expect_false,
     expect_identical,
     expect_length,
+    expect_lt,
     expect_setequal,
     expect_true,
     test_that
@@ -16,6 +17,7 @@ box::use(
   app / logic / amr_plot,
   app / logic / field_profile[field_profiles],
   app / logic / tree_plot,
+  app / logic / viz_export,
   app / logic / viz_helpers[control_ids],
   app / view / visualization_tree,
 )
@@ -1263,6 +1265,144 @@ test_that("a reset's coded default cannot land on top of the re-fit", {
       expect_length(key, 1L)
       # updateSliderInput formats its value on the way out.
       expect_equal(as.numeric(sent()[[key]]$value), fit)
+    }
+  )
+})
+
+test_that("Auto-fit drops the reader's text bias with the rest of the fit", {
+  # Text size is a bias *on* the fit, so re-solving the fit means dropping it:
+  # a hand-set 160% left on top of a freshly fitted layout is not the engine's
+  # answer for this data, it is the engine's answer with the reader's old thumb
+  # still on the scale.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$setInputs(nj_text_size = 160)
+      session$flushReact()
+      expect_equal(tree_opts()$text_scale, 1.6)
+
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+      expect_equal(isolate(fitted$nj_text_size), impl$TEXT_SIZE_DEFAULT)
+      expect_equal(tree_opts()$text_scale, 1)
+    }
+  )
+})
+
+test_that("the text scale reaches the plot as a multiplier, not a percentage", {
+  testServer(
+    visualization_tree$server,
+    args = list(plot_type = reactiveVal("Tree")),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_text_size = 75)
+      session$flushReact()
+      expect_equal(tree_opts()$text_scale, 0.75)
+    }
+  )
+})
+
+test_that("the aspect fit grows for a heatmap's header band", {
+  # A heatmap's column names stand in a band taken *out of* the plot's height,
+  # so a figure with one has to be taller or its rows are squeezed to nothing.
+  # Adding a panel re-fits for exactly that reason; a mapping does not, because
+  # the canvas grows sideways for it instead.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$flushReact()
+      bare <- isolate(fitted$nj_aspect_ratio)
+
+      # The shared switches ride into every panel, so the names have to be on
+      # in the sidebar for the panel to carry them.
+      session$setInputs(
+        nj_heatmap_gene_names = TRUE,
+        nj_heatmap_class_names = TRUE,
+        nj_heatmap_element = TRUE
+      )
+      nj_heatmaps(list(list(
+        id = "H1", kind = "amr", level = "gene", title = "Resistance genes",
+        cols = paste0("g", 1:12),
+        labels = rep("aac(6')-Ie/aph(2'')-Ia", 12),
+        classes = rep("Beta-lactam", 12),
+        show_gene_names = TRUE, show_class_names = TRUE,
+        show_element_type = TRUE, element_pos = "top",
+        cluster = FALSE, dend_depth = 0
+      )))
+      session$flushReact()
+
+      o <- isolate(tree_opts())
+      expect_true(isolate(fitted$nj_aspect_ratio) > bare)
+    }
+  )
+})
+
+test_that("the export is the figure on screen, at the size it is on screen", {
+  # No figure-size control any more: the canvas is already a physical size and
+  # every type size on it was fitted to that canvas, so a second width would
+  # mean either rebuilding the design (a different figure) or stretching this
+  # one. `width_cm` is what tells the export panel to stop asking.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      expect_true(is.function(export$width_cm))
+      expect_equal(
+        export$width_cm(),
+        plot_canvas()$canvas_in * viz_export$CM_PER_IN
+      )
+
+      file <- file.path(dir, "tree.png")
+      export$save(file, "png", list(dpi = 96))
+      expect_true(file.exists(file))
+      # The pixel dimensions are the canvas at the requested resolution, and
+      # nothing else — the export decides how finely, never how big.
+      header <- readBin(file, "raw", 33)
+      width <- sum(as.integer(header[17:20]) * 256^(3:0))
+      expect_lt(abs(width - round(plot_canvas()$canvas_in * 96)), 2)
     }
   )
 })

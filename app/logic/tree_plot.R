@@ -49,7 +49,7 @@ box::use(
   ],
   ape[root],
   stats[dist, hclust, setNames],
-  utils[head],
+  utils[head, tail],
   RColorBrewer[brewer.pal, brewer.pal.info],
   viridisLite[viridis],
   grDevices[colorRampPalette],
@@ -217,6 +217,106 @@ TIP_SIZE_FLOOR <- 1.2 # Minimum text size for legibility flag
 
 .clamp <- function(x, lo, hi) min(max(x, lo), hi)
 
+#' Largest tip label a layout can carry, in millimetres.
+#'
+#' The one solve behind both halves of the tip-label rule. `tree_auto_layout()`
+#' calls it to *choose* a size; `.tiplab_room()` calls it to find out whether a
+#' size that has already been chosen will fit. They were separate arithmetic
+#' once, and drifted: the fit measured a label against the ring it wanted while
+#' the drawing measured it against the ring it got, so a radial tree hid labels
+#' that fitted and drew labels that did not.
+#'
+#' Three geometries, one rule — the size is the smaller of what a row can hold
+#' and what a label's own length allows:
+#'
+#' - **Linear.** Rows are the panel height over the tip count; width is the
+#'   share of the budget the labels may claim, spread over the longest label.
+#' - **Circular.** Everything is measured along the radius, and the label ring
+#'   takes its outer part. The two constraints move in opposite directions as
+#'   that ring grows — a longer ring sets a larger label, while the tips it
+#'   annotates sit on the smaller circle *inside* it — so the largest legible
+#'   type is exactly where they cross, and that crossing has a closed form.
+#'   `k` is the ratio of what the two ask for at ring = 1 and ring = 0; they
+#'   cross at k / (1 + k). This replaced a fixed guess that the tips sat at
+#'   0.35 of the panel whatever the tree held, which is why a radial tree drew
+#'   the same type size at twenty tips as at eighty and ran it off the canvas
+#'   at both.
+#' - **Inward.** The labels run from the rim *toward* the centre and stop at
+#'   INWARD_CORE_FRAC of the radius, so they converge rather than diverge: the
+#'   room between two of them is the arc at their inner ends, which does not
+#'   move with the ring. There is no crossing to find — the row constraint is
+#'   fixed and the ring only widens until the width constraint stops binding.
+#'
+#' @param n_tip Integer. Number of tips.
+#' @param width_in Numeric. Tree-and-labels budget, in inches.
+#' @param layout Character. Tree layout mode.
+#' @param label_chars Numeric. Characters in the longest label.
+#' @param aspect Numeric. The plot's aspect ratio; linear layouts only.
+#' @param label_frac Numeric. Share of the budget the labels may claim. The fit
+#'   asks for TIP_LABEL_FRAC, which is a design choice; the drawing is bounded
+#'   by TIP_LABEL_AXIS_MAX, which is the hard limit. The gap between them is
+#'   headroom the text-size control can spend.
+#' @param gap_mm Numeric. Millimetres already spoken for by the tip-point nudge.
+#' @param row_only Logical. Return the row constraint alone, which is what the
+#'   element sizes fitted to the pitch (branch labels, tip points) answer to.
+#' @return Numeric millimetres.
+#' @export
+tree_tiplab_room <- function(
+  n_tip,
+  width_in = 5.5,
+  layout = "rectangular",
+  label_chars = 20,
+  aspect = 1,
+  label_frac = NULL,
+  gap_mm = 0,
+  row_only = FALSE
+) {
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  w <- if (is.null(width_in) || !is.finite(width_in) || width_in <= 0) {
+    5.5
+  } else {
+    width_in
+  }
+  chars <- max(as.numeric(label_chars %||% 1), 1)
+  radius_in <- w * TREE_RADIAL_FRAC
+  # Each layout has its own ceiling on the labels' share, and only the linear
+  # one is ever asked for a different number (the fit's 0.35 against the
+  # drawing's 0.45). The radial ceilings are what the crossing is solved
+  # against, so overriding those would change the fit rather than bound it.
+  frac <- label_frac %||%
+    if (identical(layout, "inward")) {
+      1 - INWARD_CORE_FRAC - INWARD_TREE_MIN
+    } else if (layout %in% .circular_layouts) {
+      TIP_RING_FRAC_MAX
+    } else {
+      TIP_LABEL_FRAC
+    }
+  # Millimetres of label a given ring (or width share) buys, net of the nudge
+  # that holds the label off its tip point.
+  along <- function(run_in) {
+    max(25.4 * run_in - gap_mm, 0) / (TIP_CHAR_EM * chars)
+  }
+
+  if (identical(layout, "inward")) {
+    by_row <- TIP_ROW_FILL * 25.4 * 2 * pi * radius_in * INWARD_CORE_FRAC / n
+    ring <- min(by_row * TIP_CHAR_EM * chars / (25.4 * radius_in), frac)
+    by_width <- along(radius_in * max(ring, 0))
+  } else if (layout %in% .circular_layouts) {
+    k <- TIP_ROW_FILL * 2 * pi * TIP_CHAR_EM * chars / n
+    ring <- min(k / (1 + k), frac)
+    by_row <- TIP_ROW_FILL * 25.4 * 2 * pi * radius_in * (1 - ring) / n
+    by_width <- along(radius_in * ring)
+  } else {
+    a <- suppressWarnings(as.numeric(aspect %||% 1))
+    if (length(a) != 1L || !isTRUE(is.finite(a)) || a <= 0) {
+      a <- 1
+    }
+    by_row <- TIP_ROW_FILL * 25.4 * TIP_USABLE * a * w / n
+    by_width <- along(frac * w)
+  }
+  if (isTRUE(row_only)) by_row else min(by_row, by_width)
+}
+
 #' Calculate Auto-Fitted Layout Parameters
 #'
 #' Derives optimal aspect ratios, font sizes, and element scaling based on
@@ -251,55 +351,8 @@ tree_auto_layout <- function(
     .clamp(n * TIP_ROW_IN / w, TIP_ASPECT_MIN, TIP_ASPECT_MAX)
   }
 
-  inward <- identical(layout, "inward")
-  if (inward) {
-    # Inward: the tree hangs from the rim and the labels run inward from its
-    # tips, stopping at INWARD_CORE_FRAC of the radius. Their spacing is the
-    # arc *there* — the tightest point along their length — which does not move
-    # with the ring, so unlike the circular solve there is no crossing to find:
-    # the row constraint is fixed and the ring is only ever widened until the
-    # width constraint stops binding.
-    radius_in <- w * TREE_RADIAL_FRAC
-    by_row <- TIP_ROW_FILL * 25.4 * 2 * pi * radius_in * INWARD_CORE_FRAC / n
-    ring <- min(
-      by_row * TIP_CHAR_EM * chars / (25.4 * radius_in),
-      1 - INWARD_CORE_FRAC - INWARD_TREE_MIN
-    )
-    by_width <- 25.4 * radius_in * max(ring, 0) / (TIP_CHAR_EM * chars)
-    size <- min(by_row, by_width)
-  } else if (circular) {
-    # The radial solve. Everything is measured along the radius, which is half
-    # the panel, and the label ring takes the outer `ring` of it.
-    #
-    # Two constraints, and they move in opposite directions as the ring grows:
-    #
-    #   by_width — a label is set along the radius, so a longer ring lets it be
-    #     larger. Proportional to `ring`.
-    #   by_row — two neighbouring labels are separated by the arc between their
-    #     tips, and the tips sit on the circle *inside* the ring, whose
-    #     circumference is 2*pi*R*(1 - ring). Proportional to `1 - ring`.
-    #
-    # One rises and one falls, so the largest legible type is exactly where
-    # they cross, and that crossing has a closed form. `k` is the ratio of what
-    # the two constraints ask for at ring = 1 and ring = 0 respectively; the
-    # crossing is at k / (1 + k).
-    #
-    # This replaces a fixed guess that the tips sat at 0.35 of the panel
-    # whatever the tree held, which is why a radial tree drew the same type
-    # size at twenty tips as at eighty and ran it off the canvas at both.
-    radius_in <- w * TREE_RADIAL_FRAC
-    k <- TIP_ROW_FILL * 2 * pi * TIP_CHAR_EM * chars / n
-    ring <- min(k / (1 + k), TIP_RING_FRAC_MAX)
-    by_width <- 25.4 * radius_in * ring / (TIP_CHAR_EM * chars)
-    by_row <- TIP_ROW_FILL * 25.4 * 2 * pi * radius_in * (1 - ring) / n
-    size <- min(by_row, by_width)
-  } else {
-    pitch_in <- TIP_USABLE * aspect * w / n
-    row_mm <- 25.4 * pitch_in
-    by_row <- TIP_ROW_FILL * row_mm
-    by_width <- 25.4 * TIP_LABEL_FRAC * w / (TIP_CHAR_EM * chars)
-    size <- min(by_row, by_width)
-  }
+  size <- tree_tiplab_room(n, w, layout, chars, aspect)
+  by_row <- tree_tiplab_room(n, w, layout, chars, aspect, row_only = TRUE)
 
   # Scale element sizes while clamping maximum growth
   fit_size <- function(field, value) {
@@ -343,24 +396,108 @@ tree_auto_layout <- function(
 #' nobody does that: 81 patient ids ran the guide box off the bottom of the
 #' canvas, and would have been unusable had it fit. The colours still do their
 #' other job — showing where the same value recurs on the tree — so the scale
-#' keeps its palette and the guide keeps the first few keys, with the rest
-#' reported as a count rather than dropped in silence.
+#' keeps its palette and the guide keeps a few keys, with the rest reported as
+#' a count rather than dropped in silence.
 #' @export
 LEGEND_MAX_KEYS <- 9L
 
+#' Fewest keys a guide is cut back to before it stops being worth drawing.
+#'
+#' The cap above is a ceiling, not the answer: what a guide may list depends on
+#' how much height it has and how many other guides are sharing it. Four
+#' variables mapped on a squat tree get four keys each rather than nine each
+#' off the bottom of the canvas.
+LEGEND_MIN_KEYS <- 4L
+
+#' Keys one guide may list, given the rows it has been budgeted.
+#'
+#' @param max_rows Integer. Rows per guide, from `tree_legend_max_rows()`.
+#' @return Integer key budget.
+#' @export
+tree_legend_max_keys <- function(max_rows = LEGEND_MAX_ROWS) {
+  rows <- suppressWarnings(as.integer(max_rows))
+  if (length(rows) != 1L || is.na(rows)) {
+    rows <- LEGEND_MAX_ROWS
+  }
+  as.integer(.clamp(rows, LEGEND_MIN_KEYS, LEGEND_MAX_KEYS))
+}
+
+# Whether a set of levels has ends worth showing.
+#
+# Numbers, and the four shapes a binned date takes ("2024", "2024-03",
+# "2024-W12", "2024-03-05") — all of which `.level_order()` has already put in
+# order, the dates because they sort lexically into chronological order. For
+# anything else "first" and "last" are accidents of the alphabet.
+.levels_are_ordered <- function(x) {
+  if (length(x) < 2L) {
+    return(FALSE)
+  }
+  if (!anyNA(suppressWarnings(as.numeric(x)))) {
+    return(TRUE)
+  }
+  all(grepl("^\\d{4}(-(W\\d{2}|\\d{2}(-\\d{2})?))?$", x))
+}
+
+# How often each level occurs in the column the scale was built from. Absent
+# data leaves every level equal, which falls back to the scale's own order.
+.level_counts <- function(levels, values) {
+  if (is.null(values)) {
+    return(rep(1L, length(levels)))
+  }
+  tab <- table(as.character(values))
+  counts <- as.integer(tab[levels])
+  counts[is.na(counts)] <- 0L
+  counts
+}
+
 #' The keys one guide should list, and what to say about the rest.
 #'
+#' Which keys survive is not the same question for every scale, and answering
+#' it with "the first nine" was wrong for both kinds:
+#'
+#' - An **ordered** scale (numbers, or a binned date) is read for its range.
+#'   Nine consecutive keys off the front of eighty say nothing about the other
+#'   seventy-one, so the budget is split between the two ends and the reader
+#'   gets the extremes every colour on the figure lies between.
+#' - A **nominal** scale has no ends. Its keys go to the levels the reader will
+#'   actually meet — the most frequent ones — restored to the scale's own order
+#'   so the guide still reads down the palette rather than down a ranking.
+#'
+#' "Not recorded" keeps its key wherever it appears. It is the one level whose
+#' colour cannot be guessed from the others, and an unexplained grey swatch is
+#' worse than one fewer real category.
+#'
 #' @param levels Character vector of the scale's levels, in draw order.
-#' @return list(breaks = <character>, hidden = <integer>).
+#' @param values The mapped column, for the frequency order. Optional; without
+#'   it a nominal scale falls back to its own level order.
+#' @param max_keys Integer. Keys this guide has room for.
+#' @return list(breaks = <character>, hidden = <integer>, total = <integer>).
 #' @export
-tree_legend_breaks <- function(levels) {
+tree_legend_breaks <- function(
+  levels,
+  values = NULL,
+  max_keys = LEGEND_MAX_KEYS
+) {
   levels <- as.character(levels)
-  if (length(levels) <= LEGEND_MAX_KEYS) {
-    return(list(breaks = levels, hidden = 0L))
+  n <- length(levels)
+  k <- max(suppressWarnings(as.integer(max_keys)), 2L)
+  if (is.na(k) || n <= k) {
+    return(list(breaks = levels, hidden = 0L, total = n))
+  }
+  missing <- intersect(MISSING_LABEL, levels)
+  real <- setdiff(levels, MISSING_LABEL)
+  budget <- max(k - length(missing), 1L)
+  keep <- if (.levels_are_ordered(real)) {
+    head_n <- ceiling(budget / 2)
+    c(head(real, head_n), tail(real, budget - head_n))
+  } else {
+    ranked <- order(-.level_counts(real, values), seq_along(real))
+    real[sort(head(ranked, budget))]
   }
   list(
-    breaks = levels[seq_len(LEGEND_MAX_KEYS)],
-    hidden = length(levels) - LEGEND_MAX_KEYS
+    breaks = c(keep, missing),
+    hidden = n - length(keep) - length(missing),
+    total = n
   )
 }
 
@@ -370,15 +507,23 @@ tree_legend_breaks <- function(levels) {
 #' slot for a row that is not a break, and a count dressed up as a swatch would
 #' read as another category.
 #'
+#' Stated as "9 of 81 shown" rather than "+ 72 more", because with the keys
+#' taken from both ends of an ordered scale the reader has to know the list is
+#' a *sample* of the levels and not the head of them.
+#'
 #' @param name Character. The variable's title.
 #' @param hidden Integer. Levels the guide is not listing.
+#' @param total Integer. Levels the scale holds. Optional.
 #' @return Character.
 #' @export
-tree_legend_title <- function(name, hidden) {
+tree_legend_title <- function(name, hidden, total = NULL) {
   if (!isTRUE(hidden > 0)) {
     return(name)
   }
-  paste0(name %||% "", "\n+ ", hidden, " more")
+  if (is.null(total) || !isTRUE(is.finite(total) && total > hidden)) {
+    return(paste0(name %||% "", "\n+ ", hidden, " more"))
+  }
+  paste0(name %||% "", "\n", total - hidden, " of ", total, " shown")
 }
 
 #' Calculate Legend Column Multiples
@@ -445,6 +590,10 @@ AXIS_TARGET_TICKS <- 6L
 # axis to a smear on a tree with a few hundred tips, next to a legend that had
 # stayed readable.
 AXIS_LABEL_SIZE <- 2.9
+
+# Type size for the internal node numbers, in millimetres — ggplot2's own text
+# default, so node view looks the same as it always did at text scale 1.
+NODE_LABEL_SIZE <- 3.88
 
 #' Round tick positions for a whole-tree distance axis
 #'
@@ -518,7 +667,7 @@ tree_axis_layer <- function(opts, max_x, y0) {
         label = .data[["label"]]
       ),
       inherit.aes = FALSE,
-      size = AXIS_LABEL_SIZE * .scale_of(opts),
+      size = AXIS_LABEL_SIZE * .type_of(opts),
       vjust = 1,
       color = opts$line_color
     )
@@ -826,25 +975,32 @@ tree_min_type_pt <- function(opts, md, panel_in = NULL) {
     )
   axis_in <- tree_axis_in(opts, panel_in)
   scale <- .scale_of(opts)
+  want <- HEADER_SIZE_MAX * .type_of(opts)
 
   # An annotation header is the smallest type the plot sets, because it is
-  # fitted to a column rather than to a row.
+  # fitted to a column rather than to a row. Only the ones that will actually
+  # be drawn count: a header the columns cannot hold legibly is left off the
+  # figure (`.header_drawn()`), so it says nothing about how small the figure
+  # prints.
   mm <- numeric(0)
   if (annotation_total(opts) > 0) {
-    mm <- c(mm, HEADER_SIZE_MIN * scale)
+    header <- function(col_in) {
+      size <- .fitted_type(want, col_in * 25.4 * HEADER_FILL, scale)
+      if (.header_drawn(size, scale)) size else numeric(0)
+    }
     if (.n_tiles(opts) > 0) {
-      mm <- c(mm, .tile_col_in(opts) * 25.4 * HEADER_FILL)
+      mm <- c(mm, header(.tile_col_in(opts)))
     }
     if (
       length(Filter(function(h) length(h$cols) > 0L, opts$heatmaps %||% list()))
     ) {
-      mm <- c(mm, .heat_col_in(opts) * 25.4 * HEADER_FILL)
+      mm <- c(mm, header(.heat_col_in(opts)))
     }
   }
-  if (isTRUE(opts$tiplab_show)) {
-    mm <- c(mm, opts$tiplab_size %||% 4)
+  if (tree_tiplab_drawn(opts, md)) {
+    mm <- c(mm, .tiplab_size(opts, md))
   }
-  pt <- c(mm * .MM_TO_PT, opts$legend_size %||% 10)
+  pt <- c(mm * .MM_TO_PT, tree_legend_size(opts))
   min(pt[is.finite(pt) & pt > 0], Inf)
 }
 
@@ -887,6 +1043,136 @@ scale_tree_opts <- function(opts, k) {
 .scale_of <- function(opts) {
   k <- suppressWarnings(as.numeric(opts$scale %||% 1))
   if (length(k) != 1L || is.na(k) || !is.finite(k) || k <= 0) 1 else k
+}
+
+# --- The reader's own text size ----------------------------------------------
+#
+# One control over every piece of type on the figure, and over nothing else.
+#
+# It is a *bias*, not a size. The engine already solves each label's size from
+# the room it has — a tip label from the row pitch, a column header from the
+# column under it, a legend key from the height beside the tree — and those
+# solves are what keep a figure legible as the data changes shape. This
+# multiplies what each of them asks for, and every one of them still ends
+# inside the same two rules:
+#
+#   as big as possible   — a label never grows past the room it has, so
+#                          turning the control up fills the gaps and then
+#                          stops. It cannot make two labels overlap.
+#   as small as necessary — a label never shrinks past what can be read, so
+#                          turning the control down reaches the legibility
+#                          floor and then stops.
+#
+# When the room itself cannot hold legible type — three hundred tips at half
+# an inch of pitch, a hundred gene columns across five inches — there is no
+# size that satisfies both, and the label is not drawn at all. That is the
+# only way an element disappears, and it is why the control cannot produce an
+# unreadable figure at either end of its range.
+#
+# Deliberately *not* folded into `opts$scale`. That one is the whole design's
+# physical scale: it moves the annotation columns, the key squares and the
+# branch strokes along with the type, which is what makes an export at another
+# width the same figure (see scale_tree_opts). Text size has to move the type
+# and leave the layout where it is, or "does this still fit?" has no answer.
+TEXT_SCALE_MIN <- 0.6
+TEXT_SCALE_MAX <- 2
+
+#' Text size the plot is drawn at when the reader has not said otherwise.
+#' @export
+TEXT_SCALE_DEFAULT <- 1
+
+.text_of <- function(opts) {
+  k <- suppressWarnings(as.numeric(opts$text_scale %||% TEXT_SCALE_DEFAULT))
+  if (length(k) != 1L || is.na(k) || !is.finite(k) || k <= 0) {
+    return(TEXT_SCALE_DEFAULT)
+  }
+  .clamp(k, TEXT_SCALE_MIN, TEXT_SCALE_MAX)
+}
+
+# The scale a piece of *type* is set at: the design's physical scale times the
+# reader's bias. Geometry takes `.scale_of()` alone.
+.type_of <- function(opts) .scale_of(opts) * .text_of(opts)
+
+# Type size for a label fitted to a slot, under the two rules above.
+#
+# `want` is what the design asks for at this text scale, `room` the largest
+# size the slot can hold, and HEADER_SIZE_MIN * scale the smallest worth
+# reading. When `room` falls under that floor the result is `room` itself —
+# below the floor, which is exactly what `.header_drawn()` tests for.
+.fitted_type <- function(want, room, scale) {
+  lo <- HEADER_SIZE_MIN * scale
+  if (!is.finite(room)) {
+    return(lo)
+  }
+  .clamp(want, lo, room)
+}
+
+# Whether a slot-fitted label is worth drawing at the size it came out at.
+.header_drawn <- function(size, scale) {
+  isTRUE(is.finite(size) && size >= HEADER_SIZE_MIN * scale)
+}
+
+#' Legend type size, at the reader's text scale and inside the plot's height.
+#'
+#' ggplot2 draws the guide box at whatever its contents need and lets it run
+#' off the bottom of the figure — there is no "wrap the guides into a second
+#' column", and `legend.box = "vertical"` means exactly one column. So the only
+#' two things that can keep a legend on the page are how many keys each guide
+#' lists (`tree_legend_max_keys()`) and how large they are set, and this is the
+#' second: the requested size, cut back until the box fits the height beside
+#' the tree, and no further than a journal's own type floor.
+#'
+#' Solved by repeated halving-toward-fit rather than in closed form because the
+#' row count is itself a function of the size — a smaller guide lists more keys
+#' per column, so shrinking does not reduce the rows proportionally. Four
+#' passes settle it; the loop stops as soon as it fits.
+#'
+#' Exported because the canvas budget is solved in the view and has to reserve
+#' the guide box at the size it will really be drawn at (see
+#' `tree_legend_width_in()`), not at the size the control was declared with.
+#' The view and the builder pass the same height, so they agree.
+#'
+#' @param opts List. Resolved tree options.
+#' @param height_in Numeric. Height the plot is drawn at, in inches. Without
+#'   it the requested size is returned unchecked.
+#' @return Numeric points.
+#' @export
+tree_legend_size <- function(opts, height_in = NULL) {
+  size <- (opts$legend_size %||% 10) * .text_of(opts)
+  if (!isTRUE(is.finite(height_in) && height_in > 0)) {
+    return(size)
+  }
+  scale <- .scale_of(opts)
+  floor_pt <- MIN_PRINT_PT * scale
+  for (i in seq_len(4L)) {
+    if (size <= floor_pt) {
+      return(floor_pt)
+    }
+    rows <- tree_legend_rows(
+      opts$layers,
+      opts$heatmaps,
+      tree_legend_max_rows(
+        opts$layers,
+        opts$heatmaps,
+        size,
+        height_in,
+        scale
+      )
+    )
+    need <- rows * LEGEND_ROW_IN * scale * size / 10 * LEGEND_HEIGHT_SAFETY
+    if (!isTRUE(is.finite(need)) || need <= height_in) {
+      return(size)
+    }
+    size <- max(size * height_in / need, floor_pt)
+  }
+  size
+}
+
+# Branch-label type size, at the reader's text scale. Which branches can hold
+# a number at that size is then `tree_branch_keep()`'s decision, so growing the
+# type thins the labelling rather than overprinting it.
+.branch_size <- function(opts) {
+  (opts$branch_size %||% TREE_FIT_DEFAULTS$branch_size) * .text_of(opts)
 }
 # Share of a column a header may fill across its width, leaving the rest as the
 # gap that keeps neighbouring headers apart.
@@ -1024,10 +1310,11 @@ ELEMENT_POS_DEFAULT <- "top"
   axis_units,
   panel_in,
   scale,
-  floor_size = HEADER_SIZE_MIN * scale
+  floor_size = HEADER_SIZE_MIN * scale,
+  text = 1
 ) {
   lo <- floor_size
-  hi <- max(HEADER_SIZE_MAX * scale, lo)
+  hi <- max(HEADER_SIZE_MAX * scale * text, lo)
   chars <- suppressWarnings(max(nchar(label %||% ""), 1L))
   if (
     !is.finite(run_units) ||
@@ -1266,36 +1553,158 @@ heatmap_total <- function(opts) {
 # is TIP_RING_FRAC_MAX, which the radial fit is solved against.
 TIP_LABEL_AXIS_MAX <- 0.45
 
-.tiplab_frac <- function(opts, md) {
-  if (!isTRUE(opts$tiplab_show)) {
-    # No label, so nothing to reserve — just a hair of clearance so the first
-    # strip does not butt straight onto the leader-line dots and the tip
-    # points. Kept small on purpose: with the labels off the reader wants the
-    # strip up against the tree, not floated off it.
-    return(0.008)
+# --- What one tip row can hold -----------------------------------------------
+#
+# The vertical half of the tip-label rule. `.tiplab_frac()` below books the
+# room the labels need *across* the panel and the canvas grows for it; nothing
+# grows for the room they need *down* it, because that room is one tip row and
+# the row pitch is fixed by the tip count and the aspect ratio. So this is the
+# one dimension a label can be asked for more of than exists — which is what
+# turns three hundred isolate names into a black band, and what the text-size
+# control would do to any tree if it were only a multiplier.
+
+# Millimetres of type the labels have room for, for this plot's actual shape.
+#
+# `tree_tiplab_room()` solved against the reserve's own ceiling rather than the
+# fit's share, so the answer is what will fit rather than what looks best — the
+# gap between the two is the headroom the text-size control spends. Long
+# isolate names (a 36-character assembly accession is ordinary) are what make
+# the width half the binding constraint on a small tree; the tip count makes
+# the row half bind on a large one.
+.tiplab_room <- function(opts, md) {
+  n <- if (is.null(md)) 0L else nrow(md)
+  if (!isTRUE(is.finite(n)) || n < 1L) {
+    return(Inf)
   }
-  w <- opts$width_in
-  if (is.null(w) || !is.finite(w) || w <= 0) {
-    return(0.375)
+  room <- tree_tiplab_room(
+    n,
+    opts$width_in %||% 5.5,
+    opts$layout %||% "rectangular",
+    .tiplab_chars(opts, md),
+    opts$aspect %||% 1,
+    # The hard limit rather than the fit's own share: what is being asked here
+    # is what will fit, not what looks best.
+    .tiplab_cap(opts),
+    .tiplab_point_gap_mm(opts)
+  )
+  # The rows the labels are really set on, once the builder has solved the
+  # reserves that compress them (see `row_mm` there). Without it the labels are
+  # fitted to a pitch the plot does not have: the header band over a heatmap
+  # can take more than half the height, and thirty isolate names sized for the
+  # nominal pitch then print as one black bar. Linear only — a radial tree's
+  # rows are arcs and no y-scale expansion touches them.
+  if (!.is_circular(opts) && isTRUE(is.finite(opts$row_mm %||% NA))) {
+    room <- min(room, TIP_ROW_FILL * opts$row_mm)
   }
-  size_mm <- opts$tiplab_size %||% 4
-  cap <- if (identical(opts$layout, "inward")) {
+  room
+}
+
+# Most of the tree-and-labels budget the labels may claim, by layout.
+.tiplab_cap <- function(opts) {
+  if (identical(opts$layout, "inward")) {
     1 - INWARD_CORE_FRAC - INWARD_TREE_MIN
   } else if (.is_circular(opts)) {
     TIP_RING_FRAC_MAX
   } else {
     TIP_LABEL_AXIS_MAX
   }
+}
+
+# Characters in the longest label this plot will set.
+#
+# The label source is a control the server resolves from the loaded database,
+# so it is legitimately unset — or naming a column a since-replaced database no
+# longer has — every time something asks about the labels before a plot exists.
+# The builder validates it against the frame before it draws; everything
+# upstream of that reaches here, and a missing column is one character rather
+# than an error.
+.tiplab_chars <- function(opts, md) {
+  field <- opts$tiplab
+  known <- length(field) == 1L &&
+    !is.na(field) &&
+    isTRUE(field %in% names(md))
+  if (!known) {
+    return(1L)
+  }
+  chars <- suppressWarnings(max(nchar(as.character(md[[field]])), 1L))
+  if (!is.finite(chars) || chars < 1L) 1L else chars
+}
+
+# The size the reader has asked for, before the row it has to fit in is
+# considered.
+.tiplab_want <- function(opts) {
+  (opts$tiplab_size %||% TREE_FIT_DEFAULTS$tiplab_size) * .text_of(opts)
+}
+
+# The size the labels are actually set at: what was asked for, never larger
+# than the row can hold and never smaller than legible.
+#
+# TIPLAB_ROOM_SLACK_MM keeps the cap off `tree_auto_layout()`'s own answer.
+# That fit lands the size on the room and then rounds it to one decimal, so a
+# bare `min()` would shave a rounded-up fit on every draw — invisible on the
+# page, but enough to make "the fit is what the room holds" false in a test.
+# Absolute, not proportional, because that is what rounding to one decimal is:
+# a fraction would be far too generous at the sizes a crowded tree sets.
+TIPLAB_ROOM_SLACK_MM <- 0.05
+
+.tiplab_size <- function(opts, md) {
+  room <- .tiplab_room(opts, md) + TIPLAB_ROOM_SLACK_MM
+  floor_mm <- TIP_SIZE_FLOOR * .scale_of(opts)
+  # Never past the room, never under what can be read. Where the room itself is
+  # under the floor the two rules cannot both hold and the labels are left off
+  # instead (`tree_tiplab_drawn()`), so the floor wins here without consequence.
+  .clamp(.tiplab_want(opts), floor_mm, max(room, floor_mm))
+}
+
+#' Whether the isolate labels can be drawn legibly at all.
+#'
+#' False when a tip row cannot hold type at the smallest size worth reading,
+#' whatever the reader has asked for. The labels are then not drawn — shrinking
+#' them further would produce a black band rather than a list of names, and
+#' drawing them at a legible size would produce the same band with the names on
+#' top of each other.
+#'
+#' Exported because the view has to say so in the sidebar: labels vanishing
+#' with no explanation reads as a bug.
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame. Per-tip metadata.
+#' @return TRUE when the labels are drawn.
+#' @export
+tree_tiplab_drawn <- function(opts, md) {
+  if (!isTRUE(opts$tiplab_show)) {
+    return(FALSE)
+  }
+  room <- .tiplab_room(opts, md) + TIPLAB_ROOM_SLACK_MM
+  isTRUE(!is.finite(room) || room >= TIP_SIZE_FLOOR * .scale_of(opts))
+}
+
+.tiplab_frac <- function(opts, md) {
+  if (!tree_tiplab_drawn(opts, md)) {
+    # No label, so nothing to reserve — just a hair of clearance so the first
+    # strip does not butt straight onto the leader-line dots and the tip
+    # points. Kept small on purpose: with the labels off the reader wants the
+    # strip up against the tree, not floated off it.
+    return(0.008)
+  }
+  .tiplab_frac_at(opts, md, .tiplab_size(opts, md))
+}
+
+# The reserve for a stated label size. Split out from `.tiplab_frac()` because
+# the circular row solve needs it before the size is capped (see
+# `.tiplab_room()`), and running it at the capped size there would be circular.
+.tiplab_frac_at <- function(opts, md, size_mm) {
+  w <- opts$width_in
+  if (is.null(w) || !is.finite(w) || w <= 0) {
+    return(0.375)
+  }
+  cap <- .tiplab_cap(opts)
 
   # Inches of label text — a mean-advance estimate. `TIP_CHAR_EM` was checked
   # against the real grid text path (`grobWidth`) for an accession at tip size
   # and lands within ~2%, so measuring per render buys nothing and would only
   # make the reserve depend on device and font state.
-  chars <- suppressWarnings(max(nchar(as.character(md[[opts$tiplab]])), 1L))
-  if (!is.finite(chars)) {
-    chars <- 1L
-  }
-  label_in <- chars * TIP_CHAR_EM * size_mm / 25.4
+  label_in <- .tiplab_chars(opts, md) * TIP_CHAR_EM * size_mm / 25.4
 
   # Plus the nudge that holds the label off its tip point: the label starts
   # there, so the reserve — and the strip placed past it — has to account for
@@ -1377,6 +1786,14 @@ LEGEND_MAX_ROWS <- 18L # keys in one column before they wrap into another
 # tree_legend_width_in(); see the note there.
 LEGEND_SAFETY <- 1.03
 
+# Rounding-up factor on the guide box's estimated *height*, used only by
+# `tree_legend_size()`. `tree_legend_rows()` counts a guide's title as one row
+# like any other, and ggplot2 sets it at 1.2x the key text and puts
+# `legend.box.spacing` between the box and the panel — so the real box runs
+# taller than the row count says, and a size that fitted on paper still ran off
+# the bottom of the figure.
+LEGEND_HEIGHT_SAFETY <- 1.18
+
 #' Rows one guide box would stack, given what each guide will list.
 #'
 #' A title, its keys, the "+ N more" line when there is one, and a blank row
@@ -1391,8 +1808,9 @@ tree_legend_rows <- function(
   heatmaps = list(),
   max_rows = LEGEND_MAX_ROWS
 ) {
+  max_keys <- tree_legend_max_keys(max_rows)
   rows <- function(n_levels, capped) {
-    keys <- min(as.integer(n_levels), LEGEND_MAX_KEYS)
+    keys <- min(as.integer(n_levels), max_keys)
     # Wrapped into as many key columns as it needs, so a guide is only as tall
     # as its longest column.
     keys <- ceiling(keys / tree_legend_ncol(keys, max_rows))
@@ -1402,7 +1820,7 @@ tree_legend_rows <- function(
     layers %||% list(),
     function(l) {
       n <- as.integer(l$n_levels %||% 1L)
-      rows(n, n > LEGEND_MAX_KEYS)
+      rows(n, n > max_keys)
     },
     integer(1)
   )
@@ -1418,7 +1836,7 @@ tree_legend_rows <- function(
     drawn,
     function(h) {
       n <- length(.class_guide_levels(h))
-      if (!n) 0L else rows(n, n > LEGEND_MAX_KEYS)
+      if (!n) 0L else rows(n, n > max_keys)
     },
     integer(1)
   )
@@ -1573,6 +1991,7 @@ tree_legend_width_in <- function(
   # key column while the render wrapped a nine-key scale into two is how the
   # legend came out wider than budgeted and squeezed the tip labels.
   max_rows <- tree_legend_max_rows(layers, heatmaps, size, height_in, scale)
+  max_keys <- tree_legend_max_keys(max_rows)
   guide_in <- function(chars, ncol) {
     if (!is.finite(chars)) {
       chars <- 1L
@@ -1583,7 +2002,7 @@ tree_legend_width_in <- function(
     layers,
     function(l) {
       # Only the keys the guide will list, since that is all it is sized from.
-      labs <- head(unique(as.character(md[[l$field]])), LEGEND_MAX_KEYS)
+      labs <- head(unique(as.character(md[[l$field]])), max_keys)
       chars <- suppressWarnings(max(
         vapply(c(labs, l$title %||% ""), .legend_text_cols, integer(1)),
         1L
@@ -1591,7 +2010,7 @@ tree_legend_width_in <- function(
       guide_in(
         chars,
         tree_legend_ncol(
-          min(l$n_levels %||% 1L, LEGEND_MAX_KEYS),
+          min(l$n_levels %||% 1L, max_keys),
           max_rows
         )
       )
@@ -1623,7 +2042,7 @@ tree_legend_width_in <- function(
   strip <- vapply(
     heatmaps,
     function(h) {
-      lvls <- head(.class_guide_levels(h), LEGEND_MAX_KEYS)
+      lvls <- head(.class_guide_levels(h), max_keys)
       if (!length(lvls)) {
         return(0)
       }
@@ -1912,13 +2331,14 @@ heatmap_header_frac <- function(
   # reserve does too.
   rows_per_char <- function(col_span) {
     size <- if (is.null(tree_span) || !is.finite(axis_units)) {
-      HEADER_SIZE_MAX * .scale_of(opts)
+      HEADER_SIZE_MAX * .type_of(opts)
     } else {
       tree_header_size(
         col_span * squeeze * tree_span,
         axis_units,
         width_in,
-        .scale_of(opts)
+        .scale_of(opts),
+        .text_of(opts)
       )
     }
     HEADER_CHAR_ROWS * size / (HEADER_SIZE_MAX * .scale_of(opts))
@@ -1938,7 +2358,7 @@ heatmap_header_frac <- function(
       return(0)
     }
     size <- if (is.null(tree_span) || !is.finite(axis_units)) {
-      HEADER_SIZE_MAX * .scale_of(opts)
+      HEADER_SIZE_MAX * .type_of(opts)
     } else {
       .element_label_size(
         .element_label_text(h),
@@ -1952,8 +2372,10 @@ heatmap_header_frac <- function(
           .heat_span(opts) * squeeze * tree_span,
           axis_units,
           width_in,
-          .scale_of(opts)
-        )
+          .scale_of(opts),
+          .text_of(opts)
+        ),
+        text = .text_of(opts)
       )
     }
     ELEMENT_LABEL_GAP_ROWS + .element_label_rows(size)
@@ -1978,14 +2400,31 @@ heatmap_header_frac <- function(
     numeric(1)
   )
 
-  tile_rows <- vapply(
-    tiles,
-    function(l) {
-      suppressWarnings(max(nchar(l$title %||% l$field), 1L)) *
-        rows_per_char(.tile_span(opts))
-    },
-    numeric(1)
+  # A strip whose header will not be drawn (`tree_tile_layers()` drops the ones
+  # the column cannot carry legibly) reserves nothing for it.
+  tile_header <- tree_header_size(
+    .tile_span(opts) * squeeze * tree_span,
+    axis_units,
+    width_in,
+    .scale_of(opts),
+    .text_of(opts)
   )
+  tile_rows <- if (
+    !is.null(tree_span) &&
+      is.finite(axis_units) &&
+      !tree_header_drawn(tile_header, .scale_of(opts))
+  ) {
+    numeric(0)
+  } else {
+    vapply(
+      tiles,
+      function(l) {
+        suppressWarnings(max(nchar(l$title %||% l$field), 1L)) *
+          rows_per_char(.tile_span(opts))
+      },
+      numeric(1)
+    )
+  }
 
   rows <- suppressWarnings(max(c(heat_rows, tile_rows), 1))
   if (!is.finite(rows)) {
@@ -2112,7 +2551,13 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
 
   # One entry per header: how long it is, against how far out it sits.
   want <- function(chars, col_span, radius) {
-    size <- tree_header_size(col_span, axis, axis_in, .scale_of(opts))
+    size <- tree_header_size(
+      col_span,
+      axis,
+      axis_in,
+      .scale_of(opts),
+      .text_of(opts)
+    )
     arc <- max(chars, 1L) * TIP_CHAR_EM * size / 25.4
     r_in <- axis_in * radius / axis
     if (!is.finite(r_in) || r_in <= 0) 0 else arc / r_in
@@ -2265,6 +2710,236 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
   drawn
 }
 
+# Rows the distance axis and the scale bar hang below the first tip.
+#
+# They are data — ggplot trains the y scale on them — so they are part of the
+# range every expansion below is a fraction of, and part of the height the tip
+# rows have to share. Left out, a tree with an axis under it came out with its
+# rows a tenth shorter than they were fitted for.
+.axis_rows <- function(opts) {
+  if (.is_circular(opts)) {
+    return(0)
+  }
+  axis <- isTRUE(opts$axis_show)
+  bar <- isTRUE(opts$treescale_show)
+  if (!axis && !bar) {
+    return(0)
+  }
+  # Where the axis line sits (one row down, two when the scale bar has the
+  # first), plus its ticks, the gap under them and the row of numbers.
+  if (axis) {
+    (if (bar) 2 else 1) + AXIS_TICK_LEN + AXIS_LABEL_GAP + 1
+  } else {
+    2
+  }
+}
+
+# The class-name band's depth, from the panels alone.
+#
+# `heatmap_class_runs()` needs the columns a panel actually drew, which is not
+# known until the panel loop — but the band is only ever as deep as its longest
+# class *name*, and every panel carries its own classes. Standing in for the
+# real runs lets the row pitch be solved before the tip labels are set, which
+# is the one place it is needed early.
+.class_band_runs <- function(opts) {
+  named <- Filter(
+    function(h) {
+      length(h$cols) > 0L &&
+        !isTRUE(h$cluster) &&
+        !isFALSE(h$show_class_names) &&
+        length(h$classes)
+    },
+    opts$heatmaps %||% list()
+  )
+  lapply(named, function(h) {
+    data.frame(
+      class = unique(as.character(h$classes)),
+      stringsAsFactors = FALSE
+    )
+  })
+}
+
+# Millimetres of the column-name stack over the tallest panel that draws one.
+#
+# The same measure the builder takes as it draws (`header_mm_max`), taken
+# early: the stack is what an element-type label above it has to clear, and
+# where that label lands is part of the y range the tip rows have to share.
+.header_stack_mm <- function(opts, size, tiles = FALSE) {
+  drawn <- Filter(
+    function(h) length(h$cols) > 0L && !isFALSE(h$show_gene_names),
+    opts$heatmaps %||% list()
+  )
+  chars <- vapply(
+    drawn,
+    function(h) suppressWarnings(max(nchar(h$labels %||% h$cols), 1L)),
+    numeric(1)
+  )
+  # A tile strip's header is a variable *name*, several times longer than a
+  # gene symbol, and it stands in the same band. Counted only where the caller
+  # is measuring the whole band rather than what an element label must clear.
+  if (isTRUE(tiles)) {
+    chars <- c(
+      chars,
+      vapply(
+        Filter(
+          function(l) identical(l$aesthetic, "tile"),
+          opts$layers %||% list()
+        ),
+        function(l) suppressWarnings(max(nchar(l$title %||% l$field), 1L)),
+        numeric(1)
+      )
+    )
+  }
+  chars <- suppressWarnings(max(chars))
+  if (!isTRUE(is.finite(size)) || !is.finite(chars) || chars <= 0) {
+    return(0)
+  }
+  HEADER_ROW_PACK * chars * TIP_CHAR_EM * size
+}
+
+# The type size an annotation header comes out at, before the axis is solved.
+#
+# `tree_header_size()` fits a header to its column in *data* units, which only
+# exist once there is a tree to measure them against. The same answer in
+# physical units: the column's own width, squeezed if the annotation run is
+# wider than the tree can carry, against the design ceiling.
+.nominal_header_size <- function(opts) {
+  squeeze <- .annotation_squeeze(opts)
+  col_in <- max(
+    if (length(Filter(
+      function(h) length(h$cols) > 0L,
+      opts$heatmaps %||% list()
+    ))) {
+      .heat_col_in(opts)
+    } else {
+      0
+    },
+    if (.n_tiles(opts) > 0) .tile_col_in(opts) else 0
+  )
+  if (col_in <= 0) {
+    return(0)
+  }
+  .fitted_type(
+    HEADER_SIZE_MAX * .type_of(opts),
+    col_in * squeeze * 25.4 * HEADER_FILL,
+    .scale_of(opts)
+  )
+}
+
+#' Inches of plot height the annotations take from the tip rows.
+#'
+#' A heatmap's column names are set vertically, so a twenty-two character gene
+#' symbol is a band nearly two inches deep — and that band is *taken out of*
+#' the plot's height rather than added to it, because a y-scale expansion
+#' compresses the rows already there. Twelve isolates fitted to a 2.75 inch
+#' page therefore ended up with three quarters of a millimetre per row and no
+#' labels the engine would agree to draw.
+#'
+#' `tree_auto_layout()` cannot see any of this — it is handed a tip count and a
+#' width, and knows nothing of what is drawn beside the tree. So the aspect
+#' ratio it returns is corrected by this, the same way the circle-opening angle
+#' it returns is corrected by `tree_open_angle()`.
+#'
+#' Zero for a radial layout, whose panel is square and whose annotations are
+#' rings that grow it in both directions at once.
+#'
+#' @param opts List. Resolved tree options.
+#' @param n_tip Integer. Number of tips.
+#' @return Numeric inches.
+#' @export
+tree_band_in <- function(opts, n_tip) {
+  # Radial panels are square and their annotations are rings; a plain tree's
+  # own furniture — its margins, its distance axis — is what TIP_USABLE already
+  # holds back, so counting it again here would make every tree taller for
+  # nothing.
+  if (.is_circular(opts) || annotation_total(opts) <= 0) {
+    return(0)
+  }
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  size <- .nominal_header_size(opts)
+  mm <- .header_stack_mm(opts, size, tiles = TRUE)
+  if (.element_label_above(opts)) {
+    mm <- mm + ELEMENT_LABEL_GAP_ROWS * 25.4 * TIP_ROW_IN + size
+  }
+  # The class names hang below at the size the drawing caps them to, so the
+  # band is measured from that rather than from the header size above it.
+  mm <- mm +
+    .bottom_band_rows(
+      opts,
+      n,
+      .class_band_runs(opts),
+      .class_name_size(size, n, .class_band_runs(opts), .scale_of(opts))
+    ) *
+      25.4 *
+      TIP_ROW_IN
+  mm / 25.4
+}
+
+#' The aspect ratio a fitted tree needs once its annotations are counted.
+#'
+#' @param aspect Numeric. `tree_auto_layout()`'s answer.
+#' @param opts List. Resolved tree options.
+#' @param n_tip Integer. Number of tips.
+#' @return Numeric aspect ratio, within the fit's own limits.
+#' @export
+tree_fitted_aspect <- function(aspect, opts, n_tip) {
+  a <- suppressWarnings(as.numeric(aspect))
+  if (length(a) != 1L || !isTRUE(is.finite(a)) || a <= 0) {
+    return(aspect)
+  }
+  w <- opts$width_in
+  if (is.null(w) || !is.finite(w) || w <= 0) {
+    w <- 5.5
+  }
+  round(
+    .clamp(a + tree_band_in(opts, n_tip) / w, TIP_ASPECT_MIN, TIP_ASPECT_MAX),
+    1
+  )
+}
+
+# Millimetres of tip pitch the finished panel is really drawn at.
+#
+# Not `height_in / n_tip`, and not `.drawn_row_mm()` on the tip count either:
+# a panel's element-type label is placed as *data*, one clear line above the
+# tallest stack of column names on the figure, so the y range ggplot trains on
+# reaches that far and the rows are squeezed into what is left of the height.
+# How far that is depends on the pitch, and the pitch depends on it — so it is
+# solved once and once only. Iterating to a fixed point would be *wrong*, not
+# merely slow: the drawing places that label with a single pass too, so a
+# converged answer here would describe a figure nobody draws.
+.drawn_tip_pitch <- function(
+  opts,
+  n_tip,
+  height_in,
+  top_frac,
+  bottom_frac,
+  runs = list(),
+  size = NULL,
+  header_mm = 0
+) {
+  span <- .y_span_rows(opts, n_tip, runs, size) + .axis_rows(opts)
+  row_mm <- .drawn_row_mm(height_in, span, top_frac, bottom_frac)
+  if (!isTRUE(header_mm > 0) || !.element_label_above(opts)) {
+    return(row_mm)
+  }
+  # The stack, the clear line over it, and the label's own line — all three sit
+  # above the last tip in the range ggplot trains on.
+  extra <- (header_mm +
+    ELEMENT_LABEL_GAP_ROWS * 25.4 * TIP_ROW_IN +
+    (size %||% HEADER_SIZE_MAX)) /
+    row_mm
+  .drawn_row_mm(height_in, span + extra, top_frac, bottom_frac)
+}
+
+# Whether any panel puts its element-type label above its column names.
+.element_label_above <- function(opts) {
+  any(vapply(
+    opts$heatmaps %||% list(),
+    function(h) .element_label_drawn(h) && identical(.element_pos(h), "top"),
+    logical(1)
+  ))
+}
+
 # The y range ggplot will train the scale on, in rows of tip pitch.
 #
 # `expansion(mult = )` is a fraction of *this*, not of the tip count — so a
@@ -2301,9 +2976,19 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
 #' @param n_tip Integer. Number of tips.
 #' @param runs List of class-run frames, one per drawn panel.
 #' @param size Numeric. Type size the class names are set at.
+#' @param height_in Numeric. Height the plot is drawn at, in inches. Without it
+#'   the band is measured at the pitch the fit aims for rather than the pitch
+#'   the plot has, which under-reserves on a squat figure exactly as it did
+#'   over the headers — the last class name was clipped off the bottom edge.
 #' @return Numeric multiplicative expansion for the bottom of the y scale.
 #' @export
-heatmap_class_frac <- function(opts, n_tip, runs = list(), size = NULL) {
+heatmap_class_frac <- function(
+  opts,
+  n_tip,
+  runs = list(),
+  size = NULL,
+  height_in = NULL
+) {
   n <- max(as.integer(n_tip %||% 1L), 1L)
   band <- .bottom_band_rows(opts, n, runs, size)
 
@@ -2321,11 +3006,13 @@ heatmap_class_frac <- function(opts, n_tip, runs = list(), size = NULL) {
   if (band <= drawn) {
     return(0.02)
   }
-  .clamp(
-    (band - drawn) / .y_span_rows(opts, n, runs, size),
-    0.02,
-    CLASS_FRAC_MAX
-  )
+  rows <- band - drawn
+  # The same pitch correction the header reserve makes: these rows are a
+  # physical depth of type, and a shorter row means more of them.
+  if (isTRUE(is.finite(height_in) && height_in > 0)) {
+    rows <- rows * TIP_ROW_IN / (height_in / n)
+  }
+  .clamp(rows / .y_span_rows(opts, n, runs, size), 0.02, CLASS_FRAC_MAX)
 }
 
 #' The type size the class names under a bracketed panel are set at.
@@ -2479,19 +3166,75 @@ heatmap_class_frac <- function(opts, n_tip, runs = list(), size = NULL) {
 
 #' Type size for an annotation header, fitted to the column it sits over.
 #'
+#' HEADER_FILL of the column is the room: the rest is the gap that keeps
+#' neighbouring headers apart, so a name set to the full column width would
+#' touch the one beside it. The design size is the ceiling at text scale 1 and
+#' the reader can ask past it, up to that room and no further.
+#'
+#' A result below `HEADER_SIZE_MIN * scale` means the column cannot carry a
+#' legible name at all. It is returned rather than clamped up, so
+#' `.header_drawn()` can tell that case from a merely small header and leave
+#' the names off — printed anyway, they are a smear over the matrix rather
+#' than a set of labels.
+#'
 #' @param col_units Numeric. Width of one column, in x-axis data units.
 #' @param axis_units Numeric. Full width of the x axis, same units.
 #' @param panel_in Numeric. Physical width of the panel, in inches.
+#' @param scale Numeric. The plot's design scale.
+#' @param text Numeric. The reader's text-size bias.
 #' @return Numeric ggplot2 text size.
 #' @export
-tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
-  lo <- HEADER_SIZE_MIN * scale
-  hi <- HEADER_SIZE_MAX * scale
+tree_header_size <- function(
+  col_units,
+  axis_units,
+  panel_in,
+  scale = 1,
+  text = 1
+) {
   if (!is.finite(col_units) || !is.finite(axis_units) || axis_units <= 0) {
-    return(lo)
+    return(HEADER_SIZE_MIN * scale)
   }
   col_mm <- 25.4 * panel_in * col_units / axis_units
-  .clamp(col_mm * HEADER_FILL, lo, hi)
+  .fitted_type(HEADER_SIZE_MAX * scale * text, col_mm * HEADER_FILL, scale)
+}
+
+#' Whether an annotation header is worth drawing at the size it fits at.
+#'
+#' @param size Numeric. A `tree_header_size()` result.
+#' @param scale Numeric. The plot's design scale.
+#' @return TRUE when the header is drawn.
+#' @export
+tree_header_drawn <- function(size, scale = 1) {
+  .header_drawn(size, scale)
+}
+
+# Panels whose columns cannot carry a legible gene name lose the names.
+#
+# Decided once and written back into the panel records, because three things
+# downstream have to agree about it: the band reserved above the tree
+# (`heatmap_header_frac()`), the matrix that is actually drawn (gheatmap's
+# `colnames`), and the element-type label that has to clear whatever the names
+# left behind. Taken independently they disagreed, and the reserve was the one
+# that showed — a strip of empty page over a matrix with no names on it.
+#
+# The reader's own "Gene names" switch still wins where it says no; this can
+# only take names away, never put them back.
+.resolve_header_visibility <- function(opts, axis_units, axis_in, tree_span) {
+  squeeze <- .annotation_squeeze(opts)
+  scale <- .scale_of(opts)
+  col_span <- .heat_span(opts) * squeeze * tree_span
+  size <- tree_header_size(
+    col_span,
+    axis_units,
+    axis_in,
+    scale,
+    .text_of(opts)
+  )
+  drawn <- tree_header_drawn(size, scale)
+  lapply(opts$heatmaps %||% list(), function(h) {
+    h$show_gene_names <- !isFALSE(h$show_gene_names) && drawn
+    h
+  })
 }
 
 # Gene columns reordered so that genes carried by the same isolates sit
@@ -2642,7 +3385,8 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
   hc,
   n_tip,
   colour,
-  levels
+  levels,
+  max_keys = LEGEND_MAX_KEYS
 ) {
   if (!length(centres)) {
     return(NULL)
@@ -2652,6 +3396,9 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
 
   if (length(levels)) {
     keep <- !is.na(classes) & nzchar(trimws(as.character(classes)))
+    # The strip's guide answers to the same budget every other guide does, and
+    # its keys go to the classes that actually colour the most columns.
+    strip_keys <- tree_legend_breaks(levels, classes[keep], max_keys)
     fills <- amr_palette(
       levels,
       amr_fit_scale(panel$strip_scale %||% CLASS_STRIP_SCALE, length(levels))
@@ -2677,8 +3424,12 @@ tree_header_size <- function(col_units, axis_units, panel_in, scale = 1) {
       ),
       scale_fill_manual(
         values = fills,
-        breaks = head(levels, LEGEND_MAX_KEYS),
-        name = CLASS_STRIP_TITLE,
+        breaks = strip_keys$breaks,
+        name = tree_legend_title(
+          CLASS_STRIP_TITLE,
+          strip_keys$hidden,
+          strip_keys$total
+        ),
         drop = FALSE
       )
     )
@@ -2961,7 +3712,8 @@ tree_scale <- function(
   palette,
   aesthetic,
   name = NULL,
-  max_rows = LEGEND_MAX_ROWS
+  max_rows = LEGEND_MAX_ROWS,
+  max_keys = tree_legend_max_keys(max_rows)
 ) {
   numeric <- is.numeric(values) || inherits(values, "Date")
   viridis_pal <- is.null(palette) || palette %in% .viridis_scales
@@ -3014,11 +3766,11 @@ tree_scale <- function(
 
   values <- mapped_values(values)
   cols <- tree_level_colors(levels(values), palette)
-  keys <- tree_legend_breaks(names(cols))
+  keys <- tree_legend_breaks(names(cols), values, max_keys)
   guide <- guide_legend(
     ncol = tree_legend_ncol(length(keys$breaks), max_rows)
   )
-  title <- tree_legend_title(name, keys$hidden)
+  title <- tree_legend_title(name, keys$hidden, keys$total)
 
   if (identical(aesthetic, "fill")) {
     scale_fill_manual(
@@ -3096,7 +3848,7 @@ layer_for_field <- function(opts, field) {
   if (length(hit)) hit[[1]] else NULL
 }
 
-tree_tiplab_layer <- function(opts, layer = NULL, offset = 0) {
+tree_tiplab_layer <- function(opts, md, layer = NULL, offset = 0) {
   # Labels off still draws the leader lines. They are what makes a tree with
   # ragged tip depths readable without labels: without them the eye has to
   # carry a row across an empty band to whatever is annotated beside it. The
@@ -3122,7 +3874,7 @@ tree_tiplab_layer <- function(opts, layer = NULL, offset = 0) {
 
   params <- list(
     mapping = mapping,
-    size = opts$tiplab_size,
+    size = .tiplab_size(opts, md),
     # Aligning draws a leader line from each tip out to the axis limit. In an
     # inward tree every one of those runs toward the centre, where they all
     # converge into a solid blot over the root — so the layout that makes a
@@ -3202,7 +3954,7 @@ tree_branch_layer <- function(opts, tree_data, span_x, span_in) {
     return(NULL)
   }
 
-  size <- opts$branch_size * BRANCH_ABOVE_SHRINK
+  size <- .branch_size(opts) * BRANCH_ABOVE_SHRINK
   digits <- tree_branch_digits(len)
   keep <- tree_branch_keep(
     len,
@@ -3424,9 +4176,21 @@ tree_tile_layers <- function(
     header_y <- .header_y(opts, n_tip)
     centres <- tile_centres(opts, length(tiles), label_frac, max_x, tree_span)
     header_size <- if (is.null(axis_units)) {
-      HEADER_SIZE_MAX * .scale_of(opts)
+      HEADER_SIZE_MAX * .type_of(opts)
     } else {
-      tree_header_size(pwidth, axis_units, axis_in, .scale_of(opts))
+      tree_header_size(
+        pwidth,
+        axis_units,
+        axis_in,
+        .scale_of(opts),
+        .text_of(opts)
+      )
+    }
+    # A strip too narrow to carry its variable's name legibly carries none: the
+    # colours still mean what the guide says they mean, and a smear of type
+    # above them says nothing at all.
+    if (!tree_header_drawn(header_size, .scale_of(opts))) {
+      return(layers)
     }
     layers <- c(
       layers,
@@ -3576,6 +4340,17 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # same levels the geoms will actually draw.
   md <- .normalize_mapped_columns(opts, md)
 
+  # Isolate labels the rows cannot carry legibly are switched off here, before
+  # anything is measured against them — the label reserve, the annotation
+  # offsets, the aesthetics a mapping may still be drawn on and the guide it
+  # would contribute all read `opts$tiplab_show`, and they have to read the
+  # same answer. A tree at three hundred tips and half an inch of pitch is the
+  # ordinary way to get here; so is winding the text-size control up on one at
+  # eighty.
+  if (!tree_tiplab_drawn(opts, md)) {
+    opts$tiplab_show <- FALSE
+  }
+
   # What one annotation column is worth in tree spans, solved once against this
   # plot's own label reserve. Every width below reads the answer off `opts`.
   opts <- resolve_annotation_widths(opts, md)
@@ -3589,6 +4364,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   axis_in <- tree_axis_in(opts, panel_in)
   # Every physical length this build draws is multiplied by it (see .scale_of).
   scale <- .scale_of(opts)
+  # ...and every piece of type by this as well (see .text_of).
+  text <- .text_of(opts)
   # How tall this plot is drawn. It decides two things nothing else can: how
   # many rows a header of a given height occupies, and whether the guides fit
   # in one column. A circular panel is square and grows with its rings, so its
@@ -3600,10 +4377,11 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     (opts$width_in %||% 5.5) * (opts$aspect %||% 1)
   }
   # How tall any one guide may run before its keys wrap into another column.
+  legend_size <- tree_legend_size(opts, plot_height_in)
   legend_max_rows <- tree_legend_max_rows(
     opts$layers,
     opts$heatmaps,
-    opts$legend_size,
+    legend_size,
     plot_height_in,
     scale
   )
@@ -3720,12 +4498,72 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # difference. Skipping the solve is what let a radial tree draw its labels
   # off every edge of the canvas and its rings straight over them.
   fit <- .tiplab_xlim(opts, md, tree_data, max_x, annot_total)
+
+  # The pitch the tip rows are *really* drawn at.
+  #
+  # A y-scale expansion does not grow the plot, it compresses what is already
+  # in it: the band the column headers need above the last tip and the class
+  # names below the first are taken out of the height the rows had, and over a
+  # wide heatmap the two together can leave the tips little more than a third
+  # of it. Fitting an isolate label to `height_in / n_tip` therefore sizes it
+  # for rows the plot does not have, and thirty names sized that way print as
+  # one black bar — which is what they did.
+  #
+  # Two passes, and only two. The reserve above depends on the header sizes,
+  # which depend on how much x axis is left once the labels have taken their
+  # share, which is what the first `.tiplab_xlim()` above answers; the labels
+  # are then fitted to the pitch that comes out of it and the axis re-solved so
+  # the reserve beside them matches the size finally drawn. The second round
+  # can only shrink the labels, so there is nothing for a third to settle.
+  #
+  # Linear only. A radial tree's rows are arcs of its own disc and no y
+  # expansion touches them.
+  if (!circular) {
+    n_tip <- sum(tree_data$isTip)
+    band_runs <- .class_band_runs(opts)
+    band_type <- tree_header_size(
+      .heat_span(opts) * .annotation_squeeze(opts) * tree_span,
+      fit$limit - suppressWarnings(min(tree_data$x, na.rm = TRUE)),
+      axis_in,
+      scale,
+      text
+    )
+    opts$row_mm <- .drawn_tip_pitch(
+      opts,
+      n_tip,
+      plot_height_in,
+      heatmap_header_frac(
+        opts,
+        n_tip,
+        tree_span,
+        fit$limit - suppressWarnings(min(tree_data$x, na.rm = TRUE)),
+        panel_in,
+        plot_height_in
+      ),
+      heatmap_class_frac(opts, n_tip, band_runs, band_type, plot_height_in),
+      band_runs,
+      band_type,
+      .header_stack_mm(opts, band_type)
+    )
+    if (!tree_tiplab_drawn(opts, md)) {
+      opts$tiplab_show <- FALSE
+    }
+    fit <- .tiplab_xlim(opts, md, tree_data, max_x, annot_total)
+  }
   label_reserve <- fit$reserve
 
   # How much x axis the panel spans, which is what turns a column's width in
   # data units into its width on the page — and so into a type size that fits
   # it.
   axis_units <- fit$limit - suppressWarnings(min(tree_data$x, na.rm = TRUE))
+
+  # Now the axis is solved, how much of a column's name fits on it is knowable.
+  opts$heatmaps <- .resolve_header_visibility(
+    opts,
+    axis_units,
+    axis_in,
+    tree_span
+  )
 
   # Inches the tree's *own* span is drawn across — what is left of the
   # tree-and-labels budget once the labels have taken their fraction. This is
@@ -3753,7 +4591,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # maps shape.
   layers <- c(
     tree_clade_layers(opts),
-    list(tree_tiplab_layer(opts, lab_l, tiplab_offset)),
+    list(tree_tiplab_layer(opts, md, lab_l, tiplab_offset)),
     if (!is.null(lab_l)) {
       list(
         tree_scale(
@@ -3795,11 +4633,19 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       if (MISSING_LABEL %in% shp_levels) {
         shp_values[[MISSING_LABEL]] <- TREE_MISSING_SHAPE
       }
-      shp_keys <- tree_legend_breaks(names(shp_values))
+      shp_keys <- tree_legend_breaks(
+        names(shp_values),
+        md[[shp_l$field]],
+        tree_legend_max_keys(legend_max_rows)
+      )
       list(scale_shape_manual(
         values = shp_values,
         breaks = shp_keys$breaks,
-        name = tree_legend_title(shp_l$title, shp_keys$hidden),
+        name = tree_legend_title(
+          shp_l$title,
+          shp_keys$hidden,
+          shp_keys$total
+        ),
         labels = .wrap_legend_labels,
         guide = guide_legend(
           ncol = tree_legend_ncol(length(shp_keys$breaks), legend_max_rows)
@@ -3807,7 +4653,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       ))
     },
     if (isTRUE(opts$nodelabel_show)) {
-      list(geom_nodelab(aes(label = .data[["node"]])))
+      list(geom_nodelab(
+        aes(label = .data[["node"]]),
+        size = NODE_LABEL_SIZE * .type_of(opts)
+      ))
     },
     tree_tile_layers(
       opts,
@@ -3841,7 +4690,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         y = -1,
         width = tree_nice_width(max_x * 0.1),
         color = opts$line_color,
-        fontsize = AXIS_LABEL_SIZE * .scale_of(opts)
+        fontsize = AXIS_LABEL_SIZE * .type_of(opts)
       )
   }
   if (!circular) {
@@ -3912,7 +4761,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   legend_cols <- tree_legend_cols(
     opts$layers,
     opts$heatmaps,
-    opts$legend_size,
+    legend_size,
     plot_height_in,
     scale
   )
@@ -3939,13 +4788,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       legend.box.spacing = unit(4, "pt"),
       legend.title = element_text(
         color = opts$line_color,
-        size = opts$legend_size * 1.2
+        size = legend_size * 1.2
       ),
       legend.text = element_text(
         color = opts$line_color,
-        size = opts$legend_size
+        size = legend_size
       ),
-      legend.key.size = unit(0.05 * opts$legend_size, "cm"),
+      legend.key.size = unit(0.05 * legend_size, "cm"),
       # The guide box keeps ggplot2's own theme colours unless it is told
       # otherwise — a white backdrop and grey key squares — so every legend on
       # a dark background arrived as a pale block with paler tiles behind the
@@ -4016,7 +4865,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       colnames_offset_y = .heatmap_name_offset(opts, sum(tree_data$isTip)),
       # Fitted to the column, not fixed: thirty gene names at a fixed size
       # overprint each other into a smear.
-      font.size = tree_header_size(cell, axis_units, axis_in, scale)
+      font.size = tree_header_size(cell, axis_units, axis_in, scale, text)
     )
     # gheatmap installs a default fill scale of its own, so replacing it is the
     # intended move — but ggplot2 announces every replacement, and this one is
@@ -4060,7 +4909,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         HEADER_ROW_PACK *
           suppressWarnings(max(nchar(names(frame)), 1L)) *
           TIP_CHAR_EM *
-          tree_header_size(cell, axis_units, axis_in, scale)
+          tree_header_size(cell, axis_units, axis_in, scale, text)
       )
     }
 
@@ -4081,7 +4930,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
             axis_in,
             scale,
             # Never smaller than this panel's own gene names.
-            floor_size = tree_header_size(cell, axis_units, axis_in, scale)
+            floor_size = tree_header_size(cell, axis_units, axis_in, scale, text),
+            text = text
           )
         ))
       )
@@ -4098,7 +4948,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
           cell = cell,
           # Set vertically, so what has to fit across is the type height against
           # one column — the same constraint the column names answer to above.
-          size = tree_header_size(cell, axis_units, axis_in, scale)
+          size = tree_header_size(cell, axis_units, axis_in, scale, text)
         ))
       )
     }
@@ -4118,7 +4968,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         attr(frame, "hclust"),
         sum(tree_data$isTip),
         opts$line_color %||% "#000000",
-        .class_guide_levels(pan)
+        .class_guide_levels(pan),
+        tree_legend_max_keys(legend_max_rows)
       )) {
         p <- suppressMessages(p + layer)
       }
@@ -4162,9 +5013,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   if (length(element_specs$top) || length(element_specs$bottom)) {
     n_tip_drawn <- sum(tree_data$isTip)
     band_rows <- .bottom_band_rows(opts, n_tip_drawn, class_runs, band_size)
-    row_mm <- .drawn_row_mm(
+    # The pitch the tip labels were fitted to, so the label clears the stack it
+    # is meant to clear. Taken at the nominal pitch it landed *inside* the gene
+    # names: the row it was placed on was a row the plot does not have.
+    row_mm <- .drawn_tip_pitch(
+      opts,
+      n_tip_drawn,
       plot_height_in,
-      .y_span_rows(opts, n_tip_drawn, class_runs, band_size),
       heatmap_header_frac(
         opts,
         n_tip_drawn,
@@ -4173,7 +5028,16 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         panel_in,
         plot_height_in
       ),
-      heatmap_class_frac(opts, n_tip_drawn, class_runs, band_size)
+      heatmap_class_frac(
+        opts,
+        n_tip_drawn,
+        class_runs,
+        band_size,
+        plot_height_in
+      ),
+      class_runs,
+      band_size,
+      header_mm_max
     )
     nudge <- 25.4 * TIP_ROW_IN / row_mm
 
@@ -4214,7 +5078,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
                 opts,
                 sum(tree_data$isTip),
                 class_runs,
-                band_size
+                band_size,
+                plot_height_in
               ),
               heatmap_header_frac(
                 opts,

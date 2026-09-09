@@ -84,27 +84,7 @@ MAX_EXPORT_PX <- 20000L
 #' @export
 CM_PER_IN <- 2.54
 
-# --- Presets -------------------------------------------------------------
-
-#' Named export use-cases.
-#'
-#' Each entry carries the concrete settings that produce it for a "ggplot"
-#' engine (a physical width in cm plus a DPI) and for a "widget" engine (a
-#' target pixel width — see the deterministic-sizing note on the
-#' `phylotrace_capture` handler in app/view/visualization.R for why a widget's
-#' export size is asked for this way rather than as a relative scale factor).
-#' Order is presentation order, most common first.
-#'
-#' The width/DPI numbers are chosen for what each use case actually needs
-#' rather than rounded to the nearest familiar figure: 17 cm is a two-column
-#' journal figure; 50 cm is poster scale at ordinary print resolution; 25 cm
-#' and 14 cm are sized for a slide and for a quick attachment respectively,
-#' both at screen resolution since neither is ever viewed at arm's length.
-#' @export
-# The sizes a figure is actually made at, in centimetres. Named for the page it
-# is going on rather than for a number, because that is the choice being made:
-# a single-column figure has to carry its type at 8.9 cm, and knowing that is
-# what stops someone exporting a wall chart for a journal.
+# --- Sizes and resolutions ---------------------------------------------------
 #' @export
 export_sizes <- list(
   list(id = "column", label = "Journal column", width_cm = 8.9),
@@ -188,31 +168,43 @@ export_panel <- function(ns, prefix) {
 
 #' Export Settings Modal
 #'
-#' A named preset ("Publication figure", "Presentation", ...) is the primary
-#' control — most exports need nothing else. The exact numbers a preset sets
-#' (width/DPI, or a widget's target pixel size) are reachable but tucked into
-#' a collapsed "Advanced" section, so picking one is not a dead end for a user
-#' who does need to fine-tune it.
+#' Two questions, and only two: what file to write, and — for a raster — how
+#' finely to rasterise it.
 #'
-#' File format is asked for separately, above the presets: it is a different
-#' kind of choice (an intended destination — a document, a print shop, a
-#' browser) than "how big and how sharp," and collapsing it into the preset
-#' would mean adding a second axis of preset (`format` × `use case`) for no
-#' real gain, since most formats make sense for most use cases.
+#' There used to be a third, a "Figure size" preset naming a journal column or
+#' a slide. It has no place on an engine that already draws its plot at a size
+#' the reader set: the aspect ratio, the type sizes and the room beside the
+#' tree are all fitted to one canvas, and asking for the figure again at
+#' another width means either rebuilding it (a different figure from the one on
+#' screen) or stretching it (the same figure, wrongly proportioned). Engines
+#' that know their own physical size say so (`width_cm` on their export
+#' contract) and the picker is dropped for them; the rest still get it.
+#'
+#' File format is its own control rather than part of a preset: it is a
+#' decision about the destination (a document, a print shop, a browser), and
+#' most formats make sense for most destinations.
 #'
 #' Re-created on each open, so the caller passes the values the controls last
 #' held — Shiny keeps an input's value after its UI is removed, but re-rendering
-#' the control resets it to whatever the declaration says. Seeding them (and the
-#' preset radio) is what stops the modal from forgetting the last choice between
-#' exports, however it was dismissed.
+#' the control resets it to whatever the declaration says. Seeding them is what
+#' stops the modal from forgetting the last choice between exports, however it
+#' was dismissed.
 #'
 #' @param ns Function. Module namespace function (`session$ns`).
 #' @param prefix Character. ID prefix unique to the calling module.
 #' @param kind Character. "ggplot" or "widget"; see the file header.
 #' @param values Named list of previously held control values.
+#' @param sizes Logical. Offer the figure-size picker. FALSE for an engine that
+#'   exports at the size it is already drawn at.
 #' @return A `modalDialog` wrapped in its styling container.
 #' @export
-export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
+export_modal <- function(
+  ns,
+  prefix,
+  kind = "ggplot",
+  values = list(),
+  sizes = TRUE
+) {
   id <- function(suffix) ns(paste0(prefix, "_", suffix))
   held <- function(name, default) values[[name]] %||% default
 
@@ -227,13 +219,12 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
         selected = held("filetype", "png"),
         width = "100%"
       ),
-      # Two controls, because there are two decisions and they are not the same
-      # one. Size is how big the figure is *made* — it decides how much type
-      # fits beside the drawing, so it changes the figure. Quality is only how
+      # Size is how big the figure is *made* — it decides how much type fits
+      # beside the drawing, so it changes the figure. Quality is only how
       # finely that figure is rasterised, and a vector file has no such
-      # question. The four "export for" presets bundled both into one choice
-      # and named it after neither.
-      if (identical(kind, "ggplot")) {
+      # question. Offered only to engines that do not already know their own
+      # physical size; see `sizes`.
+      if (identical(kind, "ggplot") && isTRUE(sizes)) {
         pickerInput(
           id("size"),
           "Figure size",
@@ -297,31 +288,47 @@ export_modal <- function(ns, prefix, kind = "ggplot", values = list()) {
 #' @param width_cm Numeric. Requested width in centimetres (ggplot only).
 #' @param quality Numeric. DPI (ggplot) or target pixel width (widget).
 #' @param aspect Numeric. Height-to-width ratio of the plot.
+#' @param fixed Logical. The size is the plot's own rather than a chosen one,
+#'   so the file is the figure on screen and the hint should say so.
 #' @return A single-line character description.
 #' @export
-export_hint <- function(kind, format, width_cm, quality, aspect = 0.62) {
+export_hint <- function(
+  kind,
+  format,
+  width_cm,
+  quality,
+  aspect = 0.62,
+  fixed = FALSE
+) {
   if (identical(format, "html")) {
     return("Self-contained interactive file; opens in any browser.")
   }
   if (identical(kind, "widget")) {
     px <- round(as.numeric(quality))
-    return(sprintf("%s px wide, at any window size.", prettyNum(px, big.mark = ",")))
+    return(sprintf(
+      "%s px wide, at any window size.",
+      prettyNum(px, big.mark = ",")
+    ))
   }
   size <- sprintf(
     "%.1f \u00d7 %.1f cm",
     width_cm,
     width_cm * aspect
   )
+  # Said once, at the front: with a fixed size every format writes the same
+  # figure, and the only thing left to explain is how it is stored.
+  as_shown <- if (isTRUE(fixed)) "Exactly as displayed \u00b7 " else ""
   # A vector file is the same drawing at any size, so there is nothing about
   # resolution to report — saying "600 dpi" of a PDF is not a detail, it is
   # wrong.
   if (format %in% vector_formats) {
-    return(paste0(size, " \u00b7 vector, sharp at any size."))
+    return(paste0(as_shown, size, " \u00b7 vector, sharp at any size."))
   }
   dpi <- resolved_dpi(width_cm, aspect, quality)
   w <- round(width_cm / CM_PER_IN * dpi)
   sprintf(
-    "%s \u00b7 %s \u00d7 %s px at %d dpi.",
+    "%s%s \u00b7 %s \u00d7 %s px at %d dpi.",
+    as_shown,
     size,
     prettyNum(w, big.mark = ","),
     prettyNum(round(w * aspect), big.mark = ","),
@@ -454,7 +461,10 @@ save_plot_export <- function(
   data <- c(.u32_be(ppm), .u32_be(ppm), as.raw(1L))
   chunk <- c(.u32_be(length(data)), type, data, .crc32_be(c(type, data)))
 
-  writeBin(c(raw[seq_len(ihdr_end)], chunk, raw[(ihdr_end + 1L):length(raw)]), file)
+  writeBin(
+    c(raw[seq_len(ihdr_end)], chunk, raw[(ihdr_end + 1L):length(raw)]),
+    file
+  )
 }
 
 .be_u32 <- function(b4) {
@@ -473,7 +483,10 @@ save_plot_export <- function(
 
 .crc32_be <- function(bytes) {
   hex <- digest(bytes, algo = "crc32", serialize = FALSE)
-  as.raw(strtoi(substring(hex, c(1L, 3L, 5L, 7L), c(2L, 4L, 6L, 8L)), base = 16L))
+  as.raw(strtoi(
+    substring(hex, c(1L, 3L, 5L, 7L), c(2L, 4L, 6L, 8L)),
+    base = 16L
+  ))
 }
 
 #' Decode a browser-captured data URI into an image file.

@@ -322,3 +322,37 @@ test_that("the sidebar panel is just a trigger plus the download target", {
   expect_true(grepl("e_file", html, fixed = TRUE))
   expect_false(grepl("e_filetype", html, fixed = TRUE))
 })
+
+test_that("an engine that knows its own size is not asked for one", {
+  # The tree draws on a canvas that already has a physical width, and every
+  # type size on it was fitted to that canvas. Offering a second width means
+  # either rebuilding the design — a different figure from the one on screen —
+  # or printing this one at a size it was not designed for.
+  fixed <- as.character(
+    viz_export$export_modal(identity, "e", "ggplot", sizes = FALSE)
+  )
+  expect_false(grepl("e_size", fixed, fixed = TRUE))
+  # What is left is still asked for: the file format and, for a raster, how
+  # finely that one figure is rasterised.
+  expect_true(grepl("e_filetype", fixed, fixed = TRUE))
+  expect_true(grepl("e_quality", fixed, fixed = TRUE))
+})
+
+test_that("a fixed-size export says the file is the figure on screen", {
+  raster <- viz_export$export_hint("ggplot", "png", 14, 300, 0.5, fixed = TRUE)
+  vector <- viz_export$export_hint("ggplot", "pdf", 14, 300, 0.5, fixed = TRUE)
+
+  expect_match(raster, "Exactly as displayed", fixed = TRUE)
+  expect_match(vector, "Exactly as displayed", fixed = TRUE)
+  # Still the same arithmetic underneath: the size in centimetres and, for the
+  # raster only, the pixels that resolution produces.
+  expect_match(raster, "14.0", fixed = TRUE)
+  expect_match(raster, "300 dpi", fixed = TRUE)
+  expect_match(vector, "vector", fixed = TRUE)
+  # And a chosen size says nothing of the kind.
+  expect_false(grepl(
+    "Exactly as displayed",
+    viz_export$export_hint("ggplot", "png", 14, 300, 0.5),
+    fixed = TRUE
+  ))
+})
