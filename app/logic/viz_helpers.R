@@ -695,7 +695,13 @@ reset_button_row <- function(ns, auto_fit_tip = NULL) {
           icon = shiny$icon("wand-magic-sparkles"),
           width = "100%"
         ),
-        auto_fit_tip
+        auto_fit_tip,
+        # Hover only. Bootstrap's default is "hover focus", and clicking a
+        # button focuses it — so the tip stayed up after the click, on top of
+        # the notification the click had just produced, until something else
+        # was clicked. A tooltip on a button that *does* something has no
+        # business outliving the doing.
+        options = list(trigger = "hover")
       )
     },
     shiny$actionButton(

@@ -109,13 +109,42 @@ test_that("every fitted value stays within its bounds at any tree size", {
 })
 
 test_that("labels stay legible for a few hundred tips and give up past that", {
+  # `labels = TRUE` is "the reader has asked for them": the fit then buys the
+  # row depth a name needs. Left to itself it would not, past the count at
+  # which it stops drawing them at all - which is the next case but one.
   expect_true(
-    tree_plot$tree_auto_layout(344, width_in = 5.7, label_chars = 36)$
-      labels_legible
+    tree_plot$tree_auto_layout(
+      344,
+      width_in = 5.7,
+      label_chars = 36,
+      labels = TRUE
+    )$labels_legible
   )
   expect_false(
-    tree_plot$tree_auto_layout(5000, width_in = 5.7, label_chars = 36)$
-      labels_legible
+    tree_plot$tree_auto_layout(
+      5000,
+      width_in = 5.7,
+      label_chars = 36,
+      labels = TRUE
+    )$labels_legible
+  )
+})
+
+test_that("a tree whose labels cannot be drawn is not made tall for them", {
+  chars <- 36
+  # Past mapping_engine's TIP_MAPPING_MAX the labels come off, and the row
+  # pitch that was buying room for them is room nothing uses: 253 isolates came
+  # out at the aspect ceiling, five times as tall as wide, for names never set.
+  bare <- tree_plot$tree_auto_layout(253, 5.5, "rectangular", chars)
+  asked <- tree_plot$tree_auto_layout(253, 5.5, "rectangular", chars, TRUE)
+  expect_false(bare$labels_legible)
+  expect_lt(bare$aspect, asked$aspect / 1.5)
+  # Small enough to keep the labels, and nothing changes.
+  small <- tree_plot$tree_auto_layout(20, 5.5, "rectangular", chars)
+  expect_true(small$labels_legible)
+  expect_identical(
+    small$aspect,
+    tree_plot$tree_auto_layout(20, 5.5, "rectangular", chars, TRUE)$aspect
   )
 })
 
@@ -1585,9 +1614,13 @@ test_that("the label reserve is a width, not a share of the grown canvas", {
     tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 2.3, width_in = 5.5,
     rootedge_show = FALSE, layers = list(), heatmaps = list()
   )
-  # Label text plus the tip-point nudge the reserve now carries, at X_EXPANSION.
+  # Label text plus the tip-point nudge the reserve now carries, at X_EXPANSION
+  # and grossed up for the plot margin, which is width outside the panel that a
+  # fraction of the whole figure never buys.
   needed <- (36 * impl$TIP_CHAR_EM * 2.3 / 25.4 +
-    impl$.tiplab_point_gap_mm(opts) / 25.4) * impl$X_EXPANSION
+    impl$.tiplab_point_gap_mm(opts) / 25.4) *
+    impl$X_EXPANSION *
+    5.5 / (5.5 - impl$PLOT_MARGIN_IN)
 
   narrow <- opts
   narrow$heatmaps <- list(list(kind = "amr", cols = paste0("c", 1:3)))
@@ -1609,7 +1642,9 @@ test_that("what the labels stop taking goes to the tree, not the annotations", {
     heatmaps = list(list(kind = "amr", cols = paste0("c", 1:30)))
   )
   needed <- (36 * impl$TIP_CHAR_EM * 2.3 / 25.4 +
-    impl$.tiplab_point_gap_mm(opts) / 25.4) * impl$X_EXPANSION
+    impl$.tiplab_point_gap_mm(opts) / 25.4) *
+    impl$X_EXPANSION *
+    5.5 / (5.5 - impl$PLOT_MARGIN_IN)
 
   expect_equal(5.5 - .reserve_in(opts, md), 5.5 - needed, tolerance = 0.02)
 })
@@ -1877,6 +1912,49 @@ test_that("the dendrogram hangs from the columns it was built over", {
   expect_setequal(intersect(segs$x, centres), centres)
 })
 
+test_that("both dendrograms on a figure are drawn at one stroke", {
+  # The tree's branches thin as they multiply, or a few hundred of them fill
+  # in solid. A clustered panel's column dendrogram is the same drawing and
+  # follows the same rule, so the two do not read as a tree with a hairline
+  # sketch under it.
+  expect_identical(tree_plot$tree_branch_width(60), impl$BRANCH_WIDTH)
+  expect_lt(tree_plot$tree_branch_width(240), tree_plot$tree_branch_width(60))
+  expect_identical(tree_plot$tree_branch_width(100000), impl$BRANCH_WIDTH_MIN)
+  expect_identical(
+    tree_plot$tree_auto_layout(120)$branch_width,
+    tree_plot$tree_branch_width(120)
+  )
+
+  segs <- function(p) {
+    keep <- which(vapply(
+      p$layers,
+      function(l) inherits(l$geom, "GeomSegment"),
+      logical(1)
+    ))
+    unique(unlist(lapply(keep, function(i) p$layers[[i]]$aes_params$linewidth)))
+  }
+  f <- .annot_fixture(16)
+  states <- amr_plot$AMR_CONFIDENCE_STATES
+  tier <- function(on) factor(ifelse(on, "Perfect", "Absent"), levels = states)
+  on <- rep(c(TRUE, FALSE), length.out = 16)
+  mat <- data.frame(
+    isolate = f$meta$isolate,
+    g1 = tier(on), g2 = tier(!on), g3 = tier(on),
+    stringsAsFactors = FALSE
+  )
+  opts <- .annot_opts(16)
+  opts$branch_width <- 0.5
+  opts$amr_matrix <- mat
+  opts$heatmaps <- list(list(
+    id = "H1", level = "gene", cols = c("g1", "g2", "g3"),
+    labels = c("g1", "g2", "g3"), classes = c("A", "B", "A"),
+    element = "AMR", title = "Resistance genes", cluster = TRUE,
+    dend_depth = 10, show_class_strip = TRUE, show_gene_names = TRUE
+  ))
+  drawn <- segs(.built_tree(f$tree, f$meta, opts))
+  expect_true(0.5 %in% drawn)
+})
+
 test_that("a clustered panel's class strip earns its own legend room", {
   clustered <- list(
     level = "gene",
@@ -1890,8 +1968,8 @@ test_that("a clustered panel's class strip earns its own legend room", {
   # Two guides for the clustered panel — its tiers and its classes — against
   # one for the same panel unclustered.
   expect_true(
-    tree_plot$tree_legend_rows(list(), list(clustered)) >
-      tree_plot$tree_legend_rows(list(), list(plain))
+    tree_plot$tree_legend_plan(list(), list(clustered))$rows >
+      tree_plot$tree_legend_plan(list(), list(plain))$rows
   )
   # And "Aminoglycoside" is a longer key than any confidence tier, so the
   # guide column has to widen for it.
@@ -1992,8 +2070,11 @@ test_that("the class strip and the dendrogram can each be switched off", {
   no_strip <- panel
   no_strip$show_class_strip <- FALSE
   expect_identical(
-    tree_plot$tree_legend_rows(list(), list(no_strip)),
-    tree_plot$tree_legend_rows(list(), list(within(panel, cluster <- FALSE)))
+    tree_plot$tree_legend_plan(list(), list(no_strip))$rows,
+    tree_plot$tree_legend_plan(
+      list(),
+      list(within(panel, cluster <- FALSE))
+    )$rows
   )
   expect_true(rows_below(list(heatmaps = list(no_strip))) < full)
 
@@ -2146,6 +2227,11 @@ test_that("a panel's own colours replace the shared confidence defaults", {
 
 # --- Legends a reader can actually use ---------------------------------------
 
+# The blank key a trimmed guide carries is punctuation, not a level: these
+# count the real keys either side of it.
+gap <- tree_plot$LEGEND_GAP_KEY
+.real_keys <- function(keys) length(setdiff(keys$breaks, gap))
+
 test_that("a long variable lists a few keys and counts the rest", {
   # 81 patient ids ran the guide box off the bottom of the canvas, and would
   # have been unusable had it fit. Dropping the guide outright lost the reader
@@ -2155,11 +2241,15 @@ test_that("a long variable lists a few keys and counts the rest", {
   levels <- sprintf("p%03d", seq_len(n_over))
   keys <- tree_plot$tree_legend_breaks(levels)
 
-  expect_identical(length(keys$breaks), tree_plot$LEGEND_MAX_KEYS)
+  expect_identical(.real_keys(keys), tree_plot$LEGEND_MAX_KEYS)
   expect_identical(keys$hidden, 144L)
   expect_identical(keys$total, n_over)
-  # No frequency to go on, so a nominal scale falls back to its own order.
-  expect_identical(keys$breaks, levels[seq_len(tree_plot$LEGEND_MAX_KEYS)])
+  # No frequency to go on, so a nominal scale falls back to its own order, and
+  # the blank key marks where the list was cut - here, at its end.
+  expect_identical(
+    keys$breaks,
+    c(levels[seq_len(tree_plot$LEGEND_MAX_KEYS)], tree_plot$LEGEND_GAP_KEY)
+  )
   expect_match(
     tree_plot$tree_legend_title("Patient Id", 144L, n_over),
     "9 of 153 shown",
@@ -2177,7 +2267,11 @@ test_that("an ordered scale keeps both of its ends", {
   # seventy-one. The reader of an ordered scale needs the extremes every colour
   # on the figure lies between, so the budget is split across them.
   keys <- tree_plot$tree_legend_breaks(as.character(1:80))
-  expect_identical(keys$breaks, c("1", "2", "3", "4", "5", "77", "78", "79", "80"))
+  # And the blank key between the halves, because the two are not neighbours.
+  expect_identical(
+    keys$breaks,
+    c("1", "2", "3", "4", "5", tree_plot$LEGEND_GAP_KEY, "77", "78", "79", "80")
+  )
   expect_identical(keys$hidden, 71L)
 
   # Binned dates are ordered too, in all four shapes date_bins produces.
@@ -2187,7 +2281,7 @@ test_that("an ordered scale keeps both of its ends", {
     sprintf("2024-W%02d", 1:20),
     format(as.Date("2024-01-01") + 0:40)
   )) {
-    ends <- tree_plot$tree_legend_breaks(lv)$breaks
+    ends <- setdiff(tree_plot$tree_legend_breaks(lv)$breaks, gap)
     if (length(lv) > tree_plot$LEGEND_MAX_KEYS) {
       expect_identical(ends[[1L]], lv[[1L]])
       expect_identical(ends[[length(ends)]], lv[[length(lv)]])
@@ -2205,7 +2299,8 @@ test_that("a nominal scale gives its keys to the values on the plot", {
   expect_true(all(c("ward04", "ward17", "ward29") %in% keys$breaks))
   # Still in the scale's own order, so the guide reads down the palette rather
   # than down a ranking.
-  expect_identical(keys$breaks, sort(keys$breaks))
+  real <- setdiff(keys$breaks, gap)
+  expect_identical(real, sort(real))
 })
 
 test_that("\"Not recorded\" never loses its key", {
@@ -2215,6 +2310,209 @@ test_that("\"Not recorded\" never loses its key", {
   keys <- tree_plot$tree_legend_breaks(levels)
   expect_true(tree_plot$MISSING_LABEL %in% keys$breaks)
   expect_identical(keys$breaks[[length(keys$breaks)]], tree_plot$MISSING_LABEL)
+})
+
+test_that("a short list is completed before a long one is lengthened", {
+  # Eight drug classes read "7 of 8" beside four confidence tiers with three
+  # rows going spare, because the budget was divided equally: a guide wanting
+  # four keys counted as costing the same as one wanting eighty.
+  keys <- tree_plot$tree_legend_key_budget(c(28L, 7L, 4L, 8L, 4L, 2L), 54)
+  expect_identical(keys[2:6], c(7L, 4L, 8L, 4L, 2L))
+  # And the one that cannot be completed takes what is left, up to the cap.
+  expect_identical(keys[[1]], tree_plot$LEGEND_MAX_KEYS)
+
+  # A list short enough to read is listed in full where the box has room;
+  # `LEGEND_MAX_KEYS` is for the ones that are not.
+  roomy <- tree_plot$tree_legend_key_budget(c(1L, 13L, 4L), 89)
+  expect_identical(roomy[[2]], 13L)
+  expect_identical(
+    tree_plot$tree_legend_key_budget(impl$LEGEND_FULL_MAX + 1L, 89),
+    tree_plot$LEGEND_MAX_KEYS
+  )
+
+  # A box with no room at all still leaves every guide worth drawing.
+  tight <- tree_plot$tree_legend_key_budget(rep(40L, 4L), 8)
+  expect_true(all(tight == 4L))
+})
+
+test_that("a heatmap's two guides stack together, after the mapped variables", {
+  # Four guides in the order the figure reads: what is drawn against the tips,
+  # then each panel's own tiers followed by its own drug classes. Scattered,
+  # the reader has to work out which "Drug class" belongs to which matrix.
+  layers <- list(.tile_layer("L1", "ward", "Set1"))
+  panels <- list(
+    list(id = "H1", level = "gene", cols = c("g1", "g2"), cluster = TRUE,
+         element = "AMR", classes = c("Beta-lactam", "Quinolone")),
+    list(id = "H2", level = "gene", cols = "g3", cluster = TRUE,
+         element = "STRESS", classes = "Metal")
+  )
+  plan <- tree_plot$tree_legend_plan(layers, panels, 10, 12)
+  expect_identical(plan$ids, c(
+    tree_plot$legend_guide_id("layer", layers[[1]]),
+    "heat:H1", "class:H1", "heat:H2", "class:H2"
+  ))
+  expect_identical(unname(plan$order), 1:5)
+  # A panel with no columns draws nothing and so carries no guide either.
+  bare <- tree_plot$tree_legend_plan(layers, list(panels[[1]], list(cols = NULL)))
+  expect_length(bare$ids, 3L)
+})
+
+test_that("a panel's class guide names the panel and takes its own palette", {
+  res <- list(id = "H1", element = "AMR", classes = c("A", "B"), cluster = TRUE,
+              cols = c("g1", "g2"), level = "gene")
+  stress <- within(res, {
+    id <- "H2"
+    element <- "STRESS"
+  })
+  # "Drug class" twice over says nothing about which matrix each belongs to.
+  expect_identical(impl$.class_guide_title(res), "Resistance drug class")
+  expect_identical(impl$.class_guide_title(stress), "Stress drug class")
+  # And the same green under two matrices reads as the same class, which it is
+  # not - the two are not even filed by the same vocabulary.
+  expect_false(identical(
+    impl$.class_strip_scale(res),
+    impl$.class_strip_scale(stress)
+  ))
+  # A panel the reader has given a palette keeps it.
+  expect_identical(impl$.class_strip_scale(within(res, strip_scale <- "Set3")), "Set3")
+})
+
+test_that("a gene guide lists every tier, whatever the panel reached", {
+  # A stress panel with nothing but perfect and strong calls listed two keys
+  # beside a resistance panel's four, as though the two had been scored
+  # differently. Absent is the case the reader most needs the key for, and it
+  # is exactly the one an all-positive panel drops.
+  panel <- list(level = "gene", cols = "g1")
+  expect_identical(
+    impl$.tier_guide_levels(panel, c("Perfect", "Strong")),
+    setdiff(amr_plot$AMR_CONFIDENCE_STATES, impl$AMR_TIER_RARE)
+  )
+  # The rare one is listed only where the screen actually produced it.
+  expect_true(
+    impl$AMR_TIER_RARE %in%
+      impl$.tier_guide_levels(panel, c("Perfect", impl$AMR_TIER_RARE))
+  )
+})
+
+test_that("the legend type shrinks until the guide box fits the figure", {
+  # ggplot2 has no guide-box wrapping: a box taller than the panel is simply
+  # clipped, and the last guide is gone with no sign that it was there.
+  many <- lapply(1:6, function(i) {
+    list(field = paste0("v", i), title = paste("V", i), n_levels = 30L,
+         aesthetic = "tile")
+  })
+  opts <- list(layers = many, heatmaps = list(), legend_size = 10)
+  tall <- tree_plot$tree_legend_size(opts, 20)
+  squat <- tree_plot$tree_legend_size(opts, 4)
+  expect_lt(squat, tall)
+  # A box with room to spare is left at the size it asked for.
+  expect_identical(
+    tree_plot$tree_legend_size(
+      list(layers = many[1:2], heatmaps = list(), legend_size = 10),
+      20
+    ),
+    10
+  )
+  # Never below what prints legibly - past that the guides are simply too many
+  # for the figure, and shrinking further only makes them unreadable as well.
+  expect_gte(squat, tree_plot$MIN_PRINT_PT)
+  # What it settled on either fits, at the row height a guide box draws at, or
+  # is the floor - which is the one case where nothing more can be done.
+  rows <- tree_plot$tree_legend_plan(many, list(), squat, 4)$rows
+  expect_true(
+    rows * impl$.legend_row_in(squat) <= 4 ||
+      isTRUE(all.equal(squat, tree_plot$MIN_PRINT_PT))
+  )
+  # Six thirty-level guides on a four-inch figure is that case, so check the
+  # fit on one that is merely tight rather than impossible.
+  few <- many[1:2]
+  fitted <- tree_plot$tree_legend_size(
+    list(layers = few, heatmaps = list(), legend_size = 10),
+    4
+  )
+  expect_lte(
+    tree_plot$tree_legend_plan(few, list(), fitted, 4)$rows *
+      impl$.legend_row_in(fitted),
+    4
+  )
+})
+
+test_that("a figure too short for its guides grows rather than clipping them", {
+  # ggplot2 clips a guide box taller than the figure, and the last guide is
+  # simply gone. Once the type is at the print floor a taller canvas is the
+  # only answer left - the same rule the width follows for a wide legend.
+  many <- lapply(1:8, function(i) {
+    list(field = paste0("v", i), title = paste("V", i), n_levels = 20L,
+         aesthetic = "tile")
+  })
+  opts <- list(layers = many, heatmaps = list(), legend_size = 10)
+  expect_gt(tree_plot$tree_legend_height_in(opts, 3), 3)
+  # A figure with room to spare asks for nothing.
+  expect_lt(tree_plot$tree_legend_height_in(opts, 30), 30)
+  # And a plot with no guides at all asks for no height.
+  expect_identical(
+    tree_plot$tree_legend_height_in(list(layers = list(), heatmaps = list()), 3),
+    0
+  )
+})
+
+test_that("the axis numbers get the room they hang in", {
+  # They are anchored at their top (vjust = 1), so ggplot trains the range on
+  # the anchor and the glyphs fall outside it - cut in half by the panel edge.
+  opts <- .annot_opts(20)
+  opts$axis_show <- TRUE
+  with_axis <- impl$.axis_frac(opts, 20, height_in = 3)
+  expect_gt(with_axis, 0)
+  # Bigger type hangs further down.
+  expect_gt(impl$.axis_frac(within(opts, text_scale <- 2), 20, height_in = 3),
+            with_axis)
+  # Nothing under the tree, nothing reserved.
+  off <- within(opts, {
+    axis_show <- FALSE
+    treescale_show <- FALSE
+  })
+  expect_identical(impl$.axis_frac(off, 20, height_in = 3), 0)
+})
+
+test_that("the last axis number gets the width it hangs in", {
+  # pretty() can put the last tick on the tree's own depth, and the number is
+  # centred on its tick - so half of "30" was drawn past the panel's right
+  # edge and cut down its middle.
+  opts <- .annot_opts(20)
+  opts$axis_show <- TRUE
+  opts$tiplab_show <- FALSE
+  md <- data.frame(isolate = c("a", "b"), label = c("a", "b"))
+  tree_data <- data.frame(x = c(0, 30), isTip = c(FALSE, TRUE))
+  fit <- impl$.tiplab_xlim(opts, md, tree_data, 30)
+  # The overhang, converted back to inches, covers the half-number it is for.
+  units_per_in <- fit$limit / (5.5 - impl$PLOT_MARGIN_IN)
+  expect_gt((fit$limit - 30) / units_per_in, impl$.axis_edge_in(opts, 30))
+  # Bigger type hangs further right.
+  bigger <- within(opts, text_scale <- 2)
+  expect_gt(impl$.tiplab_xlim(bigger, md, tree_data, 30)$limit, fit$limit)
+  # It is a floor on the reserve the labels already take, not an addition to
+  # it: a tree with labels keeps far more room than a two-digit number needs.
+  labelled <- within(opts, tiplab_show <- TRUE)
+  wide <- impl$.tiplab_xlim(labelled, md, tree_data, 30)
+  expect_identical(
+    wide$limit,
+    impl$.tiplab_xlim(within(labelled, axis_show <- FALSE), md, tree_data, 30)$limit
+  )
+})
+
+test_that("a bare tree still reserves the room its axis needs", {
+  # No annotations at all used to mean no y scale of our own, and ggtree's
+  # default 5% never held a line of type.
+  f <- .annot_fixture(20)
+  opts <- .annot_opts(20)
+  opts$axis_show <- TRUE
+  b <- suppressWarnings(suppressMessages(
+    ggplot2::ggplot_build(.built_tree(f$tree, f$meta, opts))
+  ))
+  y <- b$layout$panel_params[[1]]$y.range
+  # The axis line sits at y = -1 with its ticks and numbers under it; the range
+  # has to reach past the lot.
+  expect_lt(y[[1]], -1 - impl$AXIS_TICK_LEN - impl$AXIS_LABEL_GAP)
 })
 
 test_that("the key budget shrinks as guides compete for the height", {
@@ -2229,11 +2527,11 @@ test_that("the key budget shrinks as guides compete for the height", {
   expect_identical(tree_plot$tree_legend_max_keys(squat), 4L)
   expect_identical(tree_plot$tree_legend_max_keys(tall), tree_plot$LEGEND_MAX_KEYS)
   expect_identical(
-    length(tree_plot$tree_legend_breaks(
+    .real_keys(tree_plot$tree_legend_breaks(
       sprintf("p%02d", 1:40),
       NULL,
       tree_plot$tree_legend_max_keys(squat)
-    )$breaks),
+    )),
     4L
   )
 })
@@ -2245,7 +2543,7 @@ test_that("a capped guide still gets a scale, and only its keys are budgeted", {
   sc <- impl$tree_scale(many, "Set1", "fill", "Patient Id")
 
   expect_s3_class(sc$guide, "Guide")
-  expect_identical(length(sc$breaks), tree_plot$LEGEND_MAX_KEYS)
+  expect_identical(length(setdiff(sc$breaks, gap)), tree_plot$LEGEND_MAX_KEYS)
   expect_match(sc$name, "9 of 49 shown", fixed = TRUE)
 
   md <- data.frame(
@@ -2403,14 +2701,14 @@ test_that("guides flow into columns rather than being cut off", {
 })
 
 test_that("a capped guide counts as the rows it will actually draw", {
-  # 150 values is nine rows plus a "+ N more" line, not 150 — the whole point
-  # of capping the keys.
+  # 150 values is nine rows plus the counting line and the blank key, not 150 —
+  # the whole point of capping the keys.
   huge <- list(list(field = "v", title = "Patient Id", n_levels = 150L))
   small <- list(list(field = "v", title = "Patient Id", n_levels = 9L))
 
   expect_identical(
-    tree_plot$tree_legend_rows(huge),
-    tree_plot$tree_legend_rows(small) + 1L
+    tree_plot$tree_legend_plan(huge)$rows,
+    tree_plot$tree_legend_plan(small)$rows + 2L
   )
 })
 

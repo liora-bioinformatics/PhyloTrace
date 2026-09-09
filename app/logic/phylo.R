@@ -29,6 +29,7 @@ box::use(
 box::use(
   app / logic / db_connect[connect],
   app / logic / db_staging[imported_profile_long, local_allele_map],
+  app / logic / logging[log_event],
 )
 
 # --- 1. Allele Profile Extraction --------------------------------------------
@@ -77,6 +78,7 @@ load_allele_profile <- function(
   }
 
   wide <- long |>
+    .score_ambiguous_missing() |>
     select(isolate, gene, seqid) |>
     pivot_wider(names_from = gene, values_from = seqid)
 
@@ -90,6 +92,41 @@ load_allele_profile <- function(
   }
 
   mat
+}
+
+# Helper: Score a locus that carries more than one allele for the same isolate as
+# missing. pyMLST's `mlst` table has no unique key on (souche, gene), so a genome
+# with a duplicated or paralogous locus legitimately contributes two allele rows
+# for it. Two different alleles at one locus is an ambiguous call, not a profile
+# value, and NA is what every na_handling policy downstream is built to absorb.
+# Left in place, even a single such pair makes pivot_wider() return list-columns
+# for *every* locus, and the integer coercion that follows dies - taking the tree
+# and the MST for the whole database down with it.
+.score_ambiguous_missing <- function(long) {
+  key <- paste(long$isolate, long$gene, sep = "\r")
+  dup_key <- unique(key[duplicated(key)])
+  if (!length(dup_key)) {
+    return(long)
+  }
+
+  parts <- do.call(rbind, strsplit(dup_key, "\r", fixed = TRUE))
+  sample_n <- min(3L, length(dup_key))
+  log_event(
+    "PHYLO",
+    "Ambiguous loci scored missing",
+    sprintf(
+      "%d locus/isolate pair(s) across %d isolate(s) | e.g. %s",
+      length(dup_key),
+      length(unique(parts[, 1L])),
+      paste(
+        sprintf("%s@%s", parts[seq_len(sample_n), 2L], parts[seq_len(sample_n), 1L]),
+        collapse = ", "
+      )
+    )
+  )
+
+  long$seqid[key %in% dup_key] <- NA_integer_
+  long[!duplicated(key), , drop = FALSE]
 }
 
 # Helper: Format staged imported profiles into long format within local seqid code space

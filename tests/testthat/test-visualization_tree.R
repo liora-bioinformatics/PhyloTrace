@@ -24,6 +24,15 @@ box::use(
 
 impl <- attr(visualization_tree, "namespace")
 
+# The plot barrier settles the controls before it rebuilds anything, so that a
+# slider drag is one redraw rather than one per reported value. A mock session
+# has to be walked past that timer or the tree is never built.
+settle <- function(session) {
+  session$flushReact()
+  session$elapse(impl$PLOT_SETTLE_MS + 50)
+  session$flushReact()
+}
+
 # Four isolates is the smallest tree the distance matrix will build (>= 3).
 alleles <- function() {
   list(
@@ -251,7 +260,7 @@ test_that("Generate resolving a select costs no extra draw", {
       draws <- 0L
 
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       expect_identical(draws, 1L)
       expect_equal(tree_opts()$tiplab, "isolate")
@@ -528,7 +537,7 @@ test_that("Generate draws the tree exactly once, already fitted", {
       # one per control echoing back.
       selected(c("A", "B", "C"))
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       expect_identical(draws, 1L)
       expect_true(generated())
@@ -1095,6 +1104,18 @@ test_that("every control the sidebar renders is in the reset catalogue", {
   expect_catalogued(ids, impl$TREE_CONTROL_DEFAULTS)
 })
 
+test_that("the isolate labels have no size control of their own", {
+  # One "Text size" moves every piece of type on the figure, and the label
+  # itself is fitted to the row it has to sit in. A second control for this one
+  # string could only ask for a size the row cannot hold - which the engine
+  # refuses anyway (tree_plot's tree_tiplab_drawn).
+  ids <- rendered_control_ids(impl$tree_controls(NS("x")), drop = character(0))
+  expect_false("nj_tiplab_size" %in% ids)
+  expect_true("nj_text_size" %in% ids)
+  # The fit still solves a label size; it simply has nowhere to be typed in.
+  expect_true("nj_tiplab_size" %in% names(impl$FITTED_DEFAULTS))
+})
+
 test_that("every catalogued control is filed under exactly one family", {
   families <- control_ids(impl$TREE_CONTROLS)
   # A control filed twice would be sent two update messages of different kinds,
@@ -1149,7 +1170,7 @@ test_that("a reset returns the fitted controls to the fit, not to the code", {
     {
       set_tree_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       fit <- isolate(fitted$nj_aspect_ratio)
       expect_false(isTRUE(all.equal(fit, impl$FITTED_DEFAULTS$nj_aspect_ratio)))
 
@@ -1254,7 +1275,7 @@ test_that("a reset's coded default cannot land on top of the re-fit", {
     {
       set_tree_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       fit <- isolate(fitted$nj_aspect_ratio)
 
       sent <- record_input_messages(session)
@@ -1338,7 +1359,7 @@ test_that("the aspect fit grows for a heatmap's header band", {
     {
       set_tree_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       bare <- isolate(fitted$nj_aspect_ratio)
 
       # The shared switches ride into every panel, so the names have to be on
@@ -1387,7 +1408,7 @@ test_that("the export is the figure on screen, at the size it is on screen", {
     {
       set_tree_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       expect_true(is.function(export$width_cm))
       expect_equal(

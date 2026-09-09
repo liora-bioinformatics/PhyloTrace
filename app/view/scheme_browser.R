@@ -160,7 +160,7 @@ ui <- function(id) {
                         " ",
                         "Choose a folder on this computer. Databases kept on",
                         " network or shared drives (NFS, SMB, cloud-synced",
-                        " folders) can be corrupted by a typing run."
+                        " folders) can be corrupted."
                       ),
                       div(
                         id = "location-selected-ui",

@@ -25,8 +25,10 @@ box::use(
     geom_text,
     geom_label,
     geom_tile,
+    geom_rect,
     geom_segment,
     ggsave,
+    guide_colourbar,
     guide_legend,
     theme,
     element_text,
@@ -63,6 +65,7 @@ box::use(
       AMR_CLUSTER_DISTANCE_DEFAULT,
       AMR_CLUSTER_METHOD_DEFAULT,
       AMR_CONFIDENCE_STATES,
+      AMR_ELEMENT_TYPES,
       amr_confidence_palette,
       amr_fit_scale,
       amr_palette
@@ -70,6 +73,7 @@ box::use(
   app / logic / date_bins[bin_date_values],
   app / logic / field_labels[field_labels_for],
   app / logic / field_profile[field_levels],
+  app / logic / mapping_engine[crowded_tips],
 )
 
 .viridis_scales <- c(
@@ -102,6 +106,18 @@ TREE_SHAPES <- c(16, 17, 15, 18, 1, 2)
 # taller than they needed to be — a page of tree that has to be scrolled reads
 # worse than a slightly tighter one that does not.
 TIP_ROW_IN <- 0.14 # Target inches of plot height per tip
+
+# The row pitch a tree with no isolate labels is fitted to instead.
+#
+# TIP_ROW_IN buys a row deep enough to set a name in. A tree whose names cannot
+# be set at any legible size (`tree_auto_layout()` decides that, and past
+# `TIP_MAPPING_MAX` tips so does the view) is paying for room it will not use —
+# 253 isolates came out at the aspect ceiling, five times as tall as it is
+# wide, to hold labels that are never drawn. Without them the only thing a row
+# has to do is keep its branch a separate line from its neighbours, which takes
+# about a third of the depth: the same tree at 2.5 shows the same topology and
+# reads far better.
+TIP_ROW_BARE_IN <- 0.055
 TIP_USABLE <- 0.9 # Share of plot height available excluding margins/title
 TIP_ROW_FILL <- 0.77 # Fraction of row pitch occupied by tip label text box
 
@@ -204,6 +220,31 @@ BRANCH_WIDTH_TIPS <- 60
 # is how the crowding grows. A square-root fall came down far too slowly — a
 # radial tree of a few hundred tips still filled in solid.
 BRANCH_WIDTH_FALL <- 1
+
+#' The stroke a dendrogram of `n_leaves` is drawn with.
+#'
+#' One rule for both dendrograms on the figure. The tree's branches take it
+#' from the tip count (`tree_auto_layout()` puts the answer in the sidebar,
+#' where it stays the reader's to override); a clustered heatmap panel's
+#' column dendrogram takes the *tree's* stroke, so the two read as one drawing
+#' rather than as a tree with a hairline sketch under it — thinning only where
+#' its own leaves are packed tighter than the tips are, which is the same
+#' crowding this answers for either of them.
+#'
+#' @param n_leaves Integer. Leaves the dendrogram draws.
+#' @return Numeric ggplot2 linewidth.
+#' @export
+tree_branch_width <- function(n_leaves) {
+  n <- max(as.integer(n_leaves %||% 1L), 1L)
+  round(
+    .clamp(
+      BRANCH_WIDTH * (BRANCH_WIDTH_TIPS / n)^BRANCH_WIDTH_FALL,
+      BRANCH_WIDTH_MIN,
+      BRANCH_WIDTH
+    ),
+    2
+  )
+}
 
 # Fitting limits
 TIP_GROWTH <- 1.5 # Cap size scaling relative to default (150%)
@@ -326,6 +367,9 @@ tree_tiplab_room <- function(
 #' @param width_in Numeric. Device panel width in inches. Default 5.5.
 #' @param layout Character. Tree layout mode (e.g., "rectangular", "circular").
 #' @param label_chars Numeric. Max expected character length of tip labels.
+#' @param labels Logical. Whether the isolate labels are to be drawn, which
+#'   decides how much height a row is worth buying. `NA`, the default, lets the
+#'   fit answer it from the room the labels would have.
 #'
 #' @return List of calculated display parameters and legibility flags.
 #' @export
@@ -333,7 +377,8 @@ tree_auto_layout <- function(
   n_tip,
   width_in = 5.5,
   layout = "rectangular",
-  label_chars = 20
+  label_chars = 20,
+  labels = NA
 ) {
   n <- max(as.integer(n_tip %||% 1L), 1L)
   w <- if (is.null(width_in) || !is.finite(width_in) || width_in <= 0) {
@@ -344,14 +389,26 @@ tree_auto_layout <- function(
   chars <- max(as.numeric(label_chars %||% 1), 1)
 
   circular <- layout %in% .circular_layouts
-  # A circular panel is square: the tree is a disc, so its height is its width.
-  aspect <- if (circular) {
-    1
-  } else {
-    .clamp(n * TIP_ROW_IN / w, TIP_ASPECT_MIN, TIP_ASPECT_MAX)
+  linear_aspect <- function(row_in) {
+    .clamp(n * row_in / w, TIP_ASPECT_MIN, TIP_ASPECT_MAX)
   }
+  # A circular panel is square: the tree is a disc, so its height is its width.
+  aspect <- if (circular) 1 else linear_aspect(TIP_ROW_IN)
 
   size <- tree_tiplab_room(n, w, layout, chars, aspect)
+  # Whether the labels earn the height the pitch above was buying for them.
+  # Both halves of the view's own rule, so the aspect it applies and the labels
+  # it draws are decided by the same test (see `refit_layout()`) — unless the
+  # caller has already settled it, which is a switch the reader set by hand.
+  wanted <- if (is.na(labels)) {
+    size >= TIP_SIZE_FLOOR && !crowded_tips(n)
+  } else {
+    isTRUE(labels)
+  }
+  if (!circular && !wanted) {
+    aspect <- linear_aspect(TIP_ROW_BARE_IN)
+    size <- tree_tiplab_room(n, w, layout, chars, aspect)
+  }
   by_row <- tree_tiplab_room(n, w, layout, chars, aspect, row_only = TRUE)
 
   # Scale element sizes while clamping maximum growth
@@ -378,14 +435,7 @@ tree_auto_layout <- function(
     open_angle = TREE_FIT_DEFAULTS$open_angle,
     # Thinner as the branches multiply, so they stay separate lines rather
     # than filling in.
-    branch_width = round(
-      .clamp(
-        BRANCH_WIDTH * (BRANCH_WIDTH_TIPS / n)^BRANCH_WIDTH_FALL,
-        BRANCH_WIDTH_MIN,
-        BRANCH_WIDTH
-      ),
-      2
-    ),
+    branch_width = tree_branch_width(n),
     labels_legible = size >= TIP_SIZE_FLOOR
   )
 }
@@ -409,6 +459,34 @@ LEGEND_MAX_KEYS <- 9L
 #' off the bottom of the canvas.
 LEGEND_MIN_KEYS <- 4L
 
+# Levels a guide may list *in full* where the box has room for them.
+#
+# The cap above answers "how much of a list nobody can read should be shown".
+# It is the wrong question for a list that is short enough to read: thirteen
+# drug classes are a vocabulary the reader has to look a colour up in, and nine
+# of them plus a count is worse than all thirteen on a figure with room to
+# spare. Past this a scale is a population, not a vocabulary, and the cap
+# applies again.
+LEGEND_FULL_MAX <- 20L
+
+#' The blank key that stands where a run of levels was left out.
+#'
+#' A trimmed guide reads as a complete list unless it says otherwise. The title
+#' says how many levels there are ("9 of 81 shown"), but not *where* the gap
+#' falls — and for an ordered scale, whose keys come from both ends, that is
+#' the one thing the reader has to know: the two halves are not neighbours.
+#' Drawn as a swatch with no colour in it, so it reads as a break in the list
+#' rather than as another category.
+#'
+#' Three full stops, not the typographic ellipsis: U+22EF is missing from
+#' enough of the fonts these plots are exported through that R substitutes a
+#' single dot for each of its bytes and warns while doing it.
+#' @export
+LEGEND_GAP_KEY <- "..."
+
+# The colour a gap key's swatch is filled with, which is none.
+LEGEND_GAP_COLOR <- "transparent"
+
 #' Keys one guide may list, given the rows it has been budgeted.
 #'
 #' @param max_rows Integer. Rows per guide, from `tree_legend_max_rows()`.
@@ -420,6 +498,73 @@ tree_legend_max_keys <- function(max_rows = LEGEND_MAX_ROWS) {
     rows <- LEGEND_MAX_ROWS
   }
   as.integer(.clamp(rows, LEGEND_MIN_KEYS, LEGEND_MAX_KEYS))
+}
+
+# Rows one guide stands in, listing `keys` of its `demand` levels in `ncol`
+# columns: a title, the keys, and the blank line before the next guide — plus,
+# where it is not listing everything, the title's second line ("9 of 81 shown")
+# and the gap key.
+.legend_guide_rows <- function(keys, demand, ncol = 1L) {
+  as.integer(ceiling(keys / pmax(ncol, 1L))) + 2L + 2L * (keys < demand)
+}
+
+#' Keys each guide may list, sharing the rows the box has between them.
+#'
+#' An equal share was the wrong answer twice over. It counted a guide that
+#' wants four keys as costing the same as one that wants eighty, so eight drug
+#' classes were listed as "7 of 8" beside four confidence tiers that had three
+#' rows going spare; and a guide *one key short* of complete pays two extra
+#' rows for saying so, which an equal share never noticed it could recover.
+#'
+#' So: fill the short lists first, shortest first, because completing a guide
+#' costs less than it looks and is worth more than a longer sample of a list
+#' nobody can read to the end anyway. Whatever is left over is then handed round
+#' the guides that are still trimmed, one key at a time, so they grow together
+#' rather than the first of them taking the lot.
+#'
+#' What "short" means is `LEGEND_FULL_MAX`; past that a guide is capped at
+#' `LEGEND_MAX_KEYS` however much room the box has.
+#'
+#' @param demands Integer vector. Levels each guide holds, in stacking order.
+#' @param room Integer. Rows the whole guide box has.
+#' @return Integer vector of key budgets, one per guide.
+#' @export
+tree_legend_key_budget <- function(demands, room = LEGEND_MAX_ROWS) {
+  d <- suppressWarnings(as.integer(demands))
+  d <- d[!is.na(d)]
+  n <- length(d)
+  if (!n) {
+    return(integer(0))
+  }
+  d <- pmax(d, 1L)
+  cap <- ifelse(d <= LEGEND_FULL_MAX, d, LEGEND_MAX_KEYS)
+  give <- pmin(cap, LEGEND_MIN_KEYS)
+  cost <- function(g) sum(.legend_guide_rows(g, d))
+  # The floor is not negotiable: a guide cut below it is not worth drawing, and
+  # a box that cannot hold the floor is shrunk instead (`tree_legend_size()`).
+  budget <- max(suppressWarnings(as.integer(room %||% LEGEND_MAX_ROWS)), cost(give))
+  for (i in order(d)) {
+    trial <- give
+    trial[[i]] <- cap[[i]]
+    if (cost(trial) <= budget) {
+      give <- trial
+    }
+  }
+  repeat {
+    moved <- FALSE
+    for (i in which(give < cap)) {
+      trial <- give
+      trial[[i]] <- trial[[i]] + 1L
+      if (cost(trial) <= budget) {
+        give <- trial
+        moved <- TRUE
+      }
+    }
+    if (!moved) {
+      break
+    }
+  }
+  as.integer(give)
 }
 
 # Whether a set of levels has ends worth showing.
@@ -495,10 +640,52 @@ tree_legend_breaks <- function(
     real[sort(head(ranked, budget))]
   }
   list(
-    breaks = c(keep, missing),
+    breaks = c(.with_gap_key(real, keep), missing),
     hidden = n - length(keep) - length(missing),
     total = n
   )
+}
+
+# The kept keys with one blank key marking where the list was cut.
+#
+# One marker, at the first place the list stops being contiguous — counting the
+# two ends, so a guide whose missing levels all fall past its last key still
+# says so somewhere the reader can see it and not only in the count on the
+# title. One and not three: a guide scattered across a long scale would
+# otherwise spend half its rows on punctuation.
+.with_gap_key <- function(all, keep) {
+  at <- match(keep, all)
+  at <- at[!is.na(at)]
+  if (!length(at) || length(at) == length(all)) {
+    return(keep)
+  }
+  if (at[[1L]] > 1L) {
+    return(c(LEGEND_GAP_KEY, keep))
+  }
+  gap <- which(diff(at) > 1L)
+  if (length(gap)) {
+    i <- gap[[1L]]
+    return(c(head(keep, i), LEGEND_GAP_KEY, tail(keep, length(keep) - i)))
+  }
+  if (at[[length(at)]] < length(all)) c(keep, LEGEND_GAP_KEY) else keep
+}
+
+# A scale's palette with a colourless swatch added for the gap key, and the
+# limits that admit it. A break outside the scale's limits is dropped without
+# comment, and a discrete scale's limits are its data's levels — which the gap
+# key, being no level of anything, is not one of.
+.legend_values <- function(cols, breaks, blank = LEGEND_GAP_COLOR) {
+  if (!LEGEND_GAP_KEY %in% breaks) {
+    return(cols)
+  }
+  c(cols, setNames(blank, LEGEND_GAP_KEY))
+}
+
+.legend_limits <- function(levels, breaks) {
+  if (!LEGEND_GAP_KEY %in% breaks) {
+    return(NULL)
+  }
+  c(as.character(levels), LEGEND_GAP_KEY)
 }
 
 #' A guide title that says how many values it is not showing.
@@ -1144,28 +1331,64 @@ tree_legend_size <- function(opts, height_in = NULL) {
   }
   scale <- .scale_of(opts)
   floor_pt <- MIN_PRINT_PT * scale
-  for (i in seq_len(4L)) {
-    if (size <= floor_pt) {
-      return(floor_pt)
-    }
-    rows <- tree_legend_rows(
-      opts$layers,
-      opts$heatmaps,
-      tree_legend_max_rows(
-        opts$layers,
-        opts$heatmaps,
-        size,
-        height_in,
-        scale
-      )
-    )
-    need <- rows * LEGEND_ROW_IN * scale * size / 10 * LEGEND_HEIGHT_SAFETY
-    if (!isTRUE(is.finite(need)) || need <= height_in) {
-      return(size)
-    }
-    size <- max(size * height_in / need, floor_pt)
+  # The guide box gets the figure's height less the plot margin, which is
+  # outside it — the same inches the tip-label reserve does not receive.
+  room_in <- height_in - PLOT_MARGIN_IN * scale
+  fits <- function(pt) {
+    plan <- tree_legend_plan(opts$layers, opts$heatmaps, pt, height_in, scale)
+    need <- plan$rows * .legend_row_in(pt, scale) * LEGEND_HEIGHT_SAFETY
+    !isTRUE(is.finite(need)) || need <= room_in
   }
-  size
+  if (size <= floor_pt || fits(size)) {
+    return(max(size, floor_pt))
+  }
+  # Bisect rather than step towards it. Shrinking the type also *lengthens* the
+  # box — a shorter row means more rows fit, so each guide is allowed more keys
+  # — and stepping into that feedback converges slowly enough that a fixed
+  # number of steps stopped one short and left the last guide off the page.
+  lo <- floor_pt
+  hi <- size
+  for (i in seq_len(LEGEND_SIZE_STEPS)) {
+    mid <- (lo + hi) / 2
+    if (fits(mid)) lo <- mid else hi <- mid
+  }
+  lo
+}
+
+#' Inches of height the guide box will stand in.
+#'
+#' The counterpart of `tree_legend_width_in()`, and there for the same reason:
+#' the guide box is drawn beside the tree at whatever size it needs, and where
+#' the figure is not tall enough for it ggplot2 clips it — the last guide
+#' simply is not there, with nothing to say it was. Past a point the type
+#' cannot be shrunk any further (`MIN_PRINT_PT`), and then the only honest
+#' answer left is a taller canvas.
+#'
+#' Measured at the size `tree_legend_size()` settles on for the height it is
+#' given, so the two agree, and inclusive of the plot margin the box sits
+#' inside.
+#'
+#' @param opts List. Resolved tree options.
+#' @param height_in Numeric. Height the plot would otherwise be drawn at.
+#' @return Numeric inches.
+#' @export
+tree_legend_height_in <- function(opts, height_in = NULL) {
+  size <- tree_legend_size(opts, height_in)
+  scale <- .scale_of(opts)
+  plan <- tree_legend_plan(
+    opts$layers,
+    opts$heatmaps,
+    size,
+    height_in,
+    scale
+  )
+  if (!plan$rows) {
+    return(0)
+  }
+  plan$rows *
+    .legend_row_in(size, scale) *
+    LEGEND_HEIGHT_SAFETY +
+    PLOT_MARGIN_IN * scale
 }
 
 # Branch-label type size, at the reader's text scale. Which branches can hold
@@ -1382,8 +1605,61 @@ DEND_MIN_ROWS <- 2.5
 #' @export
 CLASS_STRIP_SCALE <- "Set2"
 
+#' One qualitative family per element type for the class strips.
+#'
+#' Two panels' strips on the same palette read as one scale: the reader takes
+#' the aminoglycoside green under the resistance matrix and the mercury green
+#' under the stress one for the same class, which they are not — they are not
+#' even drawn from the same vocabulary. A family per element type is what makes
+#' the two strips visibly separate keys. Fitted to the class count before it is
+#' used (`amr_fit_scale()`), so a panel with more classes than its family has
+#' colours falls through to one that can carry them.
+#' @export
+CLASS_STRIP_SCALES <- c(
+  Resistance = "Set2",
+  Virulence = "Dark2",
+  Stress = "Accent",
+  Unclassified = "Pastel1"
+)
+
+# What a panel's element type is called on the figure. The record carries the
+# database's own code ("AMR", "STRESS"); `AMR_ELEMENT_TYPES` names it.
+.element_label <- function(panel) {
+  el <- as.character(panel$element %||% "")
+  if (length(el) != 1L || is.na(el) || !nzchar(el)) {
+    return("")
+  }
+  hit <- names(AMR_ELEMENT_TYPES)[match(el, AMR_ELEMENT_TYPES)]
+  if (is.na(hit)) el else hit
+}
+
+# The palette one panel's class strip draws under: the reader's own pick where
+# the Colors tab has made one, else the family its element type owns.
+.class_strip_scale <- function(panel) {
+  pick <- panel$strip_scale
+  if (!is.null(pick) && length(pick) == 1L && !is.na(pick) && nzchar(pick)) {
+    return(as.character(pick))
+  }
+  el <- .element_label(panel)
+  if (el %in% names(CLASS_STRIP_SCALES)) {
+    CLASS_STRIP_SCALES[[el]]
+  } else {
+    CLASS_STRIP_SCALE
+  }
+}
+
 # Title over the class strip's guide.
 CLASS_STRIP_TITLE <- "Drug class"
+
+# The same, said of one panel: "Resistance drug class", not a second "Drug
+# class" the reader has to work out the owner of from where it sits in the box.
+.class_guide_title <- function(panel) {
+  el <- .element_label(panel)
+  if (!nzchar(el)) {
+    return(CLASS_STRIP_TITLE)
+  }
+  paste(el, tolower(CLASS_STRIP_TITLE))
+}
 
 # Rows of tip pitch one header character claims when set vertically, at
 # HEADER_SIZE_MAX; heatmap_header_frac() scales it down with the fitted size.
@@ -1712,7 +1988,12 @@ tree_tiplab_drawn <- function(opts, md) {
   # coming out a shade narrower than its budget.
   label_in <- label_in + .tiplab_point_gap_mm(opts) / 25.4
 
-  min(cap, label_in / tree_budget_in(opts))
+  # Against the inches the *panel* gets, not the inches the figure is. The plot
+  # margin is outside the panel, so a reserve taken as a fraction of the full
+  # width buys fewer inches than it asked for — three tenths of a percent short
+  # at an accession's length, which is a clipped final glyph.
+  margin_in <- PLOT_MARGIN_IN * .scale_of(opts)
+  min(cap, label_in / max(tree_budget_in(opts) - margin_in, 0.5))
 }
 
 # Safety factor on the tip-label reserve.
@@ -1729,7 +2010,14 @@ tree_tiplab_drawn <- function(opts, md) {
 #
 # It is not the gutter between the labels and the first annotation: that is
 # ANNOTATION_LEAD. This only stops the labels from crossing into it.
-X_EXPANSION <- 1.04
+X_EXPANSION <- 1.06
+
+# The plot margin, in inches: `plot.margin` in the builder's theme, both sides,
+# at scale 1. Outside the panel, so it is width the tip-label reserve never
+# receives — and it moves with `opts$scale` like every other physical length
+# here, or a figure drawn twice the size would not be the same figure.
+PLOT_MARGIN_PT <- 6
+PLOT_MARGIN_IN <- 2 * PLOT_MARGIN_PT / 72
 
 # The labels' share of the tree-and-labels budget — of `opts$width_in`, not of
 # the panel. The panel grows for the annotations and the budget does not, so
@@ -1778,69 +2066,160 @@ LEGEND_PAD_IN <- 0.12 # box padding either side
 # a wrapped-but-unbreakable taxon name ("pneumoniae/variicola/quasipneumoniae")
 # blew straight past; the real backstop is CANVAS_MAX_FACTOR in the view.
 LEGEND_MAX_FRAC <- 0.6
-LEGEND_ROW_IN <- 0.19 # one key row, title line or inter-guide gap
+# One key row, title line or inter-guide gap, in inches.
+#
+# Two terms because the drawn row is two things: the key square, which follows
+# the type size (`legend.key.size` is set from it), and the spacing ggplot2 puts
+# between keys, which does not. Measured off real guide boxes at 6.5, 10 and 20
+# pt — a single proportional term fitted the largest of those and ran 18% short
+# at the smallest, which is exactly where it matters, since shrinking the type
+# is how a tall legend is made to fit at all. It stopped shrinking one step too
+# early and the last guide ran off the bottom.
+LEGEND_ROW_PAD_IN <- 0.040
+LEGEND_ROW_PT_IN <- 0.017
 LEGEND_MAX_COLS <- 3L # past this the guides are wider than the tree
 LEGEND_MAX_ROWS <- 18L # keys in one column before they wrap into another
+
+.legend_row_in <- function(legend_size = 10, scale = 1) {
+  size <- suppressWarnings(as.numeric(legend_size %||% 10))
+  if (length(size) != 1L || !is.finite(size) || size <= 0) {
+    size <- 10
+  }
+  (LEGEND_ROW_PAD_IN + LEGEND_ROW_PT_IN * size) * scale
+}
 # Rounding-up factor on the finished legend-width estimate — `guide_in` counts
 # a few percent short against real title and key spacing. Applied in
 # tree_legend_width_in(); see the note there.
 LEGEND_SAFETY <- 1.03
 
 # Rounding-up factor on the guide box's estimated *height*, used only by
-# `tree_legend_size()`. `tree_legend_rows()` counts a guide's title as one row
-# like any other, and ggplot2 sets it at 1.2x the key text and puts
-# `legend.box.spacing` between the box and the panel — so the real box runs
-# taller than the row count says, and a size that fitted on paper still ran off
-# the bottom of the figure.
-LEGEND_HEIGHT_SAFETY <- 1.18
+# `tree_legend_size()`. `.legend_row_in()` is measured against plain guide
+# boxes; a title that wraps onto a second line, or a guide whose keys wrap into
+# a second column, runs taller than the row count says. Across the test
+# databases the worst of those — nine guides on a squat figure, half of them
+# wrapped — came out a quarter over the row count, so this covers it. It only
+# bites where the box has to be shrunk or the canvas grown at all: a legend
+# that already fits is left at the size it asked for.
+LEGEND_HEIGHT_SAFETY <- 1.3
 
-#' Rows one guide box would stack, given what each guide will list.
+# Bisection steps `tree_legend_size()` takes between the legibility floor and
+# the size that was asked for. Twelve halvings of a 15pt range settle it to
+# under a hundredth of a point, which is finer than the answer means.
+LEGEND_SIZE_STEPS <- 12L
+
+#' The guide box's plan: which guides it holds, how many keys each may list,
+#' and the order they stack in.
 #'
-#' A title, its keys, the "+ N more" line when there is one, and a blank row
-#' before the next guide.
+#' One solve for the whole box, because the questions are not separable: what a
+#' guide may list depends on what the others need, and what order they stack in
+#' is the difference between a heatmap's two guides reading as a pair and them
+#' being scattered through the mapped variables.
+#'
+#' The order is the reading order of the figure itself — the mapped variables,
+#' which are drawn against the tips, then each heatmap panel's own two guides
+#' (its confidence tiers, then the drug classes under it) in the order the
+#' panels are drawn left to right.
 #'
 #' @param layers List of mapping layer records.
 #' @param heatmaps List of heatmap panel records.
-#' @return Integer row count.
+#' @param legend_size Numeric. Legend text size in points.
+#' @param height_in Numeric. Height the plot is drawn at, in inches.
+#' @param scale Numeric. This plot's physical scale.
+#' @return list(ids, demand, keys, order, rows), the last four named by id.
 #' @export
-tree_legend_rows <- function(
+tree_legend_plan <- function(
   layers,
   heatmaps = list(),
-  max_rows = LEGEND_MAX_ROWS
+  legend_size = 10,
+  height_in = NULL,
+  scale = 1
 ) {
-  max_keys <- tree_legend_max_keys(max_rows)
-  rows <- function(n_levels, capped) {
-    keys <- min(as.integer(n_levels), max_keys)
-    # Wrapped into as many key columns as it needs, so a guide is only as tall
-    # as its longest column.
-    keys <- ceiling(keys / tree_legend_ncol(keys, max_rows))
-    1L + as.integer(keys) + as.integer(capped) + 1L
-  }
-  per <- vapply(
-    layers %||% list(),
-    function(l) {
-      n <- as.integer(l$n_levels %||% 1L)
-      rows(n, n > max_keys)
-    },
-    integer(1)
-  )
+  ls <- layers %||% list()
   drawn <- Filter(function(h) length(h$cols) > 0L, heatmaps %||% list())
-  heat <- vapply(
-    drawn,
-    function(h) rows(length(AMR_CONFIDENCE_STATES), FALSE),
-    integer(1)
+  ids <- character(0)
+  demand <- integer(0)
+  add <- function(id, n) {
+    ids <<- c(ids, id)
+    demand <<- c(demand, max(as.integer(n), 1L))
+  }
+  for (l in ls) {
+    add(legend_guide_id("layer", l), as.integer(l$n_levels %||% 1L))
+  }
+  for (i in seq_along(drawn)) {
+    h <- drawn[[i]]
+    add(legend_guide_id("heat", h, i), length(.tier_guide_levels(h)))
+    n <- length(.class_guide_levels(h))
+    if (n) {
+      add(legend_guide_id("class", h, i), n)
+    }
+  }
+  keys <- tree_legend_key_budget(
+    demand,
+    tree_legend_room(legend_size, height_in, scale)
   )
-  # A clustered panel carries a second guide: the drug-class strip that
-  # replaced its brackets.
-  strip <- vapply(
-    drawn,
-    function(h) {
-      n <- length(.class_guide_levels(h))
-      if (!n) 0L else rows(n, n > max_keys)
-    },
-    integer(1)
+  # A guide too tall for its share wraps its own keys into two or three
+  # columns rather than being cut back further — ggplot2 will not wrap the box
+  # itself, and a stack of guides that runs off the bottom is simply clipped.
+  # Kept for the whole box, so the guides that wrap all wrap the same way.
+  max_rows <- tree_legend_max_rows(
+    layers,
+    heatmaps,
+    legend_size,
+    height_in,
+    scale
   )
-  sum(c(per, heat, strip, 0L))
+  ncol <- vapply(keys, tree_legend_ncol, integer(1), max_rows = max_rows)
+  list(
+    ids = ids,
+    demand = setNames(demand, ids),
+    keys = setNames(keys, ids),
+    ncol = setNames(as.integer(ncol), ids),
+    order = setNames(seq_along(ids), ids),
+    max_rows = max_rows,
+    rows = as.integer(sum(.legend_guide_rows(keys, demand, ncol)))
+  )
+}
+
+#' The name one guide is filed under in a `tree_legend_plan()`.
+#'
+#' The plan is solved before the layers are assembled and read back as each
+#' scale is built, so the two have to agree on what a guide is called without
+#' passing an index around. A mapping layer is named by what it maps; a panel
+#' by its own id, falling back to its position for a record old enough not to
+#' carry one.
+#'
+#' @param kind One of "layer", "heat", "class".
+#' @param x The layer or panel record.
+#' @param i Integer. Its position, for a panel with no id.
+#' @return Character.
+#' @export
+legend_guide_id <- function(kind, x, i = 0L) {
+  if (identical(kind, "layer")) {
+    return(paste0("layer:", x$aesthetic %||% "", ":", x$field %||% ""))
+  }
+  id <- x$id %||% NA_character_
+  if (length(id) != 1L || is.na(id) || !nzchar(id)) {
+    id <- as.character(i)
+  }
+  paste0(kind, ":", id)
+}
+
+# Keys and stacking order for one guide, from the plan the builder solved.
+# A guide the plan did not see — nothing should reach here, but a scale built
+# outside the loop would — takes the floor and stacks last.
+.plan_keys <- function(plan, id) {
+  k <- (plan$keys %||% integer(0))[id]
+  if (length(k) != 1L || is.na(k)) LEGEND_MIN_KEYS else as.integer(k)
+}
+
+.plan_order <- function(plan, id) {
+  o <- (plan$order %||% integer(0))[id]
+  if (length(o) != 1L || is.na(o)) 99L else as.integer(o)
+}
+
+.plan_ncol <- function(plan, id) {
+  n <- (plan$ncol %||% integer(0))[id]
+  if (length(n) != 1L || is.na(n)) 1L else as.integer(n)
 }
 
 #' Rows one guide box has room for, at the height the plot is drawn.
@@ -1854,7 +2233,7 @@ tree_legend_room <- function(legend_size = 10, height_in = NULL, scale = 1) {
   if (is.null(height_in) || !is.finite(height_in) || height_in <= 0) {
     return(LEGEND_MAX_ROWS)
   }
-  row_in <- LEGEND_ROW_IN * scale * (legend_size %||% 10) / 10
+  row_in <- .legend_row_in(legend_size, scale)
   max(as.integer(floor(height_in / row_in)), 1L)
 }
 
@@ -1916,14 +2295,13 @@ tree_legend_cols <- function(
   height_in = NULL,
   scale = 1
 ) {
-  max_rows <- tree_legend_max_rows(
+  rows <- tree_legend_plan(
     layers,
     heatmaps,
     legend_size,
     height_in,
     scale
-  )
-  rows <- tree_legend_rows(layers, heatmaps, max_rows)
+  )$rows
   room <- tree_legend_room(legend_size, height_in, scale)
   as.integer(min(max(ceiling(rows / room), 1), LEGEND_MAX_COLS))
 }
@@ -1991,7 +2369,7 @@ tree_legend_width_in <- function(
   # key column while the render wrapped a nine-key scale into two is how the
   # legend came out wider than budgeted and squeezed the tip labels.
   max_rows <- tree_legend_max_rows(layers, heatmaps, size, height_in, scale)
-  max_keys <- tree_legend_max_keys(max_rows)
+  plan <- tree_legend_plan(layers, heatmaps, size, height_in, scale)
   guide_in <- function(chars, ncol) {
     if (!is.finite(chars)) {
       chars <- 1L
@@ -2002,18 +2380,13 @@ tree_legend_width_in <- function(
     layers,
     function(l) {
       # Only the keys the guide will list, since that is all it is sized from.
-      labs <- head(unique(as.character(md[[l$field]])), max_keys)
+      id <- legend_guide_id("layer", l)
+      labs <- head(unique(as.character(md[[l$field]])), .plan_keys(plan, id))
       chars <- suppressWarnings(max(
         vapply(c(labs, l$title %||% ""), .legend_text_cols, integer(1)),
         1L
       ))
-      guide_in(
-        chars,
-        tree_legend_ncol(
-          min(l$n_levels %||% 1L, max_keys),
-          max_rows
-        )
-      )
+      guide_in(chars, .plan_ncol(plan, id))
     },
     numeric(1)
   )
@@ -2024,33 +2397,35 @@ tree_legend_width_in <- function(
   heat <- vapply(
     heatmaps,
     function(h) {
-      states <- if (identical(h$level, "gene")) {
-        AMR_CONFIDENCE_STATES
-      } else {
-        c(AMR_PRESENT, AMR_ABSENT)
-      }
+      states <- .tier_guide_levels(h, AMR_CONFIDENCE_STATES)
       chars <- suppressWarnings(max(
         vapply(c(states, h$title %||% ""), .legend_text_cols, integer(1)),
         1L
       ))
-      guide_in(chars, 1L)
+      guide_in(chars, .plan_ncol(plan, legend_guide_id("heat", h)))
     },
     numeric(1)
   )
   # A clustered panel's second guide names drug classes, which run far longer
   # than a tier does — left out, the strip's keys were drawn over the tips.
   strip <- vapply(
-    heatmaps,
-    function(h) {
-      lvls <- head(.class_guide_levels(h), max_keys)
+    seq_along(heatmaps),
+    function(i) {
+      h <- heatmaps[[i]]
+      id <- legend_guide_id("class", h, i)
+      lvls <- head(.class_guide_levels(h), .plan_keys(plan, id))
       if (!length(lvls)) {
         return(0)
       }
       chars <- suppressWarnings(max(
-        vapply(c(lvls, CLASS_STRIP_TITLE), .legend_text_cols, integer(1)),
+        vapply(
+          c(lvls, .class_guide_title(h)),
+          .legend_text_cols,
+          integer(1)
+        ),
         1L
       ))
-      guide_in(chars, tree_legend_ncol(length(lvls), max_rows))
+      guide_in(chars, .plan_ncol(plan, id))
     },
     numeric(1)
   )
@@ -2095,6 +2470,33 @@ AMR_PRESENCE_FILL <- c(
   Detected = "#B2182B",
   Absent = "#EDEDED"
 )
+
+# The one tier a gene panel's guide lists only when the screen reached it.
+#
+# "Putative" is an HMM-only call: real, but rare enough that most screens never
+# produce one, and a key for a tier nothing on the figure carries is a category
+# the reader goes looking for and cannot find.
+AMR_TIER_RARE <- "Putative"
+
+#' The confidence tiers one panel's guide lists.
+#'
+#' Fixed rather than taken from the data. A gene panel is a *scale*, and a
+#' scale that lists two tiers on one panel and four on the next beside it says
+#' the two were measured differently — they were not; the stress panel simply
+#' had no partial call in it. Absent is the case the reader most needs the key
+#' for, and it is precisely the one an all-positive panel would drop.
+#'
+#' @param panel List. A heatmap panel record.
+#' @param seen Character. Tiers the panel's own data reached, for the rare one.
+#' @return Character vector of levels, weakest first.
+.tier_guide_levels <- function(panel, seen = character(0)) {
+  if (!identical(panel$level, "gene")) {
+    return(c(AMR_PRESENT, AMR_ABSENT))
+  }
+  keep <- AMR_CONFIDENCE_STATES != AMR_TIER_RARE |
+    AMR_CONFIDENCE_STATES %in% as.character(seen)
+  AMR_CONFIDENCE_STATES[keep]
+}
 
 #' The four colours a gene heatmap's confidence scale is built from.
 #'
@@ -2726,12 +3128,59 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
     return(0)
   }
   # Where the axis line sits (one row down, two when the scale bar has the
-  # first), plus its ticks, the gap under them and the row of numbers.
+  # first), plus its ticks and the gap under them. The row of numbers itself is
+  # not counted here: it hangs below the anchor ggplot trained on, so it is an
+  # expansion rather than part of the range (`.axis_frac()`).
   if (axis) {
-    (if (bar) 2 else 1) + AXIS_TICK_LEN + AXIS_LABEL_GAP + 1
+    (if (bar) 2 else 1) + AXIS_TICK_LEN + AXIS_LABEL_GAP
   } else {
     2
   }
+}
+
+# Most of the y range the axis numbers' own depth may claim. A backstop only:
+# one line of type is a fraction of a plot, never a third of it.
+AXIS_FRAC_MAX <- 0.2
+
+# Millimetres of type that hang *below* everything the y scale was trained on.
+#
+# The axis numbers are anchored at their top (`vjust = 1`) and so is the scale
+# bar's, so ggplot2 trains the range on the anchor and the glyphs fall outside
+# it — cut in half by the panel edge, which is exactly how they were drawn. The
+# row of numbers `.axis_rows()` counts is the same line; that count sizes the
+# rows, this reserves the space.
+.axis_text_mm <- function(opts) {
+  if (.is_circular(opts)) {
+    return(0)
+  }
+  if (!isTRUE(opts$axis_show) && !isTRUE(opts$treescale_show)) {
+    return(0)
+  }
+  AXIS_LABEL_SIZE * .type_of(opts)
+}
+
+# That depth as the bottom expansion the y scale needs, alongside whatever the
+# class band is already asking for. Pitch-corrected the same way the header and
+# class reserves are: the type is a physical height, so a shorter row is more
+# rows of it.
+.axis_frac <- function(
+  opts,
+  n_tip,
+  runs = list(),
+  size = NULL,
+  height_in = NULL
+) {
+  mm <- .axis_text_mm(opts)
+  if (mm <= 0) {
+    return(0)
+  }
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  row_mm <- if (isTRUE(is.finite(height_in) && height_in > 0)) {
+    25.4 * height_in / n
+  } else {
+    25.4 * TIP_ROW_IN
+  }
+  .clamp(mm / row_mm / .y_span_rows(opts, n, runs, size), 0, AXIS_FRAC_MAX)
 }
 
 # The class-name band's depth, from the panels alone.
@@ -2918,6 +3367,10 @@ tree_fitted_aspect <- function(aspect, opts, n_tip) {
   header_mm = 0
 ) {
   span <- .y_span_rows(opts, n_tip, runs, size) + .axis_rows(opts)
+  # The axis numbers' own depth is an expansion, not part of the range (see
+  # `.axis_frac()`), so it is charged where the scale charges it — adding it to
+  # the span as well would book the same line of type twice.
+  bottom_frac <- bottom_frac + .axis_frac(opts, n_tip, runs, size, height_in)
   row_mm <- .drawn_row_mm(height_in, span, top_frac, bottom_frac)
   if (!isTRUE(header_mm > 0) || !.element_label_above(opts)) {
     return(row_mm)
@@ -3386,7 +3839,10 @@ tree_header_drawn <- function(size, scale = 1) {
   n_tip,
   colour,
   levels,
-  max_keys = LEGEND_MAX_KEYS
+  max_keys = LEGEND_MAX_KEYS,
+  order = 99L,
+  ncol = 1L,
+  linewidth = BRANCH_WIDTH
 ) {
   if (!length(centres)) {
     return(NULL)
@@ -3401,7 +3857,7 @@ tree_header_drawn <- function(size, scale = 1) {
     strip_keys <- tree_legend_breaks(levels, classes[keep], max_keys)
     fills <- amr_palette(
       levels,
-      amr_fit_scale(panel$strip_scale %||% CLASS_STRIP_SCALE, length(levels))
+      amr_fit_scale(.class_strip_scale(panel), length(levels))
     )
     tiles <- data.frame(
       x = centres[keep],
@@ -3423,13 +3879,15 @@ tree_header_drawn <- function(size, scale = 1) {
         height = CLASS_STRIP_ROWS
       ),
       scale_fill_manual(
-        values = fills,
+        values = .legend_values(fills, strip_keys$breaks),
+        limits = .legend_limits(levels, strip_keys$breaks),
         breaks = strip_keys$breaks,
         name = tree_legend_title(
-          CLASS_STRIP_TITLE,
+          .class_guide_title(panel),
           strip_keys$hidden,
           strip_keys$total
         ),
+        guide = guide_legend(ncol = ncol, order = order),
         drop = FALSE
       )
     )
@@ -3451,7 +3909,7 @@ tree_header_drawn <- function(size, scale = 1) {
         ),
         inherit.aes = FALSE,
         colour = colour,
-        linewidth = 0.25
+        linewidth = linewidth
       ))
     )
   }
@@ -3534,6 +3992,31 @@ tree_header_drawn <- function(size, scale = 1) {
   heat
 }
 
+# Inches of the last axis number that hang past the tree's own maximum.
+#
+# The numbers are centred on their tick (`hjust` 0.5) and `pretty()` can put
+# the last tick on the tree's depth itself, so half that glyph is drawn beyond
+# everything the x range was solved for — the right edge cut "30" down its
+# middle. Half a number, not a whole one: only the overhang is unaccounted for.
+#
+# This is the same region the tip labels reserve, so it is a floor on that
+# reserve rather than an addition to it: a tree with labels already keeps far
+# more room than a two-digit number needs, and a bare one kept none.
+.axis_edge_in <- function(opts, max_x) {
+  if (.is_circular(opts) || !isTRUE(opts$axis_show)) {
+    return(0)
+  }
+  breaks <- tree_axis_breaks(max_x)
+  if (!length(breaks)) {
+    return(0)
+  }
+  label <- tree_branch_format(
+    breaks[[length(breaks)]],
+    tree_branch_digits(breaks[breaks > 0])
+  )
+  0.5 * nchar(label) * TIP_CHAR_EM * AXIS_LABEL_SIZE * .type_of(opts) / 25.4
+}
+
 # Solves x-axis plot range ensuring tip labels and heatmaps fit without clipping
 .tiplab_xlim <- function(opts, md, tree_data, max_x, heat = 0) {
   frac <- .tiplab_axis_frac(opts, md, heat)
@@ -3546,8 +4029,25 @@ tree_header_drawn <- function(size, scale = 1) {
   }
   span <- (max_x - x_min) * (1 + heat)
   range <- span / (1 - frac)
+
+  # The overhang is a fixed number of inches and the axis it has to be
+  # expressed in is the one being solved, so it is solved with it rather than
+  # converted through the range it is about to change: the panel is `panel_in`
+  # inches wide and `limit - x_min` units, and the number needs `edge_in` of
+  # those inches past `max_x`.
+  edge_in <- .axis_edge_in(opts, max_x)
+  limit <- x_min + range
+  if (edge_in > 0) {
+    panel_in <- max(
+      tree_budget_in(opts) - PLOT_MARGIN_IN * .scale_of(opts),
+      0.5
+    ) *
+      .panel_growth(opts, md, heat)
+    k <- .clamp(edge_in / panel_in, 0, 0.5)
+    limit <- max(limit, (max_x - k * x_min) / (1 - k))
+  }
   list(
-    limit = x_min + range,
+    limit = limit,
     reserve = range * frac
   )
 }
@@ -3713,7 +4213,9 @@ tree_scale <- function(
   aesthetic,
   name = NULL,
   max_rows = LEGEND_MAX_ROWS,
-  max_keys = tree_legend_max_keys(max_rows)
+  max_keys = tree_legend_max_keys(max_rows),
+  order = 99L,
+  ncol = NULL
 ) {
   numeric <- is.numeric(values) || inherits(values, "Date")
   viridis_pal <- is.null(palette) || palette %in% .viridis_scales
@@ -3728,6 +4230,7 @@ tree_scale <- function(
     # so the viridis ramp is laid out by hand through gradientn instead.
     transform <- if (inherits(values, "Date")) "date" else "identity"
     fill <- identical(aesthetic, "fill")
+    bar <- guide_colourbar(order = order)
     return(
       if (viridis_pal) {
         ramp <- viridis(GRADIENT_STEPS, option = opt)
@@ -3736,6 +4239,7 @@ tree_scale <- function(
             colours = ramp,
             transform = transform,
             name = name,
+            guide = bar,
             na.value = MISSING_COLOR
           )
         } else {
@@ -3743,6 +4247,7 @@ tree_scale <- function(
             colours = ramp,
             transform = transform,
             name = name,
+            guide = bar,
             na.value = MISSING_COLOR
           )
         }
@@ -3751,6 +4256,7 @@ tree_scale <- function(
           palette = palette,
           transform = transform,
           name = name,
+          guide = bar,
           na.value = MISSING_COLOR
         )
       } else {
@@ -3758,6 +4264,7 @@ tree_scale <- function(
           palette = palette,
           transform = transform,
           name = name,
+          guide = bar,
           na.value = MISSING_COLOR
         )
       }
@@ -3768,13 +4275,17 @@ tree_scale <- function(
   cols <- tree_level_colors(levels(values), palette)
   keys <- tree_legend_breaks(names(cols), values, max_keys)
   guide <- guide_legend(
-    ncol = tree_legend_ncol(length(keys$breaks), max_rows)
+    ncol = ncol %||% tree_legend_ncol(length(keys$breaks), max_rows),
+    order = order
   )
   title <- tree_legend_title(name, keys$hidden, keys$total)
+  fills <- .legend_values(cols, keys$breaks)
+  limits <- .legend_limits(names(cols), keys$breaks)
 
   if (identical(aesthetic, "fill")) {
     scale_fill_manual(
-      values = cols,
+      values = fills,
+      limits = limits,
       breaks = keys$breaks,
       guide = guide,
       name = title,
@@ -3783,7 +4294,8 @@ tree_scale <- function(
     )
   } else {
     scale_color_manual(
-      values = cols,
+      values = fills,
+      limits = limits,
       breaks = keys$breaks,
       guide = guide,
       name = title,
@@ -4099,7 +4611,8 @@ tree_tile_layers <- function(
   n_tip = NULL,
   axis_units = NULL,
   panel_in = NULL,
-  legend_max_rows = LEGEND_MAX_ROWS
+  legend_max_rows = LEGEND_MAX_ROWS,
+  legend_plan = NULL
 ) {
   axis_in <- tree_axis_in(opts, panel_in %||% opts$width_in %||% 5.5)
   if (is.null(tiles)) {
@@ -4156,7 +4669,10 @@ tree_tile_layers <- function(
           tile$palette,
           "fill",
           name = tile$title,
-          max_rows = legend_max_rows
+          max_rows = legend_max_rows,
+          max_keys = .plan_keys(legend_plan, legend_guide_id("layer", tile)),
+          order = .plan_order(legend_plan, legend_guide_id("layer", tile)),
+          ncol = .plan_ncol(legend_plan, legend_guide_id("layer", tile))
         )
       )
     )
@@ -4385,6 +4901,16 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     plot_height_in,
     scale
   )
+  # One solve for the whole guide box: what each guide may list, and where it
+  # stacks. Read back by id as each scale is built, so a guide's key budget and
+  # its place in the box are decided together rather than each scale guessing.
+  legend_plan <- tree_legend_plan(
+    opts$layers,
+    opts$heatmaps,
+    legend_size,
+    plot_height_in,
+    scale
+  )
 
   circular <- opts$layout %in% .circular_layouts
   label_reserve <- 0
@@ -4599,7 +5125,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
           lab_l$palette,
           "color",
           name = lab_l$title,
-          max_rows = legend_max_rows
+          max_rows = legend_max_rows,
+          max_keys = .plan_keys(legend_plan, legend_guide_id("layer", lab_l)),
+          order = .plan_order(legend_plan, legend_guide_id("layer", lab_l)),
+          ncol = .plan_ncol(legend_plan, legend_guide_id("layer", lab_l))
         ),
         new_scale_color()
       )
@@ -4615,7 +5144,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
           pt_l$palette,
           "color",
           name = pt_l$title,
-          max_rows = legend_max_rows
+          max_rows = legend_max_rows,
+          max_keys = .plan_keys(legend_plan, legend_guide_id("layer", pt_l)),
+          order = .plan_order(legend_plan, legend_guide_id("layer", pt_l)),
+          ncol = .plan_ncol(legend_plan, legend_guide_id("layer", pt_l))
         ),
         new_scale_color()
       )
@@ -4633,13 +5165,18 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       if (MISSING_LABEL %in% shp_levels) {
         shp_values[[MISSING_LABEL]] <- TREE_MISSING_SHAPE
       }
+      shp_id <- legend_guide_id("layer", shp_l)
       shp_keys <- tree_legend_breaks(
         names(shp_values),
         md[[shp_l$field]],
-        tree_legend_max_keys(legend_max_rows)
+        .plan_keys(legend_plan, shp_id)
       )
+      # `NA` rather than a colour for the gap key here: a shape scale's values
+      # are glyph codes, and NA is the one that draws nothing — the same empty
+      # key the colour scales get from a transparent swatch.
       list(scale_shape_manual(
-        values = shp_values,
+        values = .legend_values(shp_values, shp_keys$breaks, blank = NA),
+        limits = .legend_limits(names(shp_values), shp_keys$breaks),
         breaks = shp_keys$breaks,
         name = tree_legend_title(
           shp_l$title,
@@ -4648,7 +5185,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         ),
         labels = .wrap_legend_labels,
         guide = guide_legend(
-          ncol = tree_legend_ncol(length(shp_keys$breaks), legend_max_rows)
+          ncol = .plan_ncol(legend_plan, shp_id),
+          order = .plan_order(legend_plan, shp_id)
         )
       ))
     },
@@ -4668,7 +5206,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       sum(tree_data$isTip),
       axis_units,
       panel_in,
-      legend_max_rows
+      legend_max_rows,
+      legend_plan
     )
   )
   layers <- Filter(Negate(is.null), layers)
@@ -4725,18 +5264,29 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         expand = expansion(mult = c(0.05, right_expand))
       )
   }
+  # Room above the last tip for the annotation headers, which are set
+  # vertically and would otherwise be clipped by the panel, and room under the
+  # first for the axis numbers' own depth. Set unconditionally rather than only
+  # where there are annotations: a bare tree still carries an axis, and
+  # ggtree's default 5% was never enough to hold a line of type — which is how
+  # the numbers came out sliced along their middle. Replacing ggtree's y scale
+  # is the point, so its announcement is not news — it is muffled by
+  # `build_tree_ggtree()` (`.muffled_tree_warnings`).
   if (!circular) {
-    if (annotation_total(opts) > 0) {
-      # Room above the last tip for the annotation headers, which are set
-      # vertically and would otherwise be clipped by the panel. Replacing
-      # ggtree's y scale is the point, so its announcement is not news — it is
-      # muffled by `build_tree_ggtree()` (`.muffled_tree_warnings`).
-      p <- suppressMessages(
-        p +
-          scale_y_continuous(
-            expand = expansion(
-              mult = c(
+    p <- suppressMessages(
+      p +
+        scale_y_continuous(
+          expand = expansion(
+            mult = c(
+              max(
                 0.02,
+                .axis_frac(
+                  opts,
+                  sum(tree_data$isTip),
+                  height_in = plot_height_in
+                )
+              ),
+              if (annotation_total(opts) > 0) {
                 heatmap_header_frac(
                   opts,
                   sum(tree_data$isTip),
@@ -4745,11 +5295,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
                   panel_in,
                   plot_height_in
                 )
-              )
+              } else {
+                0.02
+              }
             )
           )
-      )
-    }
+        )
+    )
   }
 
   # A *numeric* legend.position floats the guide box inside the panel, over the
@@ -4768,7 +5320,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   p <- p +
     theme_tree(bgcolor = opts$bg) +
     theme(
-      plot.margin = margin(6, 6, 6, 6),
+      plot.margin = margin(1, 1, 1, 1) * PLOT_MARGIN_PT * scale,
       # One rule for both layouts. A circular tree used to put its guides
       # underneath, which took the room out of a panel that has to stay square
       # — so the disc shrank as guides were added, and with nothing reserving
@@ -4825,7 +5377,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   } else {
     list()
   }
-  for (pan in panels) {
+  for (pan_i in seq_along(panels)) {
+    pan <- panels[[pan_i]]
     frame <- .heatmap_frame(pan, md, opts$amr_matrix)
     if (is.null(frame)) {
       next
@@ -4867,6 +5420,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       # overprint each other into a smear.
       font.size = tree_header_size(cell, axis_units, axis_in, scale, text)
     )
+
     # gheatmap installs a default fill scale of its own, so replacing it is the
     # intended move — but ggplot2 announces every replacement, and this one is
     # not news. Deliberate, so silenced here rather than logged on every draw.
@@ -4875,17 +5429,58 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # two-colour fill. Either way the guide is one confidence scale.
     fill <- .heatmap_fill(pan)
     lvls <- levels(frame[[1]])
+    # The tiers this panel's guide lists. Fixed, not taken from the matrix:
+    # gheatmap gathers the frame into a long column whose values ggplot2 then
+    # trains the scale on, so a panel that happens to hold no partial call had
+    # no key for one either — two panels side by side listing two tiers and
+    # four, as though they had been scored differently.
+    keys <- .tier_guide_levels(
+      pan,
+      unlist(lapply(frame, function(v) as.character(unique(v))))
+    )
+    # `limits` puts the missing tiers back in the guide, but ggplot2 draws a
+    # key's swatch only where some layer's *data* holds that value — so they
+    # arrived as labels beside an empty square. One zero-area rectangle per
+    # tier, at a coordinate this panel already occupies, is the data the guide
+    # needs and nothing at all on the figure.
+    #
+    # A rectangle rather than a tile so that "the layers that draw this matrix"
+    # stays exactly the tile layers, here and in the tests that count them.
+    p <- p +
+      geom_rect(
+        data = data.frame(
+          .x = max_x + pan$offset,
+          .y = 1,
+          .tier = factor(keys, levels = lvls)
+        ),
+        mapping = aes(
+          xmin = .data[[".x"]],
+          xmax = .data[[".x"]],
+          ymin = .data[[".y"]],
+          ymax = .data[[".y"]],
+          fill = .data[[".tier"]]
+        ),
+        inherit.aes = FALSE
+      )
     p <- suppressMessages(
       p +
         scale_fill_manual(
           values = fill[lvls],
+          limits = keys,
           # Without explicit breaks the legend sorts its keys alphabetically —
           # "Absent, Partial, Perfect, Putative, Strong" — which reads as five
           # unrelated categories. These are a confidence scale, so the guide
           # lists them as one, strongest tier first.
-          breaks = if (identical(pan$level, "gene")) rev(lvls) else lvls,
+          breaks = if (identical(pan$level, "gene")) rev(keys) else keys,
           name = pan$title,
           na.value = fill[[AMR_ABSENT]],
+          guide = guide_legend(
+            ncol = .plan_ncol(legend_plan, legend_guide_id("heat", pan, pan_i)),
+            order = .plan_order(
+              legend_plan,
+              legend_guide_id("heat", pan, pan_i)
+            )
+          ),
           drop = FALSE
         )
     )
@@ -4969,7 +5564,17 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         sum(tree_data$isTip),
         opts$line_color %||% "#000000",
         .class_guide_levels(pan),
-        tree_legend_max_keys(legend_max_rows)
+        .plan_keys(legend_plan, legend_guide_id("class", pan, pan_i)),
+        .plan_order(legend_plan, legend_guide_id("class", pan, pan_i)),
+        .plan_ncol(legend_plan, legend_guide_id("class", pan, pan_i)),
+        # The tree's own stroke, so the two dendrograms on the figure are one
+        # drawing — thinner only where this panel's columns are packed tighter
+        # than the tips are.
+        min(
+          (opts$branch_width %||% BRANCH_WIDTH),
+          tree_branch_width(ncol(frame))
+        ) *
+          scale
       )) {
         p <- suppressMessages(p + layer)
       }
@@ -5080,7 +5685,14 @@ build_tree_ggtree <- function(tree, metadata, opts) {
                 class_runs,
                 band_size,
                 plot_height_in
-              ),
+              ) +
+                .axis_frac(
+                  opts,
+                  sum(tree_data$isTip),
+                  class_runs,
+                  band_size,
+                  plot_height_in
+                ),
               heatmap_header_frac(
                 opts,
                 sum(tree_data$isTip),

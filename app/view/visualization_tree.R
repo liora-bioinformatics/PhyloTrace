@@ -459,6 +459,11 @@ CANVAS_MAX_FACTOR <- 2.6
 # A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
 PLOT_MAX_PX <- 12000
 
+# Milliseconds the controls have to stop moving before the plot is rebuilt.
+# Long enough that a slider drag is one rebuild rather than a dozen, short
+# enough that letting go of one still feels like it did it.
+PLOT_SETTLE_MS <- 450
+
 # The legend is not the user's to set. Its column is reserved beside the tree
 # (below it, for circular layouts) and sized to the widest key by the layout
 # engine, so orientation and text size are fixed here at the values that
@@ -846,19 +851,12 @@ tree_controls <- function(ns, options_ui = NULL) {
               showDropboxAsPopup = TRUE,
               popupDropboxBreakpoint = "10000px",
               width = "100%"
-            ),
-            # Floor below the 1 this used to stop at: a few hundred tips are
-            # legible only at ~2mm, and the fit (tree_auto_layout) needs room
-            # underneath that for the trees that are larger still.
-            shiny$sliderInput(
-              ns("nj_tiplab_size"),
-              "Size",
-              0.5,
-              10,
-              FITTED_DEFAULTS$nj_tiplab_size,
-              step = 0.1,
-              ticks = FALSE
             )
+            # No size slider. The label size is fitted to the row it has to sit
+            # in and then biased by the one "Text size" control, which moves
+            # every piece of type on the figure together — a second control for
+            # this one string could only ask for a size the row cannot hold,
+            # which the engine would refuse anyway (`tree_tiplab_drawn`).
           ),
           accordion_panel(
             "Allelic Distance",
@@ -1524,6 +1522,11 @@ server <- function(
       if (is.null(tree)) {
         return(invisible(NULL))
       }
+      # Whether to buy a row deep enough to set a name in. Where the caller is
+      # armed to decide the labels' fate anyway (Generate, a layout switch,
+      # Auto-fit) the fit decides both together; otherwise the switch as it
+      # stands is the answer, so turning the labels back on by hand gets the
+      # height they need rather than the height a label-less tree was given.
       fit <- tree_plot$tree_auto_layout(
         length(tree$tip.label),
         plot_width_in(),
@@ -1532,7 +1535,12 @@ server <- function(
           tree,
           shiny$isolate(viz_metadata()),
           shiny$isolate(fitted$nj_tiplab)
-        )
+        ),
+        labels = if (notify || relabel) {
+          NA
+        } else {
+          isTRUE(shiny$isolate(fitted$nj_tiplab_show))
+        }
       )
       for (id in names(FITTED_DEFAULTS)) {
         value <- fit[[FITTED_FIELDS[[id]]]]
@@ -1756,7 +1764,9 @@ server <- function(
           }
         ),
         type = "message",
-        duration = 5
+        # Short: it reports something the reader can already see happen in the
+        # sidebar, and it appears directly over the button that asked for it.
+        duration = 2
       )
     })
 
@@ -1941,6 +1951,19 @@ server <- function(
         TREE_PANEL_IN * fitted$nj_aspect_ratio
       }
 
+      # The guide box is a column beside the tree, and a column has a height.
+      # Where the guides need more of it than the tree's own aspect gives, the
+      # canvas grows for them — the same rule the width follows, and the only
+      # answer left once the type is already at the print floor. A circular
+      # tree is excluded: its panel has to stay square or the disc is drawn as
+      # an ellipse, so its legend is bounded by the disc.
+      if (!circular) {
+        height_in <- min(
+          max(height_in, tree_plot$tree_legend_height_in(opts, height_in)),
+          TREE_PANEL_IN * CANVAS_MAX_FACTOR
+        )
+      }
+
       # After the height, because how many columns the guides need depends on
       # it — and so, in turn, does how much width they claim.
       legend_in <- tree_plot$tree_legend_width_in(
@@ -1988,14 +2011,33 @@ server <- function(
     # fresh one — the very thing this exists to stop. Higher priority than the
     # default 0 that output observers carry guarantees the order.
     plot_inputs <- shiny$reactiveVal(NULL)
-    shiny$observe(
-      {
+    # A slider reports every value the reader drags through, and each one would
+    # otherwise be a whole tree rebuilt — a second's work at a few hundred
+    # isolates, so a drag ends several plots behind where it stopped. Settling
+    # the controls before the barrier reads them rebuilds once, on the value
+    # the reader let go of. Applied here rather than to the render, because the
+    # export reads this same barrier: the file and the preview cannot disagree
+    # about which value that was.
+    #
+    # The `req()` is inside the debounced reactive rather than around it, so
+    # that with no tree yet nothing downstream of it is evaluated at all — a
+    # debounce reads its source eagerly, and reading the controls before there
+    # is anything to draw is work for a plot nobody asked for.
+    settled <- shiny$debounce(
+      shiny$reactive({
         shiny$req(tree_obj())
-        current <- list(
+        list(
           tree = tree_obj(),
           metadata = viz_metadata(),
           opts = tree_opts()
         )
+      }),
+      PLOT_SETTLE_MS
+    )
+    shiny$observe(
+      {
+        current <- settled()
+        shiny$req(current)
         previous <- shiny$isolate(plot_inputs())
         if (!identical(previous, current)) {
           # Uncomment, with the helper it belongs to, to have the console name
