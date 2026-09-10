@@ -121,9 +121,11 @@ box::use(
   app /
     logic /
     genome_hash[
-      classify_genome,
+      classify_with_digest,
+      genome_digests,
       genome_hash_map,
       genome_hash_row,
+      resolve_hash_workers,
       store_genome_hash,
     ],
 )
@@ -135,6 +137,13 @@ genome_pattern <- "\\.(fasta|fa|fna)$"
 # is large enough that the pass takes visible time; below this the bar just
 # stays at 0% while the status line reads "Checking genomes ...".
 check_progress_min <- 10L
+
+# Below this many typeable genomes the pre-run check hashes one assembly per
+# reactive tick: that pass is under ~4 s and already cancellable per genome, so
+# the fork/collect cost of going parallel would not pay for itself. At or above
+# it, hash in parallel chunks (see resolve_hash_workers) - a 250-genome import
+# drops from ~40 s to a handful, and Terminate still lands within one chunk.
+check_parallel_min <- 24L
 
 # Above this many skipped-for-a-taken-name files, pause the run for an explicit
 # look before committing rather than auto-proceeding past a wall of toast text.
@@ -1068,11 +1077,15 @@ server <- function(
       for (i in hash_rows) {
         strain <- results$strain[i]
         file <- Typing$queued_files[match(strain, Typing$queued_strains)]
+        # Reuse the digest from the pre-run check; store_genome_hash backfills
+        # the raw-file checksum that pass skipped. A NULL cache entry (unreadable
+        # file then, or a check that never ran) makes it reread and rehash.
+        cached <- chk$digests[[strain]]
         stored <- if (is.na(file)) {
           FALSE
         } else {
           tryCatch(
-            store_genome_hash(db_path(), strain, file),
+            store_genome_hash(db_path(), strain, file, digest = cached),
             error = function(e) FALSE
           )
         }
@@ -2508,6 +2521,17 @@ server <- function(
       )
       chk$i <- 0L
       chk$n <- length(Typing$queued_strains)
+      # Full digests kept as they are computed, keyed by strain, so the
+      # post-typing store step does not hash each assembly a second time.
+      chk$digests <- list()
+      # Large batches hash chk$workers assemblies per tick; small ones one at a
+      # time so a Terminate click still lands within a single file's hashing.
+      chk$workers <- if (chk$n >= check_parallel_min) {
+        resolve_hash_workers(chk$n)
+      } else {
+        1L
+      }
+      chk$chunk <- if (chk$workers > 1L) chk$workers * 6L else 1L
       # Small selections check almost instantly, so advancing the bar just makes
       # it flicker to 100% and back; only drive it for larger batches.
       chk$show_bar <- chk$n >= check_progress_min
@@ -2516,7 +2540,11 @@ server <- function(
       Typing$status <- "checking"
       log_typing(
         "Checking phase started",
-        sprintf("hashing %d typeable genome(s)", chk$n)
+        sprintf(
+          "hashing %d typeable genome(s)%s",
+          chk$n,
+          if (chk$workers > 1L) sprintf(" | %d workers", chk$workers) else ""
+        )
       )
       runjs(sprintf(
         "var el = document.getElementById('%s'); if (el) el.classList.add('is-animating');",
@@ -2536,12 +2564,13 @@ server <- function(
       )
     }
 
-    # Walk the queued selection one genome per reactive tick, classifying each
-    # against the database (see classify_genome). invalidateLater(0) yields to
-    # the event loop between genomes, so the pass never blocks the UI and a
-    # Terminate click lands within one genome's hashing time. When the queue is
-    # exhausted, hand the classification off to launch_typing(); if Terminate
-    # fired, abandon the pass and reset to idle.
+    # Walk the queued selection one chunk per reactive tick, classifying each
+    # file against the database (see classify_with_digest). A chunk is one genome
+    # for small selections and chk$workers-wide, hashed in parallel, for large
+    # ones (see start_checking_phase). invalidateLater(0) yields to the event
+    # loop between chunks, so a Terminate click lands within one chunk's hashing
+    # time. When the queue is exhausted, hand the classification off to
+    # launch_typing(); if Terminate fired, abandon the pass and reset to idle.
     observe({
       if (!identical(Typing$status, "checking")) {
         return(NULL)
@@ -2576,23 +2605,38 @@ server <- function(
         return(NULL)
       }
 
-      i <- chk$i + 1L
-      r <- classify_genome(
-        chk$out$strain[i],
-        chk$out$file[i],
-        chk$recorded,
-        chk$known
+      # This tick's slice of the queue, hashed in one (optionally parallel) pass.
+      idx <- (chk$i + 1L):min(chk$i + chk$chunk, chk$n)
+      digests <- genome_digests(
+        chk$out$file[idx],
+        workers = chk$workers,
+        with_file_sha256 = FALSE
       )
-      chk$out$digest[i] <- r$digest
-      chk$out$status[i] <- r$status
-      chk$out$other[i] <- r$other
-      chk$i <- i
+      for (k in seq_along(idx)) {
+        i <- idx[k]
+        r <- classify_with_digest(
+          chk$out$strain[i],
+          digests[[k]],
+          chk$recorded,
+          chk$known
+        )
+        chk$out$digest[i] <- r$digest
+        chk$out$status[i] <- r$status
+        chk$out$other[i] <- r$other
+        # Hold the full digest for the post-typing store so the assembly is not
+        # rehashed there. NULL (an unreadable file) is left out, and that store
+        # falls back to a reread.
+        if (!is.null(digests[[k]])) {
+          chk$digests[[chk$out$strain[i]]] <- digests[[k]]
+        }
+      }
+      chk$i <- max(idx)
 
       # Advance the bar (a targeted widget message, not a reactive write, so it
-      # does not re-flush the module) and queue the next genome. Skipped for
+      # does not re-flush the module) and queue the next chunk. Skipped for
       # small selections, which stay at 0%. invalidateLater drives the loop.
       if (chk$show_bar) {
-        updateProgressBar(session, "progress", value = i, total = chk$n)
+        updateProgressBar(session, "progress", value = chk$i, total = chk$n)
       }
       invalidateLater(0, session)
     })

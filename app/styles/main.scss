@@ -892,6 +892,15 @@ $viz-tile-row-gap: 0.85rem;
     // Still fill the stage when the plot is smaller than it.
     min-width: 100%;
     min-height: 100%;
+    // The stage's own flex-start is not enough: this box is a flex *item*, so
+    // `width: max-content` is only its base size and it is shrunk back to the
+    // stage's width. The image it centres then overflows on both sides, and
+    // scrolling reaches only the overflow past the end — a fifth of the plot's
+    // left edge, its margin and the start of the tree, could not be reached at
+    // all. Not shrinkable, and anchored at the start like the stage around it.
+    flex: 0 0 auto;
+    align-items: flex-start;
+    justify-content: flex-start;
 }
 
 .tree-stage.is-zoom .shiny-plot-output img {
@@ -943,6 +952,15 @@ $viz-tile-row-gap: 0.85rem;
     // Still fill the stage when the plot is smaller than it.
     min-width: 100%;
     min-height: 100%;
+    // The stage's own flex-start is not enough: this box is a flex *item*, so
+    // `width: max-content` is only its base size and it is shrunk back to the
+    // stage's width. The image it centres then overflows on both sides, and
+    // scrolling reaches only the overflow past the end — a fifth of the plot's
+    // left edge, its margin and the start of the tree, could not be reached at
+    // all. Not shrinkable, and anchored at the start like the stage around it.
+    flex: 0 0 auto;
+    align-items: flex-start;
+    justify-content: flex-start;
 }
 
 .amr-stage.is-zoom .shiny-plot-output img {

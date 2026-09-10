@@ -7,14 +7,16 @@ box::use(
     expect_true,
     test_that
   ],
-  withr[local_tempdir],
+  withr[local_tempdir, with_envvar, with_options],
 )
 box::use(
   app / logic / genome_hash[
     GENOME_HASH_ALGORITHM,
     check_genomes,
     genome_digest,
+    genome_digests,
     genome_hash_map,
+    resolve_hash_workers,
     sha512t24u,
     store_genome_hash
   ],
@@ -173,6 +175,105 @@ test_that("store_genome_hash accepts a precomputed digest without re-reading", {
     q1(db, "SELECT genome_digest FROM genome_hashes"),
     digest$genome_digest
   )
+})
+
+test_that("genome_digest can skip the raw-file checksum", {
+  dir <- local_tempdir()
+  file <- fasta(dir, "S1.fa", c(">c1", C1, ">c2", C2))
+
+  full <- genome_digest(file)
+  lean <- genome_digest(file, with_file_sha256 = FALSE)
+
+  # Only file_sha256 differs; the content digest and measures are untouched.
+  expect_true(is.na(lean$file_sha256))
+  expect_identical(nchar(full$file_sha256), 64L)
+  expect_identical(lean$genome_digest, full$genome_digest)
+  expect_identical(lean$n_contigs, full$n_contigs)
+  expect_equal(lean$total_length, full$total_length)
+})
+
+test_that("store_genome_hash backfills a checksum-less precomputed digest", {
+  # The pre-run check hands over a digest computed with_file_sha256 = FALSE; the
+  # stored row must still carry the same real file checksum a full hash writes.
+  dir <- local_tempdir()
+  db <- scratch_db(dir)
+  file <- fasta(dir, "S1.fa", c(">c1", C1))
+  lean <- genome_digest(file, with_file_sha256 = FALSE)
+  expect_true(is.na(lean$file_sha256))
+
+  store_genome_hash(db, "LEAN", file, digest = lean)
+  store_genome_hash(db, "FULL", file)
+
+  rows <- qdf(db, "SELECT isolate, file_sha256 FROM genome_hashes ORDER BY isolate")
+  expect_identical(nchar(rows$file_sha256), c(64L, 64L))
+  expect_identical(rows$file_sha256[[1]], rows$file_sha256[[2]])
+})
+
+test_that("genome_digests matches the serial path whatever the worker count", {
+  dir <- local_tempdir()
+  files <- c(
+    fasta(dir, "A.fa", c(">c1", C1, ">c2", C2)),
+    fasta(dir, "B.fa", c(">c1", paste0(substr(C1, 1, 27), "A"))),
+    file.path(dir, "gone.fa"),
+    fasta(dir, "notes.txt", c("plain", "text"))
+  )
+
+  serial <- genome_digests(files, workers = 1L)
+  parcel <- genome_digests(files, workers = 3L)
+
+  expect_identical(parcel, serial)
+  # Unreadable / non-FASTA inputs come back as NULL, keeping the list aligned.
+  expect_null(serial[[3]])
+  expect_null(serial[[4]])
+  expect_identical(
+    vapply(serial[1:2], `[[`, character(1), "genome_digest"),
+    vapply(files[1:2], function(f) genome_digest(f)$genome_digest, character(1),
+      USE.NAMES = FALSE)
+  )
+})
+
+test_that("resolve_hash_workers leaves headroom and never over-forks", {
+  expect_identical(resolve_hash_workers(1L), 1L)
+  expect_identical(resolve_hash_workers(0L), 1L)
+  expect_identical(resolve_hash_workers(NA_integer_), 1L)
+
+  # Never more workers than items, and never every core.
+  w <- resolve_hash_workers(3L)
+  expect_true(w >= 1L && w <= 3L)
+
+  # A bigger reserve can only ever hand back the same count or fewer.
+  big_n <- 1000L
+  expect_true(
+    resolve_hash_workers(big_n, reserve = 4L, cap = big_n) <=
+      resolve_hash_workers(big_n, reserve = 1L, cap = big_n)
+  )
+  # The cap is a hard ceiling.
+  expect_true(resolve_hash_workers(big_n, cap = 3L) <= 3L)
+
+  with_options(list(phylotrace.hash_workers = 2L), {
+    expect_identical(resolve_hash_workers(50L), 2L)
+    expect_identical(resolve_hash_workers(1L), 1L)
+  })
+  with_options(list(phylotrace.hash_workers = 99L), {
+    expect_identical(resolve_hash_workers(4L), 4L)
+  })
+})
+
+test_that("resolve_hash_workers stays serial where fork() is unavailable", {
+  # Positron / RStudio hard-error on fork rather than degrading, so mclapply
+  # must never be reached there - not even when an override asks for workers.
+  fork_state <- environment(resolve_hash_workers)$.fork_state
+  saved <- fork_state$ok
+  on.exit(fork_state$ok <- saved, add = TRUE)
+
+  fork_state$ok <- NULL # force a re-probe against the faked environment
+  with_envvar(c(POSITRON = "1"), {
+    expect_identical(resolve_hash_workers(500L), 1L)
+    with_options(list(phylotrace.hash_workers = 8L), {
+      expect_identical(resolve_hash_workers(500L), 1L)
+    })
+  })
+  fork_state$ok <- NULL # don't leak the faked verdict to later tests
 })
 
 test_that("genome_hash_map is empty for databases without the table", {

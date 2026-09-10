@@ -134,7 +134,7 @@ TIP_CHAR_EM <- 0.6 # Character width estimate (em) for accession/isolate labels
 # short of the column is three letters drawn past the edge of the panel.
 #
 # Helvetica's own widths, which the export devices' sans faces are within a
-# percent of. Anything not listed takes the mean.
+# percent of. Anything not listed takes `CHAR_EM_UNKNOWN`.
 CHAR_EM <- c(
   " " = 0.278, "!" = 0.278, "\"" = 0.355, "#" = 0.556, "$" = 0.556,
   "%" = 0.889, "&" = 0.667, "'" = 0.191, "(" = 0.333, ")" = 0.333,
@@ -162,6 +162,20 @@ CHAR_EM <- c(
   "\u2026" = 1.0
 )
 
+# What a character outside `CHAR_EM` is booked at.
+#
+# The table is Latin and a caption need not be: a gene name carrying a Greek
+# letter, a range written with an en dash, a unit with a middle dot. Nearly all
+# of those set *narrower* than the Latin mean, but the widest — an em dash, an
+# arrow, a CJK glyph — set a full em, two thirds over it, and a column short by
+# that much is the caption clipped at the panel edge.
+#
+# So an unknown character is booked at the widest a character gets rather than
+# at the average one. The guess does not cost the same in both directions: too
+# wide leaves a little white space at the end of a caption, too narrow loses
+# the end of it.
+CHAR_EM_UNKNOWN <- 1
+
 # Ems one string sets in, measured character by character.
 .string_em <- function(x) {
   ch <- strsplit(as.character(x %||% ""), "", fixed = TRUE)[[1]]
@@ -169,7 +183,7 @@ CHAR_EM <- c(
     return(0)
   }
   em <- CHAR_EM[ch]
-  em[is.na(em)] <- TIP_CHAR_EM
+  em[is.na(em)] <- CHAR_EM_UNKNOWN
   sum(em)
 }
 TIP_LABEL_FRAC <- 0.35 # Maximum fraction of panel width reserved for tip labels
@@ -260,15 +274,39 @@ LINEAR_H <- 0
 # page — so past a few dozen the stroke has to come down with them or the
 # drawing fills in solid, which is what a few hundred tips in a circle did.
 BRANCH_WIDTH <- 0.5
-# A hairline, and no thinner: the preview is drawn at PLOT_RES, where this is
-# about one pixel. Below it the stroke stops being a line and starts being a
-# grey smudge — thinner on paper, but gone on screen.
-BRANCH_WIDTH_MIN <- 0.08
+# The thinnest the branches are allowed to get. The preview is drawn at
+# PLOT_RES, where this is a fraction of a pixel and reads as a fine grey line;
+# the vector exports (cairo PDF/SVG) draw it crisp at any size. Below it the
+# on-screen line fades toward nothing, so a thousand tips sit here and the
+# reader drops it further by hand if the export needs finer still.
+BRANCH_WIDTH_MIN <- 0.05
 BRANCH_WIDTH_TIPS <- 60
 # How hard the stroke falls with the tip count: in step with it, because that
 # is how the crowding grows. A square-root fall came down far too slowly — a
 # radial tree of a few hundred tips still filled in solid.
 BRANCH_WIDTH_FALL <- 1
+
+# The leader line's stroke, as a share of the tree's own.
+#
+# A leader is a guide rather than data — it carries the eye from a tip across
+# the empty band to whatever is set beside it — so it is drawn lighter than the
+# branch it leaves. ggtree's own default is a flat 0.5 whatever the tree holds,
+# which past a few hundred tips is six times the stroke the branches have
+# already been thinned to (`tree_branch_width()`), and the leaders then read as
+# the drawing with the tree as a sketch under it.
+LEADER_WIDTH_FRAC <- 0.6
+
+# Millimetres of row a leader line needs to read as a line of its own.
+#
+# A dotted line's dots are as wide across as the line is thick and about three
+# times that apart along it. Each tip's dots start at its own depth, so no two
+# neighbouring rows are in phase, and once the rows are tighter than the dots
+# are long every vertical slice through the band lands on ink in most of them:
+# the field fills in. On a linear tree that reads as bars across the plot; on a
+# radial one, where the same band is wrapped around a circle, it reads as the
+# rings a thousand tips drew. Past this the leaders are left off — a row the
+# eye cannot pick out is a row no leader can lead it along.
+LEADER_MIN_PITCH_MM <- 1
 
 #' The stroke a dendrogram of `n_leaves` is drawn with.
 #'
@@ -298,10 +336,34 @@ tree_branch_width <- function(n_leaves) {
 # Fitting limits
 TIP_GROWTH <- 1.5 # Cap size scaling relative to default (150%)
 TIP_ASPECT_MIN <- 0.5 # Minimum allowed aspect ratio
-# A few hundred tips at the target pitch would be a plot feet tall, so past
-# this the rows tighten instead of the page growing. Lowered with TIP_ROW_IN,
-# and for the same reason.
-TIP_ASPECT_MAX <- 5
+
+#' How far the image may grow past the tree's own budget, in either direction.
+#'
+#' `tree_panel_width_in()` is a request, not a promise: without a ceiling, four
+#' wide legends and three heatmap panels ask for a canvas no screen can show
+#' and no export can rasterise. Past this the annotations share what is left.
+#'
+#' Here rather than in the view because the axis solve needs it too. Every
+#' reserve measured in inches — the axis overhang, the caption column — is
+#' solved against the panel the annotations *asked* for, and once the ceiling
+#' bites that panel is not the one being drawn on.
+#' @export
+TREE_CANVAS_MAX_FACTOR <- 2.6
+
+# The tallest aspect ratio the fit will ask for — the sidebar slider's own
+# ceiling (`ASPECT_MAX` in the view), not TREE_CANVAS_MAX_FACTOR. That one
+# bounds how far the *annotations* may grow the canvas, a separate question
+# from how tall a bare tree of a thousand branches may be drawn. The two were
+# one number, and at 2.6 the rows of a thousand-tip tree packed to a couple of
+# pixels and the branches filled in; 8 gives each branch a row it can be told
+# apart in.
+#
+# Raised safely only because `tree_canvas_height_in()` now draws whatever
+# aspect it is handed up to this: the fit and the drawing used to agree on 2.6
+# by both stopping there, and when they drifted the fit solved a thousand tips
+# onto 27.5in of paper while the image was cut to 14.3 and every row arrived
+# half the height its type was chosen for.
+TIP_ASPECT_MAX <- 8
 TIP_SIZE_MIN <- 0.5 # Minimum size threshold
 TIP_SIZE_FLOOR <- 1.2 # Minimum text size for legibility flag
 
@@ -1377,6 +1439,35 @@ TEXT_SCALE_DEFAULT <- 1
 #' off the bottom of the figure — there is no "wrap the guides into a second
 #' column", and `legend.box = "vertical"` means exactly one column. So the only
 #' two things that can keep a legend on the page are how many keys each guide
+#' The mappings and heatmap panels this layout will actually draw a guide for.
+#'
+#' An inward tree has no room past its tips for anything (`tree_annotations_
+#' drawn()`), so its tile strips and heatmap panels are not drawn — and a guide
+#' with no marks behind it is not drawn either. Reserved anyway, they left a
+#' fifth of the image blank beside a disc with nothing to explain.
+#'
+#' Mappings on the tree's *own* marks survive, because those are drawn on the
+#' tree rather than beside it: a tip label's colour, a tip point's colour or
+#' shape. So this is not "an inward tree has no legend" — it is the same rule
+#' the builder draws by, said once where the canvas is measured.
+#'
+#' @param opts List. Resolved tree options.
+#' @return List with `layers` and `heatmaps`, each possibly empty.
+#' @export
+tree_guide_inputs <- function(opts) {
+  list(
+    layers = Filter(
+      function(l) tree_aesthetic_drawn(opts, l$aesthetic %||% NA_character_),
+      opts$layers %||% list()
+    ),
+    heatmaps = if (tree_annotations_drawn(opts)) {
+      opts$heatmaps %||% list()
+    } else {
+      list()
+    }
+  )
+}
+
 #' lists (`tree_legend_max_keys()`) and how large they are set, and this is the
 #' second: the requested size, cut back until the box fits the height beside
 #' the tree, and no further than a journal's own type floor.
@@ -1406,10 +1497,11 @@ tree_legend_size <- function(opts, height_in = NULL, md = NULL) {
   # The guide box gets the figure's height less the plot margin, which is
   # outside it — the same inches the tip-label reserve does not receive.
   room_in <- height_in - PLOT_MARGIN_IN * scale
+  guides <- tree_guide_inputs(opts)
   fits <- function(pt) {
     plan <- tree_legend_plan(
-      opts$layers,
-      opts$heatmaps,
+      guides$layers,
+      guides$heatmaps,
       pt,
       height_in,
       scale,
@@ -1454,9 +1546,10 @@ tree_legend_size <- function(opts, height_in = NULL, md = NULL) {
 tree_legend_height_in <- function(opts, height_in = NULL, md = NULL) {
   size <- tree_legend_size(opts, height_in, md)
   scale <- .scale_of(opts)
+  guides <- tree_guide_inputs(opts)
   plan <- tree_legend_plan(
-    opts$layers,
-    opts$heatmaps,
+    guides$layers,
+    guides$heatmaps,
     size,
     height_in,
     scale,
@@ -1492,11 +1585,45 @@ COORD_POLAR_FRAC <- 0.8
 # answer or the box is cropped off the edge of a figure that reserved room for
 # it.
 .has_guides <- function(opts) {
-  length(opts$layers %||% list()) > 0L ||
-    length(Filter(
-      function(h) length(h$cols) > 0L,
-      opts$heatmaps %||% list()
-    )) > 0L
+  guides <- tree_guide_inputs(opts)
+  length(guides$layers) > 0L ||
+    length(Filter(function(h) length(h$cols) > 0L, guides$heatmaps)) > 0L
+}
+
+#' How tall a linear tree's panel is drawn, in inches.
+#'
+#' The aspect ratio says how tall the tree wants to be and the guide box says
+#' how tall it has to be to hold the keys; the ceiling says what the image can
+#' actually be. All three have to be settled in one place, because the answer
+#' is both the canvas the view reserves *and* the height every reserve inside
+#' the drawing is measured against — a header band in rows, the axis numbers'
+#' depth, the tip pitch the labels are fitted to. Solved twice, they drifted:
+#' the view capped the image and the builder did not, so at a thousand tips the
+#' figure was designed for 27.5 inches and printed on 14.3.
+#'
+#' The ceiling binds what the *engine* asks for, not what the reader does. A
+#' guide box may grow the canvas up to it and no further; the aspect ratio is
+#' the reader's own control and is drawn as set, and the fit never asks for
+#' more than the ceiling anyway (`TIP_ASPECT_MAX`).
+#'
+#' Radial layouts have no aspect ratio — their panel is square and its side is
+#' `tree_panel_width_in()` — so this is for linear ones only.
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame or NULL. Tip metadata, for the guide box's height.
+#' @return Numeric inches.
+#' @export
+tree_canvas_height_in <- function(opts, md = NULL) {
+  base <- opts$width_in %||% 5.5
+  if (!isTRUE(is.finite(base) && base > 0)) {
+    base <- 5.5
+  }
+  aspect <- suppressWarnings(as.numeric(opts$aspect %||% 1))
+  if (length(aspect) != 1L || !is.finite(aspect) || aspect <= 0) {
+    aspect <- 1
+  }
+  want <- base * aspect
+  max(want, min(tree_legend_height_in(opts, want, md), base * TREE_CANVAS_MAX_FACTOR))
 }
 
 #' Height the image stands at, for a panel of a given side.
@@ -1519,7 +1646,8 @@ tree_image_height_in <- function(opts, panel_in) {
   if (!.is_circular(opts)) {
     return(panel_in)
   }
-  panel_in * COORD_POLAR_FRAC + PLOT_MARGIN_IN * .scale_of(opts)
+  .drawn_panel_in(opts, panel_in) * COORD_POLAR_FRAC +
+    PLOT_MARGIN_IN * .scale_of(opts)
 }
 
 #' Width the image stands at, for a panel of a given side.
@@ -1543,7 +1671,9 @@ tree_image_width_in <- function(opts, panel_in, legend_in = 0) {
   if (!.has_guides(opts)) {
     return(disc)
   }
-  disc + (1 - COORD_POLAR_FRAC) / 2 * panel_in + legend_in
+  disc +
+    (1 - COORD_POLAR_FRAC) / 2 * .drawn_panel_in(opts, panel_in) +
+    legend_in
 }
 
 #' The margin drawn around the plot, in inches, clockwise from the top.
@@ -1568,7 +1698,8 @@ tree_plot_margin_in <- function(opts, panel_in) {
   if (!.is_circular(opts) || !isTRUE(is.finite(panel_in) && panel_in > 0)) {
     return(rep(edge, 4L))
   }
-  crop <- edge - (1 - COORD_POLAR_FRAC) / 2 * panel_in
+  crop <- edge -
+    (1 - COORD_POLAR_FRAC) / 2 * .drawn_panel_in(opts, panel_in)
   c(crop, if (.has_guides(opts)) edge else crop, crop, crop)
 }
 
@@ -1632,6 +1763,31 @@ CLASS_FRAC_MAX <- 0.45
 CLASS_STRIP_GAP_ROWS <- 0.4
 CLASS_STRIP_ROWS <- 0.9
 DEND_GAP_ROWS <- 0.5
+
+# What that band is worth as a share of the figure, in percent of the tip count.
+#
+# The three constants above are tip rows, which is the right unit for a band
+# beside a matrix whose cells are tip rows — until there are a thousand of
+# them. A tenth of a percent of the panel is not a strip, it is a line: the
+# drug classes under a heatmap of 991 isolates were a coloured hairline nobody
+# could read a colour off.
+#
+# The dendrogram that hangs under the same strip has always been a percentage
+# of the tip count (`.dend_rows()`), so that it stays the same share of the
+# figure whatever the tree's height. This is that rule applied to the band
+# above it — the whole group scaled together, so the composition the constants
+# describe is preserved and only its size follows the figure.
+#
+# A share *or* the rows, whichever is larger: a small tree keeps exactly what
+# it drew before, and the strip only starts growing where a fixed row stops
+# being visible (around ninety tips).
+CLASS_STRIP_PCT <- 1
+
+# How much of a clustered panel's band is scaled up for the tip count.
+.class_band_scale <- function(n_tip) {
+  n <- max(as.numeric(n_tip %||% 1), 1)
+  max(n * CLASS_STRIP_PCT / 100 / CLASS_STRIP_ROWS, 1)
+}
 
 # --- The element-type label over (or under) a panel --------------------------
 #
@@ -2858,19 +3014,6 @@ tree_panel_width_in <- function(opts, md, panel_in) {
   max(panel_in * growth, panel_in) + clade_in
 }
 
-#' How far the image may grow past the tree's own budget.
-#'
-#' `tree_panel_width_in()` is a request, not a promise: without a ceiling, four
-#' wide legends and three heatmap panels ask for a canvas no screen can show
-#' and no export can rasterise. Past this the annotations share what is left.
-#'
-#' Here rather than in the view because the axis solve needs it too. Every
-#' reserve measured in inches — the axis overhang, the caption column — is
-#' solved against the panel the annotations *asked* for, and once the ceiling
-#' bites that panel is not the one being drawn on.
-#' @export
-TREE_CANVAS_MAX_FACTOR <- 2.6
-
 #' How much of the panel it asked for the figure is actually drawn at.
 #'
 #' One below the ceiling and less than one above it. A fraction of the tree's
@@ -2892,10 +3035,38 @@ tree_panel_squeeze <- function(opts, panel_in, legend_in = 0) {
     leg <- 0
   }
   room <- base * TREE_CANVAS_MAX_FACTOR - leg
+  # A disc costs less width than its panel: the image is sized to the drawing
+  # rather than to the square it is drawn in, so an inch of panel buys
+  # `COORD_POLAR_FRAC` of an inch of image, plus the half-ring the guides need
+  # beside it (`tree_image_width_in()`). Dividing by that is what turns "inches
+  # of image left over" into "inches of panel they will pay for" — without it
+  # the disc was squeezed by a tenth more than the ceiling actually asked, and
+  # the image kept the height of the panel it did not get.
+  if (.is_circular(opts)) {
+    per_in <- COORD_POLAR_FRAC +
+      if (.has_guides(opts)) (1 - COORD_POLAR_FRAC) / 2 else 0
+    room <- (room - PLOT_MARGIN_IN * .scale_of(opts)) / per_in
+  }
   if (!isTRUE(is.finite(panel_in) && panel_in > 0) || !isTRUE(room > 0)) {
     return(1)
   }
   .clamp(room / panel_in, 0.2, 1)
+}
+
+# The panel a radial figure is really drawn on, which is not the one the
+# annotations asked for once the ceiling bites (`tree_panel_squeeze()`).
+#
+# Every piece of the radial image's geometry is measured from it — the image's
+# height, its width, and the negative margin that lets the panel overflow both
+# — so they are all read through here. Measured from the requested panel
+# instead, the image kept the height of a disc a tenth larger than the one
+# drawn in it, and the difference came out as blank bands above and below.
+.drawn_panel_in <- function(opts, panel_in) {
+  k <- suppressWarnings(as.numeric(opts$panel_squeeze %||% 1))
+  if (length(k) != 1L || !is.finite(k) || k <= 0) {
+    k <- 1
+  }
+  panel_in * k
 }
 
 #' Total width of every annotation drawn to the right of the tip labels, as a
@@ -3205,6 +3376,23 @@ OPEN_ANGLE_MAX <- 90
 # filling it.
 OPEN_ANGLE_PAD <- 1.25
 
+# The y limit a radial tree's scale has to carry, for a wedge of `angle` degrees.
+#
+# ggtree cuts the wedge by leaving room on the y scale past the last tip and
+# mapping the whole scale onto the circle (`ggtree:::open_tree`), so this is its
+# arithmetic, written out because we have to restore the scale after gheatmap
+# replaces it. `n + 1` is the closed case: a whole tip row of slack, which is
+# what a full circle already has between the last tip and the first.
+.radial_y_limit <- function(n_tip, angle) {
+  n <- max(as.numeric(n_tip %||% 1), 1)
+  a <- suppressWarnings(as.numeric(angle %||% 0))
+  if (length(a) != 1L || !is.finite(a) || a <= 0) {
+    return(n + 1)
+  }
+  a <- .clamp(a, 0, OPEN_ANGLE_MAX)
+  max(n * (1 + a / (360 - a)), n + 1)
+}
+
 #' Degrees of the circle a radial tree has to leave open for its headers.
 #'
 #' Every ring's header is set in the wedge between the last tip and the first,
@@ -3293,10 +3481,24 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
     start <- start + length(h$cols) * cell
   }
 
-  if (!length(needed)) {
-    return(0)
-  }
-  .clamp(round(max(needed) * OPEN_ANGLE_PAD * 180 / pi), 0, OPEN_ANGLE_MAX)
+  wedge <- if (length(needed)) max(needed) * OPEN_ANGLE_PAD * 180 / pi else 0
+
+  # And the band under the first tip — a bracketed panel's class names, a
+  # clustered one's colour strip and dendrogram. On a linear tree that band is
+  # a y expansion; here it is degrees, because it is measured in tip rows and a
+  # tip row is an angle. The two ends of the wedge are the same wedge, so the
+  # deeper of the two claims it rather than the two adding up.
+  n_tip <- max(nrow(md %||% data.frame()), 1L)
+  band <- .bottom_band_rows(
+    opts,
+    n_tip,
+    .class_band_runs(opts),
+    .nominal_header_size(opts)
+  ) *
+    360 /
+    n_tip
+
+  .clamp(round(max(wedge, band)), 0, OPEN_ANGLE_MAX)
 }
 
 # Rows of tip pitch the band under the matrices already holds, before any
@@ -3667,6 +3869,30 @@ tree_fitted_aspect <- function(aspect, opts, n_tip) {
     (size %||% HEADER_SIZE_MAX)) /
     row_mm
   .drawn_row_mm(height_in, span + extra, top_frac, bottom_frac)
+}
+
+# Millimetres between two neighbouring tips on a radial tree.
+#
+# The counterpart of `.drawn_tip_pitch()` for a disc. Rows there are arcs
+# rather than bands, and the tightest they ever are is on the circle the tips
+# themselves stand on: a leader line runs outward from there, so that is where
+# two of them are closest. The fan's opening is circumference the tips are not
+# spread over, so it comes off first.
+#
+# @param panel_in Numeric. Side of the square panel, in inches.
+# @param tip_frac Numeric. Share of the radius the tip circle stands at.
+.radial_tip_pitch_mm <- function(opts, panel_in, tip_frac, n_tip) {
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  frac <- suppressWarnings(as.numeric(tip_frac))
+  if (length(frac) != 1L || !is.finite(frac)) {
+    return(NA_real_)
+  }
+  r_in <- tree_axis_in(opts, panel_in) * .clamp(frac, 0, 1)
+  open <- suppressWarnings(as.numeric(opts$open_angle %||% 0))
+  if (length(open) != 1L || !is.finite(open)) {
+    open <- 0
+  }
+  25.4 * 2 * pi * r_in * (1 - .clamp(open, 0, 359) / 360) / n
 }
 
 # Whether any panel puts its element-type label above its column names.
@@ -4086,16 +4312,19 @@ tree_header_drawn <- function(size, scale = 1) {
 # strip and the gap under it collapse, and the dendrogram moves up into the
 # room they were holding rather than hanging below an empty band.
 .cluster_band <- function(n_tip, panel, has_strip) {
-  strip_top <- 0.5 - CLASS_STRIP_GAP_ROWS
-  strip_bottom <- if (has_strip) strip_top - CLASS_STRIP_ROWS else strip_top
+  k <- .class_band_scale(n_tip)
+  strip_rows <- CLASS_STRIP_ROWS * k
+  strip_top <- 0.5 - CLASS_STRIP_GAP_ROWS * k
+  strip_bottom <- if (has_strip) strip_top - strip_rows else strip_top
   depth <- .dend_rows(n_tip, panel)
   dend_top <- if (has_strip && depth > 0) {
-    strip_bottom - DEND_GAP_ROWS
+    strip_bottom - DEND_GAP_ROWS * k
   } else {
     strip_bottom
   }
   list(
     strip_y = (strip_top + strip_bottom) / 2,
+    strip_rows = strip_rows,
     dend_top = dend_top,
     depth = depth,
     rows = 0.5 - (dend_top - depth)
@@ -4161,7 +4390,7 @@ tree_header_drawn <- function(size, scale = 1) {
         ),
         inherit.aes = FALSE,
         width = cell,
-        height = CLASS_STRIP_ROWS
+        height = band$strip_rows
       ),
       scale_fill_manual(
         values = .legend_values(fills, strip_keys$breaks),
@@ -4684,16 +4913,42 @@ layer_for_field <- function(opts, field) {
   if (length(hit)) hit[[1]] else NULL
 }
 
+# Whether the leader lines are worth drawing.
+#
+# Three ways they are not. An inward tree's leaders all converge on the root,
+# where they pile into a blot over it. A tree with nothing set beside it — no
+# labels, no tile strips, no heatmap — has leaders that lead nowhere, which is
+# ink for its own sake. And past `LEADER_MIN_PITCH_MM` the rows are tighter
+# than the dots are long, so the band of leaders fills in solid and hides the
+# tree instead of pointing into it.
+#
+# `opts$row_mm` is the pitch the panel is really drawn at, written by the
+# builder before the layers are assembled; without it — a caller building the
+# layer on its own — the pitch is unknown and the leaders are drawn, which is
+# what they did before there was a rule at all.
+.leaders_drawn <- function(opts) {
+  if (identical(opts$layout, "inward")) {
+    return(FALSE)
+  }
+  if (!isTRUE(opts$tiplab_show) && annotation_total(opts) <= 0) {
+    return(FALSE)
+  }
+  pitch <- suppressWarnings(as.numeric(opts$row_mm %||% NA))
+  if (length(pitch) != 1L || !is.finite(pitch)) {
+    return(TRUE)
+  }
+  pitch >= LEADER_MIN_PITCH_MM * .scale_of(opts)
+}
+
 tree_tiplab_layer <- function(opts, md, layer = NULL, offset = 0) {
-  # Labels off still draws the leader lines. They are what makes a tree with
-  # ragged tip depths readable without labels: without them the eye has to
-  # carry a row across an empty band to whatever is annotated beside it. The
-  # label itself becomes a single space — an empty string makes ggtree drop the
-  # layer, and with it the lines.
+  # Labels off still draws the leader lines where there is something for them
+  # to lead to. They are what makes a tree with ragged tip depths readable
+  # without labels: without them the eye has to carry a row across an empty
+  # band to whatever is annotated beside it. The label itself becomes a single
+  # space — an empty string makes ggtree drop the layer, and with it the lines.
   hidden <- !isTRUE(opts$tiplab_show)
-  if (hidden && identical(opts$layout, "inward")) {
-    # Inward leader lines all converge on the root, so there is nothing here
-    # worth drawing without labels to anchor them.
+  align <- .leaders_drawn(opts)
+  if (hidden && !align) {
     return(NULL)
   }
 
@@ -4711,11 +4966,15 @@ tree_tiplab_layer <- function(opts, md, layer = NULL, offset = 0) {
   params <- list(
     mapping = mapping,
     size = .tiplab_size(opts, md),
-    # Aligning draws a leader line from each tip out to the axis limit. In an
-    # inward tree every one of those runs toward the centre, where they all
-    # converge into a solid blot over the root — so the layout that makes a
-    # linear tree readable is the one that ruins this one.
-    align = !inward,
+    # Aligning draws a leader line from each tip out to the axis limit
+    # (`.leaders_drawn()` decides whether that is worth doing).
+    align = align,
+    # At the tree's own stroke, lightened. ggtree's default is a constant, so
+    # the one part of the drawing that is not fitted to the tip count was the
+    # part there is most of.
+    linesize = (opts$branch_width %||% tree_branch_width(nrow(md))) *
+      LEADER_WIDTH_FRAC *
+      .scale_of(opts),
     geom = "text"
   )
 
@@ -4755,7 +5014,7 @@ tree_tiplab_layer <- function(opts, md, layer = NULL, offset = 0) {
 #' @return TRUE when the layer that carries it is drawn.
 #' @export
 tree_aesthetic_drawn <- function(opts, aesthetic) {
-  if (is.null(aesthetic)) {
+  if (is.null(aesthetic) || !length(aesthetic)) {
     return(FALSE)
   }
   if (identical(aesthetic, "tiplab_color")) {
@@ -4763,6 +5022,14 @@ tree_aesthetic_drawn <- function(opts, aesthetic) {
   }
   if (aesthetic %in% c("tippoint_color", "tippoint_shape")) {
     return(isTRUE(opts$tippoint_show))
+  }
+  # A tile strip stands past the tips, and an inward tree has nowhere past its
+  # tips to put one (`tree_annotations_drawn()`). The marks are already left
+  # off there; without this the scale behind them was not, which is both the
+  # warning above and a guide column reserved on the canvas for keys nothing
+  # was drawn in.
+  if (identical(aesthetic, "tile")) {
+    return(tree_annotations_drawn(opts))
   }
   TRUE
 }
@@ -4874,10 +5141,18 @@ CLADE_ALPHA <- 0.45
 CLADE_LABEL_SIZE <- 3.2
 
 # The caption column in mm at scale 1: the bar's thickness, the gutter between
-# the last annotation and the bar, and the gap from the bar to its text.
+# the last annotation and the bar, the gap from the bar to its text, and the
+# air after the text.
+#
+# That last one is not symmetry for its own sake. Without it the column ends
+# exactly where the widest caption ends, and the only thing between the last
+# glyph and the paper's edge is `CLADE_TEXT_SLACK` — a percent, which is a
+# pixel or two. The caption fitted, and looked cut off, which is how it was
+# reported; a column is read by its air as much as by its width.
 CLADE_BAR_MM <- 1.1
 CLADE_BAR_GAP_MM <- 2.4
 CLADE_TEXT_GAP_MM <- 1.4
+CLADE_TAIL_GAP_MM <- 1.4
 
 # Millimetres one ggplot2 `linewidth` draws, so a stroke that has to match a
 # width booked in millimetres can be asked for in the units it was booked in.
@@ -4979,7 +5254,8 @@ CLADE_PALETTE <- c(
 
 # The part of the caption column that is not text.
 .clade_gaps_mm <- function(opts) {
-  (CLADE_BAR_MM + CLADE_BAR_GAP_MM + CLADE_TEXT_GAP_MM) * .scale_of(opts)
+  (CLADE_BAR_MM + CLADE_BAR_GAP_MM + CLADE_TEXT_GAP_MM + CLADE_TAIL_GAP_MM) *
+    .scale_of(opts)
 }
 
 # Inches the caption column may claim.
@@ -5084,6 +5360,35 @@ CLADE_PALETTE <- c(
   tree_data[tree_data$node %in% c(node, seen) & tree_data$isTip, , drop = FALSE]
 }
 
+# The tree data a highlight takes its corners from.
+#
+# Every tip on an aligned tree is drawn out to the same edge — that is what the
+# leader lines do — so a wash that stopped at its own clade's deepest tip ended
+# partway along the band it was naming, and the reader had to carry the group
+# across the gap the highlight was there to close. Nested clades were worse: two
+# highlights over the same rows ended at two different places for no reason a
+# reader could see.
+#
+# Done by handing `geom_hilight()` a copy of the tree data with the tips already
+# aligned, rather than by moving the rect afterwards: it computes its own
+# corners (`ggtree:::get_clade_position_`), and this frame is the one input it
+# takes them from. Only the tips move, so each clade's *left* edge stays on its
+# own root branch.
+#
+# An inward tree draws its tips where they fall — there is no alignment line to
+# reach — so it keeps ggtree's own corners.
+.aligned_clade_data <- function(opts, tree_data) {
+  if (identical(opts$layout, "inward") || !isTRUE(any(tree_data$isTip))) {
+    return(tree_data)
+  }
+  edge <- suppressWarnings(max(tree_data$x[tree_data$isTip], na.rm = TRUE))
+  if (!isTRUE(is.finite(edge))) {
+    return(tree_data)
+  }
+  tree_data$x[tree_data$isTip] <- edge
+  tree_data
+}
+
 # The wash behind each highlighted clade.
 #
 # Added in reverse so the *first* highlight ends up deepest in the stack: each
@@ -5099,8 +5404,10 @@ tree_clade_layers <- function(opts, tree_data) {
   if (!length(clades)) {
     return(NULL)
   }
+  frame <- .aligned_clade_data(opts, tree_data)
   lapply(rev(clades), function(cl) {
     geom_hilight(
+      data = frame,
       node = cl$node,
       fill = cl$color,
       alpha = CLADE_ALPHA,
@@ -5534,19 +5841,31 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   plot_height_in <- if (opts$layout %in% .circular_layouts) {
     panel_in
   } else {
-    (opts$width_in %||% 5.5) * (opts$aspect %||% 1)
+    tree_canvas_height_in(opts, md)
   }
   # The height of the *image*, which is the panel's on a linear tree and the
   # disc's on a radial one (see `tree_image_height_in`). Everything measured
   # against the rows — the tip pitch, the header and class bands — belongs to
   # the panel and keeps `plot_height_in`; the guide box stands in the image and
   # is fitted to this, which is also what the view reserves the canvas from.
+  #
+  # Provisional on a radial tree, because the disc it is measured from is not
+  # yet known: how far the ceiling squeezes the panel depends on how wide the
+  # guide box is, and how wide the guide box is depends on how tall it may run.
+  # One pass settles it — the height only decides how many columns the keys
+  # wrap into, and a column either fits or it does not.
   image_height_in <- tree_image_height_in(opts, plot_height_in)
   # How tall any one guide may run before its keys wrap into another column.
+  #
+  # `tree_guide_inputs()` rather than `opts` throughout, so the box is budgeted
+  # for the guides this layout will really draw: an inward tree's tile strips
+  # and heatmap panels are not drawn at all, and a column reserved for their
+  # keys is a column of blank paper.
+  guides <- tree_guide_inputs(opts)
   legend_size <- tree_legend_size(opts, image_height_in, md)
   legend_max_rows <- tree_legend_max_rows(
-    opts$layers,
-    opts$heatmaps,
+    guides$layers,
+    guides$heatmaps,
     legend_size,
     image_height_in,
     scale
@@ -5559,21 +5878,23 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     opts,
     panel_in,
     tree_legend_width_in(
-      opts$layers,
+      guides$layers,
       md,
       legend_size,
       opts$width_in %||% 5.5,
-      opts$heatmaps,
+      guides$heatmaps,
       image_height_in,
       scale
     )
   )
+  # The disc as it will really be drawn, now that the squeeze is known.
+  image_height_in <- tree_image_height_in(opts, plot_height_in)
   # One solve for the whole guide box: what each guide may list, and where it
   # stacks. Read back by id as each scale is built, so a guide's key budget and
   # its place in the box are decided together rather than each scale guessing.
   legend_plan <- tree_legend_plan(
-    opts$layers,
-    opts$heatmaps,
+    guides$layers,
+    guides$heatmaps,
     legend_size,
     image_height_in,
     scale,
@@ -5632,7 +5953,11 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     args <- list(
       tree,
       color = opts$line_color,
-      linewidth = (opts$branch_width %||% BRANCH_WIDTH) * scale,
+      # Thinned with the tip count (`tree_branch_width`) so a few hundred
+      # branches stay separate lines rather than filling in. Solved here, not
+      # read off `opts`: there is no sidebar control for branch width, so
+      # nothing in the view carries the fitted value onto it.
+      linewidth = (opts$branch_width %||% tree_branch_width(nrow(md))) * scale,
       layout = layout,
       ladderize = TRUE,
       xlim = inward_xlim
@@ -5743,6 +6068,18 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       opts$tiplab_show <- FALSE
     }
     fit <- .tiplab_xlim(opts, md, tree_data, max_x, annot_total)
+  } else {
+    # A disc has a pitch too, and the leader lines are decided from it
+    # (`.leaders_drawn()`). Nothing else on a radial tree reads it — the label
+    # room there is solved along the ring instead (`.tiplab_room()`).
+    x_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
+    span <- fit$limit - x_min
+    opts$row_mm <- .radial_tip_pitch_mm(
+      opts,
+      panel_in,
+      if (isTRUE(span > 0)) (max_x - x_min) / span else NA_real_,
+      sum(tree_data$isTip)
+    )
   }
   label_reserve <- fit$reserve
 
@@ -6254,7 +6591,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         # drawing — thinner only where this panel's columns are packed tighter
         # than the tips are.
         min(
-          (opts$branch_width %||% BRANCH_WIDTH),
+          (opts$branch_width %||% tree_branch_width(sum(tree_data$isTip))),
           tree_branch_width(ncol(frame))
         ) *
           scale
@@ -6356,7 +6693,32 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # need the same reserve. Measured the same way the header reserve above is.
   # Replacing the y scale a second time is deliberate, and its announcement is
   # not news — muffled by `build_tree_ggtree()` (`.muffled_tree_warnings`).
-  if (length(panels)) {
+  #
+  # Linear only, like the header reserve above and for a sharper reason. On a
+  # radial tree y *is* the angle, and the room before the first tip and after
+  # the last one is one thing: the wedge. ggtree cuts that wedge by setting the
+  # y scale's limits (`ggtree:::open_tree`), so a scale added here replaces it
+  # and the reader's Circle opening silently stops meaning anything — 0° and
+  # 90° drew the identical picture, the only visible difference being the
+  # rotation of a clade caption, which ggtree derives separately. What the band
+  # needs is charged to the wedge instead (`tree_open_angle()`).
+  # A radial tree's wedge, put back. `gheatmap()` sets a y scale of its own
+  # whenever it is drawing a matrix without column names (`expand = c(0, 0)`),
+  # which replaces the one ggtree cut the wedge with — so the reader's Circle
+  # opening stopped meaning anything the moment a panel had too many genes to
+  # name, which is every panel that needs a wedge in the first place. The only
+  # visible difference between 0° and 90° was the rotation of a clade caption,
+  # which ggtree derives from a separate column.
+  if (circular) {
+    p <- suppressMessages(
+      p +
+        scale_y_continuous(
+          limits = c(0, .radial_y_limit(sum(tree_data$isTip), open_angle)),
+          expand = expansion(mult = c(0, 0))
+        )
+    )
+  }
+  if (length(panels) && !circular) {
     p <- suppressMessages(
       p +
         scale_y_continuous(

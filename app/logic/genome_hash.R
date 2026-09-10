@@ -11,6 +11,7 @@ box::use(
     dbListTables,
   ],
   openssl[base64_encode, sha256, sha512],
+  parallel[detectCores, mccollect, mclapply, mcparallel],
   stats[setNames],
 )
 box::use(
@@ -97,9 +98,13 @@ sha512t24u <- function(x) {
 #' `ga4gh-sorted-sequences-v1` specification.
 #'
 #' @param path File path to input FASTA assembly.
+#' @param with_file_sha256 Compute the raw-file SHA-256 checksum. Defaults to
+#'   TRUE; the pre-run genome check sets it FALSE because that checksum plays no
+#'   part in classifying a file, and its full-file read is pure overhead there.
 #' @return Named list of assembly digest metrics, or NULL if path/FASTA is invalid.
+#'   `file_sha256` is `NA` when `with_file_sha256` is FALSE.
 #' @export
-genome_digest <- function(path) {
+genome_digest <- function(path, with_file_sha256 = TRUE) {
   if (
     is.null(path) ||
       length(path) != 1 ||
@@ -126,7 +131,7 @@ genome_digest <- function(path) {
 
   list(
     genome_digest = sha512t24u(charToRaw(canonical)),
-    file_sha256 = .file_sha256(path),
+    file_sha256 = if (isTRUE(with_file_sha256)) .file_sha256(path) else NA_character_,
     algorithm = GENOME_HASH_ALGORITHM,
     n_contigs = length(seqs),
     total_length = sum(as.numeric(nchar(seqs))),
@@ -161,6 +166,15 @@ store_genome_hash <- function(db_path, strain, genome_file, digest = NULL) {
   }
   if (is.null(digest)) {
     return(invisible(FALSE))
+  }
+  # A digest carried over from the pre-run check omits the raw-file checksum
+  # (that pass skips it on purpose). Fill it in now, from the file still on
+  # disk, so the stored row is complete however the digest was obtained.
+  if (is.null(digest$file_sha256) || is.na(digest$file_sha256)) {
+    digest$file_sha256 <- tryCatch(
+      .file_sha256(genome_file),
+      error = function(e) NA_character_
+    )
   }
 
   con <- connect(db_path)
@@ -326,7 +340,29 @@ genome_hash_map <- function(db_path) {
 #'   `other` isolate name (`NA` when no other isolate shares this assembly).
 #' @export
 classify_genome <- function(strain, file, recorded, known_strains) {
-  digest <- tryCatch(genome_digest(file), error = function(e) NULL)
+  digest <- tryCatch(
+    genome_digest(file, with_file_sha256 = FALSE),
+    error = function(e) NULL
+  )
+  classify_with_digest(strain, digest, recorded, known_strains)
+}
+
+#' Classify an Already-Computed Assembly Digest Against Known Database Records
+#'
+#' The name-and-content classification half of `classify_genome()`, split out so
+#' a batch can hash its assemblies in one (optionally parallel) pass and then
+#' classify the results serially. See `classify_genome()` for what the two axes
+#' mean.
+#'
+#' @param strain Target isolate identifier.
+#' @param digest A list from `genome_digest()`, or `NULL` if the file could not
+#'   be read as FASTA.
+#' @param recorded Map of recorded genome digests from `genome_hash_map()`.
+#' @param known_strains Character vector of isolate names existing in database.
+#' @return List with `digest`, the name-axis `status`, and the content-axis
+#'   `other` isolate name (`NA` when no other isolate shares this assembly).
+#' @export
+classify_with_digest <- function(strain, digest, recorded, known_strains) {
   if (is.null(digest)) {
     return(list(digest = NA_character_, status = "new", other = NA_character_))
   }
@@ -353,6 +389,112 @@ classify_genome <- function(strain, file, recorded, known_strains) {
   list(digest = d, status = status, other = other)
 }
 
+# Cores held back from parallel hashing so the running app stays responsive:
+# one for the R main process / event loop, one for the browser and OS. The
+# hashing burst runs inside a live desktop session, not on a dedicated box.
+HASH_WORKER_RESERVE <- 2L
+
+# Cached answer to "can this R process fork?", probed once and lazily. mclapply
+# needs fork(): unavailable on Windows, and hard-errored (not merely warned) by
+# front-ends that own the R session - Positron stops outright, RStudio disables
+# it. Where fork is out, the check runs serially instead.
+.fork_state <- new.env(parent = emptyenv())
+
+.can_fork <- function() {
+  if (!is.null(.fork_state$ok)) {
+    return(.fork_state$ok)
+  }
+  hostile_frontend <- identical(Sys.getenv("POSITRON"), "1") ||
+    identical(Sys.getenv("RSTUDIO"), "1")
+  ok <- .Platform$OS.type == "unix" &&
+    !hostile_frontend &&
+    tryCatch(
+      isTRUE(mccollect(mcparallel(TRUE))[[1L]]),
+      error = function(e) FALSE,
+      warning = function(e) FALSE
+    )
+  .fork_state$ok <- ok
+  ok
+}
+
+# Upper bound on hashing workers regardless of core count. Past this, memory
+# (each worker holds transient copies of a multi-MB assembly), disk contention
+# on network shares / spinning disks, and fork-collect overhead erode the gain
+# faster than the extra worker adds. Deliberately conservative; raise it with
+# options(phylotrace.hash_workers = N) on a big workstation.
+HASH_WORKER_CAP <- 8L
+
+#' Choose a Worker Count for Parallel Assembly Hashing
+#'
+#' Holds `HASH_WORKER_RESERVE` cores back for the app and the system, never
+#' spawns more workers than there are assemblies to hash, and caps the count at
+#' `HASH_WORKER_CAP`. Returns 1 (serial) wherever `fork()` is unavailable - see
+#' `.can_fork()`. Override the whole calculation with
+#' `options(phylotrace.hash_workers = N)`; it is still clamped to 1 when forking
+#' is impossible, since there is no parallelism to be had.
+#'
+#' @param n_items Number of assemblies to be hashed.
+#' @param reserve Cores to leave free (default `HASH_WORKER_RESERVE`).
+#' @param cap Hard upper bound on workers (default `HASH_WORKER_CAP`).
+#' @return Positive integer; 1 means "run serially".
+#' @export
+resolve_hash_workers <- function(
+  n_items,
+  reserve = HASH_WORKER_RESERVE,
+  cap = HASH_WORKER_CAP
+) {
+  n_items <- suppressWarnings(as.integer(n_items))
+  if (is.na(n_items) || n_items < 2L || !.can_fork()) {
+    return(1L)
+  }
+  override <- getOption("phylotrace.hash_workers", NA)
+  if (!is.na(override)) {
+    return(max(1L, min(suppressWarnings(as.integer(override)), n_items)))
+  }
+  cores <- tryCatch(detectCores(logical = TRUE), error = function(e) NA_integer_)
+  if (is.na(cores) || cores < 2L) {
+    return(1L)
+  }
+  max(1L, min(cores - as.integer(reserve), n_items, as.integer(cap)))
+}
+
+#' Hash Several Assemblies, Optionally in Parallel
+#'
+#' @param files Character vector of assembly file paths.
+#' @param workers Worker count from `resolve_hash_workers()`; 1 runs serially.
+#' @param with_file_sha256 Passed through to `genome_digest()`.
+#' @return List parallel to `files`; each element is a `genome_digest()` list, or
+#'   `NULL` for an unreadable / non-FASTA input.
+#' @export
+genome_digests <- function(files, workers = 1L, with_file_sha256 = TRUE) {
+  files <- as.character(files)
+  one <- function(f) {
+    tryCatch(
+      genome_digest(f, with_file_sha256 = with_file_sha256),
+      error = function(e) NULL
+    )
+  }
+  if (workers <= 1L || length(files) < 2L) {
+    return(lapply(files, one))
+  }
+  out <- tryCatch(
+    mclapply(files, one, mc.cores = workers, mc.preschedule = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(out)) {
+    # fork() refused at run time (a sandboxed front-end, an rlimit) - fall back
+    # to a serial pass rather than failing the check.
+    return(lapply(files, one))
+  }
+  # A worker killed mid-fork leaves a try-error in its slot; recompute just
+  # those serially rather than failing the whole batch.
+  bad <- vapply(out, function(x) inherits(x, "try-error"), logical(1))
+  if (any(bad)) {
+    out[bad] <- lapply(files[bad], one)
+  }
+  out
+}
+
 #' Batch Check and Classify Multiple Genome Assemblies
 #'
 #' @param db_path Path to target SQLite database.
@@ -360,6 +502,9 @@ classify_genome <- function(strain, file, recorded, known_strains) {
 #' @param files Vector of assembly file paths.
 #' @param known_strains Vector of isolates already on record.
 #' @param progress Optional progress callback function `function(value, detail)`.
+#' @param workers Worker count for hashing; `NULL` picks one via
+#'   `resolve_hash_workers()`. Hashing happens up front in one pass, so
+#'   `progress` advances quickly once it returns.
 #' @return Data frame of one row per input, with the same `digest` / `status` /
 #'   `other` columns `classify_genome()` returns (see there for the two axes).
 #' @export
@@ -368,7 +513,8 @@ check_genomes <- function(
   strains,
   files,
   known_strains = NULL,
-  progress = NULL
+  progress = NULL,
+  workers = NULL
 ) {
   n <- length(files)
   out <- data.frame(
@@ -387,12 +533,22 @@ check_genomes <- function(
   if (is.null(known_strains)) {
     known_strains <- names(recorded)
   }
+  if (is.null(workers)) {
+    workers <- resolve_hash_workers(n)
+  }
+
+  digests <- genome_digests(out$file, workers = workers, with_file_sha256 = FALSE)
 
   for (i in seq_len(n)) {
     if (is.function(progress)) {
       progress(i / n, basename(out$file[i]))
     }
-    r <- classify_genome(out$strain[i], out$file[i], recorded, known_strains)
+    r <- classify_with_digest(
+      out$strain[i],
+      digests[[i]],
+      recorded,
+      known_strains
+    )
     out$digest[i] <- r$digest
     out$status[i] <- r$status
     out$other[i] <- r$other

@@ -520,6 +520,14 @@ TREE_PANEL_IN <- 5.5
 # the canvas stops growing in order to place a physical reserve inside it.
 CANVAS_MAX_FACTOR <- tree_plot$TREE_CANVAS_MAX_FACTOR
 
+# How tall the reader may make a linear tree, as a multiple of its width. The
+# fit reaches here too now (`TIP_ASPECT_MAX` in the engine) — a thousand tips
+# need every inch of it to hold one row per branch. Separate from
+# CANVAS_MAX_FACTOR, which bounds only what the engine adds to the canvas on
+# its own account; this is the reader, or the fit on their behalf, asking for
+# the page a crowded tree needs.
+ASPECT_MAX <- 8
+
 # A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
 PLOT_MAX_PX <- 12000
 
@@ -791,99 +799,121 @@ tree_controls <- function(ns, options_ui = NULL) {
         "Options",
         icon = shiny$icon("gear"),
         options_ui,
-        # Height per tip, which is the one thing about the shape that is a
-        # judgement rather than a fit: Generate solves it from the tip count so
-        # the rows come out legible, but how tall a figure is worth having is
-        # the reader's call, not the engine's.
-        shiny$sliderInput(
-          ns("nj_aspect_ratio"),
-          "Aspect ratio",
-          0.3,
-          8,
-          FITTED_DEFAULTS$nj_aspect_ratio,
-          step = 0.1,
-          ticks = FALSE
-        ),
-        # One control over every piece of type on the figure — the isolate
-        # labels, the branch numbers, the distance axis and the scale bar, the
-        # annotation and heatmap headers, the element and class names, and the
-        # legend. A bias on what the engine already solved, not a size: each
-        # label still grows only into the room it has and shrinks only to what
-        # can be read, and one that no longer fits either way is left off (see
-        # the text-size note in app/logic/tree_plot.R).
-        #
-        # It is here rather than in Labels because it is a property of the
-        # whole figure, like the aspect ratio beside it — the per-element size
-        # sliders stay where the elements are.
-        shiny$sliderInput(
-          ns("nj_text_size"),
-          "Text size",
-          TEXT_SIZE_MIN,
-          TEXT_SIZE_MAX,
-          TEXT_SIZE_DEFAULT,
-          step = 5,
-          post = "%",
-          ticks = FALSE
-        ),
-        virtualSelectInput(
-          ns("nj_layout"),
-          "Layout",
-          choices = list(
-            Linear = c(
-              Rectangular = "rectangular",
-              Roundrect = "roundrect",
-              Slanted = "slanted",
-              Ellipse = "ellipse"
+        accordion(
+          open = FALSE,
+          accordion_panel(
+            "Layout",
+            icon = shiny$icon("sliders"),
+            # Height per tip, which is the one thing about the shape that is a
+            # judgement rather than a fit: Generate solves it from the tip count so
+            # the rows come out legible, but how tall a figure is worth having is
+            # the reader's call, not the engine's.
+            #
+            # It runs past `TREE_CANVAS_MAX_FACTOR`, which the *fit* stops at. That
+            # ceiling is on what the engine adds — annotations, a guide box — not on
+            # what the reader asks for, and a tall page is the one answer to a
+            # thousand tips whose branches are a millimetre apart. What it may not
+            # do is disagree with the drawing: the figure is now built at exactly
+            # this height (`tree_canvas_height_in()`), where it used to be designed
+            # for 27.5 inches and printed on 14.3.
+            #
+            # Hidden for the radial layouts, whose panel is square by construction —
+            # the slider moved nothing there but the size of the file.
+            shiny$div(
+              id = ns("nj_aspect_wrap"),
+              shiny$sliderInput(
+                ns("nj_aspect_ratio"),
+                "Aspect ratio",
+                0.3,
+                ASPECT_MAX,
+                FITTED_DEFAULTS$nj_aspect_ratio,
+                step = 0.1,
+                ticks = FALSE
+              )
             ),
-            Circular = c(Circular = "circular", Inward = "inward")
-          ),
-          selected = "rectangular",
-          # A fixed six-item list, so no search — but the same body-appended
-          # popup the other right-sidebar selects use, so the dropdown clears
-          # the sidebar rather than being clipped inside it.
-          search = FALSE,
-          dropboxWrapper = "body",
-          showDropboxAsPopup = TRUE,
-          popupDropboxBreakpoint = "10000px",
-          width = "100%"
-        ),
-        # How far a radial tree opens between its last tip and its first.
-        # Generate solves it from what the ring headers need
-        # (tree_open_angle) and this is where that answer can be argued with
-        # — the one piece of geometry the engine cannot settle alone, because
-        # it trades the tree's sweep against the room its headers get. Hidden
-        # for the layouts that have no circle to open.
-        shiny$div(
-          id = ns("nj_open_angle_wrap"),
-          class = "d-none",
-          shiny$sliderInput(
-            ns("nj_open_angle"),
-            "Circle opening",
-            0,
-            90,
-            0,
-            step = 1,
-            post = "\u00b0",
-            ticks = FALSE
+            # One control over every piece of type on the figure — the isolate
+            # labels, the branch numbers, the distance axis and the scale bar, the
+            # annotation and heatmap headers, the element and class names, and the
+            # legend. A bias on what the engine already solved, not a size: each
+            # label still grows only into the room it has and shrinks only to what
+            # can be read, and one that no longer fits either way is left off (see
+            # the text-size note in app/logic/tree_plot.R).
+            #
+            # It is here rather than in Labels because it is a property of the
+            # whole figure, like the aspect ratio beside it — the per-element size
+            # sliders stay where the elements are.
+            shiny$sliderInput(
+              ns("nj_text_size"),
+              "Text size",
+              TEXT_SIZE_MIN,
+              TEXT_SIZE_MAX,
+              TEXT_SIZE_DEFAULT,
+              step = 5,
+              post = "%",
+              ticks = FALSE
+            ),
+            virtualSelectInput(
+              ns("nj_layout"),
+              "Layout",
+              choices = list(
+                Linear = c(
+                  Rectangular = "rectangular",
+                  Roundrect = "roundrect",
+                  Slanted = "slanted",
+                  Ellipse = "ellipse"
+                ),
+                Circular = c(Circular = "circular", Inward = "inward")
+              ),
+              selected = "rectangular",
+              # A fixed six-item list, so no search — but the same body-appended
+              # popup the other right-sidebar selects use, so the dropdown clears
+              # the sidebar rather than being clipped inside it.
+              search = FALSE,
+              dropboxWrapper = "body",
+              showDropboxAsPopup = TRUE,
+              popupDropboxBreakpoint = "10000px",
+              width = "100%"
+            ),
+            # How far a radial tree opens between its last tip and its first.
+            # Generate solves it from what the ring headers need
+            # (tree_open_angle) and this is where that answer can be argued with
+            # — the one piece of geometry the engine cannot settle alone, because
+            # it trades the tree's sweep against the room its headers get. Hidden
+            # for the layouts that have no circle to open.
+            shiny$div(
+              id = ns("nj_open_angle_wrap"),
+              class = "d-none",
+              shiny$sliderInput(
+                ns("nj_open_angle"),
+                "Circle opening",
+                0,
+                90,
+                0,
+                step = 1,
+                post = "\u00b0",
+                ticks = FALSE
+              )
+            ),
+            virtualSelectInput(
+              ns("nj_root_isolate"),
+              "Outgroup",
+              choices = c("Automatic"),
+              selected = "Automatic",
+              search = TRUE,
+              searchPlaceholderText = "Search isolates ...",
+              placeholder = "Automatic",
+              # The isolate names only arrive at Generate; left on its default
+              # this would hand the selection to whichever name lands first,
+              # silently rooting the tree on an arbitrary tip.
+              autoSelectFirstOption = FALSE,
+              optionsCount = 8,
+              dropboxWrapper = "body",
+              showDropboxAsPopup = TRUE,
+              popupDropboxBreakpoint = "10000px",
+              width = "100%"
+            ),
+            input_switch(ns("nj_rootedge_show"), "Root edge", FALSE)
           )
-        ),
-        virtualSelectInput(
-          ns("nj_root_isolate"),
-          "Outgroup",
-          choices = c("Automatic"),
-          selected = "Automatic",
-          search = TRUE,
-          searchPlaceholderText = "Search isolates ...",
-          placeholder = "Automatic",
-          # The isolate names only arrive at Generate; left on its default
-          # this would hand the selection to whichever name lands first,
-          # silently rooting the tree on an arbitrary tip.
-          autoSelectFirstOption = FALSE,
-          optionsCount = 8,
-          dropboxWrapper = "body",
-          showDropboxAsPopup = TRUE,
-          popupDropboxBreakpoint = "10000px",
-          width = "100%"
         )
       ),
       # Labels -----------------------------------------------------------------
@@ -1099,46 +1129,34 @@ tree_controls <- function(ns, options_ui = NULL) {
       ),
       # Elements ---------------------------------------------------------------
       nav_panel(
-        "Elements",
-        icon = shiny$icon("shapes"),
-        accordion(
-          open = "Clade Highlight",
-          accordion_panel(
-            "Clade Highlight",
-            icon = shiny$icon("highlighter"),
-            # Node view prints each internal node's number over the tree,
-            # which is how the reader finds the one to pick here.
-            input_switch(ns("nj_nodelabel_show"), "Toggle node view", FALSE),
-            # Same shape as Mapping and Heatmap: the picker adds one highlight
-            # and clears itself, and each highlight appears below as its own
-            # card. Single-select rather than the multi-select this was — a
-            # highlight now carries its own colour and its own caption, so it
-            # is added deliberately, one at a time, and edited on its card
-            # instead of through a swatch shared by all of them.
-            virtualSelectInput(
-              ns("nj_parentnode"),
-              "Highlight a clade",
-              choices = character(0),
-              selected = character(0),
-              multiple = FALSE,
-              search = TRUE,
-              searchPlaceholderText = "Search nodes ...",
-              placeholder = "Add a clade ...",
-              autoSelectFirstOption = FALSE,
-              optionsCount = 10,
-              dropboxWrapper = "body",
-              showDropboxAsPopup = TRUE,
-              popupDropboxBreakpoint = "10000px",
-              width = "100%"
-            ),
-            shiny$uiOutput(ns("nj_clade_layers_ui"))
-          ),
-          accordion_panel(
-            "Other Elements",
-            icon = shiny$icon("code-branch"),
-            input_switch(ns("nj_rootedge_show"), "Root edge", FALSE)
-          )
-        )
+        "Clades",
+        icon = shiny$icon("highlighter"),
+        # Node view prints each internal node's number over the tree,
+        # which is how the reader finds the one to pick here.
+        input_switch(ns("nj_nodelabel_show"), "Toggle node view", FALSE),
+        # Same shape as Mapping and Heatmap: the picker adds one highlight
+        # and clears itself, and each highlight appears below as its own
+        # card. Single-select rather than the multi-select this was — a
+        # highlight now carries its own colour and its own caption, so it
+        # is added deliberately, one at a time, and edited on its card
+        # instead of through a swatch shared by all of them.
+        virtualSelectInput(
+          ns("nj_parentnode"),
+          "Highlight a clade",
+          choices = character(0),
+          selected = character(0),
+          multiple = FALSE,
+          search = TRUE,
+          searchPlaceholderText = "Search nodes ...",
+          placeholder = "Add a clade ...",
+          autoSelectFirstOption = FALSE,
+          optionsCount = 10,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          width = "100%"
+        ),
+        shiny$uiOutput(ns("nj_clade_layers_ui"))
       ),
       # Colors -----------------------------------------------------------------
       nav_panel(
@@ -1594,6 +1612,17 @@ server <- function(
       )
     })
 
+    # ...and the aspect ratio to the linear ones. A radial panel is square
+    # whatever the slider says (`tree_image_height_in()`), so the control was
+    # offering a change it could not make.
+    shiny$observe({
+      shinyjs::toggleClass(
+        id = "nj_aspect_wrap",
+        class = "d-none",
+        condition = fitted$nj_layout %in% c("circular", "inward")
+      )
+    })
+
     # Which layout the fit last ran for, so a switch can be told from the other
     # things that trigger one.
     fitted_layout <- shiny$reactiveVal(NULL)
@@ -1740,7 +1769,11 @@ server <- function(
       # it: leaving a hand-set 160% on top of a freshly fitted layout is not
       # "the engine's answer for this data", it is the engine's answer with the
       # reader's old thumb still on the scale.
-      shiny$updateSliderInput(session, "nj_text_size", value = TEXT_SIZE_DEFAULT)
+      shiny$updateSliderInput(
+        session,
+        "nj_text_size",
+        value = TEXT_SIZE_DEFAULT
+      )
       set_fitted("nj_text_size", TEXT_SIZE_DEFAULT)
       refit_layout(tree, notify = TRUE)
       hidden <- before && !isTRUE(shiny$isolate(fitted$nj_tiplab_show))
@@ -1960,23 +1993,25 @@ server <- function(
       # doing, and the fifth left over is blank ring on every edge. The builder
       # pulls the plot margin in by the same amount, which is what lets the
       # panel keep its full side inside a smaller image.
-      height_in <- if (circular) {
-        tree_plot$tree_image_height_in(opts, panel_in)
-      } else {
-        TREE_PANEL_IN * opts$aspect
-      }
-
+      #
       # The guide box is a column beside the tree, and a column has a height.
       # Where the guides need more of it than the tree's own aspect gives, the
       # canvas grows for them — the same rule the width follows, and the only
       # answer left once the type is already at the print floor. A circular
       # tree is excluded: its panel has to stay square or the disc is drawn as
       # an ellipse, so its legend is bounded by the disc.
-      if (!circular) {
-        height_in <- min(
-          max(height_in, tree_plot$tree_legend_height_in(opts, height_in, md)),
-          TREE_PANEL_IN * CANVAS_MAX_FACTOR
-        )
+      #
+      # Both are `tree_canvas_height_in()` rather than arithmetic here, because
+      # the builder measures every reserve inside the drawing against the same
+      # number and the two must not be able to disagree.
+      #
+      # Provisional on a radial tree — see the same two passes in the builder:
+      # the disc the image is sized to is the *squeezed* panel, and how far the
+      # ceiling squeezes it depends on the guide box beside it.
+      height_in <- if (circular) {
+        tree_plot$tree_image_height_in(opts, panel_in)
+      } else {
+        tree_plot$tree_canvas_height_in(opts, md)
       }
 
       # At the size the guides will really be set at, not the size the constant
@@ -1986,14 +2021,32 @@ server <- function(
 
       # After the height, because how many columns the guides need depends on
       # it — and so, in turn, does how much width they claim.
+      #
+      # `tree_guide_inputs()` because a mapping is not always drawn: an inward
+      # tree has no room past its tips, so its tile strips and heatmap panels
+      # are left off and take no guide with them. Reserved anyway, they left a
+      # blank column a fifth of the image wide.
+      guides <- tree_plot$tree_guide_inputs(opts)
       legend_in <- tree_plot$tree_legend_width_in(
-        opts$layers,
+        guides$layers,
         md,
         legend_size,
         TREE_PANEL_IN,
-        opts$heatmaps,
+        guides$heatmaps,
         height_in
       )
+      # How much of the panel the annotations asked for the image can hold. The
+      # builder stashes the same number on `opts` for the axis solve; here it is
+      # what sizes the disc, so the image is the drawing rather than the square
+      # the drawing was requested at.
+      opts$panel_squeeze <- tree_plot$tree_panel_squeeze(
+        opts,
+        panel_in,
+        legend_in
+      )
+      if (circular) {
+        height_in <- tree_plot$tree_image_height_in(opts, panel_in)
+      }
       # The tree's own width is the panel for a linear layout and the disc for
       # a radial one, which is the height the image was just sized to.
       canvas_in <- min(
@@ -2867,7 +2920,8 @@ server <- function(
         show_gene_names = isTRUE(input$nj_heatmap_gene_names),
         show_class_names = isTRUE(input$nj_heatmap_class_names),
         show_element_type = isTRUE(input$nj_heatmap_element),
-        element_pos = input$nj_heatmap_element_pos %||% tree_plot$ELEMENT_POS_DEFAULT,
+        element_pos = input$nj_heatmap_element_pos %||%
+          tree_plot$ELEMENT_POS_DEFAULT,
         cluster = isTRUE(input$nj_heatmap_cluster),
         show_class_strip = isTRUE(input$nj_heatmap_strip)
       )
@@ -3211,12 +3265,22 @@ server <- function(
         title = sprintf("Clade at node %s", cl$node),
         size = "s",
         easyClose = TRUE,
-        shiny$textInput(
-          ns("nj_clade_label"),
-          "Caption",
-          value = cl$label %||% "",
-          placeholder = "Leave empty for no caption",
-          width = "100%"
+        # `allow-free-text` opts this field out of the app-wide character
+        # filter in app/js/index.js, which holds every other text input to
+        # `[a-zA-Z0-9_-]` because most of them end up in a file name or an
+        # SQL identifier. A caption ends up in neither: it is drawn on the
+        # figure and stored in a saved Analysis's JSON through a bound
+        # parameter, so a gene name with a Greek letter in it, an en dash or
+        # a degree sign costs nothing and was being silently eaten.
+        shiny$div(
+          class = "allow-free-text",
+          shiny$textInput(
+            ns("nj_clade_label"),
+            "Caption",
+            value = cl$label %||% "",
+            placeholder = "Leave empty for no caption",
+            width = "100%"
+          )
         ),
         shiny$div(
           class = "text-muted fst-italic small mb-3",

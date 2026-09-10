@@ -259,7 +259,9 @@ server <- function(
 
       # Get database metadata
       db_path <- db_location()[2]
-      shiny$req(is.character(db_path) && !is.na(db_path) && file.exists(db_path))
+      shiny$req(
+        is.character(db_path) && !is.na(db_path) && file.exists(db_path)
+      )
       db_metadata <- file.info(db_path)
       db_name <- basename(db_path)
       db_time <- format(db_metadata$mtime, "%Y-%m-%d %H:%M:%S")
@@ -273,13 +275,29 @@ server <- function(
         paste0(db_metadata$size, " Bytes")
       }
 
+      # Elide the middle of a long path for display, keeping the leading
+      # directories and file name visible; the untruncated path is carried in a
+      # `title` attribute so hovering the cell always reveals it in full.
+      truncate_path <- function(path, max_chars = 99) {
+        display <- path
+        if (is.character(path) && !is.na(path) && nchar(path) > max_chars) {
+          keep <- max_chars - 1L
+          display <- paste0(
+            substr(path, 1, ceiling(keep / 2)),
+            "…",
+            substr(path, nchar(path) - floor(keep / 2) + 1, nchar(path))
+          )
+        }
+        as.character(shiny$span(title = path, display))
+      }
+
       # Render database metadata table
       datatable(
         data.frame(
           Property = c("Name", "Location", "Size", "Last Changed"),
           Value = c(
             db_name,
-            db_path,
+            truncate_path(db_path),
             db_size,
             db_time
           )

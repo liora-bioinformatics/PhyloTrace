@@ -108,13 +108,17 @@ test_that("every fitted value stays within its bounds at any tree size", {
   }
 })
 
-test_that("labels stay legible for a few hundred tips and give up past that", {
+test_that("labels stay legible for a couple of hundred tips and give up past that", {
   # `labels = TRUE` is "the reader has asked for them": the fit then buys the
   # row depth a name needs. Left to itself it would not, past the count at
   # which it stops drawing them at all - which is the next case but one.
+  #
+  # Where "past that" falls is how many rows the tallest page the fit will ask
+  # for (`TIP_ASPECT_MAX`) divides into: a couple of hundred is where they stop
+  # being deep enough to hold a name.
   expect_true(
     tree_plot$tree_auto_layout(
-      344,
+      200,
       width_in = 5.7,
       label_chars = 36,
       labels = TRUE
@@ -133,12 +137,20 @@ test_that("labels stay legible for a few hundred tips and give up past that", {
 test_that("a tree whose labels cannot be drawn is not made tall for them", {
   chars <- 36
   # Past mapping_engine's TIP_MAPPING_MAX the labels come off, and the row
-  # pitch that was buying room for them is room nothing uses: 253 isolates came
-  # out at the aspect ceiling, five times as tall as wide, for names never set.
-  bare <- tree_plot$tree_auto_layout(253, 5.5, "rectangular", chars)
-  asked <- tree_plot$tree_auto_layout(253, 5.5, "rectangular", chars, TRUE)
+  # pitch that was buying room for them is room nothing uses.
+  bare <- tree_plot$tree_auto_layout(100, 5.5, "rectangular", chars)
+  asked <- tree_plot$tree_auto_layout(100, 5.5, "rectangular", chars, TRUE)
   expect_false(bare$labels_legible)
   expect_lt(bare$aspect, asked$aspect / 1.5)
+  # Still true at four hundred, now well up the taller scale the fit reaches: a
+  # bare tree is not bought the row depth a label needs just because a labelled
+  # one would be, and neither answer runs past the fit's own ceiling.
+  bare400 <- tree_plot$tree_auto_layout(400, 5.5, "rectangular", chars)$aspect
+  asked400 <- tree_plot$tree_auto_layout(
+    400, 5.5, "rectangular", chars, TRUE
+  )$aspect
+  expect_lt(bare400, asked400)
+  expect_lte(asked400, impl$TIP_ASPECT_MAX)
   # Small enough to keep the labels, and nothing changes.
   small <- tree_plot$tree_auto_layout(20, 5.5, "rectangular", chars)
   expect_true(small$labels_legible)
@@ -3178,17 +3190,90 @@ test_that("the branch stroke thins as the branches multiply", {
   expect_lte(max(widths), impl$BRANCH_WIDTH)
 })
 
+test_that("a built tree draws its branches at the fitted stroke, not the default", {
+  # The fit thins the stroke with the tip count, but the view has no control
+  # to carry that onto `opts`, so the builder applies it itself. Left to the
+  # flat default a few hundred branches fill in solid, which is what a circle
+  # of a thousand tips drew.
+  f <- .annot_fixture(400)
+  opts <- .annot_opts(400)
+  opts$tiplab_show <- FALSE
+  p <- .built_tree(f$tree, f$meta, opts)
+  seg <- which(vapply(
+    p$layers, function(l) inherits(l$geom, "GeomSegment"), logical(1)
+  ))
+  drawn <- unique(unlist(lapply(
+    seg, function(i) p$layers[[i]]$aes_params$linewidth
+  )))
+  expect_true(length(drawn) > 0)
+  expect_true(all(drawn < impl$BRANCH_WIDTH))
+  expect_equal(max(drawn), tree_plot$tree_branch_width(400))
+})
+
+test_that("the leader lines are drawn at the tree's own stroke, never heavier", {
+  # ggtree's own default is a flat 0.5 whatever the tree holds. The branches
+  # come down with the tip count (`tree_branch_width()`), so at a few hundred
+  # tips the one part of the drawing that was not fitted to the tip count was
+  # the part there is most of: the leaders read as the drawing and the tree as
+  # a sketch under it.
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
+  for (n in c(20, 300, 900)) {
+    o <- opts
+    o$branch_width <- tree_plot$tree_auto_layout(n, 5.5)$branch_width
+    lay <- impl$tree_tiplab_layer(o, .annot_fixture()$meta)
+    expect_lte(lay$linesize, o$branch_width)
+  }
+  # And it scales with the figure, like every other physical length here.
+  o <- opts
+  o$branch_width <- 0.4
+  plain <- impl$tree_tiplab_layer(o, .annot_fixture()$meta)$linesize
+  o$scale <- 2
+  expect_equal(
+    impl$tree_tiplab_layer(o, .annot_fixture()$meta)$linesize,
+    plain * 2
+  )
+})
+
+test_that("leader lines come off once the rows are tighter than their dots", {
+  # A dotted line's dots are as wide across as the line is thick and about three
+  # times that apart along it, and no two neighbouring rows are in phase, so
+  # below about a millimetre of pitch the whole band fills in: bars across a
+  # linear tree, and — the same band wrapped round a circle — the rings a
+  # thousand tips drew on a radial one.
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
+
+  opts$row_mm <- impl$LEADER_MIN_PITCH_MM * 1.5
+  expect_true(impl$.leaders_drawn(opts))
+  opts$row_mm <- impl$LEADER_MIN_PITCH_MM / 2
+  expect_false(impl$.leaders_drawn(opts))
+
+  # The threshold is a physical length, so it moves with the figure: the same
+  # drawing at twice the size has twice the pitch and is no more crowded.
+  opts$scale <- 2
+  opts$row_mm <- impl$LEADER_MIN_PITCH_MM * 1.5
+  expect_false(impl$.leaders_drawn(opts))
+  opts$row_mm <- impl$LEADER_MIN_PITCH_MM * 3
+  expect_true(impl$.leaders_drawn(opts))
+
+  # A pitch nobody has measured is not a reason to drop them.
+  opts$scale <- 1
+  opts$row_mm <- NULL
+  expect_true(impl$.leaders_drawn(opts))
+})
+
 test_that("leader lines survive the labels being switched off", {
   # They are what makes a tree with ragged tip depths readable without labels:
   # the eye has to carry a row across an empty band to whatever is annotated
-  # beside it. Only the inward layout drops them, because there every line
-  # converges on the root and they blot it out.
+  # beside it. The inward layout drops them because there every line converges
+  # on the root and they blot it out.
   f <- .annot_fixture()
   opts <- .annot_opts()
   opts$tiplab_show <- FALSE
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
 
-  tiplab_layers <- function(layout) {
-    o <- opts
+  tiplab_layers <- function(layout, o = opts) {
     o$layout <- layout
     p <- .built_tree(f$tree, f$meta, o)
     sum(vapply(
@@ -3200,6 +3285,14 @@ test_that("leader lines survive the labels being switched off", {
   expect_gt(tiplab_layers("rectangular"), 0)
   expect_gt(tiplab_layers("circular"), 0)
   expect_identical(tiplab_layers("inward"), 0L)
+
+  # ...but only where there is something to lead to. With no labels and nothing
+  # set beside the tree they lead nowhere, and a thousand of them drew as bars
+  # across a linear tree and as rings on a radial one.
+  bare <- opts
+  bare$layers <- list()
+  expect_identical(tiplab_layers("rectangular", bare), 0L)
+  expect_identical(tiplab_layers("circular", bare), 0L)
 })
 
 # --- Following the aspect the user chose --------------------------------------
@@ -3657,6 +3750,296 @@ test_that("a caption is measured by what it sets, not by how long it is", {
     ) *
       25.4 / size_mm
     expect_equal(impl$.string_em(lab), real, tolerance = 0.05)
+  }
+})
+
+test_that("a clade wash reaches the line the tips are aligned to", {
+  # The reported fault: a highlight stopped partway along the band it was
+  # naming — at its own clade's deepest tip — while the tips it grouped were
+  # all drawn out to the same edge by the leader lines, so the reader had to
+  # carry the group across the gap the highlight was there to close.
+  f <- .annot_fixture(24)
+  opts <- .annot_opts()
+  probe <- suppressWarnings(ggtree::ggtree(f$tree)$data)
+  nodes <- probe$node[!probe$isTip]
+  opts$clades <- list(
+    list(node = nodes[[3]], color = "#4E79A7", label = ""),
+    list(node = nodes[[9]], color = "#F28E2B", label = "")
+  )
+  p <- .built_tree(f$tree, f$meta, opts)
+  rects <- Filter(
+    function(l) grepl("HilightRect", class(l$geom)[1]),
+    p$layers
+  )
+  expect_length(rects, 2L)
+
+  edge <- max(p$data$x[p$data$isTip], na.rm = TRUE)
+  lefts <- vapply(rects, function(l) l$data$xmin[[1]], numeric(1))
+  for (l in rects) {
+    expect_equal(l$data$xmax[[1]], edge)
+  }
+  # Only the tips move: each highlight keeps its own left edge, on its own root
+  # branch, or two nested clades would be drawn as one block.
+  expect_gt(diff(range(lefts)), 0)
+  expect_true(all(lefts < edge))
+
+  # An inward tree draws its tips where they fall — there is no alignment line
+  # to reach — so it keeps ggtree's own corners.
+  o <- opts
+  o$layout <- "inward"
+  inward <- Filter(
+    function(l) grepl("HilightRect", class(l$geom)[1]),
+    .built_tree(f$tree, f$meta, o)$layers
+  )
+  expect_true(any(vapply(
+    inward,
+    function(l) !isTRUE(all.equal(l$data$xmax[[1]], edge)),
+    logical(1)
+  )))
+})
+
+test_that("the circle opening reaches the drawing, panels or no panels", {
+  # ggtree cuts the wedge by leaving room on the *y scale* past the last tip
+  # (`ggtree:::open_tree`), and `gheatmap()` sets a y scale of its own whenever
+  # it draws a matrix without column names — which replaced it. The reported
+  # fault: 0 degrees and 90 drew the identical picture, the only difference
+  # being that a clade caption came out rotated, because ggtree derives the
+  # angle it is set at from a separate column.
+  f <- .annot_fixture(24)
+  opts <- .annot_opts()
+  opts$layout <- "circular"
+  opts$heatmaps <- list(list(
+    id = "H1", kind = "amr", level = "class", cols = "amr_Colistin",
+    title = "Resistance genes", cluster = FALSE, classes = NULL,
+    show_gene_names = FALSE
+  ))
+
+  span <- function(angle) {
+    o <- opts
+    o$open_angle <- angle
+    b <- suppressWarnings(suppressMessages(
+      ggplot2::ggplot_build(.built_tree(f$tree, f$meta, o))
+    ))
+    diff(b$layout$panel_params[[1]]$theta.range)
+  }
+  closed <- span(0)
+  expect_gt(span(90), closed * 1.2)
+  expect_gt(span(90), span(30))
+  expect_gt(span(30), closed)
+
+  # And the arithmetic is ggtree's own, so a wedge of `a` degrees really is
+  # `a` degrees of the circle.
+  expect_equal(
+    impl$.radial_y_limit(90, 90),
+    90 * (1 + 90 / 270)
+  )
+  expect_equal(impl$.radial_y_limit(90, 0), 91)
+})
+
+test_that("a radial image is sized to the disc that is drawn, not the one asked for", {
+  # `tree_panel_width_in()` is a request. Past the ceiling the panel that
+  # arrives is smaller, and an image sized to the request keeps the height of a
+  # disc it does not hold — blank bands above and below that grew every time
+  # the reader raised the text size, because that is what grows the request.
+  opts <- .annot_opts()
+  opts$layout <- "circular"
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
+
+  full <- tree_plot$tree_image_height_in(opts, 20)
+  opts$panel_squeeze <- 0.5
+  squeezed <- tree_plot$tree_image_height_in(opts, 20)
+  expect_lt(squeezed, full)
+
+  # The width and the negative margin follow it, or the panel and the image
+  # stop agreeing about where the disc's edge is.
+  opts$panel_squeeze <- 1
+  wide <- tree_plot$tree_image_width_in(opts, 20, 2)
+  crop <- tree_plot$tree_plot_margin_in(opts, 20)[[1]]
+  opts$panel_squeeze <- 0.5
+  expect_lt(tree_plot$tree_image_width_in(opts, 20, 2), wide)
+  expect_gt(tree_plot$tree_plot_margin_in(opts, 20)[[1]], crop)
+
+  # A linear layout has no disc and is untouched by any of it.
+  opts$layout <- "rectangular"
+  expect_equal(tree_plot$tree_image_height_in(opts, 20), 20)
+})
+
+test_that("the drug-class strip stays a share of the figure", {
+  # It was a flat 0.9 tip rows, which is a readable band on a tree of sixty and
+  # a thousandth of the panel on one of a thousand — a coloured hairline nobody
+  # could read a colour off. The dendrogram that hangs under it has always been
+  # a percentage of the tip count; this is the same rule for the band above it.
+  panel <- list(
+    cluster = TRUE, show_class_strip = TRUE, classes = c("Beta-lactam"),
+    dend_depth = 0
+  )
+  small <- impl$.cluster_band(60, panel, TRUE)
+  big <- impl$.cluster_band(991, panel, TRUE)
+
+  # A small tree keeps exactly what it drew before.
+  expect_equal(small$strip_rows, impl$CLASS_STRIP_ROWS)
+  expect_gt(big$strip_rows, small$strip_rows * 5)
+  # Which is the point: the same share of the panel at either size.
+  expect_equal(big$strip_rows / 991, impl$CLASS_STRIP_PCT / 100)
+
+  # The reserve under the matrix follows, or the element label below it is
+  # placed through the middle of the strip.
+  o <- .annot_opts()
+  o$heatmaps <- list(c(panel, list(id = "H1", cols = "amr_Colistin")))
+  expect_gt(
+    impl$.bottom_band_rows(o, 991),
+    impl$.bottom_band_rows(o, 60)
+  )
+})
+
+test_that("a clade caption has air after it, not just measurement slack", {
+  # The column used to end exactly where the widest caption ended, so the only
+  # thing between the last glyph and the paper was CLADE_TEXT_SLACK — a percent
+  # of the text, which is a pixel or two. It fitted and it looked cut off.
+  opts <- .annot_opts()
+  opts$clades <- list(list(node = 30, color = "#4E79A7", label = "Node 993"))
+
+  gaps <- impl$.clade_gaps_mm(opts)
+  text_mm <- impl$.clade_ems(opts) *
+    impl$.clade_label_size(opts) *
+    impl$CLADE_TEXT_SLACK
+  reserved <- impl$.clade_edge_in(opts) * 25.4
+
+  expect_equal(reserved, gaps + text_mm)
+  # The air after the text is a real gap, of the same order as the one before.
+  expect_gte(impl$CLADE_TAIL_GAP_MM, impl$CLADE_TEXT_GAP_MM)
+  expect_gt(reserved - text_mm - impl$CLADE_BAR_MM - impl$CLADE_BAR_GAP_MM,
+            impl$CLADE_TEXT_GAP_MM)
+})
+
+test_that("an inward tree reserves no guide box for marks it never draws", {
+  # It has no room past its tips (`tree_annotations_drawn()`), so its tile
+  # strips and heatmap panels are left off — and a guide with no marks behind
+  # it is left off too. Reserved anyway, the keys took a blank column nearly a
+  # third of the image wide beside a disc with nothing to explain.
+  opts <- .annot_opts()
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
+  opts$heatmaps <- list(list(
+    id = "H1", kind = "amr", level = "class", cols = c("amr_Colistin"),
+    title = "Resistance genes", cluster = FALSE, classes = NULL
+  ))
+  md <- data.frame(ward = factor(c("ICU", "ER")), amr_Colistin = c("mcr-1", ""))
+
+  linear <- tree_plot$tree_guide_inputs(opts)
+  expect_length(linear$layers, 1L)
+  expect_length(linear$heatmaps, 1L)
+
+  opts$layout <- "inward"
+  inward <- tree_plot$tree_guide_inputs(opts)
+  expect_length(inward$layers, 0L)
+  expect_length(inward$heatmaps, 0L)
+  expect_equal(
+    tree_plot$tree_legend_width_in(
+      inward$layers, md, 9, 5.5, inward$heatmaps, 5.5
+    ),
+    0
+  )
+
+  # A mapping on the tree's own marks is drawn there whatever the layout, so it
+  # keeps its guide: this is not "an inward tree has no legend".
+  opts$layers <- list(.tile_layer("L1", "ward", "viridis"))
+  opts$layers[[1]]$aesthetic <- "tippoint_color"
+  opts$tippoint_show <- TRUE
+  expect_length(tree_plot$tree_guide_inputs(opts)$layers, 1L)
+})
+
+test_that("the aspect the fit asks for is one the image can be drawn at", {
+  # The fit and the canvas used to stop at different numbers — a thousand tips
+  # solved onto 27.5in of paper, the image cut to 14.3, every row half the
+  # height its type was chosen for. Now the fit's ceiling is the slider's
+  # (`TIP_ASPECT_MAX`), above the annotation-growth one, and the canvas draws
+  # whatever aspect it is handed up to it.
+  expect_gt(impl$TIP_ASPECT_MAX, tree_plot$TREE_CANVAS_MAX_FACTOR)
+  for (n in c(500, 991, 5000)) {
+    fit <- tree_plot$tree_auto_layout(n, 5.5, "rectangular", 36, labels = TRUE)
+    expect_lte(fit$aspect, impl$TIP_ASPECT_MAX)
+    drawn <- tree_plot$tree_canvas_height_in(
+      list(
+        width_in = 5.5, aspect = fit$aspect, layout = "rectangular",
+        layers = list(), heatmaps = list(), legend_size = 9,
+        tiplab_show = TRUE
+      ),
+      data.frame()
+    )
+    expect_equal(drawn, 5.5 * fit$aspect)
+  }
+})
+
+test_that("the canvas height is the one every reserve inside it is measured against", {
+  base <- list(
+    width_in = 5.5, aspect = 2, layout = "rectangular", layers = list(),
+    heatmaps = list(), legend_size = 9, tiplab_show = TRUE
+  )
+  expect_equal(tree_plot$tree_canvas_height_in(base, data.frame()), 11)
+
+  # The reader's own control is drawn as set — the ceiling binds what the
+  # engine asks for, and the fit never asks past it.
+  tall <- base
+  tall$aspect <- tree_plot$TREE_CANVAS_MAX_FACTOR
+  expect_equal(
+    tree_plot$tree_canvas_height_in(tall, data.frame()),
+    5.5 * tree_plot$TREE_CANVAS_MAX_FACTOR
+  )
+
+  # And above that factor: the slider reaches TIP_ASPECT_MAX and the canvas is
+  # drawn at exactly the height it names, not clipped back to the factor that
+  # only bounds annotation growth.
+  taller <- base
+  taller$aspect <- impl$TIP_ASPECT_MAX
+  expect_equal(
+    tree_plot$tree_canvas_height_in(taller, data.frame()),
+    5.5 * impl$TIP_ASPECT_MAX
+  )
+
+  # A guide box may grow the canvas, but only up to the ceiling: past it the
+  # keys share what is left rather than the image growing without limit.
+  many <- base
+  many$aspect <- 0.4
+  many$layers <- lapply(1:6, function(i) {
+    l <- .tile_layer(paste0("L", i), "ward", "viridis")
+    l$n_levels <- 24L
+    l$field <- "ward"
+    l$title <- paste("Variable", i)
+    l
+  })
+  md <- data.frame(ward = factor(paste("level", 1:24)))
+  expect_lte(
+    tree_plot$tree_canvas_height_in(many, md),
+    5.5 * tree_plot$TREE_CANVAS_MAX_FACTOR
+  )
+  expect_gt(tree_plot$tree_canvas_height_in(many, md), 5.5 * 0.4)
+})
+
+test_that("a character the width table has never seen is booked at the widest", {
+  # The caption is the one string on the figure the reader types, and since it
+  # takes free text it can carry anything: a Greek letter in a gene name, an en
+  # dash in a range, a middle dot in a unit. Almost all of those set narrower
+  # than the Latin mean and one guess is as good as another — but an em dash,
+  # an arrow and a CJK glyph set a full em, and a column short by two thirds is
+  # the caption clipped at the panel edge. So the fallback covers the widest
+  # rather than the average.
+  expect_gt(impl$CHAR_EM_UNKNOWN, impl$TIP_CHAR_EM)
+  expect_gte(impl$CHAR_EM_UNKNOWN, impl$CHAR_EM[["W"]])
+  expect_equal(impl$.string_em("\u4e2d"), impl$CHAR_EM_UNKNOWN)
+
+  grDevices::png(tempfile(), width = 6, height = 4, units = "in", res = 100)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  graphics::par(ps = 12)
+  em <- graphics::strwidth("M", units = "inches") / impl$CHAR_EM[["M"]]
+  # Every one of these has to come out reserved for, never short. Checked
+  # against the device rather than against a second table, so the two cannot
+  # agree with each other and both be wrong.
+  for (ch in c("\u03b2", "\u00b5", "\u2014", "\u2265", "\u00ab", "\u2192",
+               "\u00e9", "\u00b0", "\u03a9", "\u4e2d")) {
+    expect_gte(
+      impl$.string_em(ch),
+      graphics::strwidth(ch, units = "inches") / em - 0.02
+    )
   }
 })
 
