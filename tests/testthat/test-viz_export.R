@@ -199,21 +199,24 @@ test_that("write_data_uri decodes a data URI to its bytes", {
 })
 
 test_that("the hint states what each format will actually produce", {
-  # Physical size first, because that is what decides how much type fits
-  # beside the drawing — then the pixels, because DPI alone says nothing
-  # without a size to apply it to.
+  # A raster file is a pixel count — that is what a submission limit or a
+  # slide is stated in — plus the dpi that says how it relates to the width
+  # asked for. 10 cm at 300 dpi is 1181 px; half that aspect, 591.
   raster <- viz_export$export_hint("ggplot", "png", 10, 300, 0.5)
-  expect_match(raster, "10.0 . 5.0 cm")
-  expect_match(raster, "1,181 . 59[01] px at 300 dpi")
+  expect_match(raster, "1181 . 591 px")
+  expect_match(raster, "300 dpi")
+  expect_false(grepl("cm", raster, fixed = TRUE))
 
-  # A vector file is the same drawing at any size, so it is described by its
-  # size alone — quoting a DPI for a PDF is not a detail, it is wrong.
+  # A vector file is the same drawing at any size, so it is described by the
+  # size it is drawn at — the figure width a journal asks for — and quoting a
+  # DPI for a PDF is not a detail, it is wrong.
   pdf <- viz_export$export_hint("ggplot", "pdf", 10, 300)
   expect_match(pdf, "vector")
+  expect_match(pdf, "10.0 . 6.2 cm")
   expect_false(grepl("dpi", pdf, fixed = TRUE))
 
   expect_match(viz_export$export_hint("widget", "png", NA, 4000), "4,000")
-  expect_match(viz_export$export_hint("widget", "html", NA, 4000), "interactive")
+  expect_match(viz_export$export_hint("widget", "html", NA, 4000), "Interactive")
 })
 
 test_that("export file names are date-stamped and filesystem-safe", {
@@ -338,21 +341,16 @@ test_that("an engine that knows its own size is not asked for one", {
   expect_true(grepl("e_quality", fixed, fixed = TRUE))
 })
 
-test_that("a fixed-size export says the file is the figure on screen", {
-  raster <- viz_export$export_hint("ggplot", "png", 14, 300, 0.5, fixed = TRUE)
-  vector <- viz_export$export_hint("ggplot", "pdf", 14, 300, 0.5, fixed = TRUE)
+test_that("a fixed-size export describes the figure on screen", {
+  # "Exactly as displayed" was a promise the modal keeps by construction: an
+  # engine that knows its own size is never offered another one, so the hint
+  # has nothing left to say beyond the size itself.
+  raster <- viz_export$export_hint("ggplot", "png", 14, 300, 0.5)
+  vector <- viz_export$export_hint("ggplot", "pdf", 14, 300, 0.5)
 
-  expect_match(raster, "Exactly as displayed", fixed = TRUE)
-  expect_match(vector, "Exactly as displayed", fixed = TRUE)
-  # Still the same arithmetic underneath: the size in centimetres and, for the
-  # raster only, the pixels that resolution produces.
-  expect_match(raster, "14.0", fixed = TRUE)
+  expect_match(raster, "1654 . 827 px")
   expect_match(raster, "300 dpi", fixed = TRUE)
+  expect_match(vector, "14.0", fixed = TRUE)
   expect_match(vector, "vector", fixed = TRUE)
-  # And a chosen size says nothing of the kind.
-  expect_false(grepl(
-    "Exactly as displayed",
-    viz_export$export_hint("ggplot", "png", 14, 300, 0.5),
-    fixed = TRUE
-  ))
+  expect_false(grepl("Exactly as displayed", raster, fixed = TRUE))
 })

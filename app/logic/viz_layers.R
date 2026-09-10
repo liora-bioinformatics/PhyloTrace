@@ -95,8 +95,9 @@ normalize_layers <- function(x, defaults, medium) {
       paste("by", tolower(granularity_label(layer$granularity)))
     },
     layer$palette,
-    # A guide lists at most `legend_max` values and counts the rest. Said here
-    # too, so a short key list beside a long variable does not read as a fault.
+    # A guide lists at most `legend_max` values and counts the rest — fewer,
+    # where the figure is not tall enough for that many. Said here too, so a
+    # short key list beside a long variable does not read as a fault.
     if (!is.null(legend_max) && isTRUE(layer$n_levels > legend_max)) {
       sprintf("%d listed", legend_max)
     }
@@ -117,8 +118,8 @@ normalize_layers <- function(x, defaults, medium) {
 #' @param edit_id Character. Input the edit button writes to.
 #' @param delete_id Character. Input the remove button writes to.
 #' @param empty_text Character. Shown when nothing is mapped yet.
-#' @param legend_max Integer or NULL. Keys a guide draws before it starts
-#'   counting the remainder.
+#' @param legend_max Integer or NULL. Most keys a guide will draw before it
+#'   starts counting the remainder.
 #' @return A Shiny tag.
 #' @export
 layer_cards <- function(

@@ -1907,6 +1907,15 @@ server <- function(
     # Rebuilt live as the controls change; the matrix reactives above are what
     # re-run when a data control moves, this only redraws.
     amr_ggplot <- shiny$reactive({
+      # Which Generate this is the answer to. Everything the plot is built
+      # from is value-driven, so a Generate that changes nothing invalidates
+      # nothing — re-confirming the same isolate set applies the same metadata
+      # and the same selection — and the loading overlay comes down on this
+      # output's own value event. Without a dependency here no plot is drawn
+      # and the spinner runs to its client-side safety timeout over a picture
+      # that was already correct. Pressing Generate is an explicit request for
+      # the plot, so it draws one.
+      generate()
       shiny$req(generated())
       background <- input$amr_background_color %||% BACKGROUND_DEFAULT
 

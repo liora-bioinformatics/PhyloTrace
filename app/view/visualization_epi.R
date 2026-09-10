@@ -1650,6 +1650,15 @@ server <- function(
     # Rebuilt live as the controls change; the binning above is what re-runs
     # when a data control moves, this only redraws.
     epi_ggplot <- shiny$reactive({
+      # Which Generate this is the answer to. Everything the plot is built
+      # from is value-driven, so a Generate that changes nothing invalidates
+      # nothing — re-confirming the same isolate set applies the same metadata
+      # and the same selection — and the loading overlay comes down on this
+      # output's own value event. Without a dependency here no plot is drawn
+      # and the spinner runs to its client-side safety timeout over a picture
+      # that was already correct. Pressing Generate is an explicit request for
+      # the plot, so it draws one.
+      generate()
       binned <- epi_data()
       shiny$req(nrow(binned) > 0)
       # The browser-reported panel width, so the legend can be given a column

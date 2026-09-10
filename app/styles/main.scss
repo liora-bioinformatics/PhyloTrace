@@ -1039,6 +1039,17 @@ $viz-tile-row-gap: 0.85rem;
     background-color: var(--bs-tertiary-bg);
 }
 
+// A clade highlight's colour, on its card. The wash on the figure is the only
+// thing that says which card drew which clade, so the card has to carry it.
+.tree-layer_swatch {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-right: 0.15rem;
+    border-radius: 3px;
+    border: 1px solid var(--bs-border-color);
+}
+
 // The title/meta column, kept clear of the round buttons on its right — two
 // for a mapping layer, three for a heatmap panel (genes / edit / remove).
 .tree-layer_body {

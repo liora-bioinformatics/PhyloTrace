@@ -684,7 +684,7 @@ ui <- function(id) {
       step_info_click_script,
       disabled(actionButton(
         ns("start"),
-        "Start Analysis",
+        "Start Typing",
         icon = icon("play"),
         # pt-no-lock: Start must not arm the global input shield
         # (busy-shield.js). The checking phase keeps Shiny continuously busy
@@ -1018,14 +1018,20 @@ server <- function(
 
       # AMR: read back out of this strain's abritamr output directory, with the
       # tool / database versions and whether point mutations were enabled.
-      amr_rows <- which(ready & !is.na(results$amr_status) & results$amr_status == "done")
+      amr_rows <- which(
+        ready & !is.na(results$amr_status) & results$amr_status == "done"
+      )
       amr_rows <- amr_rows[vapply(
         results$strain[amr_rows],
         pending,
         logical(1),
         step = "amr"
       )]
-      if (isTRUE(Typing$amr_enabled) && !is.null(Typing$amr_out) && length(amr_rows)) {
+      if (
+        isTRUE(Typing$amr_enabled) &&
+          !is.null(Typing$amr_out) &&
+          length(amr_rows)
+      ) {
         amr_meta <- parse_amr_meta(lines)
         organism <- Typing$amr_organism
         for (i in amr_rows) {
@@ -1117,7 +1123,9 @@ server <- function(
           i <- match(strain, results$strain)
           # "screening" is a state the log passes through, never one to record.
           amr_observed <- results$amr_status[i]
-          if (!is.na(amr_observed) && !(amr_observed %in% c("done", "failed"))) {
+          if (
+            !is.na(amr_observed) && !(amr_observed %in% c("done", "failed"))
+          ) {
             amr_observed <- NA_character_
           }
           # The digest read is inside the guard with the write it feeds: both
@@ -1146,7 +1154,9 @@ server <- function(
                   cg_filled_genes = results$filled[i],
                   cg_removed_genes = results$removed[i],
                   cg_completeness = if (
-                    !is.na(locus_count) && locus_count > 0 && !is.na(results$found[i])
+                    !is.na(locus_count) &&
+                      locus_count > 0 &&
+                      !is.na(results$found[i])
                   ) {
                     round(results$found[i] / locus_count * 100, 1)
                   } else {
@@ -1161,8 +1171,14 @@ server <- function(
                   cla_scheme_version = cla_meta$scheme_version,
                   cla_alembic_version = Typing$cla_refs$alembic,
                   cla_repository = cla_meta$repository,
-                  cla_identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
-                  cla_coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
+                  cla_identity = or_default(
+                    input$cla_identity,
+                    CLA_IDENTITY_DEFAULT
+                  ),
+                  cla_coverage = or_default(
+                    input$cla_coverage,
+                    CLA_COVERAGE_DEFAULT
+                  ),
                   amr_status = step_status(
                     Typing$amr_enabled,
                     amr_observed,
@@ -1606,7 +1622,11 @@ server <- function(
           s$total,
           if (s$total == 1) "" else "s"
         ),
-        if (length(parts)) sprintf(" - %s.", paste(parts, collapse = ", ")) else "."
+        if (length(parts)) {
+          sprintf(" - %s.", paste(parts, collapse = ", "))
+        } else {
+          "."
+        }
       )
     })
     outputOptions(output, "selection_caption", suspendWhenHidden = FALSE)
@@ -1637,7 +1657,11 @@ server <- function(
         }
       )
     })
-    outputOptions(output, "duplicate_advisories_badge", suspendWhenHidden = FALSE)
+    outputOptions(
+      output,
+      "duplicate_advisories_badge",
+      suspendWhenHidden = FALSE
+    )
 
     # Spells out the two independent things this panel reports, so "duplicate"
     # is never left to mean whichever of them the reader assumed.
@@ -2373,7 +2397,11 @@ server <- function(
       if (sum(name_taken) > name_conflict_gate_min) {
         log_typing(
           "Skip list requires confirmation",
-          sprintf("%d (gate threshold %d)", sum(name_taken), name_conflict_gate_min)
+          sprintf(
+            "%d (gate threshold %d)",
+            sum(name_taken),
+            name_conflict_gate_min
+          )
         )
         show_skip_gate(sum(name_taken), length(Typing$strains), sum(typeable))
         return()
@@ -2456,7 +2484,10 @@ server <- function(
         error = function(e) e
       )
       if (inherits(known, "error")) {
-        log_typing("Database unreadable, check not started", conditionMessage(known))
+        log_typing(
+          "Database unreadable, check not started",
+          conditionMessage(known)
+        )
         reset_to_idle()
         showNotification(
           paste("Could not read the database:", conditionMessage(known)),
@@ -2517,7 +2548,10 @@ server <- function(
       }
 
       if (isTRUE(Typing$terminated)) {
-        log_typing("Checking phase terminated", sprintf("%d/%d done", chk$i, chk$n))
+        log_typing(
+          "Checking phase terminated",
+          sprintf("%d/%d done", chk$i, chk$n)
+        )
         reset_to_idle()
         showNotification(
           "Genome check terminated.",
@@ -2587,7 +2621,13 @@ server <- function(
     # name-conflict gate's Cancel button below both need it.
     reset_to_idle <- function() {
       Typing$status <- "idle"
-      updateProgressBar(session, "progress", value = 0, total = 1, status = "primary")
+      updateProgressBar(
+        session,
+        "progress",
+        value = 0,
+        total = 1,
+        status = "primary"
+      )
       runjs(sprintf(
         "var el = document.getElementById('%s'); if (el) el.classList.remove('is-animating');",
         ns("progress")
@@ -2694,7 +2734,10 @@ server <- function(
         error = function(e) e
       )
       if (inherits(preflight, "error")) {
-        log_typing("Database unreadable, run not started", conditionMessage(preflight))
+        log_typing(
+          "Database unreadable, run not started",
+          conditionMessage(preflight)
+        )
         # Stops the bar that has been animating since the checking phase.
         reset_to_idle()
         Typing$status <- "failed"
@@ -2749,8 +2792,10 @@ server <- function(
       # a note written here survives instead of being raced by the child's own
       # first write.
       cat(
-        strrep("-", 48), "\n",
-        describe_resolution(cla_scheme), "\n",
+        strrep("-", 48),
+        "\n",
+        describe_resolution(cla_scheme),
+        "\n",
         sep = "",
         file = Typing$log_file,
         append = TRUE
@@ -2953,7 +2998,9 @@ server <- function(
       # left for the next poll (or, failing that, the closing sweep) to redo.
       tryCatch(
         persist_results(results, lines),
-        error = function(e) log_typing("Persisting results failed", conditionMessage(e))
+        error = function(e) {
+          log_typing("Persisting results failed", conditionMessage(e))
+        }
       )
       # Genomes whose whole pipeline is over - allele calling, classical MLST and
       # the AMR screen alike. The bar counts genomes, so a genome still being
@@ -3094,7 +3141,9 @@ server <- function(
       if (added > 0L) {
         tryCatch(
           sync_metadata_table(db_path()),
-          error = function(e) log_typing("Metadata sync failed", conditionMessage(e))
+          error = function(e) {
+            log_typing("Metadata sync failed", conditionMessage(e))
+          }
         )
       }
 

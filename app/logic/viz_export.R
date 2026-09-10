@@ -279,59 +279,46 @@ export_modal <- function(
 
 #' Describe what the current export settings will actually produce.
 #'
-#' Stated in the units the user cares about — final pixel dimensions for a
-#' raster, "scales with the page" for vector art — because neither DPI nor a
-#' scale factor means anything on its own.
+#' The two numbers that decide the file and nothing else: how big the figure
+#' is, and how finely it is rasterised. The pixel count they multiply out to
+#' was a third way of saying the same thing, and "Exactly as displayed" was a
+#' promise the modal keeps by construction — an engine that knows its own size
+#' is not offered another one (see `sizes`).
 #'
 #' @param kind Character. "ggplot" or "widget".
 #' @param format Character. Selected file format.
 #' @param width_cm Numeric. Requested width in centimetres (ggplot only).
 #' @param quality Numeric. DPI (ggplot) or target pixel width (widget).
 #' @param aspect Numeric. Height-to-width ratio of the plot.
-#' @param fixed Logical. The size is the plot's own rather than a chosen one,
-#'   so the file is the figure on screen and the hint should say so.
 #' @return A single-line character description.
 #' @export
-export_hint <- function(
-  kind,
-  format,
-  width_cm,
-  quality,
-  aspect = 0.62,
-  fixed = FALSE
-) {
+export_hint <- function(kind, format, width_cm, quality, aspect = 0.62) {
   if (identical(format, "html")) {
-    return("Self-contained interactive file; opens in any browser.")
+    return("Interactive HTML file.")
   }
   if (identical(kind, "widget")) {
     px <- round(as.numeric(quality))
+    return(sprintf("%s px wide.", prettyNum(px, big.mark = ",")))
+  }
+  # A vector file is the same drawing at any size, so what it is described by
+  # is the size it is *drawn* at — the figure width a journal asks for — and
+  # there is nothing about resolution to report: saying "600 dpi" of a PDF is
+  # not a detail, it is wrong.
+  if (format %in% vector_formats) {
     return(sprintf(
-      "%s px wide, at any window size.",
-      prettyNum(px, big.mark = ",")
+      "%.1f \u00d7 %.1f cm \u00b7 vector",
+      width_cm,
+      width_cm * aspect
     ))
   }
-  size <- sprintf(
-    "%.1f \u00d7 %.1f cm",
-    width_cm,
-    width_cm * aspect
-  )
-  # Said once, at the front: with a fixed size every format writes the same
-  # figure, and the only thing left to explain is how it is stored.
-  as_shown <- if (isTRUE(fixed)) "Exactly as displayed \u00b7 " else ""
-  # A vector file is the same drawing at any size, so there is nothing about
-  # resolution to report — saying "600 dpi" of a PDF is not a detail, it is
-  # wrong.
-  if (format %in% vector_formats) {
-    return(paste0(as_shown, size, " \u00b7 vector, sharp at any size."))
-  }
+  # A raster file is a pixel count, and that is what a reader checks it
+  # against — a submission limit, a slide, a screen. The centimetres are only
+  # the width control restated, and the dpi says how the two relate.
   dpi <- resolved_dpi(width_cm, aspect, quality)
-  w <- round(width_cm / CM_PER_IN * dpi)
   sprintf(
-    "%s%s \u00b7 %s \u00d7 %s px at %d dpi.",
-    as_shown,
-    size,
-    prettyNum(w, big.mark = ","),
-    prettyNum(round(w * aspect), big.mark = ","),
+    "%d \u00d7 %d px \u00b7 %d dpi",
+    as.integer(round(width_cm / 2.54 * dpi)),
+    as.integer(round(width_cm * aspect / 2.54 * dpi)),
     as.integer(dpi)
   )
 }

@@ -123,6 +123,55 @@ TIP_ROW_FILL <- 0.77 # Fraction of row pitch occupied by tip label text box
 
 # Horizontal label reservation geometry
 TIP_CHAR_EM <- 0.6 # Character width estimate (em) for accession/isolate labels
+
+# Advance of one character, in ems, for the characters a caption is made of.
+#
+# `TIP_CHAR_EM` is a mean, and a mean is the right measure for a reserve that
+# has to cover labels nobody has typed yet — an accession is a fixed shape and
+# a mean over it is exact enough. A clade caption is the other case: one known
+# string, typed by the reader, drawn at a size fitted to a column measured from
+# it. There the mean is 20% short of what an all-capital word sets, and 20%
+# short of the column is three letters drawn past the edge of the panel.
+#
+# Helvetica's own widths, which the export devices' sans faces are within a
+# percent of. Anything not listed takes the mean.
+CHAR_EM <- c(
+  " " = 0.278, "!" = 0.278, "\"" = 0.355, "#" = 0.556, "$" = 0.556,
+  "%" = 0.889, "&" = 0.667, "'" = 0.191, "(" = 0.333, ")" = 0.333,
+  "*" = 0.389, "+" = 0.584, "," = 0.278, "-" = 0.333, "." = 0.278,
+  "/" = 0.278,
+  "0" = 0.556, "1" = 0.556, "2" = 0.556, "3" = 0.556, "4" = 0.556,
+  "5" = 0.556, "6" = 0.556, "7" = 0.556, "8" = 0.556, "9" = 0.556,
+  ":" = 0.278, ";" = 0.278, "<" = 0.584, "=" = 0.584, ">" = 0.584,
+  "?" = 0.556, "@" = 1.015,
+  "A" = 0.667, "B" = 0.667, "C" = 0.722, "D" = 0.722, "E" = 0.667,
+  "F" = 0.611, "G" = 0.778, "H" = 0.722, "I" = 0.278, "J" = 0.5,
+  "K" = 0.667, "L" = 0.556, "M" = 0.833, "N" = 0.722, "O" = 0.778,
+  "P" = 0.667, "Q" = 0.778, "R" = 0.722, "S" = 0.667, "T" = 0.611,
+  "U" = 0.722, "V" = 0.667, "W" = 0.944, "X" = 0.667, "Y" = 0.667,
+  "Z" = 0.611,
+  "[" = 0.278, "\\" = 0.278, "]" = 0.278, "^" = 0.469, "_" = 0.556,
+  "`" = 0.333,
+  "a" = 0.556, "b" = 0.556, "c" = 0.5, "d" = 0.556, "e" = 0.556,
+  "f" = 0.278, "g" = 0.556, "h" = 0.556, "i" = 0.222, "j" = 0.222,
+  "k" = 0.5, "l" = 0.222, "m" = 0.833, "n" = 0.556, "o" = 0.556,
+  "p" = 0.556, "q" = 0.556, "r" = 0.333, "s" = 0.5, "t" = 0.278,
+  "u" = 0.556, "v" = 0.5, "w" = 0.722, "x" = 0.5, "y" = 0.5,
+  "z" = 0.5,
+  "{" = 0.334, "|" = 0.26, "}" = 0.334, "~" = 0.584,
+  "\u2026" = 1.0
+)
+
+# Ems one string sets in, measured character by character.
+.string_em <- function(x) {
+  ch <- strsplit(as.character(x %||% ""), "", fixed = TRUE)[[1]]
+  if (!length(ch)) {
+    return(0)
+  }
+  em <- CHAR_EM[ch]
+  em[is.na(em)] <- TIP_CHAR_EM
+  sum(em)
+}
 TIP_LABEL_FRAC <- 0.35 # Maximum fraction of panel width reserved for tip labels
 
 # Air between a tip point and the isolate label that starts beside it, in
@@ -440,34 +489,40 @@ tree_auto_layout <- function(
   )
 }
 
-#' Most keys one legend lists before it starts counting instead.
+#' Keys a guide lists when nothing has told it how much room it has.
 #'
-#' A key list is for looking a value up in, and past a handful of swatches
-#' nobody does that: 81 patient ids ran the guide box off the bottom of the
-#' canvas, and would have been unusable had it fit. The colours still do their
-#' other job — showing where the same value recurs on the tree — so the scale
-#' keeps its palette and the guide keeps a few keys, with the rest reported as
-#' a count rather than dropped in silence.
+#' The answer to "how long a list is worth drawing" is mostly the box's height
+#' (`tree_legend_key_budget()`), and every guide the builder draws is solved
+#' against it. This is what a scale built outside that solve falls back to — a
+#' handful of swatches, which is what a key list is read for.
 #' @export
 LEGEND_MAX_KEYS <- 9L
 
 #' Fewest keys a guide is cut back to before it stops being worth drawing.
 #'
-#' The cap above is a ceiling, not the answer: what a guide may list depends on
-#' how much height it has and how many other guides are sharing it. Four
-#' variables mapped on a squat tree get four keys each rather than nine each
-#' off the bottom of the canvas.
+#' The floor the budget starts every guide at, and the one number in it that is
+#' not negotiable: what a guide may list past this depends on how much height
+#' the box has and how many other guides are sharing it, but a guide cut below
+#' four keys is not worth the rows it stands in. Where even the floor will not
+#' fit, the type is shrunk instead (`tree_legend_size()`).
 LEGEND_MIN_KEYS <- 4L
 
-# Levels a guide may list *in full* where the box has room for them.
-#
-# The cap above answers "how much of a list nobody can read should be shown".
-# It is the wrong question for a list that is short enough to read: thirteen
-# drug classes are a vocabulary the reader has to look a colour up in, and nine
-# of them plus a count is worse than all thirteen on a figure with room to
-# spare. Past this a scale is a population, not a vocabulary, and the cap
-# applies again.
-LEGEND_FULL_MAX <- 20L
+#' Keys any one guide lists, however much room the box has.
+#'
+#' One column's worth — the same `LEGEND_MAX_ROWS` a guide's keys wrap at,
+#' written again here because it is declared further down the file. Tying the
+#' two together is the point: a guide allowed more keys than a column holds
+#' buys them by folding into a second column, and a second column is width
+#' taken off the tree. So the height decides everything under this, and past it
+#' a scale is a population rather than a vocabulary — the colours still say
+#' where the same value recurs on the tree, which is the job they go on doing
+#' when the guide only samples them.
+#'
+#' It used to be nine, with everything longer than twenty levels cut back to it
+#' whatever the figure's height was. That is what listed nine of twenty-seven
+#' wards down the side of a plot with a hand's width of blank paper beside them.
+#' @export
+LEGEND_FULL_MAX <- 18L
 
 #' The blank key that stands where a run of levels was left out.
 #'
@@ -522,8 +577,9 @@ tree_legend_max_keys <- function(max_rows = LEGEND_MAX_ROWS) {
 #' the guides that are still trimmed, one key at a time, so they grow together
 #' rather than the first of them taking the lot.
 #'
-#' What "short" means is `LEGEND_FULL_MAX`; past that a guide is capped at
-#' `LEGEND_MAX_KEYS` however much room the box has.
+#' No guide lists more than `LEGEND_FULL_MAX` keys whatever the room; under it
+#' the height is the only thing that trims a guide, so a figure with paper to
+#' spare lists every level it has.
 #'
 #' @param demands Integer vector. Levels each guide holds, in stacking order.
 #' @param room Integer. Rows the whole guide box has.
@@ -537,7 +593,7 @@ tree_legend_key_budget <- function(demands, room = LEGEND_MAX_ROWS) {
     return(integer(0))
   }
   d <- pmax(d, 1L)
-  cap <- ifelse(d <= LEGEND_FULL_MAX, d, LEGEND_MAX_KEYS)
+  cap <- pmin(d, LEGEND_FULL_MAX)
   give <- pmin(cap, LEGEND_MIN_KEYS)
   cost <- function(g) sum(.legend_guide_rows(g, d))
   # The floor is not negotiable: a guide cut below it is not worth drawing, and
@@ -724,7 +780,7 @@ tree_legend_ncol <- function(n_levels, max_rows = LEGEND_MAX_ROWS) {
   if (n_levels <= max_rows) {
     return(1L)
   }
-  as.integer(min(4L, ceiling(n_levels / max_rows)))
+  as.integer(min(LEGEND_KEY_COLS, ceiling(n_levels / max_rows)))
 }
 
 #' Calculate Rounded Scale Bar Width
@@ -781,6 +837,7 @@ AXIS_LABEL_SIZE <- 2.9
 # Type size for the internal node numbers, in millimetres — ggplot2's own text
 # default, so node view looks the same as it always did at text scale 1.
 NODE_LABEL_SIZE <- 3.88
+
 
 #' Round tick positions for a whole-tree distance axis
 #'
@@ -1138,6 +1195,21 @@ MIN_PRINT_PT <- 5
 # points, so the two have to be converted before they can be compared.
 .MM_TO_PT <- 72 / 25.4
 
+#' Legend type size, in points.
+#'
+#' The legend is furniture, like the distance axis, and it is the only text on
+#' the figure that competes with nothing: the tip labels are fitted to the row
+#' pitch, the column names to the column width, and both shrink as the data
+#' grows, while a guide box has its own column and stays wherever it was put.
+#' At ggplot2's own 10pt it ended up half again the size of the axis it sits
+#' beside and several times the size of the names it explains. Setting it to
+#' the axis's size is what makes the two read as one figure; the reader's text
+#' scale still moves both together.
+#'
+#' Points rather than millimetres because that is what `theme()` takes.
+#' @export
+LEGEND_SIZE_PT <- round(AXIS_LABEL_SIZE * .MM_TO_PT, 1)
+
 #' Smallest type this plot will print at, in points.
 #'
 #' Scaling the whole design keeps a figure *proportioned* at any size, which is
@@ -1324,7 +1396,7 @@ TEXT_SCALE_DEFAULT <- 1
 #'   it the requested size is returned unchecked.
 #' @return Numeric points.
 #' @export
-tree_legend_size <- function(opts, height_in = NULL) {
+tree_legend_size <- function(opts, height_in = NULL, md = NULL) {
   size <- (opts$legend_size %||% 10) * .text_of(opts)
   if (!isTRUE(is.finite(height_in) && height_in > 0)) {
     return(size)
@@ -1335,7 +1407,14 @@ tree_legend_size <- function(opts, height_in = NULL) {
   # outside it — the same inches the tip-label reserve does not receive.
   room_in <- height_in - PLOT_MARGIN_IN * scale
   fits <- function(pt) {
-    plan <- tree_legend_plan(opts$layers, opts$heatmaps, pt, height_in, scale)
+    plan <- tree_legend_plan(
+      opts$layers,
+      opts$heatmaps,
+      pt,
+      height_in,
+      scale,
+      md
+    )
     need <- plan$rows * .legend_row_in(pt, scale) * LEGEND_HEIGHT_SAFETY
     !isTRUE(is.finite(need)) || need <= room_in
   }
@@ -1372,15 +1451,16 @@ tree_legend_size <- function(opts, height_in = NULL) {
 #' @param height_in Numeric. Height the plot would otherwise be drawn at.
 #' @return Numeric inches.
 #' @export
-tree_legend_height_in <- function(opts, height_in = NULL) {
-  size <- tree_legend_size(opts, height_in)
+tree_legend_height_in <- function(opts, height_in = NULL, md = NULL) {
+  size <- tree_legend_size(opts, height_in, md)
   scale <- .scale_of(opts)
   plan <- tree_legend_plan(
     opts$layers,
     opts$heatmaps,
     size,
     height_in,
-    scale
+    scale,
+    md
   )
   if (!plan$rows) {
     return(0)
@@ -1389,6 +1469,107 @@ tree_legend_height_in <- function(opts, height_in = NULL) {
     .legend_row_in(size, scale) *
     LEGEND_HEIGHT_SAFETY +
     PLOT_MARGIN_IN * scale
+}
+
+# Share of a square panel that a radial layout's drawing actually covers.
+#
+# ggplot2's CoordPolar rescales the radius into the first four tenths of the
+# panel and draws the disc about its centre, so a full circle covers four
+# fifths of the panel however tightly the axis is fitted to it. The remaining
+# fifth is a blank ring no axis setting reaches — and on a figure sized to the
+# panel it is the band of white a reader ends up cropping off by hand.
+#
+# The fit already works in these terms: `tree_budget_in()` hands a radial
+# layout `TREE_RADIAL_FRAC` (0.4) of the width, which is this same number as a
+# radius. This is the diameter, used where the *image* is being sized rather
+# than the drawing inside it.
+COORD_POLAR_FRAC <- 0.8
+
+# Whether this plot draws a guide box beside the tree at all.
+#
+# The margin and the image width are solved from it in two places — the builder
+# draws the margin, the view sizes the canvas — and they have to reach the same
+# answer or the box is cropped off the edge of a figure that reserved room for
+# it.
+.has_guides <- function(opts) {
+  length(opts$layers %||% list()) > 0L ||
+    length(Filter(
+      function(h) length(h$cols) > 0L,
+      opts$heatmaps %||% list()
+    )) > 0L
+}
+
+#' Height the image stands at, for a panel of a given side.
+#'
+#' The two are the same thing on a linear tree and are not on a radial one: a
+#' disc covers `COORD_POLAR_FRAC` of the square it is drawn in, so an image
+#' sized to the square carries a tenth of its height in blank ring above the
+#' drawing and another tenth below. The image is sized to the *disc* instead,
+#' and the panel is allowed to overflow it — what leaves the page is ring.
+#'
+#' `tree_plot_margin_in()` is the other half of the same arrangement and has to
+#' be read with it: the panel only reaches its full side because the margin is
+#' pulled in by exactly what this leaves out.
+#'
+#' @param opts List. Resolved tree options.
+#' @param panel_in Numeric. The panel's side, in inches.
+#' @return Numeric inches.
+#' @export
+tree_image_height_in <- function(opts, panel_in) {
+  if (!.is_circular(opts)) {
+    return(panel_in)
+  }
+  panel_in * COORD_POLAR_FRAC + PLOT_MARGIN_IN * .scale_of(opts)
+}
+
+#' Width the image stands at, for a panel of a given side.
+#'
+#' A radial figure with no guides is its disc, so the image is square. With
+#' guides it is the disc, the guide box, and — between them — the one piece of
+#' ring that cannot be cropped: the box is a gtable column outside the panel,
+#' so the panel's own right-hand ring stands between the drawing and the first
+#' key whatever the margin does.
+#'
+#' @param opts List. Resolved tree options.
+#' @param panel_in Numeric. The panel's side, in inches.
+#' @param legend_in Numeric. Width the guide box was reserved, in inches.
+#' @return Numeric inches.
+#' @export
+tree_image_width_in <- function(opts, panel_in, legend_in = 0) {
+  if (!.is_circular(opts)) {
+    return(panel_in + legend_in)
+  }
+  disc <- tree_image_height_in(opts, panel_in)
+  if (!.has_guides(opts)) {
+    return(disc)
+  }
+  disc + (1 - COORD_POLAR_FRAC) / 2 * panel_in + legend_in
+}
+
+#' The margin drawn around the plot, in inches, clockwise from the top.
+#'
+#' Negative on a radial layout, which is not a mistake: the image is sized to
+#' the disc (`tree_image_height_in()`), so the square panel the disc is drawn
+#' in is larger than the image and has to hang over its edges to be drawn at
+#' full size. Only blank ring hangs over — the drawing is bounded by the disc,
+#' and the ordinary margin is still there between the disc and the paper.
+#'
+#' The right edge is the exception, and only when there are guides: a negative
+#' margin there does not crop the ring, it pushes the guide box that many
+#' inches past the edge of the paper. So that side keeps its ordinary margin
+#' and the ring under the box stays, which `tree_image_width_in()` counts.
+#'
+#' @param opts List. Resolved tree options.
+#' @param panel_in Numeric. The panel's side, in inches.
+#' @return Numeric vector of four inches: top, right, bottom, left.
+#' @export
+tree_plot_margin_in <- function(opts, panel_in) {
+  edge <- PLOT_MARGIN_PT * .scale_of(opts) / 72
+  if (!.is_circular(opts) || !isTRUE(is.finite(panel_in) && panel_in > 0)) {
+    return(rep(edge, 4L))
+  }
+  crop <- edge - (1 - COORD_POLAR_FRAC) / 2 * panel_in
+  c(crop, if (.has_guides(opts)) edge else crop, crop, crop)
 }
 
 # Branch-label type size, at the reader's text scale. Which branches can hold
@@ -2055,6 +2236,9 @@ PLOT_MARGIN_IN <- 2 * PLOT_MARGIN_PT / 72
 # of dead space between the labels and the matrix as wide as the labels
 # themselves.
 
+# How much larger a guide's title is set than its keys.
+LEGEND_TITLE_RATIO <- 1.1
+
 # Legend geometry, in inches at legend_size 10.
 LEGEND_KEY_IN <- 0.16 # key square plus its gap
 LEGEND_PAD_IN <- 0.12 # box padding either side
@@ -2079,6 +2263,14 @@ LEGEND_ROW_PAD_IN <- 0.040
 LEGEND_ROW_PT_IN <- 0.017
 LEGEND_MAX_COLS <- 3L # past this the guides are wider than the tree
 LEGEND_MAX_ROWS <- 18L # keys in one column before they wrap into another
+
+# Columns one guide's own keys may wrap into.
+#
+# One fold, not three. Wrapping is what keeps a guide taller than its share of
+# the box on the page at all, and the key budget is allowed to count on it —
+# which makes it a way of buying keys, and at four columns it buys them with
+# width the tree is holding. Past a fold the answer is fewer keys.
+LEGEND_KEY_COLS <- 2L
 
 .legend_row_in <- function(legend_size = 10, scale = 1) {
   size <- suppressWarnings(as.numeric(legend_size %||% 10))
@@ -2107,6 +2299,29 @@ LEGEND_HEIGHT_SAFETY <- 1.3
 # under a hundredth of a point, which is finer than the answer means.
 LEGEND_SIZE_STEPS <- 12L
 
+# Keys one mapping layer's guide would list if nothing trimmed it.
+#
+# Not the layer's own `n_levels`, which counts the values the column *holds*.
+# The guide lists the scale's levels, and those are two different numbers
+# whenever the column has gaps in it — "Not recorded" is a level with a swatch
+# and no value behind it. Budgeting for the smaller of the two is what listed
+# a four-level scale as "2 of 4 shown" beside a figure with room for forty.
+.layer_demand <- function(layer, md = NULL) {
+  field <- layer$field %||% NA_character_
+  if (
+    !is.null(md) &&
+      length(field) == 1L &&
+      !is.na(field) &&
+      field %in% names(md)
+  ) {
+    v <- mapped_values(md[[field]])
+    if (is.factor(v)) {
+      return(max(length(levels(v)), 1L))
+    }
+  }
+  max(as.integer(layer$n_levels %||% 1L), 1L)
+}
+
 #' The guide box's plan: which guides it holds, how many keys each may list,
 #' and the order they stack in.
 #'
@@ -2125,6 +2340,8 @@ LEGEND_SIZE_STEPS <- 12L
 #' @param legend_size Numeric. Legend text size in points.
 #' @param height_in Numeric. Height the plot is drawn at, in inches.
 #' @param scale Numeric. This plot's physical scale.
+#' @param md Data frame. The metadata the scales are built from, for the level
+#'   counts. Optional; without it the layers' recorded counts are used.
 #' @return list(ids, demand, keys, order, rows), the last four named by id.
 #' @export
 tree_legend_plan <- function(
@@ -2132,7 +2349,8 @@ tree_legend_plan <- function(
   heatmaps = list(),
   legend_size = 10,
   height_in = NULL,
-  scale = 1
+  scale = 1,
+  md = NULL
 ) {
   ls <- layers %||% list()
   drawn <- Filter(function(h) length(h$cols) > 0L, heatmaps %||% list())
@@ -2143,7 +2361,7 @@ tree_legend_plan <- function(
     demand <<- c(demand, max(as.integer(n), 1L))
   }
   for (l in ls) {
-    add(legend_guide_id("layer", l), as.integer(l$n_levels %||% 1L))
+    add(legend_guide_id("layer", l), .layer_demand(l, md))
   }
   for (i in seq_along(drawn)) {
     h <- drawn[[i]]
@@ -2157,10 +2375,14 @@ tree_legend_plan <- function(
     demand,
     tree_legend_room(legend_size, height_in, scale)
   )
-  # A guide too tall for its share wraps its own keys into two or three
-  # columns rather than being cut back further — ggplot2 will not wrap the box
-  # itself, and a stack of guides that runs off the bottom is simply clipped.
-  # Kept for the whole box, so the guides that wrap all wrap the same way.
+  # A guide too tall for its share wraps its own keys into a second column
+  # rather than being cut back further — ggplot2 will not wrap the box itself,
+  # and a stack of guides that runs off the bottom is simply clipped. Kept for
+  # the whole box, so the guides that wrap all wrap the same way.
+  #
+  # The budget above does not count on it: costing a guide at one column while
+  # the render folds it is conservative, and the alternative is worse — a
+  # budget that can buy keys by folding spends the tree's width on them.
   max_rows <- tree_legend_max_rows(
     layers,
     heatmaps,
@@ -2224,6 +2446,14 @@ legend_guide_id <- function(kind, x, i = 0L) {
 
 #' Rows one guide box has room for, at the height the plot is drawn.
 #'
+#' The same inches, and the same rounding-up on them, that `tree_legend_size()`
+#' tests the finished box against — the plot margin the box sits inside is
+#' taken off, and each row is costed at `LEGEND_HEIGHT_SAFETY`. Measured any
+#' other way the two disagree, and they disagree in the worst direction: the
+#' budget hands out keys until the raw height is full, the fit then finds the
+#' box too tall and shrinks the type to the print floor to hold what the budget
+#' had already promised.
+#'
 #' @param legend_size Numeric. Legend text size in points.
 #' @param height_in Numeric. Height the plot is drawn at, in inches.
 #' @param scale Numeric. This plot's physical scale.
@@ -2233,8 +2463,9 @@ tree_legend_room <- function(legend_size = 10, height_in = NULL, scale = 1) {
   if (is.null(height_in) || !is.finite(height_in) || height_in <= 0) {
     return(LEGEND_MAX_ROWS)
   }
-  row_in <- .legend_row_in(legend_size, scale)
-  max(as.integer(floor(height_in / row_in)), 1L)
+  row_in <- .legend_row_in(legend_size, scale) * LEGEND_HEIGHT_SAFETY
+  usable <- height_in - PLOT_MARGIN_IN * scale
+  max(as.integer(floor(usable / row_in)), 1L)
 }
 
 #' Rows one guide may run to before its keys wrap into another column.
@@ -2293,14 +2524,16 @@ tree_legend_cols <- function(
   heatmaps = list(),
   legend_size = 10,
   height_in = NULL,
-  scale = 1
+  scale = 1,
+  md = NULL
 ) {
   rows <- tree_legend_plan(
     layers,
     heatmaps,
     legend_size,
     height_in,
-    scale
+    scale,
+    md
   )$rows
   room <- tree_legend_room(legend_size, height_in, scale)
   as.integer(min(max(ceiling(rows / room), 1), LEGEND_MAX_COLS))
@@ -2369,7 +2602,7 @@ tree_legend_width_in <- function(
   # key column while the render wrapped a nine-key scale into two is how the
   # legend came out wider than budgeted and squeezed the tip labels.
   max_rows <- tree_legend_max_rows(layers, heatmaps, size, height_in, scale)
-  plan <- tree_legend_plan(layers, heatmaps, size, height_in, scale)
+  plan <- tree_legend_plan(layers, heatmaps, size, height_in, scale, md)
   guide_in <- function(chars, ncol) {
     if (!is.finite(chars)) {
       chars <- 1L
@@ -2434,7 +2667,7 @@ tree_legend_width_in <- function(
     return(0)
   }
   # A box that has to flow into several columns is that many times as wide.
-  cols <- tree_legend_cols(layers, heatmaps, size, height_in, scale)
+  cols <- tree_legend_cols(layers, heatmaps, size, height_in, scale, md)
   box <- cols * min(widest + LEGEND_PAD_IN * scale, LEGEND_MAX_FRAC * w)
   # LEGEND_SAFETY rounds the estimate up: `guide_in` counts a few percent short
   # against a real guide's title and key spacing, and this estimate has one job
@@ -2603,14 +2836,66 @@ HEAT_SCALE_DEFAULT <- "Greys"
 tree_panel_width_in <- function(opts, md, panel_in) {
   opts <- resolve_annotation_widths(opts, md)
   heat <- annotation_total(opts)
+  # A clade caption is a physical width rather than a share of the tree's span,
+  # so it is added to the canvas rather than solved into the split above.
+  #
+  # A circular tree needs more canvas than the caption is wide: its disc is
+  # drawn across `TREE_RADIAL_FRAC` of the panel's side, so a square that grew
+  # by the caption's own inches would hand the *radius* only a fraction of them
+  # and take the rest out of the disc. Every other annotation escapes this by
+  # being a multiple of the tree's span, which grows with the panel.
+  clade_in <- .clade_edge_in(opts)
+  if (.is_circular(opts) && clade_in > 0) {
+    clade_in <- clade_in / TREE_RADIAL_FRAC
+  }
   if (!isTRUE(heat > 0)) {
-    return(panel_in)
+    return(panel_in + clade_in)
   }
   growth <- .panel_growth(opts, md, heat)
   if (!is.finite(growth) || growth <= 0) {
-    return(panel_in)
+    return(panel_in + clade_in)
   }
-  max(panel_in * growth, panel_in)
+  max(panel_in * growth, panel_in) + clade_in
+}
+
+#' How far the image may grow past the tree's own budget.
+#'
+#' `tree_panel_width_in()` is a request, not a promise: without a ceiling, four
+#' wide legends and three heatmap panels ask for a canvas no screen can show
+#' and no export can rasterise. Past this the annotations share what is left.
+#'
+#' Here rather than in the view because the axis solve needs it too. Every
+#' reserve measured in inches — the axis overhang, the caption column — is
+#' solved against the panel the annotations *asked* for, and once the ceiling
+#' bites that panel is not the one being drawn on.
+#' @export
+TREE_CANVAS_MAX_FACTOR <- 2.6
+
+#' How much of the panel it asked for the figure is actually drawn at.
+#'
+#' One below the ceiling and less than one above it. A fraction of the tree's
+#' span rides a squeeze out untouched — it is a fraction of whatever the panel
+#' turns out to be — but a physical width does not, and a caption is a physical
+#' width whose type was already set in millimetres against the panel it was
+#' promised. Off by a sixth, that is three letters drawn past the panel edge
+#' and clipped there, which is exactly how it was reported.
+#'
+#' @param opts List. Resolved tree options.
+#' @param panel_in Numeric. Inches `tree_panel_width_in()` asked for.
+#' @param legend_in Numeric. Inches the guide box takes beside it.
+#' @return Numeric factor in (0, 1].
+#' @export
+tree_panel_squeeze <- function(opts, panel_in, legend_in = 0) {
+  base <- opts$width_in %||% 5.5
+  leg <- suppressWarnings(as.numeric(legend_in %||% 0))
+  if (length(leg) != 1L || !is.finite(leg) || leg < 0) {
+    leg <- 0
+  }
+  room <- base * TREE_CANVAS_MAX_FACTOR - leg
+  if (!isTRUE(is.finite(panel_in) && panel_in > 0) || !isTRUE(room > 0)) {
+    return(1)
+  }
+  .clamp(room / panel_in, 0.2, 1)
 }
 
 #' Total width of every annotation drawn to the right of the tip labels, as a
@@ -4035,20 +4320,52 @@ tree_header_drawn <- function(size, scale = 1) {
   # converted through the range it is about to change: the panel is `panel_in`
   # inches wide and `limit - x_min` units, and the number needs `edge_in` of
   # those inches past `max_x`.
+  # The caption column past the annotations is physical width too, and the
+  # canvas has already been grown for it (`tree_panel_width_in`), so it is part
+  # of the panel these overhangs are solved against.
+  clade_in <- .clade_edge_in(opts)
+  # Times the squeeze, because these inches have to be the ones the figure will
+  # really be drawn across. Where the annotations asked for more canvas than the
+  # ceiling allows (`tree_panel_squeeze`), solving against the request reserves
+  # a column wider than the panel that arrives, and the caption inside it is
+  # drawn off the edge.
+  panel_in <- (max(
+    tree_budget_in(opts) - PLOT_MARGIN_IN * .scale_of(opts),
+    0.5
+  ) *
+    .panel_growth(opts, md, heat) +
+    clade_in) *
+    (opts$panel_squeeze %||% 1)
+
   edge_in <- .axis_edge_in(opts, max_x)
   limit <- x_min + range
   if (edge_in > 0) {
-    panel_in <- max(
-      tree_budget_in(opts) - PLOT_MARGIN_IN * .scale_of(opts),
-      0.5
-    ) *
-      .panel_growth(opts, md, heat)
     k <- .clamp(edge_in / panel_in, 0, 0.5)
     limit <- max(limit, (max_x - k * x_min) / (1 - k))
   }
+
+  # Same solve again for the captions, from the edge everything else ended at:
+  # the column needs `clade_in` of the panel's inches past it, and enlarging the
+  # axis by exactly that fraction leaves every width already placed at the size
+  # it was placed for.
+  clade <- NULL
+  if (clade_in > 0) {
+    k <- .clamp(clade_in / panel_in, 0, 0.5)
+    grown <- (limit - k * x_min) / (1 - k)
+    per_in <- (grown - x_min) / panel_in
+    scale <- .scale_of(opts)
+    bar_x <- limit + CLADE_BAR_GAP_MM * scale / 25.4 * per_in
+    clade <- list(
+      x = bar_x,
+      text_x = bar_x +
+        (CLADE_BAR_MM + CLADE_TEXT_GAP_MM) * scale / 25.4 * per_in
+    )
+    limit <- grown
+  }
   list(
     limit = limit,
-    reserve = range * frac
+    reserve = range * frac,
+    clade = clade
   )
 }
 
@@ -4173,8 +4490,15 @@ mapped_values <- function(v) {
   # into `md` and the scales are built from the frame afterwards, so this runs
   # twice over the same column; a second sort would file "Not recorded" among
   # the real values and leave the legend disagreeing with the strip.
+  #
+  # `droplevels` because a column can arrive carrying levels nothing in it
+  # uses — an AMR gene call is a factor of every state the caller can report,
+  # and a screen that found the gene outright holds two of them. A key for a
+  # level with no mark on the figure is a colour the reader goes looking for
+  # and cannot find, and it costs the guide a key that a real level wanted.
+  # A no-op on the second pass, which is why it can live on this branch.
   if (is.factor(v) && !anyNA(v) && all(nzchar(trimws(levels(v))))) {
-    return(v)
+    return(droplevels(v))
   }
   ch <- trimws(as.character(v))
   ch[!nzchar(ch)] <- NA_character_
@@ -4532,15 +4856,335 @@ tree_tippoint_layer <- function(opts, color_layer = NULL, shape_layer = NULL) {
   do.call(geom_tippoint, params)
 }
 
-tree_clade_layers <- function(opts) {
-  nodes <- suppressWarnings(as.integer(opts$parentnodes))
-  nodes <- nodes[!is.na(nodes)]
-  if (!length(nodes)) {
+# --- Clade highlights ---------------------------------------------------------
+#
+# A highlight names a group of tips: a wash behind the clade, optionally with a
+# bar and a caption beside it. The reader adds them one node at a time and each
+# carries its own colour and its own text, so everything about one highlight
+# lives on its record rather than in a control shared by all of them.
+
+# Behind the tree rather than over it, so the branches a highlight groups stay
+# readable through it. `to.bottom` in tree_clade_layers() is the other half of
+# that; the alpha alone is not enough at these saturations.
+CLADE_ALPHA <- 0.45
+
+# Type size a caption is set at, in mm at scale 1 before the reader's text bias.
+# A shade over the axis numbers: a caption names a group rather than being read
+# off one.
+CLADE_LABEL_SIZE <- 3.2
+
+# The caption column in mm at scale 1: the bar's thickness, the gutter between
+# the last annotation and the bar, and the gap from the bar to its text.
+CLADE_BAR_MM <- 1.1
+CLADE_BAR_GAP_MM <- 2.4
+CLADE_TEXT_GAP_MM <- 1.4
+
+# Millimetres one ggplot2 `linewidth` draws, so a stroke that has to match a
+# width booked in millimetres can be asked for in the units it was booked in.
+LINEWIDTH_MM <- 72.27 / 96
+
+# How far past its outermost tips a bar runs, in tip rows. A tile reaches half a
+# row past the last tip (TILE_TOP_ROWS), so a bar that stopped at the tip itself
+# would read as falling short of the clade it brackets.
+CLADE_BAR_EXTEND <- 0.5
+
+# Most of the figure's width the caption column may claim. The canvas grows for
+# it (`tree_panel_width_in()`), so this is not the tree paying for the captions
+# — it is the ceiling past which a long caption is set smaller, and then elided,
+# instead of the figure growing wider without end.
+CLADE_LABEL_CAP <- 0.3
+
+# Safety factor on the caption column, for the same reason X_EXPANSION is one
+# on the tip-label reserve: the right of the axis carries no ggplot2 expansion
+# to absorb a caption that runs a little long, so without it the last glyph of
+# the widest caption sits exactly on the panel edge — a clipped glyph rather
+# than a tight fit. `CHAR_EM` is within about a percent of what the export
+# devices set, and this covers the percent.
+CLADE_TEXT_SLACK <- 1.06
+
+#' Colours a clade highlight is given as the reader adds one.
+#'
+#' Cycled by the view so no two highlights open in the same colour — telling
+#' them apart is the whole reason a reader adds a second one. Mid-tone
+#' throughout: each has to survive being washed to `CLADE_ALPHA` behind the tree
+#' *and* read as a solid bar beside it, which rules out the pastels at one end
+#' and the near-blacks at the other.
+#' @export
+CLADE_PALETTE <- c(
+  "#4E79A7",
+  "#F28E2B",
+  "#59A14F",
+  "#E15759",
+  "#B07AA1",
+  "#76B7B2",
+  "#FF9DA7",
+  "#9C755F"
+)
+
+# The highlights as records, whatever shape the caller had them in.
+#
+# A tree saved before highlights carried their own colour holds a list of nodes
+# and one shared colour instead. Rebuilding those here is what stops a saved
+# Analysis losing its highlights the first time it is reopened.
+.clade_records <- function(opts) {
+  given <- opts$clades %||% list()
+  if (!length(given)) {
+    nodes <- suppressWarnings(as.integer(opts$parentnodes %||% integer(0)))
+    nodes <- nodes[!is.na(nodes)]
+    if (!length(nodes)) {
+      return(list())
+    }
+    fill <- opts$clade_color %||% CLADE_PALETTE[[1]]
+    return(lapply(nodes, function(n) list(node = n, color = fill, label = "")))
+  }
+  out <- lapply(given, function(x) {
+    n <- suppressWarnings(as.integer(x$node %||% NA))
+    if (is.na(n)) {
+      return(NULL)
+    }
+    list(
+      node = n,
+      color = x$color %||% CLADE_PALETTE[[1]],
+      label = trimws(as.character(x$label %||% ""))
+    )
+  })
+  Filter(Negate(is.null), out)
+}
+
+# The highlights that carry a caption. A blank caption is the ordinary case —
+# the wash is the annotation — so an uncaptioned highlight reserves nothing.
+#
+# An inward tree has no room past its tips for any annotation
+# (`tree_annotations_drawn()`); its highlights still draw, but nothing is
+# written beside them.
+.clade_captions <- function(opts) {
+  if (!tree_annotations_drawn(opts)) {
+    return(list())
+  }
+  Filter(function(x) nzchar(x$label), .clade_records(opts))
+}
+
+# Ems the widest caption sets in, as it will be set.
+#
+# Measured rather than counted (`CHAR_EM`): the widest caption is not always
+# the longest one, and the column has to hold whichever it is.
+.clade_ems <- function(opts) {
+  caps <- .clade_captions(opts)
+  if (!length(caps)) {
+    return(0)
+  }
+  set <- vapply(caps, function(x) .clade_caption_text(opts, x$label), "")
+  max(vapply(set, .string_em, numeric(1)), 0)
+}
+
+# The part of the caption column that is not text.
+.clade_gaps_mm <- function(opts) {
+  (CLADE_BAR_MM + CLADE_BAR_GAP_MM + CLADE_TEXT_GAP_MM) * .scale_of(opts)
+}
+
+# Inches the caption column may claim.
+#
+# Against the figure's own width, not `tree_budget_in()`. That one is the
+# *radius* on a circular tree, and a caption set along the outside of the disc
+# is on the page rather than on the radius — capping it against a radius left
+# every circular caption at the legibility floor.
+.clade_cap_in <- function(opts) {
+  budget <- tree_budget_in(opts)
+  if (.is_circular(opts)) {
+    budget <- budget / TREE_RADIAL_FRAC
+  }
+  CLADE_LABEL_CAP * budget
+}
+
+# Ems the column holds at the smallest size worth reading.
+#
+# A caption is the one piece of type on this figure the engine did not choose
+# the content of, so it is the one place the two fitting rules can genuinely
+# fail to meet: past this width there is no size that is both inside the column
+# and legible. Elided rather than shrunk into a smudge, and rather than
+# widening the figure for a caption nobody could read at the end of it.
+.clade_max_em <- function(opts) {
+  room_mm <- max(.clade_cap_in(opts) * 25.4 - .clade_gaps_mm(opts), 0)
+  floor_mm <- TIP_SIZE_FLOOR * .scale_of(opts)
+  max(room_mm / (floor_mm * CLADE_TEXT_SLACK), 1)
+}
+
+# One caption as it will actually be set.
+#
+# Cut by width rather than by character count, since that is what runs out —
+# eight capitals set wider than eleven lowercase letters.
+.clade_caption_text <- function(opts, label) {
+  label <- as.character(label %||% "")
+  limit <- .clade_max_em(opts)
+  if (.string_em(label) <= limit) {
+    return(label)
+  }
+  ch <- strsplit(label, "", fixed = TRUE)[[1]]
+  room <- limit - .string_em("\u2026")
+  used <- 0
+  keep <- 0L
+  for (i in seq_along(ch)) {
+    used <- used + .string_em(ch[[i]])
+    if (used > room) {
+      break
+    }
+    keep <- i
+  }
+  paste0(substr(label, 1L, max(keep, 1L)), "\u2026")
+}
+
+# Type size the captions are set at, under the same two rules as every other
+# label on the figure: what the reader's text bias asks for, never wider than
+# the column may claim, never under what can be read.
+.clade_label_size <- function(opts) {
+  want <- CLADE_LABEL_SIZE * .type_of(opts)
+  ems <- .clade_ems(opts)
+  if (!ems) {
+    return(want)
+  }
+  floor_mm <- TIP_SIZE_FLOOR * .scale_of(opts)
+  room_mm <- max(.clade_cap_in(opts) * 25.4 - .clade_gaps_mm(opts), 0)
+  fits <- room_mm / (ems * CLADE_TEXT_SLACK)
+  .clamp(want, floor_mm, max(fits, floor_mm))
+}
+
+# Inches of canvas the caption column needs, past every other annotation.
+#
+# Unlike a tile strip or a heatmap panel this is a physical width rather than a
+# multiple of the tree's span: a caption is text the reader typed, and text does
+# not grow with the tree. So it is booked the way the axis overhang is
+# (`.axis_edge_in`) — solved into the axis by `.tiplab_xlim()`, with the canvas
+# grown to match in `tree_panel_width_in()` so the column is not taken off the
+# tree and its labels.
+.clade_edge_in <- function(opts) {
+  ems <- .clade_ems(opts)
+  if (!ems) {
+    return(0)
+  }
+  text_mm <- ems * .clade_label_size(opts) * CLADE_TEXT_SLACK
+  (.clade_gaps_mm(opts) + text_mm) / 25.4
+}
+
+# The tips under a node, found by walking the parent links down from it. The
+# bar beside a clade spans exactly these rows.
+.clade_tip_rows <- function(tree_data, node) {
+  front <- node
+  seen <- integer(0)
+  repeat {
+    kids <- tree_data$node[
+      tree_data$parent %in% front & tree_data$node != tree_data$parent
+    ]
+    kids <- setdiff(kids, seen)
+    if (!length(kids)) {
+      break
+    }
+    seen <- c(seen, kids)
+    front <- kids
+  }
+  tree_data[tree_data$node %in% c(node, seen) & tree_data$isTip, , drop = FALSE]
+}
+
+# The wash behind each highlighted clade.
+#
+# Added in reverse so the *first* highlight ends up deepest in the stack: each
+# `to.bottom` rect is inserted at the bottom as it is added, which would
+# otherwise bury a clade nested inside one the reader added earlier.
+tree_clade_layers <- function(opts, tree_data) {
+  clades <- .clade_records(opts)
+  # A highlight on a node this tree does not have cannot be drawn, and asking
+  # for one is an error rather than an empty layer. It is reachable: a Generate
+  # on a smaller isolate selection leaves fewer internal nodes than the
+  # highlight was added against.
+  clades <- Filter(function(cl) cl$node %in% tree_data$node, clades)
+  if (!length(clades)) {
     return(NULL)
   }
-  lapply(nodes, function(n) {
-    geom_hilight(node = n, fill = opts$clade_color)
+  lapply(rev(clades), function(cl) {
+    geom_hilight(
+      node = cl$node,
+      fill = cl$color,
+      alpha = CLADE_ALPHA,
+      to.bottom = TRUE
+    )
   })
+}
+
+# The bar and caption beside each highlighted clade.
+#
+# Two layers for the whole set rather than two per clade, and the colours are
+# passed as a per-row parameter rather than mapped: a mapped colour would open a
+# scale and put a guide in the legend box, and the bar already sits next to the
+# thing it names.
+#
+# The bar takes the clade's colour and the caption takes the figure's ink. A
+# caption set in its own highlight's colour is the one piece of type here that
+# has no room to be fitted — it is as wide as what was typed — so it is the one
+# piece that cannot afford to be set in a colour chosen for a wash.
+tree_cladelab_layers <- function(opts, tree_data, at) {
+  caps <- .clade_captions(opts)
+  if (!length(caps) || is.null(at)) {
+    return(NULL)
+  }
+  circular <- .is_circular(opts)
+  rows <- lapply(caps, function(cl) {
+    if (!cl$node %in% tree_data$node) {
+      return(NULL)
+    }
+    tips <- .clade_tip_rows(tree_data, cl$node)
+    ys <- tips$y[is.finite(tips$y)]
+    if (!length(ys)) {
+      return(NULL)
+    }
+    # A radial tree's y is an angle, so the caption is set along the tip it
+    # sits beside; on the left half of the disc that reading is upside down,
+    # and the fix is the one ggtree uses for its own tip labels — turn the
+    # text through 180 and anchor it at the other end, so it still grows
+    # outward from the rim.
+    ang <- if (circular) mean(range(tips$angle)) else 0
+    flip <- circular && ang > 90 && ang < 270
+    data.frame(
+      label = .clade_caption_text(opts, cl$label),
+      color = cl$color,
+      x = at$x,
+      text_x = at$text_x,
+      lo = min(ys) - CLADE_BAR_EXTEND,
+      hi = max(ys) + CLADE_BAR_EXTEND,
+      mid = mean(range(ys)),
+      angle = if (flip) ang - 180 else ang,
+      hjust = if (flip) 1 else 0,
+      stringsAsFactors = FALSE
+    )
+  })
+  rows <- do.call(rbind, Filter(Negate(is.null), rows))
+  if (is.null(rows) || !nrow(rows)) {
+    return(NULL)
+  }
+  list(
+    geom_segment(
+      data = rows,
+      mapping = aes(x = x, xend = x, y = lo, yend = hi),
+      colour = rows$color,
+      linewidth = CLADE_BAR_MM * .scale_of(opts) / LINEWIDTH_MM,
+      lineend = "round",
+      inherit.aes = FALSE,
+      show.legend = FALSE
+    ),
+    geom_text(
+      data = rows,
+      mapping = aes(
+        x = text_x,
+        y = mid,
+        label = label,
+        angle = angle,
+        hjust = hjust
+      ),
+      colour = opts$line_color,
+      size = .clade_label_size(opts),
+      vjust = 0.5,
+      inherit.aes = FALSE,
+      show.legend = FALSE
+    )
+  )
 }
 
 TILE_GAP <- 0.012
@@ -4892,14 +5536,37 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   } else {
     (opts$width_in %||% 5.5) * (opts$aspect %||% 1)
   }
+  # The height of the *image*, which is the panel's on a linear tree and the
+  # disc's on a radial one (see `tree_image_height_in`). Everything measured
+  # against the rows — the tip pitch, the header and class bands — belongs to
+  # the panel and keeps `plot_height_in`; the guide box stands in the image and
+  # is fitted to this, which is also what the view reserves the canvas from.
+  image_height_in <- tree_image_height_in(opts, plot_height_in)
   # How tall any one guide may run before its keys wrap into another column.
-  legend_size <- tree_legend_size(opts, plot_height_in)
+  legend_size <- tree_legend_size(opts, image_height_in, md)
   legend_max_rows <- tree_legend_max_rows(
     opts$layers,
     opts$heatmaps,
     legend_size,
-    plot_height_in,
+    image_height_in,
     scale
+  )
+  # How much of the panel the annotations asked for the image can actually hold
+  # (`tree_panel_squeeze`). Carried on `opts` because every physical reserve is
+  # solved against it in `.tiplab_xlim()`, which is called from more than one
+  # place and has no way of measuring the guide box for itself.
+  opts$panel_squeeze <- tree_panel_squeeze(
+    opts,
+    panel_in,
+    tree_legend_width_in(
+      opts$layers,
+      md,
+      legend_size,
+      opts$width_in %||% 5.5,
+      opts$heatmaps,
+      image_height_in,
+      scale
+    )
   )
   # One solve for the whole guide box: what each guide may list, and where it
   # stacks. Read back by id as each scale is built, so a guide's key budget and
@@ -4908,8 +5575,9 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     opts$layers,
     opts$heatmaps,
     legend_size,
-    plot_height_in,
-    scale
+    image_height_in,
+    scale,
+    md
   )
 
   circular <- opts$layout %in% .circular_layouts
@@ -5116,7 +5784,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # pair; the shape layer contributes neither, because nothing else in the plot
   # maps shape.
   layers <- c(
-    tree_clade_layers(opts),
+    tree_clade_layers(opts, tree_data),
     list(tree_tiplab_layer(opts, md, lab_l, tiplab_offset)),
     if (!is.null(lab_l)) {
       list(
@@ -5242,26 +5910,37 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     }
   }
 
+  # Past every annotation, at the x `fit` reserved for them.
+  for (layer in tree_cladelab_layers(opts, tree_data, fit$clade) %||% list()) {
+    p <- p + layer
+  }
+
   # `fit` was solved before the layers were assembled, because the tile strips
   # needed the label reserve to place themselves. An inward tree already
   # carries it as its build range (see `inward_xlim`), and adding it again as a
   # scale limit clips the reversed axis instead of extending it.
   #
-  # On a linear tree `expand` is pinned to zero on the right: every annotation
-  # past the tips is placed in x-axis units measured against `fit$limit`, so
-  # ggplot2's default 5% expansion there would stretch the axis under them and
-  # shrink the gap each was given — a tip label that cleared the strip in the
-  # solve ended up under it on the page. The right margin the annotations need
-  # is ANNOTATION_SLACK, already inside `fit$limit`. The left keeps its default
-  # so the root and the leftmost branch do not sit on the panel edge. A radial
-  # tree keeps the symmetric default: its x axis is a radius mapped through
-  # CoordPolar, where a one-sided expansion offsets the whole disc.
+  # `expand` is pinned to zero on the right: every annotation past the tips is
+  # placed in x-axis units measured against `fit$limit`, so ggplot2's default
+  # 5% expansion there would stretch the axis under them and shrink the gap
+  # each was given — a tip label that cleared the strip in the solve ended up
+  # under it on the page. The right margin the annotations need is
+  # ANNOTATION_SLACK, already inside `fit$limit`.
+  #
+  # On the left a linear tree keeps the default, so the root and the leftmost
+  # branch do not sit on the panel edge. A radial tree takes zero there too,
+  # and for the opposite reason: its x axis is a *radius*, its left edge is the
+  # centre of the disc, and expansion there is not a margin — it is a hole
+  # punched through the middle that pushes every ring outward and costs the
+  # drawing the outermost twentieth of its radius. The disc has margin enough:
+  # CoordPolar draws it across four fifths of a square panel however tightly
+  # the axis is fitted (`COORD_POLAR_FRAC`).
   if (!inward) {
-    right_expand <- if (circular) 0.05 else 0
+    left_expand <- if (circular) 0 else 0.05
     p <- p +
       scale_x_continuous(
         limits = c(NA, fit$limit),
-        expand = expansion(mult = c(0.05, right_expand))
+        expand = expansion(mult = c(left_expand, 0))
       )
   }
   # Room above the last tip for the annotation headers, which are set
@@ -5310,17 +5989,13 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # makes ggplot2's gtable allocate a real guide-box column outside the panel,
   # sized to the widest key label. That is the reserved area, computed by the
   # layout engine rather than guessed at with two sliders.
-  legend_cols <- tree_legend_cols(
-    opts$layers,
-    opts$heatmaps,
-    legend_size,
-    plot_height_in,
-    scale
-  )
   p <- p +
     theme_tree(bgcolor = opts$bg) +
     theme(
-      plot.margin = margin(1, 1, 1, 1) * PLOT_MARGIN_PT * scale,
+      plot.margin = do.call(
+        margin,
+        c(as.list(tree_plot_margin_in(opts, panel_in)), list(unit = "in"))
+      ),
       # One rule for both layouts. A circular tree used to put its guides
       # underneath, which took the room out of a panel that has to stay square
       # — so the disc shrank as guides were added, and with nothing reserving
@@ -5336,11 +6011,19 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       # Align the guide box to the plot rather than to the panel, so it does
       # not drift as the panel's own width changes with the label reserve.
       legend.location = "plot",
-      legend.justification = "top",
+      # Top-aligned beside a linear tree, which is read from the top down.
+      # Centred beside a disc, which has no top — and, more to the point, a
+      # radial figure's plot margin is pulled inside the image
+      # (`tree_plot_margin_in`), so a box justified to the top of the *plot*
+      # starts above the top of the paper.
+      legend.justification = if (circular) "centre" else "top",
       legend.box.spacing = unit(4, "pt"),
+      # A shade over the keys rather than ggplot2's 1.2: the title is the
+      # longest string in the box and the box is a column of the figure, so
+      # every point of it is width taken from the tree.
       legend.title = element_text(
         color = opts$line_color,
-        size = legend_size * 1.2
+        size = legend_size * LEGEND_TITLE_RATIO
       ),
       legend.text = element_text(
         color = opts$line_color,

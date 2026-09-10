@@ -67,15 +67,11 @@ set_tree_inputs <- function(session) {
     nj_show_branch_label = FALSE,
     nj_branch_size = 4,
     nj_branch_color = "#000000",
-    nj_tippoint_show = FALSE,
-    nj_tippoint_alpha = 0.5,
     nj_tippoint_size = 4,
     nj_tippoint_color = "#3A4657",
-    nj_tippoint_shape = 16,
     nj_tipcolor_mapping_show = FALSE,
     nj_tipshape_mapping_show = FALSE,
     nj_nodelabel_show = FALSE,
-    nj_clade_scale = "#D0F221",
     nj_heatmap_show = FALSE,
     nj_rootedge_show = FALSE,
     nj_treescale_show = FALSE,
@@ -270,6 +266,161 @@ test_that("Generate resolving a select costs no extra draw", {
   )
 })
 
+test_that("a second Generate on the same isolates still draws", {
+  # The barrier republishes only on a real difference, which is the point of it
+  # — but re-confirming the same isolate set re-arms Generate without changing
+  # anything it computes: the same tree from the same metadata. Nothing was
+  # republished, no plot was drawn, and the loading overlay (which comes down
+  # on the plot's own value event) spun on over a picture that was already
+  # correct until its 45-second client-side timeout. Pressing Generate is an
+  # explicit request for the plot, so it draws one.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      draws <- 0L
+      observe({
+        tree_plot_built()
+        draws <<- draws + 1L
+      })
+      session$flushReact()
+      draws <- 0L
+
+      generate(1L)
+      settle(session)
+      expect_identical(draws, 1L)
+
+      # Identical selection, identical options: the tree computed is the very
+      # same object.
+      generate(2L)
+      settle(session)
+      expect_identical(draws, 2L)
+    }
+  )
+})
+
+test_that("a mapping re-fits the layout, like a heatmap does", {
+  # A mapped strip carries a header, and a header is a band taken out of the
+  # height the rows had (tree_band_in) — exactly what a heatmap's column names
+  # do. The mappings were left out of the re-fit back when a strip was thought
+  # to be paid for by a wider canvas alone, so the aspect stayed at the answer
+  # for a tree with nothing beside it until the next Generate or Auto-fit.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(
+    isolate = c("A", "B", "C", "D"),
+    purpose = c("outbreak", "surveillance", "outbreak", "surveillance"),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      settle(session)
+
+      sent <- record_input_messages(session)
+      session$setInputs(nj_layer_add = "purpose")
+      settle(session)
+
+      # The fit sends its answer unconditionally, so the message is the proof
+      # that it ran at all — whatever this particular mapping resolves to.
+      expect_length(grep("nj_aspect_ratio$", names(sent()), value = TRUE), 1L)
+    }
+  )
+})
+
+test_that("the canvas changes with the picture, not before it", {
+  # renderPlot takes its width and height from plot_canvas(). Read live, those
+  # moved a whole debounce ahead of the image: removing a heatmap resized the
+  # box while the plot drawn for the old one was still on screen, so the
+  # branches stretched across the gap it left for a fraction of a second.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      settle(session)
+      before <- plot_canvas()$height_in
+
+      session$setInputs(nj_aspect_ratio = 3)
+      session$flushReact()
+      expect_identical(plot_canvas()$height_in, before)
+
+      settle(session)
+      expect_gt(plot_canvas()$height_in, before)
+    }
+  )
+})
+
+test_that("Generate names the isolates when the rows can hold a name", {
+  # The fit decides the labels in both directions wherever it is armed at all.
+  # Only ever switching them *off* left a tree fitted for labels with none on
+  # it — the aspect had bought the rows and nothing was set in them until
+  # Auto-fit was pressed, which is what made Auto-fit look like it had turned
+  # something on by itself.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_tiplab_show = FALSE)
+      session$flushReact()
+      expect_false(isolate(fitted$nj_tiplab_show))
+
+      generate(1L)
+      settle(session)
+      # Four tips have room for their names, so the fit draws them.
+      expect_true(isolate(fitted$nj_tiplab_show))
+    }
+  )
+})
+
 test_that("the label source carries the database's own fields before Generate", {
   # The reported bug: every variable picker listed the placeholder names
   # viz_helpers declares them with — "Isolation Date", "Host", "Country" — which
@@ -335,33 +486,42 @@ test_that("a mapping is offered every column, and picks the aesthetic itself", {
       expect_equal(tree_opts()$layers[[2]]$aesthetic, "tile")
       expect_equal(tree_opts()$layers[[2]]$palette, "viridis")
 
-      # A mapping onto the tip points is meaningless while they are hidden, and
-      # that switch lives in another tab — so it comes on with the mapping.
-      expect_true(isolate(fitted$nj_tippoint_show))
+      # The points are the mapping's: they are drawn because something is
+      # mapped onto them, and for no other reason.
+      expect_true(tree_opts()$tippoint_show)
 
-      # And goes off again when the mapping that needed it is deleted: the
-      # points were the mapping's doing, so leaving them behind put dots on the
-      # tree that nothing was mapped to.
+      # And they go with it. Leaving them behind put dots on the tree that
+      # nothing was mapped to.
       session$setInputs(nj_layer_delete = "L1")
       session$flushReact()
       expect_length(tree_opts()$layers, 1L)
-      expect_false(isolate(fitted$nj_tippoint_show))
+      expect_false(tree_opts()$tippoint_show)
     }
   )
 })
 
-test_that("a mapping keeps its tip points drawn even if the switch says off", {
-  # The sidebar locks "Show tip points" on while a mapping is drawn on them,
-  # but the lock lives in the browser. The plot enforces the same rule itself,
-  # so a switch that reads FALSE — a restored Analysis writing a saved "off"
-  # into the mirror after the mapping is already there — cannot leave the tree
-  # with a legend for marks it never drew.
+test_that("the tip points have no controls of their own", {
+  # A tip point is drawn because a variable is mapped onto it, so the mark is
+  # the mapping's: its colour or its shape carries the value and its size is
+  # fitted to the row pitch. The three controls that used to sit in Elements
+  # were three ways to contradict a mapping the reader had just made — hiding
+  # the marks a legend was drawn for, overriding the shape scale, fading them
+  # out — so the panel is gone and the plot's own values are fixed.
+  ids <- rendered_control_ids(impl$tree_controls(NS("x")), drop = character(0))
+  expect_false(any(c(
+    "nj_tippoint_show",
+    "nj_tippoint_shape",
+    "nj_tippoint_alpha",
+    "nj_tippoint_size"
+  ) %in% ids))
+  # The fit still solves a point size; it simply has nowhere to be typed in.
+  expect_true("nj_tippoint_size" %in% names(impl$FITTED_DEFAULTS))
+
   meta <- data.frame(
     isolate = sprintf("ISO-%02d", 1:12),
     purpose = rep(c("outbreak", "surveillance", "screening"), 4),
     stringsAsFactors = FALSE
   )
-
   testServer(
     visualization_tree$server,
     args = list(
@@ -371,48 +531,20 @@ test_that("a mapping keeps its tip points drawn even if the switch says off", {
     ),
     {
       set_tree_inputs(session)
+      expect_false(tree_opts()$tippoint_show)
+
       session$setInputs(nj_layer_add = "purpose")
       session$flushReact()
       expect_equal(tree_opts()$layers[[1]]$aesthetic, "tippoint_shape")
-
-      session$setInputs(nj_tippoint_show = FALSE)
-      session$flushReact()
-      expect_false(isolate(fitted$nj_tippoint_show))
       expect_true(tree_opts()$tippoint_show)
-    }
-  )
-})
-
-test_that("tip points the user switched on survive their mapping", {
-  # The other half of the same rule: only the points the mapping turned on are
-  # turned back off. A user who opened Elements and asked for tip points keeps
-  # them when a tip-point mapping comes and goes.
-  meta <- data.frame(
-    isolate = sprintf("ISO-%02d", 1:12),
-    purpose = rep(c("outbreak", "surveillance", "screening"), 4),
-    stringsAsFactors = FALSE
-  )
-
-  testServer(
-    visualization_tree$server,
-    args = list(
-      viz_metadata = reactive(meta),
-      field_profiles = reactive(field_profiles(meta)),
-      plot_type = reactiveVal("Tree")
-    ),
-    {
-      set_tree_inputs(session)
-      session$setInputs(nj_tippoint_show = TRUE)
-      session$flushReact()
-
-      session$setInputs(nj_layer_add = "purpose")
-      session$flushReact()
-      expect_equal(tree_opts()$layers[[1]]$aesthetic, "tippoint_shape")
+      # Fixed, and the same whatever the mapping is.
+      expect_identical(tree_opts()$tippoint_shape, impl$TIPPOINT_SHAPE)
+      expect_identical(tree_opts()$tippoint_alpha, impl$TIPPOINT_ALPHA)
 
       session$setInputs(nj_layer_delete = "L1")
       session$flushReact()
       expect_length(tree_opts()$layers, 0L)
-      expect_true(isolate(fitted$nj_tippoint_show))
+      expect_false(tree_opts()$tippoint_show)
     }
   )
 })
@@ -469,6 +601,38 @@ test_that("the canvas grows for what is drawn beside the tree", {
       # The tree itself keeps its width, and the height keeps its row pitch.
       expect_equal(tree_opts()$width_in, impl$TREE_PANEL_IN)
       expect_equal(mapped$height_in, bare$height_in)
+    }
+  )
+})
+
+test_that("a radial canvas is the disc, not the square it is drawn in", {
+  # The reported fault. A circular figure was sized to the square panel
+  # CoordPolar draws the disc across four fifths of, so a tenth of its height
+  # was blank ring above the drawing and another tenth below — whitespace the
+  # reader crops off by hand after exporting.
+  meta <- data.frame(
+    isolate = sprintf("ISO-%02d", 1:8),
+    stringsAsFactors = FALSE
+  )
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(field_profiles(meta)),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_layout = "circular")
+      session$flushReact()
+      round <- plot_canvas()
+
+      # The panel is the tree's whole budget; the image is the disc inside it.
+      expect_lt(round$height_in, impl$TREE_PANEL_IN)
+      expect_gt(round$height_in, impl$TREE_PANEL_IN * 0.75)
+      # With nothing beside it a disc is square on the page.
+      expect_equal(round$canvas_in, round$height_in)
     }
   )
 })
@@ -1092,10 +1256,12 @@ test_that("every control the sidebar renders is in the reset catalogue", {
       # renderUI mount points that do not end in _ui.
       "nj_heatmap_none",
       "nj_heatmap_shared",
-      # Both adders clear themselves the moment they are picked from, and the
-      # heatmap one's choices are rebuilt from the panel list.
+      # Every adder clears itself the moment it is picked from, and its
+      # choices are rebuilt from the list it adds to — so there is no value
+      # for a catalogue to restore.
       "nj_layer_add",
       "nj_heatmap_add",
+      "nj_parentnode",
       # Restored by populate_metadata_selects(), which has to set their choices
       # from the loaded database as well as their value.
       impl$MIRRORED_SELECTS
@@ -1425,5 +1591,285 @@ test_that("the export is the figure on screen, at the size it is on screen", {
       width <- sum(as.integer(header[17:20]) * 256^(3:0))
       expect_lt(abs(width - round(plot_canvas()$canvas_in * 96)), 2)
     }
+  )
+})
+
+# --- Clade highlights ---------------------------------------------------------
+
+# The sidebar's clade picker offers internal nodes, which for a
+# Neighbour-Joining tree of n tips are n+1 .. 2n-2 — so the four-isolate
+# fixture offers "5" and "6".
+.clade_args <- function(dir, isolates = c("A", "B", "C", "D")) {
+  db <- fixture_db(dir)
+  list(
+    db_path = reactive(db),
+    viz_metadata = reactiveVal(
+      data.frame(isolate = isolates, stringsAsFactors = FALSE)
+    ),
+    selected_isolates = reactiveVal(isolates),
+    generate = reactiveVal(0L),
+    plot_type = reactiveVal("Tree")
+  )
+}
+
+test_that("picking a node adds a highlight and clears the picker", {
+  # The picker is an adder, like Mapping's and Heatmap's: it holds no value
+  # between picks, so the same node can be re-picked after a delete and a
+  # stale selection cannot re-fire on a later flush.
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    sent <- record_input_messages(session)
+
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+
+    clades <- nj_clades()
+    expect_length(clades, 1L)
+    expect_identical(clades[[1]]$node, "5")
+    expect_identical(clades[[1]]$label, "")
+    expect_identical(clades[[1]]$color, tree_plot$CLADE_PALETTE[[1]])
+    expect_true(any(grepl("nj_parentnode$", names(sent()))))}
+  )
+})
+
+test_that("a second highlight opens in a different colour", {
+  # Telling two washes apart is the whole reason a reader adds the second one,
+  # so the colour is chosen rather than asked for.
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+    session$setInputs(nj_parentnode = "6")
+    session$flushReact()
+
+    colors <- vapply(nj_clades(), function(cl) cl$color, character(1))
+    expect_length(unique(colors), 2L)
+    expect_true(all(colors %in% tree_plot$CLADE_PALETTE))}
+  )
+})
+
+test_that("the same node cannot be highlighted twice", {
+  # Two washes on one clade draw one over an identical one and leave two cards
+  # claiming it.
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+
+    expect_length(nj_clades(), 1L)}
+  )
+})
+
+test_that("the picker stops offering a node that is already highlighted", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    sent <- record_input_messages(session)
+
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+
+    last <- tail(grep("nj_parentnode$", names(sent()), value = TRUE), 1L)
+    expect_false("5" %in% sent()[[last]]$choices)}
+  )
+})
+
+test_that("editing a highlight sets its caption and its colour", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+
+    id <- nj_clades()[[1]]$id
+    session$setInputs(
+      nj_clade_edit = id,
+      nj_clade_label = "  Outbreak A  ",
+      nj_clade_color = "#123456"
+    )
+    session$setInputs(nj_clade_apply = 1L)
+    session$flushReact()
+
+    cl <- nj_clades()[[1]]
+    expect_identical(cl$label, "Outbreak A")
+    expect_identical(cl$color, "#123456")}
+  )
+})
+
+test_that("removing a highlight removes only that one", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+    session$setInputs(nj_parentnode = "6")
+    session$flushReact()
+
+    session$setInputs(nj_clade_delete = nj_clades()[[1]]$id)
+    session$flushReact()
+
+    expect_length(nj_clades(), 1L)
+    expect_identical(nj_clades()[[1]]$node, "6")}
+  )
+})
+
+test_that("the highlights reach the plot as records", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+
+    clades <- tree_opts()$clades
+    expect_length(clades, 1L)
+    expect_identical(clades[[1]]$node, "5")}
+  )
+})
+
+test_that("a highlight is dropped when its node leaves the tree", {
+  # A Generate on a smaller selection leaves fewer internal nodes than the
+  # highlight was added against, and geom_hilight errors on one the tree does
+  # not have rather than drawing nothing.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  meta <- reactiveVal(data.frame(
+    isolate = c("A", "B", "C", "D"),
+    stringsAsFactors = FALSE
+  ))
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = meta,
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = reactiveVal(0L),
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "6")
+      session$flushReact()
+      expect_length(nj_clades(), 1L)
+
+      # Three isolates leave one internal node, numbered 4.
+      meta(data.frame(isolate = c("A", "B", "C"), stringsAsFactors = FALSE))
+      session$flushReact()
+
+      expect_length(nj_clades(), 0L)
+    }
+  )
+})
+
+test_that("a highlight re-fits the layout, like a heatmap does", {
+  # A captioned highlight widens the canvas for its caption column, and the
+  # aspect the fit solves is an aspect of that canvas.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      settle(session)
+
+      sent <- record_input_messages(session)
+      session$setInputs(nj_parentnode = "5")
+      settle(session)
+
+      expect_length(grep("nj_aspect_ratio$", names(sent()), value = TRUE), 1L)
+    }
+  )
+})
+
+test_that("Reset settings drops the clade highlights", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$flushReact()
+    expect_length(nj_clades(), 1L)
+
+    reset_tree_settings()
+    session$flushReact()
+
+    expect_length(nj_clades(), 0L)}
+  )
+})
+
+test_that("a saved Analysis restores its highlights, however it stored them", {
+  testServer(
+    visualization_tree$server,
+    args = .clade_args(local_tempdir()),
+    {
+    set_tree_inputs(session)
+    session$flushReact()
+    session$setInputs(nj_parentnode = "5")
+    session$setInputs(nj_parentnode = "6")
+    session$flushReact()
+
+    saved <- isolate(snapshot())
+    reset_tree_settings()
+    session$flushReact()
+
+    restore(saved)
+    session$flushReact()
+    expect_setequal(
+      vapply(nj_clades(), function(cl) cl$node, character(1)),
+      c("5", "6")
+    )
+
+    # And the shape a tree saved before highlights carried anything of their
+    # own was stored in: a node list and one shared swatch.
+    reset_tree_settings()
+    session$flushReact()
+    restore(list(nj_parentnode = c("5", "6"), nj_clade_scale = "#D0F221"))
+    session$flushReact()
+
+    expect_length(nj_clades(), 2L)
+    expect_true(all(vapply(nj_clades(), function(cl) cl$color, "") ==
+      "#D0F221"))}
   )
 })

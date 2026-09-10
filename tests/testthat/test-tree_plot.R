@@ -2318,21 +2318,81 @@ test_that("a short list is completed before a long one is lengthened", {
   # four keys counted as costing the same as one wanting eighty.
   keys <- tree_plot$tree_legend_key_budget(c(28L, 7L, 4L, 8L, 4L, 2L), 54)
   expect_identical(keys[2:6], c(7L, 4L, 8L, 4L, 2L))
-  # And the one that cannot be completed takes what is left, up to the cap.
-  expect_identical(keys[[1]], tree_plot$LEGEND_MAX_KEYS)
+  # And the one that cannot be completed takes what is left of the rows.
+  expect_gt(keys[[1]], impl$LEGEND_MIN_KEYS)
+  expect_lt(keys[[1]], 28L)
 
-  # A list short enough to read is listed in full where the box has room;
-  # `LEGEND_MAX_KEYS` is for the ones that are not.
+  # A list short enough to read is listed in full where the box has room.
   roomy <- tree_plot$tree_legend_key_budget(c(1L, 13L, 4L), 89)
   expect_identical(roomy[[2]], 13L)
-  expect_identical(
-    tree_plot$tree_legend_key_budget(impl$LEGEND_FULL_MAX + 1L, 89),
-    tree_plot$LEGEND_MAX_KEYS
-  )
 
   # A box with no room at all still leaves every guide worth drawing.
   tight <- tree_plot$tree_legend_key_budget(rep(40L, 4L), 8)
   expect_true(all(tight == 4L))
+})
+
+test_that("a level nothing in the column uses is not a level of the scale", {
+  # The reported fault. An AMR gene call is a factor of every state the caller
+  # can report, and a screen that found the gene outright holds two of them —
+  # so a guide over four declared levels said "2 of 4 shown" while the strip
+  # beside it drew two colours and no more.
+  col <- factor(
+    rep(c("Match", "Absent"), 8),
+    levels = c("Match", "Inexact", "Partial", "Absent")
+  )
+  drawn <- impl$mapped_values(col)
+
+  expect_identical(levels(drawn), c("Match", "Absent"))
+  # And a second pass over the normalised column leaves it exactly as it is.
+  expect_identical(levels(impl$mapped_values(drawn)), levels(drawn))
+})
+
+test_that("a guide is budgeted for the levels it draws, not the values held", {
+  # The two are different numbers whenever the column has gaps: "Not recorded"
+  # is a level with a swatch and no value behind it, and a guide budgeted for
+  # the smaller of the two lists one real level fewer than it has room for.
+  md <- data.frame(
+    v = c(rep(c("a", "b", "c"), 4), NA, NA),
+    stringsAsFactors = FALSE
+  )
+  layer <- list(field = "v", title = "V", n_levels = 3L)
+
+  expect_identical(impl$.layer_demand(layer, md), 4L)
+  expect_identical(impl$.layer_demand(layer, NULL), 3L)
+  # Which is what the plan then budgets keys against.
+  plan <- tree_plot$tree_legend_plan(list(layer), list(), 10, 12, 1, md)
+  expect_identical(unname(plan$keys[[1]]), 4L)
+})
+
+test_that("the rows a guide is given are what trims it, not a fixed ceiling", {
+  # The reported fault, in the direction the reader sees it: nine of
+  # twenty-seven wards listed beside a plot with room for the lot. Room is now
+  # the only thing that decides, so a taller box lists more of the same scale.
+  short <- tree_plot$tree_legend_key_budget(40L, 12)
+  tall <- tree_plot$tree_legend_key_budget(40L, 40)
+
+  expect_gt(tall, short)
+  # Up to one column's worth. Past that a guide buys its keys by folding into
+  # a second column, which is width taken off the tree.
+  expect_identical(tall, impl$LEGEND_FULL_MAX)
+  expect_identical(
+    tree_plot$tree_legend_key_budget(impl$LEGEND_FULL_MAX + 1L, 400),
+    impl$LEGEND_FULL_MAX
+  )
+})
+
+test_that("the row budget is the one the box is afterwards measured against", {
+  # The two used to be measured differently — the budget against the raw
+  # height, the fit against the height less the margin and with every row
+  # rounded up. So the budget promised keys the fit then found no room for,
+  # and the type was shrunk to the print floor to hold them.
+  for (h in c(4, 7, 14)) {
+    room <- tree_plot$tree_legend_room(10, h, 1)
+    expect_lte(
+      room * impl$.legend_row_in(10, 1) * impl$LEGEND_HEIGHT_SAFETY,
+      h - impl$PLOT_MARGIN_IN
+    )
+  }
 })
 
 test_that("a heatmap's two guides stack together, after the mapped variables", {
@@ -2582,6 +2642,92 @@ test_that("a capped guide still gets a scale, and only its keys are budgeted", {
   )
 }
 
+test_that("a radial image is the disc, not the square it is drawn in", {
+  # The reported fault: a circular figure came out with a tenth of its height
+  # in blank ring above the drawing and another tenth below, and the reader
+  # cropped it off by hand after export.
+  circ <- .circ_opts()
+  linear <- .circ_opts(layout = "rectangular")
+  panel <- 6.29
+
+  expect_equal(tree_plot$tree_image_height_in(linear, panel), panel)
+  expect_lt(tree_plot$tree_image_height_in(circ, panel), panel)
+  # The disc itself, which CoordPolar draws across four fifths of the panel,
+  # plus the ordinary margin either side of it.
+  expect_equal(
+    tree_plot$tree_image_height_in(circ, panel),
+    panel * impl$COORD_POLAR_FRAC + impl$PLOT_MARGIN_IN
+  )
+})
+
+test_that("the panel overhangs a radial image by exactly the blank ring", {
+  # The other half of the same arrangement: the image is smaller than the panel
+  # the disc needs, so the margin goes negative and the panel hangs over the
+  # edges. What leaves the page is ring — the drawing is bounded by the disc.
+  panel <- 6.29
+  circ <- tree_plot$tree_plot_margin_in(.circ_opts(), panel)
+  linear <- tree_plot$tree_plot_margin_in(.circ_opts(layout = "rectangular"), panel)
+
+  expect_true(all(linear > 0))
+  expect_equal(length(unique(linear)), 1L)
+  expect_true(all(circ < 0))
+  expect_equal(
+    tree_plot$tree_image_height_in(.circ_opts(), panel) - 2 * circ[[1]],
+    panel
+  )
+})
+
+test_that("a radial image keeps its right margin for the guide box", {
+  # A negative margin there does not crop the ring, it pushes the guide box
+  # that many inches past the edge of the paper — which cropped the keys off.
+  bare <- .circ_opts()
+  guided <- .circ_opts(layers = list(.tile_layer("L1", "ward", "Set1")))
+  panel <- 6.29
+
+  expect_lt(tree_plot$tree_plot_margin_in(bare, panel)[[2]], 0)
+  expect_gt(tree_plot$tree_plot_margin_in(guided, panel)[[2]], 0)
+  # So a guided figure is that much wider than the disc, and a bare one is
+  # square on it.
+  expect_equal(
+    tree_plot$tree_image_width_in(bare, panel),
+    tree_plot$tree_image_height_in(bare, panel)
+  )
+  expect_gt(
+    tree_plot$tree_image_width_in(guided, panel, 1.2),
+    tree_plot$tree_image_height_in(guided, panel) + 1.2
+  )
+})
+
+test_that("a radial axis is fitted tight to what it draws", {
+  # Its x axis is a radius, so ggplot2's default expansion is not a margin at
+  # the ends: the lower one punches a hole through the middle of the disc and
+  # pushes every ring outward, and the drawing loses the outermost twentieth of
+  # its radius to blank paper.
+  f <- .annot_fixture()
+  opts <- .annot_opts()
+  opts$layout <- "circular"
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  rng <- ggplot2::ggplot_build(p)$layout$panel_params[[1]]$r.range
+  limit <- impl$.tiplab_xlim(
+    opts, f$meta, p$data, max(p$data$x[p$data$isTip]),
+    tree_plot$annotation_total(opts)
+  )$limit
+
+  # The root is the centre of the disc, not a ring a twentieth of the way out.
+  expect_equal(rng[[1]], 0)
+  # And the outermost ring still has somewhere to be drawn.
+  expect_gte(rng[[2]], limit)
+
+  # A linear tree keeps its left-hand expansion: there the axis is a width, and
+  # its lower end is a margin holding the root off the panel edge.
+  flat <- opts
+  flat$layout <- "rectangular"
+  q <- .built_tree(f$tree, f$meta, flat)
+  expect_lt(ggplot2::ggplot_build(q)$layout$panel_params[[1]]$x.range[[1]], 0)
+})
+
 test_that("a circular tree measures itself against its radius", {
   # Its x axis is a radius, and ggplot's CoordPolar draws that across
   # TREE_RADIAL_FRAC of a square panel. Measuring against the panel instead is
@@ -2701,15 +2847,13 @@ test_that("guides flow into columns rather than being cut off", {
 })
 
 test_that("a capped guide counts as the rows it will actually draw", {
-  # 150 values is nine rows plus the counting line and the blank key, not 150 —
-  # the whole point of capping the keys.
+  # 150 values is the keys it was budgeted plus the counting line and the blank
+  # key, not 150 — the whole point of capping the keys.
   huge <- list(list(field = "v", title = "Patient Id", n_levels = 150L))
-  small <- list(list(field = "v", title = "Patient Id", n_levels = 9L))
+  plan <- tree_plot$tree_legend_plan(huge)
 
-  expect_identical(
-    tree_plot$tree_legend_plan(huge)$rows,
-    tree_plot$tree_legend_plan(small)$rows + 2L
-  )
+  expect_lte(plan$keys[[1]], impl$LEGEND_FULL_MAX)
+  expect_identical(plan$rows, as.integer(plan$keys[[1]] + 4L))
 })
 
 # --- Opening the circle -------------------------------------------------------
@@ -3350,4 +3494,301 @@ test_that("the room a label has and the size the fit picks are one solve", {
       )
     }
   }
+})
+
+# --- Clade highlights ---------------------------------------------------------
+
+.clade_opts <- function(...) {
+  opts <- .annot_opts()
+  extra <- list(...)
+  for (f in names(extra)) {
+    opts[[f]] <- extra[[f]]
+  }
+  opts
+}
+
+# Where each geom sits in the finished plot's layer stack, by class name.
+.geom_classes <- function(p) {
+  vapply(p$layers, function(l) class(l$geom)[1], character(1))
+}
+
+test_that("a highlight is drawn behind the branches it groups", {
+  # The reported fault: a wash over the tree hides exactly the branches it is
+  # meant to point at. ggtree() has already drawn the segments into the plot
+  # these layers are added to, so being first in the layer list decides
+  # nothing — only geom_hilight's own `to.bottom` does.
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = ""))
+  )
+
+  classes <- .geom_classes(.built_tree(f$tree, f$meta, opts))
+  expect_lt(
+    which(classes == "GeomHilightRect")[[1]],
+    min(which(classes == "GeomSegment"))
+  )
+})
+
+test_that("each highlight keeps its own colour", {
+  f <- .annot_fixture()
+  opts <- .clade_opts(clades = list(
+    list(node = 20, color = "#4E79A7", label = ""),
+    list(node = 25, color = "#F28E2B", label = "")
+  ))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  rects <- p$layers[which(.geom_classes(p) == "GeomHilightRect")]
+  fills <- vapply(rects, function(l) l$aes_params$fill, character(1))
+  expect_setequal(fills, c("#4E79A7", "#F28E2B"))
+})
+
+test_that("a later highlight draws over an earlier one", {
+  # Each `to.bottom` rect goes in at the bottom as it is added, so applying
+  # them in list order would bury a clade nested inside one added before it.
+  f <- .annot_fixture()
+  opts <- .clade_opts(clades = list(
+    list(node = 20, color = "#4E79A7", label = ""),
+    list(node = 25, color = "#F28E2B", label = "")
+  ))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  rects <- p$layers[which(.geom_classes(p) == "GeomHilightRect")]
+  fills <- vapply(rects, function(l) l$aes_params$fill, character(1))
+  expect_identical(fills, c("#4E79A7", "#F28E2B"))
+})
+
+test_that("an uncaptioned highlight costs the figure nothing", {
+  # The wash is inside the tree's own span. Only the caption is a column.
+  f <- .annot_fixture()
+  bare <- .clade_opts()
+  washed <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = ""))
+  )
+
+  expect_identical(
+    tree_plot$tree_panel_width_in(washed, f$meta, 5.5),
+    tree_plot$tree_panel_width_in(bare, f$meta, 5.5)
+  )
+})
+
+test_that("the canvas grows for a caption instead of the tree paying for it", {
+  # A caption is text the reader typed, so it is a physical width rather than a
+  # share of the tree's span — and taking it out of the axis alone would shrink
+  # every label already fitted to the axis it had.
+  f <- .annot_fixture()
+  bare <- .clade_opts()
+  named <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+
+  grown <- tree_plot$tree_panel_width_in(named, f$meta, 5.5) -
+    tree_plot$tree_panel_width_in(bare, f$meta, 5.5)
+  expect_equal(grown, impl$.clade_edge_in(named), tolerance = 1e-9)
+  expect_gt(grown, 0)
+})
+
+test_that("a caption is set past the heatmap, not over it", {
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    heatmaps = list(list(
+      kind = "amr",
+      level = "class",
+      cols = c("amr_Beta-lactam", "amr_Colistin", "amr_Quinolone"),
+      palette = "Reds",
+      title = "AMR classes"
+    )),
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  classes <- .geom_classes(p)
+  tiles <- max(unlist(lapply(
+    which(grepl("Tile", classes)),
+    function(i) b$data[[i]]$xmax
+  )), na.rm = TRUE)
+  bar <- b$data[[which(classes == "GeomSegment" & seq_along(classes) >
+    max(which(grepl("GGtree", classes))))[[1]]]]
+  expect_gt(min(bar$x), tiles)
+})
+
+test_that("the caption column ends inside the panel", {
+  # No ggplot2 expansion on the right of a linear tree, so a caption that ran
+  # past the limit would be clipped mid-glyph rather than merely tight.
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  i <- which(.geom_classes(p) == "GeomText")
+  text_x <- b$data[[i]]$x[[1]]
+  limit <- b$layout$panel_params[[1]]$x.range[[2]]
+  size <- impl$.clade_label_size(opts)
+  per_unit <- (limit - b$layout$panel_params[[1]]$x.range[[1]]) /
+    (impl$tree_budget_in(opts) - impl$PLOT_MARGIN_IN + impl$.clade_edge_in(opts))
+  width <- impl$.string_em("Outbreak A") * size / 25.4 * per_unit
+  expect_lte(text_x + width, limit)
+})
+
+test_that("a caption is measured by what it sets, not by how long it is", {
+  # The reported fault: an all-capital caption was drawn three letters past the
+  # panel edge and clipped there. A mean advance is the right measure for a
+  # reserve over labels nobody has typed yet; a caption is one known string, and
+  # capitals set a fifth wider than the mean.
+  caps <- impl$.string_em("LONGNAME")
+  mixed <- impl$.string_em("longNAME")
+
+  expect_gt(caps, mixed)
+  expect_gt(caps, nchar("LONGNAME") * impl$TIP_CHAR_EM)
+
+  # And the table is what the device really sets, within the slack the column
+  # carries for it.
+  grDevices::png(tempfile(), width = 6, height = 4, units = "in", res = 100)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  graphics::par(ps = 12)
+  size_mm <- 3.2
+  for (lab in c("LONGNAME", "longNAME", "Outbreak A", "ward-17", "mmmmmmmm")) {
+    real <- graphics::strwidth(
+      lab,
+      units = "inches",
+      cex = size_mm * (72.27 / 25.4) / 12
+    ) *
+      25.4 / size_mm
+    expect_equal(impl$.string_em(lab), real, tolerance = 0.05)
+  }
+})
+
+test_that("a caption stays inside a panel the ceiling has squeezed", {
+  # `tree_panel_width_in()` is a request. Past `TREE_CANVAS_MAX_FACTOR` the
+  # image stops growing and the panel that arrives is narrower than the one
+  # every inch-measured reserve was solved against — so the caption column was
+  # wider than the paper under it, and the caption was clipped mid-word.
+  base <- list(width_in = 5.5)
+  expect_equal(tree_plot$tree_panel_squeeze(base, 5.5, 0), 1)
+  expect_equal(tree_plot$tree_panel_squeeze(base, 5.5 * 2, 0), 1)
+  # The guide box is part of what fills the ceiling, so it counts.
+  roomy <- tree_plot$tree_panel_squeeze(base, 5.5 * 2.6, 0)
+  tight <- tree_plot$tree_panel_squeeze(base, 5.5 * 2.6, 1.4)
+  expect_equal(roomy, 1)
+  expect_lt(tight, 1)
+
+  # And a squeezed panel gives the column a larger share of the axis, which is
+  # what keeps the caption's millimetres inside it.
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+  squeezed <- opts
+  squeezed$panel_squeeze <- 0.6
+  td <- data.frame(x = c(0, 1), isTip = c(FALSE, TRUE))
+  share <- function(o) {
+    fit <- impl$.tiplab_xlim(o, f$meta, td, 1, tree_plot$annotation_total(o))
+    (fit$limit - fit$clade$text_x) / fit$limit
+  }
+
+  expect_gt(share(squeezed), share(opts))
+})
+
+test_that("a caption too long for its column is set smaller, not clipped", {
+  short <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = "A"))
+  )
+  long <- .clade_opts(clades = list(list(
+    node = 20,
+    color = "#4E79A7",
+    label = strrep("outbreak-", 8)
+  )))
+
+  expect_lt(impl$.clade_label_size(long), impl$.clade_label_size(short))
+  # Past the point where no size is both legible and inside the column, it is
+  # elided rather than shrunk into a smudge.
+  expect_match(
+    impl$.clade_caption_text(long, long$clades[[1]]$label),
+    "\u2026$"
+  )
+  # And the column it asks for stops at its ceiling rather than growing with
+  # the text.
+  expect_lte(
+    impl$.clade_edge_in(long),
+    impl$.clade_cap_in(long) + impl$.clade_gaps_mm(long) / 25.4
+  )
+})
+
+test_that("captions grow with the reader's text size", {
+  small <- .clade_opts(
+    text_scale = 0.7,
+    clades = list(list(node = 20, color = "#4E79A7", label = "ST239"))
+  )
+  large <- .clade_opts(
+    text_scale = 1.6,
+    clades = list(list(node = 20, color = "#4E79A7", label = "ST239"))
+  )
+
+  expect_lt(impl$.clade_label_size(small), impl$.clade_label_size(large))
+  expect_lt(impl$.clade_edge_in(small), impl$.clade_edge_in(large))
+})
+
+test_that("an inward tree highlights without captioning", {
+  # Nothing can be written past the tips of a tree that hangs from the rim —
+  # the space there is the middle of the disc. The wash still reads.
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    layout = "inward",
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+
+  expect_identical(impl$.clade_edge_in(opts), 0)
+  classes <- .geom_classes(.built_tree(f$tree, f$meta, opts))
+  expect_true("GeomHilightRect" %in% classes)
+  expect_false("GeomText" %in% classes)
+})
+
+test_that("a highlight on a node this tree does not have is skipped", {
+  # Reachable: a Generate on fewer isolates leaves fewer internal nodes than
+  # the highlight was added against, and asking geom_hilight for one is an
+  # error rather than an empty layer.
+  f <- .annot_fixture()
+  opts <- .clade_opts(clades = list(
+    list(node = 20, color = "#4E79A7", label = "Kept"),
+    list(node = 9999, color = "#F28E2B", label = "Gone")
+  ))
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  expect_identical(sum(.geom_classes(p) == "GeomHilightRect"), 1L)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  labels <- b$data[[which(.geom_classes(p) == "GeomText")]]$label
+  expect_identical(labels, "Kept")
+})
+
+test_that("a tree saved before highlights had colours still draws them", {
+  # The old shape: a list of nodes and one swatch shared by all of them.
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    parentnodes = c("20", "25"),
+    clade_color = "#D0F221"
+  )
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  rects <- p$layers[which(.geom_classes(p) == "GeomHilightRect")]
+  expect_length(rects, 2L)
+  expect_true(all(vapply(rects, function(l) l$aes_params$fill, "") ==
+    "#D0F221"))
+})
+
+test_that("a bar spans exactly the clade's own tips", {
+  f <- .annot_fixture()
+  opts <- .clade_opts(
+    clades = list(list(node = 20, color = "#4E79A7", label = "Outbreak A"))
+  )
+
+  p <- .built_tree(f$tree, f$meta, opts)
+  b <- suppressWarnings(suppressMessages(ggplot2::ggplot_build(p)))
+  classes <- .geom_classes(p)
+  bar <- b$data[[max(which(classes == "GeomSegment"))]]
+  data <- suppressWarnings(ggtree::ggtree(f$tree)$data)
+  ys <- impl$.clade_tip_rows(data, 20)$y
+  expect_equal(bar$y[[1]], min(ys) - impl$CLADE_BAR_EXTEND)
+  expect_equal(bar$yend[[1]], max(ys) + impl$CLADE_BAR_EXTEND)
 })

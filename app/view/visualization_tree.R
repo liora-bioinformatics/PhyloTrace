@@ -377,6 +377,70 @@ HEATMAP_SHARED_FIELDS <- c(
   )
 }
 
+# The sidebar's list of clade highlights — one card per node the reader has
+# highlighted. The same card as a mapping layer and a heatmap panel, for the
+# same reason: it is a list of removable things configured in a sidebar. What it
+# adds is the swatch, because a highlight's colour is the only thing on the
+# figure that identifies which card drew which wash.
+#
+# One button rather than two. A highlight is configured along a single axis —
+# what it is called and what colour it is — so both live in one dialog.
+.clade_layer_cards <- function(ns, clades) {
+  if (!length(clades)) {
+    return(shiny$div(
+      class = "text-muted fst-italic mb-2 tree-layer-empty",
+      "No clades highlighted yet."
+    ))
+  }
+  shiny$div(
+    class = "tree-layer-list",
+    lapply(clades, function(cl) {
+      captioned <- nzchar(cl$label %||% "")
+      shiny$div(
+        class = "tree-layer-card",
+        shiny$div(
+          class = "tree-layer_swatch",
+          style = sprintf("background-color:%s;", cl$color),
+          title = cl$color
+        ),
+        shiny$div(
+          class = "tree-layer_body",
+          shiny$div(
+            class = "tree-layer_title",
+            title = if (captioned) cl$label else NULL,
+            if (captioned) cl$label else sprintf("Node %s", cl$node)
+          ),
+          shiny$div(
+            class = "tree-layer_meta",
+            if (captioned) sprintf("Node %s", cl$node) else "No caption"
+          )
+        ),
+        layer_action_btn(ns, "nj_clade_edit", cl$id, "pen", "Edit highlight"),
+        layer_action_btn(
+          ns,
+          "nj_clade_delete",
+          cl$id,
+          "xmark",
+          "Remove highlight"
+        )
+      )
+    })
+  )
+}
+
+# A saved Analysis's highlights, back as records this sidebar can list.
+.normalize_clades <- function(x) {
+  normalize_layer_records(
+    x,
+    list(
+      id = NA_character_,
+      node = NA_character_,
+      label = "",
+      color = tree_plot$CLADE_PALETTE[[1]]
+    )
+  )
+}
+
 .normalize_heatmaps <- function(x) {
   out <- normalize_layer_records(
     x,
@@ -452,9 +516,9 @@ PLOT_RES <- 192
 TREE_PANEL_IN <- 5.5
 
 # How far the canvas may grow past the tree's own budget before the annotations
-# are simply given less. Without a ceiling, four wide legends and three heatmap
-# panels ask for a canvas no screen can show and no export can rasterise.
-CANVAS_MAX_FACTOR <- 2.6
+# are simply given less. The engine's, because the axis solve has to know where
+# the canvas stops growing in order to place a physical reserve inside it.
+CANVAS_MAX_FACTOR <- tree_plot$TREE_CANVAS_MAX_FACTOR
 
 # A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
 PLOT_MAX_PX <- 12000
@@ -468,9 +532,24 @@ PLOT_SETTLE_MS <- 450
 # (below it, for circular layouts) and sized to the widest key by the layout
 # engine, so orientation and text size are fixed here at the values that
 # reserve agrees with — a horizontal box or a larger type size would claim a
-# width the reserve was never computed for and land the keys on the tips.
+# width the reserve was never computed for and land the keys on the tips. The
+# size is the engine's own (the distance axis's size, see LEGEND_SIZE_PT), so
+# the guide box and the rest of the figure's furniture are set alike.
 LEGEND_ORIENTATION <- "vertical"
-LEGEND_SIZE <- 10
+LEGEND_SIZE <- tree_plot$LEGEND_SIZE_PT
+
+# The tip points' own appearance, no longer the reader's to set.
+#
+# A tip point exists only because a variable is mapped onto it, so the mark is
+# the mapping's — its colour or its shape carries the value, and its size is
+# fitted to the row pitch like every other element. That left "Show tip
+# points", "Shape" and "Opacity" as three ways to contradict a mapping the
+# reader had just made: hiding the marks a legend was drawn for, overriding
+# the shape scale with a fixed one, fading them out. The size slider is gone
+# for the same reason the tip-label one is — the fit answers it (see
+# FITTED_FIELDS, which still carries nj_tippoint_size).
+TIPPOINT_SHAPE <- unname(point_shapes[[1L]])
+TIPPOINT_ALPHA <- 0.7
 
 # --- Controls fitted to the data ---------------------------------------------
 
@@ -510,8 +589,7 @@ FITTED_DEFAULTS <- setNames(
 # value for the browser to echo back a flush later.
 MIRRORED_SELECTS <- c(
   "nj_tiplab",
-  "nj_root_isolate",
-  "nj_parentnode"
+  "nj_root_isolate"
 )
 
 # Everything mirrored, in one list: the fitted sliders, the tip-label switch the
@@ -525,7 +603,6 @@ MIRRORED_SELECTS <- c(
 MIRRORED_IDS <- c(
   names(FITTED_DEFAULTS),
   "nj_tiplab_show",
-  "nj_tippoint_show",
   "nj_layout",
   # Auto-fit and Reset both put it back to TEXT_SIZE_DEFAULT, so it echoes
   # exactly as a fitted slider does.
@@ -561,7 +638,6 @@ TREE_CONTROLS <- control_families(
     "nj_axis_show",
     "nj_show_branch_label",
     "nj_treescale_show",
-    "nj_tippoint_show",
     "nj_nodelabel_show",
     "nj_rootedge_show",
     # The heatmap block's shared controls. Real sidebar inputs since the style
@@ -573,7 +649,7 @@ TREE_CONTROLS <- control_families(
     "nj_heatmap_cluster",
     "nj_heatmap_strip"
   ),
-  pickers = c("nj_tippoint_shape", "nj_heatmap_vocabulary"),
+  pickers = "nj_heatmap_vocabulary",
   plain_selects = c("nj_heatmap_distance", "nj_heatmap_method"),
   virtual_selects = "nj_layout",
   sliders = c(
@@ -582,7 +658,6 @@ TREE_CONTROLS <- control_families(
     "nj_open_angle",
     "nj_tiplab_size",
     "nj_branch_size",
-    "nj_tippoint_alpha",
     "nj_tippoint_size",
     "nj_heatmap_dend"
   ),
@@ -592,8 +667,7 @@ TREE_CONTROLS <- control_families(
     "nj_bg",
     "nj_tiplab_color",
     "nj_branch_color",
-    "nj_tippoint_color",
-    "nj_clade_scale"
+    "nj_tippoint_color"
   )
 )
 
@@ -613,9 +687,6 @@ TREE_CONTROL_DEFAULTS <- c(
     nj_axis_show = TRUE,
     nj_show_branch_label = FALSE,
     nj_treescale_show = FALSE,
-    nj_tippoint_show = FALSE,
-    nj_tippoint_shape = unname(point_shapes[[1L]]),
-    nj_tippoint_alpha = 0.5,
     nj_nodelabel_show = FALSE,
     nj_rootedge_show = FALSE,
     nj_heatmap_gene_names = HEATMAP_STYLE_DEFAULTS$show_gene_names,
@@ -633,7 +704,6 @@ TREE_CONTROL_DEFAULTS <- c(
     nj_tiplab_color = "#000000",
     nj_branch_color = "#000000",
     nj_tippoint_color = "#3A4657",
-    nj_clade_scale = "#D0F221",
     zoom_view = "FALSE"
   )
 )
@@ -1032,71 +1102,36 @@ tree_controls <- function(ns, options_ui = NULL) {
         "Elements",
         icon = shiny$icon("shapes"),
         accordion(
-          open = "Tip Points",
-          accordion_panel(
-            "Tip Points",
-            icon = shiny$icon("circle"),
-            # The switch is locked on while a mapping is drawn on the points
-            # (see the sidebar-state observer): the hint is what says so,
-            # because a disabled control with no reason given reads as a bug.
-            input_switch(ns("nj_tippoint_show"), "Show tip points", FALSE),
-            shiny$div(
-              id = ns("nj_tippoint_show_hint"),
-              class = "text-muted fst-italic small mb-2 d-none",
-              "A mapped variable is drawn on the tip points. Remove the ",
-              "mapping to hide them."
-            ),
-            pickerInput(ns("nj_tippoint_shape"), "Shape", point_shapes),
-            layout_columns(
-              col_widths = c(6, 6),
-              shiny$sliderInput(
-                ns("nj_tippoint_alpha"),
-                "Opacity",
-                0.1,
-                1,
-                0.5,
-                step = 0.05,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("nj_tippoint_size"),
-                "Size",
-                0.5,
-                20,
-                FITTED_DEFAULTS$nj_tippoint_size,
-                step = 0.1,
-                ticks = FALSE
-              )
-            )
-          ),
+          open = "Clade Highlight",
           accordion_panel(
             "Clade Highlight",
             icon = shiny$icon("highlighter"),
+            # Node view prints each internal node's number over the tree,
+            # which is how the reader finds the one to pick here.
             input_switch(ns("nj_nodelabel_show"), "Toggle node view", FALSE),
+            # Same shape as Mapping and Heatmap: the picker adds one highlight
+            # and clears itself, and each highlight appears below as its own
+            # card. Single-select rather than the multi-select this was — a
+            # highlight now carries its own colour and its own caption, so it
+            # is added deliberately, one at a time, and edited on its card
+            # instead of through a swatch shared by all of them.
             virtualSelectInput(
               ns("nj_parentnode"),
-              "Nodes",
+              "Highlight a clade",
               choices = character(0),
               selected = character(0),
-              multiple = TRUE,
+              multiple = FALSE,
               search = TRUE,
-              # Without this, the header checkbox highlights every internal
-              # node, not just the ones the search term currently matches.
-              selectAllOnlyVisible = TRUE,
               searchPlaceholderText = "Search nodes ...",
-              placeholder = "No clade highlighted",
+              placeholder = "Add a clade ...",
+              autoSelectFirstOption = FALSE,
               optionsCount = 10,
-              noOfDisplayValues = 3,
-              # Every pick redraws the tree, so a selection of several clades
-              # is batched to the dropdown's close rather than costing one
-              # draw per node.
-              updateOn = "close",
               dropboxWrapper = "body",
               showDropboxAsPopup = TRUE,
               popupDropboxBreakpoint = "10000px",
               width = "100%"
             ),
-            viz_color(ns, "nj_clade_scale", "Highlight color", "#D0F221")
+            shiny$uiOutput(ns("nj_clade_layers_ui"))
           ),
           accordion_panel(
             "Other Elements",
@@ -1354,9 +1389,11 @@ server <- function(
       # field_profiles() rather than from this function.
       keep("nj_tiplab", grouped(fields), "isolate", valid = fields)
 
-      # Outgroup + clade node choices are derived from the isolate set without
-      # computing the tree (tips = isolates; internal node count follows from
-      # the algorithm), keeping this cheap enough to call from Reset too.
+      # The outgroup's choices are derived from the isolate set without
+      # computing the tree, keeping this cheap enough to call from Reset too.
+      # The clade nodes are derived the same way but in their own observer:
+      # that list also shrinks as highlights are added, which is a dependency
+      # this function does not have.
       tips <- meta$isolate
       n_tip <- length(tips)
       root <- if (!force_default && isTRUE(input$nj_root_isolate %in% tips)) {
@@ -1371,69 +1408,20 @@ server <- function(
         selected = root
       )
       set_fitted("nj_root_isolate", root)
-      if (n_tip >= 3) {
-        n_node <- if (identical(algo(), "UPGMA")) {
-          n_tip - 1L
-        } else {
-          n_tip - 2L
-        }
-        nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
-        picked <- if (force_default) {
-          character(0)
-        } else {
-          intersect(input$nj_parentnode, nodes)
-        }
-        updateVirtualSelect(
-          inputId = "nj_parentnode",
-          session = session,
-          choices = nodes,
-          selected = picked
-        )
-        set_fitted("nj_parentnode", picked)
-      }
     }
 
-    # Whether the tip points are on because a mapping needed them rather than
-    # because the user asked for them — which is what makes the switch below
-    # reversible without ever undoing a deliberate choice. Cleared as soon as
-    # the switch is seen off (see the observer below): points the user turns
-    # back on from there are theirs, and stay on when the mapping goes.
-    tippoint_auto_on <- shiny$reactiveVal(FALSE)
-
-    shiny$observeEvent(input$nj_tippoint_show, {
-      if (!isTRUE(input$nj_tippoint_show)) {
-        tippoint_auto_on(FALSE)
+    # Every internal node the algorithm will produce, as characters. Tips are
+    # the isolates and the internal count follows from the algorithm, so this
+    # needs no tree — which is what lets the picker be right before the first
+    # Generate as well as after it.
+    clade_node_ids <- function(meta) {
+      n_tip <- if (is.null(meta)) 0L else length(meta$isolate)
+      if (n_tip < 3L) {
+        return(character(0))
       }
-    })
-
-    # A mapping onto the tip points draws nothing while the tip points
-    # themselves are switched off, and that switch lives in a different tab
-    # (Elements) from the mapping that needs it — so adding such a mapping
-    # appeared to do nothing at all. Turn the points on with it.
-    #
-    # And off again with it: the points are an artefact of the mapping, so
-    # deleting the mapping (or editing it onto another aesthetic) left the tree
-    # wearing dots nobody asked for, in a tab the user had never opened. Only
-    # the points this observer switched on are switched back off.
-    shiny$observeEvent(
-      nj_layers(),
-      {
-        wants_points <- .layers_want_tippoints(nj_layers())
-        shown <- isTRUE(shiny$isolate(fitted$nj_tippoint_show))
-        if (wants_points && !shown) {
-          tippoint_auto_on(TRUE)
-          set_fitted("nj_tippoint_show", TRUE)
-          bslib::update_switch("nj_tippoint_show", value = TRUE)
-        } else if (
-          !wants_points && shown && shiny$isolate(tippoint_auto_on())
-        ) {
-          tippoint_auto_on(FALSE)
-          set_fitted("nj_tippoint_show", FALSE)
-          bslib::update_switch("nj_tippoint_show", value = FALSE)
-        }
-      },
-      ignoreInit = TRUE
-    )
+      n_node <- if (identical(algo(), "UPGMA")) n_tip - 1L else n_tip - 2L
+      as.character(seq.int(n_tip + 1L, n_tip + n_node))
+    }
 
     # Grey out a colour swatch whose element is not being drawn, or whose
     # aesthetic a mapping layer has taken over.
@@ -1459,9 +1447,8 @@ server <- function(
         nj_tiplab_color = isTRUE(fitted$nj_tiplab_show) &&
           !layer_on("tiplab_color"),
         nj_branch_color = isTRUE(input$nj_show_branch_label),
-        nj_tippoint_color = isTRUE(fitted$nj_tippoint_show) &&
-          !layer_on("tippoint_color"),
-        nj_clade_scale = length(fitted$nj_parentnode %||% character(0)) > 0L
+        nj_tippoint_color = .layers_want_tippoints(ls) &&
+          !layer_on("tippoint_color")
       )
       for (id in names(active)) {
         shinyjs::toggleClass(
@@ -1470,19 +1457,6 @@ server <- function(
           condition = !isTRUE(active[[id]])
         )
       }
-
-      # The same rule one step further: while a mapping is drawn on the tip
-      # points, "Show tip points" is not the user's to turn off. Switching it
-      # off hid the points and left the mapping in place — a legend for marks
-      # that were not on the tree, and no way to tell from the Elements tab
-      # that anything was wrong. Removing the mapping is how the points go.
-      owned <- .layers_want_tippoints(ls)
-      shinyjs::toggleState("nj_tippoint_show", condition = !owned)
-      shinyjs::toggleClass(
-        id = "nj_tippoint_show_hint",
-        class = "d-none",
-        condition = !owned
-      )
     })
 
     # Say so when the engine has decided the rows cannot carry a legible label.
@@ -1514,11 +1488,17 @@ server <- function(
     # when the value really changed — its echo is harmless (see `fitted`) but
     # pointless.
     #
-    # `relabel` is the "Auto-fit" button's half of the tip-label rule. `notify`
-    # only ever switches the labels *off*; asking for the best layout for this
-    # data is also the one moment it is right to switch them back on, because
-    # the request is explicit and is not a side effect of some other edit.
-    refit_layout <- function(tree, notify = FALSE, relabel = FALSE) {
+    # `notify` says the caller is asking for the layout this data needs —
+    # Generate, Auto-fit, a reset, a layout switch — and the labels are part of
+    # that answer in both directions: switched off where no legible size fits,
+    # and back on where one does. Only `notify` may turn them on, because a
+    # re-fit triggered by some other edit (a panel added, a mapping) must not
+    # countermand a toggle the reader has just set by hand.
+    #
+    # Leaving the "on" half out is what left a fitted tree with no names on it:
+    # the aspect was solved for labels the switch never got told about, so the
+    # rows were bought and nothing was set in them until Auto-fit was pressed.
+    refit_layout <- function(tree, notify = FALSE) {
       if (is.null(tree)) {
         return(invisible(NULL))
       }
@@ -1536,7 +1516,7 @@ server <- function(
           shiny$isolate(viz_metadata()),
           shiny$isolate(fitted$nj_tiplab)
         ),
-        labels = if (notify || relabel) {
+        labels = if (notify) {
           NA
         } else {
           isTRUE(shiny$isolate(fitted$nj_tiplab_show))
@@ -1588,12 +1568,9 @@ server <- function(
       legible <- !crowded_tips(length(tree$tip.label)) &&
         isTRUE(fit$labels_legible)
       shown <- isTRUE(shiny$isolate(fitted$nj_tiplab_show))
-      if (notify && !legible && shown) {
-        set_fitted("nj_tiplab_show", FALSE)
-        bslib::update_switch("nj_tiplab_show", value = FALSE)
-      } else if (relabel && legible && !shown) {
-        set_fitted("nj_tiplab_show", TRUE)
-        bslib::update_switch("nj_tiplab_show", value = TRUE)
+      if (notify && legible != shown) {
+        set_fitted("nj_tiplab_show", legible)
+        bslib::update_switch("nj_tiplab_show", value = legible)
       }
       invisible(fit)
     }
@@ -1621,17 +1598,31 @@ server <- function(
     # things that trigger one.
     fitted_layout <- shiny$reactiveVal(NULL)
 
-    # `nj_heatmaps()` is here and the mapping layers are not, and the difference
-    # is which direction the annotation grows in. A tile strip or a legend is
-    # paid for by a wider canvas, so the tree is unaffected and a re-fit would
-    # redraw for nothing; a heatmap's column names are a band across the top,
-    # and that comes out of the height the rows had (see tree_band_in).
+    # Everything that changes how much of the figure is *not* tree, re-fitted
+    # as it changes rather than at the next Generate.
+    #
+    # A heatmap's column names are a band across the top and come out of the
+    # height the rows had (tree_band_in); so does a mapped tile strip's header,
+    # which is why the mapping layers are here too — they were left out back
+    # when a strip was thought to be paid for by a wider canvas alone. The
+    # panel records carry the shared heatmap style, so the switches that add or
+    # remove a band (column names, the class strip, the dendrogram's depth)
+    # arrive through `nj_heatmaps()` without needing their own trigger.
+    #
+    # The clade highlights are here because a captioned one widens the canvas
+    # for its caption column (`tree_panel_width_in`), and the aspect the fit
+    # solves is an aspect of that canvas.
+    #
+    # It is arithmetic, not a rebuild: the redraw was going to happen anyway,
+    # and the fit only republishes the sliders whose value really moved.
     shiny$observeEvent(
       list(
         fitted$nj_layout,
         fitted$nj_tiplab,
         fitted$nj_tiplab_show,
-        nj_heatmaps()
+        nj_heatmaps(),
+        nj_layers(),
+        nj_clades()
       ),
       {
         shiny$req(tree_obj())
@@ -1686,10 +1677,10 @@ server <- function(
       nj_layer_seq(0L)
       nj_heatmaps(list())
       nj_heatmap_layer_seq(0L)
-      # The tip points are nobody's doing again once the mappings that asked
-      # for them are gone.
-      tippoint_auto_on(FALSE)
+      nj_clades(list())
+      nj_clade_seq(0L)
       editing(NULL)
+      editing_clade(NULL)
       coloring_heatmap(NULL)
 
       apply_controls(session, TREE_CONTROL_DEFAULTS, TREE_CONTROLS)
@@ -1715,8 +1706,8 @@ server <- function(
       session,
       reset_tree_settings,
       paste(
-        "Mapped variables and heatmap panels are removed with the rest of",
-        "the settings."
+        "Mapped variables, heatmap panels and clade highlights are removed",
+        "with the rest of the settings."
       )
     )
 
@@ -1751,7 +1742,7 @@ server <- function(
       # reader's old thumb still on the scale.
       shiny$updateSliderInput(session, "nj_text_size", value = TEXT_SIZE_DEFAULT)
       set_fitted("nj_text_size", TEXT_SIZE_DEFAULT)
-      refit_layout(tree, notify = TRUE, relabel = TRUE)
+      refit_layout(tree, notify = TRUE)
       hidden <- before && !isTRUE(shiny$isolate(fitted$nj_tiplab_show))
       shiny$showNotification(
         paste0(
@@ -1791,10 +1782,22 @@ server <- function(
     nj_heatmaps <- shiny$reactiveVal(list())
     nj_heatmap_layer_seq <- shiny$reactiveVal(0L)
 
+    # The clade highlights, in the order they were added. Same id discipline
+    # again, in its own sequence so no two card lists in this sidebar can mint
+    # the same id.
+    nj_clades <- shiny$reactiveVal(list())
+    nj_clade_seq <- shiny$reactiveVal(0L)
+
     next_layer_id <- function() {
       n <- nj_layer_seq() + 1L
       nj_layer_seq(n)
       paste0("L", n)
+    }
+
+    next_clade_id <- function() {
+      n <- nj_clade_seq() + 1L
+      nj_clade_seq(n)
+      paste0("C", n)
     }
 
     next_heatmap_layer_id <- function() {
@@ -1861,22 +1864,21 @@ server <- function(
         branch_show = input$nj_show_branch_label,
         branch_size = fitted$nj_branch_size,
         branch_color = input$nj_branch_color,
-        # Tip points. A mapping onto them is drawn *on* the points, so it brings
-        # the element with it whatever the switch says. The switch is locked on
-        # while such a mapping exists (see the sidebar-state observer), and this
-        # is what makes that true of the plot rather than only of the sidebar —
-        # a restored Analysis can put a saved "off" into the mirror after the
-        # mapping is already there.
-        tippoint_show = isTRUE(fitted$nj_tippoint_show) ||
-          .layers_want_tippoints(nj_layers()),
-        tippoint_alpha = input$nj_tippoint_alpha,
+        # Tip points, which exist for exactly as long as a mapping is drawn on
+        # them: the mark carries the value, so there is nothing to switch on or
+        # off beside the mapping itself. Size stays fitted; shape and opacity
+        # are fixed (see TIPPOINT_SHAPE), and the fixed colour is reached only
+        # while no colour mapping owns the points.
+        tippoint_show = .layers_want_tippoints(nj_layers()),
+        tippoint_alpha = TIPPOINT_ALPHA,
         tippoint_size = fitted$nj_tippoint_size,
         tippoint_color = input$nj_tippoint_color,
-        tippoint_shape = input$nj_tippoint_shape,
-        # Clade highlights.
+        tippoint_shape = TIPPOINT_SHAPE,
+        # Clade highlights. One record per highlight: its node, its colour and
+        # its caption. The builder reserves the caption column out of the
+        # canvas, so this is one of the inputs the layout fit reads.
         nodelabel_show = input$nj_nodelabel_show,
-        parentnodes = fitted$nj_parentnode %||% character(0),
-        clade_color = input$nj_clade_scale,
+        clades = nj_clades(),
         # Heatmap panel, and — only when it is drawing genes — the call
         # matrix it reads from. Kept out of the metadata table because it is one
         # column per gene and nothing maps it; see amr_matrix above.
@@ -1930,8 +1932,15 @@ server <- function(
     # Capped at CANVAS_MAX_FACTOR: past that the annotations share what is left
     # rather than the canvas growing without limit.
     plot_canvas <- shiny$reactive({
-      opts <- tree_opts()
-      meta <- viz_metadata()
+      # Read from the same barrier the image is built from, never from the
+      # live controls. The canvas is the render's width and height, so a canvas
+      # that moved ahead of the picture resized the box around a plot drawn for
+      # the old one — removing a heatmap stretched the branches across the gap
+      # it left for as long as the rebuild took. Behind the barrier the two
+      # change in the same flush, which is one render and no interim frame.
+      published <- plot_inputs()
+      opts <- if (is.null(published)) tree_opts() else published$opts
+      meta <- if (is.null(published)) viz_metadata() else published$metadata
       md <- if (is.null(meta)) data.frame() else meta
 
       # Solved in tree_plot.R, beside the axis split it has to agree with: the
@@ -1945,10 +1954,16 @@ server <- function(
       # rings grow it in *both* directions, not just across. Holding the height
       # at the budget while the width grew for the rings drew the disc as an
       # ellipse and put the outer ring off the bottom of the image.
+      #
+      # The image is sized to the disc rather than to the square it is drawn
+      # in: CoordPolar covers four fifths of that square whatever the axis is
+      # doing, and the fifth left over is blank ring on every edge. The builder
+      # pulls the plot margin in by the same amount, which is what lets the
+      # panel keep its full side inside a smaller image.
       height_in <- if (circular) {
-        panel_in
+        tree_plot$tree_image_height_in(opts, panel_in)
       } else {
-        TREE_PANEL_IN * fitted$nj_aspect_ratio
+        TREE_PANEL_IN * opts$aspect
       }
 
       # The guide box is a column beside the tree, and a column has a height.
@@ -1959,27 +1974,30 @@ server <- function(
       # an ellipse, so its legend is bounded by the disc.
       if (!circular) {
         height_in <- min(
-          max(height_in, tree_plot$tree_legend_height_in(opts, height_in)),
+          max(height_in, tree_plot$tree_legend_height_in(opts, height_in, md)),
           TREE_PANEL_IN * CANVAS_MAX_FACTOR
         )
       }
+
+      # At the size the guides will really be set at, not the size the constant
+      # declares: the reader's text scale moves them, and a box budgeted at one
+      # size and drawn at another takes the difference out of the tip labels.
+      legend_size <- tree_plot$tree_legend_size(opts, height_in, md)
 
       # After the height, because how many columns the guides need depends on
       # it — and so, in turn, does how much width they claim.
       legend_in <- tree_plot$tree_legend_width_in(
         opts$layers,
         md,
-        # At the size the guides will really be set at, not the size the
-        # constant declares: the reader's text scale moves them, and a box
-        # budgeted at one size and drawn at another takes the difference out of
-        # the tip labels.
-        tree_plot$tree_legend_size(opts, height_in),
+        legend_size,
         TREE_PANEL_IN,
         opts$heatmaps,
         height_in
       )
+      # The tree's own width is the panel for a linear layout and the disc for
+      # a radial one, which is the height the image was just sized to.
       canvas_in <- min(
-        panel_in + legend_in,
+        tree_plot$tree_image_width_in(opts, panel_in, legend_in),
         TREE_PANEL_IN * CANVAS_MAX_FACTOR
       )
 
@@ -2027,6 +2045,17 @@ server <- function(
       shiny$reactive({
         shiny$req(tree_obj())
         list(
+          # Which Generate this is the answer to. Everything else here is
+          # value-compared, which is the point of the barrier — but it makes a
+          # Generate that changes nothing invisible, and the loading overlay
+          # comes down on the plot's value event: re-confirming the same
+          # isolate set computes the same tree from the same metadata, nothing
+          # is republished, no plot is drawn, and the spinner runs to the
+          # client's 45-second safety timeout over a plot that was already
+          # correct. Pressing Generate is an explicit request for the plot, so
+          # it draws one — the echoing controls this barrier exists to absorb
+          # do not touch this field.
+          generation = generate(),
           tree = tree_obj(),
           metadata = viz_metadata(),
           opts = tree_opts()
@@ -2277,7 +2306,7 @@ server <- function(
         "tree",
         "nj_layer_edit",
         "nj_layer_delete",
-        legend_max = tree_plot$LEGEND_MAX_KEYS
+        legend_max = tree_plot$LEGEND_FULL_MAX
       )
     })
 
@@ -3082,6 +3111,146 @@ server <- function(
       shiny$removeModal()
     })
 
+    # ---- Clade highlights ----------------------------------------------------
+
+    # The nodes the picker offers: every internal node the tree will have, less
+    # the ones already highlighted — the same rule the heatmap picker follows,
+    # and for the same reason. Highlighting one node twice draws one wash over
+    # an identical one and leaves two cards claiming it.
+    #
+    # It prunes as well as offers. A Generate on a smaller isolate selection
+    # leaves fewer internal nodes than before, and a highlight on a node the
+    # tree no longer has cannot be drawn — so it is dropped here rather than
+    # left to fail in the builder. Writing `nj_clades()` while reading it is
+    # safe because the write is conditional: the re-run finds nothing to prune.
+    shiny$observe({
+      nodes <- clade_node_ids(viz_metadata())
+      clades <- nj_clades()
+      kept <- Filter(function(cl) as.character(cl$node) %in% nodes, clades)
+      if (!identical(kept, clades)) {
+        nj_clades(kept)
+        return()
+      }
+      taken <- vapply(kept, function(cl) as.character(cl$node), character(1))
+      updateVirtualSelect(
+        inputId = "nj_parentnode",
+        session = session,
+        choices = setdiff(nodes, taken),
+        selected = character(0)
+      )
+    })
+
+    # The colour a new highlight opens in: the first of CLADE_PALETTE that no
+    # highlight is using yet, so a second one is distinguishable from the first
+    # without the reader opening anything. Past the end of the palette they
+    # start over — eight is already more washes than a tree can carry legibly,
+    # and a repeat the reader can see is better than a colour they cannot.
+    next_clade_color <- function(clades) {
+      palette <- tree_plot$CLADE_PALETTE
+      used <- vapply(clades, function(cl) cl$color %||% "", character(1))
+      free <- setdiff(palette, used)
+      if (length(free)) {
+        return(free[[1]])
+      }
+      palette[[(length(clades) %% length(palette)) + 1L]]
+    }
+
+    shiny$observeEvent(input$nj_parentnode, {
+      node <- input$nj_parentnode
+      shiny$req(nzchar(node %||% ""))
+      # Cleared straight away so the same node can be picked again after a
+      # delete, and so this selection cannot re-fire on a later flush.
+      updateVirtualSelect(
+        inputId = "nj_parentnode",
+        session = session,
+        selected = character(0)
+      )
+      clades <- nj_clades()
+      if (any(vapply(clades, function(cl) identical(cl$node, node), TRUE))) {
+        return()
+      }
+      nj_clades(c(
+        clades,
+        list(list(
+          id = next_clade_id(),
+          node = node,
+          label = "",
+          color = next_clade_color(clades)
+        ))
+      ))
+    })
+
+    shiny$observeEvent(input$nj_clade_delete, {
+      nj_clades(Filter(
+        function(cl) !identical(cl$id, input$nj_clade_delete),
+        nj_clades()
+      ))
+    })
+
+    output$nj_clade_layers_ui <- shiny$renderUI({
+      .clade_layer_cards(ns, nj_clades())
+    })
+
+    # Which highlight the open dialog belongs to.
+    editing_clade <- shiny$reactiveVal(NULL)
+
+    # Both of a highlight's settings in one dialog: what it is called and what
+    # colour it is. An empty caption is the ordinary case rather than an
+    # omission — the wash is the annotation — so it is what a new highlight
+    # starts with and the field says so instead of demanding a name.
+    shiny$observeEvent(input$nj_clade_edit, {
+      hit <- Filter(
+        function(cl) identical(cl$id, input$nj_clade_edit),
+        nj_clades()
+      )
+      shiny$req(length(hit))
+      cl <- hit[[1]]
+      editing_clade(cl$id)
+
+      shiny$showModal(shiny$modalDialog(
+        title = sprintf("Clade at node %s", cl$node),
+        size = "s",
+        easyClose = TRUE,
+        shiny$textInput(
+          ns("nj_clade_label"),
+          "Caption",
+          value = cl$label %||% "",
+          placeholder = "Leave empty for no caption",
+          width = "100%"
+        ),
+        shiny$div(
+          class = "text-muted fst-italic small mb-3",
+          paste(
+            "Set beside the tree, past the labels and any heatmap.",
+            "The figure widens to hold it."
+          )
+        ),
+        viz_color(ns, "nj_clade_color", "Highlight colour", cl$color),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("nj_clade_apply"), "Apply")
+        )
+      ))
+    })
+
+    shiny$observeEvent(input$nj_clade_apply, {
+      id <- editing_clade()
+      shiny$req(!is.null(id))
+      # `%||%` for the same reason the heatmap dialog uses it: the modal is torn
+      # down after Apply, and a widget that never reported a value must leave
+      # the record as it was rather than blanking it.
+      nj_clades(lapply(nj_clades(), function(cl) {
+        if (!identical(cl$id, id)) {
+          return(cl)
+        }
+        cl$label <- trimws(input$nj_clade_label %||% cl$label)
+        cl$color <- input$nj_clade_color %||% cl$color
+        cl
+      }))
+      editing_clade(NULL)
+      shiny$removeModal()
+    })
+
     # ---- Export contract ----------------------------------------------------
     # The tab's sidebar owns the export panel and the download itself; this
     # engine only says what it can produce and how to write it.
@@ -3170,7 +3339,8 @@ server <- function(
       list(
         zoom_view = isTRUE(as.logical(input$zoom_view)),
         .layers = nj_layers(),
-        .heatmaps = nj_heatmaps()
+        .heatmaps = nj_heatmaps(),
+        .clades = nj_clades()
       )
     ))
 
@@ -3222,17 +3392,32 @@ server <- function(
             selected = root
           )
         }
-        n_tip <- length(tips)
-        if (n_tip >= 3 && !is.null(vals$nj_parentnode)) {
-          n_node <- if (identical(algo(), "UPGMA")) n_tip - 1L else n_tip - 2L
-          nodes <- as.character(seq.int(n_tip + 1L, n_tip + n_node))
-          updateVirtualSelect(
-            inputId = "nj_parentnode",
-            session = session,
-            choices = nodes,
-            selected = intersect(vals$nj_parentnode, nodes)
-          )
-        }
+      }
+
+      # The highlights. The node picker itself is not restored: it holds no
+      # value between picks, and its choices are recomputed from the isolate
+      # set and the highlights that come back below.
+      clades <- .normalize_clades(vals$.clades)
+      if (is.null(clades) && length(vals$nj_parentnode %||% character(0))) {
+        # Saved before a highlight carried anything of its own: a list of nodes
+        # and one shared swatch. Rebuilt rather than dropped, so reopening an
+        # Analysis does not silently lose its highlights.
+        fill <- vals$nj_clade_scale %||% tree_plot$CLADE_PALETTE[[1]]
+        clades <- lapply(as.character(vals$nj_parentnode), function(node) {
+          list(id = NA_character_, node = node, label = "", color = fill)
+        })
+      }
+      if (!is.null(clades)) {
+        # Ids are minted here rather than trusted: a highlight saved before they
+        # existed has none, and the card buttons address a highlight by id.
+        clades <- lapply(seq_along(clades), function(i) {
+          cl <- clades[[i]]
+          cl$id <- paste0("C", i)
+          cl$node <- as.character(cl$node)
+          cl
+        })
+        nj_clades(clades)
+        nj_clade_seq(length(clades))
       }
 
       # Both come back from JSON as data.frames rather than lists of lists —

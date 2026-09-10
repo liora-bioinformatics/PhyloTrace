@@ -160,7 +160,8 @@ box::use(
             "Initiate plot",
             icon = icon("plus"),
             class = "btn-primary btn-lg w-100"
-          )
+          ),
+          uiOutput(ns("min_isolates_hint"))
         )
       ),
       div(
@@ -488,6 +489,17 @@ server <- function(
       list_imported_sets(db_path())
     })
 
+    # Local isolate count, and never an abort: viz_metadata() req()s a database,
+    # so a missing or empty one has to read as zero for the creator-form gate.
+    viz_isolate_n <- reactive({
+      tryCatch(nrow(viz_metadata()), error = function(e) 0L) %||% 0L
+    })
+
+    # Smallest database the currently picked plot type can be drawn from.
+    min_isolates_for <- function(pt) {
+      visualization_plot$plot_type_meta[[pt %||% "MST"]]$min_isolates %||% 1L
+    }
+
     # Grouped Save-target choices: an ungrouped "None" entry (the plot isn't
     # part of any Analysis — the default) followed by one optgroup per
     # Analysis, each led by a "New plot" entry (value "analysis:<id>") and its
@@ -746,9 +758,55 @@ server <- function(
       )
     })
 
+    # Grey out "Initiate plot" while the loaded database is too small for the
+    # picked type, and explain the requirement beneath it.
+    observeEvent(
+      list(input$plot_type, viz_isolate_n()),
+      {
+        need <- min_isolates_for(input$plot_type)
+        shinyjs::toggleState("initiate", condition = viz_isolate_n() >= need)
+      },
+      ignoreNULL = FALSE
+    )
+
+    output$min_isolates_hint <- renderUI({
+      need <- min_isolates_for(input$plot_type)
+      have <- viz_isolate_n()
+      if (have >= need) {
+        return(NULL)
+      }
+      div(
+        class = "small text-warning mt-2",
+        icon("triangle-exclamation"),
+        sprintf(
+          " Needs at least %d isolate%s in the database (found %d).",
+          need, if (need == 1L) "" else "s", have
+        )
+      )
+    })
+
     observeEvent(input$initiate, {
       pt <- input$plot_type
       req(pt)
+
+      # Block plot creation on a database that cannot support the chosen view:
+      # MST and Tree need at least three isolates, the other views at least one.
+      # The "Initiate plot" button is already disabled in this state; this is the
+      # guard for anything that reaches the handler regardless.
+      need <- min_isolates_for(pt)
+      have <- viz_isolate_n()
+      if (have < need) {
+        showNotification(
+          sprintf(
+            "A %s plot needs at least %d isolate%s in the database (found %d).",
+            pt, need, if (need == 1L) "" else "s", have
+          ),
+          type = "warning",
+          duration = 6
+        )
+        return()
+      }
+
       # Named after how many plots are open, not after the never-resetting tab
       # counter, so the suggestion stays "Plot 3" rather than drifting to
       # "Plot 47" over a long session of opening and closing tabs.

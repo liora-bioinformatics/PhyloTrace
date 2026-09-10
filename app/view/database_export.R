@@ -550,6 +550,18 @@ server <- function(
     })
 
     shiny$observeEvent(input$isolates_button, {
+      # An empty (freshly initiated) database has nothing to pick from, and
+      # export_meta() would just req()-abort here, leaving the click with no
+      # visible effect. Say so instead.
+      if (!length(isolates())) {
+        shiny$showNotification(
+          "This database has no isolates yet — nothing to select for export.",
+          type = "warning",
+          duration = 5
+        )
+        return()
+      }
+
       meta <- export_meta()
       shiny$req(meta)
 

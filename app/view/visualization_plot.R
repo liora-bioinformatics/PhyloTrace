@@ -105,16 +105,41 @@ box::use(
 # drawn rather than of what it shows: "ggplot" engines hold a plot object on the
 # server and can be re-rendered at any size, while "widget" engines are drawn by
 # the browser and have to be captured from it. See app/logic/viz_export.R.
+# `min_isolates` is the smallest database the view can draw anything meaningful
+# from: the distance-based views (MST, Tree) need at least three isolates to form
+# a network worth reading, the rest need at least one. The creator form enforces
+# it before a tab is opened.
 .ENGINES <- list(
-  MST = list(mod = visualization_mst, distance = TRUE, export_kind = "widget"),
+  MST = list(
+    mod = visualization_mst,
+    distance = TRUE,
+    export_kind = "widget",
+    min_isolates = 3L
+  ),
   Tree = list(
     mod = visualization_tree,
     distance = TRUE,
-    export_kind = "ggplot"
+    export_kind = "ggplot",
+    min_isolates = 3L
   ),
-  Map = list(mod = visualization_map, distance = FALSE, export_kind = "widget"),
-  Epi = list(mod = visualization_epi, distance = FALSE, export_kind = "ggplot"),
-  AMR = list(mod = visualization_amr, distance = FALSE, export_kind = "ggplot")
+  Map = list(
+    mod = visualization_map,
+    distance = FALSE,
+    export_kind = "widget",
+    min_isolates = 1L
+  ),
+  Epi = list(
+    mod = visualization_epi,
+    distance = FALSE,
+    export_kind = "ggplot",
+    min_isolates = 1L
+  ),
+  AMR = list(
+    mod = visualization_amr,
+    distance = FALSE,
+    export_kind = "ggplot",
+    min_isolates = 1L
+  )
 )
 
 #' @export
@@ -422,12 +447,16 @@ plot_types <- names(.ENGINES)
 )
 
 #' Plot-type presentation metadata for the creator form, keyed by plot type and
-#' carrying the engine's own `distance` flag so the picker can state what each
-#' view needs without a second copy of that fact.
+#' carrying the engine's own `distance` flag and `min_isolates` threshold so the
+#' picker can state what each view needs without a second copy of that fact.
 #' @export
 plot_type_meta <- stats::setNames(
   lapply(plot_types, function(k) {
-    c(.TYPE_INFO[[k]], list(key = k, distance = .ENGINES[[k]]$distance))
+    c(.TYPE_INFO[[k]], list(
+      key = k,
+      distance = .ENGINES[[k]]$distance,
+      min_isolates = .ENGINES[[k]]$min_isolates
+    ))
   }),
   plot_types
 )
@@ -1558,8 +1587,7 @@ server <- function(
         export_format(),
         opts$width_cm,
         if (export_widget) opts$target_px else opts$dpi,
-        aspect,
-        fixed = export_fixed_size
+        aspect
       )
       # An engine may have something to say about the size that only it can
       # know — the tree reports when the figure's smallest type would print

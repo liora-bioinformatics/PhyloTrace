@@ -1405,6 +1405,16 @@ server <- function(
     # these rebuilds the network; a change to anything else is a data push.
     shell <- shiny$reactive(
       list(
+        # Which Generate this is the answer to. Everything else here is
+        # value-compared, which is the point — but it makes a Generate that
+        # changes nothing invisible, and the loading overlay comes down on the
+        # widget's draw event: re-confirming the same isolate set computes the
+        # same graph, nothing is republished, no network is built, and the
+        # spinner runs to its client-side safety timeout over a picture that
+        # was already correct. Pressing Generate is an explicit request for the
+        # plot, so it draws one; the echoing controls this gate exists to
+        # absorb do not touch this field.
+        generation = generate(),
         graph = mst_obj(),
         # Collapsing changes which nodes exist, not just what is drawn on
         # them — the incremental path only updates and adds rows by id, it
