@@ -10,6 +10,7 @@ box::use(
   stats[setNames],
   shinyWidgets[
     colorPickr,
+    radioGroupButtons,
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
@@ -30,6 +31,9 @@ box::use(
       mapped_granularity,
     ],
   app / logic / field_profile[profile_description],
+  app /
+    logic /
+    viz_fit[TEXT_SIZE_DEFAULT, TEXT_SIZE_MAX, TEXT_SIZE_MIN, TEXT_SIZE_STEP],
 )
 
 # --- Control Reset Handling Reference ----------------------------------------
@@ -710,6 +714,72 @@ reset_button_row <- function(ns, auto_fit_tip = NULL) {
       icon = shiny$icon("rotate-left"),
       width = "100%"
     )
+  )
+}
+
+#' The Full / Zoomed Display Toggle
+#'
+#' How a fixed-canvas image is presented in its stage: scaled to fit, or at its
+#' rendered size with the stage scrolling. Purely presentation — toggling it
+#' restyles the image and never redraws it.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @return A `<div>` for the bottom of the control panel.
+#' @export
+zoom_view_buttons <- function(ns) {
+  shiny$div(
+    class = "reset-buttons",
+    radioGroupButtons(
+      ns("zoom_view"),
+      NULL,
+      choiceNames = c("Full", "Zoomed"),
+      choiceValues = c(FALSE, TRUE),
+      width = "100%"
+    )
+  )
+}
+
+#' The "Text size" Slider
+#'
+#' One control over every piece of type on the figure. A bias on what the
+#' engine fitted, not a size: each label still grows only into the room it has
+#' and shrinks only to what can be read, and one that fits neither way is left
+#' off (see app/logic/viz_fit.R).
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Unnamespaced input id.
+#' @return A slider input, in percent.
+#' @export
+text_size_slider <- function(ns, id) {
+  shiny$sliderInput(
+    ns(id),
+    "Text size",
+    TEXT_SIZE_MIN,
+    TEXT_SIZE_MAX,
+    TEXT_SIZE_DEFAULT,
+    step = TEXT_SIZE_STEP,
+    post = "%",
+    ticks = FALSE
+  )
+}
+
+#' A Hidden Note Under a Label Switch
+#'
+#' Shown when the switch asks for labels the fit left off because no legible
+#' size fits the room, so a switch that is on but draws nothing is explained
+#' rather than reading as a bug. Toggled with `shinyjs::toggleClass(class =
+#' "d-none")`.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param id Character. Unnamespaced element id; ends in `_hint`.
+#' @param ... Text of the note.
+#' @return A `<div>`, hidden.
+#' @export
+fit_hint <- function(ns, id, ...) {
+  shiny$div(
+    id = ns(id),
+    class = "text-muted fst-italic small mb-2 d-none",
+    ...
   )
 }
 

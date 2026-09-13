@@ -69,6 +69,7 @@ box::use(
 box::use(
   app / logic / db_events,
   app / logic / db_staging[imported_metadata_wide],
+  app / logic / dist_cache[new_dist_cache],
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
   app /
@@ -637,6 +638,9 @@ server <- function(
   # Grouped Save-target choices, kept current by the coordinator.
   picker_choices = shiny::reactive(list()),
   db_rev = db_events$new_bus(),
+  # The session's distance matrix cache, shared with every other tab so a Tree
+  # and an MST over the same isolates compute their distances once.
+  dist_cache = new_dist_cache(db_rev),
   # TRUE while this tab is the selected nav panel. Only the Map needs it (to
   # nudge Leaflet into recomputing its size), but it costs nothing to thread.
   is_active = shiny::reactive(TRUE),
@@ -859,8 +863,8 @@ server <- function(
 
     # The isolate set handed to the engines: always concrete, never NULL.
     #
-    # Read only by the two distance engines, which pass it straight to
-    # compute_phylo_tree() / compute_mst(). It must not be NULL there. NULL
+    # Read only by the two distance engines, which pass it through the distance
+    # cache to load_allele_profile(). It must not be NULL there. NULL
     # means "all isolates" everywhere in this sidebar, but load_allele_profile()
     # resolves NULL with a live `SELECT ... FROM mlst` of its own - a different
     # question, answered at a different moment, against a different table. Mid
@@ -1458,7 +1462,10 @@ server <- function(
       if (needs_distance) {
         list(
           viz_metadata = gate(viz_metadata_selected_all),
-          imported_sets = gate(imported_sets)
+          imported_sets = gate(imported_sets),
+          # Not gated, like db_rev: plain memory shared across tabs, not a
+          # reactive this tab owns.
+          dist_cache = dist_cache
         )
       } else {
         list(viz_metadata = gate(viz_metadata_selected))

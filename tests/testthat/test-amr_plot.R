@@ -23,6 +23,9 @@ box::use(
 )
 box::use(
   app / logic / amr_plot,
+  app / logic / viz_export,
+  app / logic / viz_fit,
+  app / logic / viz_legend,
 )
 
 impl <- attr(amr_plot, "namespace")
@@ -662,7 +665,7 @@ test_that("every column arrangement of the gene heatmap renders", {
     expect_s3_class(plot, "ggplot")
 
     file <- local_tempfile(fileext = ".png")
-    amr_plot$render_amr_png(plot, file, 600, 400)
+    viz_export$render_canvas_png(plot, file, 6, 4, res = 60)
     expect_true(file.exists(file))
   }
 })
@@ -694,9 +697,14 @@ test_that("several annotation strips travel in one rowAnnotation", {
   )
   expect_identical(length(anno$anno@anno_list), 2L)
   expect_named(anno$anno@anno_list, c("Country", "Host"))
-  # Each strip's own legend travels alongside the annotation rather than being
-  # left for ComplexHeatmap to collect - see build_amr_heatmap's extra_legends.
-  expect_length(anno$legends, 2L)
+  # Each strip's key is listed with the rest of the legend column rather than
+  # left for ComplexHeatmap to collect - see amr_legend_guides().
+  guides <- amr_plot$amr_legend_guides(
+    mat,
+    list(anno_layers = list(strip_fixture(), host))
+  )
+  strips <- Filter(function(g) identical(g$kind, "strip"), guides)
+  expect_identical(vapply(strips, `[[`, "", "title"), c("Country", "Host"))
 })
 
 test_that("a continuous strip gets a ramp rather than a colour per value", {
@@ -745,7 +753,13 @@ test_that("an empty strip is dropped rather than drawn blank", {
   gp <- impl$.legend_gp("#000000", 9)
   expect_null(impl$.row_annotation(mat, list(), "#000000", gp)$anno)
   expect_null(impl$.row_annotation(mat, NULL, "#000000", gp)$anno)
-  expect_length(impl$.row_annotation(mat, list(), "#000000", gp)$legends, 0L)
+  expect_length(
+    Filter(
+      function(g) identical(g$kind, "strip"),
+      amr_plot$amr_legend_guides(mat, list(anno_layers = list()))
+    ),
+    0L
+  )
 })
 
 # --- explicit legend ordering -------------------------------------------------
@@ -1053,13 +1067,10 @@ test_that("hiding gene names is read straight through to the panel", {
   expect_false(hidden@column_names_param$show)
 })
 
-test_that("gene names kept on over a crowded shape still get room to sit in", {
-  # The fit only seeds the switch off (refit_labels() in visualization_amr.R);
-  # a reader is free to turn the names back on. Budgeting against `cols_
-  # legible` rather than against the switch left that reader a zero-height
-  # band: the names ran off the foot of the page and through the element-type
-  # row, which is laid out under the room they were given rather than under
-  # the room they take.
+test_that("gene names that cannot be set legibly are left off and cost no room", {
+  # The switch asks for the names; only room decides whether they are drawn.
+  # A name its column cannot hold at the floor size is left off whatever the
+  # switch says, so no band is reserved for it and the room goes to the rows.
   crowded <- function(...) {
     amr_plot$amr_auto_layout(
       100, 244,
@@ -1074,13 +1085,26 @@ test_that("gene names kept on over a crowded shape still get room to sit in", {
   }
   kept <- crowded(show_col_names = TRUE)
   expect_false(kept$cols_legible)
-  expect_gt(kept$col_label_in, 0)
+  expect_false(kept$col_names_drawn)
+  expect_equal(kept$col_label_in, 0)
 
+  roomy <- function(...) {
+    amr_plot$amr_auto_layout(
+      100, 20,
+      width_in = 9,
+      col_label_chars = 14,
+      aspect = 0.65,
+      ...
+    )
+  }
+  on <- roomy(show_col_names = TRUE)
+  expect_true(on$col_names_drawn)
+  expect_gt(on$col_label_in, 0)
   # And the room comes back to the rows where the names are off, rather than
   # leaving a band of white under the matrix.
-  dropped <- crowded(show_col_names = FALSE)
-  expect_equal(dropped$col_label_in, 0)
-  expect_gt(dropped$row_pitch_in, kept$row_pitch_in)
+  off <- roomy(show_col_names = FALSE)
+  expect_equal(off$col_label_in, 0)
+  expect_gt(off$row_pitch_in, on$row_pitch_in)
 })
 
 test_that("the panel draws its gene names into exactly the room fitted", {
@@ -1133,8 +1157,10 @@ test_that("the fit grows the plot taller as isolates are added", {
   small <- amr_plot$amr_auto_layout(10, 20)
   large <- amr_plot$amr_auto_layout(400, 20)
   expect_gt(large$aspect, small$aspect)
-  # ... and stops, rather than producing a page nobody can scroll.
-  expect_lt(large$aspect, 3)
+  # ... up to the ceiling every engine shares, and never packing a row tighter
+  # than the band it needs to stay a row of its own.
+  expect_lte(large$aspect, viz_fit$ASPECT_MAX)
+  expect_gte(large$row_pitch_in, impl$AMR_ROW_IN_PLAIN - 1e-6)
 })
 
 test_that("the fit shrinks the column labels as columns are added", {
@@ -1264,7 +1290,10 @@ test_that("a class title stays on screen at its floor size, illegible or not", {
   )
 })
 
-test_that("the legend is sized against the height it is drawn into", {
+test_that("the legend is planned against the height it is drawn into", {
+  # The Tree's planner on the AMR legend column: a long key list is trimmed to
+  # what the room holds rather than shrunk to a smudge, and a taller page lists
+  # more of it.
   few <- amr_plot$amr_auto_layout(
     100, 40,
     block_titles = c("Beta-lactam", "Quinolone")
@@ -1273,36 +1302,29 @@ test_that("the legend is sized against the height it is drawn into", {
     100, 40,
     block_titles = paste0("Class-", 1:80)
   )
-  expect_gt(few$fontsize_legend, many$fontsize_legend)
-  # A mapped strip's own categories count too, even without a block title for
-  # each of them - amr_auto_layout has no tabulated values yet to count.
-  stripped <- amr_plot$amr_auto_layout(
-    100, 40,
-    block_titles = c("Beta-lactam", "Quinolone"),
-    n_strips = 20L
-  )
-  expect_lt(stripped$fontsize_legend, few$fontsize_legend)
+  expect_equal(unname(few$legend_keys[["class:blocks"]]), 2L)
+  expect_lt(unname(many$legend_keys[["class:blocks"]]), 80L)
+  expect_gte(many$fontsize_legend, impl$AMR_LEGEND_MIN_PT)
 
-  # The same key list on a taller page is drawn larger, because the constraint
-  # is the room rather than the count: a table of key counts alone left a
-  # forty-class screen listing at a size that still ran off the bottom.
   tall <- amr_plot$amr_auto_layout(
     100, 40,
     block_titles = paste0("Class-", 1:80),
     aspect = 6
   )
-  expect_gt(tall$fontsize_legend, many$fontsize_legend)
-  expect_gt(tall$legend_rows, many$legend_rows)
-})
+  expect_gte(
+    unname(tall$legend_keys[["class:blocks"]]),
+    unname(many$legend_keys[["class:blocks"]])
+  )
+  expect_gte(tall$legend_rows, many$legend_rows)
 
-test_that("a legend longer than its column wraps its keys instead", {
-  # The last resort, once the type is already at the floor: the type shrinks
-  # first because a second column of drug-class names is width the matrix
-  # would otherwise have had.
-  expect_identical(amr_plot$amr_legend_ncol(8L, 20L), 1L)
-  expect_identical(amr_plot$amr_legend_ncol(40L, 20L), 2L)
-  # Never past the cap, however long the list.
-  expect_identical(amr_plot$amr_legend_ncol(400L, 20L), 3L)
+  # Where not even every guide's floor of keys fits, the type is shrunk.
+  squat <- amr_plot$amr_auto_layout(
+    4, 40,
+    block_titles = paste0("Class-", 1:80),
+    n_strips = 12L,
+    aspect = 0.65
+  )
+  expect_lt(squat$fontsize_legend, few$fontsize_legend)
 })
 
 test_that("a reader's aspect ratio is used as given and re-solves the sizes", {
@@ -1459,9 +1481,11 @@ test_that("the prevalence chart grows with its bars and sets type to the pitch",
   expect_lte(many$aspect, impl$AMR_PREVALENCE_MAX)
   expect_lt(many$fontsize_row, few$fontsize_row)
 
-  # The same bar count on a narrower canvas is less room per bar, which the
-  # step table of counts this replaced could not see at all.
-  expect_lt(amr_plot$amr_prevalence_layout(80, 5)$fontsize_row, many$fontsize_row)
+  # The same bar count on a narrower canvas buys a taller page rather than
+  # smaller type: the bars keep the pitch their names need.
+  narrow <- amr_plot$amr_prevalence_layout(80, 5)
+  expect_gt(narrow$aspect, many$aspect)
+  expect_equal(narrow$fontsize_row, many$fontsize_row, tolerance = 0.3)
   expect_true(few$legible)
 
   # The legend and axis title scale off the same bar pitch too, so a crowded
@@ -1583,30 +1607,16 @@ test_that("split class keys still draw from one screen-wide palette", {
 })
 
 test_that("a panel whose only class names the panel drops its key", {
-  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
-  meta <- attr(mat, "genes")
-  cols <- impl$.class_colors(meta, NULL)
-  gp <- impl$.legend_gp("#000000", 9)
-
   # AMRFinderPlus leaves `class` empty for virulence genes, so the panel's one
   # block is labelled "Virulence" — the same word its key would be titled with.
-  virulence <- meta[meta$element_type == "VIRULENCE", , drop = FALSE]
-  vir <- impl$.class_legend(
-    virulence$group,
-    cols,
-    gp,
-    impl$.panel_label(virulence)
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  classes <- Filter(
+    function(g) identical(g$kind, "class"),
+    amr_plot$amr_legend_guides(mat)
   )
-  resistance <- meta[meta$element_type == "AMR", , drop = FALSE]
-  res <- impl$.class_legend(
-    resistance$group,
-    cols,
-    gp,
-    impl$.panel_label(resistance)
-  )
-
-  expect_null(vir)
-  expect_false(is.null(res))
+  titles <- vapply(classes, `[[`, "", "title")
+  expect_false("Virulence" %in% titles)
+  expect_true("Resistance" %in% titles)
 })
 
 test_that(".panel_label names a panel by the element type it holds", {
@@ -1667,11 +1677,12 @@ test_that("a screen with several strips still renders at its true canvas", {
 
   for (height_in in c(7, 40)) {
     file <- local_tempfile(fileext = ".png")
-    amr_plot$render_amr_png(
+    viz_export$render_canvas_png(
       amr_plot$amr_as_ggplot(ht, width_in = 9, height_in = height_in),
       file,
-      900,
-      2400
+      9,
+      height_in,
+      res = 30
     )
     expect_true(file.exists(file))
   }
@@ -1706,7 +1717,119 @@ test_that("the prevalence chart renders to a real image", {
   # The on-screen path. File export across every offered format is
   # save_plot_export()'s job — see test-viz_export.R.
   file <- local_tempfile(fileext = ".png")
-  amr_plot$render_amr_png(plot, file, width_px = 800, height_px = 520)
+  viz_export$render_canvas_png(plot, file, 8, 5.2, res = 60)
   expect_true(file.exists(file))
   expect_gt(file.size(file), 0)
+})
+
+# --- the shared fit ------------------------------------------------------------
+
+test_that("the canvas grows sideways for gene names it can set legibly", {
+  base <- amr_plot$amr_canvas_width_in(10)
+  expect_equal(base, amr_plot$AMR_CANVAS_IN)
+  grown <- amr_plot$amr_canvas_width_in(138)
+  expect_gt(grown, base)
+  expect_lte(grown, amr_plot$AMR_CANVAS_IN * viz_fit$CANVAS_MAX_FACTOR)
+  expect_true(amr_plot$amr_auto_layout(991, 138, width_in = grown)$cols_legible)
+  # Names switched off buy no more width than keeps a cell a cell.
+  expect_lt(amr_plot$amr_canvas_width_in(138, show_col_names = FALSE), grown)
+  # Past what even the ceiling can seat, it does not grow for them at all.
+  expect_equal(
+    amr_plot$amr_canvas_width_in(1000),
+    amr_plot$amr_canvas_width_in(1000, show_col_names = FALSE)
+  )
+})
+
+test_that("text size moves every label's ceiling and none past its room", {
+  args <- list(40, 20, show_row_names = TRUE, aspect = 2)
+  base <- do.call(amr_plot$amr_auto_layout, args)
+  big <- do.call(amr_plot$amr_auto_layout, c(args, list(text_scale = 2)))
+  small <- do.call(amr_plot$amr_auto_layout, c(args, list(text_scale = 0.6)))
+  # A label with room to spare follows the bias both ways...
+  expect_gt(big$fontsize_element, base$fontsize_element)
+  expect_lt(small$fontsize_element, base$fontsize_element)
+  # ...down to its floor and no further: a smaller text size never turns a
+  # label that fits into one declared illegible.
+  expect_true(small$elements_legible)
+  # ...while one already held to its room does not grow past it (sizes are
+  # reported to a tenth of a point).
+  expect_gte(big$fontsize_legend, base$fontsize_legend)
+  expect_lte(
+    big$fontsize_col,
+    72 * big$cell_width_in * impl$AMR_LABEL_FILL + 0.05
+  )
+  # Nothing is ever set under the print floor.
+  expect_gte(small$min_pt, viz_fit$MIN_PRINT_PT)
+})
+
+test_that("the fit decides the isolate names the way the Tree decides its tip labels", {
+  expect_true(amr_plot$amr_auto_layout(30, 20, show_row_names = NA)$show_row_names)
+  # Past the per-isolate ceiling a name carries nothing, however it fits.
+  expect_false(
+    amr_plot$amr_auto_layout(200, 20, show_row_names = NA)$show_row_names
+  )
+  # A decided switch is the answer as it stands.
+  expect_true(
+    amr_plot$amr_auto_layout(200, 20, show_row_names = TRUE)$show_row_names
+  )
+  # Names buy a deeper row than bare bands.
+  named <- amr_plot$amr_auto_layout(50, 138, show_row_names = TRUE)
+  bare <- amr_plot$amr_auto_layout(50, 138, show_row_names = FALSE)
+  expect_gt(named$aspect, bare$aspect)
+})
+
+test_that("square cells stop buying height once the page is tall", {
+  few_cols <- amr_plot$amr_auto_layout(500, 30)
+  expect_lt(few_cols$aspect, 4)
+  expect_gte(few_cols$row_pitch_in, impl$AMR_ROW_IN_PLAIN - 1e-6)
+})
+
+test_that("a label the fit found illegible is not drawn, whatever the switch", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  shown <- amr_plot$build_amr_heatmap(
+    mat,
+    list(show_col_names = TRUE, cols_legible = TRUE)
+  )
+  hidden <- amr_plot$build_amr_heatmap(
+    mat,
+    list(show_col_names = TRUE, cols_legible = FALSE)
+  )
+  expect_true(shown@ht_list[[1]]@column_names_param$show)
+  expect_false(hidden@ht_list[[1]]@column_names_param$show)
+})
+
+test_that("a long strip's legend lists its commonest values and counts the rest", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  layer <- strip_fixture("Ward")
+  layer$field <- "ward"
+  layer$values <- setNames(
+    c("W1", "W1", "W1", "W2", "W3", "W4")[seq_along(ISOLATES)],
+    ISOLATES
+  )
+  guides <- amr_plot$amr_legend_guides(mat, list(anno_layers = list(layer)))
+  ward <- Filter(function(g) identical(g$id, "strip:Ward"), guides)[[1]]
+  expect_equal(ward$n, 4L)
+
+  legend <- impl$.guide_legend(
+    ward,
+    list(legend_keys = c(`strip:Ward` = 2L)),
+    impl$.legend_gp("#000000", 9)
+  )
+  texts <- .grob_texts(legend@grob)
+  expect_true("W1" %in% texts)
+  expect_true(viz_legend$LEGEND_GAP_KEY %in% texts)
+  expect_true(any(grepl("2 of 4 shown", texts, fixed = TRUE)))
+})
+
+test_that("the fit plans the guides the builder draws", {
+  mat <- amr_plot$amr_presence_matrix(hits_fixture(), ISOLATES)
+  opts <- list(anno_layers = list(strip_fixture()))
+  guides <- amr_plot$amr_legend_guides(mat, opts)
+  fit <- amr_plot$amr_auto_layout(
+    nrow(mat), ncol(mat),
+    legend_guides = guides
+  )
+  # One key budget per guide the builder will draw, under the same ids.
+  drawn <- Filter(function(g) !identical(g$kind, "class"), guides)
+  expect_true(all(vapply(drawn, `[[`, "", "id") %in% names(fit$legend_keys)))
 })

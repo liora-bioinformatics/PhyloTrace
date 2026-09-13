@@ -50,6 +50,7 @@ dependencies:
   - r-leaflet
   - r-leaflet.extras
   - r-leaflet.minicharts
+  - r-matrix
   - r-openssl
   - r-openxlsx
   - r-processx

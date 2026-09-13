@@ -18,6 +18,7 @@ box::use(
   app / logic / field_profile[field_profiles],
   app / logic / tree_plot,
   app / logic / viz_export,
+  app / logic / viz_fit,
   app / logic / viz_helpers[control_ids],
   app / view / visualization_tree,
 )
@@ -74,8 +75,6 @@ set_tree_inputs <- function(session) {
     nj_nodelabel_show = FALSE,
     nj_heatmap_show = FALSE,
     nj_rootedge_show = FALSE,
-    nj_treescale_show = FALSE,
-    nj_axis_show = TRUE,
     nj_aspect_ratio = 0.6
   )
 }
@@ -564,6 +563,77 @@ test_that("the tree's own width is fixed, not taken from the browser", {
       session$flushReact()
       expect_equal(plot_width_in(), impl$TREE_PANEL_IN)
       expect_equal(tree_opts()$width_in, impl$TREE_PANEL_IN)
+    }
+  )
+})
+
+test_that("the branch mode alone decides the distance read-outs", {
+  expect_true(impl$TREE_CONTROL_DEFAULTS$nj_branch_lengths %in% tree_plot$BRANCH_MODES)
+  # No switch for either scale: a wrong one cannot be picked.
+  ids <- rendered_control_ids(impl$tree_controls(NS("x")))
+  expect_false(any(c("nj_axis_show", "nj_treescale_show") %in% ids))
+
+  testServer(
+    visualization_tree$server,
+    args = list(plot_type = reactiveVal("Tree")),
+    {
+      set_tree_inputs(session)
+      session$setInputs(nj_branch_lengths = "scaled")
+      session$flushReact()
+      expect_true(tree_opts()$axis_show)
+      expect_false(tree_opts()$treescale_show)
+
+      session$setInputs(nj_branch_lengths = "shortened")
+      session$flushReact()
+      expect_false(tree_opts()$axis_show)
+      expect_true(tree_opts()$treescale_show)
+
+      # A cladogram writes its distances on the branches whatever the switch.
+      session$setInputs(nj_branch_lengths = "cladogram", nj_show_branch_label = FALSE)
+      session$flushReact()
+      expect_false(tree_opts()$axis_show)
+      expect_false(tree_opts()$treescale_show)
+      expect_true(tree_opts()$branch_show)
+    }
+  )
+})
+
+test_that("the truncated mode is only offered a tree with something to cut", {
+  # A synonym for "to scale" is not a choice, and a reader who picks it to see
+  # what it does would get nothing for the click.
+  expect_setequal(
+    impl$branch_length_choices(FALSE),
+    tree_plot$BRANCH_MODES[tree_plot$BRANCH_MODES != "shortened"]
+  )
+  expect_setequal(impl$branch_length_choices(TRUE), tree_plot$BRANCH_MODES)
+
+  # The fixture's four isolates are far too few edges for a quartile to mean
+  # anything (tree_plot's BRANCH_BREAK_MIN_EDGES), so Generate never has a
+  # truncated mode to offer — and the picker's own choices, not only the
+  # chosen value, have to say so.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      sent <- record_input_messages(session)
+      generate(1L)
+      settle(session)
+
+      msg <- sent()[[grep("^nj_branch_lengths$", names(sent()), value = TRUE)]]
+      expect_false(grepl("shortened", msg$options))
+      expect_false(identical(isolate(fitted$nj_branch_lengths), "shortened"))
     }
   )
 })
@@ -1484,7 +1554,7 @@ test_that("Auto-fit drops the reader's text bias with the rest of the fit", {
 
       session$setInputs(auto_fit = 1L)
       session$flushReact()
-      expect_equal(isolate(fitted$nj_text_size), impl$TEXT_SIZE_DEFAULT)
+      expect_equal(isolate(fitted$nj_text_size), viz_fit$TEXT_SIZE_DEFAULT)
       expect_equal(tree_opts()$text_scale, 1)
     }
   )

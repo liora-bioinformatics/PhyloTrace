@@ -22,7 +22,6 @@ box::use(
       compute_dist_matrix,
       compute_mst,
       compute_phylo_tree,
-      hamming_dist_ignore,
       load_allele_profile
     ],
   app / logic / db_staging[resolve_profile, stage_profile_set],
@@ -119,7 +118,7 @@ test_that("staging a set does not disturb the local profile or its distances", {
   db <- fixture(dir)
 
   before <- load_allele_profile(db)
-  d_before <- compute_dist_matrix(before, hamming_dist_ignore)
+  d_before <- compute_dist_matrix(before, "ignore_na")
 
   stage_clone(dir, db, c("A", "B"))
 
@@ -130,7 +129,7 @@ test_that("staging a set does not disturb the local profile or its distances", {
   locals <- rownames(before)
   expect_identical(after[locals, , drop = FALSE], before)
   expect_identical(
-    compute_dist_matrix(after[locals, , drop = FALSE], hamming_dist_ignore),
+    compute_dist_matrix(after[locals, , drop = FALSE], "ignore_na"),
     d_before
   )
 })
@@ -143,7 +142,7 @@ test_that("a staged clone sits at distance zero from the isolate it copies", {
   p <- load_allele_profile(db, imported_sets = 1L)
   expect_equal(nrow(p), 8L)
 
-  d <- compute_dist_matrix(p, hamming_dist_ignore)
+  d <- compute_dist_matrix(p, "ignore_na")
   dimnames(d) <- list(rownames(p), rownames(p))
 
   for (iso in c("A", "B", "C", "D")) {
@@ -178,7 +177,7 @@ test_that("an allele we have never seen is novel, not missing", {
   stage_profile_set(db, "peer", r)
 
   p <- load_allele_profile(db, imported_sets = 1L)
-  d <- compute_dist_matrix(p, hamming_dist_ignore)
+  d <- compute_dist_matrix(p, "ignore_na")
   dimnames(d) <- list(rownames(p), rownames(p))
 
   # X shares g2 and g3 with A, and its g1 is novel -> exactly one difference.
@@ -212,7 +211,7 @@ test_that("two staged isolates sharing a novel allele share its code", {
   p <- load_allele_profile(db, imported_sets = 1L)
   expect_identical(p["X", "g1"], p["Y", "g1"])
 
-  d <- compute_dist_matrix(p, hamming_dist_ignore)
+  d <- compute_dist_matrix(p, "ignore_na")
   dimnames(d) <- list(rownames(p), rownames(p))
   expect_equal(d["X", "Y"], 0)
 })

@@ -78,7 +78,10 @@ box::use(
       rebalance_layers,
       set_layer_granularity
     ],
-  app / logic / viz_export[save_plot_export],
+  app / logic / viz_export[canvas_export, canvas_image, render_canvas_png],
+  app /
+    logic /
+    viz_fit[ASPECT_MAX, TEXT_SIZE_DEFAULT, legibility_note, text_scale_percent],
   app /
     logic /
     viz_helpers[
@@ -87,14 +90,17 @@ box::use(
       field_select,
       granularity_select,
       control_families,
+      fit_hint,
       layer_action_btn,
       on_confirmed_reset,
       reset_button_row,
       scale_select,
       suitable_scale_categories,
+      text_size_slider,
       update_field_select,
       update_scale_select,
-      viz_color
+      viz_color,
+      zoom_view_buttons
     ],
   app /
     logic /
@@ -252,6 +258,7 @@ AMR_CONTROLS <- control_families(
     "amr_min_identity",
     "amr_min_coverage",
     "amr_aspect_ratio",
+    "amr_text_size",
     "amr_dend_size"
   ),
   radio_groups = c(
@@ -279,6 +286,7 @@ AMR_CONTROL_DEFAULTS <- list(
   amr_min_identity = 0,
   amr_min_coverage = 0,
   amr_aspect_ratio = ASPECT_DEFAULT,
+  amr_text_size = TEXT_SIZE_DEFAULT,
   amr_show_row_names = FALSE,
   amr_show_col_names = TRUE,
   amr_show_element_names = TRUE,
@@ -531,13 +539,24 @@ amr_controls <- function(ns) {
           ns("amr_aspect_ratio"),
           "Aspect ratio",
           min = 0.65,
-          max = 8,
+          max = ASPECT_MAX,
           value = ASPECT_DEFAULT,
           step = 0.1,
           ticks = FALSE
         ),
+        # Every piece of type on the plot: isolate and gene names, class and
+        # element titles, strip names and the legend. A bias on the fit, not a
+        # size - see app/logic/viz_fit.R.
+        text_size_slider(ns, "amr_text_size"),
         input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
-        shiny$uiOutput(ns("row_name_warning")),
+        # A switch that is on but draws nothing is explained rather than left
+        # to read as a bug: the fit leaves a label off where no legible size
+        # fits the room it has (see amr_auto_layout()).
+        fit_hint(
+          ns,
+          "amr_row_names_hint",
+          "Too many isolates to name legibly. Try a taller aspect ratio."
+        ),
         # Both read off the heatmap alone: not shown for Prevalence, which has
         # no per-gene column to name.
         #
@@ -550,6 +569,11 @@ amr_controls <- function(ns) {
           condition = COND_HEATMAPS,
           ns = ns,
           input_switch(ns("amr_show_col_names"), "Show gene names", TRUE),
+          fit_hint(
+            ns,
+            "amr_col_names_hint",
+            "Too many genes to name legibly. Filter the genes shown."
+          ),
           # The element type (Resistance/Virulence/Stress) a panel's columns
           # belong to — always one label per panel regardless of how its
           # columns are grouped, drawn under the matrix rather than the drug
@@ -560,6 +584,11 @@ amr_controls <- function(ns) {
             ns("amr_show_element_names"),
             "Show element-type labels",
             TRUE
+          ),
+          fit_hint(
+            ns,
+            "amr_element_names_hint",
+            "A panel is too narrow to carry its element-type label."
           )
         )
       ),
@@ -698,21 +727,13 @@ amr_controls <- function(ns) {
         selected = PLOT_MODE_DEFAULT
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      radioGroupButtons(
-        ns("zoom_view"),
-        NULL,
-        choiceNames = c("Full", "Zoomed"),
-        choiceValues = c(FALSE, TRUE),
-        width = "100%"
-      )
-    ),
+    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
-        "Re-solve the aspect ratio, the label sizes and the filter ranges for",
-        "the matrix currently drawn. Colours and mappings are kept."
+        "Re-solve the aspect ratio, the text sizes, which labels fit and the",
+        "filter ranges for the matrix currently drawn. Colours and mappings",
+        "are kept."
       )
     ),
     .mode_tabs_script(ns)
@@ -1025,7 +1046,13 @@ server <- function(
     # The bar chart's own fit, standing in for layout_fit() in that mode: the
     # heatmap fit has a matrix to solve against and this has one bar per row.
     prevalence_fit <- shiny$reactive({
-      amr_plot$amr_prevalence_layout(nrow(prevalence_df()), canvas_in())
+      df <- prevalence_df()
+      amr_plot$amr_prevalence_layout(
+        nrow(df),
+        amr_plot$AMR_CANVAS_IN,
+        text_scale_percent(text_size_mirror()),
+        max(nchar(as.character(df$item)), 1L)
+      )
     })
 
     # --- controls fitted to the data ----------------------------------------
@@ -1532,6 +1559,8 @@ server <- function(
 
       apply_controls(session, AMR_CONTROL_DEFAULTS, AMR_CONTROLS)
       aspect_mirror(ASPECT_DEFAULT)
+      text_size_mirror(TEXT_SIZE_DEFAULT)
+      show_row_names_mirror(FALSE)
       show_col_names_mirror(TRUE)
       show_element_names_mirror(TRUE)
 
@@ -1560,14 +1589,14 @@ server <- function(
       "Mapped variables and the per-panel gene-call colours go with the rest."
     )
 
-    # The layout fit, applied on demand: the aspect ratio the matrix's shape
-    # calls for, and the two label rows switched to whatever that shape has room
-    # for. Wrapped together because they are one answer -- refit_aspect() writes
-    # the ratio every size is then solved against, so the labels have to be
-    # judged after it, not beside it.
+    # The layout fit, applied: the three label rows switched to whatever this
+    # shape has room for, in both directions, and then the aspect ratio. In
+    # that order because the labels decide the height worth buying - isolate
+    # names want a deeper row than bare bands - and the canvas width the gene
+    # names get.
     auto_fit_layout <- function() {
+      refit_labels()
       refit_aspect()
-      refit_labels(relabel = TRUE)
     }
 
     # Auto-fit: re-solve the geometry for the matrix on screen -- the same solve
@@ -1588,9 +1617,13 @@ server <- function(
         )
         return()
       }
+      # Text size is a bias on the fit, so re-solving the fit drops it: a
+      # hand-set 160% left on a freshly fitted layout is not the engine's
+      # answer for this matrix.
+      set_text_size(TEXT_SIZE_DEFAULT)
       auto_fit_layout()
       shiny$showNotification(
-        "Sizes and spacing fitted to the matrix on screen.",
+        "Sizes, labels and spacing fitted to the matrix on screen.",
         type = "message",
         duration = 5
       )
@@ -1658,21 +1691,28 @@ server <- function(
       # Fitted before the plot is published, so the first draw is already at the
       # right ratio rather than being drawn once at the old one and again at the
       # new one.
-      refit_aspect()
-      refit_labels()
+      auto_fit_layout()
       generated(TRUE)
     })
 
     # --- plot ---------------------------------------------------------------
 
-    # The canvas the plot is laid out for, in inches. Read from the browser so
-    # the fit knows the room it actually has; 9in is a reasonable desktop
-    # sidebar-open width for the first render, before clientData has reported.
-    canvas_in <- function() {
-      w <- session$clientData[[paste0("output_", ns("amr_plot"), "_width")]]
-      w <- suppressWarnings(as.numeric(w))
-      if (!length(w) || !is.finite(w) || w <= 0) 9 else w / 96
+    # The canvas the plot is drawn on, in inches: a physical size, never the
+    # width the browser reports, so no size report from the client can redraw
+    # the plot and the preview, the export and a saved Analysis are one
+    # drawing. The heatmap grows it sideways for its gene columns (see
+    # amr_plot$amr_canvas_width_in()); the prevalence chart keeps the base.
+    canvas_width <- function(col_names = show_col_names_mirror()) {
+      if (identical(mode(), "prevalence")) {
+        return(amr_plot$AMR_CANVAS_IN)
+      }
+      amr_plot$amr_canvas_width_in(
+        ncol(presence_mat()),
+        col_names,
+        length(anno_layers())
+      )
     }
+    canvas_in <- shiny$reactive(canvas_width())
 
     # A radioGroupButtons round-trips its boolean choiceValues as the strings
     # "TRUE"/"FALSE", never as a logical — see the zoom_view comment further
@@ -1714,6 +1754,33 @@ server <- function(
     # same draw.
     show_col_names_mirror <- shiny$reactiveVal(TRUE)
 
+    # The isolate names are decided by the fit the same way, so they need the
+    # same mirror.
+    show_row_names_mirror <- shiny$reactiveVal(FALSE)
+
+    shiny$observeEvent(input$amr_show_row_names, {
+      value <- isTRUE(input$amr_show_row_names)
+      if (!isTRUE(all.equal(shiny$isolate(show_row_names_mirror()), value))) {
+        show_row_names_mirror(value)
+      }
+    })
+
+    # The text size is reset by Auto-fit, so it echoes as the aspect does.
+    text_size_mirror <- shiny$reactiveVal(TEXT_SIZE_DEFAULT)
+
+    shiny$observeEvent(input$amr_text_size, {
+      value <- input$amr_text_size
+      if (!isTRUE(all.equal(shiny$isolate(text_size_mirror()), value))) {
+        text_size_mirror(value)
+      }
+    })
+
+    # Writes a text size to the slider and to the mirror the fit reads.
+    set_text_size <- function(value) {
+      shiny$updateSliderInput(session, "amr_text_size", value = value)
+      text_size_mirror(value)
+    }
+
     shiny$observeEvent(input$amr_show_col_names, {
       value <- isTRUE(input$amr_show_col_names)
       if (!isTRUE(all.equal(shiny$isolate(show_col_names_mirror()), value))) {
@@ -1735,10 +1802,13 @@ server <- function(
     })
 
     # Everything the fit needs to describe the matrix on screen. Split out
-    # because it is asked for twice: once at the ratio the reader has set (what
-    # gets drawn) and once with no ratio at all (what Generate seeds the slider
-    # from).
-    fit_args <- function() {
+    # because it is asked for in two ways: with the label switches as they
+    # stand (what gets drawn), and with the labels left for the fit to decide
+    # (what Generate and Auto-fit seed the switches from).
+    fit_args <- function(
+      col_names = show_col_names_mirror(),
+      row_names = show_row_names_mirror()
+    ) {
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
       blocks <- amr_plot$amr_column_blocks(mat, grouping())
@@ -1746,8 +1816,10 @@ server <- function(
       list(
         n_rows = nrow(mat),
         n_cols = ncol(mat),
-        width_in = canvas_in(),
-        show_row_names = isTRUE(input$amr_show_row_names),
+        width_in = canvas_width(col_names),
+        show_row_names = row_names,
+        show_col_names = col_names,
+        show_element_names = show_element_names_mirror(),
         row_label_chars = max(nchar(rownames(mat)), 1L),
         col_label_chars = max(nchar(colnames(mat)), 1L),
         block_titles = blocks$titles,
@@ -1759,14 +1831,18 @@ server <- function(
         # Only whether the drug classes are named as text over each block or
         # coloured into a strip - the element-type row below the body answers
         # to element_titles above now, not to this. See amr_auto_layout().
-        column_grouping = grouping()
+        column_grouping = grouping(),
+        text_scale = text_scale_percent(text_size_mirror()),
+        # The guides the legend column will really draw, so the fit plans the
+        # keys and the type size against them rather than against a guess.
+        legend_guides = amr_plot$amr_legend_guides(mat, palette_opts())
       )
     }
 
     # Every size in the heatmap, solved against the ratio in force. This is what
-    # replaced the sliders: both label sizes, the block-title size, the legend
-    # size, the cell border width and whether the block titles have to be turned
-    # on their side. See amr_plot$amr_auto_layout().
+    # replaced the sliders: every label size, the legend size, the cell border
+    # width, which labels are legible and whether the block titles have to be
+    # turned on their side. See amr_plot$amr_auto_layout().
     layout_fit <- shiny$reactive({
       do.call(
         amr_plot$amr_auto_layout,
@@ -1774,12 +1850,11 @@ server <- function(
       )
     })
 
-    # Fit the aspect to the data, the way the Tree fits its own. The coded
-    # default suits a few dozen isolates and nothing else: two hundred and fifty
-    # at 0.9 is a band of rows a millimetre apart, and no hand-tuning could fix
-    # it because the ratio needed is several times what the slider used to open
-    # at. Seeded on Generate only — a filter change must not countermand a ratio
-    # the reader has just set by hand.
+    # Fit the aspect to the data, the way the Tree fits its own, for the label
+    # switches as they now stand. The coded default suits a few dozen isolates
+    # and nothing else: a thousand at 0.9 is a band of rows a fraction of a
+    # millimetre apart. Seeded on Generate, Auto-fit and a reset only — a filter
+    # change must not countermand a ratio the reader has just set by hand.
     refit_aspect <- function() {
       fitted <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
       value <- fitted$aspect
@@ -1793,64 +1868,95 @@ server <- function(
       aspect_mirror(value)
     }
 
-    # The one place the fit reports rather than acts. The isolate names are off
-    # until a reader asks for them, so there is no initial draw to keep clean,
-    # and a reader who has asked is better answered with the reason than with a
-    # switch that silently undoes itself.
-    output$row_name_warning <- shiny$renderUI({
-      if (!isTRUE(input$amr_show_row_names)) {
-        return(NULL)
-      }
-      fit <- shiny$req(layout_fit())
-      if (isTRUE(fit$legible)) {
-        return(NULL)
-      }
-    })
-
-    # The two labels that are on by default. A shape with no room for one of
-    # them needs the fit to act rather than only report: seeded off on Generate
-    # the same way refit_aspect() seeds the aspect ratio, so the first draw
-    # already leaves it off instead of drawing an illegible smear once and a
-    # clean plot on the redraw that follows. Only ever seeded off, never back
-    # on — a reader who turns one on by hand over a crowded shape keeps it, and
-    # gets whatever that draws instead of a switch that quietly does nothing.
-    #
-    # The drug-class titles have no switch of their own to seed (see
-    # amr_cluster_cols): where they will not fit, heatmap_opts() hands the
-    # verdict to the builder, which draws the class strip and its key in their
-    # place rather than a row of smudges.
-    # `relabel` is Auto-fit's half of the rule. A seed only ever switches a row
-    # *off*; asking for the best layout for this shape is also the one moment it
-    # is right to switch one back on, because the request is explicit and is not
-    # a side effect of some other edit.
-    refit_labels <- function(relabel = FALSE) {
-      fit <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
-      if (!isTRUE(fit$cols_legible)) {
-        update_switch("amr_show_col_names", value = FALSE, session = session)
-        show_col_names_mirror(FALSE)
-      } else if (relabel && !isTRUE(shiny$isolate(show_col_names_mirror()))) {
-        update_switch("amr_show_col_names", value = TRUE, session = session)
-        show_col_names_mirror(TRUE)
-      }
-      # Only reached by a panel narrower than a single line of type, since the
-      # element row turns on its side before it gives up on fitting (see
-      # element_rot) - but a two-column virulence panel beside two hundred
-      # resistance genes is exactly that shape.
-      if (!isTRUE(fit$elements_legible)) {
-        update_switch(
-          "amr_show_element_names",
-          value = FALSE,
-          session = session
-        )
-        show_element_names_mirror(FALSE)
-      } else if (
-        relabel && !isTRUE(shiny$isolate(show_element_names_mirror()))
-      ) {
-        update_switch("amr_show_element_names", value = TRUE, session = session)
-        show_element_names_mirror(TRUE)
-      }
+    # Writes a label switch and the mirror the render reads, in one flush.
+    set_label_switch <- function(id, mirror, value) {
+      update_switch(id, value = value, session = session)
+      mirror(value)
     }
 
+    # The three label rows, switched to what this shape has room for — in both
+    # directions, because Generate, Auto-fit and a reset are all a request for
+    # the layout this data needs: a label the room cannot hold is switched off,
+    # and one it can hold is switched back on. The Tree's rule for its tip
+    # labels; any other edit leaves the switches as the reader set them, and the
+    # builder still leaves off whatever no longer fits (see the hints).
+    #
+    # Judged with the gene names wanted, so the canvas is measured at the width
+    # it would grow to for them; the isolate names are the fit's to decide.
+    refit_labels <- function() {
+      fit <- do.call(
+        amr_plot$amr_auto_layout,
+        shiny$isolate(fit_args(col_names = TRUE, row_names = NA))
+      )
+      set_label_switch(
+        "amr_show_row_names",
+        show_row_names_mirror,
+        isTRUE(fit$show_row_names)
+      )
+      set_label_switch(
+        "amr_show_col_names",
+        show_col_names_mirror,
+        isTRUE(fit$cols_legible)
+      )
+      set_label_switch(
+        "amr_show_element_names",
+        show_element_names_mirror,
+        isTRUE(fit$elements_legible)
+      )
+    }
+
+    # Say why a switch that is on draws nothing: the fit left that label off
+    # because no legible size fits the room it has.
+    shiny$observe({
+      fit <- if (identical(mode(), "prevalence")) {
+        NULL
+      } else {
+        tryCatch(layout_fit(), error = function(e) NULL)
+      }
+      hint <- function(id, shown) {
+        shinyjs::toggleClass(id, "d-none", condition = !isTRUE(shown))
+      }
+      hint(
+        "amr_row_names_hint",
+        !is.null(fit) && show_row_names_mirror() && !isTRUE(fit$legible)
+      )
+      hint(
+        "amr_col_names_hint",
+        !is.null(fit) && show_col_names_mirror() && !isTRUE(fit$cols_legible)
+      )
+      hint(
+        "amr_element_names_hint",
+        !is.null(fit) &&
+          show_element_names_mirror() &&
+          !isTRUE(fit$elements_legible)
+      )
+    })
+
+    # The colour choices the legend column is keyed from. Read by both the fit
+    # (which plans the legend against them) and the builder (which draws it).
+    palette_opts <- function() {
+      list(
+        # The flat tier keys are the fallback the builder blends Putative out
+        # of for a panel with no per-element entry (a hand-built matrix, or a
+        # label outside CONFIDENCE_ELEMENT_LABELS); every real panel is
+        # coloured from element_colors below instead.
+        present_color = PRESENT_COLOR_DEFAULT,
+        strong_color = STRONG_COLOR_DEFAULT,
+        partial_color = PARTIAL_COLOR_DEFAULT,
+        absent_color = ABSENT_COLOR_DEFAULT,
+        # One confidence-colour config per element-type panel, keyed by the
+        # panel's display label (see element_cfg and the colour modal).
+        element_colors = setNames(
+          lapply(CONFIDENCE_ELEMENT_LABELS, element_cfg),
+          CONFIDENCE_ELEMENT_LABELS
+        ),
+        class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
+        anno_layers = anno_layers()
+      )
+    }
+
+    # Everything the heatmap builder reads: the palette choices, the rest of
+    # the controls, and the fit last so its sizes are the ones it takes.
     heatmap_opts <- function() {
       fit <- layout_fit()
       # One distance and one linkage, shared by both axes rather than a second
@@ -1858,27 +1964,14 @@ server <- function(
       cluster_distance <- input$amr_cluster_distance %||%
         CLUSTER_DISTANCE_DEFAULT
       cluster_method <- input$amr_cluster_method %||% CLUSTER_METHOD_DEFAULT
-      # The cell border has no picker of its own: drawn any other color it
-      # reads as a grid superimposed on the matrix rather than the thin gap
-      # between cells it is meant to be, so it always matches the background.
-      background_color <- input$amr_background_color %||% BACKGROUND_DEFAULT
       c(
+        palette_opts(),
         list(
-          # The flat tier keys are the fallback the builder blends Putative out
-          # of for a panel with no per-element entry (a hand-built matrix, or a
-          # label outside CONFIDENCE_ELEMENT_LABELS); every real panel is
-          # coloured from element_colors below instead.
-          present_color = PRESENT_COLOR_DEFAULT,
-          strong_color = STRONG_COLOR_DEFAULT,
-          partial_color = PARTIAL_COLOR_DEFAULT,
-          absent_color = ABSENT_COLOR_DEFAULT,
-          # One confidence-colour config per element-type panel, keyed by the
-          # panel's display label (see element_cfg and the colour modal).
-          element_colors = setNames(
-            lapply(CONFIDENCE_ELEMENT_LABELS, element_cfg),
-            CONFIDENCE_ELEMENT_LABELS
-          ),
-          grid_color = background_color,
+          # The cell border has no picker of its own: drawn any other color it
+          # reads as a grid superimposed on the matrix rather than the thin gap
+          # between cells it is meant to be, so it always matches the
+          # background.
+          grid_color = input$amr_background_color %||% BACKGROUND_DEFAULT,
           dend_color = input$amr_dend_color %||% DEND_COLOR_DEFAULT,
           text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
           column_grouping = grouping(),
@@ -1888,18 +1981,14 @@ server <- function(
           col_cluster_distance = cluster_distance,
           col_cluster_method = cluster_method,
           dend_size = input$amr_dend_size %||% DEND_DEFAULT,
-          show_row_names = isTRUE(input$amr_show_row_names),
-          # Read from the mirror, never from the input directly - same reason
-          # as aspect_mirror above: refit_labels()'s auto-off would otherwise
+          # Read from the mirrors, never from the inputs directly - same reason
+          # as aspect_mirror above: refit_labels()'s decision would otherwise
           # not reach the first draw until updateSwitchInput's echo arrived a
           # flush later.
+          show_row_names = show_row_names_mirror(),
           show_col_names = show_col_names_mirror(),
-          show_element_names = show_element_names_mirror(),
-          class_scale = input$amr_class_scale %||% CLASS_SCALE_DEFAULT,
-          anno_layers = anno_layers()
+          show_element_names = show_element_names_mirror()
         ),
-        # The fit comes last so its fontsize_*, grid_width and title_rot are the
-        # ones the builder reads.
         fit
       )
     }
@@ -1940,16 +2029,15 @@ server <- function(
       # legends out against the device it is drawn on, so this has to be the
       # real canvas rather than grid.grabExpr's 7x7 default — see
       # amr_plot$amr_as_ggplot().
-      width_in <- canvas_in()
-      height_in <- width_in * plot_aspect()
+      canvas <- plot_canvas()
 
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
       amr_plot$amr_as_ggplot(
         amr_plot$build_amr_heatmap(mat, heatmap_opts()),
         background,
-        width_in = width_in,
-        height_in = height_in
+        width_in = canvas$width_in,
+        height_in = canvas$height_in
       )
     })
 
@@ -2021,6 +2109,21 @@ server <- function(
       layout_fit()$aspect
     })
 
+    # The canvas in inches, for the render, the export and the thumbnail.
+    plot_canvas <- shiny$reactive({
+      width_in <- canvas_in()
+      list(width_in = width_in, height_in = width_in * plot_aspect())
+    })
+
+    # Smallest type the plot on screen sets, for the export's legibility note.
+    plot_min_pt <- function() {
+      if (identical(mode(), "prevalence")) {
+        prevalence_fit()$min_pt
+      } else {
+        layout_fit()$min_pt
+      }
+    }
+
     # Fit ⇄ Zoom display mode, driven by this engine's own `zoom_view` control
     # (right sidebar, amr_controls()). Purely toggles the .is-zoom class on the
     # mounted stage — the image is not re-rendered (see the amr-stage CSS in
@@ -2044,51 +2147,35 @@ server <- function(
     # background from the theme's plot.background, whereas renderPlot's device
     # is hardwired white and forced once at module init, so it can never track
     # the colour picker. Same treatment, and the same reason, as the Epi curve.
+    # The pixel size is the canvas at PLOT_RES.
     output$amr_plot <- shiny$renderImage(
       {
         render_info("visualization_amr amr_plot")
-        p <- amr_ggplot()
-        w <- session$clientData[[paste0("output_", ns("amr_plot"), "_width")]]
-        w <- as.integer(w %||% 900L)
-        h <- as.integer(w * plot_aspect())
-        # Lay the plot out as if at 96dpi (so point sizes keep their meaning)
-        # but render at the browser's device pixel ratio so the PNG stays crisp
-        # on HiDPI screens.
-        pr <- session$clientData$pixelratio %||% 1
-        tmp <- tempfile(fileext = ".png")
-        amr_plot$render_amr_png(
-          p,
-          tmp,
-          width_px = w,
-          height_px = h,
-          res = 96,
-          scale = pr
+        canvas <- plot_canvas()
+        canvas_image(
+          amr_ggplot(),
+          canvas$width_in,
+          canvas$height_in,
+          "AMR screening plot"
         )
-        list(src = tmp, width = w, height = h, alt = "AMR screening plot")
       },
       deleteFile = TRUE
     )
 
     # ---- Export contract ----------------------------------------------------
     # The tab's sidebar owns the export panel and the download; this engine only
-    # says what it can produce and how to write it. The file name carries the
-    # view mode, since the three modes are different plots over the same data
-    # and an exported heatmap should not be mistaken for a prevalence chart.
-    export_aspect <- plot_aspect
-
-    export <- list(
-      kind = "ggplot",
+    # says what it can produce and how to write it. The file is the plot on
+    # screen at the size it is on screen, and its name carries the view mode,
+    # since the modes are different plots over the same data.
+    export <- canvas_export(
       label = shiny$reactive(paste0("amr_", mode())),
       ready = shiny$reactive(isTRUE(generated())),
-      aspect = export_aspect,
-      save = function(file, format, opts) {
-        save_plot_export(
-          amr_ggplot(),
-          file,
-          format,
-          width_cm = opts$width_cm,
-          aspect = export_aspect(),
-          dpi = opts$dpi
+      canvas = plot_canvas,
+      plot = amr_ggplot,
+      note = function() {
+        legibility_note(
+          plot_min_pt(),
+          "Raise the text size or the aspect ratio, or show fewer genes."
         )
       }
     )
@@ -2195,6 +2282,12 @@ server <- function(
       if (!is.null(vals$amr_aspect_ratio)) {
         aspect_mirror(vals$amr_aspect_ratio)
       }
+      if (!is.null(vals$amr_text_size)) {
+        text_size_mirror(vals$amr_text_size)
+      }
+      if (!is.null(vals$amr_show_row_names)) {
+        show_row_names_mirror(isTRUE(vals$amr_show_row_names))
+      }
       if (!is.null(vals$amr_show_col_names)) {
         show_col_names_mirror(isTRUE(vals$amr_show_col_names))
       }
@@ -2223,15 +2316,17 @@ server <- function(
       }
     }
 
-    # Thumbnail: server-render the current view to a small PNG.
+    # Thumbnail: server-render the current view on its own canvas, so it looks
+    # like the plot it stands for, with the resolution carrying the requested
+    # pixel width.
     save_thumb <- function(file, w, h) {
-      amr_plot$render_amr_png(
+      canvas <- plot_canvas()
+      render_canvas_png(
         amr_ggplot(),
         file,
-        width_px = w,
-        height_px = h,
-        res = 96,
-        scale = 1
+        canvas$width_in,
+        canvas$height_in,
+        res = max(24, round(w / canvas$width_in))
       )
     }
 

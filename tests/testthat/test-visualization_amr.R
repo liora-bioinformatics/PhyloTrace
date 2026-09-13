@@ -81,18 +81,19 @@ crowded_amr_db <- function(env = parent.frame()) {
     metadata = data.frame(isolate = "ISO-1", stringsAsFactors = FALSE)
   )
   # Creates the amr_results table; its own single gene is harmless alongside
-  # the sixty-four inserted below.
+  # the two hundred inserted below - more than even the widest canvas can name
+  # legibly.
   seed_results(path, "ISO-1", classical = FALSE, amr = TRUE)
   con <- DBI::dbConnect(RSQLite::SQLite(), path)
   on.exit(DBI::dbDisconnect(con), add = TRUE)
-  for (i in seq_len(64)) {
+  for (i in seq_len(200)) {
     DBI::dbExecute(
       con,
       "INSERT INTO amr_results
          (isolate, gene_symbol, element_type, class, method, pct_identity,
           pct_coverage, called_at)
        VALUES ('ISO-1', ?, 'AMR', ?, 'EXACTX', 99, 100, '2026-01-01')",
-      list(sprintf("gene%02d", i), sprintf("CLASS-%02d", i))
+      list(sprintf("gene%03d", i), sprintf("CLASS-%03d", i))
     )
   }
   path
@@ -476,8 +477,8 @@ test_that("a crowded screen seeds the gene names off on Generate", {
     ),
     {
       set_default_inputs(session)
-      # Grouped by class rather than clustered, so the sixty-four single-gene
-      # classes actually draw as sixty-four titles rather than one label
+      # Grouped by class rather than clustered, so the two hundred single-gene
+      # classes actually draw as two hundred titles rather than one label
       # ("Resistance") spanning the whole panel.
       session$setInputs(
         amr_cluster_cols = FALSE,
@@ -982,8 +983,6 @@ test_that("every control the sidebar renders is in the reset catalogue", {
     drop = c(
       "auto_fit",
       "reset_settings",
-      # A renderUI mount point that does not end in _ui.
-      "row_name_warning",
       # Clears itself the moment it is picked from.
       "amr_layer_add"
     )
@@ -1168,6 +1167,46 @@ test_that("a reset's coded default cannot land on top of the re-fit", {
       expect_identical(length(key), 1L)
       # updateSliderInput formats its value on the way out.
       expect_equal(as.numeric(sent()[[key]]$value), fit)
+    }
+  )
+})
+
+test_that("Generate names the isolates of a screen with room for them", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      # Four isolates have room for their names, so the fit turns them on.
+      expect_true(show_row_names_mirror())
+      expect_true(heatmap_opts()$show_row_names)
+
+      # The text size reaches the fit, and Auto-fit drops it again.
+      session$setInputs(amr_text_size = 150)
+      session$flushReact()
+      expect_equal(layout_fit()$text_scale, 1.5)
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+      expect_equal(text_size_mirror(), 100)
+      expect_equal(layout_fit()$text_scale, 1)
+
+      # The export is the canvas the plot is drawn on.
+      expect_equal(export$width_cm(), plot_canvas()$width_in * 2.54)
+      expect_equal(
+        export$aspect(),
+        plot_canvas()$height_in / plot_canvas()$width_in
+      )
     }
   )
 })

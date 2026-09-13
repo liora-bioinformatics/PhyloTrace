@@ -1,6 +1,13 @@
 box::use(
+  ape[nj, node.depth.edgelength, read.tree],
+  ggplotify[as.ggplot],
+  stats[as.dist],
+  utils[modifyList],
+)
+box::use(
   app / logic / amr_plot,
   app / logic / tree_plot,
+  app / logic / viz_fit,
 )
 
 impl <- attr(tree_plot, "namespace")
@@ -410,50 +417,112 @@ test_that("annotations together never dwarf the tree", {
   )
 })
 
-test_that("a branch too narrow to hold its number does not get one", {
-  # The reported fault, as geometry. One 1600-unit stem takes the whole span
-  # and thirty hairlines sit behind it; picking the longest 25 put twenty-five
-  # numbers on top of each other where the branches were sub-pixel.
-  len <- c(1600.5, 1531.5, 1542, 1563.5, 1579.38, 3.78, 3.81, 9.68, 11.03, 4.5)
-  y <- c(18, 31, 33, 34, 35, 8, 10, 14, 16, 20)
-  digits <- tree_plot$tree_branch_digits(len)
-  keep <- tree_plot$tree_branch_keep(
-    len, y, max(len), 3.6, 4 * impl$BRANCH_ABOVE_SHRINK, digits
+# A linear geometry by hand: branches as runs along the page, `across` in mm.
+linear_geom <- function(from, to, across, conn_at = numeric(0),
+                        conn_lo = numeric(0), conn_hi = numeric(0)) {
+  list(
+    from = from, to = to, across = across, across_per_row = 1, radial = FALSE,
+    conn_at = conn_at, conn_lo = conn_lo, conn_hi = conn_hi
   )
+}
 
-  # Only the five long ones survive; every hairline is dropped.
-  expect_setequal(keep, 1:5)
+test_that("a branch too short to hold its number does not get one", {
+  # A 1600-allele stem across the page and hairlines inside a cluster, drawn far
+  # shorter than their own digits.
+  geom <- linear_geom(
+    from = c(0, 100, 100, 100),
+    to = c(100, 100.2, 100.5, 100.6),
+    across = c(10, 20, 30, 40)
+  )
+  placed <- tree_plot$tree_branch_keep(c(1600, 3.8, 9.7, 11), geom, 8, 2)
+  expect_equal(placed$i, 1L)
 })
 
-test_that("two labels never land on the same row", {
-  # Internal nodes deep in a ladder sit fractions of a row apart, which is the
-  # other half of what stacked the numbers.
-  len <- rep(100, 5)
-  keep <- tree_plot$tree_branch_keep(
-    len, c(1, 1.2, 1.4, 5, 9), 100, 5.5, 3, 0L
-  )
-  expect_equal(length(keep), 3L)
+test_that("a label never sits on another branch or a connector", {
+  # Branch 2's line runs 1 mm above branch 1, through the slot 1's number needs.
+  geom <- linear_geom(from = c(0, 0, 0), to = c(50, 50, 50), across = c(10, 11, 30))
+  placed <- tree_plot$tree_branch_keep(c(40, 30, 20), geom, 10, 2)
+  expect_setequal(placed$i, c(2L, 3L))
 
-  # Where two compete for a row, the longer branch wins it.
-  keep <- tree_plot$tree_branch_keep(
-    c(50, 90), c(2, 2.3), 100, 5.5, 3, 0L
-  )
-  expect_equal(keep, 2L)
+  crossed <- linear_geom(0, 50, 10, conn_at = 25, conn_lo = 5, conn_hi = 20)
+  expect_equal(nrow(tree_plot$tree_branch_keep(40, crossed, 10, 2)), 0L)
 })
 
-test_that("branch labels are capped however many would fit", {
-  n <- 60L
-  keep <- tree_plot$tree_branch_keep(
-    rep(50, n), seq_len(n), 50, 5.5, 3, 0L
+test_that("where two numbers would overprint, the more important one wins", {
+  geom <- linear_geom(from = c(0, 0), to = c(50, 50), across = c(10, 10.5))
+  expect_equal(tree_plot$tree_branch_keep(c(40, 30), geom, 10, 2)$i, 1L)
+
+  # One allowed below takes the slot under its own branch instead.
+  placed <- tree_plot$tree_branch_keep(
+    c(40, 30), geom, 10, 2,
+    below = c(FALSE, TRUE)
   )
-  expect_equal(length(keep), impl$BRANCH_LABEL_MAX)
+  expect_equal(placed$i, c(1L, 2L))
+  expect_equal(placed$side, c(1, -1))
+
+  # Priority, not length, decides the order.
+  placed <- tree_plot$tree_branch_keep(c(40, 30), geom, 10, 2, priority = c(1, 2))
+  expect_equal(placed$i, 2L)
 })
 
-test_that("nothing labellable draws nothing rather than erroring", {
-  expect_length(tree_plot$tree_branch_keep(numeric(0), numeric(0), 1, 5.5, 3, 0L), 0)
-  expect_length(tree_plot$tree_branch_keep(rep(0, 5), 1:5, 1, 5.5, 3, 0L), 0)
-  expect_length(tree_plot$tree_branch_keep(c(1, 2), c(1, 2), 0, 5.5, 3, 0L), 0)
-  expect_length(tree_plot$tree_branch_keep(c(1, 2), c(1, 2), 10, 0, 3, 0L), 0)
+test_that("on a disc a label keeps off branches converging on the centre", {
+  # Two radial branches 0.05 rad apart: half a millimetre apart near the centre,
+  # five millimetres apart a hundred millimetres out.
+  near <- list(
+    from = c(5, 5), to = c(15, 15), across = c(1, 1.05), across_per_row = 0.05,
+    radial = TRUE, conn_at = numeric(0), conn_lo = numeric(0),
+    conn_hi = numeric(0)
+  )
+  expect_equal(nrow(tree_plot$tree_branch_keep(c(40, 30), near, 8, 1.5)), 0L)
+
+  far <- modifyList(near, list(from = c(95, 95), to = c(105, 105)))
+  expect_equal(nrow(tree_plot$tree_branch_keep(c(40, 30), far, 8, 1.5)), 2L)
+})
+
+test_that("the number placed is bounded however many would fit", {
+  n <- 40L
+  geom <- linear_geom(rep(0, n), rep(50, n), seq_len(n) * 10)
+  placed <- tree_plot$tree_branch_keep(rep(50, n), geom, 10, 2, max_labels = 5L)
+  expect_equal(nrow(placed), 5L)
+})
+
+test_that("nothing labellable places nothing rather than erroring", {
+  empty <- linear_geom(numeric(0), numeric(0), numeric(0))
+  expect_equal(nrow(tree_plot$tree_branch_keep(numeric(0), empty, 10, 2)), 0L)
+  five <- linear_geom(rep(0, 5), rep(50, 5), 1:5 * 10)
+  expect_equal(nrow(tree_plot$tree_branch_keep(rep(0, 5), five, 10, 2)), 0L)
+  expect_equal(nrow(tree_plot$tree_branch_keep(c(1, 2), NULL, 10, 2)), 0L)
+  two <- linear_geom(c(0, 0), c(50, 50), c(10, 30))
+  expect_equal(nrow(tree_plot$tree_branch_keep(c(1, 2), two, 10, 0)), 0L)
+})
+
+test_that("branch numbers are as large as the pitch allows, never under the floor", {
+  expect_equal(impl$.branch_label_size(list(branch_size = 4)), 4 * impl$BRANCH_ABOVE_SHRINK)
+  expect_equal(impl$.branch_label_size(list(branch_size = 0.5)), impl$TIP_SIZE_FLOOR)
+  # The floor is physical, so it scales with the design.
+  expect_equal(
+    impl$.branch_label_size(list(branch_size = 0.5, scale = 2)),
+    2 * impl$TIP_SIZE_FLOOR
+  )
+})
+
+test_that("branch geometry is measured on the drawn figure", {
+  td <- data.frame(
+    node = 1:3, parent = c(3, 3, 3), x = c(1, 2, 0), y = c(1, 2, 1.5),
+    branch = c(0.5, 1, 0), isTip = c(TRUE, TRUE, FALSE),
+    branch.length = c(1, 2, 0)
+  )
+  # Two tree units across 20 mm: 10 mm a unit.
+  geom <- tree_plot$tree_branch_geometry(
+    td, list(layout = "rectangular", row_mm = 4), 2, 20 / 25.4
+  )
+  expect_equal(geom$from, c(0, 0, 0))
+  expect_equal(geom$to, c(10, 20, 0))
+  expect_equal(geom$across, c(4, 8, 6))
+  expect_equal(geom$conn_at, 0)
+  expect_equal(c(geom$conn_lo, geom$conn_hi), c(4, 8))
+
+  expect_null(tree_plot$tree_branch_geometry(td, list(), 0, 1))
 })
 
 test_that("one decimal count serves the whole figure", {
@@ -468,6 +537,279 @@ test_that("one decimal count serves the whole figure", {
   expect_equal(tree_plot$tree_branch_digits(c(3.78, 1600.38)), 0L)
   expect_equal(tree_plot$tree_branch_digits(c(0.013, 0.4)), 2L)
   expect_equal(tree_plot$tree_branch_digits(numeric(0)), 0L)
+})
+
+# --- Branch lengths as drawn -------------------------------------------------
+
+# Lineages a few dozen alleles deep, joined at the saturated distances a tree
+# spanning lineages has: the shape truncation exists for.
+lineage_tree <- function(lineages = 3L, per = 8L) {
+  set.seed(7)
+  groups <- rep(seq_len(lineages), each = per)
+  n <- length(groups)
+  d <- matrix(0, n, n)
+  for (i in seq_len(n - 1L)) {
+    for (j in (i + 1L):n) {
+      pool <- if (groups[i] == groups[j]) 10:60 else 1600:1680
+      d[i, j] <- d[j, i] <- sample(pool, 1)
+    }
+  }
+  tree <- nj(as.dist(d))
+  tree$edge.length <- pmax(tree$edge.length, 0)
+  tree$tip.label <- sprintf("iso%02d", seq_len(n))
+  tree
+}
+
+branch_opts <- function(mode, ...) {
+  modifyList(
+    list(
+      root = "Automatic", layout = "rectangular", line_color = "#000000",
+      bg = "#ffffff", tiplab_show = TRUE, tiplab = "isolate", tiplab_size = 3,
+      tiplab_color = "#000000", layers = list(), branch_show = FALSE,
+      branch_size = 3, branch_color = "#000000", tippoint_show = FALSE,
+      tippoint_alpha = 1, tippoint_size = 3, tippoint_color = "#3A4657",
+      tippoint_shape = 16, nodelabel_show = FALSE, heatmaps = list(),
+      rootedge_show = FALSE, width_in = 7, zoom = 1, h = 0, v = 0,
+      legend_orientation = "vertical", legend_size = 9, branch_mode = mode
+    ),
+    list(...)
+  )
+}
+
+# The ggplot the builder assembles, caught before it is wrapped into a grob.
+build_inner <- function(tree, opts) {
+  inner <- NULL
+  build <- impl$.build_tree_ggtree
+  shadow <- new.env(parent = environment(build))
+  assign("as.ggplot", function(plot, ...) {
+    inner <<- plot
+    as.ggplot(plot, ...)
+  }, envir = shadow)
+  environment(build) <- shadow
+  suppressMessages(suppressWarnings(
+    build(tree, data.frame(isolate = tree$tip.label), opts)
+  ))
+  inner
+}
+
+# The whole-tree axis is the one segment layer that is a single horizontal
+# line starting at the root below the tips.
+axis_drawn <- function(p) {
+  any(vapply(p$layers, function(l) {
+    d <- l$data
+    inherits(l$geom, "GeomSegment") && is.data.frame(d) && nrow(d) == 1L &&
+      isTRUE(d$x == 0 && d$y < 0 && d$y == d$yend)
+  }, logical(1)))
+}
+
+text_labels <- function(p) {
+  unlist(lapply(p$layers, function(l) {
+    if (inherits(l$geom, "GeomText") && is.data.frame(l$data)) l$data$label
+  }))
+}
+
+test_that("the stems joining lineages are cut, and only they", {
+  tree <- lineage_tree()
+  len <- tree$edge.length
+  out <- tree_plot$tree_shorten_branches(tree)
+
+  expect_true(any(out$broken))
+  expect_true(all(len[out$broken] > 500))
+  expect_true(all(len[!out$broken] < 200))
+  # With no room to solve against, a cut branch is drawn at the cut-off.
+  expect_equal(out$drawn, out$cap)
+  expect_equal(out$tree$edge.length[out$broken], rep(out$drawn, sum(out$broken)))
+  expect_equal(out$tree$edge.length[!out$broken], len[!out$broken])
+})
+
+test_that("a cut branch is drawn exactly as long as its mark needs", {
+  tree <- lineage_tree()
+  out <- tree_plot$tree_shorten_branches(tree, need = 0.05)
+  expect_lt(out$drawn, out$cap)
+  # The tightest path is solved exactly: the mark takes precisely its share.
+  depth <- max(node.depth.edgelength(out$tree))
+  expect_equal(out$drawn, 0.05 * depth, tolerance = 1e-6)
+
+  # Where no length could fit, it stays at the cut-off...
+  expect_equal(tree_plot$tree_shorten_branches(tree, need = 0.9)$drawn, out$cap)
+  # ...unless a later, smaller share (the mark alone) does.
+  expect_equal(
+    tree_plot$tree_shorten_branches(tree, need = c(2, 0.05))$drawn,
+    out$drawn
+  )
+})
+
+test_that("a tree without outlying branches is drawn exactly to scale", {
+  one <- lineage_tree(lineages = 1L, per = 24L)
+  out <- tree_plot$tree_shorten_branches(one)
+  expect_false(any(out$broken))
+  expect_identical(out$tree, one)
+
+  # Too few branches for a quartile to mean anything.
+  expect_false(any(tree_plot$tree_shorten_branches(lineage_tree(2L, 2L))$broken))
+})
+
+test_that("a tree reports whether it has anything worth truncating", {
+  expect_true(tree_plot$tree_has_long_branches(lineage_tree()))
+  expect_false(
+    tree_plot$tree_has_long_branches(lineage_tree(lineages = 1L, per = 24L))
+  )
+  # Too few branches for a quartile to mean anything, same as the cut-off test.
+  expect_false(tree_plot$tree_has_long_branches(lineage_tree(2L, 2L)))
+})
+
+test_that("a long branch that takes nothing from the depth is not cut", {
+  # Forty rungs of 1 set the depth; the 20-unit side branch is twelve times the
+  # quartile, but cutting it would give back none of the width.
+  chain <- "x40:1"
+  for (i in 39:0) {
+    chain <- sprintf("(t%d:1,%s):1", i, chain)
+  }
+  tree <- read.tree(text = sprintf("(%s,long:20);", chain))
+  expect_false(any(tree_plot$tree_shorten_branches(tree)$broken))
+  expect_false(tree_plot$tree_has_long_branches(tree))
+})
+
+test_that("each branch mode carries the one distance read-out it can support", {
+  legacy <- list(axis_show = FALSE, treescale_show = TRUE)
+  expect_identical(tree_plot$tree_distance_marks(legacy), legacy)
+
+  scaled <- tree_plot$tree_distance_marks(list(branch_mode = "scaled"))
+  expect_true(scaled$axis_show)
+  expect_false(scaled$treescale_show)
+
+  cut <- tree_plot$tree_distance_marks(list(branch_mode = "shortened", axis_show = TRUE))
+  expect_false(cut$axis_show)
+  expect_true(cut$treescale_show)
+
+  clado <- tree_plot$tree_distance_marks(
+    list(branch_mode = "cladogram", branch_show = FALSE)
+  )
+  expect_false(clado$axis_show)
+  expect_false(clado$treescale_show)
+  expect_true(clado$branch_show)
+})
+
+test_that("the tree's own shape picks its layout and how its branches are drawn", {
+  few <- lineage_tree()
+  auto <- tree_plot$tree_auto_choices(few, 5.5, 5)
+  expect_equal(auto$layout, "rectangular")
+  expect_equal(auto$branch_mode, "shortened")
+
+  expect_equal(
+    tree_plot$tree_auto_choices(lineage_tree(1L, 24L), 5.5, 5)$branch_mode,
+    "scaled"
+  )
+  # Past the tips a page of names can carry, the disc.
+  expect_equal(tree_plot$tree_auto_choices(lineage_tree(4L, 30L), 5.5, 5)$layout, "circular")
+
+  flat <- few
+  flat$edge.length[] <- 0
+  expect_equal(tree_plot$tree_auto_choices(flat, 5.5, 5)$branch_mode, "cladogram")
+
+  # Crowded, but its tips crowd the root: a disc would leave most of itself
+  # empty, so it stays rectangular.
+  deep <- "d20:5"
+  for (i in 19:1) {
+    deep <- sprintf("(d%d:5,%s):5", i, deep)
+  }
+  shallow <- paste0("s", 1:80, ":2", collapse = ",")
+  lopsided <- read.tree(text = sprintf("((%s):1,%s);", shallow, deep))
+  expect_equal(tree_plot$tree_auto_choices(lopsided, 5.5, 5)$layout, "rectangular")
+})
+
+test_that("a radial phylogram opens its centre only when its tips crowd the root", {
+  # Most tips near the root, a few far out: opened until the median tip sits at
+  # OPEN_CENTRE_TIP_RADIUS of the radius.
+  crowded <- c(rep(5, 90), rep(100, 10))
+  open <- tree_plot$tree_open_centre(crowded)
+  expect_gt(open, 0)
+  expect_equal((5 + open) / (100 + open), impl$OPEN_CENTRE_TIP_RADIUS)
+  # Bounded however crowded; closed for a balanced tree or none.
+  expect_lte(
+    tree_plot$tree_open_centre(c(rep(0, 99), 100)),
+    impl$OPEN_CENTRE_MAX * 100
+  )
+  expect_equal(tree_plot$tree_open_centre(c(60, 80, 100)), 0)
+  expect_equal(tree_plot$tree_open_centre(numeric(0)), 0)
+})
+
+test_that("a crowded radial phylogram is drawn around an open centre", {
+  star <- paste0("t", 1:20, ":1", collapse = ",")
+  tree <- read.tree(text = sprintf("((%s):1,far:100);", star))
+  lower <- function(p) p$scales$get_scales("x")$limits[1]
+
+  expect_lt(lower(build_inner(tree, branch_opts("scaled", layout = "circular"))), 0)
+  # A column has no centre, and a cladogram's tips all sit on the rim.
+  expect_true(is.na(lower(build_inner(tree, branch_opts("scaled")))))
+  expect_true(is.na(lower(
+    build_inner(tree, branch_opts("cladogram", layout = "circular"))
+  )))
+})
+
+test_that("a truncated tree draws its stems cut and says how long they are", {
+  tree <- lineage_tree()
+  scaled <- build_inner(tree, branch_opts("scaled"))
+  short <- build_inner(tree, branch_opts("shortened"))
+
+  # The clusters get the width the stems gave back.
+  expect_lt(max(short$data$x), 0.25 * max(scaled$data$x))
+
+  stems <- tree$edge.length[tree_plot$tree_shorten_branches(tree)$broken]
+  expected <- tree_plot$tree_branch_format(
+    stems,
+    tree_plot$tree_branch_digits(tree$edge.length)
+  )
+  # The true distances are written even with the branch labels switched off.
+  expect_true(all(expected %in% text_labels(short)))
+  expect_false(any(expected %in% text_labels(scaled)))
+
+  # The gap is cut in the background colour.
+  expect_true(any(vapply(short$layers, function(l) {
+    inherits(l$geom, "GeomSegment") && identical(l$aes_params$colour, "#ffffff")
+  }, logical(1))))
+
+  # Past a cut a position is no longer a distance, so the axis goes.
+  expect_true(axis_drawn(scaled))
+  expect_false(axis_drawn(short))
+
+  for (layout in c("slanted", "circular", "inward")) {
+    expect_true(inherits(
+      build_inner(tree, branch_opts("shortened", layout = layout)),
+      "ggplot"
+    ))
+  }
+})
+
+test_that("a cladogram aligns its tips and writes its distances unasked", {
+  tree <- lineage_tree()
+  clado <- build_inner(tree, branch_opts("cladogram"))
+
+  expect_length(unique(clado$data$x[clado$data$isTip]), 1L)
+  expect_false(axis_drawn(clado))
+
+  printed <- text_labels(clado)
+  expect_gt(length(printed), 0L)
+  expect_true(all(printed %in% tree_plot$tree_branch_format(
+    tree$edge.length,
+    tree_plot$tree_branch_digits(tree$edge.length)
+  )))
+})
+
+test_that("a circular tree turns its branch numbers along their branches", {
+  layer <- impl$tree_branch_layer(
+    list(branch_show = TRUE, branch_size = 4, layout = "circular"),
+    data.frame(
+      branch.length = c(10, 10), branch = c(50, 50), y = c(1, 2),
+      isTip = c(TRUE, TRUE)
+    ),
+    100,
+    5.5
+  )
+  angles <- layer$data$angle
+  expect_true(all(angles != 0))
+  # Upright on the left half of the disc, never upside down.
+  expect_true(all((angles %% 360) <= 90 | (angles %% 360) >= 270))
 })
 
 # --- Whole-tree distance axis -------------------------------------------------
@@ -549,7 +891,7 @@ test_that("branch numbers are text above the line, not a box on it", {
   td <- data.frame(
     branch.length = c(10, 20, 30),
     branch = c(5, 15, 25),
-    y = c(1, 2, 3)
+    y = c(1, 20, 40)
   )
   layer <- impl$tree_branch_layer(
     list(branch_show = TRUE, branch_size = 4, branch_color = "#000000"),
@@ -560,11 +902,11 @@ test_that("branch numbers are text above the line, not a box on it", {
   expect_true(inherits(layer$geom, "GeomText"))
   expect_false(inherits(layer$geom, "GeomLabel"))
   # Lifted clear of the line rather than centred on it.
-  expect_lt(layer$aes_params$vjust, 0)
+  expect_true(all(layer$data$vjust < 0))
   # The chosen branches carry the layer as their own data, so an unchosen one
   # contributes nothing to it at all.
   expect_true(is.data.frame(layer$data))
-  expect_setequal(names(layer$data), c("x", "y", "label"))
+  expect_setequal(names(layer$data), c("x", "y", "label", "vjust", "angle"))
 })
 
 test_that("branch labels switched off draw nothing", {
@@ -3407,8 +3749,8 @@ test_that("the text scale is bounded at both ends", {
   # Outside the range the control offers, and for anything that is not a
   # number at all, the plot falls back to its own fitted size rather than to
   # whatever arithmetic a bad value would produce.
-  expect_equal(impl$.text_of(list(text_scale = 99)), impl$TEXT_SCALE_MAX)
-  expect_equal(impl$.text_of(list(text_scale = 0.01)), impl$TEXT_SCALE_MIN)
+  expect_equal(impl$.text_of(list(text_scale = 99)), viz_fit$TEXT_SCALE_MAX)
+  expect_equal(impl$.text_of(list(text_scale = 0.01)), viz_fit$TEXT_SCALE_MIN)
   for (bad in list(NULL, NA, "big", c(1, 2), -1, Inf)) {
     expect_equal(
       impl$.text_of(list(text_scale = bad)),
@@ -3447,8 +3789,8 @@ test_that("type shrinks to what can be read and no further", {
     o$text_scale <- k
     impl$.tiplab_size(o, fx$meta)
   }
-  expect_gte(at(impl$TEXT_SCALE_MIN), impl$TIP_SIZE_FLOOR)
-  expect_lt(at(impl$TEXT_SCALE_MIN), at(1))
+  expect_gte(at(viz_fit$TEXT_SCALE_MIN), impl$TIP_SIZE_FLOOR)
+  expect_lt(at(viz_fit$TEXT_SCALE_MIN), at(1))
 })
 
 test_that("labels the rows cannot hold legibly are not drawn at all", {
@@ -3721,7 +4063,7 @@ test_that("the caption column ends inside the panel", {
   size <- impl$.clade_label_size(opts)
   per_unit <- (limit - b$layout$panel_params[[1]]$x.range[[1]]) /
     (impl$tree_budget_in(opts) - impl$PLOT_MARGIN_IN + impl$.clade_edge_in(opts))
-  width <- impl$.string_em("Outbreak A") * size / 25.4 * per_unit
+  width <- viz_fit$string_em("Outbreak A") * size / 25.4 * per_unit
   expect_lte(text_x + width, limit)
 })
 
@@ -3730,8 +4072,8 @@ test_that("a caption is measured by what it sets, not by how long it is", {
   # panel edge and clipped there. A mean advance is the right measure for a
   # reserve over labels nobody has typed yet; a caption is one known string, and
   # capitals set a fifth wider than the mean.
-  caps <- impl$.string_em("LONGNAME")
-  mixed <- impl$.string_em("longNAME")
+  caps <- viz_fit$string_em("LONGNAME")
+  mixed <- viz_fit$string_em("longNAME")
 
   expect_gt(caps, mixed)
   expect_gt(caps, nchar("LONGNAME") * impl$TIP_CHAR_EM)
@@ -3749,7 +4091,7 @@ test_that("a caption is measured by what it sets, not by how long it is", {
       cex = size_mm * (72.27 / 25.4) / 12
     ) *
       25.4 / size_mm
-    expect_equal(impl$.string_em(lab), real, tolerance = 0.05)
+    expect_equal(viz_fit$string_em(lab), real, tolerance = 0.05)
   }
 })
 
@@ -4013,34 +4355,6 @@ test_that("the canvas height is the one every reserve inside it is measured agai
     5.5 * tree_plot$TREE_CANVAS_MAX_FACTOR
   )
   expect_gt(tree_plot$tree_canvas_height_in(many, md), 5.5 * 0.4)
-})
-
-test_that("a character the width table has never seen is booked at the widest", {
-  # The caption is the one string on the figure the reader types, and since it
-  # takes free text it can carry anything: a Greek letter in a gene name, an en
-  # dash in a range, a middle dot in a unit. Almost all of those set narrower
-  # than the Latin mean and one guess is as good as another — but an em dash,
-  # an arrow and a CJK glyph set a full em, and a column short by two thirds is
-  # the caption clipped at the panel edge. So the fallback covers the widest
-  # rather than the average.
-  expect_gt(impl$CHAR_EM_UNKNOWN, impl$TIP_CHAR_EM)
-  expect_gte(impl$CHAR_EM_UNKNOWN, impl$CHAR_EM[["W"]])
-  expect_equal(impl$.string_em("\u4e2d"), impl$CHAR_EM_UNKNOWN)
-
-  grDevices::png(tempfile(), width = 6, height = 4, units = "in", res = 100)
-  on.exit(grDevices::dev.off(), add = TRUE)
-  graphics::par(ps = 12)
-  em <- graphics::strwidth("M", units = "inches") / impl$CHAR_EM[["M"]]
-  # Every one of these has to come out reserved for, never short. Checked
-  # against the device rather than against a second table, so the two cannot
-  # agree with each other and both be wrong.
-  for (ch in c("\u03b2", "\u00b5", "\u2014", "\u2265", "\u00ab", "\u2192",
-               "\u00e9", "\u00b0", "\u03a9", "\u4e2d")) {
-    expect_gte(
-      impl$.string_em(ch),
-      graphics::strwidth(ch, units = "inches") / em - 0.02
-    )
-  }
 })
 
 test_that("a caption stays inside a panel the ceiling has squeezed", {

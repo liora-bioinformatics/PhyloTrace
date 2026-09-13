@@ -20,6 +20,8 @@ box::use(
     nav_panel,
     input_switch,
     as_fill_carrier,
+    tooltip,
+    update_tooltip,
   ],
   shinyWidgets[
     actionGroupButtons,
@@ -38,6 +40,7 @@ box::use(
   app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
+  app / logic / dist_cache[new_dist_cache],
   app /
     logic /
     field_labels[
@@ -72,8 +75,17 @@ box::use(
     ],
   app / logic / functions[render_info],
   app / logic / tree_plot,
-  app / logic / phylo[compute_phylo_tree],
-  app / logic / viz_export[CM_PER_IN, save_plot_export],
+  app / logic / phylo[tree_from_distance],
+  app / logic / viz_export[canvas_export],
+  app /
+    logic /
+    viz_fit[
+      ASPECT_MAX,
+      PLOT_MAX_PX,
+      PLOT_RES,
+      TEXT_SIZE_DEFAULT,
+      legibility_note
+    ],
   app /
     logic /
     viz_helpers[
@@ -95,6 +107,8 @@ box::use(
       on_confirmed_reset,
       reset_button_row,
       collect_input_snapshot,
+      text_size_slider,
+      zoom_view_buttons,
     ],
   app / logic / viz_layers[layer_cards, layer_defaults, normalize_layers],
 )
@@ -500,8 +514,8 @@ HEATMAP_SHARED_FIELDS <- c(
 # — the stage scales the finished image to fit, or shows it full size under
 # Zoom view (the .tree-stage rules in app/styles/main.scss). A fixed canvas
 # also makes the export match the preview exactly, and makes a saved Analysis
-# render identically on a different screen.
-PLOT_RES <- 192
+# render identically on a different screen. The resolution itself, PLOT_RES,
+# is shared with the Epi curve and the AMR views (app/logic/viz_fit.R).
 
 # Inches the tree and its tip labels always get, whatever else is on the plot.
 # This is the budget tree_auto_layout and the tip-label reserve reason about,
@@ -525,11 +539,8 @@ CANVAS_MAX_FACTOR <- tree_plot$TREE_CANVAS_MAX_FACTOR
 # need every inch of it to hold one row per branch. Separate from
 # CANVAS_MAX_FACTOR, which bounds only what the engine adds to the canvas on
 # its own account; this is the reader, or the fit on their behalf, asking for
-# the page a crowded tree needs.
-ASPECT_MAX <- 8
-
-# A few hundred tips at aspect 8 is already ~8400px; this is the ceiling.
-PLOT_MAX_PX <- 12000
+# the page a crowded tree needs. ASPECT_MAX, and PLOT_MAX_PX beside it, are
+# shared with the other fixed-canvas engines (app/logic/viz_fit.R).
 
 # Milliseconds the controls have to stop moving before the plot is rebuilt.
 # Long enough that a slider drag is one rebuild rather than a dozen, short
@@ -612,19 +623,14 @@ MIRRORED_IDS <- c(
   names(FITTED_DEFAULTS),
   "nj_tiplab_show",
   "nj_layout",
+  # Generate, Auto-fit and a reset choose it from the tree's shape, exactly as
+  # they choose the layout, so it echoes back the same way.
+  "nj_branch_lengths",
   # Auto-fit and Reset both put it back to TEXT_SIZE_DEFAULT, so it echoes
   # exactly as a fitted slider does.
   "nj_text_size",
   MIRRORED_SELECTS
 )
-
-# The "Text size" slider's own units. The engine reasons in a multiplier
-# (tree_plot's text_scale, 1 = the fitted size); the sidebar states it as a
-# percentage, because "110%" says what it does to the figure and "1.1" does
-# not.
-TEXT_SIZE_DEFAULT <- 100
-TEXT_SIZE_MIN <- 60
-TEXT_SIZE_MAX <- 200
 
 # --- The sidebar's controls, by widget family --------------------------------
 #
@@ -643,9 +649,7 @@ TEXT_SIZE_MAX <- 200
 TREE_CONTROLS <- control_families(
   switches = c(
     "nj_tiplab_show",
-    "nj_axis_show",
     "nj_show_branch_label",
-    "nj_treescale_show",
     "nj_nodelabel_show",
     "nj_rootedge_show",
     # The heatmap block's shared controls. Real sidebar inputs since the style
@@ -659,7 +663,7 @@ TREE_CONTROLS <- control_families(
   ),
   pickers = "nj_heatmap_vocabulary",
   plain_selects = c("nj_heatmap_distance", "nj_heatmap_method"),
-  virtual_selects = "nj_layout",
+  virtual_selects = c("nj_layout", "nj_branch_lengths"),
   sliders = c(
     "nj_aspect_ratio",
     "nj_text_size",
@@ -683,6 +687,35 @@ TREE_CONTROLS <- control_families(
 # each widget so a reset and the UI cannot disagree; the ones that are already
 # named constants are taken from the constant rather than repeated.
 #
+# What each branch mode does to the distance read-out, keyed by
+# TREE_CONTROL_DEFAULTS$nj_branch_lengths / tree_plot$BRANCH_MODES. Shown as a
+# single tooltip on the "Branch lengths" picker, swapped in on selection.
+NJ_BRANCH_LENGTH_NOTES <- c(
+  scaled = "Branch lengths are allelic distances, read off the distance axis.",
+  shortened = paste(
+    "Branches far longer than the rest are cut (//) and labelled with",
+    "their true distance; the scale bar measures every uncut branch."
+  ),
+  cladogram = paste(
+    "Branch lengths carry no distance; allelic distances are written",
+    "on every branch with room for one."
+  )
+)
+
+# The "Branch lengths" picker's own choices, narrowed to what this tree can
+# offer. A tree with nothing worth truncating (tree_plot's
+# tree_has_long_branches) is not offered the truncated mode at all — a choice
+# that would draw exactly the "to scale" phylogram back is not a choice, it
+# reads as one, and a reader who picks it to see what it does gets nothing for
+# the click.
+branch_length_choices <- function(has_long) {
+  if (isTRUE(has_long)) {
+    tree_plot$BRANCH_MODES
+  } else {
+    tree_plot$BRANCH_MODES[tree_plot$BRANCH_MODES != "shortened"]
+  }
+}
+
 # `zoom_view` is a string because radioGroupButtons' choiceValues are: the
 # browser reports "FALSE", not FALSE, and updateRadioGroupButtons matches on the
 # value as written.
@@ -690,11 +723,10 @@ TREE_CONTROL_DEFAULTS <- c(
   as.list(FITTED_DEFAULTS),
   list(
     nj_layout = "rectangular",
+    nj_branch_lengths = "scaled",
     nj_text_size = TEXT_SIZE_DEFAULT,
     nj_tiplab_show = TRUE,
-    nj_axis_show = TRUE,
     nj_show_branch_label = FALSE,
-    nj_treescale_show = FALSE,
     nj_nodelabel_show = FALSE,
     nj_rootedge_show = FALSE,
     nj_heatmap_gene_names = HEATMAP_STYLE_DEFAULTS$show_gene_names,
@@ -798,9 +830,77 @@ tree_controls <- function(ns, options_ui = NULL) {
       nav_panel(
         "Options",
         icon = shiny$icon("gear"),
-        options_ui,
         accordion(
-          open = FALSE,
+          open = "Algorithm",
+          accordion_panel(
+            "Algorithm",
+            icon = shiny$icon("superscript"),
+            options_ui
+          ),
+          accordion_panel(
+            "Allelic Distance",
+            icon = shiny$icon("code-branch"),
+            # How the branches are drawn, and so which distance scale the figure
+            # carries: an axis for a phylogram to scale, a scale bar once long
+            # branches are truncated, none for a cladogram, whose distances live
+            # on its branch labels instead (tree_plot's tree_distance_marks).
+            # There is no switch for either scale, so a wrong one cannot be
+            # picked. Generate and Auto-fit choose the mode from the tree's shape
+            # (tree_auto_choices); it stays the reader's to change.
+            tooltip(
+              virtualSelectInput(
+                ns("nj_branch_lengths"),
+                "Branch lengths",
+                choices = tree_plot$BRANCH_MODES,
+                selected = "scaled",
+                search = FALSE,
+                dropboxWrapper = "body",
+                showDropboxAsPopup = TRUE,
+                popupDropboxBreakpoint = "10000px",
+                width = "100%"
+              ),
+              NJ_BRANCH_LENGTH_NOTES[["scaled"]],
+              id = ns("nj_branch_lengths_tip"),
+              options = list(trigger = "hover")
+            ),
+            # Which branches get a number is solved from the drawn geometry, not
+            # chosen (tree_branch_keep): one is set where it fits along its
+            # branch and touches nothing else, at the size fitted to the tips and
+            # never under the legible floor. A cladogram has no other record of
+            # its distances, so there the switch is shown on and fixed — a static
+            # stand-in rather than the input, which keeps the reader's own
+            # setting for when they switch back.
+            shiny$div(
+              id = ns("nj_branch_label_wrap"),
+              input_switch(
+                ns("nj_show_branch_label"),
+                "Show on branches",
+                FALSE
+              )
+            ),
+            shiny$div(
+              id = ns("nj_branch_label_forced_wrap"),
+              class = "d-none",
+              shiny$div(
+                class = "bslib-input-switch form-switch form-check",
+                shiny$tags$input(
+                  type = "checkbox",
+                  class = "form-check-input",
+                  role = "switch",
+                  checked = NA,
+                  disabled = NA
+                ),
+                shiny$tags$label(class = "form-check-label", "Show on branches")
+              )
+            )
+          )
+        )
+      ),
+      nav_panel(
+        "Layout",
+        icon = shiny$icon("sliders"),
+        accordion(
+          open = "Layout",
           accordion_panel(
             "Layout",
             icon = shiny$icon("sliders"),
@@ -830,27 +930,6 @@ tree_controls <- function(ns, options_ui = NULL) {
                 step = 0.1,
                 ticks = FALSE
               )
-            ),
-            # One control over every piece of type on the figure — the isolate
-            # labels, the branch numbers, the distance axis and the scale bar, the
-            # annotation and heatmap headers, the element and class names, and the
-            # legend. A bias on what the engine already solved, not a size: each
-            # label still grows only into the room it has and shrinks only to what
-            # can be read, and one that no longer fits either way is left off (see
-            # the text-size note in app/logic/tree_plot.R).
-            #
-            # It is here rather than in Labels because it is a property of the
-            # whole figure, like the aspect ratio beside it — the per-element size
-            # sliders stay where the elements are.
-            shiny$sliderInput(
-              ns("nj_text_size"),
-              "Text size",
-              TEXT_SIZE_MIN,
-              TEXT_SIZE_MAX,
-              TEXT_SIZE_DEFAULT,
-              step = 5,
-              post = "%",
-              ticks = FALSE
             ),
             virtualSelectInput(
               ns("nj_layout"),
@@ -913,18 +992,22 @@ tree_controls <- function(ns, options_ui = NULL) {
               width = "100%"
             ),
             input_switch(ns("nj_rootedge_show"), "Root edge", FALSE)
-          )
-        )
-      ),
-      # Labels -----------------------------------------------------------------
-      nav_panel(
-        "Labels",
-        icon = shiny$icon("tag"),
-        accordion(
-          open = "Isolate Labels",
+          ),
           accordion_panel(
-            "Isolate Labels",
-            icon = shiny$icon("tag"),
+            "Text Annotation",
+            icon = shiny$icon("heading"),
+            # One control over every piece of type on the figure — the isolate
+            # labels, the branch numbers, the distance axis and the scale bar, the
+            # annotation and heatmap headers, the element and class names, and the
+            # legend. A bias on what the engine already solved, not a size: each
+            # label still grows only into the room it has and shrinks only to what
+            # can be read, and one that no longer fits either way is left off (see
+            # the text-size note in app/logic/tree_plot.R).
+            #
+            # It is here rather than in Labels because it is a property of the
+            # whole figure, like the aspect ratio beside it — the per-element size
+            # sliders stay where the elements are.
+            text_size_slider(ns, "nj_text_size"),
             input_switch(ns("nj_tiplab_show"), "Show isolate labels", TRUE),
             # The engine leaves the labels off when no legible size fits the
             # rows (tree_tiplab_drawn). Switched on but not drawn reads as a
@@ -957,26 +1040,6 @@ tree_controls <- function(ns, options_ui = NULL) {
             # every piece of type on the figure together — a second control for
             # this one string could only ask for a size the row cannot hold,
             # which the engine would refuse anyway (`tree_tiplab_drawn`).
-          ),
-          accordion_panel(
-            "Allelic Distance",
-            icon = shiny$icon("code-branch"),
-            # One switch, and nothing else. Allelic distance is the only value
-            # worth writing on a branch, and nothing about how it is written is
-            # a decision: the text size is fitted from the tip count
-            # (tree_auto_layout), and *which* branches get a label is solved
-            # from the drawn geometry rather than chosen (tree_branch_keep) —
-            # a branch is labelled when it is wide enough to hold the number
-            # and no other label shares its row, which is the only rule under
-            # which the numbers stay readable on a tree whose branch lengths
-            # differ by three orders of magnitude.
-            input_switch(ns("nj_axis_show"), "Distance axis", TRUE),
-            input_switch(
-              ns("nj_show_branch_label"),
-              "Show on branches",
-              FALSE
-            ),
-            input_switch(ns("nj_treescale_show"), "Scale bar", FALSE)
           )
         )
       ),
@@ -1172,16 +1235,7 @@ tree_controls <- function(ns, options_ui = NULL) {
         )
       )
     ),
-    shiny$div(
-      class = "reset-buttons",
-      radioGroupButtons(
-        ns("zoom_view"),
-        NULL,
-        choiceNames = c("Full", "Zoomed"),
-        choiceValues = c(FALSE, TRUE),
-        width = "100%"
-      )
-    ),
+    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
@@ -1279,7 +1333,10 @@ server <- function(
   imported_sets = shiny$reactive(NULL),
   generate = shiny$reactive(0L),
   plot_type = shiny$reactive("Tree"),
-  algo = shiny$reactive("Neighbour-Joining")
+  algo = shiny$reactive("Neighbour-Joining"),
+  # The session's distance matrix cache (app/logic/dist_cache.R), shared with
+  # every other distance tab.
+  dist_cache = new_dist_cache(db_rev)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -1314,6 +1371,7 @@ server <- function(
         list(
           nj_tiplab_show = TRUE,
           nj_layout = "rectangular",
+          nj_branch_lengths = "scaled",
           nj_text_size = TEXT_SIZE_DEFAULT
         )
       )
@@ -1464,7 +1522,10 @@ server <- function(
         nj_bg = TRUE,
         nj_tiplab_color = isTRUE(fitted$nj_tiplab_show) &&
           !layer_on("tiplab_color"),
-        nj_branch_color = isTRUE(input$nj_show_branch_label),
+        # Truncated branches and a cladogram write distances whatever the
+        # switch says, in this colour.
+        nj_branch_color = isTRUE(input$nj_show_branch_label) ||
+          !identical(fitted$nj_branch_lengths, "scaled"),
         nj_tippoint_color = .layers_want_tippoints(ls) &&
           !layer_on("tippoint_color")
       )
@@ -1516,9 +1577,50 @@ server <- function(
     # Leaving the "on" half out is what left a fitted tree with no names on it:
     # the aspect was solved for labels the switch never got told about, so the
     # rows were bought and nothing was set in them until Auto-fit was pressed.
-    refit_layout <- function(tree, notify = FALSE) {
+    refit_layout <- function(tree, notify = FALSE, choose = FALSE) {
       if (is.null(tree)) {
         return(invisible(NULL))
+      }
+      # Generate, Auto-fit and a reset also choose the layout and the branch
+      # mode from the tree's own shape (tree_plot's tree_auto_choices) before
+      # fitting to them; a layout switch does not, since that is the reader
+      # choosing. The layout mark moves with the choice, so the layout observer
+      # does not take this write for a switch and fit a second time.
+      if (choose) {
+        auto <- tree_plot$tree_auto_choices(
+          tree,
+          plot_width_in(),
+          .label_chars(
+            tree,
+            shiny$isolate(viz_metadata()),
+            shiny$isolate(fitted$nj_tiplab)
+          )
+        )
+        chosen <- c(
+          nj_layout = auto$layout,
+          nj_branch_lengths = auto$branch_mode
+        )
+        # The picker's own choices are narrowed here rather than anywhere the
+        # tree changes: this is the one path every route to a new tree runs
+        # through (Generate, Auto-fit, a reset), and `auto$branch_mode` is
+        # already decided off the same test, so the two can never disagree —
+        # the mode this chooses is never the one the choices just dropped.
+        # Bundled into the same message as `selected` below: a second
+        # updateVirtualSelect() for this id in the same flush would coalesce
+        # with this one and the choices would be the field left out.
+        branch_choices <- branch_length_choices(
+          tree_plot$tree_has_long_branches(tree)
+        )
+        fitted_layout(auto$layout)
+        for (id in names(chosen)) {
+          updateVirtualSelect(
+            inputId = id,
+            selected = chosen[[id]],
+            choices = if (identical(id, "nj_branch_lengths")) branch_choices,
+            session = session
+          )
+          set_fitted(id, chosen[[id]])
+        }
       }
       # Whether to buy a row deep enough to set a name in. Where the caller is
       # armed to decide the labels' fate anyway (Generate, a layout switch,
@@ -1620,6 +1722,28 @@ server <- function(
         id = "nj_aspect_wrap",
         class = "d-none",
         condition = fitted$nj_layout %in% c("circular", "inward")
+      )
+    })
+
+    # Each branch mode's note, in the "Branch lengths" tooltip, and the
+    # branch-label switch a cladogram holds on.
+    shiny$observe({
+      mode <- fitted$nj_branch_lengths
+      update_tooltip(
+        "nj_branch_lengths_tip",
+        NJ_BRANCH_LENGTH_NOTES[[mode]] %||% NJ_BRANCH_LENGTH_NOTES[["scaled"]],
+        session = session
+      )
+      topology <- identical(mode, "cladogram")
+      shinyjs::toggleClass(
+        id = "nj_branch_label_wrap",
+        class = "d-none",
+        condition = topology
+      )
+      shinyjs::toggleClass(
+        id = "nj_branch_label_forced_wrap",
+        class = "d-none",
+        condition = !topology
       )
     })
 
@@ -1727,7 +1851,7 @@ server <- function(
       # three-hundred-tip tree to aspect 0.6 would hand back a plot no setting
       # in the panel had produced.
       fitted_layout(shiny$isolate(fitted$nj_layout))
-      refit_layout(tree_obj(), notify = TRUE)
+      refit_layout(tree_obj(), notify = TRUE, choose = TRUE)
     }
 
     on_confirmed_reset(
@@ -1775,7 +1899,7 @@ server <- function(
         value = TEXT_SIZE_DEFAULT
       )
       set_fitted("nj_text_size", TEXT_SIZE_DEFAULT)
-      refit_layout(tree, notify = TRUE)
+      refit_layout(tree, notify = TRUE, choose = TRUE)
       hidden <- before && !isTRUE(shiny$isolate(fitted$nj_tiplab_show))
       shiny$showNotification(
         paste0(
@@ -1870,11 +1994,14 @@ server <- function(
     })
 
     # Resolved Tree control values, shared by the live render and the export.
+    # Passed through tree_distance_marks() so the canvas reserves room only for
+    # the distance read-outs the branch mode can draw.
     tree_opts <- shiny$reactive(
-      list(
+      tree_plot$tree_distance_marks(list(
         # Layout / rooting.
         root = fitted$nj_root_isolate,
         layout = fitted$nj_layout,
+        branch_mode = fitted$nj_branch_lengths,
         line_color = input$nj_color,
         bg = input$nj_bg,
         # Tip labels.
@@ -1927,8 +2054,6 @@ server <- function(
         },
         # Elements toggles.
         rootedge_show = input$nj_rootedge_show,
-        treescale_show = input$nj_treescale_show,
-        axis_show = input$nj_axis_show,
         # Panel width, for the tip-label reserve (see .tiplab_frac).
         width_in = plot_width_in(),
         # Dimensions / legend.
@@ -1951,7 +2076,7 @@ server <- function(
         # Degrees of circle left open for the ring headers. Fitted on Generate
         # and adjustable after; only a radial layout uses it.
         open_angle = fitted$nj_open_angle
-      )
+      ))
     )
 
     # How big the canvas has to be for this plot's contents, in inches.
@@ -2165,9 +2290,11 @@ server <- function(
     # applied_selection in visualization_plot.R), so it reaches this observer
     # through generate() alone.
     #
-    # This is the expensive path — a few hundred isolates spend most of a second
-    # in the distance matrix — so the trigger list is kept to inputs that really
-    # change what is computed.
+    # This is the expensive path, so the trigger list is kept to inputs that
+    # really change what is computed. The distance matrix comes from the
+    # session's shared cache (app/logic/dist_cache.R): an algorithm switch, or a
+    # Generate over isolates an MST or another Tree tab already covered, only
+    # rebuilds the tree.
     shiny$observeEvent(
       list(generate(), na_handling(), algo(), imported_sets()),
       {
@@ -2187,12 +2314,14 @@ server <- function(
         # Compute the tree (heavy work is covered by the client-side loading
         # overlay, which stays up until this engine's plot fires its value event).
         tree <- tryCatch(
-          compute_phylo_tree(
-            db_path(),
-            na_handling(),
-            algo(),
-            selected_isolates(),
-            imported_sets()
+          tree_from_distance(
+            dist_cache$get(
+              db_path(),
+              na_handling(),
+              selected_isolates(),
+              imported_sets()
+            ),
+            algo()
           ),
           error = function(e) {
             shiny$showNotification(
@@ -2213,7 +2342,7 @@ server <- function(
           shinyjs::removeClass(id = "plot_stage", class = "is-loading")
         }
         if (!is.null(tree)) {
-          refit_layout(tree, notify = TRUE)
+          refit_layout(tree, notify = TRUE, choose = TRUE)
         }
 
         tree_obj(tree)
@@ -3282,13 +3411,6 @@ server <- function(
             width = "100%"
           )
         ),
-        shiny$div(
-          class = "text-muted fst-italic small mb-3",
-          paste(
-            "Set beside the tree, past the labels and any heatmap.",
-            "The figure widens to hold it."
-          )
-        ),
         viz_color(ns, "nj_clade_color", "Highlight colour", cl$color),
         footer = shiny$tagList(
           shiny$modalButton("Cancel"),
@@ -3332,55 +3454,35 @@ server <- function(
     # What is left is the file format and, for a raster, how finely that one
     # figure is rasterised. Resolution changes no geometry, so a 600 dpi PNG
     # and a PDF of the same plot are the same picture.
-    export <- list(
-      kind = "ggplot",
+    export <- canvas_export(
       label = "tree",
       ready = shiny$reactive(isTRUE(generated())),
-      aspect = shiny$reactive(plot_canvas()$aspect),
-      # The canvas's own width. Reported in centimetres because that is what
-      # the export panel states sizes in.
-      width_cm = shiny$reactive(plot_canvas()$canvas_in * CM_PER_IN),
-      # Legibility is a property of the figure now, not of the export: the
-      # file carries the design as drawn, so if its smallest type is under what
-      # a journal accepts, that is true on screen too. Said here because the
-      # export is the moment it starts to matter, and the two ways out — a
-      # taller aspect ratio for the tip labels, fewer columns for the headers —
-      # are both in the sidebar behind the reader. `width_cm` is ignored: there
-      # is no longer a width to be warned about.
-      note = function(width_cm) {
-        meta <- viz_metadata()
-        md <- if (is.null(meta)) data.frame() else meta
-        pt <- tree_plot$tree_min_type_pt(tree_opts(), md)
-        if (!is.finite(pt) || pt >= tree_plot$MIN_PRINT_PT) {
-          return(NULL)
-        }
-        sprintf(
-          paste(
-            "Smallest text prints at %.1f pt — under the %g pt most journals",
-            "ask for. Raise the aspect ratio, or show fewer columns."
-          ),
-          pt,
-          tree_plot$MIN_PRINT_PT
-        )
-      },
+      canvas = shiny$reactive({
+        canvas <- plot_canvas()
+        list(width_in = canvas$canvas_in, height_in = canvas$height_in)
+      }),
       # Built from exactly what the preview was built from, at exactly the
       # canvas it was drawn on. `plot_inputs()` is the barrier the live render
       # reads, so the export cannot pick up a control the preview has not shown
       # yet.
-      save = function(file, format, opts) {
-        canvas <- plot_canvas()
-        built <- tree_plot$build_tree_ggtree(
+      plot = function() {
+        tree_plot$build_tree_ggtree(
           plot_inputs()$tree,
           plot_inputs()$metadata,
           plot_inputs()$opts
         )
-        save_plot_export(
-          built,
-          file,
-          format,
-          width_cm = canvas$canvas_in * CM_PER_IN,
-          aspect = canvas$aspect,
-          dpi = opts$dpi
+      },
+      # Legibility is a property of the figure, not of the export: the file
+      # carries the design as drawn. Said here because the export is the moment
+      # it starts to matter, and the two ways out — a taller aspect ratio for
+      # the tip labels, fewer columns for the headers — are both in the sidebar
+      # behind the reader.
+      note = function() {
+        meta <- viz_metadata()
+        md <- if (is.null(meta)) data.frame() else meta
+        legibility_note(
+          tree_plot$tree_min_type_pt(tree_opts(), md),
+          "Raise the aspect ratio, or show fewer columns."
         )
       }
     )

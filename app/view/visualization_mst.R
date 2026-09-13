@@ -50,6 +50,7 @@ box::use(
   app / logic / database_functions[load_db_scheme_overview],
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
+  app / logic / dist_cache[new_dist_cache],
   app /
     logic /
     field_profile[
@@ -82,7 +83,7 @@ box::use(
       mst_threshold_default,
       save_mst_html,
     ],
-  app / logic / phylo[compute_mst],
+  app / logic / phylo[mst_from_distance],
   app /
     logic /
     viz_helpers[
@@ -623,7 +624,10 @@ server <- function(
   plot_type = shiny$reactive("MST"),
   # Staged peer typing results (Database > Import) folded into the distance
   # matrix; NULL means local isolates only.
-  imported_sets = shiny$reactive(NULL)
+  imported_sets = shiny$reactive(NULL),
+  # The session's distance matrix cache (app/logic/dist_cache.R), shared with
+  # every other distance tab.
+  dist_cache = new_dist_cache(db_rev)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -1266,11 +1270,13 @@ server <- function(
         populate_metadata_selects()
 
         graph <- tryCatch(
-          compute_mst(
-            db_path(),
-            na_handling(),
-            selected_isolates(),
-            imported_sets()
+          mst_from_distance(
+            dist_cache$get(
+              db_path(),
+              na_handling(),
+              selected_isolates(),
+              imported_sets()
+            )
           ),
           error = function(e) {
             shiny$showNotification(

@@ -13,17 +13,16 @@ box::use(
     dbDisconnect,
     dbGetQuery,
   ],
+  Matrix[sparseMatrix, tcrossprod],
   ape[as.phylo, nj],
-  dplyr[select],
   igraph[
     components,
     graph_from_adjacency_matrix,
     mst,
     set_vertex_attr,
   ],
-  stats[as.dist, hclust],
-  tidyr[pivot_wider],
   rlang[`%||%`],
+  stats[as.dist, hclust],
 )
 
 box::use(
@@ -77,15 +76,22 @@ load_allele_profile <- function(
     return(matrix(integer(0), nrow = 0, ncol = 0))
   }
 
-  wide <- long |>
-    .score_ambiguous_missing() |>
-    select(isolate, gene, seqid) |>
-    pivot_wider(names_from = gene, values_from = seqid)
+  # Filled by index rather than pivoted: rows and columns keep their order of
+  # first appearance, as pivot_wider() gave them, at a fraction of the cost on a
+  # whole-genome scheme.
+  isolate_ids <- unique(long$isolate)
+  genes <- unique(long$gene)
+  row_i <- match(long$isolate, isolate_ids)
+  col_i <- match(long$gene, genes)
+  keep <- !.ambiguous_cells(long, row_i, col_i, length(genes))
 
-  isolate <- wide$isolate
-  mat <- as.matrix(wide[, setdiff(names(wide), "isolate"), drop = FALSE])
-  storage.mode(mat) <- "integer"
-  rownames(mat) <- isolate
+  mat <- matrix(
+    NA_integer_,
+    length(isolate_ids),
+    length(genes),
+    dimnames = list(isolate_ids, genes)
+  )
+  mat[cbind(row_i[keep], col_i[keep])] <- as.integer(long$seqid[keep])
 
   if (!is.null(isolates)) {
     mat <- mat[rownames(mat) %in% isolates, , drop = FALSE]
@@ -94,39 +100,37 @@ load_allele_profile <- function(
   mat
 }
 
-# Helper: Score a locus that carries more than one allele for the same isolate as
-# missing. pyMLST's `mlst` table has no unique key on (souche, gene), so a genome
-# with a duplicated or paralogous locus legitimately contributes two allele rows
-# for it. Two different alleles at one locus is an ambiguous call, not a profile
-# value, and NA is what every na_handling policy downstream is built to absorb.
-# Left in place, even a single such pair makes pivot_wider() return list-columns
-# for *every* locus, and the integer coercion that follows dies - taking the tree
-# and the MST for the whole database down with it.
-.score_ambiguous_missing <- function(long) {
-  key <- paste(long$isolate, long$gene, sep = "\r")
-  dup_key <- unique(key[duplicated(key)])
-  if (!length(dup_key)) {
-    return(long)
+# Helper: Flag the rows of a locus that carries more than one allele for the same
+# isolate, so that cell is scored missing. pyMLST's `mlst` table has no unique key
+# on (souche, gene), so a genome with a duplicated or paralogous locus
+# legitimately contributes two allele rows for it. Two alleles at one locus is an
+# ambiguous call, not a profile value, and NA is what every na_handling policy
+# downstream is built to absorb. Letting either row win would silently pick one.
+.ambiguous_cells <- function(long, row_i, col_i, n_genes) {
+  cell <- (row_i - 1) * n_genes + col_i
+  dup <- duplicated(cell)
+  if (!any(dup)) {
+    return(logical(length(cell)))
   }
 
-  parts <- do.call(rbind, strsplit(dup_key, "\r", fixed = TRUE))
-  sample_n <- min(3L, length(dup_key))
+  ambiguous <- cell %in% cell[dup]
+  first <- which(ambiguous & !dup)
+  sample_i <- first[seq_len(min(3L, length(first)))]
   log_event(
     "PHYLO",
     "Ambiguous loci scored missing",
     sprintf(
       "%d locus/isolate pair(s) across %d isolate(s) | e.g. %s",
-      length(dup_key),
-      length(unique(parts[, 1L])),
+      length(first),
+      length(unique(long$isolate[first])),
       paste(
-        sprintf("%s@%s", parts[seq_len(sample_n), 2L], parts[seq_len(sample_n), 1L]),
+        sprintf("%s@%s", long$gene[sample_i], long$isolate[sample_i]),
         collapse = ", "
       )
     )
   )
 
-  long$seqid[key %in% dup_key] <- NA_integer_
-  long[!duplicated(key), , drop = FALSE]
+  ambiguous
 }
 
 # Helper: Format staged imported profiles into long format within local seqid code space
@@ -160,6 +164,9 @@ load_allele_profile <- function(
 
 # --- 2. Pairwise Distance Kernels --------------------------------------------
 
+# These per-pair kernels are the reference definitions of each missing-value
+# policy. `compute_dist_matrix()` computes the same counts for all pairs at once.
+
 #' Standard Hamming Distance Kernel
 #' @param x Vector of allele values.
 #' @param y Vector of allele values.
@@ -191,25 +198,62 @@ hamming_dist_category <- function(x, y) {
 
 #' Compute Distance Matrix Across Profiles
 #'
-#' Applies a distance metric function across all pairwise isolate profile combinations.
+#' Counts, for every pair of isolates, the loci at which their allele calls
+#' differ under a missing-value policy - exactly what the matching reference
+#' kernel above gives per pair, computed for all pairs at once with sparse
+#' linear algebra instead of one R call per pair. The pair count still grows with
+#' the square of the isolate count; the cost per pair no longer involves R.
 #'
-#' @param profile Matrix of allele profiles.
-#' @param hamming_method Distance function kernel to apply.
-#' @return Symmetric distance matrix.
+#' Each called cell becomes a 1 in an isolates x (locus, allele) indicator
+#' matrix, whose cross product counts the loci at which two isolates carry the
+#' same allele. From that:
+#' - `ignore_na`: loci called in both, minus shared alleles
+#'   (`hamming_dist_ignore`);
+#' - `category`: all loci, minus shared alleles, minus loci missing in both
+#'   (`hamming_dist_category`);
+#' - `omit`: `ignore_na` over the loci called in every row of `profile`
+#'   (`hamming_dist` on those loci), so the result depends on which isolates
+#'   the profile holds.
+#' Any other value is treated as `ignore_na`.
+#'
+#' @param profile Integer matrix of allele profiles, isolates in rows.
+#' @param na_handling Missing-value policy ("ignore_na", "category" or "omit").
+#' @return Integer matrix of pairwise distances, labelled by isolate on both axes.
 #' @export
-compute_dist_matrix <- function(profile, hamming_method) {
+compute_dist_matrix <- function(profile, na_handling = "ignore_na") {
   mat <- as.matrix(profile)
   n <- nrow(mat)
-  dist_mat <- matrix(0, n, n)
-  if (n < 2) {
-    return(dist_mat)
+  labels <- rownames(mat)
+  if (identical(na_handling, "omit")) {
+    mat <- mat[, colSums(is.na(mat)) == 0, drop = FALSE]
   }
-  for (i in 1:(n - 1)) {
-    for (j in (i + 1):n) {
-      dist_mat[i, j] <- hamming_method(x = mat[i, ], y = mat[j, ])
-      dist_mat[j, i] <- dist_mat[i, j]
-    }
+
+  called <- !is.na(mat)
+  shared <- matrix(0, n, n)
+  if (any(called)) {
+    idx <- which(called)
+    vals <- as.double(mat[idx])
+    low <- min(vals)
+    # Offset by locus so an allele code reused by two loci is never mistaken
+    # for a shared allele.
+    allele <- ((idx - 1) %/% n) * (max(vals) - low + 1) + (vals - low)
+    codes <- unique(allele)
+    indicator <- sparseMatrix(
+      i = (idx - 1) %% n + 1,
+      j = match(allele, codes),
+      x = 1,
+      dims = c(n, length(codes))
+    )
+    shared <- as.matrix(tcrossprod(indicator))
   }
+
+  dist_mat <- if (identical(na_handling, "category")) {
+    ncol(mat) - shared - tcrossprod((!called) * 1)
+  } else {
+    tcrossprod(called * 1) - shared
+  }
+  storage.mode(dist_mat) <- "integer"
+  dimnames(dist_mat) <- list(labels, labels)
   dist_mat
 }
 
@@ -228,10 +272,10 @@ compute_dist_matrix <- function(profile, hamming_method) {
 #' differences), so those are clamped to zero — the same fix other NJ viewers
 #' apply — rather than compressed. A branch that is genuinely far longer than
 #' its neighbours (an outgroup, a divergent reference) stays exactly as long
-#' as the data says: which of those branches is legible enough to carry a
-#' printed number is a rendering decision, handled downstream in
-#' `tree_plot.R` (`tree_branch_keep`) from the drawn geometry rather than by
-#' silently rescaling what a branch means.
+#' as the data says. Whether it is drawn broken, and which branches are legible
+#' enough to carry a printed number, are rendering decisions made downstream in
+#' `tree_plot.R` (`tree_shorten_branches`, `tree_branch_keep`) and marked on the
+#' figure, rather than a silent rescaling of what a branch means.
 #'
 #' @param dist_mat Distance matrix.
 #' @param labels Tip label vector matching distance matrix ordering.
@@ -253,10 +297,21 @@ build_tree <- function(dist_mat, labels, algo) {
   tree
 }
 
-# --- 5. Internal Distance Preparation ---------------------------------------
+# --- 5. Distance Computation ------------------------------------------------
 
-# Helper: Load allele profile and prepare distance matrix according to NA policy
-prepare_distance <- function(
+#' Compute the Distance Matrix for a Set of Isolates
+#'
+#' Loads the allele profiles and applies [compute_dist_matrix()]. The Tree and
+#' MST engines reach this through the session cache in app/logic/dist_cache.R.
+#'
+#' @param db_path Database path.
+#' @param na_handling Strategy for missing values ("ignore_na", "omit", or
+#'   "category"); NULL means "ignore_na".
+#' @param isolates Optional vector of isolate IDs (see [load_allele_profile()]).
+#' @param imported_sets Optional staged imported peer profile sets.
+#' @return Labelled integer distance matrix, or NULL when no profile matches.
+#' @export
+compute_distance <- function(
   db_path,
   na_handling,
   isolates = NULL,
@@ -266,28 +321,24 @@ prepare_distance <- function(
   if (nrow(profile) < 1) {
     return(NULL)
   }
-
-  na_handling <- na_handling %||% "ignore_na"
-  method <- switch(
-    na_handling,
-    ignore_na = hamming_dist_ignore,
-    category = hamming_dist_category,
-    omit = {
-      keep <- colSums(is.na(profile)) == 0
-      profile <- profile[, keep, drop = FALSE]
-      hamming_dist
-    },
-    hamming_dist_ignore
-  )
-
-  list(
-    profile = profile,
-    method = method,
-    dist = compute_dist_matrix(profile, method)
-  )
+  compute_dist_matrix(profile, na_handling %||% "ignore_na")
 }
 
 # --- 6. Tree Orchestration --------------------------------------------------
+
+#' Build a Phylogenetic Tree From a Distance Matrix
+#'
+#' @param dist_mat Labelled distance matrix, as from [compute_distance()].
+#' @param algo Clustering algorithm ("Neighbour-Joining" or "UPGMA"); NULL
+#'   means Neighbour-Joining.
+#' @return A `phylo` object, or NULL for fewer than 3 isolates.
+#' @export
+tree_from_distance <- function(dist_mat, algo = NULL) {
+  if (is.null(dist_mat) || nrow(dist_mat) < 3) {
+    return(NULL)
+  }
+  build_tree(dist_mat, rownames(dist_mat), algo %||% "Neighbour-Joining")
+}
 
 #' Compute Phylogenetic Tree
 #'
@@ -307,15 +358,9 @@ compute_phylo_tree <- function(
   isolates = NULL,
   imported_sets = NULL
 ) {
-  prep <- prepare_distance(db_path, na_handling, isolates, imported_sets)
-  if (is.null(prep) || nrow(prep$profile) < 3) {
-    return(NULL)
-  }
-
-  build_tree(
-    prep$dist,
-    rownames(prep$profile),
-    if (is.null(algo)) "Neighbour-Joining" else algo
+  tree_from_distance(
+    compute_distance(db_path, na_handling, isolates, imported_sets),
+    algo
   )
 }
 
@@ -323,8 +368,7 @@ compute_phylo_tree <- function(
 
 #' Compute Minimum Spanning Tree Graph
 #'
-#' Builds an igraph MST representation from isolate allele profiles.
-#' Zero-distance isolates are merged into single representative nodes.
+#' High-level wrapper to calculate distances and return the MST graph.
 #'
 #' @param db_path Database path.
 #' @param na_handling Strategy for handling missing values.
@@ -338,17 +382,28 @@ compute_mst <- function(
   isolates = NULL,
   imported_sets = NULL
 ) {
-  prep <- prepare_distance(db_path, na_handling, isolates, imported_sets)
-  if (is.null(prep) || nrow(prep$profile) < 2) {
+  mst_from_distance(
+    compute_distance(db_path, na_handling, isolates, imported_sets)
+  )
+}
+
+#' Build a Minimum Spanning Tree Graph From a Distance Matrix
+#'
+#' Zero-distance isolates are merged into single representative nodes.
+#'
+#' @param dist_mat Labelled distance matrix, as from [compute_distance()].
+#' @return An `igraph` object, or NULL for fewer than 2 isolates.
+#' @export
+mst_from_distance <- function(dist_mat) {
+  if (is.null(dist_mat) || nrow(dist_mat) < 2) {
     return(NULL)
   }
 
-  profile <- prep$profile
-  labels <- rownames(profile)
+  labels <- rownames(dist_mat)
 
   # Collapse zero-distance samples into groups (transitive: chained identical
   # profiles merge into one node).
-  zero_adj <- prep$dist == 0
+  zero_adj <- dist_mat == 0
   diag(zero_adj) <- FALSE
   membership <- components(
     graph_from_adjacency_matrix(zero_adj, mode = "undirected", diag = FALSE)
@@ -365,8 +420,9 @@ compute_mst <- function(
   )
   group_sizes <- lengths(groups)
 
-  rep_profile <- profile[rep_idx, , drop = FALSE]
-  rep_dist <- compute_dist_matrix(rep_profile, prep$method)
+  # The representatives' distances to each other are already in the matrix;
+  # slicing it gives exactly what recomputing them from their profiles would.
+  rep_dist <- dist_mat[rep_idx, rep_idx, drop = FALSE]
 
   graph <- graph_from_adjacency_matrix(
     rep_dist,

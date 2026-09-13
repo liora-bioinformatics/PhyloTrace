@@ -68,6 +68,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_staging[list_imported_sets],
   app / logic / db_store,
+  app / logic / dist_cache[new_dist_cache],
   app / logic / field_profile[field_profiles],
   app / logic / field_types[field_types],
   app / view / visualization_plot,
@@ -483,6 +484,11 @@ server <- function(
       )
     })
 
+    # Distance matrices, shared by every Tree and MST tab of this session. Plain
+    # memory, not a reactive: engines ask it on Generate and it checks the
+    # revision bus itself. See app/logic/dist_cache.R.
+    dist_cache <- new_dist_cache(db_rev)
+
     staged_sets <- reactive({
       db_events$depend(db_rev, "staged")
       req(db_path())
@@ -624,6 +630,7 @@ server <- function(
         staged_sets = staged_sets,
         picker_choices = picker_choices,
         db_rev = db_rev,
+        dist_cache = dist_cache,
         is_active = reactive(identical(input$plot_set, tid)),
         alive = alive,
         preset = preset
@@ -1010,6 +1017,7 @@ server <- function(
           close_tab(tid, remove_ui = FALSE, collect = FALSE)
         }
         tabs(list())
+        dist_cache$clear()
         gc()
         pending_preset(NULL)
         closing_tab(NULL)

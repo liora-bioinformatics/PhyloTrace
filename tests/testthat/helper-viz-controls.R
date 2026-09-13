@@ -11,8 +11,9 @@ box::use(
 )
 
 # Ids that belong to something other than a control: the labels shiny emits, the
-# wrappers the CSS and shinyjs address, and renderUI mount points.
-NON_CONTROL_SUFFIX <- "-label$|_row$|_wrap$|_hint$|_ui$|_note$"
+# wrappers the CSS and shinyjs address, renderUI mount points, and tooltips
+# addressed by update_tooltip() rather than set through the reset catalogue.
+NON_CONTROL_SUFFIX <- "-label$|_row$|_wrap$|_hint$|_ui$|_note$|_tip$"
 
 #' Every input id a control panel renders, minus the scaffolding.
 #'

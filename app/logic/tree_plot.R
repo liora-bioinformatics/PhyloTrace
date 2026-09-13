@@ -49,8 +49,8 @@ box::use(
     scale_y_continuous,
     expansion,
   ],
-  ape[root],
-  stats[dist, hclust, setNames],
+  ape[node.depth.edgelength, root],
+  stats[dist, hclust, median, quantile, setNames],
   utils[head, tail],
   RColorBrewer[brewer.pal, brewer.pal.info],
   viridisLite[viridis],
@@ -74,6 +74,8 @@ box::use(
   app / logic / field_labels[field_labels_for],
   app / logic / field_profile[field_levels],
   app / logic / mapping_engine[crowded_tips],
+  app / logic / viz_fit,
+  app / logic / viz_legend,
 )
 
 .viridis_scales <- c(
@@ -124,68 +126,10 @@ TIP_ROW_FILL <- 0.77 # Fraction of row pitch occupied by tip label text box
 # Horizontal label reservation geometry
 TIP_CHAR_EM <- 0.6 # Character width estimate (em) for accession/isolate labels
 
-# Advance of one character, in ems, for the characters a caption is made of.
-#
-# `TIP_CHAR_EM` is a mean, and a mean is the right measure for a reserve that
-# has to cover labels nobody has typed yet — an accession is a fixed shape and
-# a mean over it is exact enough. A clade caption is the other case: one known
-# string, typed by the reader, drawn at a size fitted to a column measured from
-# it. There the mean is 20% short of what an all-capital word sets, and 20%
-# short of the column is three letters drawn past the edge of the panel.
-#
-# Helvetica's own widths, which the export devices' sans faces are within a
-# percent of. Anything not listed takes `CHAR_EM_UNKNOWN`.
-CHAR_EM <- c(
-  " " = 0.278, "!" = 0.278, "\"" = 0.355, "#" = 0.556, "$" = 0.556,
-  "%" = 0.889, "&" = 0.667, "'" = 0.191, "(" = 0.333, ")" = 0.333,
-  "*" = 0.389, "+" = 0.584, "," = 0.278, "-" = 0.333, "." = 0.278,
-  "/" = 0.278,
-  "0" = 0.556, "1" = 0.556, "2" = 0.556, "3" = 0.556, "4" = 0.556,
-  "5" = 0.556, "6" = 0.556, "7" = 0.556, "8" = 0.556, "9" = 0.556,
-  ":" = 0.278, ";" = 0.278, "<" = 0.584, "=" = 0.584, ">" = 0.584,
-  "?" = 0.556, "@" = 1.015,
-  "A" = 0.667, "B" = 0.667, "C" = 0.722, "D" = 0.722, "E" = 0.667,
-  "F" = 0.611, "G" = 0.778, "H" = 0.722, "I" = 0.278, "J" = 0.5,
-  "K" = 0.667, "L" = 0.556, "M" = 0.833, "N" = 0.722, "O" = 0.778,
-  "P" = 0.667, "Q" = 0.778, "R" = 0.722, "S" = 0.667, "T" = 0.611,
-  "U" = 0.722, "V" = 0.667, "W" = 0.944, "X" = 0.667, "Y" = 0.667,
-  "Z" = 0.611,
-  "[" = 0.278, "\\" = 0.278, "]" = 0.278, "^" = 0.469, "_" = 0.556,
-  "`" = 0.333,
-  "a" = 0.556, "b" = 0.556, "c" = 0.5, "d" = 0.556, "e" = 0.556,
-  "f" = 0.278, "g" = 0.556, "h" = 0.556, "i" = 0.222, "j" = 0.222,
-  "k" = 0.5, "l" = 0.222, "m" = 0.833, "n" = 0.556, "o" = 0.556,
-  "p" = 0.556, "q" = 0.556, "r" = 0.333, "s" = 0.5, "t" = 0.278,
-  "u" = 0.556, "v" = 0.5, "w" = 0.722, "x" = 0.5, "y" = 0.5,
-  "z" = 0.5,
-  "{" = 0.334, "|" = 0.26, "}" = 0.334, "~" = 0.584,
-  "\u2026" = 1.0
-)
-
-# What a character outside `CHAR_EM` is booked at.
-#
-# The table is Latin and a caption need not be: a gene name carrying a Greek
-# letter, a range written with an en dash, a unit with a middle dot. Nearly all
-# of those set *narrower* than the Latin mean, but the widest — an em dash, an
-# arrow, a CJK glyph — set a full em, two thirds over it, and a column short by
-# that much is the caption clipped at the panel edge.
-#
-# So an unknown character is booked at the widest a character gets rather than
-# at the average one. The guess does not cost the same in both directions: too
-# wide leaves a little white space at the end of a caption, too narrow loses
-# the end of it.
-CHAR_EM_UNKNOWN <- 1
-
-# Ems one string sets in, measured character by character.
-.string_em <- function(x) {
-  ch <- strsplit(as.character(x %||% ""), "", fixed = TRUE)[[1]]
-  if (!length(ch)) {
-    return(0)
-  }
-  em <- CHAR_EM[ch]
-  em[is.na(em)] <- CHAR_EM_UNKNOWN
-  sum(em)
-}
+# A caption is one known string typed by the reader, so it is measured
+# character by character (`viz_fit$string_em()`, Helvetica's own advances)
+# rather than at the `TIP_CHAR_EM` mean, which runs a fifth short of an
+# all-capital word — three letters drawn past the edge of the panel.
 TIP_LABEL_FRAC <- 0.35 # Maximum fraction of panel width reserved for tip labels
 
 # Air between a tip point and the isolate label that starts beside it, in
@@ -347,8 +291,10 @@ TIP_ASPECT_MIN <- 0.5 # Minimum allowed aspect ratio
 #' reserve measured in inches — the axis overhang, the caption column — is
 #' solved against the panel the annotations *asked* for, and once the ceiling
 #' bites that panel is not the one being drawn on.
+#'
+#' The factor every fixed-canvas engine shares (see app/logic/viz_fit.R).
 #' @export
-TREE_CANVAS_MAX_FACTOR <- 2.6
+TREE_CANVAS_MAX_FACTOR <- viz_fit$CANVAS_MAX_FACTOR
 
 # The tallest aspect ratio the fit will ask for — the sidebar slider's own
 # ceiling (`ASPECT_MAX` in the view), not TREE_CANVAS_MAX_FACTOR. That one
@@ -363,11 +309,11 @@ TREE_CANVAS_MAX_FACTOR <- 2.6
 # by both stopping there, and when they drifted the fit solved a thousand tips
 # onto 27.5in of paper while the image was cut to 14.3 and every row arrived
 # half the height its type was chosen for.
-TIP_ASPECT_MAX <- 8
+TIP_ASPECT_MAX <- viz_fit$ASPECT_MAX
 TIP_SIZE_MIN <- 0.5 # Minimum size threshold
 TIP_SIZE_FLOOR <- 1.2 # Minimum text size for legibility flag
 
-.clamp <- function(x, lo, hi) min(max(x, lo), hi)
+.clamp <- viz_fit$clamp
 
 #' Largest tip label a layout can carry, in millimetres.
 #'
@@ -551,188 +497,46 @@ tree_auto_layout <- function(
   )
 }
 
-#' Keys a guide lists when nothing has told it how much room it has.
-#'
-#' The answer to "how long a list is worth drawing" is mostly the box's height
-#' (`tree_legend_key_budget()`), and every guide the builder draws is solved
-#' against it. This is what a scale built outside that solve falls back to — a
-#' handful of swatches, which is what a key list is read for.
-#' @export
-LEGEND_MAX_KEYS <- 9L
+# --- Legend keys ---------------------------------------------------------------
+#
+# How many keys each guide lists in the height it has, which keys, the gap key
+# where a list was cut and the count on its title: shared with the AMR heatmap's
+# legend column, and planned in app/logic/viz_legend.R. The tree's own names
+# stay, as this module's API.
 
-#' Fewest keys a guide is cut back to before it stops being worth drawing.
-#'
-#' The floor the budget starts every guide at, and the one number in it that is
-#' not negotiable: what a guide may list past this depends on how much height
-#' the box has and how many other guides are sharing it, but a guide cut below
-#' four keys is not worth the rows it stands in. Where even the floor will not
-#' fit, the type is shrunk instead (`tree_legend_size()`).
-LEGEND_MIN_KEYS <- 4L
+#' Keys a guide lists when nothing has told it how much room it has.
+#' @export
+LEGEND_MAX_KEYS <- viz_legend$LEGEND_MAX_KEYS
+
+LEGEND_MIN_KEYS <- viz_legend$LEGEND_MIN_KEYS
 
 #' Keys any one guide lists, however much room the box has.
-#'
-#' One column's worth — the same `LEGEND_MAX_ROWS` a guide's keys wrap at,
-#' written again here because it is declared further down the file. Tying the
-#' two together is the point: a guide allowed more keys than a column holds
-#' buys them by folding into a second column, and a second column is width
-#' taken off the tree. So the height decides everything under this, and past it
-#' a scale is a population rather than a vocabulary — the colours still say
-#' where the same value recurs on the tree, which is the job they go on doing
-#' when the guide only samples them.
-#'
-#' It used to be nine, with everything longer than twenty levels cut back to it
-#' whatever the figure's height was. That is what listed nine of twenty-seven
-#' wards down the side of a plot with a hand's width of blank paper beside them.
 #' @export
-LEGEND_FULL_MAX <- 18L
+LEGEND_FULL_MAX <- viz_legend$LEGEND_FULL_MAX
 
 #' The blank key that stands where a run of levels was left out.
-#'
-#' A trimmed guide reads as a complete list unless it says otherwise. The title
-#' says how many levels there are ("9 of 81 shown"), but not *where* the gap
-#' falls — and for an ordered scale, whose keys come from both ends, that is
-#' the one thing the reader has to know: the two halves are not neighbours.
-#' Drawn as a swatch with no colour in it, so it reads as a break in the list
-#' rather than as another category.
-#'
-#' Three full stops, not the typographic ellipsis: U+22EF is missing from
-#' enough of the fonts these plots are exported through that R substitutes a
-#' single dot for each of its bytes and warns while doing it.
 #' @export
-LEGEND_GAP_KEY <- "..."
+LEGEND_GAP_KEY <- viz_legend$LEGEND_GAP_KEY
 
-# The colour a gap key's swatch is filled with, which is none.
-LEGEND_GAP_COLOR <- "transparent"
+LEGEND_GAP_COLOR <- viz_legend$LEGEND_GAP_COLOR
 
 #' Keys one guide may list, given the rows it has been budgeted.
-#'
-#' @param max_rows Integer. Rows per guide, from `tree_legend_max_rows()`.
-#' @return Integer key budget.
 #' @export
-tree_legend_max_keys <- function(max_rows = LEGEND_MAX_ROWS) {
-  rows <- suppressWarnings(as.integer(max_rows))
-  if (length(rows) != 1L || is.na(rows)) {
-    rows <- LEGEND_MAX_ROWS
-  }
-  as.integer(.clamp(rows, LEGEND_MIN_KEYS, LEGEND_MAX_KEYS))
-}
+tree_legend_max_keys <- viz_legend$legend_max_keys
 
-# Rows one guide stands in, listing `keys` of its `demand` levels in `ncol`
-# columns: a title, the keys, and the blank line before the next guide — plus,
-# where it is not listing everything, the title's second line ("9 of 81 shown")
-# and the gap key.
-.legend_guide_rows <- function(keys, demand, ncol = 1L) {
-  as.integer(ceiling(keys / pmax(ncol, 1L))) + 2L + 2L * (keys < demand)
-}
+.legend_guide_rows <- viz_legend$legend_guide_rows
 
 #' Keys each guide may list, sharing the rows the box has between them.
-#'
-#' An equal share was the wrong answer twice over. It counted a guide that
-#' wants four keys as costing the same as one that wants eighty, so eight drug
-#' classes were listed as "7 of 8" beside four confidence tiers that had three
-#' rows going spare; and a guide *one key short* of complete pays two extra
-#' rows for saying so, which an equal share never noticed it could recover.
-#'
-#' So: fill the short lists first, shortest first, because completing a guide
-#' costs less than it looks and is worth more than a longer sample of a list
-#' nobody can read to the end anyway. Whatever is left over is then handed round
-#' the guides that are still trimmed, one key at a time, so they grow together
-#' rather than the first of them taking the lot.
-#'
-#' No guide lists more than `LEGEND_FULL_MAX` keys whatever the room; under it
-#' the height is the only thing that trims a guide, so a figure with paper to
-#' spare lists every level it has.
-#'
-#' @param demands Integer vector. Levels each guide holds, in stacking order.
-#' @param room Integer. Rows the whole guide box has.
-#' @return Integer vector of key budgets, one per guide.
 #' @export
-tree_legend_key_budget <- function(demands, room = LEGEND_MAX_ROWS) {
-  d <- suppressWarnings(as.integer(demands))
-  d <- d[!is.na(d)]
-  n <- length(d)
-  if (!n) {
-    return(integer(0))
-  }
-  d <- pmax(d, 1L)
-  cap <- pmin(d, LEGEND_FULL_MAX)
-  give <- pmin(cap, LEGEND_MIN_KEYS)
-  cost <- function(g) sum(.legend_guide_rows(g, d))
-  # The floor is not negotiable: a guide cut below it is not worth drawing, and
-  # a box that cannot hold the floor is shrunk instead (`tree_legend_size()`).
-  budget <- max(suppressWarnings(as.integer(room %||% LEGEND_MAX_ROWS)), cost(give))
-  for (i in order(d)) {
-    trial <- give
-    trial[[i]] <- cap[[i]]
-    if (cost(trial) <= budget) {
-      give <- trial
-    }
-  }
-  repeat {
-    moved <- FALSE
-    for (i in which(give < cap)) {
-      trial <- give
-      trial[[i]] <- trial[[i]] + 1L
-      if (cost(trial) <= budget) {
-        give <- trial
-        moved <- TRUE
-      }
-    }
-    if (!moved) {
-      break
-    }
-  }
-  as.integer(give)
-}
-
-# Whether a set of levels has ends worth showing.
-#
-# Numbers, and the four shapes a binned date takes ("2024", "2024-03",
-# "2024-W12", "2024-03-05") — all of which `.level_order()` has already put in
-# order, the dates because they sort lexically into chronological order. For
-# anything else "first" and "last" are accidents of the alphabet.
-.levels_are_ordered <- function(x) {
-  if (length(x) < 2L) {
-    return(FALSE)
-  }
-  if (!anyNA(suppressWarnings(as.numeric(x)))) {
-    return(TRUE)
-  }
-  all(grepl("^\\d{4}(-(W\\d{2}|\\d{2}(-\\d{2})?))?$", x))
-}
-
-# How often each level occurs in the column the scale was built from. Absent
-# data leaves every level equal, which falls back to the scale's own order.
-.level_counts <- function(levels, values) {
-  if (is.null(values)) {
-    return(rep(1L, length(levels)))
-  }
-  tab <- table(as.character(values))
-  counts <- as.integer(tab[levels])
-  counts[is.na(counts)] <- 0L
-  counts
-}
+tree_legend_key_budget <- viz_legend$legend_key_budget
 
 #' The keys one guide should list, and what to say about the rest.
 #'
-#' Which keys survive is not the same question for every scale, and answering
-#' it with "the first nine" was wrong for both kinds:
-#'
-#' - An **ordered** scale (numbers, or a binned date) is read for its range.
-#'   Nine consecutive keys off the front of eighty say nothing about the other
-#'   seventy-one, so the budget is split between the two ends and the reader
-#'   gets the extremes every colour on the figure lies between.
-#' - A **nominal** scale has no ends. Its keys go to the levels the reader will
-#'   actually meet — the most frequent ones — restored to the scale's own order
-#'   so the guide still reads down the palette rather than down a ranking.
-#'
-#' "Not recorded" keeps its key wherever it appears. It is the one level whose
-#' colour cannot be guessed from the others, and an unexplained grey swatch is
-#' worse than one fewer real category.
+#' `viz_legend$legend_breaks()`, with "Not recorded" as the level that always
+#' keeps its key.
 #'
 #' @param levels Character vector of the scale's levels, in draw order.
-#' @param values The mapped column, for the frequency order. Optional; without
-#'   it a nominal scale falls back to its own level order.
+#' @param values The mapped column, for the frequency order. Optional.
 #' @param max_keys Integer. Keys this guide has room for.
 #' @return list(breaks = <character>, hidden = <integer>, total = <integer>).
 #' @export
@@ -741,109 +545,20 @@ tree_legend_breaks <- function(
   values = NULL,
   max_keys = LEGEND_MAX_KEYS
 ) {
-  levels <- as.character(levels)
-  n <- length(levels)
-  k <- max(suppressWarnings(as.integer(max_keys)), 2L)
-  if (is.na(k) || n <= k) {
-    return(list(breaks = levels, hidden = 0L, total = n))
-  }
-  missing <- intersect(MISSING_LABEL, levels)
-  real <- setdiff(levels, MISSING_LABEL)
-  budget <- max(k - length(missing), 1L)
-  keep <- if (.levels_are_ordered(real)) {
-    head_n <- ceiling(budget / 2)
-    c(head(real, head_n), tail(real, budget - head_n))
-  } else {
-    ranked <- order(-.level_counts(real, values), seq_along(real))
-    real[sort(head(ranked, budget))]
-  }
-  list(
-    breaks = c(.with_gap_key(real, keep), missing),
-    hidden = n - length(keep) - length(missing),
-    total = n
-  )
+  viz_legend$legend_breaks(levels, values, max_keys, missing = MISSING_LABEL)
 }
 
-# The kept keys with one blank key marking where the list was cut.
-#
-# One marker, at the first place the list stops being contiguous — counting the
-# two ends, so a guide whose missing levels all fall past its last key still
-# says so somewhere the reader can see it and not only in the count on the
-# title. One and not three: a guide scattered across a long scale would
-# otherwise spend half its rows on punctuation.
-.with_gap_key <- function(all, keep) {
-  at <- match(keep, all)
-  at <- at[!is.na(at)]
-  if (!length(at) || length(at) == length(all)) {
-    return(keep)
-  }
-  if (at[[1L]] > 1L) {
-    return(c(LEGEND_GAP_KEY, keep))
-  }
-  gap <- which(diff(at) > 1L)
-  if (length(gap)) {
-    i <- gap[[1L]]
-    return(c(head(keep, i), LEGEND_GAP_KEY, tail(keep, length(keep) - i)))
-  }
-  if (at[[length(at)]] < length(all)) c(keep, LEGEND_GAP_KEY) else keep
-}
+.legend_values <- viz_legend$legend_values
 
-# A scale's palette with a colourless swatch added for the gap key, and the
-# limits that admit it. A break outside the scale's limits is dropped without
-# comment, and a discrete scale's limits are its data's levels — which the gap
-# key, being no level of anything, is not one of.
-.legend_values <- function(cols, breaks, blank = LEGEND_GAP_COLOR) {
-  if (!LEGEND_GAP_KEY %in% breaks) {
-    return(cols)
-  }
-  c(cols, setNames(blank, LEGEND_GAP_KEY))
-}
-
-.legend_limits <- function(levels, breaks) {
-  if (!LEGEND_GAP_KEY %in% breaks) {
-    return(NULL)
-  }
-  c(as.character(levels), LEGEND_GAP_KEY)
-}
+.legend_limits <- viz_legend$legend_limits
 
 #' A guide title that says how many values it is not showing.
-#'
-#' Said on the title rather than as a key of its own: ggplot2's guides have no
-#' slot for a row that is not a break, and a count dressed up as a swatch would
-#' read as another category.
-#'
-#' Stated as "9 of 81 shown" rather than "+ 72 more", because with the keys
-#' taken from both ends of an ordered scale the reader has to know the list is
-#' a *sample* of the levels and not the head of them.
-#'
-#' @param name Character. The variable's title.
-#' @param hidden Integer. Levels the guide is not listing.
-#' @param total Integer. Levels the scale holds. Optional.
-#' @return Character.
 #' @export
-tree_legend_title <- function(name, hidden, total = NULL) {
-  if (!isTRUE(hidden > 0)) {
-    return(name)
-  }
-  if (is.null(total) || !isTRUE(is.finite(total) && total > hidden)) {
-    return(paste0(name %||% "", "\n+ ", hidden, " more"))
-  }
-  paste0(name %||% "", "\n", total - hidden, " of ", total, " shown")
-}
+tree_legend_title <- viz_legend$legend_title
 
-#' Calculate Legend Column Multiples
-#'
-#' @param n_levels Integer. Number of categories in the legend.
-#' @param max_rows Integer. Target maximum vertical entries per column.
-#' @return Integer count of legend columns (1 to 4).
+#' Columns one guide's keys fold into.
 #' @export
-tree_legend_ncol <- function(n_levels, max_rows = LEGEND_MAX_ROWS) {
-  max_rows <- max(as.integer(max_rows), 1L)
-  if (n_levels <= max_rows) {
-    return(1L)
-  }
-  as.integer(min(LEGEND_KEY_COLS, ceiling(n_levels / max_rows)))
-}
+tree_legend_ncol <- viz_legend$legend_ncol
 
 #' Calculate Rounded Scale Bar Width
 #'
@@ -872,9 +587,9 @@ tree_nice_width <- function(x) {
 # distance from the root — that is the entire premise of drawing branch
 # lengths to scale rather than as a cladogram — so a real axis, ticked and
 # labelled from 0 to the tree's own depth, only makes explicit what the
-# drawing already encodes. It does not change what any position means, which
-# is why it is fine where the log axis and the truncation considered earlier
-# were not.
+# drawing already encodes. That holds only while every branch is to scale: past
+# a broken branch a position is no longer cumulative distance, so a tree drawn
+# with breaks, or as topology only, does not get one (`tree_distance_marks()`).
 #
 # It does not fix the legibility problem a very unequal tree has, either: the
 # ticks are still spaced linearly, so a cluster of near-zero branches still
@@ -984,16 +699,12 @@ tree_axis_layer <- function(opts, max_x, y0) {
 #
 # Which branches carry their allelic distance in writing.
 #
-# The tree itself is left alone. Branch lengths are drawn to scale and the
-# distances are read from the scale bar — that is the convention every tree
-# viewer follows, and the only one under which the drawn distance between two
-# tips equals the sum of the branches between them. Neither of the tricks that
-# suggest themselves for a tree with one branch far longer than the rest is
-# used here: a log axis destroys that additivity outright (a path's drawn
-# length stops being the sum of its parts, and the scale bar stops meaning
-# anything), and truncating the long branch is only honest with a break glyph
-# and the true value printed beside it, which is a figure the *reader* has to
-# be told about rather than something to do to a tree silently.
+# The label layer leaves the geometry alone. How the branches are drawn — to
+# scale, with the few outlying ones broken, or as topology only — is settled
+# before the tree is built (see "Branch lengths as drawn" below). A log axis is
+# not among the choices: it destroys additivity outright (a path's drawn length
+# stops being the sum of its parts, and the scale bar stops meaning anything).
+# A broken branch prints its true value with its break, not from this layer.
 #
 # So the length disparity is not the label layer's to fix, and it is not what
 # was wrong. What was wrong is that labels were picked by *rank*: the longest
@@ -1003,27 +714,29 @@ tree_axis_layer <- function(opts, max_x, y0) {
 # so their numbers printed on top of each other in a blot while the branches
 # they belonged to were invisible.
 #
-# Legibility is geometry, not rank. A branch can carry a label when the branch
-# is drawn wide enough to hold the text, and when no label already sits on the
-# same row. Both are computable from the axis split that is solved anyway, so
-# both are decided here instead of being left to the eye.
+# Legibility is geometry, not rank. A label is a box of type on the drawn
+# figure, set only where that box fits along its own branch and touches no other
+# branch, no node's connector and no label already set — all measured in
+# millimetres, so one rule serves forty tips or a thousand, a column or a disc
+# (`tree_branch_keep()`). A row count stood in for that once, and a row is not a
+# distance: on a dense tree it was a fraction of the type's height, and on a
+# disc it shrinks toward the centre.
+#
+# The type is one size for the whole figure — a distance printed larger on one
+# branch than another reads as a different quantity. It is the size fitted to
+# the tip pitch, as large as that allows and never under the size worth reading
+# (`.branch_label_size()`); where the tree is too dense for every branch to take
+# a label at that size, fewer branches take one.
 
 BRANCH_ABOVE_SHRINK <- 0.72
 BRANCH_VJUST <- -0.35
 
-# Never more than this many, even where they all fit: past it the numbers are
-# the figure rather than an annotation on it.
-BRANCH_LABEL_MAX <- 25L
+# A bound on the work, not a taste: the collision test decides how many fit.
+BRANCH_LABEL_MAX <- 200L
 
 # Slack on the width test, so a label that only just fits still has air on
 # either side of it rather than butting into the next branch's.
 BRANCH_LABEL_PAD <- 1.2
-
-# Minimum vertical separation between two labels, in tip rows. The text is
-# fitted to a fraction of the row pitch (tree_auto_layout), so one clear row is
-# always enough — and internal nodes deep in a ladder sit fractions of a row
-# apart, which is what stacked them.
-BRANCH_ROW_GAP <- 1
 
 # What a circular tree's x axis is worth as a fraction of the panel it is drawn
 # on.
@@ -1134,68 +847,523 @@ tree_branch_format <- function(x, digits) {
   formatC(round(x, digits), format = "f", digits = digits)
 }
 
-#' Select the branches whose label can actually be read
+# Branch-label type size, in millimetres: fitted to the tip pitch and biased by
+# the reader's text size, as large as that asks for and never under the floor
+# the isolate labels answer to. Below the floor a label is not smaller, it is
+# left off — the placement drops the ones the tree has no room for.
+.branch_label_size <- function(opts) {
+  max(
+    .branch_size(opts) * BRANCH_ABOVE_SHRINK,
+    TIP_SIZE_FLOOR * .scale_of(opts)
+  )
+}
+
+#' The drawn geometry branch labels are placed against
 #'
-#' Two tests, in order. A branch has to be drawn at least as wide as its own
-#' text (`BRANCH_LABEL_PAD` times, for air), which is what excludes the
-#' hairlines inside a tight cluster however long they are relative to their
-#' neighbours. Then, longest first, a branch is taken only if no label already
-#' accepted sits within `BRANCH_ROW_GAP` rows of it — greedy, so where two
-#' branches compete for a row the longer one wins.
+#' Every branch as a run `from`..`to` along the axis, in millimetres from the
+#' root (a radius on a disc), at `across`: millimetres down the page on a linear
+#' tree, radians round the disc on a radial one. `across_per_row` converts a tip
+#' row into those units. The connector joining a node to its children sits at
+#' `conn_at` along the axis and spans `conn_lo`..`conn_hi` across it.
 #'
-#' @param len Numeric branch lengths.
-#' @param y Numeric vertical positions, in tip rows.
-#' @param span_x Numeric. The tree's own x span, in tree units.
+#' @param tree_data Data frame. `ggtree()`'s plot data.
+#' @param opts List. Resolved tree options (`layout`, `row_mm`).
+#' @param span_x Numeric. The tree's x span, in tree units.
 #' @param span_in Numeric. Inches that span is drawn across.
-#' @param size Numeric. Rendered text size, in mm (ggplot2's `size`).
-#' @param digits Integer decimal places, from `tree_branch_digits()`.
-#' @param max_labels Integer cap.
-#' @param row_gap Numeric minimum row separation.
-#' @return Integer vector of positions into `len`, longest branch first.
+#' @param x_limit Numeric. An inward tree's build range end, which is its rim.
+#' @param y_limit Numeric. A radial tree's y range, which is its whole turn.
+#' @return A list, or NULL when the span is degenerate.
+#' @export
+tree_branch_geometry <- function(
+  tree_data,
+  opts,
+  span_x,
+  span_in,
+  x_limit = NULL,
+  y_limit = NULL
+) {
+  if (!isTRUE(is.finite(span_x) && span_x > 0 && is.finite(span_in) && span_in > 0)) {
+    return(NULL)
+  }
+  mm <- 25.4 * span_in / span_x
+  radial <- .is_circular(opts)
+  per_row <- if (radial) {
+    2 * pi / (y_limit %||% .radial_y_limit(sum(tree_data$isTip %||% TRUE), 0))
+  } else {
+    row_mm <- opts$row_mm
+    if (isTRUE(is.finite(row_mm) && row_mm > 0)) row_mm else 25.4 * TIP_ROW_IN
+  }
+  across <- tree_data$y * per_row
+  geom <- list(
+    across = across,
+    across_per_row = per_row,
+    radial = radial,
+    conn_at = numeric(0),
+    conn_lo = numeric(0),
+    conn_hi = numeric(0)
+  )
+
+  if (is.null(tree_data$parent) || is.null(tree_data$node) || is.null(tree_data$x)) {
+    # A bare frame knows only each branch's midpoint and length.
+    len <- .branch_distance(tree_data)
+    geom$from <- (tree_data$branch - len / 2) * mm
+    geom$to <- (tree_data$branch + len / 2) * mm
+    return(geom)
+  }
+
+  x <- tree_data$x
+  pos <- if (identical(opts$layout, "inward") && isTRUE(is.finite(x_limit))) {
+    (x_limit - x) * mm
+  } else {
+    (x - min(x, na.rm = TRUE) + (opts$open_centre %||% 0)) * mm
+  }
+  parent <- match(tree_data$parent, tree_data$node)
+  geom$from <- pmin(pos, pos[parent])
+  geom$to <- pmax(pos, pos[parent])
+
+  child <- which(tree_data$node != tree_data$parent)
+  if (length(child)) {
+    lo <- tapply(across[child], tree_data$parent[child], min)
+    hi <- tapply(across[child], tree_data$parent[child], max)
+    geom$conn_at <- unname(pos[match(as.numeric(names(lo)), tree_data$node)])
+    geom$conn_lo <- unname(as.numeric(lo))
+    geom$conn_hi <- unname(as.numeric(hi))
+  }
+  geom
+}
+
+#' Place the branch labels that can be read
+#'
+#' A label is its text centred on its branch's midpoint, lifted just clear of
+#' the line. It is placed only when the branch is drawn at least as long as the
+#' text (`need`, which carries `BRANCH_LABEL_PAD` for air) and its box crosses
+#' no other branch, no connector and no label already placed.
+#'
+#' Candidates go highest `priority` first, so where two compete the more
+#' important one wins. One allowed `below` may take the slot under its branch
+#' when the one above is taken. On a disc the text turns with its branch and
+#' flips to stay upright, so both sides of the branch are held for it.
+#'
+#' @param len Numeric distances; NA or non-positive ones are not candidates.
+#' @param geom List from `tree_branch_geometry()`.
+#' @param need Numeric millimetres of branch each label needs.
+#' @param height Numeric millimetres of one line of label type.
+#' @param priority Numeric, placed highest first. Defaults to `len`.
+#' @param below Logical per candidate: may it go under its branch.
+#' @param lift Numeric per candidate: extra clearance off the line, in `across`
+#'   units (a truncation mark's strokes).
+#' @param max_labels Integer bound on how many are placed.
+#' @return Data frame of `i` (position in `len`) and `side` (1 above, -1 below),
+#'   in placement order.
 #' @export
 tree_branch_keep <- function(
   len,
-  y,
-  span_x,
-  span_in,
-  size,
-  digits,
-  max_labels = BRANCH_LABEL_MAX,
-  row_gap = BRANCH_ROW_GAP
+  geom,
+  need,
+  height,
+  priority = len,
+  below = FALSE,
+  lift = 0,
+  max_labels = BRANCH_LABEL_MAX
 ) {
+  none <- data.frame(i = integer(0), side = numeric(0))
   n <- length(len)
-  if (!n || !isTRUE(is.finite(span_x) && span_x > 0)) {
-    return(integer(0))
+  if (!n || is.null(geom) || !isTRUE(is.finite(height) && height > 0)) {
+    return(none)
   }
-  if (!isTRUE(is.finite(span_in) && span_in > 0)) {
-    return(integer(0))
-  }
-
-  # Both sides in inches: the text from its character count at the rendered
-  # size (the em width tip labels are reserved with), the branch from its
-  # share of the tree's span.
-  chars <- nchar(tree_branch_format(len, digits))
-  need <- BRANCH_LABEL_PAD * chars * TIP_CHAR_EM * size / 25.4
-  have <- len / span_x * span_in
-
-  fits <- which(is.finite(len) & len > 0 & is.finite(y) & have >= need)
-  if (!length(fits)) {
-    return(integer(0))
+  need <- rep_len(need, n)
+  below <- rep_len(below, n)
+  lift <- rep_len(lift, n)
+  from <- geom$from
+  to <- geom$to
+  across <- geom$across
+  candidates <- which(
+    is.finite(len) & len > 0 & is.finite(from) & is.finite(to) &
+      is.finite(across) & is.finite(need) & to - from >= need
+  )
+  if (!length(candidates)) {
+    return(none)
   }
 
-  keep <- integer(0)
-  taken_y <- numeric(0)
-  for (i in fits[order(len[fits], decreasing = TRUE)]) {
-    if (length(taken_y) && min(abs(taken_y - y[i])) < row_gap) {
-      next
+  mid <- (from + to) / 2
+  half_text <- need / BRANCH_LABEL_PAD / 2
+  gap <- -BRANCH_VJUST * height
+  box_across <- function(i, side) {
+    if (isTRUE(geom$radial)) {
+      # Across a disc is an angle, and a millimetre is worth more of one nearer
+      # the centre, so the box is measured at its inner end, where it is widest.
+      reach <- (gap + height) / max(mid[i] - half_text[i], height) + lift[i]
+      across[i] + c(-1, 1) * reach
+    } else if (side > 0) {
+      across[i] + lift[i] + c(gap, gap + height)
+    } else {
+      across[i] - lift[i] - c(gap + height, gap)
     }
-    keep <- c(keep, i)
-    taken_y <- c(taken_y, y[i])
-    if (length(keep) >= max_labels) {
+  }
+
+  placed <- integer(0)
+  sides <- numeric(0)
+  box <- list(a0 = numeric(0), a1 = numeric(0), b0 = numeric(0), b1 = numeric(0))
+  free <- function(i, a, b) {
+    lines <- from < a[2] & to > a[1] & across > b[1] & across < b[2]
+    lines[i] <- FALSE
+    if (any(lines, na.rm = TRUE)) {
+      return(FALSE)
+    }
+    connectors <- geom$conn_at > a[1] & geom$conn_at < a[2] &
+      geom$conn_hi > b[1] & geom$conn_lo < b[2]
+    if (any(connectors, na.rm = TRUE)) {
+      return(FALSE)
+    }
+    !any(box$a0 < a[2] & box$a1 > a[1] & box$b0 < b[2] & box$b1 > b[1])
+  }
+
+  for (i in candidates[order(priority[candidates], decreasing = TRUE)]) {
+    a <- mid[i] + c(-1, 1) * half_text[i]
+    slots <- if (isTRUE(below[i]) && !isTRUE(geom$radial)) c(1, -1) else 1
+    for (side in slots) {
+      b <- box_across(i, side)
+      if (free(i, a, b)) {
+        placed <- c(placed, i)
+        sides <- c(sides, side)
+        box <- list(
+          a0 = c(box$a0, a[1]),
+          a1 = c(box$a1, a[2]),
+          b0 = c(box$b0, b[1]),
+          b1 = c(box$b1, b[2])
+        )
+        break
+      }
+    }
+    if (length(placed) >= max_labels) {
       break
     }
   }
-  keep
+  data.frame(i = placed, side = sides)
+}
+
+# --- Branch lengths as drawn -------------------------------------------------
+#
+# Allelic distance measures divergence faithfully only over a short range.
+# Within a lineage it counts real differences; between lineages it saturates
+# near the scheme's locus count. An S. aureus database on the 1861-target
+# scheme holds pairs 30-70 apart and pairs 1600-1680 apart and almost nothing
+# between, so its few lineage-joining branches hold most of the tree's depth
+# while saying little beyond "another lineage", and every cluster the tree was
+# drawn to show is squeezed into the first sliver of the width.
+#
+# A log scale is not the answer (see "Branch labels" above). The two remedies
+# figures and tree viewers do use are offered, and each marks what it did:
+#
+#   scaled     A phylogram: every branch to scale, read off the distance axis.
+#   shortened  A phylogram with its outliers truncated. Branches longer than
+#              BRANCH_BREAK_FACTOR times the upper-quartile branch are cut,
+#              marked "//" and labelled with their true distance — only when
+#              that gives back BRANCH_BREAK_MIN_GAIN of the depth, so a tree
+#              without real outliers stays to scale. The quartile rather than a
+#              higher percentile because a small study of a few lineages has
+#              more than a twentieth of its branches joining them. A cut branch
+#              is drawn only as long as its mark and value need, which is what
+#              hands the width back to the clusters; the scale bar measures
+#              every branch left uncut.
+#   cladogram  Topology only, tips aligned, no distance scale. Its branch labels
+#              are always on, since they are the only place its distances are
+#              written.
+
+#' The ways the branches can be drawn, named as the sidebar lists them.
+#' @export
+BRANCH_MODES <- c(
+  "Phylogram (to scale)" = "scaled",
+  "Phylogram (long branches truncated)" = "shortened",
+  "Cladogram (topology only)" = "cladogram"
+)
+
+BRANCH_BREAK_QUANTILE <- 0.75
+BRANCH_BREAK_FACTOR <- 12
+BRANCH_BREAK_MIN_GAIN <- 0.25
+# Below this many measured branches a quartile is not a statistic.
+BRANCH_BREAK_MIN_EDGES <- 10L
+
+# The break glyph, in millimetres before the design scale: half the gap cut
+# out of the branch, how far each stroke climbs above and below it, and the
+# thinnest stroke that still reads beside hairline branches.
+BREAK_HALF_GAP_MM <- 0.8
+BREAK_RISE_MM <- 1.1
+BREAK_STROKE_MIN <- 0.2
+# How far a stroke leans, as a share of the half gap, and how much wider than
+# the branch the strip that cuts the gap is.
+BREAK_LEAN <- 0.6
+BREAK_MASK_WIDTH <- 3
+# Most of a row the strokes may climb, whatever the millimetres come to.
+BREAK_RISE_ROWS <- 0.3
+# ...but never flatter than this, or on a dense tree the strokes read as a dash.
+BREAK_RISE_MIN_MM <- 0.45
+# Clearance a truncation mark keeps from the nodes at either end of its branch.
+BREAK_MARGIN_MM <- 0.6
+
+# The branch mode an option set asks for. One that predates the control draws
+# to scale, exactly as it always did.
+.branch_mode <- function(opts) {
+  mode <- opts$branch_mode
+  if (length(mode) == 1L && mode %in% BRANCH_MODES) mode else "scaled"
+}
+
+#' Truncate the few branches that dwarf the rest of a tree
+#'
+#' A branch is cut when it is longer than `BRANCH_BREAK_FACTOR` times the
+#' upper-quartile branch, and only if cutting it at that length shortens the
+#' tree's depth by `BRANCH_BREAK_MIN_GAIN`: a long branch off to one side of a
+#' deep tree takes nothing from the clusters, and a mark there would have
+#' nothing to show for it.
+#'
+#' A cut branch is then drawn as short as its mark and value allow. `need` is
+#' the share of the drawn depth that takes. With `a` a tip's uncut depth and `b`
+#' the cut branches on its path, drawing each at `L` makes the depth
+#' `max(a + b * L)`, and the mark fits wherever `L >= need * (a + b * L)`; the
+#' shortest length that fits on every path is therefore
+#' `max(need * a / (1 - need * b))`, one pass over the tips. Where no length
+#' fits (`need * b >= 1`), or no `need` is given, it stays at the cut-off.
+#'
+#' @param tree An ape `phylo` object with non-negative edge lengths, rooted as
+#'   it will be drawn.
+#' @param need Numeric shares of the drawn depth one cut branch needs, tried in
+#'   order until one fits (the mark with its value, then the mark alone), or
+#'   NULL.
+#' @return A list: `tree` with the drawn edge lengths, `broken` (logical, one
+#'   per edge), `cap` (the cut-off) and `drawn` (the length a cut branch is
+#'   drawn at); both NA when nothing is cut.
+#' @export
+tree_shorten_branches <- function(tree, need = NULL) {
+  len <- tree$edge.length
+  unchanged <- list(
+    tree = tree,
+    broken = logical(length(len)),
+    cap = NA_real_,
+    drawn = NA_real_
+  )
+  positive <- len[is.finite(len) & len > 0]
+  if (length(positive) < BRANCH_BREAK_MIN_EDGES) {
+    return(unchanged)
+  }
+
+  cap <- BRANCH_BREAK_FACTOR *
+    quantile(positive, BRANCH_BREAK_QUANTILE, names = FALSE)
+  broken <- is.finite(len) & len > cap
+  if (!any(broken)) {
+    return(unchanged)
+  }
+
+  tip_depth <- function(lengths) {
+    drawn_tree <- tree
+    drawn_tree$edge.length <- lengths
+    node.depth.edgelength(drawn_tree)[seq_along(tree$tip.label)]
+  }
+  before <- max(tip_depth(len))
+  after <- max(tip_depth(replace(len, broken, cap)))
+  if (!isTRUE(before > 0 && 1 - after / before >= BRANCH_BREAK_MIN_GAIN)) {
+    return(unchanged)
+  }
+
+  drawn <- cap
+  need <- suppressWarnings(as.numeric(need))
+  need <- need[is.finite(need) & need > 0]
+  if (length(need)) {
+    a <- tip_depth(replace(len, broken, 0))
+    b <- tip_depth(as.numeric(broken))
+    for (share in need) {
+      if (all(share * b < 1)) {
+        fits <- max(share * a / (1 - share * b))
+        if (fits > 0) {
+          drawn <- min(cap, fits)
+        }
+        break
+      }
+    }
+  }
+
+  short <- tree
+  short$edge.length <- replace(len, broken, drawn)
+  list(tree = short, broken = broken, cap = cap, drawn = drawn)
+}
+
+#' Whether a tree has any branch worth truncating
+#'
+#' The same cut-off `tree_shorten_branches()` decides its `broken` flags from —
+#' `need` only settles how short a cut branch is drawn, never which ones are
+#' cut — asked without also solving that length, for a caller that only needs
+#' to know whether the truncated mode applies at all. The sidebar uses it to
+#' decide whether "Phylogram (long branches truncated)" is worth offering: a
+#' mode that would cut nothing is not a choice, it is a synonym for "to scale"
+#' that only reads as a live option.
+#'
+#' @param tree An ape `phylo` object.
+#' @return TRUE when at least one branch would be cut.
+#' @export
+tree_has_long_branches <- function(tree) {
+  isTRUE(any(tree_shorten_branches(tree)$broken))
+}
+
+#' The distance read-outs each branch mode carries
+#'
+#' One per mode, chosen for what its geometry can honestly support: a phylogram
+#' to scale is read off a distance axis; a truncated one off a scale bar, since
+#' past a cut a position is no longer cumulative distance while every uncut
+#' branch still measures true; a cladogram has no scale at all, so its branch
+#' labels are switched on — they are the only place its distances are written.
+#' An option set without a mode keeps whatever it asked for.
+#'
+#' @param opts List. Resolved tree options.
+#' @return `opts`, with `axis_show`, `treescale_show` and, for a cladogram,
+#'   `branch_show` resolved.
+#' @export
+tree_distance_marks <- function(opts) {
+  mode <- opts$branch_mode
+  if (length(mode) != 1L || !isTRUE(mode %in% BRANCH_MODES)) {
+    return(opts)
+  }
+  opts$axis_show <- identical(mode, "scaled")
+  opts$treescale_show <- identical(mode, "shortened")
+  if (identical(mode, "cladogram")) {
+    opts$branch_show <- TRUE
+  }
+  opts
+}
+
+#' The layout and branch mode a tree's own shape asks for
+#'
+#' Rectangular reads most clearly, and circular carries more tips before it
+#' clutters, so the usual advice is to start rectangular and go circular once
+#' the tree is crowded. Crowded here is the fit's own test: rectangular while
+#' the isolate names can be set legibly down the page (`tree_auto_layout()`,
+#' `crowded_tips()`), circular past it — but only for a tree whose tips reach
+#' out toward the rim. A disc gives its room to the outer tips, so one whose
+#' tips mostly sit near the root leaves most of the disc empty and its isolates
+#' in a ring near the centre; that tree stays rectangular, where every tip gets
+#' the same row whatever its depth. Balance is the median tip's share of the
+#' deepest tip's depth, as drawn after truncation.
+#'
+#' Branches are truncated when the tree has outliers worth truncating
+#' (`tree_shorten_branches()`), drawn as a cladogram when it has no length to
+#' draw at all, and to scale otherwise. A cladogram is never chosen over real
+#' lengths: dropping them is the reader's call, not the data's.
+#'
+#' @param tree An ape `phylo` object.
+#' @param width_in Numeric. Tree-and-labels budget, in inches.
+#' @param label_chars Numeric. Characters in the longest isolate label.
+#' @return List of `layout` and `branch_mode`.
+#' @export
+tree_auto_choices <- function(tree, width_in = 5.5, label_chars = 20) {
+  n <- length(tree$tip.label)
+  w <- if (isTRUE(is.finite(width_in) && width_in > 0)) width_in else 5.5
+  linear <- tree_auto_layout(n, w, "rectangular", label_chars)
+
+  len <- tree$edge.length
+  drawn <- tree
+  branch_mode <- if (is.null(len) || !any(is.finite(len) & len > 0)) {
+    "cladogram"
+  } else {
+    # The marks charged as a linear tree of this width would charge them: close
+    # enough to judge the tree's shape, which is all this is for.
+    cut <- tree_shorten_branches(
+      tree,
+      .break_need_in(list(branch_size = linear$branch_size), 6) / w
+    )
+    drawn <- cut$tree
+    if (any(cut$broken)) "shortened" else "scaled"
+  }
+
+  crowded <- !isTRUE(linear$labels_legible) || crowded_tips(n)
+  balanced <- .tip_balance(drawn, branch_mode) >= AUTO_RADIAL_BALANCE
+  list(
+    layout = if (crowded && balanced) "circular" else "rectangular",
+    branch_mode = branch_mode
+  )
+}
+
+# The median tip's share of the deepest tip's depth: how far out toward a disc's
+# rim the typical isolate would sit. Calibrated on the test databases: a diverse
+# E. coli collection sits at 0.85 and P. aeruginosa at 0.39, where a disc earns
+# its room; S. aureus across lineages at 0.05, and its subsets at 0.1 to 0.2.
+AUTO_RADIAL_BALANCE <- 0.35
+
+# A cladogram's tips all sit on the rim, so it is balanced by construction.
+.tip_balance <- function(tree, branch_mode) {
+  if (identical(branch_mode, "cladogram")) {
+    return(1)
+  }
+  depth <- node.depth.edgelength(tree)[seq_along(tree$tip.label)]
+  if (!isTRUE(max(depth) > 0)) 1 else median(depth) / max(depth)
+}
+
+# The radius fraction a radial phylogram's median tip is moved out to, and the
+# most of the tree's depth the centre may take to get it there.
+OPEN_CENTRE_TIP_RADIUS <- 0.3
+OPEN_CENTRE_MAX <- 0.5
+
+#' How far to open the centre of a radial phylogram
+#'
+#' A disc has almost no circumference near its middle. A tree whose tips mostly
+#' sit near the root — one deep lineage beside many shallow ones, which is what
+#' a collection spanning lineages looks like even truncated — draws most of its
+#' isolates as a blot there while the outer disc stays empty. Starting the root
+#' on a small circle instead of the centre (the long-root trick the ggtree book
+#' recommends for circular readability) gives those tips a ring to spread along.
+#'
+#' Opened just far enough that the median tip sits at `OPEN_CENTRE_TIP_RADIUS`
+#' of the radius: with `m` the median and `M` the deepest tip, that is
+#' `(r * M - m) / (1 - r)`, never more than `OPEN_CENTRE_MAX * M`, and nothing
+#' at all for a tree whose tips are already spread outward, or a cladogram,
+#' whose tips all sit on the rim.
+#'
+#' @param tip_x Numeric. Each tip's distance from the root, as drawn.
+#' @return Numeric radius to leave open, in the same units.
+#' @export
+tree_open_centre <- function(tip_x) {
+  tip_x <- tip_x[is.finite(tip_x)]
+  if (!length(tip_x) || !isTRUE(max(tip_x) > 0)) {
+    return(0)
+  }
+  deepest <- max(tip_x)
+  open <- (OPEN_CENTRE_TIP_RADIUS * deepest - median(tip_x)) /
+    (1 - OPEN_CENTRE_TIP_RADIUS)
+  .clamp(open, 0, OPEN_CENTRE_MAX * deepest)
+}
+
+# The allelic distance each row's branch stands for. The builder carries it in
+# its own column because `branch.length` is the drawn length once a tree has
+# been shortened.
+.branch_distance <- function(tree_data) {
+  tree_data$distance %||% tree_data$branch.length
+}
+
+# Whether each row's branch is drawn broken.
+.branch_broken <- function(tree_data) {
+  broken <- tree_data$broken
+  if (is.null(broken)) rep(FALSE, NROW(tree_data)) else broken %in% TRUE
+}
+
+# How far a truncation mark's strokes climb off the branch, in rows: a physical
+# length, capped to a share of the row so they stay out of the next one.
+.break_rise_rows <- function(opts) {
+  row_mm <- opts$row_mm
+  if (!isTRUE(is.finite(row_mm) && row_mm > 0)) {
+    row_mm <- 25.4 * TIP_ROW_IN
+  }
+  scale <- .scale_of(opts)
+  min(
+    BREAK_RISE_MM * scale / row_mm,
+    max(BREAK_RISE_ROWS, BREAK_RISE_MIN_MM * scale / row_mm)
+  )
+}
+
+# Inches of branch a truncated branch needs for its mark and its value: the
+# wider of the two, with a margin either side so the mark keeps clear of the
+# nodes it joins.
+.break_need_in <- function(opts, chars) {
+  scale <- .scale_of(opts)
+  text_mm <- BRANCH_LABEL_PAD * chars * TIP_CHAR_EM * .branch_label_size(opts)
+  mark_mm <- 2 * BREAK_HALF_GAP_MM * (1 + BREAK_LEAN) * scale
+  (max(text_mm, mark_mm) + 2 * BREAK_MARGIN_MM * scale) / 25.4
 }
 
 # --- Annotation widths -------------------------------------------------------
@@ -1245,13 +1413,12 @@ HEADER_SIZE_MIN <- 0.9
 # Ratios do not take it. HEADER_CHAR_ROWS is millimetres of type over inches of
 # row pitch and both sides scale together, so it is the same number at any
 # size; so are TIP_CHAR_EM, HEADER_FILL and every `*_ROWS` and `*_FRAC`.
-# Smallest type a printed figure should carry, in points.
-#
-# The number journals converge on: Nature, Science and PLOS all set their floor
-# between 5 and 7 pt, and 5 is the common minimum for a label. Below it the
-# figure is not "dense", it is unreadable on paper.
+#' Smallest type a printed figure should carry, in points.
+#'
+#' The floor every engine shares; see app/logic/viz_fit.R for where it comes
+#' from.
 #' @export
-MIN_PRINT_PT <- 5
+MIN_PRINT_PT <- viz_fit$MIN_PRINT_PT
 
 # ggplot2 sizes geom text in millimetres of font height and theme text in
 # points, so the two have to be converted before they can be compared.
@@ -1395,20 +1562,12 @@ scale_tree_opts <- function(opts, k) {
 # branch strokes along with the type, which is what makes an export at another
 # width the same figure (see scale_tree_opts). Text size has to move the type
 # and leave the layout where it is, or "does this still fit?" has no answer.
-TEXT_SCALE_MIN <- 0.6
-TEXT_SCALE_MAX <- 2
-
 #' Text size the plot is drawn at when the reader has not said otherwise.
 #' @export
-TEXT_SCALE_DEFAULT <- 1
+TEXT_SCALE_DEFAULT <- viz_fit$TEXT_SCALE_DEFAULT
 
-.text_of <- function(opts) {
-  k <- suppressWarnings(as.numeric(opts$text_scale %||% TEXT_SCALE_DEFAULT))
-  if (length(k) != 1L || is.na(k) || !is.finite(k) || k <= 0) {
-    return(TEXT_SCALE_DEFAULT)
-  }
-  .clamp(k, TEXT_SCALE_MIN, TEXT_SCALE_MAX)
-}
+# The reader's bias, cleaned and held to the range every engine shares.
+.text_of <- function(opts) viz_fit$text_scale(opts$text_scale)
 
 # The scale a piece of *type* is set at: the design's physical scale times the
 # reader's bias. Geometry takes `.scale_of()` alone.
@@ -2418,15 +2577,7 @@ LEGEND_MAX_FRAC <- 0.6
 LEGEND_ROW_PAD_IN <- 0.040
 LEGEND_ROW_PT_IN <- 0.017
 LEGEND_MAX_COLS <- 3L # past this the guides are wider than the tree
-LEGEND_MAX_ROWS <- 18L # keys in one column before they wrap into another
-
-# Columns one guide's own keys may wrap into.
-#
-# One fold, not three. Wrapping is what keeps a guide taller than its share of
-# the box on the page at all, and the key budget is allowed to count on it —
-# which makes it a way of buying keys, and at four columns it buys them with
-# width the tree is holding. Past a fold the answer is fewer keys.
-LEGEND_KEY_COLS <- 2L
+LEGEND_MAX_ROWS <- viz_legend$LEGEND_MAX_ROWS
 
 .legend_row_in <- function(legend_size = 10, scale = 1) {
   size <- suppressWarnings(as.numeric(legend_size %||% 10))
@@ -2527,35 +2678,8 @@ tree_legend_plan <- function(
       add(legend_guide_id("class", h, i), n)
     }
   }
-  keys <- tree_legend_key_budget(
-    demand,
-    tree_legend_room(legend_size, height_in, scale)
-  )
-  # A guide too tall for its share wraps its own keys into a second column
-  # rather than being cut back further — ggplot2 will not wrap the box itself,
-  # and a stack of guides that runs off the bottom is simply clipped. Kept for
-  # the whole box, so the guides that wrap all wrap the same way.
-  #
-  # The budget above does not count on it: costing a guide at one column while
-  # the render folds it is conservative, and the alternative is worse — a
-  # budget that can buy keys by folding spends the tree's width on them.
-  max_rows <- tree_legend_max_rows(
-    layers,
-    heatmaps,
-    legend_size,
-    height_in,
-    scale
-  )
-  ncol <- vapply(keys, tree_legend_ncol, integer(1), max_rows = max_rows)
-  list(
-    ids = ids,
-    demand = setNames(demand, ids),
-    keys = setNames(keys, ids),
-    ncol = setNames(as.integer(ncol), ids),
-    order = setNames(seq_along(ids), ids),
-    max_rows = max_rows,
-    rows = as.integer(sum(.legend_guide_rows(keys, demand, ncol)))
-  )
+  names(demand) <- ids
+  viz_legend$legend_plan(demand, tree_legend_room(legend_size, height_in, scale))
 }
 
 #' The name one guide is filed under in a `tree_legend_plan()`.
@@ -2653,14 +2777,10 @@ tree_legend_max_rows <- function(
   guides <- length(layers %||% list()) +
     length(drawn) +
     sum(vapply(drawn, function(h) length(.class_guide_levels(h)) > 0L, logical(1)))
-  room <- tree_legend_room(legend_size, height_in, scale)
-  if (guides < 1L) {
-    return(LEGEND_MAX_ROWS)
-  }
-  # Two rows per guide go to its title and the blank line under it, so only
-  # what is left can hold keys.
-  per <- floor(room / guides) - 2L
-  as.integer(.clamp(per, 3L, LEGEND_MAX_ROWS))
+  viz_legend$legend_max_rows(
+    guides,
+    tree_legend_room(legend_size, height_in, scale)
+  )
 }
 
 #' Columns the guide box needs so that no guide is cut off.
@@ -4534,14 +4654,17 @@ tree_header_drawn <- function(size, scale = 1) {
 # Solves x-axis plot range ensuring tip labels and heatmaps fit without clipping
 .tiplab_xlim <- function(opts, md, tree_data, max_x, heat = 0) {
   frac <- .tiplab_axis_frac(opts, md, heat)
-  x_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
-  if (!is.finite(x_min)) {
-    x_min <- 0
+  tree_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
+  if (!is.finite(tree_min)) {
+    tree_min <- 0
   }
-  if (isTRUE(opts$rootedge_show)) {
-    x_min <- x_min - max_x * 0.05
-  }
-  span <- (max_x - x_min) * (1 + heat)
+  # Room inside the root: a root edge's stub, and a radial tree's open centre
+  # (`tree_open_centre()`) past it. The centre is not tree, so the annotations,
+  # which are multiples of the tree's span, do not grow with it.
+  stub <- if (isTRUE(opts$rootedge_show)) max_x * 0.05 else 0
+  centre <- max((opts$open_centre %||% 0) - stub, 0)
+  x_min <- tree_min - stub - centre
+  span <- (max_x - tree_min + stub) * (1 + heat) + centre
   range <- span / (1 - frac)
 
   # The overhang is a fixed number of inches and the axis it has to be
@@ -5036,60 +5159,151 @@ tree_aesthetic_drawn <- function(opts, aesthetic) {
 
 #' Allelic distances written on the branches that can hold them
 #'
-#' The selection is made here rather than by a `subset` inside the aesthetic,
-#' because it is geometry (see `tree_branch_keep()`) and needs the axis split
-#' the caller has already solved. What survives is drawn from its own data
-#' frame, so a branch that was not chosen contributes nothing to the layer at
-#' all.
+#' The branch-label switch asks for every branch's distance. A truncated branch
+#' carries its own whatever the switch says — its value is the only record of
+#' how long it really is — and is placed first, above its mark or, where that
+#' slot is taken, below it. Which labels are drawn is `tree_branch_keep()`'s
+#' decision against the drawn geometry, so an unchosen branch contributes
+#' nothing to the layer at all.
+#'
+#' On a disc each number turns to run along its branch, flipped on the left
+#' half so it never reads upside down.
 #'
 #' @param opts List. Resolved tree options.
 #' @param tree_data Data frame. `ggtree()`'s plot data.
 #' @param span_x Numeric. The tree's x span, in tree units.
 #' @param span_in Numeric. Inches that span is drawn across.
+#' @param geom List from `tree_branch_geometry()`; built from the rest if NULL.
 #' @return A ggplot2 layer, or NULL when nothing can be labelled legibly.
-tree_branch_layer <- function(opts, tree_data, span_x, span_in) {
-  if (!isTRUE(opts$branch_show)) {
+tree_branch_layer <- function(opts, tree_data, span_x, span_in, geom = NULL) {
+  broken <- .branch_broken(tree_data)
+  if (!isTRUE(opts$branch_show) && !any(broken)) {
     return(NULL)
   }
-
-  len <- tree_data$branch.length
+  len <- .branch_distance(tree_data)
   if (is.null(len) || !any(is.finite(len) & len > 0)) {
     return(NULL)
   }
-
-  size <- .branch_size(opts) * BRANCH_ABOVE_SHRINK
-  digits <- tree_branch_digits(len)
-  keep <- tree_branch_keep(
-    len,
-    tree_data$y,
-    span_x,
-    span_in,
-    size,
-    digits
-  )
-  if (!length(keep)) {
+  geom <- geom %||% tree_branch_geometry(tree_data, opts, span_x, span_in)
+  if (is.null(geom)) {
     return(NULL)
   }
 
-  # `branch` is the midpoint of the branch, which is where the number goes.
+  size <- .branch_label_size(opts)
+  text <- tree_branch_format(len, tree_branch_digits(len))
+  rise <- .break_rise_rows(opts)
+  placed <- tree_branch_keep(
+    if (isTRUE(opts$branch_show)) len else replace(len, !broken, NA_real_),
+    geom,
+    need = BRANCH_LABEL_PAD * nchar(text) * TIP_CHAR_EM * size,
+    height = size,
+    priority = len + ifelse(broken, max(len, na.rm = TRUE) + 1, 0),
+    below = broken,
+    lift = ifelse(broken, rise * geom$across_per_row, 0)
+  )
+  if (!nrow(placed)) {
+    return(NULL)
+  }
+
+  i <- placed$i
   labels <- data.frame(
-    x = tree_data$branch[keep],
-    y = tree_data$y[keep],
-    label = tree_branch_format(len[keep], digits),
+    x = tree_data$branch[i],
+    y = tree_data$y[i] + ifelse(broken[i], placed$side * rise, 0),
+    label = text[i],
+    vjust = ifelse(placed$side > 0, BRANCH_VJUST, 1 - BRANCH_VJUST),
+    angle = 0,
     stringsAsFactors = FALSE
   )
+  if (isTRUE(geom$radial)) {
+    deg <- (geom$across[i] * 180 / pi) %% 360
+    labels$angle <- ifelse(deg > 90 & deg < 270, deg + 180, deg)
+  }
 
   geom_text(
     data = labels,
     mapping = aes(
       x = .data[["x"]],
       y = .data[["y"]],
-      label = .data[["label"]]
+      label = .data[["label"]],
+      vjust = .data[["vjust"]],
+      angle = .data[["angle"]]
     ),
     inherit.aes = FALSE,
     size = size,
-    vjust = BRANCH_VJUST,
-    color = opts$branch_color
+    color = opts$branch_color %||% opts$line_color %||% "#000000"
+  )
+}
+
+#' The mark on a truncated branch
+#'
+#' A short gap cut at the branch's midpoint, bridged by two slanted strokes —
+#' the "//" a figure uses for an axis it has cut. The distance the branch stands
+#' for is written by `tree_branch_layer()`, which places it with every other
+#' label.
+#'
+#' @param opts List. Resolved tree options.
+#' @param tree_data Data frame. `ggtree()`'s plot data, with the builder's
+#'   `broken` column.
+#' @param span_x Numeric. The tree's x span, in tree units.
+#' @param span_in Numeric. Inches that span is drawn across.
+#' @return A list of ggplot2 layers, or NULL when no branch is truncated.
+tree_branch_break_layers <- function(opts, tree_data, span_x, span_in) {
+  rows <- which(.branch_broken(tree_data))
+  if (!length(rows)) {
+    return(NULL)
+  }
+  if (!isTRUE(is.finite(span_x) && span_x > 0 && is.finite(span_in) && span_in > 0)) {
+    return(NULL)
+  }
+
+  scale <- .scale_of(opts)
+  # Half the gap, in x units through the inches the tree's span is drawn across.
+  half_gap <- BREAK_HALF_GAP_MM * scale / 25.4 * span_x / span_in
+  rise <- .break_rise_rows(opts)
+
+  x <- tree_data$branch[rows]
+  y <- tree_data$y[rows]
+  # A slanted branch runs straight from its parent, so its midpoint is halfway
+  # up as well as along. Every other layout has reached the child's row there.
+  if (identical(opts$layout, "slanted")) {
+    y <- (y + tree_data$y[match(tree_data$parent[rows], tree_data$node)]) / 2
+  }
+
+  branch_lw <- (opts$branch_width %||% tree_branch_width(sum(tree_data$isTip))) *
+    scale
+  centres <- c(x - half_gap, x + half_gap)
+
+  segments <- function(d, colour, linewidth) {
+    geom_segment(
+      data = d,
+      mapping = aes(
+        x = .data[["x"]],
+        xend = .data[["xend"]],
+        y = .data[["y"]],
+        yend = .data[["yend"]]
+      ),
+      inherit.aes = FALSE,
+      color = colour,
+      linewidth = linewidth
+    )
+  }
+
+  list(
+    segments(
+      data.frame(x = x - half_gap, xend = x + half_gap, y = y, yend = y),
+      opts$bg %||% "#ffffff",
+      branch_lw * BREAK_MASK_WIDTH
+    ),
+    segments(
+      data.frame(
+        x = centres - half_gap * BREAK_LEAN,
+        xend = centres + half_gap * BREAK_LEAN,
+        y = rep(y, 2) - rise,
+        yend = rep(y, 2) + rise
+      ),
+      opts$line_color %||% "#000000",
+      max(branch_lw, BREAK_STROKE_MIN * scale)
+    )
   )
 }
 
@@ -5249,7 +5463,7 @@ CLADE_PALETTE <- c(
     return(0)
   }
   set <- vapply(caps, function(x) .clade_caption_text(opts, x$label), "")
-  max(vapply(set, .string_em, numeric(1)), 0)
+  max(viz_fit$string_em(set), 0)
 }
 
 # The part of the caption column that is not text.
@@ -5292,15 +5506,15 @@ CLADE_PALETTE <- c(
 .clade_caption_text <- function(opts, label) {
   label <- as.character(label %||% "")
   limit <- .clade_max_em(opts)
-  if (.string_em(label) <= limit) {
+  if (viz_fit$string_em(label) <= limit) {
     return(label)
   }
   ch <- strsplit(label, "", fixed = TRUE)[[1]]
-  room <- limit - .string_em("\u2026")
+  room <- limit - viz_fit$string_em("\u2026")
   used <- 0
   keep <- 0L
   for (i in seq_along(ch)) {
-    used <- used + .string_em(ch[[i]])
+    used <- used + viz_fit$string_em(ch[[i]])
     if (used > room) {
       break
     }
@@ -5779,6 +5993,20 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     }
   }
 
+  # Branch lengths as drawn (see that section). The read-outs each mode carries
+  # are settled before anything below reads them, and the true distance of every
+  # branch is kept by the node it leads to, for the labels.
+  branch_mode <- .branch_mode(opts)
+  opts <- tree_distance_marks(opts)
+  distance <- if (!is.null(tree$edge.length)) {
+    setNames(tree$edge.length, tree$edge[, 2])
+  }
+  branch_length <- if (identical(branch_mode, "cladogram")) {
+    "none"
+  } else {
+    "branch.length"
+  }
+
   md <- tree_tip_metadata(tree, metadata)
 
   # Validate selections against current metadata columns
@@ -5821,6 +6049,35 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # What one annotation column is worth in tree spans, solved once against this
   # plot's own label reserve. Every width below reads the answer off `opts`.
   opts <- resolve_annotation_widths(opts, md)
+
+  # Truncation is settled on the rooted tree, since depth depends on the root,
+  # and only now: how short a cut branch may be drawn depends on the room its
+  # mark and value take against the tree's own share of the width, and that
+  # share is known once the isolate labels and annotations have been decided.
+  broken_nodes <- integer(0)
+  if (identical(branch_mode, "shortened") && !is.null(distance)) {
+    found <- tree_shorten_branches(tree)
+    if (any(found$broken)) {
+      chars <- max(nchar(tree_branch_format(
+        tree$edge.length[found$broken],
+        tree_branch_digits(tree$edge.length)
+      )))
+      tree_in <- tree_budget_in(opts) * (1 - .tiplab_budget_frac(opts, md))
+      need <- c(.break_need_in(opts, chars), .break_need_in(opts, 0)) / tree_in
+      found <- tree_shorten_branches(tree, need)
+      # A radial tree may then open its centre, which takes that much radius from
+      # the tree; one more pass charges the marks for it.
+      if (identical(opts$layout, "circular")) {
+        tips <- node.depth.edgelength(found$tree)[seq_along(tree$tip.label)]
+        centre <- tree_open_centre(tips)
+        if (centre > 0) {
+          found <- tree_shorten_branches(tree, need * (1 + centre / max(tips)))
+        }
+      }
+      tree <- found$tree
+      broken_nodes <- tree$edge[found$broken, 2]
+    }
+  }
   # Inches the whole panel spans. `opts$width_in` is only the tree-and-labels
   # budget — the canvas grows past it for the annotations — so it is the wrong
   # width to fit a header to. Fitting to it is what drew a thirty-column matrix
@@ -5941,7 +6198,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # as a blot at the centre with its annotations outside the root.
   inward <- identical(opts$layout, "inward")
   inward_xlim <- if (inward) {
-    probe <- suppressWarnings(ggtree(tree)$data)
+    probe <- suppressWarnings(ggtree(tree, branch.length = branch_length)$data)
     probe_x <- suppressWarnings(max(probe$x, na.rm = TRUE))
     c(
       .tiplab_xlim(opts, md, probe, probe_x, annotation_total(opts))$limit,
@@ -5952,6 +6209,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   build_base <- function(alpha = NULL) {
     args <- list(
       tree,
+      branch.length = branch_length,
       color = opts$line_color,
       # Thinned with the tip count (`tree_branch_width`) so a few hundred
       # branches stay separate lines rather than filling in. Solved here, not
@@ -5975,7 +6233,25 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   base <- if (isTRUE(opts$nodelabel_show)) build_base(0.2) else build_base()
 
   tree_data <- base$data
+  tree_data$distance <- if (is.null(distance)) {
+    NA_real_
+  } else {
+    unname(distance[as.character(tree_data$node)])
+  }
+  tree_data$broken <- tree_data$node %in% broken_nodes
   max_x <- max(tree_data$x, na.rm = TRUE)
+
+  # A radial phylogram whose tips crowd its root is drawn around an open centre
+  # (`tree_open_centre()`); every radial solve below measures from that circle.
+  tree_min_x <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
+  open_centre <- if (
+    identical(opts$layout, "circular") && !identical(branch_mode, "cladogram")
+  ) {
+    tree_open_centre(tree_data$x[tree_data$isTip] - tree_min_x)
+  } else {
+    0
+  }
+  opts$open_centre <- open_centre
 
   p <- base %<+% md
 
@@ -6072,7 +6348,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     # A disc has a pitch too, and the leader lines are decided from it
     # (`.leaders_drawn()`). Nothing else on a radial tree reads it — the label
     # room there is solved along the ring instead (`.tiplab_room()`).
-    x_min <- suppressWarnings(min(tree_data$x, na.rm = TRUE))
+    x_min <- tree_min_x - open_centre
     span <- fit$limit - x_min
     opts$row_mm <- .radial_tip_pitch_mm(
       opts,
@@ -6086,7 +6362,7 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # How much x axis the panel spans, which is what turns a column's width in
   # data units into its width on the page — and so into a type size that fits
   # it.
-  axis_units <- fit$limit - suppressWarnings(min(tree_data$x, na.rm = TRUE))
+  axis_units <- fit$limit - (tree_min_x - open_centre)
 
   # Now the axis is solved, how much of a column's name fits on it is knowable.
   opts$heatmaps <- .resolve_header_visibility(
@@ -6101,7 +6377,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # the only thing that says whether a given branch is physically wide enough
   # to print a number on (tree_branch_keep); the annotations are paid for by a
   # wider canvas, so they do not come out of it.
-  span_in <- tree_budget_in(opts) * (1 - .tiplab_budget_frac(opts, md))
+  span_in <- tree_budget_in(opts) * (1 - .tiplab_budget_frac(opts, md)) *
+    tree_span / (tree_span + open_centre)
 
   # The tip-label nudge, in x-axis units: a physical gap (mm) becomes data
   # units through how many inches the tree's own span is drawn across. The
@@ -6138,10 +6415,24 @@ build_tree_ggtree <- function(tree, metadata, opts) {
         new_scale_color()
       )
     },
-    list(
-      tree_branch_layer(opts, tree_data, tree_span, span_in),
-      tree_tippoint_layer(opts, pt_l, shp_l)
-    ),
+    tree_branch_break_layers(opts, tree_data, tree_span, span_in),
+    list(tree_branch_layer(
+      opts,
+      tree_data,
+      tree_span,
+      span_in,
+      tree_branch_geometry(
+        tree_data,
+        opts,
+        tree_span,
+        span_in,
+        x_limit = inward_xlim[1],
+        y_limit = if (circular) {
+          .radial_y_limit(sum(tree_data$isTip), open_angle)
+        }
+      )
+    )),
+    list(tree_tippoint_layer(opts, pt_l, shp_l)),
     if (!is.null(pt_l)) {
       list(
         tree_scale(
@@ -6272,11 +6563,23 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # drawing the outermost twentieth of its radius. The disc has margin enough:
   # CoordPolar draws it across four fifths of a square panel however tightly
   # the axis is fitted (`COORD_POLAR_FRAC`).
+  #
+  # An open centre is the one deliberate hole (`tree_open_centre()`), set as the
+  # lower limit rather than as expansion so it is exactly the radius the solves
+  # above were charged for.
   if (!inward) {
     left_expand <- if (circular) 0 else 0.05
     p <- p +
       scale_x_continuous(
-        limits = c(NA, fit$limit),
+        limits = c(
+          if (open_centre > 0) {
+            tree_min_x -
+              max(open_centre, if (isTRUE(opts$rootedge_show)) max_x * 0.05 else 0)
+          } else {
+            NA
+          },
+          fit$limit
+        ),
         expand = expansion(mult = c(left_expand, 0))
       )
   }

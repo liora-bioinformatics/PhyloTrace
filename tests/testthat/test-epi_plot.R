@@ -8,12 +8,19 @@ box::use(
     expect_length,
     expect_no_warning,
     expect_s3_class,
+    expect_gt,
+    expect_gte,
+    expect_lt,
+    expect_lte,
     expect_true,
     test_that
   ],
+  ggplot2[ggplot_build],
 )
 box::use(
   app / logic / epi_plot,
+  app / logic / viz_export,
+  app / logic / viz_fit,
 )
 
 # The bar-stacking helpers below are internal to the module.
@@ -293,15 +300,17 @@ test_that("epi_legend_ncol narrows the legend so long labels fit the width", {
     "US Centers for Disease Control and Prevention",
     "Wellcome Centre for Human Genetics"
   )
-  wide <- epi_plot$epi_legend_ncol(long, width_px = 1180)
+  wide <- epi_plot$epi_legend_ncol(long, width_in = 12)
   expect_true(wide >= 1L && wide < 6L)
-  # A narrower panel takes fewer columns still.
-  expect_true(epi_plot$epi_legend_ncol(long, width_px = 400) <= wide)
+  # A narrower canvas takes fewer columns still.
+  expect_true(epi_plot$epi_legend_ncol(long, width_in = 4) <= wide)
+  # And smaller type fits more.
+  expect_gte(epi_plot$epi_legend_ncol(long, width_in = 12, pt = 6), wide)
 })
 
 test_that("epi_legend_ncol never asks for more columns than categories", {
-  expect_identical(epi_plot$epi_legend_ncol(c("A", "B", "C"), 4000), 3L)
-  expect_identical(epi_plot$epi_legend_ncol("All isolates", 1180), 1L)
+  expect_identical(epi_plot$epi_legend_ncol(c("A", "B", "C"), 40), 3L)
+  expect_identical(epi_plot$epi_legend_ncol("All isolates", 12), 1L)
 })
 
 test_that("epi_legend_ncol falls back for an unknown width", {
@@ -321,13 +330,17 @@ test_that("the fill legend carries the adaptive column count", {
     count = 1L,
     stringsAsFactors = FALSE
   )
-  p <- epi_plot$build_epi_ggplot(
-    binned,
-    list(mode = "stacked", interval = "week", plot_width = 500)
-  )
+  opts <- list(mode = "stacked", interval = "week")
+  p <- epi_plot$build_epi_ggplot(binned, opts)
+  lay <- epi_plot$epi_layout(binned, opts)
+  expect_identical(p$guides$guides$fill$params$ncol, lay$legend_ncol)
   expect_identical(
-    p$guides$guides$fill$params$ncol,
-    epi_plot$epi_legend_ncol(c("EMBL-EBI", "US Centers for Disease Control and Prevention"), 500)
+    lay$legend_ncol,
+    epi_plot$epi_legend_ncol(
+      c("EMBL-EBI", "US Centers for Disease Control and Prevention"),
+      lay$width_in,
+      lay$legend_pt
+    )
   )
 })
 
@@ -641,11 +654,14 @@ test_that("every style renders to a real image", {
   # save_plot_export()'s job — see test-viz_export.R.
   for (mode in c("stacked", "cumulative")) {
     file <- tempfile(fileext = ".png")
-    epi_plot$render_epi_png(
-      epi_plot$build_epi_ggplot(binned, list(mode = mode, interval = "week")),
+    opts <- list(mode = mode, interval = "week")
+    lay <- epi_plot$epi_layout(binned, opts)
+    viz_export$render_canvas_png(
+      epi_plot$build_epi_ggplot(binned, c(opts, list(layout = lay))),
       file,
-      width_px = 800,
-      height_px = 440
+      lay$width_in,
+      lay$height_in,
+      res = 60
     )
     expect_true(file.exists(file))
     expect_true(file.size(file) > 0)
@@ -1414,4 +1430,134 @@ test_that("stacked bars keep the order the fill scale draws them in", {
   )
   expect_equal(max(first$ymax), 5)
   expect_equal(min(first$ymin), 0)
+})
+
+# --- epi_layout ---------------------------------------------------------------
+
+strata_fixture <- function(n_strata, label = function(i) paste("Site", i)) {
+  dates <- seq(as.Date("2024-01-01"), by = "month", length.out = 12)
+  data.frame(
+    date_bin = rep(dates, each = n_strata),
+    stratum = rep(vapply(seq_len(n_strata), label, character(1)), 12),
+    count = rep(seq_len(n_strata), 12),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("the legend is added to the canvas, never taken from the curve", {
+  single <- strata_fixture(1, function(i) epi_plot$EPI_ALL_LABEL)
+  mapped <- strata_fixture(8)
+  opts <- list(mode = "stacked", interval = "month", aspect = 0.6)
+  a <- epi_plot$epi_layout(single, opts)
+  b <- epi_plot$epi_layout(mapped, opts)
+  expect_equal(a$plot_height_in, b$plot_height_in)
+  expect_gt(b$height_in, a$height_in)
+  expect_equal(a$width_in, epi_plot$EPI_CANVAS_IN)
+})
+
+test_that("text size moves the type and leaves the canvas where it is", {
+  binned <- strata_fixture(4)
+  opts <- list(mode = "stacked", interval = "month", aspect = 0.6)
+  base <- epi_plot$epi_layout(binned, opts)
+  big <- epi_plot$epi_layout(binned, c(opts, list(text_scale = 1.6)))
+  small <- epi_plot$epi_layout(binned, c(opts, list(text_scale = 0.6)))
+  expect_gt(big$axis_pt, base$axis_pt)
+  expect_lt(small$axis_pt, base$axis_pt)
+  expect_equal(big$width_in, base$width_in)
+  expect_equal(big$plot_height_in, base$plot_height_in)
+  # Nothing is ever set under the print floor, at either end of the range.
+  expect_gte(small$min_pt, viz_fit$MIN_PRINT_PT)
+})
+
+test_that("end labels too many to set legibly give way to the legend", {
+  few <- epi_plot$epi_layout(
+    strata_fixture(5),
+    list(mode = "cumulative", interval = "month", label_ends = TRUE)
+  )
+  expect_true(few$end_drawn)
+  expect_false(few$show_legend)
+
+  many <- epi_plot$epi_layout(
+    strata_fixture(90),
+    list(
+      mode = "cumulative",
+      interval = "month",
+      label_ends = TRUE,
+      aspect = 0.6
+    )
+  )
+  expect_false(many$end_drawn)
+  expect_true(many$end_hidden)
+  expect_true(many$show_legend)
+
+  # And the fit does not make the page tall for labels it will never draw.
+  unset <- epi_plot$epi_layout(
+    strata_fixture(400),
+    list(mode = "cumulative", interval = "month", label_ends = TRUE)
+  )
+  expect_lte(unset$fitted_aspect, 1)
+})
+
+test_that("a legend longer than the canvas can hold ends in a count", {
+  # Long names, one key per row: three hundred rows is far more than the
+  # canvas grows for, even at the floor size.
+  binned <- strata_fixture(
+    300,
+    function(i) sprintf("Regional hospital network sampling site %03d", i)
+  )
+  lay <- epi_plot$epi_layout(
+    binned,
+    list(mode = "stacked", interval = "month", aspect = 0.5)
+  )
+  expect_true(grepl("more$", utils::tail(lay$legend_keys, 1)))
+  expect_lt(length(lay$legend_keys), 300)
+  p <- epi_plot$build_epi_ggplot(
+    binned,
+    list(mode = "stacked", interval = "month", layout = lay)
+  )
+  expect_s3_class(p, "ggplot")
+})
+
+test_that("annotation labels stand in lanes above the counts, all drawn", {
+  binned <- strata_fixture(3)
+  annos <- epi_plot$as_epi_annotations(data.frame(
+    id = c("a", "b"),
+    type = c("period", "milestone"),
+    label = c("A long outbreak investigation name", "Policy change"),
+    start = as.Date(c("2024-03-01", "2024-03-15")),
+    end = as.Date(c("2024-04-01", NA)),
+    stringsAsFactors = FALSE
+  ))
+  opts <- list(mode = "stacked", interval = "month", annos = annos)
+  lay <- epi_plot$epi_layout(binned, opts)
+  expect_gte(lay$n_lanes, 1L)
+  expect_gt(lay$band_in, 0)
+  expect_true(all(lay$anno$drawn))
+  # The period is far too short to hold its label, so the label is set beside
+  # the bracket rather than squeezed into it.
+  expect_false(lay$anno$inside[lay$anno$id == "a"])
+
+  p <- epi_plot$build_epi_ggplot(binned, c(opts, list(layout = lay)))
+  # Every lane is inside the scale's limits: nothing is censored.
+  expect_no_warning(built <- ggplot_build(p))
+  y_top <- built$layout$panel_params[[1]]$y.range[[2]]
+  expect_gt(y_top, max(tapply(binned$count, binned$date_bin, sum)) * 1.08)
+})
+
+test_that("square blocks size the canvas to the squares", {
+  binned <- strata_fixture(2)
+  square <- epi_plot$epi_layout(
+    binned,
+    list(mode = "stacked", square = TRUE, interval = "month", aspect = 0.4)
+  )
+  expect_true(square$square)
+  # The reader's ratio does not apply: the data's does.
+  expect_false(isTRUE(all.equal(square$aspect, 0.4)))
+  # One case is as tall as one interval is wide.
+  cases <- max(tapply(binned$count, binned$date_bin, sum)) * 1.08
+  expect_equal(
+    square$panel_height_in,
+    cases * square$day_in * epi_plot$bin_width_days("month") + square$band_in,
+    tolerance = 1e-6
+  )
 })

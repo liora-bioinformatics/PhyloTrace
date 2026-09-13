@@ -67,7 +67,10 @@ box::use(
       rebalance_layers,
       set_layer_granularity,
     ],
-  app / logic / viz_export[save_plot_export],
+  app / logic / viz_export[canvas_export, canvas_image, render_canvas_png],
+  app /
+    logic /
+    viz_fit[ASPECT_MAX, TEXT_SIZE_DEFAULT, legibility_note, text_scale_percent],
   app /
     logic /
     viz_helpers[
@@ -75,13 +78,16 @@ box::use(
       collect_input_snapshot,
       control_families,
       field_select,
+      fit_hint,
       granularity_select,
       on_confirmed_reset,
       reset_button_row,
       scale_select,
       suitable_scale_categories,
+      text_size_slider,
       update_field_select,
       viz_color,
+      zoom_view_buttons,
     ],
   app /
     logic /
@@ -131,12 +137,9 @@ PLOT_MODE_DEFAULT <- "stacked"
 # How long one playback step is held, in milliseconds.
 STEP_MS <- 450
 
+# What the aspect slider holds before any data is loaded. Generate replaces it
+# with epi_plot$epi_layout()'s fitted answer for the curve actually drawn.
 ASPECT_DEFAULT <- 0.55
-
-# Roughly the pixels the axes, labels and legend need — the panel gets the rest.
-# Only used to size square mode's plot, where the panel's own shape is fixed by
-# the data and everything else has to be budgeted around it.
-PANEL_CHROME_PX <- 200
 
 COL_SCALE_DEFAULT <- "Set2"
 # The single-series colour used when the curve is not stratified. Matches Set2's
@@ -188,9 +191,10 @@ EPI_CONTROLS <- control_families(
     "epi_zoom_axis"
   ),
   pickers = c("epi_plot_mode", "epi_moving_avg_align", "epi_anno_type"),
-  sliders = c("epi_aspect_ratio", "epi_moving_avg_window"),
+  sliders = c("epi_aspect_ratio", "epi_text_size", "epi_moving_avg_window"),
   texts = "epi_anno_label",
   dates = c("epi_anno_start", "epi_anno_end"),
+  radio_groups = "zoom_view",
   colors = c(
     "epi_single_color",
     "epi_text_color",
@@ -216,6 +220,7 @@ epi_control_defaults <- function() {
     epi_label_ends = TRUE,
     epi_show_x_label = TRUE,
     epi_aspect_ratio = ASPECT_DEFAULT,
+    epi_text_size = TEXT_SIZE_DEFAULT,
     epi_zoom_axis = FALSE,
     epi_anno_type = "milestone",
     # Today, the same as the widget: a date default cannot be a constant.
@@ -227,7 +232,10 @@ epi_control_defaults <- function() {
     epi_background_color = BACKGROUND_DEFAULT,
     epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
     epi_moving_avg_color = MOVING_AVG_COLOR_DEFAULT,
-    epi_anno_color = ANNO_COLOR_DEFAULT
+    epi_anno_color = ANNO_COLOR_DEFAULT,
+    # A string because radioGroupButtons' choiceValues are: the browser
+    # reports "FALSE", not FALSE.
+    zoom_view = "FALSE"
   )
 }
 
@@ -306,7 +314,15 @@ epi_controls <- function(ns) {
             shiny$conditionalPanel(
               condition = "input.epi_plot_mode == 'cumulative'",
               ns = ns,
-              input_switch(ns("epi_label_ends"), "Label lines", TRUE)
+              input_switch(ns("epi_label_ends"), "Label lines", TRUE),
+              # The layout leaves the labels off where no legible size fits
+              # beside the lines, and the legend names them instead.
+              fit_hint(
+                ns,
+                "epi_label_ends_hint",
+                "Too many lines to label legibly; the legend names them. ",
+                "Try a taller aspect ratio."
+              )
             )
           ),
           # Axes & Sizing ------------------------------------------------------
@@ -316,23 +332,31 @@ epi_controls <- function(ns) {
             # Off hides the x-axis title ("Date of collection") — the axis is
             # self-evidently dates, so some users would rather reclaim the room.
             input_switch(ns("epi_show_x_label"), "Show x-axis label", TRUE),
+            # Height of the plot over its width. Generate fits it to the curve
+            # (room for the annotation lanes and the labels at the lines' ends)
+            # and keeps it fitted as those change, until the reader sets one of
+            # their own. The legend is set below the plot and adds to the
+            # canvas rather than taking from this.
+            #
             # Square blocks mode fixes the panel's shape to the data grid via
-            # coord_fixed (see square_ratio / epi_plot's square split), so the
-            # aspect ratio has no effect there. The wrapper carries the id the
-            # server toggles: disabled and given an explanatory hover title while
-            # square mode is active.
+            # coord_fixed, so the aspect ratio has no effect there. The wrapper
+            # carries the id the server toggles: disabled and given an
+            # explanatory hover title while square mode is active.
             shiny$div(
               id = ns("epi_aspect_ratio_wrap"),
               shiny$sliderInput(
                 ns("epi_aspect_ratio"),
                 "Aspect ratio",
-                min = 0.3,
-                max = 1,
+                min = epi_plot$EPI_ASPECT_MIN,
+                max = ASPECT_MAX,
                 value = ASPECT_DEFAULT,
                 step = 0.05,
                 ticks = FALSE
               )
-            )
+            ),
+            # Every piece of type on the curve: axis numbers and titles, the
+            # legend, the annotation and end-of-line labels.
+            text_size_slider(ns, "epi_text_size")
           )
         )
       ),
@@ -527,6 +551,12 @@ epi_controls <- function(ns) {
           width = "100%"
         ),
         shiny$hr(),
+        fit_hint(
+          ns,
+          "epi_anno_hint",
+          "Some labels are left off: more lanes than fit above the curve. ",
+          "Try a taller aspect ratio or a smaller text size."
+        ),
         shiny$uiOutput(ns("active_annotations_ui")),
         shiny$actionButton(
           ns("epi_clear_anno"),
@@ -536,11 +566,13 @@ epi_controls <- function(ns) {
         )
       )
     ),
+    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
-        "Re-fit the interval to the span this data covers and rewind the",
-        "window to all of it. Colours, mappings and annotations are kept."
+        "Re-fit the interval, the aspect ratio and the text sizes to the data",
+        "on screen, and rewind the window to all of it. Colours, mappings and",
+        "annotations are kept."
       )
     )
   )
@@ -719,6 +751,61 @@ server <- function(
     # plot-type switches (only session reset clears it). Once TRUE the curve
     # tracks the controls live — see epi_data().
     generated <- shiny$reactiveVal(FALSE)
+
+    # The aspect ratio and text size the curve is drawn at, and the only thing
+    # the layout reads for them — never the inputs directly. An update*Input()
+    # reaches `input` only once the browser echoes it back a flush later, so a
+    # plot built from the input is drawn once at the stale value and again at
+    # the fitted one. Same arrangement, and the same reason, as the Tree's
+    # `fitted` mirrors and the AMR plot's aspect_mirror.
+    aspect_mirror <- shiny$reactiveVal(ASPECT_DEFAULT)
+    text_size_mirror <- shiny$reactiveVal(TEXT_SIZE_DEFAULT)
+
+    # Whether the aspect ratio follows the fit as the curve changes shape. On
+    # until the reader drags the slider to a ratio of their own; Generate,
+    # Auto-fit and a reset turn it back on. A restored plot keeps its saved one.
+    aspect_follows_fit <- shiny$reactiveVal(TRUE)
+
+    # A drag lands in the mirror; the echo of a fitted value does not count as
+    # the reader's own ratio, since it equals what the mirror already holds.
+    shiny$observeEvent(input$epi_aspect_ratio, {
+      value <- input$epi_aspect_ratio
+      if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), value))) {
+        aspect_mirror(value)
+        aspect_follows_fit(FALSE)
+      }
+    })
+
+    # A drag of the text size lands in its mirror the same way.
+    shiny$observeEvent(input$epi_text_size, {
+      value <- input$epi_text_size
+      if (!isTRUE(all.equal(shiny$isolate(text_size_mirror()), value))) {
+        text_size_mirror(value)
+      }
+    })
+
+    # Writes an aspect to the slider and to the mirror the plot reads.
+    set_aspect <- function(value) {
+      shiny$updateSliderInput(session, "epi_aspect_ratio", value = value)
+      aspect_mirror(value)
+    }
+
+    # Writes a text size to the slider and to the mirror the plot reads.
+    set_text_size <- function(value) {
+      shiny$updateSliderInput(session, "epi_text_size", value = value)
+      text_size_mirror(value)
+    }
+
+    # Puts the fitted aspect back and resumes following the fit.
+    refit_aspect <- function() {
+      aspect_follows_fit(TRUE)
+      fitted <- shiny$isolate(
+        tryCatch(epi_layout()$fitted_aspect, error = function(e) NULL)
+      )
+      if (!is.null(fitted)) {
+        set_aspect(fitted)
+      }
+    }
 
     # Timeline annotations the user has added (see the Annotations tab).
     annotations <- shiny$reactiveVal(epi_plot$empty_epi_annotations())
@@ -1098,7 +1185,16 @@ server <- function(
       epi_layer_seq(0L)
 
       apply_controls(session, epi_control_defaults(), EPI_CONTROLS)
+      # Overrides the Sys.Date() the catalogue just applied above: reset
+      # should still land the composer on this curve's own span, not today.
+      d <- anno_date_defaults()
+      shiny$updateDateInput(session, "epi_anno_start", value = d$start)
+      shiny$updateDateInput(session, "epi_anno_end", value = d$end)
+      text_size_mirror(TEXT_SIZE_DEFAULT)
       refit_interval()
+      # For the aspect ratio the default *is* the fit: ASPECT_DEFAULT is only
+      # what the slider holds before a curve exists.
+      refit_aspect()
     }
 
     on_confirmed_reset(
@@ -1139,9 +1235,14 @@ server <- function(
         return()
       }
       refit_interval()
+      # Text size is a bias on the fit, so re-solving the fit drops it: a
+      # hand-set 160% left on a freshly fitted layout is not the engine's
+      # answer for this data.
+      set_text_size(TEXT_SIZE_DEFAULT)
+      refit_aspect()
       shiny$showNotification(
         sprintf(
-          "Interval fitted to this data's span: %s.",
+          "Interval, aspect ratio and text sizes fitted to this data (%s).",
           names(epi_plot$EPI_INTERVALS)[
             match(fitted_interval(), epi_plot$EPI_INTERVALS)
           ]
@@ -1315,10 +1416,30 @@ server <- function(
     # date by up to an interval.
     epi_extent <- shiny$reactive(epi_plot$epi_date_range(epi_data()))
 
-    # The panel shape square cells force on this data; NULL when it doesn't
-    # apply. Drives the plot's height — see the epi_plot renderImage below.
-    square_ratio <- shiny$reactive({
-      epi_plot$square_panel_ratio(epi_data(), mode_for())
+    # The annotation composer's date fields, worked out from the loaded
+    # curve rather than fixed: "today" means nothing once historic isolate
+    # collection dates are what's plotted. Start lands on the span's
+    # midpoint (a reasonable first guess for a period), end on its last
+    # collected date. Falls back to today before any curve exists yet,
+    # matching the static dateInput values in epi_controls().
+    anno_date_defaults <- function() {
+      if (!isTRUE(shiny$isolate(generated()))) {
+        return(list(start = Sys.Date(), end = Sys.Date()))
+      }
+      rng <- shiny$isolate(epi_extent())
+      if (anyNA(rng)) {
+        return(list(start = Sys.Date(), end = Sys.Date()))
+      }
+      mid <- rng[1] + round(as.numeric(diff(rng)) / 2)
+      list(start = mid, end = rng[2])
+    }
+
+    # A freshly generated (or regenerated) curve re-lands the annotation
+    # composer on its own span -- see anno_date_defaults().
+    shiny$observeEvent(epi_extent(), {
+      d <- anno_date_defaults()
+      shiny$updateDateInput(session, "epi_anno_start", value = d$start)
+      shiny$updateDateInput(session, "epi_anno_end", value = d$end)
     })
 
     shiny$observeEvent(
@@ -1395,6 +1516,9 @@ server <- function(
         )
       }
       generated(TRUE)
+      # Fitted before the plot is published, so the first draw is already at
+      # the aspect this curve calls for rather than the one before it.
+      refit_aspect()
     })
 
     # --- playback ------------------------------------------------------------
@@ -1647,33 +1771,11 @@ server <- function(
 
     # --- plot ----------------------------------------------------------------
 
-    # Rebuilt live as the controls change; the binning above is what re-runs
-    # when a data control moves, this only redraws.
-    epi_ggplot <- shiny$reactive({
-      # Which Generate this is the answer to. Everything the plot is built
-      # from is value-driven, so a Generate that changes nothing invalidates
-      # nothing — re-confirming the same isolate set applies the same metadata
-      # and the same selection — and the loading overlay comes down on this
-      # output's own value event. Without a dependency here no plot is drawn
-      # and the spinner runs to its client-side safety timeout over a picture
-      # that was already correct. Pressing Generate is an explicit request for
-      # the plot, so it draws one.
-      generate()
-      binned <- epi_data()
-      shiny$req(nrow(binned) > 0)
-      # The browser-reported panel width, so the legend can be given a column
-      # count that keeps it inside the plot rather than clipped at the edges
-      # (see epi_legend_ncol). NULL until the first render reports it, which
-      # build_epi_ggplot handles with a sensible fallback; re-reading it here
-      # re-flows the legend when the panel is resized.
-      plot_width <- session$clientData[[
-        paste0("output_", ns("epi_plot"), "_width")
-      ]]
-      epi_plot$build_epi_ggplot(
-        binned,
-        list(
+    # Every option the curve is drawn with except its layout. Read by both the
+    # layout and the build, so the two solve the same figure.
+    plot_opts <- function() {
+      list(
           mode = mode_for(),
-          plot_width = plot_width,
           col_scale = epi_col_scale(),
           single_color = input$epi_single_color %||% SINGLE_COLOR_DEFAULT,
           cumulative_color = input$epi_cumulative_color %||%
@@ -1696,7 +1798,71 @@ server <- function(
           annos = annotations(),
           reveal_from = win_start_date(),
           reveal_to = win_end_date()
+      )
+    }
+
+    # The curve's canvas and every size on it, solved once for the binned data
+    # (see epi_plot$epi_layout()). The canvas is a physical size, never the
+    # width the browser reports, so the preview, the export and a saved
+    # Analysis are one drawing.
+    epi_layout <- shiny$reactive({
+      # Which Generate this is the answer to. Everything the plot is built
+      # from is value-driven, so a Generate that changes nothing invalidates
+      # nothing — re-confirming the same isolate set applies the same metadata
+      # and the same selection — and the loading overlay comes down on the
+      # plot's own value event. Without a dependency here no plot is drawn
+      # and the spinner runs to its client-side safety timeout over a picture
+      # that was already correct. Pressing Generate is an explicit request for
+      # the plot, so it draws one.
+      generate()
+      binned <- epi_data()
+      shiny$req(nrow(binned) > 0)
+      epi_plot$epi_layout(
+        binned,
+        c(
+          plot_opts(),
+          list(
+            width_in = epi_plot$EPI_CANVAS_IN,
+            aspect = aspect_mirror(),
+            text_scale = text_scale_percent(text_size_mirror())
+          )
         )
+      )
+    })
+
+    # Rebuilt live as the controls change; the binning above is what re-runs
+    # when a data control moves, this only redraws.
+    epi_ggplot <- shiny$reactive({
+      lay <- epi_layout()
+      epi_plot$build_epi_ggplot(epi_data(), c(plot_opts(), list(layout = lay)))
+    })
+
+    # Keep a fitted aspect fitted as the curve changes shape — an annotation
+    # that needs another lane, a mapping whose lines need labelling — until the
+    # reader has set a ratio of their own. Ahead of the render (priority), so a
+    # changed fit is drawn once rather than at the old ratio first.
+    shiny$observe(priority = 10, {
+      shiny$req(aspect_follows_fit())
+      fitted <- tryCatch(epi_layout()$fitted_aspect, error = function(e) NULL)
+      shiny$req(fitted)
+      if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), fitted))) {
+        set_aspect(fitted)
+      }
+    })
+
+    # Say why a switch that is on draws nothing: the layout left those labels
+    # off because no legible size fits the room they have.
+    shiny$observe({
+      lay <- tryCatch(epi_layout(), error = function(e) NULL)
+      shinyjs::toggleClass(
+        "epi_label_ends_hint",
+        "d-none",
+        condition = !isTRUE(lay$end_hidden)
+      )
+      shinyjs::toggleClass(
+        "epi_anno_hint",
+        "d-none",
+        condition = !isTRUE(lay$anno_hidden)
       )
     })
 
@@ -1731,7 +1897,14 @@ server <- function(
       )
 
       shiny$div(
-        class = "viz-plot-stage epi-stage",
+        # `is-zoom` is re-applied on every (re)mount from the current control
+        # value via isolate(), so toggling it never re-renders the plot; live
+        # toggles are the observer's job. radioGroupButtons round-trips its
+        # choiceValues as the strings "FALSE"/"TRUE", which as.logical() reads.
+        class = paste(
+          "viz-plot-stage epi-stage",
+          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
+        ),
         id = ns("plot_stage"),
         prompt,
         loading,
@@ -1749,90 +1922,55 @@ server <- function(
     )
 
     # Rendered through ggsave (via renderImage) rather than renderPlot so the
-    # whole frame takes the chosen background. In Square blocks mode the curve
-    # uses coord_fixed, whose respect=TRUE centres the entire ggplot in the
-    # device and leaves a letterbox around it; renderPlot fills that letterbox
-    # with its device background, which is hardwired white and — unlike a normal
-    # argument — forced once at module init, so it can never track the colour
-    # picker. ggsave instead derives the device background from the theme's
-    # plot.background, so the letterbox takes the selected colour too — exactly
-    # as the PNG export already does (see save_epi_plot). This is the same image
-    # the Download button writes, just sized to the on-screen panel.
+    # whole frame takes the chosen background, the coord_fixed letterbox of
+    # Square blocks mode included: renderPlot's device background is hardwired
+    # white and forced once at module init, whereas ggsave derives it from the
+    # theme's plot.background. The pixel size is the layout's canvas at
+    # PLOT_RES, so nothing the browser reports about its own width can redraw
+    # the curve.
     output$epi_plot <- shiny$renderImage(
       {
         render_info("visualization_epi epi_plot")
-        p <- epi_ggplot()
-        w <- session$clientData[[paste0("output_", ns("epi_plot"), "_width")]]
-        w <- as.integer(w %||% 900L)
-        # Height follows the panel width, like the Tree's. Square mode is the
-        # exception: coord_fixed ties the panel's shape to the data grid (see
-        # square_ratio), so it gets the height its squares actually need rather
-        # than the aspect slider's — a decade of months against a handful of
-        # cases is legitimately a long, low plot.
-        ratio <- if (square_for()) square_ratio() else NULL
-        h <- if (is.null(ratio)) {
-          as.integer(w * (input$epi_aspect_ratio %||% ASPECT_DEFAULT))
-        } else {
-          # The axes, labels and legend take room the panel doesn't.
-          as.integer(min(
-            2000,
-            max(240, (w - PANEL_CHROME_PX) * ratio + PANEL_CHROME_PX)
-          ))
-        }
-        # Lay the plot out as if at 96dpi (what the renderPlot `res` used to do,
-        # so 13pt text keeps its size) but render at the browser's device pixel
-        # ratio so the PNG stays crisp on HiDPI screens.
-        pr <- session$clientData$pixelratio %||% 1
-        tmp <- tempfile(fileext = ".png")
-        epi_plot$render_epi_png(
-          p,
-          tmp,
-          width_px = w,
-          height_px = h,
-          res = 96,
-          scale = pr
+        lay <- epi_layout()
+        canvas_image(
+          epi_ggplot(),
+          lay$width_in,
+          lay$height_in,
+          "Epidemiological curve"
         )
-        list(src = tmp, width = w, height = h, alt = "Epidemiological curve")
       },
       deleteFile = TRUE
     )
 
+    # Full ⇄ Zoomed display mode. Purely toggles the .is-zoom class on the
+    # mounted stage — the image is not re-rendered. ignoreInit: the initial
+    # state is already stamped on the stage div by renderUI's isolate() read.
+    shiny$observeEvent(
+      input$zoom_view,
+      {
+        shinyjs::toggleClass(
+          id = "plot_stage",
+          class = "is-zoom",
+          condition = isTRUE(as.logical(input$zoom_view))
+        )
+      },
+      ignoreInit = TRUE
+    )
+
     # ---- Export contract ----------------------------------------------------
     # The tab's sidebar owns the export panel and the download; this engine only
-    # says what it can produce and how to write it.
-    #
-    # In Square blocks mode the export uses the same data-fitted ratio the
-    # on-screen renderImage falls back to (square_ratio()) rather than the
-    # plain aspect slider, so a cell is a true square in the exported file the
-    # same way it is on screen. This is deliberately not identical to the
-    # on-screen *pixel* shape: the preview's height formula also subtracts a
-    # fixed chrome offset for axis/legend room (see the renderImage block
-    # below), which matters at a ~900px preview but is a rounding error once
-    # the export is thousands of pixels wide — square_ratio() alone is the
-    # geometrically correct answer at export size. Every other mode has no
-    # shape the data imposes on it, so the slider governs both places exactly
-    # as before.
-    export_aspect <- shiny$reactive({
-      if (square_for()) {
-        square_ratio() %||% (input$epi_aspect_ratio %||% ASPECT_DEFAULT)
-      } else {
-        input$epi_aspect_ratio %||% ASPECT_DEFAULT
-      }
-    })
-
-    export <- list(
-      kind = "ggplot",
+    # says what it can produce and how to write it. The file is the curve on
+    # screen, at the size it is on screen — Square blocks mode's true squares
+    # included, since the canvas was solved from them.
+    export <- canvas_export(
       label = "epi_curve",
       ready = shiny$reactive(isTRUE(generated())),
-      aspect = export_aspect,
-      save = function(file, format, opts) {
-        save_plot_export(
-          epi_ggplot(),
-          file,
-          format,
-          width_cm = opts$width_cm,
-          aspect = export_aspect(),
-          dpi = opts$dpi
+      canvas = epi_layout,
+      plot = epi_ggplot,
+      note = function() {
+        legibility_note(
+          epi_layout()$min_pt,
+          "Raise the text size or the aspect ratio."
         )
       }
     )
@@ -1915,6 +2053,18 @@ server <- function(
       # coded ones.
       apply_controls(session, vals, EPI_CONTROLS)
 
+      # The mirrors are what the layout reads, and a restored slider reaches
+      # them only via the browser's echo — which never arrives for a value that
+      # did not change. A saved ratio is the reader's own, so it stops the
+      # aspect following the fit.
+      if (!is.null(vals$epi_aspect_ratio)) {
+        aspect_follows_fit(FALSE)
+        aspect_mirror(vals$epi_aspect_ratio)
+      }
+      if (!is.null(vals$epi_text_size)) {
+        text_size_mirror(vals$epi_text_size)
+      }
+
       # Interval is renderUI-owned too (interval_ui fits it to the data), so it
       # takes the same treatment as the two below rather than an update.
       if (!is.null(vals$epi_interval)) {
@@ -1955,14 +2105,16 @@ server <- function(
     }
 
     # Thumbnail: server-render the Epi curve to a small PNG.
+    # Drawn on the preview's own canvas, so it looks like the plot it stands
+    # for, with the resolution carrying the requested pixel width.
     save_thumb <- function(file, w, h) {
-      epi_plot$render_epi_png(
+      lay <- epi_layout()
+      render_canvas_png(
         epi_ggplot(),
         file,
-        width_px = w,
-        height_px = h,
-        res = 96,
-        scale = 1
+        lay$width_in,
+        lay$height_in,
+        res = max(24, round(w / lay$width_in))
       )
     }
 

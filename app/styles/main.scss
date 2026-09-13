@@ -933,11 +933,13 @@ $viz-tile-row-gap: 0.85rem;
     object-fit: contain;
 }
 
-// The AMR heatmap gets the Tree's second display mode as well: a screen of two
-// hundred isolates is drawn several times taller than the stage, and scaled to
-// fit it is a smear. `.is-zoom` presents it at its rendered size and lets the
-// stage scroll — same rules as `.tree-stage.is-zoom`, kept separate because the
-// two stages are not otherwise interchangeable.
+// The Epi curve and the AMR heatmap get the Tree's second display mode as well:
+// both are drawn on a fixed physical canvas, a screen of hundreds of isolates
+// is several times taller than the stage, and scaled to fit it is a smear.
+// `.is-zoom` presents the image at its rendered size and lets the stage scroll
+// — same rules as `.tree-stage.is-zoom`, kept separate because the stages are
+// not otherwise interchangeable.
+.epi-stage.is-zoom,
 .amr-stage.is-zoom {
     overflow: auto;
     // Anchor top-left so the whole image stays reachable while scrolling
@@ -946,6 +948,7 @@ $viz-tile-row-gap: 0.85rem;
     justify-content: flex-start;
 }
 
+.epi-stage.is-zoom .shiny-plot-output,
 .amr-stage.is-zoom .shiny-plot-output {
     width: max-content;
     height: max-content !important;
@@ -963,6 +966,7 @@ $viz-tile-row-gap: 0.85rem;
     justify-content: flex-start;
 }
 
+.epi-stage.is-zoom .shiny-plot-output img,
 .amr-stage.is-zoom .shiny-plot-output img {
     max-width: none;
     max-height: none;

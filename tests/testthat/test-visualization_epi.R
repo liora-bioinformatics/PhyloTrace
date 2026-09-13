@@ -537,10 +537,9 @@ test_that("the 'square' mode choice folds to the stacked curve with squares on",
   )
 })
 
-test_that("export aspect matches square_ratio() in square mode", {
-  # The exported file has to be a genuine square-cell layout whenever the
-  # on-screen preview is one — using the plain aspect slider instead (the bug
-  # this replaces) drew an exported file whose cells were not squares at all.
+test_that("the export is the canvas the curve is drawn on", {
+  # One drawing: the exported file is the preview at the size it is on
+  # screen, Square blocks mode's true squares included.
   generate <- reactiveVal(0L)
 
   testServer(
@@ -552,24 +551,57 @@ test_that("export aspect matches square_ratio() in square mode", {
     ),
     {
       set_default_inputs(session)
-      session$setInputs(epi_aspect_ratio = 0.9)
       generate(1L)
       session$flushReact()
 
+      lay <- epi_layout()
+      expect_equal(lay$width_in, epi_plot$EPI_CANVAS_IN)
+      expect_equal(export$width_cm(), lay$width_in * 2.54)
+      expect_equal(export$aspect(), lay$height_in / lay$width_in)
+      # Generate fitted the aspect.
+      expect_equal(aspect_mirror(), lay$fitted_aspect)
+
+      # A reader's ratio is drawn as set, and stops the fit overriding it.
+      session$setInputs(epi_aspect_ratio = 0.9)
+      session$flushReact()
+      expect_false(aspect_follows_fit())
+      expect_equal(epi_layout()$plot_height_in, 0.9 * lay$width_in)
+
       session$setInputs(epi_plot_mode = "square")
       session$flushReact()
-      expect_true(square_for())
-      ratio <- square_ratio()
-      expect_true(!is.null(ratio))
-      expect_identical(export$aspect(), ratio)
-      # Not merely non-NULL — genuinely not the slider's value, or this would
-      # pass by coincidence whenever the two happened to be close.
-      expect_false(isTRUE(all.equal(export$aspect(), 0.9)))
+      square <- epi_layout()
+      expect_true(square$square)
+      expect_equal(export$aspect(), square$height_in / square$width_in)
+    }
+  )
+})
 
-      # Every other mode still uses the plain slider, exactly as before.
-      session$setInputs(epi_plot_mode = "stacked")
+test_that("Auto-fit drops the text size and returns the aspect to the fit", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
       session$flushReact()
-      expect_identical(export$aspect(), 0.9)
+
+      session$setInputs(epi_text_size = 160, epi_aspect_ratio = 2)
+      session$flushReact()
+      expect_equal(epi_layout()$text_scale, 1.6)
+      expect_equal(epi_layout()$aspect, 2)
+
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+      expect_equal(text_size_mirror(), 100)
+      expect_equal(epi_layout()$text_scale, 1)
+      expect_true(aspect_follows_fit())
+      expect_equal(aspect_mirror(), epi_layout()$fitted_aspect)
     }
   )
 })

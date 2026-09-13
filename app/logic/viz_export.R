@@ -32,6 +32,7 @@ box::use(
     downloadButton,
     icon,
     modalDialog,
+    reactive,
     tagList,
     tags,
     uiOutput,
@@ -40,6 +41,9 @@ box::use(
   shinyWidgets[pickerInput, sliderTextInput],
   stats[setNames],
   svglite[svglite],
+)
+box::use(
+  app / logic / viz_fit[PLOT_MAX_PX, PLOT_RES, canvas_px],
 )
 
 # --- Format definitions ------------------------------------------------------
@@ -492,6 +496,101 @@ write_data_uri <- function(uri, file) {
   }
   writeBin(base64decode(payload), file)
   TRUE
+}
+
+# --- Fixed-canvas plots ------------------------------------------------------
+#
+# The ggplot engines draw on a canvas of known inches (see app/logic/viz_fit.R),
+# so the on-screen image, a saved Analysis's thumbnail and the exported file are
+# one drawing at three resolutions. These are the three writers.
+
+#' Rasterise a fixed-canvas plot to PNG.
+#'
+#' Through the same cairo device the PNG export uses, so the preview is the
+#' export at screen resolution rather than a second renderer's idea of it. The
+#' resolution is lowered only where the canvas would pass `PLOT_MAX_PX`.
+#'
+#' @param plot ggplot object.
+#' @param file Character. Destination path.
+#' @param width_in,height_in Numeric. Canvas size in inches.
+#' @param res Numeric. Pixels per inch.
+#' @return `file`, invisibly.
+#' @export
+render_canvas_png <- function(plot, file, width_in, height_in, res = PLOT_RES) {
+  longest <- max(width_in, height_in, 1e-3)
+  res <- max(12, min(res, floor(PLOT_MAX_PX / longest)))
+  ggsave(
+    filename = file,
+    plot = plot,
+    device = .device_for("png", res),
+    width = width_in,
+    height = height_in,
+    limitsize = FALSE
+  )
+  invisible(file)
+}
+
+#' A `renderImage()` payload for a fixed-canvas plot.
+#'
+#' The image's pixel size comes from the canvas, never from the width the
+#' browser reports, so no size report from the client can trigger a redraw;
+#' the stage's CSS scales it to fit or shows it full size under Zoom.
+#'
+#' @param plot ggplot object.
+#' @param width_in,height_in Numeric. Canvas size in inches.
+#' @param alt Character. Alternative text.
+#' @return List for `renderImage()`, with a temporary `src` it may delete.
+#' @export
+canvas_image <- function(plot, width_in, height_in, alt) {
+  file <- tempfile(fileext = ".png")
+  render_canvas_png(plot, file, width_in, height_in)
+  list(
+    src = file,
+    width = canvas_px(width_in),
+    height = canvas_px(height_in),
+    alt = alt
+  )
+}
+
+#' The export contract of an engine that draws on a fixed canvas.
+#'
+#' The file is the figure on screen, at the size it is on screen: `width_cm`
+#' tells the export panel to drop its figure-size picker, and only the file
+#' format and, for a raster, the resolution are left to choose. Resolution
+#' changes no geometry, so a 600 dpi PNG and a PDF of the same plot are the
+#' same picture.
+#'
+#' @param label Character, or a reactive returning one. File-name stem.
+#' @param ready Reactive. TRUE once there is a plot to write.
+#' @param canvas Reactive returning a list with `width_in` and `height_in`.
+#' @param plot Function of no arguments returning the ggplot to write.
+#' @param note Function of no arguments returning a warning sentence or NULL.
+#' @return The export contract `visualization_plot.R` consumes.
+#' @export
+canvas_export <- function(label, ready, canvas, plot, note = NULL) {
+  aspect <- reactive({
+    size <- canvas()
+    size$height_in / size$width_in
+  })
+  list(
+    kind = "ggplot",
+    label = label,
+    ready = ready,
+    aspect = aspect,
+    width_cm = reactive(canvas()$width_in * CM_PER_IN),
+    note = function(width_cm) if (is.function(note)) note() else NULL,
+    save = function(file, format, opts) {
+      size <- canvas()
+      save_plot_export(
+        plot(),
+        file,
+        format,
+        width_cm = size$width_in * CM_PER_IN,
+        aspect = size$height_in / size$width_in,
+        dpi = opts$dpi
+      )
+    }
+  )
 }
 
 #' Default file name for an exported plot.
