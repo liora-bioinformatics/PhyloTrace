@@ -59,8 +59,14 @@ if ! command -v conda >/dev/null 2>&1; then
         echo -e "\e[31mError: Failed to download the Miniconda installer.\e[0m"
         exit 1
     fi
-    bash "$HOME/miniconda.sh" -b -p "$HOME/miniconda3"
+    # No -b: run interactively so the user reads and accepts the license/ToS themselves.
+    bash "$HOME/miniconda.sh" -p "$HOME/miniconda3"
+    INSTALL_STATUS=$?
     rm "$HOME/miniconda.sh"
+    if [ $INSTALL_STATUS -ne 0 ] || [ ! -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+        echo -e "\e[31mError: Miniconda installation was not completed (license declined or install failed).\e[0m"
+        exit 1
+    fi
 
     # shellcheck disable=SC1091
     . "$HOME/miniconda3/etc/profile.d/conda.sh"
