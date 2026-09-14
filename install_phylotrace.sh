@@ -37,9 +37,14 @@ if ! command -v conda >/dev/null 2>&1; then
 
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
         echo -e "\e[31mError: Neither curl nor wget is installed. Please install one of them first:\e[0m"
+        echo "To install curl:"
         echo "  Ubuntu/Debian:  sudo apt install curl"
         echo "  Arch Linux:     sudo pacman -S curl"
         echo "  RHEL/Fedora:    sudo dnf install curl"
+        echo "To install wget:"
+        echo "  Ubuntu/Debian:  sudo apt install wget"
+        echo "  Arch Linux:     sudo pacman -S wget"
+        echo "  RHEL/Fedora:    sudo dnf install wget"
         exit 1
     fi
 
@@ -59,7 +64,24 @@ if ! command -v conda >/dev/null 2>&1; then
 
     # shellcheck disable=SC1091
     . "$HOME/miniconda3/etc/profile.d/conda.sh"
+    SHELL_NAME="$(basename "${SHELL:-bash}")"
+    conda init "$SHELL_NAME" >/dev/null 2>&1 || conda init bash
     conda config --set auto_activate_base false
+
+    echo ""
+    echo -e "\e[33mMiniconda was just installed.\e[0m"
+
+    SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+    case "$SHELL_NAME" in
+        bash|zsh)
+            echo -e "\e[33mRestarting the setup in a fresh shell...\e[0m"
+            exec "$SHELL" -l -c "source ~/.${SHELL_NAME}rc >/dev/null 2>&1; exec $(printf '%q' "$SCRIPT_PATH")"
+            ;;
+        *)
+            echo -e "\e[33mOpen a new terminal, then re-run this script to install PhyloTrace.\e[0m"
+            exit 0
+            ;;
+    esac
 fi
 
 CONDA_PATH="$(conda info --base)/bin/conda"
