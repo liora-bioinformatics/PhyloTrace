@@ -35,14 +35,27 @@ if ! command -v conda >/dev/null 2>&1; then
         exit 1
     fi
 
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        echo -e "\e[31mError: Neither curl nor wget is installed. Please install one of them first:\e[0m"
+        echo "  Ubuntu/Debian:  sudo apt install curl"
+        echo "  Arch Linux:     sudo pacman -S curl"
+        echo "  RHEL/Fedora:    sudo dnf install curl"
+        exit 1
+    fi
+
     echo "Conda not found. Installing Miniconda into $HOME/miniconda3 ..."
-    mkdir -p "$HOME/miniconda3"
-    if ! curl -fsSL "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh" -o "$HOME/miniconda3/miniconda.sh"; then
+    MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$MINICONDA_URL" -o "$HOME/miniconda.sh"
+    else
+        wget -q "$MINICONDA_URL" -O "$HOME/miniconda.sh"
+    fi
+    if [ ! -s "$HOME/miniconda.sh" ]; then
         echo -e "\e[31mError: Failed to download the Miniconda installer.\e[0m"
         exit 1
     fi
-    bash "$HOME/miniconda3/miniconda.sh" -b -p "$HOME/miniconda3"
-    rm "$HOME/miniconda3/miniconda.sh"
+    bash "$HOME/miniconda.sh" -b -p "$HOME/miniconda3"
+    rm "$HOME/miniconda.sh"
 
     # shellcheck disable=SC1091
     . "$HOME/miniconda3/etc/profile.d/conda.sh"
