@@ -739,6 +739,33 @@ zoom_view_buttons <- function(ns) {
   )
 }
 
+#' Milliseconds the Controls Have to Stop Moving Before a Plot Is Rebuilt
+#'
+#' Long enough that a slider drag is one rebuild rather than a dozen, short
+#' enough that letting go of one still feels like it did it.
+#' @export
+PLOT_SETTLE_MS <- 450
+
+#' Inputs Read Once They Have Stopped Moving
+#'
+#' A slider reports every value the reader drags through. Read through this, a
+#' control whose change re-derives a matrix or redraws a figure costs one
+#' rebuild, on the value the reader let go of. A debounce reads its source
+#' eagerly, so the source here is the bare input: nothing downstream of it runs
+#' while the drag is under way. Call inside a module server.
+#'
+#' @param input Shiny input object.
+#' @param ids Character vector of unnamespaced input ids.
+#' @param ms Numeric. Settle time in milliseconds.
+#' @return A named list of reactives, one per id.
+#' @export
+settled_inputs <- function(input, ids, ms = PLOT_SETTLE_MS) {
+  setNames(
+    lapply(ids, function(id) shiny$debounce(shiny$reactive(input[[id]]), ms)),
+    ids
+  )
+}
+
 #' The "Text size" Slider
 #'
 #' One control over every piece of type on the figure. A bias on what the

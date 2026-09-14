@@ -107,6 +107,7 @@ box::use(
       on_confirmed_reset,
       reset_button_row,
       collect_input_snapshot,
+      PLOT_SETTLE_MS,
       text_size_slider,
       zoom_view_buttons,
     ],
@@ -541,11 +542,6 @@ CANVAS_MAX_FACTOR <- tree_plot$TREE_CANVAS_MAX_FACTOR
 # its own account; this is the reader, or the fit on their behalf, asking for
 # the page a crowded tree needs. ASPECT_MAX, and PLOT_MAX_PX beside it, are
 # shared with the other fixed-canvas engines (app/logic/viz_fit.R).
-
-# Milliseconds the controls have to stop moving before the plot is rebuilt.
-# Long enough that a slider drag is one rebuild rather than a dozen, short
-# enough that letting go of one still feels like it did it.
-PLOT_SETTLE_MS <- 450
 
 # The legend is not the user's to set. Its column is reserved beside the tree
 # (below it, for circular layouts) and sized to the widest key by the layout

@@ -19,7 +19,7 @@ box::use(
   app / logic / tree_plot,
   app / logic / viz_export,
   app / logic / viz_fit,
-  app / logic / viz_helpers[control_ids],
+  app / logic / viz_helpers[control_ids, PLOT_SETTLE_MS],
   app / view / visualization_tree,
 )
 
@@ -30,7 +30,7 @@ impl <- attr(visualization_tree, "namespace")
 # has to be walked past that timer or the tree is never built.
 settle <- function(session) {
   session$flushReact()
-  session$elapse(impl$PLOT_SETTLE_MS + 50)
+  session$elapse(PLOT_SETTLE_MS + 50)
   session$flushReact()
 }
 

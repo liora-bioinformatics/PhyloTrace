@@ -110,6 +110,18 @@ test_that("a legend column shrinks its type before it drops a key", {
   expect_true(unname(tight$plan$keys[["strip:Ward"]]) < viz_legend$LEGEND_FULL_MAX)
 })
 
+test_that("a legend column shrinks for what the engine measures besides rows", {
+  plan_at <- function(pt) viz_legend$legend_plan(c(`strip:Country` = 8L), 100L)
+  # Rows to spare, but only 7pt fits the width beside the drawing.
+  narrow <- viz_legend$legend_fit(9, 5.5, plan_at, fits = function(pt, plan) pt <= 7)
+  expect_equal(narrow$size, 7, tolerance = 0.01)
+  expect_true(narrow$complete)
+
+  never <- viz_legend$legend_fit(9, 5.5, plan_at, fits = function(pt, plan) FALSE)
+  expect_equal(never$size, 5.5)
+  expect_false(never$complete)
+})
+
 test_that("an engine with a tall column may let a long guide run down it", {
   # The Tree folds past LEGEND_MAX_ROWS to keep its box narrow; the AMR column
   # raises the ceiling so a vocabulary folds only when its share runs out.

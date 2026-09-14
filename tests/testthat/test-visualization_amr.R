@@ -13,11 +13,19 @@ box::use(
 )
 box::use(
   app / logic / field_profile,
-  app / logic / viz_helpers[control_ids],
+  app / logic / viz_helpers[control_ids, PLOT_SETTLE_MS],
   app / view / visualization_amr,
 )
 
 impl <- attr(visualization_amr, "namespace")
+
+# The sliders are read once they stop moving (settled_inputs), so a mock
+# session has to be walked past that timer before a slider's value lands.
+settle <- function(session) {
+  session$flushReact()
+  session$elapse(PLOT_SETTLE_MS + 50)
+  session$flushReact()
+}
 
 # A database carrying an AMR screen for three of its four isolates. ISO-4 was
 # never screened, which is what a freshly imported isolate looks like.
@@ -281,6 +289,7 @@ test_that("the identity floor drops hits it was set above", {
       # seed_results records no percentages for blaTEST (like a point mutation),
       # so it survives any floor; gyrA and fimH are 99% and do not.
       session$setInputs(amr_min_identity = 100)
+      settle(session)
       expect_identical(colnames(presence_mat()), "blaTEST")
     }
   )
@@ -602,6 +611,7 @@ test_that("prevalence counts distinct isolates and honours the top-n cap", {
       expect_identical(df$n[1], 3L)
 
       session$setInputs(amr_top_n = 1)
+      settle(session)
       expect_identical(nrow(prevalence_df()), 1L)
 
       session$setInputs(amr_level = "class")
@@ -876,7 +886,7 @@ test_that("a reader's aspect ratio overrides the fit and survives a redraw", {
       session$flushReact()
 
       session$setInputs(amr_aspect_ratio = 5)
-      session$flushReact()
+      settle(session)
       expect_identical(plot_aspect(), 5)
       # Every size that hangs off the row pitch is re-solved against it.
       expect_identical(layout_fit()$aspect, 5)
@@ -885,6 +895,135 @@ test_that("a reader's aspect ratio overrides the fit and survives a redraw", {
       session$setInputs(amr_show_element_names = FALSE)
       session$flushReact()
       expect_identical(plot_aspect(), 5)
+    }
+  )
+})
+
+test_that("each view follows its own fit until the reader sets a ratio for it", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      settle(session)
+      generate(1L)
+      session$flushReact()
+      heatmap_fit <- aspect_mirror()
+      expect_equal(heatmap_fit, fitted_aspect())
+
+      # The bar chart has a fit of its own, taken as soon as it is shown.
+      session$setInputs(amr_mode = "prevalence")
+      session$flushReact()
+      expect_equal(aspect_mirror(), fitted_aspect())
+      expect_equal(plot_aspect(), aspect_mirror())
+
+      # A ratio set by hand holds for its view and is not carried to the other.
+      session$setInputs(amr_aspect_ratio = 2)
+      settle(session)
+      expect_equal(aspect_mirror(), 2)
+      session$setInputs(amr_mode = "heatmap")
+      session$flushReact()
+      expect_equal(aspect_mirror(), heatmap_fit)
+      session$setInputs(amr_mode = "prevalence")
+      session$flushReact()
+      expect_equal(aspect_mirror(), 2)
+
+      # Auto-fit returns the view on screen to its fit.
+      session$setInputs(auto_fit = 1L)
+      session$flushReact()
+      expect_null(hand_aspect()$prevalence)
+      expect_equal(aspect_mirror(), fitted_aspect())
+    }
+  )
+})
+
+test_that("only the count-by level and the bar count re-fit the bar chart", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      settle(session)
+      session$setInputs(amr_mode = "prevalence")
+      generate(1L)
+      session$flushReact()
+      before <- aspect_mirror()
+      expect_null(hand_aspect()$prevalence)
+
+      # Text size and the threshold filters change what the bars look like,
+      # not how many there are - they resize within the ratio in force.
+      session$setInputs(amr_text_size = 200)
+      settle(session)
+      expect_equal(aspect_mirror(), before)
+
+      session$setInputs(amr_min_identity = 90)
+      settle(session)
+      expect_equal(aspect_mirror(), before)
+
+      # Raising how many bars are kept changes how many rows there are to
+      # seat, so it still follows the fit to a new ratio.
+      session$setInputs(amr_top_n = 40)
+      settle(session)
+      expect_equal(aspect_mirror(), fitted_aspect())
+      expect_false(isTRUE(all.equal(aspect_mirror(), before)))
+    }
+  )
+})
+
+test_that("the text size reaches the bar chart, once the slider settles", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      settle(session)
+      session$setInputs(amr_mode = "prevalence")
+      generate(1L)
+      session$flushReact()
+      before <- prevalence_fit()
+
+      session$setInputs(amr_text_size = 200)
+      settle(session)
+      after <- prevalence_fit()
+      expect_equal(after$text_scale, 2)
+      expect_gt(after$fontsize_row, before$fontsize_row)
+      # Text size resizes within the ratio already in force - it does not
+      # rank anything, so it never reopens the ratio the fit chose.
+      expect_equal(aspect_mirror(), before$aspect)
+      expect_equal(after$aspect, aspect_mirror())
+      expect_equal(export$aspect(), plot_canvas()$height_in / plot_canvas()$width_in)
+
+      # A drag still under way redraws nothing; the value let go of does.
+      session$setInputs(amr_text_size = 60)
+      session$flushReact()
+      expect_equal(text_size_mirror(), 200)
+      settle(session)
+      expect_equal(text_size_mirror(), 60)
+      expect_s3_class(amr_ggplot(), "ggplot")
     }
   )
 })
@@ -952,9 +1091,9 @@ test_that("every view names tabs the navset actually has", {
 })
 
 test_that("prevalence drops the tabs that only describe a matrix", {
-  # It has no matrix to lay out, no dendrogram and no row strips, so those three
-  # would open on nothing; Data and Colors both still apply.
-  expect_identical(impl$TABS_BY_MODE$prevalence, c("data", "colors"))
+  # It has no dendrogram and no row strips, so those two would open on nothing;
+  # Data, Colors and the Layout tab's aspect ratio and text size still apply.
+  expect_identical(impl$TABS_BY_MODE$prevalence, c("data", "layout", "colors"))
   expect_identical(impl$TABS_BY_MODE$heatmap, impl$ALL_TABS)
 })
 
@@ -1091,7 +1230,7 @@ test_that("Auto-fit re-solves the aspect and leaves the rest alone", {
       fit <- aspect_mirror()
 
       session$setInputs(amr_aspect_ratio = 8, amr_text_color = "#FF0000")
-      session$flushReact()
+      settle(session)
       expect_equal(aspect_mirror(), 8)
 
       session$setInputs(auto_fit = 1)
@@ -1194,7 +1333,7 @@ test_that("Generate names the isolates of a screen with room for them", {
 
       # The text size reaches the fit, and Auto-fit drops it again.
       session$setInputs(amr_text_size = 150)
-      session$flushReact()
+      settle(session)
       expect_equal(layout_fit()$text_scale, 1.5)
       session$setInputs(auto_fit = 1L)
       session$flushReact()

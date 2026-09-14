@@ -32,8 +32,9 @@ box::use(
     navset_tab,
     sidebar,
     tooltip,
+    update_tooltip,
   ],
-  igraph[V, as_data_frame, vcount],
+  igraph[V, vcount],
   shiny,
   shinyWidgets[pickerInput, updatePickerInput, updateVirtualSelect],
   stats[setNames],
@@ -78,7 +79,7 @@ box::use(
       MST_LENGTH_MODES,
       MST_MAX_EDGE_MULT,
       build_mst_visnetwork,
-      mst_auto_layout,
+      mst_fit_drawing,
       mst_frames,
       mst_threshold_default,
       save_mst_html,
@@ -114,14 +115,18 @@ LAYER_DEFAULTS <- layer_defaults(MEDIUM)
 
 # --- Controls fitted to the data ---------------------------------------------
 
-# Which fitted control takes which field of an mst_auto_layout() fit.
+# Which fitted control takes which field of an mst_fit_drawing() fit.
 FITTED_FIELDS <- c(
   mst_show_label = "show_label",
   mst_show_edge_label = "show_edge_label",
   mst_length_mode = "length_mode",
   mst_node_size = "node_size",
   mst_node_label_fontsize = "node_font_size",
-  mst_edge_font_size = "edge_font_size"
+  mst_edge_font_size = "edge_font_size",
+  mst_edge_length_scale = "spread",
+  mst_rotation = "rotation",
+  mst_cluster_width = "cluster_width",
+  mst_cluster_label_size = "cluster_label_size"
 )
 
 # The values those controls hold before any data is loaded. Taken from the logic
@@ -134,7 +139,11 @@ FITTED_DEFAULTS <- list(
   mst_length_mode = MST_FIT_DEFAULTS$length_mode,
   mst_node_size = MST_FIT_DEFAULTS$node_size,
   mst_node_label_fontsize = MST_FIT_DEFAULTS$node_font_size,
-  mst_edge_font_size = MST_FIT_DEFAULTS$edge_font_size
+  mst_edge_font_size = MST_FIT_DEFAULTS$edge_font_size,
+  mst_edge_length_scale = MST_FIT_DEFAULTS$spread,
+  mst_rotation = 0,
+  mst_cluster_width = 15,
+  mst_cluster_label_size = 20
 )
 
 # The placeholder threshold, used only until a database says otherwise
@@ -142,11 +151,9 @@ FITTED_DEFAULTS <- list(
 THRESHOLD_PLACEHOLDER <- 10L
 
 # Everything the render reads through a mirror: the fitted controls above, the
-# spread (which the fit leaves alone but which the geometry is built from), the
 # label source, and the cluster threshold the scheme resolves. See `fitted`.
 MIRRORED_IDS <- c(
   names(FITTED_DEFAULTS),
-  "mst_edge_length_scale",
   "mst_node_label",
   "mst_cluster_threshold"
 )
@@ -169,7 +176,6 @@ MIRRORED_IDS <- c(
 MST_CONTROLS <- control_families(
   switches = c(
     "mst_show_clusters",
-    "mst_cluster_label_tint",
     "mst_show_label",
     "mst_scale_nodes",
     "mst_shadow",
@@ -186,7 +192,6 @@ MST_CONTROLS <- control_families(
   ),
   sliders = c(
     "mst_cluster_width",
-    "mst_cluster_opacity",
     "mst_cluster_label_size",
     "mst_node_label_fontsize",
     "mst_node_size",
@@ -213,18 +218,12 @@ MST_CONTROL_DEFAULTS <- c(
     mst_show_clusters = TRUE,
     mst_cluster_threshold = THRESHOLD_PLACEHOLDER,
     mst_cluster_col_scale = "turbo",
-    mst_cluster_width = 15,
-    mst_cluster_opacity = 66,
-    mst_cluster_label_size = 18,
-    mst_cluster_label_tint = FALSE,
     mst_collapse_threshold = 0,
     mst_scale_nodes = TRUE,
     mst_shadow = FALSE,
-    mst_edge_length_scale = MST_FIT_DEFAULTS$spread,
     mst_shorten_long = TRUE,
     mst_cap_mult = MST_MAX_EDGE_MULT,
     mst_background_transparent = TRUE,
-    mst_rotation = 0,
     mst_show_legend = TRUE,
     mst_legend_ori = "left",
     mst_show_scale_caption = TRUE,
@@ -254,16 +253,21 @@ mst_controls <- function(ns, options_ui = NULL) {
               "Clustering",
               icon = shiny$icon("tag"),
               input_switch(ns("mst_show_clusters"), "Show clusters", TRUE),
-              shiny$numericInput(
-                ns("mst_cluster_threshold"),
-                "Threshold (allelic distance)",
-                value = THRESHOLD_PLACEHOLDER,
-                min = 1,
-                max = 10000
-              ),
-              shiny$div(
-                id = ns("mst_threshold_note"),
-                class = "text-muted small mb-2"
+              # Where the default came from is in the tooltip, filled in once
+              # the database's scheme is known (apply_scheme_threshold).
+              tooltip(
+                shiny$numericInput(
+                  ns("mst_cluster_threshold"),
+                  "Threshold (allelic distance)",
+                  value = THRESHOLD_PLACEHOLDER,
+                  min = 1,
+                  max = 10000
+                ),
+                "Allelic distance at which isolates are linked into one cluster.",
+                id = ns("mst_threshold_tip"),
+                # Hover only: while a number is being typed, a focus-triggered
+                # tip would sit over the field.
+                options = list(trigger = "hover")
               ),
               scale_select(ns, "mst_cluster_col_scale", selected = "turbo"),
             ),
@@ -275,15 +279,7 @@ mst_controls <- function(ns, options_ui = NULL) {
                 "Width",
                 0,
                 60,
-                15,
-                ticks = FALSE
-              ),
-              shiny$sliderInput(
-                ns("mst_cluster_opacity"),
-                "Opacity (%)",
-                5,
-                100,
-                66,
+                FITTED_DEFAULTS$mst_cluster_width,
                 ticks = FALSE
               ),
               shiny$sliderInput(
@@ -291,13 +287,8 @@ mst_controls <- function(ns, options_ui = NULL) {
                 "Label size (0 = off)",
                 0,
                 48,
-                18,
+                FITTED_DEFAULTS$mst_cluster_label_size,
                 ticks = FALSE
-              ),
-              input_switch(
-                ns("mst_cluster_label_tint"),
-                "Label Colors",
-                FALSE
               )
             ),
             accordion_panel(
@@ -323,7 +314,16 @@ mst_controls <- function(ns, options_ui = NULL) {
         "Nodes",
         icon = shiny$icon("circle"),
         accordion(
-          open = "Labels",
+          open = "Size",
+          accordion_panel(
+            "Size",
+            icon = shiny$icon("arrows-up-down"),
+            tooltip(
+              input_switch(ns("mst_scale_nodes"), "Scale by duplicates", TRUE),
+              "Node area is proportional to the number of isolates it holds."
+            ),
+            shiny$uiOutput(ns("mst_node_size_ui"))
+          ),
           accordion_panel(
             "Labels",
             icon = shiny$icon("tag"),
@@ -353,15 +353,6 @@ mst_controls <- function(ns, options_ui = NULL) {
               FITTED_DEFAULTS$mst_node_label_fontsize,
               ticks = FALSE
             )
-          ),
-          accordion_panel(
-            "Size",
-            icon = shiny$icon("arrows-up-down"),
-            tooltip(
-              input_switch(ns("mst_scale_nodes"), "Scale by duplicates", TRUE),
-              "Node area is proportional to the number of isolates it holds."
-            ),
-            shiny$uiOutput(ns("mst_node_size_ui"))
           ),
           accordion_panel(
             "Shadow",
@@ -496,14 +487,25 @@ mst_controls <- function(ns, options_ui = NULL) {
           accordion_panel(
             "Orientation",
             icon = shiny$icon("compass"),
-            shiny$sliderInput(
-              ns("mst_rotation"),
-              "Rotation",
-              -180,
-              180,
-              0,
-              step = 5,
-              ticks = FALSE
+            # Signed degrees say nothing about which way the drawing turns, so
+            # the slider's two ends are named instead of numbered.
+            shiny$div(
+              class = "mst-rotation",
+              shiny$sliderInput(
+                ns("mst_rotation"),
+                "Rotation",
+                -180,
+                180,
+                0,
+                step = 5,
+                post = "°",
+                ticks = FALSE
+              ),
+              shiny$div(
+                class = "mst-rotation-ends",
+                shiny$span(shiny$icon("rotate-left"), "Anti-clockwise"),
+                shiny$span("Clockwise", shiny$icon("rotate-right"))
+              )
             )
           ),
           accordion_panel(
@@ -649,7 +651,6 @@ server <- function(
       c(
         FITTED_DEFAULTS,
         list(
-          mst_edge_length_scale = MST_FIT_DEFAULTS$spread,
           mst_node_label = "isolate",
           mst_cluster_threshold = THRESHOLD_PLACEHOLDER
         )
@@ -832,9 +833,9 @@ server <- function(
     # or it reads as an arbitrary default.
     apply_scheme_threshold <- function(force_default = FALSE) {
       value <- scheme_threshold()
-      shinyjs::html(
-        id = "mst_threshold_note",
-        html = if (is.null(value)) {
+      update_tooltip(
+        "mst_threshold_tip",
+        if (is.null(value)) {
           paste(
             "This scheme publishes no complex-type distance;",
             THRESHOLD_PLACEHOLDER,
@@ -845,7 +846,8 @@ server <- function(
             "%d is this scheme's own complex-type distance (cgMLST.org).",
             value
           )
-        }
+        },
+        session = session
       )
       if (is.null(value)) {
         return(invisible(NULL))
@@ -882,7 +884,7 @@ server <- function(
       shiny$sliderInput(
         ns("mst_node_size"),
         if (scaled) "Size (smallest – largest)" else "Size",
-        4,
+        1,
         60,
         value = if (scaled) {
           if (length(value) >= 2L) {
@@ -977,7 +979,7 @@ server <- function(
 
       populate_metadata_selects(force_default = TRUE)
       apply_scheme_threshold(force_default = TRUE)
-      refit_layout(mst_obj(), notify = FALSE)
+      refit_layout(mst_obj())
     }
 
     on_confirmed_reset(
@@ -1005,13 +1007,26 @@ server <- function(
         )
         return()
       }
-      refit_layout(graph, notify = TRUE)
+      refit_layout(graph)
+      reframe_view()
       shiny$showNotification(
         sprintf("Sizes and spacing fitted to %d nodes.", vcount(graph)),
         type = "message",
-        duration = 5
+        duration = 2
       )
     })
+
+    # Frame the drawing on the canvas again. A fit that changes no value
+    # rebuilds nothing, and a reader who panned or zoomed would otherwise keep
+    # their own view after asking for the fitted one.
+    reframe_view <- function() {
+      shinyjs::runjs(paste0(
+        "(function(){var el=document.getElementById('",
+        ns("mst_plot"),
+        "');var r=el&&el.htmlwidget_data_init_result;",
+        "if(r&&r.network){r.network.__ptFitted=false;r.network.redraw();}})();"
+      ))
+    }
 
     # --- Variable mapping layers -------------------------------------------
 
@@ -1200,15 +1215,17 @@ server <- function(
       suppressWarnings(max(nchar(as.character(vals)), 1L))
     }
 
-    refit_layout <- function(graph, notify = FALSE) {
+    # Solve every geometry control against the drawing the graph makes on this
+    # canvas (mst_plot$mst_fit_drawing) and push the answers into the mirrors
+    # and the sidebar.
+    refit_layout <- function(graph) {
       if (is.null(graph)) {
         return(invisible(NULL))
       }
-      edges <- as_data_frame(graph, what = "edges")
-      fit <- mst_auto_layout(
-        vcount(graph),
-        edges$weight,
-        spread = shiny$isolate(fitted$mst_edge_length_scale),
+      fit <- mst_fit_drawing(
+        graph,
+        shiny$isolate(viz_metadata()),
+        shiny$isolate(mst_opts()),
         label_chars = label_chars(graph)
       )
 
@@ -1231,14 +1248,6 @@ server <- function(
         } else {
           shiny$updateSliderInput(session, id, value = value)
         }
-      }
-
-      if (notify && !isTRUE(fit$labels_legible)) {
-        shiny$showNotification(
-          "Node labels disabled: too many nodes to display legibly. Hover a node to view it.",
-          type = "warning",
-          duration = 8
-        )
       }
       invisible(fit)
     }
@@ -1296,7 +1305,7 @@ server <- function(
           # spinner up until the 45s client-side safety timeout.
           shinyjs::removeClass(id = "plot_stage", class = "is-loading")
         } else {
-          refit_layout(graph, notify = TRUE)
+          refit_layout(graph)
         }
         mst_obj(graph)
 
@@ -1320,9 +1329,10 @@ server <- function(
       shiny$isolate({
         w <- session$clientData[[paste0("output_", ns("mst_plot"), "_width")]]
         h <- session$clientData[[paste0("output_", ns("mst_plot"), "_height")]]
+        # Before the first layout pass: the panel's own 16:9 shape.
         c(
-          if (is.null(w) || w < 200) 900 else w,
-          if (is.null(h) || h < 200) 620 else h
+          if (is.null(w) || w < 200) 1200 else w,
+          if (is.null(h) || h < 200) 675 else h
         )
       })
     }
@@ -1355,7 +1365,7 @@ server <- function(
         spread = fitted$mst_edge_length_scale,
         shorten_long = input$mst_shorten_long,
         cap_mult = input$mst_cap_mult,
-        rotation = input$mst_rotation,
+        rotation = fitted$mst_rotation,
         collapse_threshold = input$mst_collapse_threshold,
         # Mapping.
         layers = mst_layers(),
@@ -1363,10 +1373,8 @@ server <- function(
         show_clusters = input$mst_show_clusters,
         cluster_threshold = fitted$mst_cluster_threshold,
         cluster_col_scale = input$mst_cluster_col_scale,
-        cluster_width = input$mst_cluster_width,
-        cluster_opacity = (input$mst_cluster_opacity %||% 35) / 100,
-        cluster_label_size = input$mst_cluster_label_size,
-        cluster_label_tint = input$mst_cluster_label_tint,
+        cluster_width = fitted$mst_cluster_width,
+        cluster_label_size = fitted$mst_cluster_label_size,
         # Legend.
         show_legend = input$mst_show_legend,
         legend_ori = input$mst_legend_ori,
@@ -1427,7 +1435,6 @@ server <- function(
         # never removes one, so a node the threshold has just folded away
         # would be stranded on screen forever without a full rebuild.
         collapse_threshold = input$mst_collapse_threshold,
-        rotation = input$mst_rotation,
         transparent = input$mst_background_transparent,
         background = input$mst_background_color,
         shadow = input$mst_shadow,
@@ -1442,15 +1449,13 @@ server <- function(
         layers = mst_layers(),
         # The cluster regions are painted by a hook, and their geometry follows
         # the coordinates and the node radii. Everything the hook is built from
-        # belongs here, right down to its opacity — a beforeDrawing handler is
-        # baked into the widget and cannot be pushed through the proxy.
+        # belongs here — a beforeDrawing handler is baked into the widget and
+        # cannot be pushed through the proxy.
         clusters = input$mst_show_clusters,
         cluster_threshold = fitted$mst_cluster_threshold,
         cluster_col_scale = input$mst_cluster_col_scale,
-        cluster_width = input$mst_cluster_width,
-        cluster_opacity = input$mst_cluster_opacity,
-        cluster_label_size = input$mst_cluster_label_size,
-        cluster_label_tint = input$mst_cluster_label_tint,
+        cluster_width = fitted$mst_cluster_width,
+        cluster_label_size = fitted$mst_cluster_label_size,
         scale_nodes = input$mst_scale_nodes,
         node_size = fitted$mst_node_size,
         length_mode = fitted$mst_length_mode,
@@ -1460,7 +1465,7 @@ server <- function(
         # Rotation moves every coordinate, and the cluster regions are baked
         # from those coordinates at build time — so it belongs here for the
         # same reason spread and length_mode do.
-        rotation = input$mst_rotation
+        rotation = fitted$mst_rotation
       )
     )
 

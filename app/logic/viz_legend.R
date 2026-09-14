@@ -382,13 +382,15 @@ legend_title <- function(name, hidden, total = NULL) {
 #' @param floor Numeric. Smallest legible legend type.
 #' @param plan_at Function of one size, returning a `legend_plan()` for the
 #'   rows the column has at that size.
+#' @param fits Function of a size and its plan, TRUE where the column also fits
+#'   whatever the engine measures besides rows (its width beside the drawing).
 #' @return list(size, plan, complete), `complete` saying whether every guide
 #'   lists everything up to its cap.
 #' @export
-legend_fit <- function(want, floor, plan_at) {
+legend_fit <- function(want, floor, plan_at, fits = function(size, plan) TRUE) {
   complete <- function(pt) {
     plan <- plan_at(pt)
-    all(plan$keys >= plan$cap) && plan$rows <= plan$room
+    all(plan$keys >= plan$cap) && plan$rows <= plan$room && isTRUE(fits(pt, plan))
   }
   size <- if (isTRUE(complete(floor))) {
     largest_fitting(want, complete, floor = floor)

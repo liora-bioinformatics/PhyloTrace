@@ -33,16 +33,19 @@
 #    renderer silently won: switching clusters on with a mapping active changed
 #    nothing at all on the canvas.
 #
-# 4. The layout is crossing-free by construction (equal-angle; see mst_layout).
-#    No force layout can promise that, and a crossing in a tree is a false
-#    relationship — two lineages appear to touch where no edge exists.
+# 4. The layout starts crossing-free by construction (equal-angle; see
+#    mst_layout), because a crossing in a tree is a false relationship — two
+#    lineages appear to touch where no edge exists. It gives that up only where
+#    nodes would otherwise sit on top of each other, which on a large
+#    collection is most of them: branches are then turned, never lengthened,
+#    until every node is clear (.relax_collisions).
 
 box::use(
   htmlwidgets[JS, sizingPolicy],
   stats[median, quantile, setNames],
   utils[head],
   visNetwork,
-  rlang[`%||%`],
+  rlang[`%||%`, hash],
 )
 
 box::use(
@@ -55,6 +58,7 @@ box::use(
       mapped_values,
       tree_level_colors,
     ],
+  app / logic / viz_fit[MIN_PRINT_PT],
 )
 
 # --- Geometry constants ------------------------------------------------------
@@ -95,17 +99,25 @@ MST_NODE_EDGE_FRAC <- 0.42
 # the way out.
 MST_MAX_CONE <- pi * 0.9
 
-# Least of a node's fan a branch gets when it leaves the node's cluster.
-#
-# Angle is the one thing an equal-angle layout is free to choose: the branch
-# *lengths* carry the allelic distances and cannot move, but which direction a
-# subtree is fanned in carries nothing at all. Spending that freedom on the
-# branches that leave a cluster is what keeps an unclustered node out of the
-# region drawn around its neighbours — by proportion alone, one such branch
-# among a 175-node cluster's would get a two-degree sliver in the middle of the
-# fan, which is how it ends up reading as a hole in a shaded area rather than as
-# a node beside one.
-MST_LOOSE_SHARE <- 0.12
+
+# Daylight kept between two node rims once they are pushed apart, as a share of
+# the largest radius: enough for two dots to read as two rather than as one
+# with a notch in it.
+MST_NODE_GAP_FRAC <- 0.25
+
+# Budget of the collision pass (.relax_collisions()). Sixty rounds settle the
+# 972-node reference collection to no overlapping pair at its fitted node size;
+# candidate pairs are re-gathered every few rounds because a node moves.
+MST_RELAX_ITERS <- 120L
+MST_RELAX_REFRESH <- 5L
+# Furthest a branch may be turned away from the direction the fan gave it, so
+# relaxing never reorganises the drawing — it only opens it up. A quarter turn:
+# at a third of one, 16 of the reference collection's nodes stayed overlapped.
+MST_RELAX_MAX_SWING <- pi / 2
+# Largest turn one round may make, in radians, and the share of a node's push
+# passed on to the branch above it (which moves the whole limb, not one leaf).
+MST_RELAX_STEP <- 0.12
+MST_RELAX_PARENT_SHARE <- 0.35
 
 # Node counts past which labels stop helping. A merged node in the reference
 # database carries up to 15 isolate names; 186 nodes' worth of them is the grey
@@ -327,45 +339,37 @@ mst_edge_lengths <- function(
   best[[1]]
 }
 
-# The order a node's children are fanned in, and the share of its wedge each one
-# gets, given which of them stay inside the node's own cluster.
+# The node the drawing is fanned out from: the busiest one.
 #
-# Two changes to a plain equal-angle fan, both of them angular and so both free:
-#
-#   * a branch that leaves the cluster is placed at an *end* of the wedge rather
-#     than wherever the traversal happened to find it. In the middle it has
-#     cluster branches fanning past it on both sides, and the node on the end of
-#     it reads as enclosed by them however wide the gap actually is. Several of
-#     them alternate between the two ends, largest first, so they do not stack
-#     up on one side.
-#   * it gets at least `MST_LOOSE_SHARE` of the wedge, so the gap around it is
-#     one a reader can see rather than one the region has to pinch itself into.
-#
-# What it does not change is any branch's length, and it leaves the wedges
-# contiguous and disjoint — so the layout stays crossing-free, which is the
-# property the whole arrangement is built on.
-.fan_layout <- function(ch, tips_ch, attached) {
-  share <- tips_ch / sum(tips_ch)
-  loose <- which(!attached)
-  if (!length(loose) || !length(ch)) {
-    return(list(ch = ch, share = share))
+# The root is the only node whose children share a full circle; every other fan
+# is capped below half of one (MST_MAX_CONE). A cgMLST MST is star-shaped — the
+# 991-isolate reference collection has one node with a hundred branches — and
+# rooted at the graph centre, which there was a pass-through node of degree two,
+# that hub's hundred children were packed into a cone of 162 degrees and most of
+# them drawn on top of each other. Rooted at the hub they get the whole circle.
+# Ties go to the more central node, then to the one holding more isolates; a
+# tree with no node of degree three (a path) keeps the plain centre.
+.root_node <- function(nb, n, weight = NULL) {
+  deg <- lengths(nb)
+  if (n <= 2L || max(deg) < 3L) {
+    return(.center_node(nb, n, weight))
   }
-
-  # Never more than four fifths of the wedge between them: the cluster's own
-  # branches still have to fit, however many leave it.
-  floor_each <- min(MST_LOOSE_SHARE, 0.8 / length(loose))
-  share[loose] <- pmax(share[loose], floor_each)
-  inside <- which(attached)
-  if (length(inside)) {
-    left <- max(1 - sum(share[loose]), 0)
-    share[inside] <- left * tips_ch[inside] / sum(tips_ch[inside])
+  hubs <- which(deg == max(deg))
+  if (length(hubs) > 1L) {
+    # Double-sweep eccentricity, as in .center_node(): exact enough to break a
+    # tie and linear rather than one search per hub.
+    da <- .bfs(nb, n, which.max(.bfs(nb, n, 1L)))
+    db <- .bfs(nb, n, which.max(da))
+    ecc <- pmax(da, db)[hubs]
+    central <- !is.na(ecc) & ecc == suppressWarnings(min(ecc, na.rm = TRUE))
+    if (any(central)) {
+      hubs <- hubs[central]
+    }
   }
-  share <- share / sum(share)
-
-  by_size <- loose[order(-tips_ch[loose], loose)]
-  odd <- seq_along(by_size) %% 2L == 1L
-  ord <- c(by_size[odd], inside, rev(by_size[!odd]))
-  list(ch = ch[ord], share = share[ord])
+  if (length(hubs) > 1L && !is.null(weight)) {
+    hubs <- hubs[weight[hubs] == max(weight[hubs])]
+  }
+  hubs[[1]]
 }
 
 # Orientation, vectorised over the second segment. Not written with ifelse():
@@ -436,12 +440,11 @@ MST_PUSH_ANGLES <- 72L
 
 # Swing the branches that leave a cluster until they point out of it.
 #
-# The last resort, and the only one that actually works on a large collection.
-# Ordering the fan (`.fan_layout()`) helps a branch whose own cluster is what
-# surrounds it, but on the reference database three of the four unclustered
-# nodes are not surrounded by their own cluster at all — they are surrounded by
-# *unrelated* subtrees that the radial layout happens to pack against them, and
-# no local choice of wedge reaches that.
+# The only thing that works on a large collection. A straggler is rarely
+# surrounded by its own cluster alone — on the reference database three of the
+# four unclustered nodes were surrounded by *unrelated* subtrees that the radial
+# layout happened to pack against them, and no local choice of wedge reaches
+# that.
 #
 # What is free to change is the same thing as ever: direction. The subtree is
 # rotated rigidly about the node it hangs from, so every branch length inside it
@@ -477,12 +480,55 @@ MST_PUSH_ANGLES <- 72L
   for (v in loose) {
     p <- parent[[v]]
     kin <- subtree[[v]]
-    others <- setdiff(seq_len(n), kin)
+    # Already outside every region: nothing to escape, and the angle search
+    # below — seventy-two candidates, each checked against every branch — is
+    # what made a thousand-node render take three seconds when it ran for every
+    # straggler whether it was buried or not.
+    if (min(.cluster_reach(x[kin], y[kin], skel) - radius[kin]) > 0) {
+      next
+    }
+    # However it is swung, the subtree stays inside a disc of `arm` about the
+    # node it hangs from. Nothing outside that disc can collide with it, cross
+    # it or shade it, so the checks below are made against what reaches the
+    # disc only — the same answers, at a thousand nodes a small share of the
+    # work.
+    ox <- x[[p]]
+    oy <- y[[p]]
+    arm <- max(sqrt((x[kin] - ox)^2 + (y[kin] - oy)^2) + radius[kin])
+    near <- which(sqrt((x - ox)^2 + (y - oy)^2) <= arm + max(radius))
+    others <- setdiff(near, kin)
+    local_skel <- skel
+    if (length(skel$x)) {
+      keep <- sqrt((skel$x - ox)^2 + (skel$y - oy)^2) - skel$r <= arm
+      local_skel$x <- skel$x[keep]
+      local_skel$y <- skel$y[keep]
+      local_skel$r <- skel$r[keep]
+    }
+    if (nrow(skel$seg)) {
+      keep <- .point_seg_dist(
+        ox,
+        oy,
+        skel$seg[, 1],
+        skel$seg[, 2],
+        skel$seg[, 3],
+        skel$seg[, 4]
+      ) -
+        skel$seg_r <=
+        arm
+      local_skel$seg <- skel$seg[keep, , drop = FALSE]
+      local_skel$seg_r <- skel$seg_r[keep]
+    }
     # The branches that move with the subtree, and the ones that stay put. The
     # fixed ones do not move between candidate angles, so their coordinates and
     # the shared-endpoint exclusions are worked out once rather than 72 times.
     moving <- which(f %in% kin | t %in% kin)
     fixed <- setdiff(seq_along(f), moving)
+    if (length(fixed)) {
+      fixed <- fixed[
+        .point_seg_dist(ox, oy, x[f[fixed]], y[f[fixed]], x[t[fixed]], y[t[fixed]]) <=
+          arm
+      ]
+    }
     fax <- x[f[fixed]]
     fay <- y[f[fixed]]
     fbx <- x[t[fixed]]
@@ -508,18 +554,20 @@ MST_PUSH_ANGLES <- 72L
 
       # Clear of every other node, by both their rims.
       gap <- Inf
-      for (i in seq_along(kin)) {
-        reach <- sqrt((x[others] - nx[[i]])^2 + (y[others] - ny[[i]])^2)
-        gap <- min(gap, min(reach - radius[others]) - radius[[kin[[i]]]])
-        if (gap <= 0) {
-          break
+      if (length(others)) {
+        for (i in seq_along(kin)) {
+          reach <- sqrt((x[others] - nx[[i]])^2 + (y[others] - ny[[i]])^2)
+          gap <- min(gap, min(reach - radius[others]) - radius[[kin[[i]]]])
+          if (gap <= 0) {
+            break
+          }
         }
       }
       if (gap <= 0) {
         next
       }
       # And out of the shaded regions, which is the whole point.
-      score <- min(.cluster_reach(nx, ny, skel) - radius[kin])
+      score <- min(.cluster_reach(nx, ny, local_skel) - radius[kin])
       # Among angles that escape, the one closest to where the fan already put
       # it: the drawing should move as little as the goal allows.
       score <- score - 1e-6 * abs(atan2(sin(d), cos(d)))
@@ -567,6 +615,164 @@ MST_PUSH_ANGLES <- 72L
   list(x = x, y = y)
 }
 
+# Every pair of points closer than `h`, found through a grid of `h`-sized cells
+# rather than a distance matrix: a node is compared only with the nodes in its
+# own cell and the four neighbouring cells ahead of it, so the cost follows the
+# number of close pairs instead of the square of the node count (a 3,000-node
+# collection is a nine-million-cell matrix per round otherwise).
+#
+# Returns a two-column integer matrix of index pairs, each unordered pair once.
+.near_pairs <- function(x, y, h) {
+  n <- length(x)
+  if (n < 2L || !is.finite(h) || h <= 0) {
+    return(matrix(integer(0), 0, 2))
+  }
+  gx <- floor((x - min(x)) / h)
+  gy <- floor((y - min(y)) / h)
+  # Two spare columns, so the cell left of column zero cannot alias onto the
+  # last column of the row below.
+  width <- max(gx) + 3
+  key <- gx + gy * width
+  o <- order(key)
+  runs <- rle(key[o])
+  first <- cumsum(c(1L, head(runs$lengths, -1L)))
+  offsets <- list(c(0, 0), c(1, 0), c(-1, 1), c(0, 1), c(1, 1))
+  found <- lapply(offsets, function(off) {
+    cell <- match(key + off[[1]] + off[[2]] * width, runs$values)
+    has <- which(!is.na(cell))
+    count <- runs$lengths[cell[has]]
+    i <- rep(has, count)
+    j <- o[sequence(count, from = first[cell[has]])]
+    if (!any(off != 0)) {
+      keep <- i < j
+      i <- i[keep]
+      j <- j[keep]
+    }
+    cbind(i, j)
+  })
+  pairs <- do.call(rbind, found)
+  d <- sqrt((x[pairs[, 2]] - x[pairs[, 1]])^2 + (y[pairs[, 2]] - y[pairs[, 1]])^2)
+  pairs[d < h, , drop = FALSE]
+}
+
+# Turn branches until no two nodes overlap, keeping every branch length exact.
+#
+# The equal-angle fan cannot seat a real collection: the share of a circle a
+# leaf earns by its tip count is independent of how big it is drawn, and on the
+# 991-isolate reference database the leaves of one hub were given half a degree
+# each — less than a pixel of arc — so 822 of 972 nodes sat on top of another.
+# No choice of wedge fixes that (a size-aware packing of the fans needs two to
+# five full circles at the root), and shrinking the nodes does not either: at a
+# tenth of the size 411 still overlap, because many coincide exactly.
+#
+# What GrapeTree does after its static layout is a force-directed refinement;
+# this is that idea restricted to the one freedom a branch has. The state is
+# each branch's direction, positions are rebuilt from the root down, and a
+# collision only turns branches — the node's own, and a share of its parent's —
+# so the allelic distance every branch was drawn at is never touched. The cost
+# is the crossing-free guarantee: a turned limb can pass over a neighbouring
+# one. On the reference collection that is a few dozen of 971 branches, deep
+# inside the densest fans, against no overlapping node at all; a drawing with
+# nothing overlapping is returned exactly as the fan left it.
+.relax_collisions <- function(x, y, parent, depth, radius, gap) {
+  n <- length(x)
+  kids <- which(!is.na(parent))
+  if (n < 2L || !length(kids)) {
+    return(list(x = x, y = y))
+  }
+  up <- parent[kids]
+  plen <- rep(1, n)
+  plen[kids] <- pmax(sqrt((x[kids] - x[up])^2 + (y[kids] - y[up])^2), 1e-9)
+  phi0 <- rep(0, n)
+  phi0[kids] <- atan2(y[kids] - y[up], x[kids] - x[up])
+  phi <- phi0
+  # Root first, so every node's parent is already in place when it is placed.
+  levels <- split(kids, depth[kids])
+  reach <- 2 * max(radius) + gap
+
+  pairs <- NULL
+  fresh <- FALSE
+  for (k in seq_len(MST_RELAX_ITERS)) {
+    if (is.null(pairs) || (k - 1L) %% MST_RELAX_REFRESH == 0L) {
+      # Twice the contact distance: a node turns at most MST_RELAX_STEP a
+      # round, so a pair that was clear when gathered cannot close the gap
+      # before the next gathering.
+      pairs <- .near_pairs(x, y, 2 * reach)
+      fresh <- TRUE
+    }
+    if (!nrow(pairs)) {
+      break
+    }
+    i <- pairs[, 1]
+    j <- pairs[, 2]
+    dx <- x[j] - x[i]
+    dy <- y[j] - y[i]
+    d <- sqrt(dx^2 + dy^2)
+    need <- radius[i] + radius[j] + gap
+    hit <- which(d < need)
+    if (!length(hit)) {
+      # Clear against pairs gathered rounds ago proves nothing; clear against
+      # fresh ones is done.
+      if (fresh) {
+        break
+      }
+      pairs <- NULL
+      next
+    }
+    fresh <- FALSE
+
+    i <- i[hit]
+    j <- j[hit]
+    d <- d[hit]
+    ux <- dx[hit] / pmax(d, 1e-9)
+    uy <- dy[hit] / pmax(d, 1e-9)
+    # Two nodes on exactly the same spot have no direction between them; a
+    # fixed one derived from their indices keeps the result reproducible.
+    same <- d < 1e-9
+    if (any(same)) {
+      a <- ((i[same] * 7L + j[same] * 13L) %% 360L) * pi / 180
+      ux[same] <- cos(a)
+      uy[same] <- sin(a)
+    }
+    push <- (need[hit] - d) / 2
+    who <- c(i, j)
+    fx <- rowsum(c(-ux * push, ux * push), who)
+    fy <- rowsum(c(-uy * push, uy * push), who)[, 1]
+    ids <- as.integer(rownames(fx))
+    fx <- fx[, 1]
+
+    movable <- !is.na(parent[ids])
+    v <- ids[movable]
+    fx <- fx[movable]
+    fy <- fy[movable]
+    # Only the part of a push across the branch can be spent by turning it.
+    turn <- numeric(n)
+    turn[v] <- (cos(phi[v]) * fy - sin(phi[v]) * fx) / plen[v]
+    q <- parent[v]
+    lifted <- !is.na(parent[q])
+    if (any(lifted)) {
+      share <- rowsum(
+        (cos(phi[q[lifted]]) * fy[lifted] - sin(phi[q[lifted]]) * fx[lifted]) /
+          plen[q[lifted]],
+        q[lifted]
+      )
+      at <- as.integer(rownames(share))
+      turn[at] <- turn[at] + MST_RELAX_PARENT_SHARE * share[, 1]
+    }
+    turn <- pmax(-MST_RELAX_STEP, pmin(MST_RELAX_STEP, 0.7 * turn))
+    phi <- phi + turn
+    swing <- atan2(sin(phi - phi0), cos(phi - phi0))
+    phi <- phi0 + pmax(-MST_RELAX_MAX_SWING, pmin(MST_RELAX_MAX_SWING, swing))
+
+    for (lv in levels) {
+      p <- parent[lv]
+      x[lv] <- x[p] + plen[lv] * cos(phi[lv])
+      y[lv] <- y[p] + plen[lv] * sin(phi[lv])
+    }
+  }
+  list(x = x, y = y)
+}
+
 #' Crossing-free radial coordinates for an MST.
 #'
 #' The equal-angle algorithm (Meacham; the family `ape`'s unrooted layout and
@@ -582,25 +788,26 @@ MST_PUSH_ANGLES <- 72L
 #' unchanged and the chain spirals into itself, which is the one shape the naive
 #' algorithm really does cross on.
 #'
-#' `cluster` is the second departure, and the reason it belongs here rather than
-#' in the drawing: which direction a subtree is fanned in carries no
-#' information, so it is free to spend on keeping the branches that *leave* a
-#' cluster clear of the region drawn around the ones that stay in it. Without
-#' it an unclustered node lands wherever proportion puts it — often in the
-#' middle of its cluster's fan, where the shaded region has to pinch itself
-#' around the node and reads as a hole rather than as a node outside the
-#' cluster. See `.fan_layout()`.
+#' `cluster` is the second departure: a branch that leaves a cluster is swung,
+#' at its own length, until it points out of the region drawn around the
+#' cluster (`.push_out_of_clusters()`). The fan itself stays proportional. It
+#' used to hand every such branch a fixed share of its fan as well, and on a
+#' large collection — 402 of 991 isolates in no cluster — that squeezed the
+#' clustered subtrees into what was left and overlapped 150 nodes the plain fan
+#' does not.
 #'
 #' @param from,to Character vectors of edge endpoints (node ids).
 #' @param edge_len Numeric vector of edge lengths in pixels.
 #' @param ids Character vector of every node id, in output order.
 #' @param weight Optional numeric per node (isolate counts), for the root choice.
 #' @param cluster Optional cluster name per node in `ids` order, NA for none.
-#'   Branches leaving a cluster are fanned to the edge of their parent's wedge
-#'   and then swung clear of the regions altogether.
+#'   Branches leaving a cluster are swung clear of the regions.
 #' @param radius Optional drawn node radii, in the same units as `edge_len`.
 #'   Needed only alongside `cluster`, to know what has to clear what.
 #' @param pad Numeric. How far past its nodes a cluster region will reach.
+#' @param relax Logical. Turn branches until no two nodes of `radius` overlap
+#'   (see `.relax_collisions()`). Lengths stay exact; the crossing-free
+#'   guarantee is given up where, and only where, a collision had to be undone.
 #' @return Data frame of `id`, `x`, `y`, `depth` (hops from the root) and
 #'   `root` (logical).
 #' @export
@@ -612,7 +819,8 @@ mst_layout <- function(
   weight = NULL,
   cluster = NULL,
   radius = NULL,
-  pad = 0
+  pad = 0,
+  relax = FALSE
 ) {
   n <- length(ids)
   if (!n) {
@@ -645,7 +853,7 @@ mst_layout <- function(
   }
 
   adj <- .adjacency(f, t, len, n)
-  root <- .center_node(adj$nb, n, weight)
+  root <- .root_node(adj$nb, n, weight)
 
   # Parent, incoming length, depth and BFS order in one sweep.
   parent <- rep(NA_integer_, n)
@@ -693,8 +901,8 @@ mst_layout <- function(
     tips[[v]] <- if (!length(ch)) 1L else sum(tips[ch])
   }
 
-  # NA everywhere when the caller passed none, which makes every branch
-  # "attached" below and the fan a plain proportional one.
+  # NA everywhere when the caller passed none: no region to swing anything out
+  # of.
   cl <- if (is.null(cluster)) rep(NA_character_, n) else as.character(cluster)
 
   x <- rep(0, n)
@@ -707,27 +915,11 @@ mst_layout <- function(
       next
     }
     span <- cone[[v]]
-    # A branch is inside the cluster only when both its ends are in the *same*
-    # one — which is exactly when the shaded region runs along it.
-    #
-    # A node in no cluster has no region at it, so there is nothing for its
-    # branches to point away from and the fan is the plain proportional one.
-    # Written as "everything is attached" rather than left to the comparison
-    # above, which answers FALSE for every child when the parent is NA and so
-    # re-ordered and re-shared *every* fan in a tree with no clustering at all.
-    fan <- .fan_layout(
-      ch,
-      tips[ch],
-      if (is.na(cl[[v]])) {
-        rep(TRUE, length(ch))
-      } else {
-        !is.na(cl[ch]) & cl[ch] == cl[[v]]
-      }
-    )
+    share <- tips[ch] / sum(tips[ch])
     acc <- facing[[v]] - span / 2
-    for (i in seq_along(fan$ch)) {
-      c <- fan$ch[[i]]
-      w <- span * fan$share[[i]]
+    for (i in seq_along(ch)) {
+      c <- ch[[i]]
+      w <- span * share[[i]]
       theta <- acc + w / 2
       facing[[c]] <- theta
       cone[[c]] <- min(w, MST_MAX_CONE)
@@ -735,6 +927,23 @@ mst_layout <- function(
       y[[c]] <- y[[v]] + plen[[c]] * sin(theta)
       acc <- acc + w
     }
+  }
+
+  # Open up the fans the proportional shares packed too tightly, before the
+  # regions are escaped: what a straggler has to clear is where its neighbours
+  # finally sit.
+  if (isTRUE(relax) && !is.null(radius)) {
+    rad <- rep_len(as.numeric(radius), n)
+    opened <- .relax_collisions(
+      x,
+      y,
+      parent,
+      depth,
+      rad,
+      MST_NODE_GAP_FRAC * max(rad)
+    )
+    x <- opened$x
+    y <- opened$y
   }
 
   # Swing whatever is still buried clear of the regions. Last, because it needs
@@ -943,6 +1152,370 @@ mst_auto_layout <- function(
   )
 }
 
+# --- 3b. The fit against the drawing ------------------------------------------
+#
+# mst_auto_layout() fits sizes to the edge lengths alone. What decides whether a
+# drawing is legible is the drawing: how many nodes share its area, how far the
+# view has to zoom out to show all of it, and where the cluster names land. So
+# the full fit lays the tree out and measures it, the way the Tree engine fits
+# to its canvas. All sizes on the canvas are in graph units, which vis.js scales
+# by the zoom; type is judged by what that zoom makes of it on paper.
+
+#' Width, in inches, the MST is assumed to be printed at: a two-column journal
+#' figure, as the Epi canvas is. The export draws exactly what is on screen, so
+#' a label is legible when it would reach `MIN_PRINT_PT` at this width.
+#' @export
+MST_PRINT_IN <- 7
+
+# Room, in canvas pixels, kept between the drawing and the canvas edge, and the
+# band the two-line caption takes at the foot (two 16px lines, 7px padding top
+# and bottom, 6px off the edge — see .caption_js).
+MST_FIT_MARGIN_PX <- 12
+MST_CAPTION_PX <- 52
+
+# The furthest the view zooms in to fill the canvas. vis.js's own fit stops at
+# 1, which left a small tree floating in the middle of an empty panel.
+MST_MAX_ZOOM <- 10
+
+# Zoom the fit aims for on a small tree, by lengthening every branch (the
+# spread). Above 1 the canvas magnifies graph units, and the smallest font and
+# node the sliders allow turn into large type on screen.
+MST_ZOOM_TARGET <- 1
+
+# Largest node radius as a share of the radius of the disc each node would get
+# if the drawing's area were shared out evenly. At 0.19 the 972-node reference
+# collection relaxes to no overlapping pair (see .relax_collisions()).
+MST_NODE_DENSITY_FRAC <- 0.19
+
+# Largest node radius on screen, as a share of the canvas width.
+MST_NODE_MAX_FRAC <- 0.016
+
+# Cluster region width as a share of the largest node radius, so a busier
+# drawing, which fits smaller nodes, draws narrower regions with them.
+MST_CLUSTER_PAD_FRAC <- 0.8
+
+# Type sizes the fit aims for on paper at MST_PRINT_IN, in points.
+MST_LABEL_PT <- 7
+MST_EDGE_LABEL_PT <- 6.5
+MST_CLUSTER_LABEL_PT <- 8
+
+# Mean advance of the bold sans-serif the cluster names are set in, in ems.
+MST_CLUSTER_LABEL_EM <- 0.62
+
+# More cluster names than this are a second legend written over the drawing.
+MST_CLUSTER_LABEL_MAX <- 30L
+
+# Nodes a cluster name may cover on average before the drawing is too busy to
+# write names over.
+MST_CLUSTER_LABEL_BUSY <- 2
+
+# The canvas as width and height, from whatever the browser reported. The panel
+# is 16:9 by CSS (.mst-canvas-wrap), which is also the fallback's shape.
+.canvas_size <- function(canvas_px) {
+  px <- suppressWarnings(as.numeric(unlist(canvas_px)))
+  px <- px[is.finite(px)]
+  w <- if (length(px) >= 1L && px[[1]] >= 200) px[[1]] else 1200
+  h <- if (length(px) >= 2L && px[[2]] >= 200) px[[2]] else w * 9 / 16
+  c(w, h)
+}
+
+# The zoom at which a `w` x `h` drawing fills the canvas, with the legend box
+# (`legend`, width and height in pixels) beside it or above it — whichever
+# leaves the larger drawing — and the caption band below. The browser runs the
+# same arithmetic when it frames the drawing (.fit_view_js).
+.fit_scale <- function(w, h, canvas, legend = NULL, caption = TRUE) {
+  m <- MST_FIT_MARGIN_PX
+  bottom <- canvas[[2]] - m - if (isTRUE(caption)) MST_CAPTION_PX else 0
+  right <- canvas[[1]] - m
+  fill <- function(left, top) {
+    min((right - left) / max(w, 1), (bottom - top) / max(h, 1))
+  }
+  if (is.null(legend)) {
+    return(fill(m, m))
+  }
+  max(fill(m + legend[[1]], m), fill(m, m + legend[[2]]))
+}
+
+# The legend panel's size in pixels, estimated the way the browser lays it out
+# (.drawn_js): the widest label, the solved columns and rows, and the gap left
+# to the drawing.
+.legend_box_px <- function(items, canvas) {
+  if (!length(items)) {
+    return(NULL)
+  }
+  geom <- mst_legend_layout(items, canvas)
+  chars <- max(nchar(vapply(items, function(i) i$label %||% "", character(1))))
+  col <- min(
+    chars * geom$font_size * TEXT_EM + geom$symbol_size * 2.2 + 8,
+    canvas[[1]] * geom$width / geom$ncol
+  )
+  c(col * geom$ncol + 26, geom$rows * geom$step_y + 24)
+}
+
+# The rotation that lets the drawing fill the canvas the most, in 5-degree
+# steps. A bounding box repeats every half turn, so only half of one is tried,
+# and among near-equal answers the one closest to the drawing as laid out wins.
+.best_rotation <- function(x, y, radius, canvas, legend = NULL, caption = TRUE) {
+  angles <- seq(0, 175, by = 5)
+  scores <- vapply(
+    angles,
+    function(a) {
+      t <- a * pi / 180
+      rx <- x * cos(t) - y * sin(t)
+      ry <- x * sin(t) + y * cos(t)
+      .fit_scale(
+        diff(range(rx)) + 2 * radius,
+        diff(range(ry)) + 2 * radius,
+        canvas,
+        legend,
+        caption
+      )
+    },
+    numeric(1)
+  )
+  near <- angles[scores >= max(scores) * (1 - 1e-3)]
+  signed <- ifelse(near > 90, near - 180, near)
+  pick <- which.min(abs(signed))
+  list(
+    degrees = signed[[pick]],
+    scale = scores[match(near[[pick]], angles)]
+  )
+}
+
+# The largest cluster-name size, in graph units, at which every name is legible
+# on paper, no two names overlap and the names do not sit on top of too many
+# nodes — or 0, for a drawing with too many clusters or too busy to name them.
+.cluster_label_fit <- function(blobs, x, y, radius, zoom, px_per_pt) {
+  hi <- min(round(MST_CLUSTER_LABEL_PT * px_per_pt / zoom), 48)
+  lo <- max(ceiling(MIN_PRINT_PT * px_per_pt / zoom), 1)
+  if (!length(blobs)) {
+    return(.clamp(hi, 0, 48))
+  }
+  if (length(blobs) > MST_CLUSTER_LABEL_MAX || lo > hi) {
+    return(0)
+  }
+  for (s in seq(hi, lo, by = -1)) {
+    # The same placement the frames will make at this size.
+    spots <- .place_cluster_labels(blobs, x, y, radius, s)
+    if (!any(spots$clash) && mean(spots$cover) <= MST_CLUSTER_LABEL_BUSY) {
+      return(s)
+    }
+  }
+  0
+}
+
+# Share of node labels allowed to overlap another before the labels are left
+# off: a few collisions at the edge of a fan are worth having the names.
+MST_LABEL_CLASH_SHARE <- 0.1
+
+# Do the node labels, as `fr` draws them at `font`, overlap one another beyond
+# MST_LABEL_CLASH_SHARE? A count-and-length rule cannot see a hub: twelve short
+# names fanned around one node collide however few nodes there are overall.
+.node_labels_clash <- function(fr, font) {
+  text <- as.character(fr$nodes$label)
+  if (length(text) < 2L) {
+    return(FALSE)
+  }
+  lines <- strsplit(text, "\n", fixed = TRUE)
+  half <- vapply(
+    lines,
+    function(l) if (length(l)) max(nchar(l)) else 0L,
+    integer(1)
+  ) *
+    font *
+    TEXT_EM /
+    2
+  x0 <- fr$coords$x - half
+  x1 <- fr$coords$x + half
+  y0 <- fr$coords$y + fr$nodes$size
+  y1 <- y0 + (lengths(lines) + 0.5) * font
+  over <- outer(x0, x1, "<") &
+    t(outer(x0, x1, "<")) &
+    outer(y0, y1, "<") &
+    t(outer(y0, y1, "<"))
+  diag(over) <- FALSE
+  mean(rowSums(over) > 0) > MST_LABEL_CLASH_SHARE
+}
+
+# Do the allelic distances, written at the middle of each branch at `font`,
+# overlap one another beyond MST_LABEL_CLASH_SHARE? The twenty leaves of one hub
+# put twenty numbers within a few pixels of each other.
+.edge_labels_clash <- function(fr, font) {
+  e <- fr$edges
+  if (nrow(e) < 2L) {
+    return(FALSE)
+  }
+  ix <- setNames(seq_len(nrow(fr$coords)), fr$coords$id)
+  f <- ix[e$from]
+  t <- ix[e$to]
+  mx <- (fr$coords$x[f] + fr$coords$x[t]) / 2
+  my <- (fr$coords$y[f] + fr$coords$y[t]) / 2
+  half <- (nchar(as.character(e$weight)) * font * TEXT_EM + font * 0.4) / 2
+  x0 <- mx - half
+  x1 <- mx + half
+  y0 <- my - font / 2
+  y1 <- my + font / 2
+  over <- outer(x0, x1, "<") &
+    t(outer(x0, x1, "<")) &
+    outer(y0, y1, "<") &
+    t(outer(y0, y1, "<"))
+  diag(over) <- FALSE
+  mean(rowSums(over) > 0) > MST_LABEL_CLASH_SHARE
+}
+
+#' Fit every geometry control to the drawing the graph actually makes.
+#'
+#' Two passes. The first lays the tree out without sizes (cheap) and decides
+#' what depends only on its shape: the rotation that fills the canvas best, the
+#' spread that keeps a small tree's type within the sliders, and the node size
+#' the drawing's density allows. The second draws it at those sizes — the same
+#' frames the render then takes from the layout cache — and fits what depends
+#' on where things landed: the zoom the legend leaves, and whether the cluster
+#' names fit at all.
+#'
+#' @param graph igraph MST from `compute_mst()`.
+#' @param metadata Isolate metadata frame.
+#' @param opts Resolved control values; `canvas_px` is the on-screen canvas.
+#' @param label_chars Numeric. Characters the longest node label runs to.
+#' @return List of fitted control values: `node_size`, `node_size_min`,
+#'   `node_size_max`, `node_font_size`, `edge_font_size`, `spread`,
+#'   `length_mode`, `show_label`,
+#'   `show_edge_label`, `label_lines`, `labels_legible`, `rotation`,
+#'   `cluster_width`, `cluster_label_size`, and the predicted `zoom`.
+#' @export
+mst_fit_drawing <- function(graph, metadata, opts, label_chars = 12) {
+  canvas <- .canvas_size(opts$canvas_px)
+  px_per_pt <- canvas[[1]] / (MST_PRINT_IN * 72)
+  floor_px <- MIN_PRINT_PT * px_per_pt
+  caption <- !isFALSE(opts$show_caption)
+  drawn <- .drawn_graph(graph, opts)
+  ids <- drawn$ids
+  edges <- drawn$edges
+  n <- length(ids)
+  counts <- mst_node_sizes(ids)
+  anchor <- MST_FIT_DEFAULTS$spread
+  shorten <- !isFALSE(opts$shorten_long)
+  cap <- opts$cap_mult %||% MST_MAX_EDGE_MULT
+
+  # -- pass 1: the shape
+  first <- mst_auto_layout(n, edges$weight, spread = anchor, label_chars = label_chars)
+  mode <- first$length_mode
+  lens <- mst_edge_lengths(edges$weight, mode, anchor, shorten, cap)$length
+  plain <- mst_layout(edges$from, edges$to, lens, ids, counts)
+  found <- mst_clusters(
+    ids,
+    edges$from,
+    edges$to,
+    edges$weight,
+    opts$cluster_threshold,
+    counts
+  )
+  legend <- if (!isFALSE(opts$show_legend)) {
+    .legend_box_px(
+      mst_legend_items(
+        clusters = if (isTRUE(opts$show_clusters) && nrow(found$table)) {
+          found$table
+        },
+        threshold = opts$cluster_threshold,
+        scaled = isTRUE(opts$scale_nodes) && max(counts) > 1L,
+        unclustered = sum(counts[is.na(found$node)])
+      ),
+      canvas
+    )
+  }
+  turn <- .best_rotation(
+    plain$x,
+    plain$y,
+    first$node_size,
+    canvas,
+    legend,
+    caption
+  )
+
+  # A small tree zoomed in past MST_ZOOM_TARGET is drawn with longer branches
+  # instead, which is the same picture with type and nodes in slider range.
+  spread <- if (turn$scale > MST_ZOOM_TARGET) {
+    .clamp(round(anchor * turn$scale / MST_ZOOM_TARGET), anchor, 60)
+  } else {
+    anchor
+  }
+  grow <- mst_edge_lengths(1, "uniform", spread)$length /
+    mst_edge_lengths(1, "uniform", anchor)$length
+  zoom <- turn$scale / grow
+
+  base <- mst_auto_layout(n, edges$weight, mode, spread, label_chars)
+  r_max <- base$node_size
+  if (n > 1L) {
+    area <- (diff(range(plain$x)) * grow + 2 * r_max) *
+      (diff(range(plain$y)) * grow + 2 * r_max)
+    dense <- MST_NODE_DENSITY_FRAC * sqrt(area / n / pi)
+    r_max <- min(r_max, dense, MST_NODE_MAX_FRAC * canvas[[1]] / zoom)
+  }
+  r_max <- .clamp(round(r_max), 2, 60)
+  r_min <- .clamp(round(r_max * 0.42), 1, r_max)
+
+  node_font <- .clamp(round(MST_LABEL_PT * px_per_pt / zoom), 6, 30)
+  edge_font <- .clamp(round(MST_EDGE_LABEL_PT * px_per_pt / zoom), 6, 30)
+  typical <- if (length(lens)) median(lens) * grow else MST_BASE_EDGE_PX
+  show_label <- n <= MST_LABEL_MAX_NODES &&
+    node_font * zoom >= floor_px &&
+    max(as.numeric(label_chars %||% 12), 1) * node_font * TEXT_EM <=
+      typical * LABEL_ROOM
+  show_edge_label <- length(lens) <= MST_EDGE_LABEL_MAX &&
+    edge_font * zoom >= floor_px
+  pad <- .clamp(round(MST_CLUSTER_PAD_FRAC * r_max), 1, 60)
+
+  # -- pass 2: the drawing at those sizes
+  fitted <- opts
+  fitted$length_mode <- mode
+  fitted$spread <- spread
+  fitted$node_size <- if (isTRUE(opts$scale_nodes)) c(r_min, r_max) else r_max
+  fitted$rotation <- turn$degrees
+  fitted$cluster_width <- pad
+  fitted$show_label <- show_label
+  fitted$node_font_size <- node_font
+  # Regions are built whether or not they are shown, so the names are sized for
+  # the moment the reader switches them on.
+  fitted$show_clusters <- TRUE
+  fitted$cluster_label_size <- 0
+  fr <- mst_frames(graph, metadata, fitted)
+  box <- if (!isFALSE(opts$show_legend)) .legend_box_px(fr$legend, canvas)
+  ext <- fr$extent
+  if (show_label && .node_labels_clash(fr, node_font)) {
+    show_label <- FALSE
+    ext <- .drawn_extent(fr$coords$x, fr$coords$y, fr$nodes$size, fr$blobs)
+  }
+  if (show_edge_label && .edge_labels_clash(fr, edge_font)) {
+    show_edge_label <- FALSE
+  }
+  zoom <- .fit_scale(ext[[3]] - ext[[1]], ext[[4]] - ext[[2]], canvas, box, caption)
+
+  list(
+    node_size = r_max,
+    node_size_min = r_min,
+    node_size_max = r_max,
+    node_font_size = node_font,
+    edge_font_size = edge_font,
+    spread = spread,
+    length_mode = mode,
+    show_label = show_label,
+    show_edge_label = show_edge_label,
+    label_lines = base$label_lines,
+    labels_legible = show_label,
+    rotation = turn$degrees,
+    cluster_width = pad,
+    cluster_label_size = .cluster_label_fit(
+      fr$blobs,
+      fr$coords$x,
+      fr$coords$y,
+      fr$nodes$size,
+      zoom,
+      px_per_pt
+    ),
+    zoom = zoom
+  )
+}
+
 # --- 4. Clustering -----------------------------------------------------------
 
 #' Default cluster threshold for a database.
@@ -1123,14 +1696,13 @@ mst_clusters <- function(ids, from, to, weight, threshold, sizes = NULL) {
 MST_BLOB_CLEARANCE <- 3
 
 # Background left around a node that is in no cluster at all, where a region
-# would otherwise cover it.
+# still covers it.
 #
-# Cut out of the region rather than avoided by it, and the difference is the
-# whole point. Narrowing the region around such a node scallops its outline, and
-# at the size a real collection reaches — 181 nodes with one cluster holding 175
-# of them — the notches read as damage to the shape rather than as nodes outside
-# it. A ring cut from the finished region reads as what it is: the node sits on
-# top of the cluster's area, not in it.
+# A backstop now: regions narrow around every node that is not theirs (see
+# mst_cluster_blobs), so what is left for the ring is a band that could not get
+# narrower than MST_BLOB_MIN_BAND where a branch passes right by such a node.
+# The most it is cut; the frames scale it to half the region width, because a
+# five-unit ring around a three-unit node is a larger hole than the node.
 #
 # It has to be an erase and not a disc of background colour, because the canvas
 # may be transparent over the panel's own hatched backdrop, and a white disc
@@ -1142,6 +1714,11 @@ MST_NODE_CASING <- 5
 # either end — so unlike a disc it may narrow to a thread, and where a node in
 # no cluster passes close by, a thread is the honest width.
 MST_BLOB_MIN_BAND <- 1
+
+# How strongly a cluster region is painted. Fixed rather than a control: at
+# this share the region reads as a colour behind the nodes without drowning
+# the branches and outlines drawn over it.
+MST_CLUSTER_OPACITY <- 0.77
 
 # Distance from a point to a line *segment* (not the infinite line): the
 # perpendicular where the foot falls inside the segment, the nearer endpoint
@@ -1176,9 +1753,8 @@ MST_BLOB_MIN_BAND <- 1
 # 175-node cluster would shrink the halo below the big node's own rim, which is
 # not a region either. Each place gets the width its own surroundings allow.
 #
-# `others` is the nodes this region must not reach — the other clusters'
-# members. A node in no cluster is not among them: it gets a ring cut out of the
-# finished region instead, which keeps this outline smooth (MST_NODE_CASING).
+# `others` is the nodes this region must not reach — every node that is not one
+# of its members.
 .blob_clearance <- function(x, y, others, coords, radius, seg = NULL) {
   n <- if (is.null(seg)) length(x) else nrow(seg)
   # Nothing to keep clear of.
@@ -1268,11 +1844,14 @@ mst_cluster_blobs <- function(
     return(list())
   }
   radius <- rep_len(radius, nrow(coords))
-  # Which nodes a region has to narrow itself around: the *other clusters'*
-  # members, and those only. A node in no cluster at all is handled by cutting a
-  # ring out of the finished region instead (MST_NODE_CASING) — narrowing for
-  # those is what scalloped a large cluster's outline into notches.
-  claimed <- which(keep)
+  # Which nodes a region has to narrow itself around: every node that is not
+  # one of its own, whether it belongs to another cluster or to none. Leaving
+  # the unclustered ones to the ring cut out of the finished region
+  # (MST_NODE_CASING) kept the outline smooth while halos were wide, but on the
+  # 991-isolate reference collection it left 70 of them sitting inside a
+  # region with a white ring round each — where narrowing for them too leaves
+  # ten, at any width.
+  claimed <- seq_len(nrow(coords))
   ix <- setNames(seq_len(nrow(coords)), coords$id)
   f <- unname(ix[as.character(from)])
   t <- unname(ix[as.character(to)])
@@ -2049,10 +2628,19 @@ MST_NODE_RENDERER <- JS(
     function(nm) {
       b <- blobs[[nm]]
       col <- .lookup(colors, nm, MISSING_COLOR)
+      # Where the name goes (.place_cluster_labels), or above the topmost
+      # member for a region the frames did not place a name for.
+      top <- if (length(b$y)) which.min(b$y) else NA_integer_
+      spot <- b$label %||%
+        list(
+          x = if (is.na(top)) 0 else b$x[[top]],
+          y = if (is.na(top)) 0 else b$y[[top]] - b$radius,
+          align = "center"
+        )
       sprintf(
         paste0(
           '{"x":[%s],"y":[%s],"s":[%s],"rp":[%s],"rs":[%s],',
-          '"r":%s,"c":"%s","lc":"%s","l":%s}'
+          '"r":%s,"c":"%s","lc":"%s","l":%s,"lx":%s,"ly":%s,"la":"%s"}'
         ),
         paste(round(b$x, 1), collapse = ","),
         paste(round(b$y, 1), collapse = ","),
@@ -2062,7 +2650,10 @@ MST_NODE_RENDERER <- JS(
         round(b$radius, 1),
         col,
         label_color %||% col,
-        .json_string(nm)
+        .json_string(nm),
+        round(spot$x, 1),
+        round(spot$y, 1),
+        spot$align
       )
     },
     character(1),
@@ -2081,7 +2672,12 @@ MST_NODE_RENDERER <- JS(
 # came out as a patchwork of darker patches wherever a disc met a capsule. The
 # subpaths are wound in one direction for the same reason: nonzero winding
 # subtracts an overlap traversed the other way, which would punch holes in it.
-.blob_renderer <- function(blobs, colors, opacity = 0.35, loose = NULL) {
+.blob_renderer <- function(
+  blobs,
+  colors,
+  opacity = MST_CLUSTER_OPACITY,
+  loose = NULL
+) {
   # Nodes in no cluster, as a ring erased from the finished regions. Erased
   # rather than painted: the canvas may be transparent over the panel's own
   # backdrop, and there is no colour that is "the background" in that case.
@@ -2096,7 +2692,7 @@ MST_NODE_RENDERER <- JS(
       "],CY=[",
       paste(round(loose$y, 1), collapse = ","),
       "],CR=[",
-      paste(round(loose$r + MST_NODE_CASING, 1), collapse = ","),
+      paste(round(loose$r + (loose$casing %||% MST_NODE_CASING), 1), collapse = ","),
       "];",
       "ctx.save();ctx.globalCompositeOperation='destination-out';",
       "ctx.beginPath();for(var q=0;q<C.length;q++){",
@@ -2109,7 +2705,7 @@ MST_NODE_RENDERER <- JS(
     "function(ctx){var B=[",
     paste(.blob_spec(blobs, colors), collapse = ","),
     "];var A=",
-    round(.clamp(as.numeric(opacity %||% 0.35), 0, 1), 3),
+    round(.clamp(as.numeric(opacity %||% MST_CLUSTER_OPACITY), 0, 1), 3),
     ";",
     "B.forEach(function(b){if(!b.x.length)return;",
     "ctx.save();ctx.globalAlpha=A;ctx.fillStyle=b.c;ctx.beginPath();",
@@ -2134,6 +2730,94 @@ MST_NODE_RENDERER <- JS(
   ))
 }
 
+# Where each cluster's name is written, at type size `size` in graph units.
+#
+# Anchored to the region's own edge node rather than to its mean — a cluster laid
+# out along a diagonal has a mean nowhere near its outline, which is how a name
+# once floated in open space beside the shape it named. Four places are tried
+# per region: above its topmost member, below its bottommost, and beside its
+# rightmost and leftmost. Regions are placed largest first (the order
+# mst_cluster_blobs() returns them in), each taking the side that overlaps no
+# name already placed and covers the fewest nodes. With only "above", names in
+# a dense part of a 150-isolate drawing collided at every legible size and the
+# fit had to switch all of them off.
+#
+# Returns one row per region: the anchor (`x`, baseline `y`, `align`), the box
+# the text fills (`x0`, `y0`, `x1`, `y1`), whether every side collided
+# (`clash`) and how many nodes the box covers (`cover`).
+.place_cluster_labels <- function(blobs, x, y, radius, size) {
+  gap <- size * 0.35
+  placed <- matrix(numeric(0), 0, 4)
+  rows <- vector("list", length(blobs))
+  for (i in seq_along(blobs)) {
+    b <- blobs[[i]]
+    w <- nchar(names(blobs)[[i]]) * size * MST_CLUSTER_LABEL_EM
+    top <- which.min(b$y)
+    bottom <- which.max(b$y)
+    left <- which.min(b$x)
+    right <- which.max(b$x)
+    cand <- data.frame(
+      x = c(
+        b$x[[top]],
+        b$x[[bottom]],
+        b$x[[right]] + b$radius + gap,
+        b$x[[left]] - b$radius - gap
+      ),
+      y = c(
+        b$y[[top]] - b$radius - gap,
+        b$y[[bottom]] + b$radius + gap + size,
+        b$y[[right]] + size / 2,
+        b$y[[left]] + size / 2
+      ),
+      align = c("center", "center", "left", "right"),
+      stringsAsFactors = FALSE
+    )
+    cand$x0 <- cand$x - w * c(0.5, 0.5, 0, 1)
+    cand$x1 <- cand$x0 + w
+    cand$y0 <- cand$y - size
+    cand$y1 <- cand$y
+    clash <- vapply(
+      seq_len(nrow(cand)),
+      function(k) {
+        nrow(placed) > 0L &&
+          any(
+            placed[, 1] < cand$x1[[k]] &
+              cand$x0[[k]] < placed[, 3] &
+              placed[, 2] < cand$y1[[k]] &
+              cand$y0[[k]] < placed[, 4]
+          )
+      },
+      logical(1)
+    )
+    cover <- vapply(
+      seq_len(nrow(cand)),
+      function(k) {
+        sum(
+          x + radius > cand$x0[[k]] &
+            x - radius < cand$x1[[k]] &
+            y + radius > cand$y0[[k]] &
+            y - radius < cand$y1[[k]]
+        )
+      },
+      numeric(1)
+    )
+    free <- which(!clash)
+    pick <- if (length(free)) free[[which.min(cover[free])]] else 1L
+    rows[[i]] <- cbind(
+      cand[pick, ],
+      clash = !length(free),
+      cover = cover[[pick]]
+    )
+    placed <- rbind(
+      placed,
+      c(cand$x0[[pick]], cand$y0[[pick]], cand$x1[[pick]], cand$y1[[pick]])
+    )
+  }
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
 # The cluster names, in graph coordinates but drawn *after* the graph.
 #
 # They used to ride along in the region hook, which is a beforeDrawing handler —
@@ -2142,10 +2826,8 @@ MST_NODE_RENDERER <- JS(
 # last, and a halo behind the glyphs so they stay legible over whatever they do
 # cross.
 #
-# The anchor is the region's *topmost member node*, not the mean of its members.
-# A cluster laid out along a diagonal has a mean x nowhere near the top of the
-# region, which is how a name ended up floating in open space beside the shape
-# it was supposed to be naming.
+# Where each name goes is decided in R (.place_cluster_labels): beside the
+# region, at whichever of its four sides is clear of the names already placed.
 .cluster_label_js <- function(
   blobs,
   colors,
@@ -2169,10 +2851,9 @@ MST_NODE_RENDERER <- JS(
     halo,
     "';",
     "CL.forEach(function(b){if(!b.x.length)return;",
-    "var ti=0;for(var k=1;k<b.y.length;k++){if(b.y[k]<b.y[ti])ti=k;}",
-    "var lx=b.x[ti],ly=b.y[ti]-b.r-LS*0.35;",
-    "ctx.strokeText(b.l,lx,ly);",
-    "ctx.fillStyle=b.lc;ctx.fillText(b.l,lx,ly);});",
+    "ctx.textAlign=b.la||'center';",
+    "ctx.strokeText(b.l,b.lx,b.ly);",
+    "ctx.fillStyle=b.lc;ctx.fillText(b.l,b.lx,b.ly);});",
     "ctx.restore();"
   )
 }
@@ -2286,6 +2967,8 @@ mst_stats_caption <- function(counts, weights) {
     "var lh=f+4,tw=0;",
     "ls.forEach(function(s){tw=Math.max(tw,ctx.measureText(s).width);});",
     "var pad=7,bw=Math.min(tw+2*pad,W-10),bh=ls.length*lh+2*pad;",
+    # What the framing has to keep clear at the foot (.fit_view_js).
+    "this.__ptCaption=bh+6;",
     "var x0=(W-bw)/2,y0=H-bh-6;",
     "ctx.globalAlpha=0.88;ctx.fillStyle='",
     panel_color,
@@ -2329,7 +3012,8 @@ mst_stats_caption <- function(counts, weights) {
   caption = NULL,
   caption_fg = "#000000",
   caption_bg = "#ffffff",
-  cluster_labels = ""
+  cluster_labels = "",
+  extent = NULL
 ) {
   legend <- if (is.null(legend_spec)) {
     ""
@@ -2383,9 +3067,9 @@ mst_stats_caption <- function(counts, weights) {
       "ctx.fillStyle=L.fg;ctx.textAlign='left';",
       "ctx.fillText(fit(it.l,colW-4),cx,cy);}});",
       "ctx.restore();",
-      # What the fit has to leave clear, in canvas fractions, so the drawing and
-      # its key do not land on each other.
-      "this.__ptReserve={frac:pw/W,side:L.pos};}"
+      # What the framing has to leave clear, in pixels, so the drawing and its
+      # key do not land on each other: the panel and the 10px it stands off.
+      "this.__ptReserve={w:pw+10,h:ph+10,side:L.pos};}"
     )
   }
   paste0(
@@ -2394,22 +3078,155 @@ mst_stats_caption <- function(counts, weights) {
     legend,
     .caption_js(caption, caption_fg, caption_bg),
     "if(!this.__ptFitted){this.__ptFitted=true;",
-    "this.fit({animation:false});",
-    "var res=this.__ptReserve;",
-    "if(res&&res.frac<0.5){",
-    "var s=this.getScale()*(1-res.frac);",
-    "var c=this.getViewPosition();",
-    "var w=ctx.canvas.clientWidth;",
-    "this.moveTo({scale:s,animation:false,position:{",
-    "x:c.x-(res.side==='right'?-1:1)*(res.frac*w/2)/s,y:c.y}});}}",
+    .fit_view_js(extent),
+    "}",
     "document.querySelectorAll('.viz-plot-stage')",
     ".forEach(function(s){s.classList.remove('is-loading');});}"
+  )
+}
+
+# Frame the view on the drawing's extent, as large as the canvas allows.
+#
+# Replaces vis.js's fit(), which frames the nodes only — so a cluster name or
+# the outer edge of a region was cut off at the canvas edge — never zooms past
+# 1, and knows nothing of the legend or the caption painted over the canvas.
+# The drawing is fitted into what those leave: the legend is kept clear either
+# beside or above the drawing, whichever leaves it larger, and the caption band
+# below. Same arithmetic as .fit_scale(), which the fit predicts sizes with.
+.fit_view_js <- function(extent) {
+  if (length(extent) != 4L || !all(is.finite(extent))) {
+    return("this.fit({animation:false});")
+  }
+  paste0(
+    "var E=[",
+    paste(round(extent, 1), collapse = ","),
+    "];",
+    "var W=ctx.canvas.clientWidth,H=ctx.canvas.clientHeight;",
+    "if(W>0&&H>0){",
+    "var M=",
+    MST_FIT_MARGIN_PX,
+    ",bw=Math.max(E[2]-E[0],1),bh=Math.max(E[3]-E[1],1);",
+    "var box=function(l,t,r,b){",
+    "return{s:Math.min((r-l)/bw,(b-t)/bh),l:l,t:t,r:r,b:b};};",
+    "var bot=H-M-(this.__ptCaption||0),res=this.__ptReserve;",
+    "var best=box(M,M,W-M,bot);",
+    "if(res){var side=res.side==='right'?box(M,M,W-M-res.w,bot)",
+    ":box(M+res.w,M,W-M,bot);",
+    "var above=box(M,M+res.h,W-M,bot);best=side.s>=above.s?side:above;}",
+    "var s=Math.max(Math.min(best.s,",
+    MST_MAX_ZOOM,
+    "),1e-4);",
+    "var cx=(best.l+best.r)/2,cy=(best.t+best.b)/2;",
+    "this.moveTo({scale:s,animation:false,position:{",
+    "x:(E[0]+E[2])/2-(cx-W/2)/s,y:(E[1]+E[3])/2-(cy-H/2)/s}});}"
   )
 }
 
 MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
 
 # --- 9. Frames ---------------------------------------------------------------
+
+# The last few layouts, keyed by every argument they were built from.
+#
+# `mst_frames()` is rebuilt for any control at all — a colour, a legend switch —
+# and the layout inside it is the one costly step: on the 991-isolate reference
+# collection the collision pass and the cluster swing take well over a second.
+# None of those controls reach the layout's arguments, so the answer is looked
+# up rather than solved again. The result is a pure function of the key, so a
+# hit is always the layout a fresh solve would have produced.
+MST_LAYOUT_CACHE_SIZE <- 4L
+.layout_cache <- new.env(parent = emptyenv())
+
+# The nodes and edges that are actually drawn: the graph's own, after the
+# collapse threshold has merged the branches at or below it. Shared by the
+# frames and the fit, which have to agree on what is being drawn.
+.drawn_graph <- function(graph, opts) {
+  data <- visNetwork$toVisNetworkData(graph)
+  collapsed <- mst_collapse(
+    data$nodes$id,
+    data$edges$from,
+    data$edges$to,
+    data$edges$weight,
+    opts$collapse_threshold %||% 0
+  )
+  list(ids = collapsed$ids, edges = collapsed$edges, collapsed = collapsed)
+}
+
+# The bounding box, in graph units, of everything drawn: the nodes, the cluster
+# regions, the node labels hanging below their nodes and the cluster names above
+# their regions. The view is framed on this (.fit_view_js), so nothing drawn is
+# cut off at the canvas edge — vis.js frames nodes only, and the regions and
+# names are painted by hooks it knows nothing about.
+.drawn_extent <- function(
+  x,
+  y,
+  radius,
+  blobs = list(),
+  labels = NULL,
+  font = 0
+) {
+  if (!length(x)) {
+    return(c(-1, -1, 1, 1))
+  }
+  x0 <- min(x - radius)
+  x1 <- max(x + radius)
+  y0 <- min(y - radius)
+  y1 <- max(y + radius)
+  for (b in blobs) {
+    if (length(b$x)) {
+      x0 <- min(x0, b$x - b$r)
+      x1 <- max(x1, b$x + b$r)
+      y0 <- min(y0, b$y - b$r)
+      y1 <- max(y1, b$y + b$r)
+    }
+    # The name's box, where the frames placed one.
+    if (!is.null(b$label)) {
+      x0 <- min(x0, b$label$x0)
+      x1 <- max(x1, b$label$x1)
+      y0 <- min(y0, b$label$y0)
+      y1 <- max(y1, b$label$y1)
+    }
+  }
+  if (!is.null(labels) && font > 0) {
+    text <- as.character(labels)
+    has <- nzchar(trimws(text))
+    if (any(has)) {
+      lines <- strsplit(text, "\n", fixed = TRUE)
+      half <- vapply(
+        lines,
+        function(l) if (length(l)) max(nchar(l)) else 0L,
+        integer(1)
+      ) *
+        font *
+        TEXT_EM /
+        2
+      depth <- radius + (lengths(lines) + 0.5) * font
+      x0 <- min(x0, (x - half)[has])
+      x1 <- max(x1, (x + half)[has])
+      y1 <- max(y1, (y + depth)[has])
+    }
+  }
+  c(x0, y0, x1, y1)
+}
+
+# Look a layout up by its arguments, solving and remembering it on a miss.
+.cached_layout <- function(...) {
+  args <- list(...)
+  key <- hash(args)
+  hit <- .layout_cache[[key]]
+  if (!is.null(hit)) {
+    return(hit)
+  }
+  out <- do.call(mst_layout, args)
+  order <- c(setdiff(.layout_cache$.order %||% character(0), key), key)
+  stale <- head(order, max(length(order) - MST_LAYOUT_CACHE_SIZE, 0L))
+  if (length(stale)) {
+    rm(list = stale, envir = .layout_cache)
+  }
+  .layout_cache$.order <- setdiff(order, stale)
+  assign(key, out, envir = .layout_cache)
+  out
+}
 
 # The value a node takes for an aesthetic that can hold only one: the level with
 # the largest share. A merged node with three countries has to pick, and the pie
@@ -2548,19 +3365,10 @@ MST_RESIZE_JS <- "function(){this.__ptFitted=false;}"
 #'   `cluster_colors`, `blobs`, `legend`, `custom` and `length_mode`.
 #' @export
 mst_frames <- function(graph, metadata, opts) {
-  data <- visNetwork$toVisNetworkData(graph)
-  ids <- data$nodes$id
-  edges <- data$edges
-
-  collapsed <- mst_collapse(
-    ids,
-    edges$from,
-    edges$to,
-    edges$weight,
-    opts$collapse_threshold %||% 0
-  )
-  ids <- collapsed$ids
-  edges <- collapsed$edges
+  drawn <- .drawn_graph(graph, opts)
+  ids <- drawn$ids
+  edges <- drawn$edges
+  collapsed <- drawn$collapsed
 
   counts <- mst_node_sizes(ids)
   n <- length(ids)
@@ -2637,7 +3445,7 @@ mst_frames <- function(graph, metadata, opts) {
   radii <- mst_node_radii(counts, size_range)
   pad <- opts$cluster_width %||% round(max(radii) * 0.45)
 
-  coords <- mst_layout(
+  coords <- .cached_layout(
     edges$from,
     edges$to,
     lens$length,
@@ -2645,7 +3453,8 @@ mst_frames <- function(graph, metadata, opts) {
     counts,
     cluster = found$node,
     radius = radii,
-    pad = pad
+    pad = pad,
+    relax = TRUE
   )
   coords <- mst_rotate(coords, opts$rotation)
 
@@ -2671,6 +3480,19 @@ mst_frames <- function(graph, metadata, opts) {
       # differed only in this.
       pad
     )
+    label_size <- as.numeric(opts$cluster_label_size %||% 16)
+    if (length(blobs) && label_size > 0) {
+      spots <- .place_cluster_labels(
+        blobs,
+        coords$x,
+        coords$y,
+        radii,
+        label_size
+      )
+      for (i in seq_along(blobs)) {
+        blobs[[i]]$label <- as.list(spots[i, ])
+      }
+    }
   }
 
   # -- mapping layers
@@ -2794,13 +3616,28 @@ mst_frames <- function(graph, metadata, opts) {
     NULL
   } else {
     out <- which(is.na(clusters$node))
-    list(x = coords$x[out], y = coords$y[out], r = radii[out])
+    list(
+      x = coords$x[out],
+      y = coords$y[out],
+      r = radii[out],
+      casing = .clamp(0.5 * pad, 1, MST_NODE_CASING)
+    )
   }
+
+  extent <- .drawn_extent(
+    coords$x,
+    coords$y,
+    radii,
+    blobs,
+    labels = if (isTRUE(opts$show_label)) nodes$label,
+    font = opts$node_font_size %||% MST_FIT_DEFAULTS$node_font_size
+  )
 
   list(
     nodes = nodes,
     edges = edges_out,
     coords = coords,
+    extent = extent,
     counts = counts,
     clusters = clusters,
     loose = loose,
@@ -2909,16 +3746,13 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
   # The region goes under the graph and its name goes over it, so the two are
   # separate hooks over the same geometry.
   cluster_labels <- if (length(fr$blobs)) {
+    # Set in the figure's ink over a halo of its background, like every other
+    # piece of type on the canvas.
     .cluster_label_js(
       fr$blobs,
       fr$cluster_colors,
       opts$cluster_label_size %||% 16,
-      # NULL means every region's name in its own colour.
-      if (isTRUE(opts$cluster_label_tint)) {
-        NULL
-      } else {
-        opts$node_font_color %||% "#000000"
-      },
+      opts$node_font_color %||% "#000000",
       halo
     )
   } else {
@@ -2931,7 +3765,8 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
       caption,
       opts$node_font_color %||% "#000000",
       halo,
-      cluster_labels
+      cluster_labels,
+      fr$extent
     )),
     resize = JS(MST_RESIZE_JS)
   )
@@ -2939,7 +3774,7 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
     events$beforeDrawing <- .blob_renderer(
       fr$blobs,
       fr$cluster_colors,
-      opts$cluster_opacity %||% 0.35,
+      MST_CLUSTER_OPACITY,
       fr$loose
     )
   }

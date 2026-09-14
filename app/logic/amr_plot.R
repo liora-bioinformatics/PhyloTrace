@@ -11,28 +11,35 @@ box::use(
     .data,
     aes,
     coord_flip,
+    dup_axis,
     element_blank,
     element_rect,
     element_text,
     expansion,
     geom_col,
     ggplot,
+    guide_legend,
+    guides,
     labs,
+    margin,
     scale_fill_manual,
     scale_x_discrete,
     scale_y_continuous,
     theme,
     theme_minimal,
+    waiver,
   ],
   ggplotify[as.ggplot],
   grDevices[colorRampPalette],
   grid[
     gpar,
     grid.grabExpr,
+    grid.lines,
     grid.text,
     popViewport,
     pushViewport,
     unit,
+    unit.c,
     viewport
   ],
   RColorBrewer[brewer.pal.info],
@@ -44,14 +51,7 @@ box::use(
   app / logic / epi_plot[epi_fit_scale, epi_palette, epi_scale_choices],
   app / logic / field_labels[amr_class_label],
   app / logic / mapping_engine[crowded_tips],
-  app /
-    logic /
-    viz_fit[
-      ASPECT_MAX,
-      CANVAS_MAX_FACTOR,
-      fit_text_scale = text_scale,
-      min_type_pt
-    ],
+  app / logic / viz_fit,
   app / logic / viz_legend,
 )
 
@@ -422,6 +422,51 @@ amr_top_n_bounds <- function(n_items, default = 30L, current = NULL) {
     value = min(max(want, min_v), n_items),
     step = step
   )
+}
+
+#' Gene columns the heatmap opens on at most, across its element-type panels.
+#' @export
+AMR_GENE_CAP <- 100L
+
+# Which panel gives way first when the screen is over the cap: resistance is
+# what the screen is run for, stress genes are few, virulence factors many.
+AMR_ELEMENT_PRIORITY <- c("AMR", "STRESS", "VIRULENCE")
+
+#' The element types the heatmap opens on.
+#'
+#' Every type when their genes together fit under `cap`; otherwise the types in
+#' priority order (resistance, stress, virulence) for as long as the running
+#' gene count still fits. The first type carrying genes is always kept, so a
+#' screen whose resistance panel alone is over the cap still draws it.
+#'
+#' @param hits Data frame from `load_amr_hits()`, or NULL.
+#' @param cap Integer. Most gene columns to open on.
+#' @return Character vector of element-type codes.
+#' @export
+amr_capped_element_types <- function(hits, cap = AMR_GENE_CAP) {
+  every <- unname(AMR_ELEMENT_TYPES)
+  if (is.null(hits) || !nrow(hits)) {
+    return(every)
+  }
+  element <- toupper(as.character(hits$element_type))
+  genes <- vapply(
+    AMR_ELEMENT_PRIORITY,
+    function(et) length(unique(hits$gene_symbol[element %in% et])),
+    integer(1)
+  )
+  if (sum(genes) <= cap) {
+    return(every)
+  }
+  keep <- character(0)
+  total <- 0L
+  for (et in AMR_ELEMENT_PRIORITY) {
+    if (total > 0L && total + genes[[et]] > cap) {
+      break
+    }
+    keep <- c(keep, et)
+    total <- total + genes[[et]]
+  }
+  keep
 }
 
 # Gene symbol -> the class abritamr filed it under, read off the rollup rows.
@@ -897,7 +942,7 @@ AMR_ROW_IN_MAX <- 0.30
 # ASPECT_MAX): a thousand isolates need a tall page to give each row a band of
 # its own, and a fit that stopped at 2 packed them 0.4 mm apart.
 AMR_ASPECT_MIN <- 0.65
-AMR_ASPECT_MAX <- ASPECT_MAX
+AMR_ASPECT_MAX <- viz_fit$ASPECT_MAX
 
 # How tall a page square cells may buy. Past this a matrix has rows enough
 # that each needs only the pitch that keeps it a band of its own; squaring
@@ -915,7 +960,7 @@ AMR_ASPECT_FIT_SCALE <- 0.7
 
 # Type sizes, in points. The floor is where a label stops being readable at all;
 # past it the labels are better turned off than shrunk further.
-AMR_FONT_MIN <- 4
+AMR_FONT_MIN <- viz_fit$MIN_PRINT_PT
 AMR_FONT_MAX <- 13
 
 # Fraction of the pitch a label's type size may take, leaving the rest as the
@@ -951,20 +996,21 @@ AMR_TITLE_GAP_IN <- 0.03
 # this is what keeps that overrun off the label underneath.
 AMR_COL_LABEL_GAP_IN <- 0.08
 
-# Where each label stops being worth drawing at all. Below its own floor a
-# label is a smear rather than a word, and the rule across every one of them is
-# the same: fit the type to the room the label actually has, and where even the
-# floor will not fit, drop the label rather than set it smaller. Nothing in an
-# AMR plot is ever drawn below the floor for its role — what differs between
-# the roles is only what stands in for a dropped label (the class strip and its
-# key for a block title, the class strip's legend heading for an element-type
-# name, nothing at all for a gene name, which the reader can always switch back
-# on) and how far each can be trusted to shrink before that point.
-AMR_TITLE_MIN_PT <- 7
-AMR_ELEMENT_MIN_PT <- 7
-AMR_COL_MIN_PT <- 5
-AMR_ROW_MIN_PT <- 5
-AMR_ANNO_NAME_MIN_PT <- 5
+# Where each label stops being worth drawing at all: the shared print floor,
+# the same one the Tree fits to. Every role follows one rule - fit the type to
+# the room the label actually has, and only where not even the floor fits,
+# drop the label rather than set it smaller. A floor of its own above the
+# shared one dropped labels that still printed legibly: class titles that fit
+# at 6.4 pt gave way to a colour strip and a key of thirty drug classes. What
+# differs between the roles is only what stands in for a dropped label (the
+# class strip and its key for a block title, the class strip's legend heading
+# for an element-type name, nothing at all for a gene name, which the reader
+# can always switch back on).
+AMR_TITLE_MIN_PT <- viz_fit$MIN_PRINT_PT
+AMR_ELEMENT_MIN_PT <- viz_fit$MIN_PRINT_PT
+AMR_COL_MIN_PT <- viz_fit$MIN_PRINT_PT
+AMR_ROW_MIN_PT <- viz_fit$MIN_PRINT_PT
+AMR_ANNO_NAME_MIN_PT <- viz_fit$MIN_PRINT_PT
 
 # Ceiling on the element-type row, and the share of the canvas width that
 # picks a size below it. One label under a whole panel has room to grow far
@@ -1017,7 +1063,7 @@ amr_canvas_width_in <- function(
   n <- max(as.integer(n_cols %||% 1L), 1L)
   strips <- max(as.integer(n_strips %||% 0L), 0L) * AMR_STRIP_IN
   width_for <- function(cell_in) (n * cell_in + strips) / AMR_BODY_FRAC
-  ceiling_in <- base_in * CANVAS_MAX_FACTOR
+  ceiling_in <- base_in * viz_fit$CANVAS_MAX_FACTOR
   bare <- .clamp(width_for(AMR_GRID_MIN_IN), base_in, ceiling_in)
   floor_cell_in <- AMR_COL_MIN_PT / 72 / AMR_LABEL_FILL
   if (isFALSE(show_col_names) || width_for(floor_cell_in) > ceiling_in) {
@@ -1054,7 +1100,7 @@ AMR_TITLE_FILL <- 0.85
 # top of the matrix *body* downwards, so the room it really has is short by
 # everything stacked above the body. tree_plot.R solves the same problem the
 # same way — see tree_legend_room().
-AMR_LEGEND_MIN_PT <- 5.5
+AMR_LEGEND_MIN_PT <- viz_fit$MIN_PRINT_PT
 
 .legend_grid_mm <- function(size) max(size * 0.4, 2.5)
 
@@ -1075,6 +1121,43 @@ AMR_LEGEND_HEIGHT_SAFETY <- 1.15
 
 # Rows a continuous strip's colour bar stands in, planned like a guide of keys.
 AMR_RAMP_ROWS <- 5L
+
+# The legend's horizontal geometry, in millimetres: the gap between a swatch
+# and its label, and between two folded columns of keys.
+AMR_LEGEND_LABEL_GAP_MM <- 1
+AMR_LEGEND_COL_GAP_MM <- 2
+
+# ComplexHeatmap measures the legend column on the device the heatmap is laid
+# out on and the figure is set on the export device, whose type runs a few
+# percent wider. Without this share of the widest guide added to the page's
+# right padding, the longest drug class lost its last letters at the edge.
+AMR_LEGEND_METRIC_SLACK <- 0.08
+
+# Inches the widest guide in the legend column takes across at a type size: its
+# title, or its keys in the columns the plan folds them into. Guides planned
+# from an estimate carry no names, and cost nothing here.
+.legend_width_in <- function(guides, plan, pt) {
+  if (!length(guides)) {
+    return(0)
+  }
+  key_in <- (.legend_grid_mm(pt) + AMR_LEGEND_LABEL_GAP_MM) / 25.4
+  widths <- vapply(
+    guides,
+    function(g) {
+      title_in <- viz_fit$text_width_in(g$title %||% "", pt + 2)
+      labels <- if (is.null(g$col_fun)) names(g$cols) else "0000.0"
+      if (!length(labels)) {
+        return(title_in)
+      }
+      ncol <- .planned(plan$ncol, as.character(g$id), 1L)
+      keys_in <- ncol * (key_in + viz_fit$text_width_in(labels, pt)) +
+        (ncol - 1L) * AMR_LEGEND_COL_GAP_MM / 25.4
+      max(title_in, keys_in)
+    },
+    numeric(1)
+  )
+  max(widths)
+}
 
 .clamp <- function(x, lo, hi) min(max(x, lo), hi)
 
@@ -1104,73 +1187,157 @@ AMR_RAMP_ROWS <- 5L
 
 # The prevalence chart's own shape. One bar per item and no matrix to solve
 # against, so the page grows with the bar count rather than with the isolates:
-# each bar gets a row deep enough to name it, up to the shared aspect ceiling.
-AMR_PREVALENCE_ROW_IN <- 0.16
-AMR_PREVALENCE_MIN <- 0.35
-AMR_PREVALENCE_MAX <- ASPECT_MAX
+# each bar gets the row its name needs at the size asked for, up to the shared
+# aspect ceiling.
+#' Lowest aspect the prevalence chart is fitted to, the lowest of either view.
+#' @export
+AMR_PREVALENCE_MIN <- 0.3
+AMR_PREVALENCE_MAX <- viz_fit$ASPECT_MAX
 
-# What the axis title, the legend row and the plot's margins take off the top
-# and bottom of that page before the bars get their share.
-AMR_PREVALENCE_OVERHEAD_IN <- 0.9
+# Design sizes at 100% text size, in points: the bar names, the count axis's
+# numbers and its title, and the group key.
+AMR_PREVALENCE_LABEL_PT <- 10
+AMR_PREVALENCE_AXIS_PT <- 9
+AMR_PREVALENCE_TITLE_PT <- 10
+AMR_PREVALENCE_LEGEND_PT <- 9
 
 # Most of the canvas width the bar names may take beside the bars.
 AMR_PREVALENCE_LABEL_FRAC <- 0.35
 
-#' Fits the prevalence chart's height and type to the bars it draws.
+# Padding at each end of the bar axis, in bar rows (the discrete expansion).
+AMR_PREVALENCE_END_ROWS <- 0.6
+
+# Share of its row a bar fills, and the thickest a bar is drawn: a chart of
+# five bars on a page held at the minimum aspect would otherwise be five slabs.
+AMR_PREVALENCE_BAR_FILL <- 0.75
+AMR_PREVALENCE_BAR_MAX_IN <- 0.25
+
+# The plot margin, and the panel height past which the count axis is repeated
+# along the top, where a reader at the head of a long chart can still read it.
+AMR_PREVALENCE_MARGIN_PT <- 5.5
+AMR_PREVALENCE_SEC_AXIS_IN <- 8
+
+# The gap between the axis numbers and the panel, in points (ggplot2's own).
+AMR_PREVALENCE_AXIS_GAP_PT <- 2.2
+
+#' Fits the prevalence chart to the bars it draws.
 #'
-#' The same rule as `amr_auto_layout()` on a much simpler shape: the page grows
-#' with the row count up to the shared ceiling, and the labels are set to the
-#' row pitch that leaves - and to the width their names need - under the two
-#' rules in app/logic/viz_fit.R.
+#' The rules in app/logic/viz_fit.R on a much simpler shape than the heatmap's.
+#' Every size is its design size times `text_scale`; a bar name is also cut
+#' back to the widest name the label column holds, measured rather than
+#' counted. The fitted aspect buys each bar the row that name needs, so a
+#' larger text size is a taller chart rather than names squeezed into the
+#' rows the old size bought; a ratio the reader set is used as given, and the
+#' names are cut back to the rows it leaves.
 #'
-#' Unlike every other label in this module a bar label is never dropped: a bar
-#' chart whose bars are not named says nothing at all, and there is no strip,
-#' key or heading elsewhere on the page carrying the same names. `legible`
-#' reports the case that fails anyway.
+#' Unlike every other label in this module a bar name is never dropped: a bar
+#' chart whose bars are not named says nothing at all, and nothing else on the
+#' page carries the same names. `legible` reports the case that fails anyway,
+#' and the names are then set at the floor.
 #'
-#' @param n_items Integer. Bars the chart draws.
+#' @param labels Character vector. The bar names, one per bar.
+#' @param groups Character vector. The groups the bars are coloured by.
 #' @param width_in Numeric. Canvas width in inches.
+#' @param aspect Numeric, or NULL to fit one.
 #' @param text_scale Numeric. The reader's text-size bias, 1 = fitted.
-#' @param label_chars Numeric. Longest bar name, in characters.
-#' @return A list with `aspect`, `fontsize_row`, `fontsize_legend`, `legible`
-#'   and `min_pt`.
+#' @return A list with `width_in`, `aspect`, `fitted_aspect`, the four type
+#'   sizes (`fontsize_row`, `fontsize_axis`, `fontsize_title`,
+#'   `fontsize_legend`), `legend_nrow`, `bar_width`, `sec_axis`,
+#'   `row_pitch_in`, `legible`, `text_scale` and `min_pt`.
 #' @export
 amr_prevalence_layout <- function(
-  n_items,
+  labels,
+  groups = NULL,
   width_in = AMR_CANVAS_IN,
-  text_scale = 1,
-  label_chars = 12
+  aspect = NULL,
+  text_scale = 1
 ) {
-  n <- max(as.integer(n_items %||% 1L), 1L)
-  w <- if (is.null(width_in) || !is.finite(width_in) || width_in <= 0) {
+  labels <- as.character(labels %||% character(0))
+  w <- if (is.null(width_in) || !isTRUE(is.finite(width_in) && width_in > 0)) {
     AMR_CANVAS_IN
   } else {
     as.numeric(width_in)
   }
-  k <- fit_text_scale(text_scale)
-  aspect <- .clamp(
-    (n * AMR_PREVALENCE_ROW_IN + AMR_PREVALENCE_OVERHEAD_IN) / w,
-    AMR_PREVALENCE_MIN,
-    AMR_PREVALENCE_MAX
+  k <- viz_fit$text_scale(text_scale)
+  axis_pt <- AMR_PREVALENCE_AXIS_PT * k
+  title_pt <- AMR_PREVALENCE_TITLE_PT * k
+  legend_pt <- AMR_PREVALENCE_LEGEND_PT * k
+  margin_in <- 2 * AMR_PREVALENCE_MARGIN_PT / 72
+
+  # The widest name the label column holds, as a type size.
+  width_pt <- w * AMR_PREVALENCE_LABEL_FRAC / max(viz_fit$text_width_in(labels, 1), 1e-6)
+  want_row <- AMR_PREVALENCE_LABEL_PT * k
+
+  # The group key runs along the top of the chart, where a reader at the head
+  # of a long one sees it, wrapping to a second row only when its keys need it.
+  keys <- unique(as.character(groups %||% character(0)))
+  key_in <- legend_pt * 1.3 / 72
+  legend_nrow <- if (!length(keys)) {
+    0L
+  } else {
+    per_key <- key_in +
+      legend_pt * 1.5 / 72 +
+      vapply(keys, viz_fit$text_width_in, numeric(1), pt = legend_pt)
+    as.integer(min(ceiling(sum(per_key) / max(w - margin_in, 1)), length(keys)))
+  }
+  legend_in <- if (legend_nrow > 0L) {
+    legend_nrow * max(key_in, viz_fit$line_height_in(legend_pt)) + legend_pt * 0.8 / 72
+  } else {
+    0
+  }
+  axis_in <- AMR_PREVALENCE_AXIS_GAP_PT / 72 + viz_fit$line_height_in(axis_pt)
+  base_overhead <- margin_in + axis_in + viz_fit$line_height_in(title_pt) + legend_in
+  units <- max(length(labels), 1L) + 2 * AMR_PREVALENCE_END_ROWS
+  sec_axis_for <- function(panel_in) panel_in > AMR_PREVALENCE_SEC_AXIS_IN
+
+  # The row one name needs at the size it can have; where no legible size fits
+  # the label column, the floor's, since a taller row cannot widen the column.
+  row_in <- max(min(want_row, width_pt), AMR_ROW_MIN_PT) / 72 / AMR_LABEL_FILL
+  fitted_panel <- units * row_in
+  fitted_aspect <- round(
+    .clamp(
+      (fitted_panel +
+        base_overhead +
+        (if (sec_axis_for(fitted_panel)) axis_in else 0)) /
+        w,
+      AMR_PREVALENCE_MIN,
+      AMR_PREVALENCE_MAX
+    ),
+    2
   )
-  pitch <- max(w * aspect - AMR_PREVALENCE_OVERHEAD_IN, 0.2) / n
-  room <- min(
-    72 * pitch * AMR_LABEL_FILL,
-    72 * w * AMR_PREVALENCE_LABEL_FRAC / (AMR_CHAR_EM * max(label_chars, 1))
-  )
-  fontsize_row <- .clamp(room, AMR_FONT_MIN, AMR_FONT_MAX * k)
-  # The legend key and the axis title scale off the same bar pitch rather
-  # than a flat 11pt, so they never read oversized beside bar labels a
-  # crowded screen has already shrunk down - the same floor and ceiling
-  # amr_auto_layout() fits the gene heatmap's own legend to.
-  fontsize_legend <- .clamp(fontsize_row * 1.3, AMR_LEGEND_MIN_PT, 11 * k)
+  given <- !is.null(aspect) &&
+    length(aspect) == 1L &&
+    isTRUE(is.finite(aspect) && aspect > 0)
+  a <- if (given) as.numeric(aspect) else fitted_aspect
+
+  panel_in <- a * w - base_overhead
+  sec_axis <- sec_axis_for(panel_in)
+  panel_in <- max(panel_in - (if (sec_axis) axis_in else 0), 0.2)
+  pitch <- panel_in / units
+  row_pt <- viz_fit$fit_type(want_row, min(72 * pitch * AMR_LABEL_FILL, width_pt), AMR_ROW_MIN_PT)
+  legible <- viz_fit$type_drawn(row_pt, AMR_ROW_MIN_PT)
+  row_pt <- max(row_pt, AMR_ROW_MIN_PT)
+
   list(
-    aspect = round(aspect, 2),
-    fontsize_row = round(fontsize_row, 1),
-    fontsize_legend = round(fontsize_legend, 1),
-    legible = room >= AMR_ROW_MIN_PT,
+    width_in = w,
+    aspect = round(a, 2),
+    fitted_aspect = fitted_aspect,
+    fontsize_row = round(row_pt, 1),
+    fontsize_axis = round(axis_pt, 1),
+    fontsize_title = round(title_pt, 1),
+    fontsize_legend = round(legend_pt, 1),
+    legend_nrow = legend_nrow,
+    bar_width = round(min(AMR_PREVALENCE_BAR_FILL, AMR_PREVALENCE_BAR_MAX_IN / pitch), 3),
+    sec_axis = sec_axis,
+    row_pitch_in = round(pitch, 4),
+    legible = legible,
     text_scale = k,
-    min_pt = min_type_pt(fontsize_row, fontsize_legend)
+    min_pt = viz_fit$min_type_pt(
+      row_pt,
+      axis_pt,
+      title_pt,
+      if (legend_nrow > 0L) legend_pt
+    )
   )
 }
 
@@ -1247,7 +1414,7 @@ amr_auto_layout <- function(
   } else {
     as.numeric(width_in)
   }
-  k <- fit_text_scale(text_scale)
+  k <- viz_fit$text_scale(text_scale)
   font_max <- AMR_FONT_MAX * k
 
   # The body loses width to whatever sits beside it, and the strips are the one
@@ -1493,10 +1660,24 @@ amr_auto_layout <- function(
       max_rows_cap = max(c(demand, viz_legend$LEGEND_MAX_ROWS))
     )
   }
+  # The column's width is the other half of its room: it sits in what the body
+  # leaves beside the dendrogram, the strips and the isolate names, and a key
+  # wider than that takes the width out of the body every size above was
+  # fitted to. The type shrinks for it the way it shrinks for the height.
+  legend_w_room <- max(
+    w -
+      body_w -
+      n_strips * AMR_STRIP_IN -
+      max(dend_cm, 0) / 2.54 -
+      (if (row_names && rows_legible) max(w - body_w, 0.1) * 0.45 else 0) -
+      (AMR_LEGEND_PAD_MM + 4) / 25.4,
+    0.5
+  )
   legend_fit <- viz_legend$legend_fit(
     AMR_LEGEND_PT * k,
     AMR_LEGEND_MIN_PT,
-    legend_plan_at
+    legend_plan_at,
+    fits = function(pt, plan) .legend_width_in(guides, plan, pt) <= legend_w_room
   )
   fontsize_legend <- legend_fit$size
   legend_plan <- legend_fit$plan
@@ -1516,6 +1697,9 @@ amr_auto_layout <- function(
     # The height the legend column is drawn into, which the builders pack it
     # against so it wraps rather than overrunning the page. See .pack_legends.
     legend_height_in = round(legend_h, 3),
+    # Its widest guide at the fitted size, which amr_as_ggplot() pads the page
+    # for (see AMR_LEGEND_METRIC_SLACK).
+    legend_width_in = round(.legend_width_in(guides, legend_plan, fontsize_legend), 3),
     # The room the labels were budgeted above, handed to ComplexHeatmap as the
     # room it may use for them. Its own defaults are a flat 6cm either way, so
     # a name longer than that was quietly cut off at the edge of the page while
@@ -1556,7 +1740,7 @@ amr_auto_layout <- function(
     element_names_drawn = element_row_drawn,
     text_scale = k,
     # Smallest type on the figure, for the export's legibility note.
-    min_pt = min_type_pt(
+    min_pt = viz_fit$min_type_pt(
       if (row_names && rows_legible) fontsize_row,
       if (col_names_drawn) fontsize_col,
       if (class_titles_drawn) fontsize_title,
@@ -1956,13 +2140,21 @@ amr_auto_layout <- function(
           gp = gpar(col = text_color, fontsize = size)
         )
       }
-      # A one-column block clusters against nothing and column_dend() hands
-      # back a degenerate, zero-height "dendrogram" for it - drawing that is
-      # skipped rather than fed to grid.dendrogram(), which errors on a
-      # height scale of zero width.
+      # A one-column block clusters against nothing: column_dend() hands back
+      # a bare leaf, which carries no labels at all, and a block of identical
+      # genes a tree of zero height. Neither can go to grid.dendrogram(),
+      # which errors on a height scale of zero width, so each is drawn as a
+      # straight connector down to the block instead of a title floating over
+      # blank space.
       n <- length(labels(dend))
       heights <- ComplexHeatmap$dend_heights(dend)
-      if (n > 1L && max(heights, 0) > 0 && dend_cm > 0) {
+      if (dend_cm > 0 && (n <= 1L || max(heights, 0) <= 0)) {
+        grid.lines(
+          x = unit(c(0.5, 0.5), "npc"),
+          y = unit.c(unit(0, "npc"), base),
+          gp = gpar(col = text_color)
+        )
+      } else if (n > 1L && max(heights, 0) > 0 && dend_cm > 0) {
         dend_in <- dend_cm / 2.54
         total_in <- title_in + dend_in
         pushViewport(viewport(
@@ -2652,6 +2844,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
   }
   ht <- Reduce(`+`, panels)
   attr(ht, "extra_legends") <- extra_legends
+  attr(ht, "legend_width_in") <- opts$legend_width_in
   attr(ht, "class_decorations") <- do.call(
     c,
     lapply(panels, function(p) attr(p, "class_decorations"))
@@ -2713,6 +2906,17 @@ amr_as_ggplot <- function(
         # to fill more than one legend column.
         heatmap_legend_list = attr(ht, "extra_legends") %||% list(),
         background = "transparent",
+        # Bottom, left, top, right: ComplexHeatmap's own 2mm, with the right
+        # side widened by the error it makes measuring the legend column.
+        padding = unit(
+          c(
+            2,
+            2,
+            2,
+            2 + AMR_LEGEND_METRIC_SLACK * 25.4 * (attr(ht, "legend_width_in") %||% 0)
+          ),
+          "mm"
+        ),
         # The gutter between one element type's panel and the next. Wide
         # enough to read as a break, narrow enough that the panels still
         # read as one matrix.
@@ -2767,25 +2971,37 @@ amr_as_ggplot <- function(
 # --- Prevalence Chart --------------------------------------------------------
 
 #' Builds a horizontal ggplot2 bar chart for AMR gene/class prevalence.
+#'
+#' @param df Data frame from `amr_prevalence()`.
+#' @param opts Named list: `bar_scale`, `text_color`, `background`,
+#'   `n_isolates`, and the fitted sizes from `amr_prevalence_layout()`. Any size
+#'   not given is fitted here on the default canvas.
+#' @return A ggplot object.
 #' @export
 build_amr_prevalence <- function(df, opts = list()) {
-  text_color <- opts$text_color %||% "#000000"
-  background <- opts$background %||% "#FFFFFF"
-  n_iso <- opts$n_isolates %||% NA_integer_
-  row_size <- opts$fontsize_row %||% amr_fit_fontsize(nrow(df))
-  legend_size <- opts$fontsize_legend %||% 11
+  fit <- amr_prevalence_layout(df$item, df$group)
+  o <- c(opts, fit[setdiff(names(fit), names(opts))])
+  text_color <- o$text_color %||% "#000000"
+  background <- o$background %||% "#FFFFFF"
+  n_iso <- o$n_isolates %||% NA_integer_
+  axis_text <- element_text(colour = text_color, size = o$fontsize_axis)
+  margin_pt <- AMR_PREVALENCE_MARGIN_PT
 
   cats <- sort(unique(df$group))
-  cols <- amr_palette(cats, amr_bar_scale_fit(opts$bar_scale, length(cats)))
+  cols <- amr_palette(cats, amr_bar_scale_fit(o$bar_scale, length(cats)))
 
   df$item <- factor(df$item, levels = rev(df$item))
 
   ggplot(df, aes(x = .data$item, y = .data$n, fill = .data$group)) +
-    geom_col(width = 0.75) +
+    geom_col(width = o$bar_width) +
     coord_flip() +
     scale_fill_manual(values = cols, name = NULL, drop = FALSE) +
-    scale_x_discrete(expand = expansion(add = 0.6)) +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_discrete(expand = expansion(add = AMR_PREVALENCE_END_ROWS)) +
+    scale_y_continuous(
+      expand = expansion(mult = c(0, 0.05)),
+      sec.axis = if (isTRUE(o$sec_axis)) dup_axis(name = NULL) else waiver()
+    ) +
+    guides(fill = guide_legend(nrow = max(as.integer(o$legend_nrow), 1L))) +
     labs(
       x = NULL,
       y = if (is.na(n_iso)) {
@@ -2794,14 +3010,22 @@ build_amr_prevalence <- function(df, opts = list()) {
         sprintf("Isolates (of %d)", n_iso)
       }
     ) +
-    theme_minimal(base_size = legend_size) +
+    theme_minimal(base_size = o$fontsize_title) +
     theme(
       text = element_text(colour = text_color),
-      axis.text = element_text(colour = text_color, size = row_size),
-      axis.title = element_text(colour = text_color, size = legend_size),
-      legend.text = element_text(colour = text_color, size = legend_size),
+      axis.text.y = element_text(colour = text_color, size = o$fontsize_row),
+      axis.text.x = axis_text,
+      axis.text.x.top = axis_text,
+      axis.title = element_text(colour = text_color, size = o$fontsize_title),
+      legend.position = if (o$legend_nrow > 0L) "top" else "none",
+      legend.justification = "left",
+      legend.text = element_text(colour = text_color, size = o$fontsize_legend),
+      legend.key.size = unit(o$fontsize_legend * 1.3, "pt"),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.box.spacing = unit(o$fontsize_legend * 0.8, "pt"),
       panel.grid.major.y = element_blank(),
       panel.grid.minor = element_blank(),
+      plot.margin = margin(margin_pt, margin_pt, margin_pt, margin_pt, "pt"),
       plot.background = element_rect(fill = background, colour = NA),
       panel.background = element_rect(fill = background, colour = NA)
     )

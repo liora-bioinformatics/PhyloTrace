@@ -5,8 +5,10 @@ box::use(
     expect_equal,
     expect_false,
     expect_gt,
+    expect_gte,
     expect_identical,
     expect_lt,
+    expect_lte,
     expect_named,
     expect_true,
     test_that,
@@ -170,11 +172,8 @@ test_that("the layout never crosses an edge, whatever the shape or transform", {
       edges <- random_tree(n, shape)
       w <- sample(c(1, 1, 2, 3, 8, 60, 400, 3000), nrow(edges), replace = TRUE)
       ids <- paste0("n", seq_len(n))
-      # Both fans: the plain proportional one, and the one that re-allocates
-      # angle to the branches leaving a cluster. Reordering a wedge and
-      # re-sharing it out keeps the wedges contiguous and disjoint, so it must
-      # not cost the planarity everything here rests on — but "must not" is
-      # worth what the test is worth.
+      # With and without a clustering: handing the layout a cluster assignment
+      # must not cost the planarity everything here rests on.
       cl <- mst_plot$mst_clusters(ids, edges$from, edges$to, w, 5)$node
       for (mode in c("log", "real", "uniform")) {
         len <- mst_plot$mst_edge_lengths(w, mode)$length
@@ -234,6 +233,87 @@ test_that("the root is the graph centre, and the busiest node breaks a tie", {
     weight = c(1, 1, 9, 1)
   )
   expect_identical(rooted$id[rooted$root], "n3")
+})
+
+test_that("a hub off the graph centre is still where the drawing fans from", {
+  # A path of four ending in a node with four leaves. The centre by
+  # eccentricity is n4; the busiest node is n5, and only the root's fan gets a
+  # full circle — rooted anywhere else, its leaves share less than half of one.
+  from <- c("n1", "n2", "n3", "n4", rep("n5", 4))
+  to <- c("n2", "n3", "n4", "n5", paste0("l", 1:4))
+  ids <- unique(c(from, to))
+  coords <- mst_plot$mst_layout(from, to, rep(40, length(from)), ids)
+  expect_identical(coords$id[coords$root], "n5")
+})
+
+test_that("close pairs found through the grid are exactly the close pairs", {
+  set.seed(4)
+  x <- runif(300, 0, 400)
+  y <- runif(300, 0, 400)
+  h <- 18
+  grid <- impl$.near_pairs(x, y, h)
+  d <- as.matrix(stats::dist(cbind(x, y)))
+  brute <- which(d < h & upper.tri(d), arr.ind = TRUE)
+  key <- function(p) sort(paste(pmin(p[, 1], p[, 2]), pmax(p[, 1], p[, 2])))
+  expect_identical(key(grid), key(brute))
+})
+
+test_that("relaxing a crowded fan clears every node at its exact length", {
+  # Forty leaves on one hub at four lengths, ten in a row at each: the
+  # proportional fan gives each 9 degrees, eight pixels of arc at the shortest
+  # length for a node twelve across. Clearing them needs the ends of each run
+  # turned by about a quarter of the turn relaxing is allowed.
+  leaves <- paste0("l", 1:40)
+  from <- rep("hub", 40)
+  ids <- c("hub", leaves)
+  len <- mst_plot$mst_edge_lengths(rep(1:4, each = 10), "log")$length
+  radius <- rep(6, length(ids))
+  clashes <- function(z) {
+    d <- as.matrix(stats::dist(cbind(z$x, z$y)))
+    diag(d) <- Inf
+    sum(d < 12 - 1e-6) / 2
+  }
+  plain <- mst_plot$mst_layout(from, leaves, len, ids)
+  relaxed <- mst_plot$mst_layout(
+    from, leaves, len, ids, radius = radius, relax = TRUE
+  )
+  expect_gt(clashes(plain), 0)
+  expect_identical(clashes(relaxed), 0)
+  ix <- stats::setNames(seq_len(nrow(relaxed)), relaxed$id)
+  drawn <- sqrt(
+    (relaxed$x[ix[leaves]] - relaxed$x[ix[["hub"]]])^2 +
+      (relaxed$y[ix[leaves]] - relaxed$y[ix[["hub"]]])^2
+  )
+  expect_equal(drawn, len, tolerance = 1e-8)
+})
+
+test_that("a drawing with nothing to clear is not moved by relaxing", {
+  edges <- random_tree(12L, "binary")
+  ids <- paste0("n", 1:12)
+  len <- rep(200, nrow(edges))
+  plain <- mst_plot$mst_layout(edges$from, edges$to, len, ids)
+  relaxed <- mst_plot$mst_layout(
+    edges$from, edges$to, len, ids, radius = 4, relax = TRUE
+  )
+  expect_equal(relaxed$x, plain$x)
+  expect_equal(relaxed$y, plain$y)
+})
+
+test_that("the layout cache hands back exactly what a fresh solve makes", {
+  edges <- random_tree(40L, "random")
+  ids <- paste0("n", 1:40)
+  len <- rep(60, nrow(edges))
+  fresh <- mst_plot$mst_layout(
+    edges$from, edges$to, len, ids, radius = 8, relax = TRUE
+  )
+  first <- impl$.cached_layout(
+    edges$from, edges$to, len, ids, radius = 8, relax = TRUE
+  )
+  again <- impl$.cached_layout(
+    edges$from, edges$to, len, ids, radius = 8, relax = TRUE
+  )
+  expect_identical(first, fresh)
+  expect_identical(again, fresh)
 })
 
 test_that("a graph too small to lay out still returns one row per node", {
@@ -478,11 +558,11 @@ test_that("a region never reaches another cluster's node", {
   expect_equal(b$radius, 72)
 })
 
-test_that("a region does not narrow around a node in no cluster", {
-  # It is cut instead (see MST_NODE_CASING). Narrowing was the first answer and
-  # it scallops the outline: one cluster holding 175 of a collection's 181 nodes
-  # came out notched wherever a single unclustered node sat near it, which reads
-  # as damage to the shape rather than as a node outside it.
+test_that("a region narrows around a node in no cluster as well", {
+  # Leaving it to the ring cut out of the finished region kept the outline
+  # smooth while halos were wide, and on the 991-isolate reference collection
+  # left 70 unclustered nodes inside a region with a white ring round each. An
+  # unclustered node is a node the region must not claim, like any other.
   coords <- data.frame(
     id = c("a", "b", "c"),
     x = c(0, 100, 140),
@@ -495,7 +575,8 @@ test_that("a region does not narrow around a node in no cluster", {
     coords, cl$node, cl$edge, c("a", "b"), c("b", "c"),
     radius = 12, pad = 60
   )[["Cluster 1"]]
-  expect_equal(b$r, c(72, 72))
+  expect_equal(b$r, c(72, 25))
+  expect_equal(region_gap(b, 140, 0, 12), impl$MST_BLOB_CLEARANCE)
 })
 
 test_that("a band tapers between two differently sized nodes", {
@@ -796,8 +877,7 @@ base_opts <- function(...) {
     layers = list(),
     show_clusters = FALSE, cluster_threshold = 10,
     cluster_col_scale = "viridis", cluster_width = 14,
-    cluster_opacity = 0.35, cluster_label_size = 18,
-    cluster_label_tint = TRUE,
+    cluster_label_size = 18,
     show_legend = TRUE, legend_ori = "left", show_caption = TRUE,
     canvas_px = c(900, 620)
   )
@@ -910,14 +990,19 @@ test_that("every node in no cluster is handed to the renderer to cut around", {
   expect_true(grepl("destination-out", js, fixed = TRUE))
 })
 
-test_that("the region is one path at the requested opacity", {
+test_that("the region is one path at the fixed opacity", {
   opts <- base_opts(show_clusters = TRUE, cluster_threshold = 5,
-                    cluster_opacity = 0.5, cluster_label_size = 22)
+                    cluster_label_size = 22)
   fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
   hook <- mst_plot$build_mst_visnetwork(
     demo_graph(), demo_meta(), opts, fr
   )$x$events$beforeDrawing
-  expect_true(grepl("var A=0.5", hook, fixed = TRUE))
+  expect_true(grepl(
+    paste0("var A=", impl$MST_CLUSTER_OPACITY),
+    hook,
+    fixed = TRUE
+  ))
+  expect_equal(impl$MST_CLUSTER_OPACITY, 0.77)
   # One beginPath and one fill per region: a fill per disc and capsule is what
   # made a translucent region composite into a patchwork. The second fill is the
   # cut around the nodes in no cluster, which runs once for all of them.
@@ -1261,48 +1346,6 @@ test_that("the cap multiplier is a control, not just a constant", {
             max(tight$coords$x) - min(tight$coords$x))
 })
 
-test_that("a branch leaving a cluster is fanned to the edge of its wedge", {
-  # Angle is the one thing an equal-angle layout is free to choose — the lengths
-  # carry the allelic distances — so it is spent on pointing the branches that
-  # leave a cluster away from the ones that stay in it. Two leaves in the
-  # cluster and one out of it: the odd one takes an end of the fan, not the
-  # middle, and more of the wedge than its single tip would earn.
-  fan <- impl$.fan_layout(
-    ch = c(10L, 11L, 12L),
-    tips_ch = c(20, 1, 20),
-    attached = c(TRUE, FALSE, TRUE)
-  )
-  expect_identical(fan$ch[[1]], 11L)
-  expect_gte(fan$share[[1]], impl$MST_LOOSE_SHARE)
-  expect_equal(sum(fan$share), 1)
-
-  # Several of them alternate between the two ends rather than stacking on one.
-  fan <- impl$.fan_layout(
-    ch = 1:4,
-    tips_ch = c(1, 30, 1, 30),
-    attached = c(FALSE, TRUE, FALSE, TRUE)
-  )
-  expect_identical(fan$ch[[1]], 1L)
-  expect_identical(fan$ch[[length(fan$ch)]], 3L)
-
-  # With nothing leaving, the fan is exactly the proportional one it always was.
-  fan <- impl$.fan_layout(1:3, c(2, 3, 5), rep(TRUE, 3))
-  expect_identical(fan$ch, 1:3)
-  expect_equal(fan$share, c(0.2, 0.3, 0.5))
-
-  # However many leave, the cluster's own branch keeps a fifth of the wedge —
-  # otherwise a node with eight stragglers hanging off it would have its own
-  # subtree, however large, squeezed into nothing.
-  fan <- impl$.fan_layout(1:9, c(rep(1, 8), 100), c(rep(FALSE, 8), TRUE))
-  expect_gte(fan$share[[which(fan$ch == 9L)]], 0.2 - 1e-9)
-  expect_equal(sum(fan$share), 1)
-
-  # A floor is a floor, not a cap: a straggler that is itself a large subtree
-  # keeps the share its size earns.
-  fan <- impl$.fan_layout(1:2, c(90, 10), c(FALSE, TRUE))
-  expect_equal(fan$share[[which(fan$ch == 1L)]], 0.9)
-})
-
 test_that("a branch leaving a cluster is swung out of it, at its own length", {
   # Ordering the fan is not enough on a real collection: a node in no cluster is
   # usually surrounded by *unrelated* subtrees the radial layout packed against
@@ -1415,7 +1458,6 @@ test_that("switching the regions on does not move a single node", {
 
   # Nor does any other display-only control.
   for (o in list(
-    list(cluster_opacity = 0.9),
     list(cluster_col_scale = "Dark2"),
     list(cluster_label_size = 30),
     list(show_legend = FALSE)
@@ -1428,6 +1470,84 @@ test_that("switching the regions on does not move a single node", {
   # cluster, so the fan has different branches to steer. Asserted on a real
   # collection rather than here, where seven nodes can fan the same way either
   # way by coincidence.
+})
+
+test_that("cluster names are placed clear of one another", {
+  # Two regions side by side, their topmost members level: named above each,
+  # the names overlap; placement moves the second one to a free side.
+  blobs <- list(
+    `Cluster 1` = list(x = c(0, 0), y = c(0, 60), radius = 10),
+    `Cluster 2` = list(x = c(40, 40), y = c(0, 60), radius = 10)
+  )
+  spots <- impl$.place_cluster_labels(
+    blobs, x = c(0, 0, 40, 40), y = c(0, 60, 0, 60), radius = 6, size = 14
+  )
+  expect_false(any(spots$clash))
+  apart <- spots$x1[[1]] <= spots$x0[[2]] || spots$x1[[2]] <= spots$x0[[1]] ||
+    spots$y1[[1]] <= spots$y0[[2]] || spots$y1[[2]] <= spots$y0[[1]]
+  expect_true(apart)
+})
+
+test_that("cluster names are left off when there are too many of them", {
+  many <- stats::setNames(
+    lapply(seq_len(impl$MST_CLUSTER_LABEL_MAX + 1L), function(i) {
+      list(x = c(i * 1000, i * 1000), y = c(0, 50), radius = 10)
+    }),
+    paste("Cluster", seq_len(impl$MST_CLUSTER_LABEL_MAX + 1L))
+  )
+  expect_identical(
+    impl$.cluster_label_fit(many, 0, 0, 1, zoom = 1, px_per_pt = 2.4),
+    0
+  )
+  # A handful, far apart, are named at the size the fit aims for.
+  few <- many[1:3]
+  size <- impl$.cluster_label_fit(few, 0, 0, 1, zoom = 1, px_per_pt = 2.4)
+  expect_equal(size, round(impl$MST_CLUSTER_LABEL_PT * 2.4))
+})
+
+test_that("the view is framed on everything drawn, not on the nodes", {
+  opts <- base_opts(
+    show_clusters = TRUE, cluster_threshold = 5, cluster_label_size = 22
+  )
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  ext <- fr$extent
+  for (b in fr$blobs) {
+    expect_lte(ext[[1]], min(b$x - b$r) + 1e-9)
+    expect_gte(ext[[3]], max(b$x + b$r) - 1e-9)
+    expect_lte(ext[[2]], b$label$y0 + 1e-9)
+  }
+  after <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts, fr
+  )$x$events$afterDrawing
+  expect_true(grepl("moveTo", after, fixed = TRUE))
+  expect_false(grepl("this.fit(", after, fixed = TRUE))
+})
+
+test_that("the fit shrinks nodes as a collection crowds its drawing", {
+  set.seed(21)
+  small_edges <- random_tree(8L, "star")
+  big_edges <- random_tree(300L, "random")
+  graph_of <- function(e) {
+    mst_graph(e$from, e$to, sample(c(1, 2, 5, 30, 80), nrow(e), replace = TRUE))
+  }
+  meta_of <- function(e) {
+    data.frame(isolate = unique(c(e$from, e$to)), stringsAsFactors = FALSE)
+  }
+  opts <- base_opts(show_clusters = TRUE, cluster_threshold = 3)
+  small <- mst_plot$mst_fit_drawing(
+    graph_of(small_edges), meta_of(small_edges), opts, label_chars = 4
+  )
+  big <- mst_plot$mst_fit_drawing(
+    graph_of(big_edges), meta_of(big_edges), opts, label_chars = 4
+  )
+  expect_lt(big$node_size, small$node_size)
+  expect_false(big$show_label)
+  for (fit in list(small, big)) {
+    expect_gte(fit$rotation, -90)
+    expect_lte(fit$rotation, 90)
+    expect_identical(fit$rotation %% 5, 0)
+    expect_lte(fit$node_size_min, fit$node_size_max)
+  }
 })
 
 test_that("with nothing clustered the fan is the plain proportional one", {

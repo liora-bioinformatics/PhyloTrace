@@ -90,9 +90,7 @@ set_mst_inputs <- function(session, ...) {
     mst_show_clusters = TRUE,
     mst_cluster_col_scale = "viridis",
     mst_cluster_width = 15,
-    mst_cluster_opacity = 35,
-    mst_cluster_label_size = 18,
-    mst_cluster_label_tint = FALSE,
+    mst_cluster_label_size = 20,
     mst_show_legend = TRUE,
     mst_legend_ori = "left",
     mst_show_scale_caption = TRUE
@@ -519,9 +517,7 @@ test_that("a cluster region's look rebuilds the network", {
     # widget — the proxy cannot reach it, so every one of these has to rebuild.
     for (change in list(
       list(mst_cluster_width = 40),
-      list(mst_cluster_opacity = 90),
-      list(mst_cluster_label_size = 0),
-      list(mst_cluster_label_tint = TRUE)
+      list(mst_cluster_label_size = 0)
     )) {
       previous <- shell()
       do.call(session$setInputs, change)
@@ -562,6 +558,9 @@ test_that("a change to the geometry rebuilds the network", {
   testServer(visualization_mst$server, args = args_for(db, generate), {
     set_mst_inputs(session)
     generate(1L)
+    session$flushReact()
+    # Generate fits the spread to the drawing, so start from a known one.
+    session$setInputs(mst_edge_length_scale = 15)
     session$flushReact()
     before <- shell()
     extent <- diff(range(frames()$coords$x))
@@ -700,7 +699,11 @@ test_that("a reset returns the pickers shinyjs::reset() used to skip", {
     session$setInputs(reset_settings_confirm = 1)
     session$flushReact()
 
-    for (id in c("mst_length_mode", "mst_legend_ori", "mst_cluster_col_scale")) {
+    for (id in c(
+      "mst_length_mode",
+      "mst_legend_ori",
+      "mst_cluster_col_scale"
+    )) {
       expect_true(any(endsWith(names(sent()), id)))
     }
   })

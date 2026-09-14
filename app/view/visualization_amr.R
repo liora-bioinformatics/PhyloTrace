@@ -49,6 +49,7 @@ box::use(
     pickerInput,
     pickerOptions,
     radioGroupButtons,
+    updatePickerInput,
     updateRadioGroupButtons,
     updateVirtualSelect,
     virtualSelectInput
@@ -95,6 +96,7 @@ box::use(
       on_confirmed_reset,
       reset_button_row,
       scale_select,
+      settled_inputs,
       suitable_scale_categories,
       text_size_slider,
       update_field_select,
@@ -165,6 +167,19 @@ TOP_N_DEFAULT <- 30L
 # with amr_auto_layout()'s answer for the matrix actually being drawn; this is
 # only what the control shows until then.
 ASPECT_DEFAULT <- 0.9
+
+# The aspect slider's floor and grid. The floor is the prevalence chart's, the
+# lowest either view is fitted to.
+ASPECT_MIN <- amr_plot$AMR_PREVALENCE_MIN
+ASPECT_STEP <- 0.05
+
+# A ratio put on the aspect slider's own grid. The slider snaps whatever it is
+# sent, and a snapped echo that differed from the value sent would read as the
+# reader's own drag and stop the view following its fit.
+.snap_aspect <- function(value) {
+  snapped <- ASPECT_MIN + round((value - ASPECT_MIN) / ASPECT_STEP) * ASPECT_STEP
+  round(min(max(snapped, ASPECT_MIN), ASPECT_MAX), 2)
+}
 
 # One depth for both dendrograms, in centimetres. They are read together and
 # there was never a reason to give them different depths; 0 draws neither,
@@ -307,17 +322,17 @@ AMR_CONTROL_DEFAULTS <- list(
 
 # Which control tabs each view has anything to say in.
 #
-# Prevalence draws ranked bars off a count: it has no matrix to lay out, no
-# dendrogram to tune and no row strips to map, so three of the five tabs would
-# open on nothing but a note explaining why they are empty. Hiding them is the
-# same arrangement the Map makes for its own modes.
+# Prevalence draws ranked bars off a count: it has no dendrogram to tune and no
+# row strips to map, so two of the five tabs would open on nothing but a note
+# explaining why they are empty. Its Layout tab stays, for the aspect ratio and
+# the text size. Hiding the rest is the arrangement the Map makes for its modes.
 #
 # Keyed on each nav_panel's explicit `value`, never on its title: a tab renamed
 # for the reader would otherwise stop matching here and silently stick — left
 # visible in a view with nothing to put in it, or hidden for good.
 TABS_BY_MODE <- list(
   heatmap = c("data", "layout", "clustering", "mapping", "colors"),
-  prevalence = c("data", "colors")
+  prevalence = c("data", "layout", "colors")
 )
 ALL_TABS <- c("data", "layout", "clustering", "mapping", "colors")
 
@@ -516,8 +531,8 @@ amr_controls <- function(ns) {
       ),
       # Layout -----------------------------------------------------------------
       #
-      # Both views this tab is shown for are matrices, so nothing here needs a
-      # per-mode condition of its own — see TABS_BY_MODE.
+      # The aspect ratio and the text size apply to both views; the label
+      # switches name the heatmap's rows and columns and are shown for it only.
       nav_panel(
         "Layout",
         value = "layout",
@@ -538,27 +553,29 @@ amr_controls <- function(ns) {
         shiny$sliderInput(
           ns("amr_aspect_ratio"),
           "Aspect ratio",
-          min = 0.65,
+          min = ASPECT_MIN,
           max = ASPECT_MAX,
           value = ASPECT_DEFAULT,
-          step = 0.1,
+          step = ASPECT_STEP,
           ticks = FALSE
         ),
         # Every piece of type on the plot: isolate and gene names, class and
-        # element titles, strip names and the legend. A bias on the fit, not a
-        # size - see app/logic/viz_fit.R.
+        # element titles, strip names, bar names, axes and the legend. A bias on
+        # the fit, not a size - see app/logic/viz_fit.R.
         text_size_slider(ns, "amr_text_size"),
-        input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
-        # A switch that is on but draws nothing is explained rather than left
-        # to read as a bug: the fit leaves a label off where no legible size
-        # fits the room it has (see amr_auto_layout()).
-        fit_hint(
-          ns,
-          "amr_row_names_hint",
-          "Too many isolates to name legibly. Try a taller aspect ratio."
+        # A bar name is never left off (see amr_prevalence_layout()), so what is
+        # explained here is a chart whose names had to be set too small.
+        shiny$conditionalPanel(
+          condition = "input.amr_mode == 'prevalence'",
+          ns = ns,
+          fit_hint(
+            ns,
+            "amr_bar_names_hint",
+            "Too many bars to name legibly. Show fewer or raise the aspect ratio."
+          )
         ),
-        # Both read off the heatmap alone: not shown for Prevalence, which has
-        # no per-gene column to name.
+        # All three read off the heatmap alone: not shown for Prevalence, which
+        # has no isolate row or per-gene column to name.
         #
         # Whether the drug class itself is drawn as text or as a colour strip
         # is not a switch here at all — see amr_cluster_cols in the
@@ -568,6 +585,15 @@ amr_controls <- function(ns) {
         shiny$conditionalPanel(
           condition = COND_HEATMAPS,
           ns = ns,
+          input_switch(ns("amr_show_row_names"), "Show isolate names", FALSE),
+          # A switch that is on but draws nothing is explained rather than left
+          # to read as a bug: the fit leaves a label off where no legible size
+          # fits the room it has (see amr_auto_layout()).
+          fit_hint(
+            ns,
+            "amr_row_names_hint",
+            "Too many isolates to name legibly. Try a taller aspect ratio."
+          ),
           input_switch(ns("amr_show_col_names"), "Show gene names", TRUE),
           fit_hint(
             ns,
@@ -895,6 +921,22 @@ server <- function(
 
     mode <- function() input$amr_mode %||% PLOT_MODE_DEFAULT
 
+    # The sliders, read once the reader lets go. Each one either re-derives the
+    # presence matrix (the two thresholds), re-counts the bars (top n) or
+    # redraws a figure that takes seconds at a thousand isolates, so a drag
+    # read live queued one rebuild per value it passed through.
+    settled <- settled_inputs(
+      input,
+      c(
+        "amr_min_identity",
+        "amr_min_coverage",
+        "amr_top_n",
+        "amr_aspect_ratio",
+        "amr_text_size",
+        "amr_dend_size"
+      )
+    )
+
     # Which curation files a gene under a drug class, for both the heatmap's
     # column blocks and the gene picker's headings — they have to agree, or a
     # reader searches under a heading the plot does not draw.
@@ -939,7 +981,27 @@ server <- function(
       fit_one("amr_min_coverage", hits$pct_coverage)
     }
 
-    shiny$observeEvent(amr_hits(), fit_threshold_bounds(), ignoreNULL = FALSE)
+    # Opens the element-type picker on as many panels as fit under the gene cap
+    # (see amr_plot$amr_capped_element_types()): all three panels of a large
+    # screen are well over a hundred columns, too narrow for any gene name or
+    # drug-class title. Seeded when a screen loads and on reset only; after
+    # that the choice is the reader's.
+    fit_element_types <- function() {
+      updatePickerInput(
+        session,
+        "amr_elements",
+        selected = amr_plot$amr_capped_element_types(shiny$isolate(amr_hits()))
+      )
+    }
+
+    shiny$observeEvent(
+      amr_hits(),
+      {
+        fit_threshold_bounds()
+        fit_element_types()
+      },
+      ignoreNULL = FALSE
+    )
 
     # Fits the "Show top" slider's range to how many genes or drug classes
     # this screen (and the current vocabulary, at class level) actually
@@ -1007,8 +1069,8 @@ server <- function(
       amr_plot$filter_amr_hits(
         amr_hits(),
         element_types = input$amr_elements,
-        min_identity = input$amr_min_identity %||% 0,
-        min_coverage = input$amr_min_coverage %||% 0
+        min_identity = settled$amr_min_identity() %||% 0,
+        min_coverage = settled$amr_min_coverage() %||% 0
       )
     })
 
@@ -1037,23 +1099,28 @@ server <- function(
         amr_sections(),
         isolates(),
         level = input$amr_level %||% LEVEL_DEFAULT,
-        top_n = input$amr_top_n %||% TOP_N_DEFAULT,
+        top_n = settled$amr_top_n() %||% TOP_N_DEFAULT,
         keep_sections = input$amr_sections,
         vocabulary = class_vocab()
       )
     })
 
-    # The bar chart's own fit, standing in for layout_fit() in that mode: the
-    # heatmap fit has a matrix to solve against and this has one bar per row.
-    prevalence_fit <- shiny$reactive({
+    # The bar chart's fit at a given ratio (NULL fits one), standing in for
+    # amr_auto_layout() in that mode: the heatmap fit has a matrix to solve
+    # against and this has one bar per row.
+    prevalence_layout <- function(aspect) {
       df <- prevalence_df()
       amr_plot$amr_prevalence_layout(
-        nrow(df),
+        df$item,
+        df$group,
         amr_plot$AMR_CANVAS_IN,
-        text_scale_percent(text_size_mirror()),
-        max(nchar(as.character(df$item)), 1L)
+        aspect = aspect,
+        text_scale = text_scale_percent(text_size_mirror())
       )
-    })
+    }
+
+    # The bar chart as drawn, at the ratio in force.
+    prevalence_fit <- shiny$reactive(prevalence_layout(aspect_mirror()))
 
     # --- controls fitted to the data ----------------------------------------
 
@@ -1558,7 +1625,9 @@ server <- function(
       genes_rebuild(genes_rebuild() + 1L)
 
       apply_controls(session, AMR_CONTROL_DEFAULTS, AMR_CONTROLS)
+      fit_element_types()
       aspect_mirror(ASPECT_DEFAULT)
+      hand_aspect(list())
       text_size_mirror(TEXT_SIZE_DEFAULT)
       show_row_names_mirror(FALSE)
       show_col_names_mirror(TRUE)
@@ -1579,7 +1648,7 @@ server <- function(
       )
       fit_threshold_bounds()
       fit_top_n_bounds()
-      auto_fit_layout()
+      auto_fit_layout(unname(PLOT_MODES))
     }
 
     on_confirmed_reset(
@@ -1590,13 +1659,13 @@ server <- function(
     )
 
     # The layout fit, applied: the three label rows switched to whatever this
-    # shape has room for, in both directions, and then the aspect ratio. In
-    # that order because the labels decide the height worth buying - isolate
-    # names want a deeper row than bare bands - and the canvas width the gene
-    # names get.
-    auto_fit_layout <- function() {
+    # shape has room for, in both directions, and then the aspect ratio of the
+    # given views returned to their fit. In that order because the labels
+    # decide the height worth buying - isolate names want a deeper row than
+    # bare bands - and the canvas width the gene names get.
+    auto_fit_layout <- function(views = shiny$isolate(mode())) {
       refit_labels()
-      refit_aspect()
+      refit_aspect(views)
     }
 
     # Auto-fit: re-solve the geometry for the matrix on screen -- the same solve
@@ -1623,7 +1692,7 @@ server <- function(
       set_text_size(TEXT_SIZE_DEFAULT)
       auto_fit_layout()
       shiny$showNotification(
-        "Sizes, labels and spacing fitted to the matrix on screen.",
+        "Sizes, labels and spacing fitted to the plot on screen.",
         type = "message",
         duration = 5
       )
@@ -1690,8 +1759,8 @@ server <- function(
 
       # Fitted before the plot is published, so the first draw is already at the
       # right ratio rather than being drawn once at the old one and again at the
-      # new one.
-      auto_fit_layout()
+      # new one. Both views go back to their fit: a Generate is a new plot.
+      auto_fit_layout(unname(PLOT_MODES))
       generated(TRUE)
     })
 
@@ -1737,14 +1806,43 @@ server <- function(
     # and the same reason, as the Tree's `fitted` mirrors.
     aspect_mirror <- shiny$reactiveVal(ASPECT_DEFAULT)
 
-    # A user drag lands in the same mirror the fit writes to, so the two are
-    # indistinguishable downstream and whichever happened last simply wins.
-    shiny$observeEvent(input$amr_aspect_ratio, {
-      value <- input$amr_aspect_ratio
+    # The ratio the reader set by hand in each view, keyed by view, or nothing
+    # where that view still follows its fit - the Epi curve's
+    # aspect_follows_fit, kept per view because a heatmap's ratio means nothing
+    # to a bar chart. Generate and a reset clear both, Auto-fit the one on
+    # screen, and a restore records the saved ratio against its view.
+    hand_aspect <- shiny$reactiveVal(list())
+
+    # A user drag lands in the same mirror the fit writes to and is remembered
+    # as this view's own ratio. The echo of a fitted value is not a drag: it
+    # was snapped to the slider's grid before it was sent, so it equals the
+    # mirror already.
+    #
+    # Nor is a late echo of a ratio sent before the last one: the slider is read
+    # once it settles, and a server busy drawing a thousand-isolate heatmap can
+    # let one echo settle after the fit has already moved on. Every value sent
+    # since the reader last dragged is therefore recognised as the server's own.
+    aspects_sent <- numeric(0)
+    shiny$observeEvent(settled$amr_aspect_ratio(), {
+      value <- settled$amr_aspect_ratio()
+      if (any(abs(aspects_sent - value) < 1e-9)) {
+        return()
+      }
+      aspects_sent <<- numeric(0)
       if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), value))) {
         aspect_mirror(value)
+        held <- shiny$isolate(hand_aspect())
+        held[[shiny$isolate(mode())]] <- value
+        hand_aspect(held)
       }
     })
+
+    # Writes an aspect to the slider and to the mirror the plot reads.
+    set_aspect <- function(value) {
+      aspects_sent <<- c(aspects_sent, value)
+      shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
+      aspect_mirror(value)
+    }
 
     # refit_labels() below writes a Generate-time auto-off straight in here
     # rather than only sending updateSwitchInput's message, which the render
@@ -1768,8 +1866,8 @@ server <- function(
     # The text size is reset by Auto-fit, so it echoes as the aspect does.
     text_size_mirror <- shiny$reactiveVal(TEXT_SIZE_DEFAULT)
 
-    shiny$observeEvent(input$amr_text_size, {
-      value <- input$amr_text_size
+    shiny$observeEvent(settled$amr_text_size(), {
+      value <- settled$amr_text_size()
       if (!isTRUE(all.equal(shiny$isolate(text_size_mirror()), value))) {
         text_size_mirror(value)
       }
@@ -1826,7 +1924,7 @@ server <- function(
         block_cols = blocks$cols,
         element_titles = elements$titles,
         element_cols = elements$cols,
-        dend_cm = input$amr_dend_size %||% DEND_DEFAULT,
+        dend_cm = settled$amr_dend_size() %||% DEND_DEFAULT,
         n_strips = length(anno_layers()),
         # Only whether the drug classes are named as text over each block or
         # coloured into a strip - the element-type row below the body answers
@@ -1850,22 +1948,66 @@ server <- function(
       )
     })
 
-    # Fit the aspect to the data, the way the Tree fits its own, for the label
-    # switches as they now stand. The coded default suits a few dozen isolates
-    # and nothing else: a thousand at 0.9 is a band of rows a fraction of a
-    # millimetre apart. Seeded on Generate, Auto-fit and a reset only — a filter
-    # change must not countermand a ratio the reader has just set by hand.
-    refit_aspect <- function() {
-      fitted <- do.call(amr_plot$amr_auto_layout, shiny$isolate(fit_args()))
-      value <- fitted$aspect
-      # Sent unconditionally. Guarding on `input$amr_aspect_ratio` -- "the
-      # slider already shows this" -- reads a value the browser may be about to
-      # replace: a reset pushes the coded default first and re-fits in the same
-      # flush, so the guard would see the *pre-reset* value, skip the send, and
-      # let the default's echo land on top of the fit. Two messages for one
-      # input in a flush coalesce to the last one, so this simply wins.
-      shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
-      aspect_mirror(value)
+    # The ratio the fit chooses for the view on screen, on the slider's grid:
+    # for the heatmap, for the label switches as they now stand. The coded
+    # default suits a few dozen isolates and nothing else: a thousand at 0.9 is
+    # a band of rows a fraction of a millimetre apart.
+    fitted_aspect <- shiny$reactive({
+      value <- if (identical(mode(), "prevalence")) {
+        prevalence_layout(NULL)$fitted_aspect
+      } else {
+        do.call(amr_plot$amr_auto_layout, fit_args())$aspect
+      }
+      .snap_aspect(value)
+    })
+
+    # Keeps the ratio on the fit as the data, the labels, the text size and the
+    # view change - or on the reader's own ratio for this view, which no filter
+    # change countermands. Priority over the render, so a changed fit is drawn
+    # once rather than at the old ratio first.
+    #
+    # In the bar chart, only what is ranked - the count-by level, or how many
+    # bars are kept - reopens the ratio: those change how many rows there are
+    # to seat. Text size and the threshold/section filters resize the chart's
+    # contents within the ratio already in force instead (see
+    # amr_prevalence_layout()'s hand-set-ratio branch), so they are read only
+    # inside fitted_aspect() below, isolated from this observer, and never
+    # move the slider on their own.
+    shiny$observe(priority = 10, {
+      shiny$req(generated())
+      m <- mode()
+      if (identical(m, "prevalence")) {
+        input$amr_level
+        settled$amr_top_n()
+      }
+      target <- hand_aspect()[[m]] %||%
+        tryCatch(
+          if (identical(m, "prevalence")) {
+            shiny$isolate(fitted_aspect())
+          } else {
+            fitted_aspect()
+          },
+          error = function(e) NULL
+        )
+      shiny$req(target)
+      if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), target))) {
+        set_aspect(target)
+      }
+    })
+
+    # Returns the given views to their fit, and the one on screen to its fitted
+    # ratio on this flush. Sent unconditionally: guarding on
+    # `input$amr_aspect_ratio` reads a value the browser may be about to
+    # replace - a reset pushes the coded default first and re-fits in the same
+    # flush, and two messages for one input in a flush coalesce to the last.
+    refit_aspect <- function(views = shiny$isolate(mode())) {
+      held <- shiny$isolate(hand_aspect())
+      held[views] <- NULL
+      hand_aspect(held)
+      fitted <- shiny$isolate(tryCatch(fitted_aspect(), error = function(e) NULL))
+      if (!is.null(fitted)) {
+        set_aspect(fitted)
+      }
     }
 
     # Writes a label switch and the mirror the render reads, in one flush.
@@ -1884,6 +2026,12 @@ server <- function(
     # Judged with the gene names wanted, so the canvas is measured at the width
     # it would grow to for them; the isolate names are the fit's to decide.
     refit_labels <- function() {
+      # A screen whose filters leave no gene column still has bars to count;
+      # there is nothing to name, and the switches are left as they are.
+      mat <- shiny$isolate(tryCatch(presence_mat(), error = function(e) NULL))
+      if (is.null(mat) || !ncol(mat)) {
+        return(invisible(NULL))
+      }
       fit <- do.call(
         amr_plot$amr_auto_layout,
         shiny$isolate(fit_args(col_names = TRUE, row_names = NA))
@@ -1929,6 +2077,11 @@ server <- function(
         !is.null(fit) &&
           show_element_names_mirror() &&
           !isTRUE(fit$elements_legible)
+      )
+      hint(
+        "amr_bar_names_hint",
+        identical(mode(), "prevalence") &&
+          isFALSE(tryCatch(prevalence_fit()$legible, error = function(e) NULL))
       )
     })
 
@@ -1980,7 +2133,7 @@ server <- function(
           cluster_method = cluster_method,
           col_cluster_distance = cluster_distance,
           col_cluster_method = cluster_method,
-          dend_size = input$amr_dend_size %||% DEND_DEFAULT,
+          dend_size = settled$amr_dend_size() %||% DEND_DEFAULT,
           # Read from the mirrors, never from the inputs directly - same reason
           # as aspect_mirror above: refit_labels()'s decision would otherwise
           # not reach the first draw until updateSwitchInput's echo arrived a
@@ -2175,7 +2328,11 @@ server <- function(
       note = function() {
         legibility_note(
           plot_min_pt(),
-          "Raise the text size or the aspect ratio, or show fewer genes."
+          if (identical(mode(), "prevalence")) {
+            "Raise the text size or the aspect ratio, or show fewer bars."
+          } else {
+            "Raise the text size or the aspect ratio, or show fewer genes."
+          }
         )
       }
     )
@@ -2281,6 +2438,9 @@ server <- function(
       # not change. Writing it here makes a restore take effect on this flush.
       if (!is.null(vals$amr_aspect_ratio)) {
         aspect_mirror(vals$amr_aspect_ratio)
+        held <- list()
+        held[[vals$amr_mode %||% PLOT_MODE_DEFAULT]] <- vals$amr_aspect_ratio
+        hand_aspect(held)
       }
       if (!is.null(vals$amr_text_size)) {
         text_size_mirror(vals$amr_text_size)

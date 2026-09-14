@@ -1413,12 +1413,14 @@ test_that("no label is ever set below the floor for its own role", {
   # the floor will not fit, say so (so the builders can drop the label) rather
   # than set it smaller. A four-point label is a smudge that still costs the
   # page a full row.
+  # Eighty classes of five genes on six inches leave each title 2.6 pt of room,
+  # under the shared print floor.
   crowded <- amr_plot$amr_auto_layout(
     400, 400,
     width_in = 6,
     col_label_chars = 20,
-    block_titles = paste0("Class-", 1:40),
-    block_cols = rep(10L, 40),
+    block_titles = paste0("Class-", 1:80),
+    block_cols = rep(5L, 80),
     element_titles = c("Resistance", "Virulence"),
     element_cols = c(395L, 5L),
     n_strips = 3L,
@@ -1473,28 +1475,81 @@ test_that("the element panels are measured before the heatmap exists", {
   expect_identical(sum(blocks$cols), ncol(mat))
 })
 
-test_that("the prevalence chart grows with its bars and sets type to the pitch", {
-  few <- amr_plot$amr_prevalence_layout(8, 10)
-  many <- amr_plot$amr_prevalence_layout(80, 10)
+test_that("the prevalence chart buys each bar the row its name needs", {
+  bars <- function(n) sprintf("gene%03d", seq_len(n))
+  few <- amr_plot$amr_prevalence_layout(bars(8))
+  many <- amr_plot$amr_prevalence_layout(bars(80))
   expect_gt(many$aspect, few$aspect)
   # ... and stops, rather than a chart nobody can scroll.
-  expect_lte(many$aspect, impl$AMR_PREVALENCE_MAX)
-  expect_lt(many$fontsize_row, few$fontsize_row)
+  expect_lte(amr_plot$amr_prevalence_layout(bars(2000))$aspect, impl$AMR_PREVALENCE_MAX)
+  # The names keep the size asked for, however many bars there are.
+  expect_equal(many$fontsize_row, few$fontsize_row, tolerance = 0.2)
+  expect_true(many$legible)
 
-  # The same bar count on a narrower canvas buys a taller page rather than
-  # smaller type: the bars keep the pitch their names need.
-  narrow <- amr_plot$amr_prevalence_layout(80, 5)
-  expect_gt(narrow$aspect, many$aspect)
-  expect_equal(narrow$fontsize_row, many$fontsize_row, tolerance = 0.3)
-  expect_true(few$legible)
+  # A larger text size is a taller chart with larger names in it, not larger
+  # names squeezed into the rows the old size bought.
+  big <- amr_plot$amr_prevalence_layout(bars(80), text_scale = 2)
+  expect_gt(big$aspect, many$aspect)
+  expect_gt(big$fontsize_row, many$fontsize_row * 1.8)
+  expect_gt(big$fontsize_axis, many$fontsize_axis)
 
-  # The legend and axis title scale off the same bar pitch too, so a crowded
-  # chart never leaves them looking oversized beside tiny bar labels - though,
-  # unlike the row labels, they only start shrinking once the page is
-  # genuinely packed.
-  crowded <- amr_plot$amr_prevalence_layout(500, 10)
-  expect_lt(crowded$fontsize_legend, few$fontsize_legend)
-  expect_lte(few$fontsize_legend, 11)
+  # A ratio the reader set is used as given, and the names are cut back to the
+  # rows it leaves; the fitted ratio is still reported beside it.
+  short <- amr_plot$amr_prevalence_layout(bars(80), aspect = 0.6)
+  expect_equal(short$aspect, 0.6)
+  expect_equal(short$fitted_aspect, many$fitted_aspect)
+  expect_lt(short$fontsize_row, many$fontsize_row)
+})
+
+test_that("a long bar name is measured into its column, and a crowded chart says so", {
+  long <- amr_plot$amr_prevalence_layout(c("a", strrep("W", 40)))
+  expect_lt(long$fontsize_row, impl$AMR_PREVALENCE_LABEL_PT)
+  expect_true(long$legible)
+  expect_lte(
+    viz_fit$text_width_in(strrep("W", 40), long$fontsize_row),
+    impl$AMR_CANVAS_IN * impl$AMR_PREVALENCE_LABEL_FRAC + 0.01
+  )
+
+  # A bar name is never left off: past the rows a ratio leaves, it is set at
+  # the floor and reported.
+  crowded <- amr_plot$amr_prevalence_layout(sprintf("g%03d", 1:400), aspect = 1)
+  expect_false(crowded$legible)
+  expect_gte(crowded$fontsize_row, impl$AMR_ROW_MIN_PT)
+})
+
+test_that("a tall prevalence chart repeats its axis on top and keeps its key there", {
+  bars <- sprintf("gene%03d", 1:120)
+  tall <- amr_plot$amr_prevalence_layout(bars, c("Resistance", "Virulence"))
+  expect_true(tall$sec_axis)
+  expect_identical(tall$legend_nrow, 1L)
+  expect_false(amr_plot$amr_prevalence_layout(bars[1:10], "Resistance")$sec_axis)
+  expect_identical(amr_plot$amr_prevalence_layout(bars[1:10])$legend_nrow, 0L)
+
+  # Two bars on a page kept square are drawn as bars, not as two slabs.
+  slim <- amr_plot$amr_prevalence_layout(c("a", "b"), aspect = 1)
+  expect_lt(slim$bar_width, impl$AMR_PREVALENCE_BAR_FILL)
+  expect_lte(slim$bar_width * slim$row_pitch_in, impl$AMR_PREVALENCE_BAR_MAX_IN + 1e-3)
+})
+
+test_that("the heatmap legend shrinks for its width as well as its height", {
+  guides <- list(list(
+    id = "strip:Class",
+    kind = "strip",
+    title = "Class",
+    cols = setNames(rep("#000000", 3), c("a", strrep("Macrolide/", 6), "b")),
+    n = 3L
+  ))
+  args <- list(n_rows = 40, n_cols = 20, legend_guides = guides)
+  wide <- do.call(amr_plot$amr_auto_layout, c(args, list(width_in = 30)))
+  # Nine inches with the isolate names beside the matrix leave the column too
+  # narrow for that name at any legible size: the floor, not the design size.
+  narrow <- do.call(
+    amr_plot$amr_auto_layout,
+    c(args, list(width_in = 9, show_row_names = TRUE))
+  )
+  expect_equal(wide$fontsize_legend, impl$AMR_LEGEND_PT)
+  expect_lt(narrow$fontsize_legend, wide$fontsize_legend)
+  expect_gt(wide$legend_width_in, narrow$legend_width_in)
 })
 
 test_that("the Prevalence bar scale only ever lands on Dark2 or viridis", {
@@ -1697,11 +1752,14 @@ test_that("every text element on the prevalence chart takes the fitted sizes", {
   )
   plot <- amr_plot$build_amr_prevalence(
     df,
-    list(fontsize_row = 6, fontsize_legend = 8)
+    list(fontsize_row = 6, fontsize_axis = 7, fontsize_title = 8, fontsize_legend = 9)
   )
-  expect_equal(plot$theme$axis.text$size, 6)
+  expect_equal(plot$theme$axis.text.y$size, 6)
+  expect_equal(plot$theme$axis.text.x$size, 7)
   expect_equal(plot$theme$axis.title$size, 8)
-  expect_equal(plot$theme$legend.text$size, 8)
+  expect_equal(plot$theme$legend.text$size, 9)
+  # The group key runs along the top, where a long chart's reader starts.
+  expect_identical(plot$theme$legend.position, "top")
 })
 
 test_that("the prevalence chart renders to a real image", {
@@ -1832,4 +1890,34 @@ test_that("the fit plans the guides the builder draws", {
   # One key budget per guide the builder will draw, under the same ids.
   drawn <- Filter(function(g) !identical(g$kind, "class"), guides)
   expect_true(all(vapply(drawn, `[[`, "", "id") %in% names(fit$legend_keys)))
+})
+
+test_that("the element types open on as many panels as fit under the gene cap", {
+  screen <- function(amr, stress, virulence) {
+    data.frame(
+      isolate = "ISO-1",
+      gene_symbol = c(
+        sprintf("r%d", seq_len(amr)),
+        sprintf("s%d", seq_len(stress)),
+        sprintf("v%d", seq_len(virulence))
+      ),
+      element_type = rep(c("AMR", "STRESS", "VIRULENCE"), c(amr, stress, virulence))
+    )
+  }
+  capped <- amr_plot$amr_capped_element_types
+  every <- unname(amr_plot$AMR_ELEMENT_TYPES)
+
+  expect_identical(capped(screen(40, 10, 30)), every)
+  expect_identical(capped(NULL), every)
+  # Over the cap: resistance, then stress, then virulence, while the running
+  # total still fits - the S. aureus test screen is 82 + 14 + 42.
+  expect_identical(capped(screen(82, 14, 42)), c("AMR", "STRESS"))
+  expect_identical(capped(screen(70, 40, 5)), "AMR")
+  # A first panel over the cap on its own still opens, rather than no plot.
+  expect_identical(capped(screen(187, 56, 119)), "AMR")
+  expect_identical(capped(screen(0, 150, 20)), c("AMR", "STRESS"))
+  # A gene reported by many isolates is one column.
+  twice <- rbind(screen(60, 0, 50), screen(60, 0, 50))
+  expect_identical(capped(twice), c("AMR", "STRESS"))
+  expect_identical(capped(screen(60, 0, 50), cap = 200), every)
 })

@@ -1,9 +1,10 @@
 box::use(
-  shiny[MockShinySession],
+  shiny[isolate, MockShinySession, moduleServer, testServer],
   testthat[
     expect_equal,
     expect_false,
     expect_match,
+    expect_named,
     expect_no_error,
     expect_true,
     test_that
@@ -263,4 +264,26 @@ test_that("the interval control opens at what the dates warrant", {
   expect_match(paste(pick("none", values = decade), collapse = " "), "none")
   # And with nothing to go on it stays where it always was.
   expect_match(paste(pick(), collapse = " "), "none")
+})
+
+test_that("a settled input reports the value a drag stopped on, once", {
+  module <- function(id) {
+    moduleServer(id, function(input, output, session) {
+      settled <- viz_helpers$settled_inputs(input, c("size", "ratio"))
+    })
+  }
+  testServer(module, {
+    expect_named(settled, c("size", "ratio"))
+    session$setInputs(size = 100)
+    session$elapse(viz_helpers$PLOT_SETTLE_MS + 50)
+    expect_equal(isolate(settled$size()), 100)
+
+    # Values passed through mid-drag never reach the reader of the input.
+    session$setInputs(size = 120)
+    session$setInputs(size = 140)
+    session$flushReact()
+    expect_equal(isolate(settled$size()), 100)
+    session$elapse(viz_helpers$PLOT_SETTLE_MS + 50)
+    expect_equal(isolate(settled$size()), 140)
+  })
 })

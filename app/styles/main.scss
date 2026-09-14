@@ -853,6 +853,30 @@ $viz-tile-row-gap: 0.85rem;
     height: 100% !important;
 }
 
+// The MST rotation slider names its two ends ("Anti-clockwise" / "Clockwise")
+// in place of the signed -180/180 bounds, which say nothing about direction.
+// display, not visibility: ionRangeSlider sets their visibility inline as the
+// handle moves, which beats any stylesheet rule on that property.
+.mst-rotation .irs-min,
+.mst-rotation .irs-max {
+    display: none !important;
+}
+
+.mst-rotation-ends {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -0.6rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+.mst-rotation-ends .fa,
+.mst-rotation-ends .fas,
+.mst-rotation-ends svg {
+    margin: 0 0.3rem;
+}
+
 // Tree display modes (see visualization_tree.R). The ggtree image is rendered
 // at panel-width × aspect-ratio by renderPlot(); this only restyles how that
 // already-rendered image is presented in the stage — it never re-renders.
