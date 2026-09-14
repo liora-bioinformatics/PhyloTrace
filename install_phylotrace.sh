@@ -99,10 +99,15 @@ conda clean --all -y
 
 if conda env list | grep -q "PhyloTrace"; then
   echo "Environment PhyloTrace already exists. Updating the environment..."
-  conda env update -f environment.yml --quiet
+  conda env update -f environment.yml
 else
   echo "Environment PhyloTrace does not exist. Creating the environment..."
-  conda env create -f environment.yml --quiet
+  conda env create -f environment.yml
+fi
+
+if [ $? -ne 0 ]; then
+    echo -e "\e[31mError: Setting up the PhyloTrace conda environment failed (see above -- a declined channel Terms of Service can cause this).\e[0m"
+    exit 1
 fi
 
 conda activate PhyloTrace
