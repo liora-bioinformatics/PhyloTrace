@@ -29,8 +29,24 @@ if ! command -v conda >/dev/null 2>&1; then
 fi
 
 if ! command -v conda >/dev/null 2>&1; then
-    echo -e "\e[31mError: Conda was not found. Please install or properly initialize Anaconda before running this script.\e[0m"
-    exit 1
+    if [ -e "$HOME/miniconda3" ]; then
+        echo -e "\e[31mError: Conda was not found, and $HOME/miniconda3 already exists but doesn't look like a working conda install.\e[0m"
+        echo -e "\e[31mPlease check that directory manually -- it will not be touched or overwritten.\e[0m"
+        exit 1
+    fi
+
+    echo "Conda not found. Installing Miniconda into $HOME/miniconda3 ..."
+    mkdir -p "$HOME/miniconda3"
+    if ! curl -fsSL "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh" -o "$HOME/miniconda3/miniconda.sh"; then
+        echo -e "\e[31mError: Failed to download the Miniconda installer.\e[0m"
+        exit 1
+    fi
+    bash "$HOME/miniconda3/miniconda.sh" -b -p "$HOME/miniconda3"
+    rm "$HOME/miniconda3/miniconda.sh"
+
+    # shellcheck disable=SC1091
+    . "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda config --set auto_activate_base false
 fi
 
 CONDA_PATH="$(conda info --base)/bin/conda"
