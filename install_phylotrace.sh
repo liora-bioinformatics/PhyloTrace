@@ -90,7 +90,7 @@ if conda env list | grep -q "PhyloTrace"; then
   conda env update -f environment.yml
 else
   echo "Environment PhyloTrace does not exist. Creating the environment..."
-  conda env create -f environment.yml
+  conda create -f environment.yml
 fi
 
 if [ $? -ne 0 ]; then
