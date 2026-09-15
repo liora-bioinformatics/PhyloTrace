@@ -44,6 +44,7 @@ box::use(
   app / logic / analysis_store,
   app / logic / db_compat[check_db_loadable],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / database_functions[append_classical_mlst],
   app / logic / db_store,
   app / logic / field_labels[field_labels_for],
@@ -131,7 +132,10 @@ server <- function(
     # Current Analyses, refreshed whenever the store changes or the DB reloads.
     analyses <- reactive({
       db_events$depend(db_rev, "analyses")
-      analysis_store$list_analyses(db_path())
+      guard_db_read(
+        "Loading saved Analyses",
+        analysis_store$list_analyses(db_path())
+      )
     })
 
     # On DB load / reload: ensure the schema exists and guarantee at least one
@@ -141,9 +145,14 @@ server <- function(
       if (!.usable_path(path)) {
         return()
       }
-      analysis_store$ensure_schema(path)
-      if (nrow(analysis_store$list_analyses(path)) == 0L) {
-        analysis_store$add_analysis(path, "Analysis 1")
+      synced <- guard_db("Preparing the Analysis Dashboard", {
+        analysis_store$ensure_schema(path)
+        if (nrow(analysis_store$list_analyses(path)) == 0L) {
+          analysis_store$add_analysis(path, "Analysis 1")
+        }
+      })
+      if (db_failed(synced)) {
+        return()
       }
       db_events$bump(db_rev, "analyses")
     }
@@ -213,7 +222,11 @@ server <- function(
     # for it explicitly, the same as before this read moved to the store.
     settings_meta <- reactive({
       req(db_path())
-      append_classical_mlst(store$metadata(), db_path())
+      meta <- store$metadata()
+      guard_db_read(
+        "Loading classical MLST results",
+        append_classical_mlst(meta, db_path())
+      )
     })
 
     # The date-typed columns the time filter can work along: the fixed
@@ -225,7 +238,10 @@ server <- function(
       if (is.null(meta)) {
         return(character(0))
       }
-      cols <- date_fields(db_path(), names(meta))
+      cols <- guard_db_read(
+        "Loading custom variables",
+        date_fields(db_path(), names(meta))
+      )
       stats::setNames(cols, field_labels_for(cols))
     })
 
@@ -310,10 +326,16 @@ server <- function(
       } else {
         # Editing an Analysis that already holds plots: warn up front that the
         # isolate set is what those plots were built from.
-        n_saved <- if (creating) {
-          0L
-        } else {
-          nrow(analysis_store$list_plots(db_path(), editing_analysis()))
+        n_saved <- 0L
+        if (!creating) {
+          saved_plots <- guard_db(
+            "Opening the Analysis settings",
+            analysis_store$list_plots(db_path(), editing_analysis())
+          )
+          if (db_failed(saved_plots)) {
+            return()
+          }
+          n_saved <- nrow(saved_plots)
         }
         retro_warning <- if (n_saved > 0) {
           plural <- if (n_saved == 1) "" else "s"
@@ -431,8 +453,11 @@ server <- function(
 
     # The pencil on an Analysis card reopens the same wizard, prefilled.
     handle_edit_settings <- function(analysis_id) {
-      row <- analysis_store$get_analysis(db_path(), analysis_id)
-      if (is.null(row)) {
+      row <- guard_db(
+        "Opening the Analysis settings",
+        analysis_store$get_analysis(db_path(), analysis_id)
+      )
+      if (db_failed(row) || is.null(row)) {
         return()
       }
       editing_analysis(analysis_id)
@@ -679,8 +704,18 @@ server <- function(
       # data, so confirm before committing. Creating a new Analysis, or
       # editing one with no plots yet, has nothing to invalidate.
       if (!is.null(aid)) {
-        n_plots <- nrow(analysis_store$list_plots(db_path(), aid))
-        row <- analysis_store$get_analysis(db_path(), aid)
+        current <- guard_db(
+          "Saving the Analysis settings",
+          list(
+            plots = analysis_store$list_plots(db_path(), aid),
+            row = analysis_store$get_analysis(db_path(), aid)
+          )
+        )
+        if (db_failed(current)) {
+          return()
+        }
+        n_plots <- nrow(current$plots)
+        row <- current$row
         prev_sel <- if (is.null(row)) {
           NULL
         } else {

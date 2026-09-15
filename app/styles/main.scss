@@ -668,7 +668,11 @@ $viz-tile-row-gap: 0.85rem;
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
-    padding: 1rem 0.5rem;
+    padding: 1rem;
+}
+
+.btn-group label {
+    width: 100%;
 }
 
 // Applied to an .accordion-item when it's the only panel left visible in its

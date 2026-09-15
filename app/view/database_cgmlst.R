@@ -57,6 +57,7 @@ box::use(
       locus_fasta
     ],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / functions[render_info],
   app /
     logic /
@@ -242,13 +243,13 @@ scheme_info_server <- function(input, output, session, db_path, db_rev) {
   scheme_overview <- reactive({
     req(db_path())
     db_events$depend(db_rev, "schema")
-    load_db_scheme_overview(db_path())
+    guard_db_read("Loading the scheme", load_db_scheme_overview(db_path()))
   })
 
   scheme_species <- reactive({
     req(db_path())
     db_events$depend(db_rev, "schema")
-    load_db_species(db_path())
+    guard_db_read("Loading the scheme", load_db_species(db_path()))
   })
 
   # The scheme this database was built from, as named by the scheme table. What
@@ -414,7 +415,7 @@ loci_info_server <- function(
   loci_info <- reactive({
     req(db_path())
     db_events$depend(db_rev, "schema", "isolates")
-    load_loci_info(db_path())
+    guard_db_read("Loading the scheme loci", load_loci_info(db_path()))
   })
 
   output$db_loci <- renderDT({
@@ -482,7 +483,8 @@ loci_info_server <- function(
   # Distinct alleles of the selected locus with in-database usage.
   alleles <- reactive({
     req(db_path())
-    load_locus_alleles(db_path(), selected_row()$.gene)
+    gene <- selected_row()$.gene
+    guard_db_read("Loading the locus alleles", load_locus_alleles(db_path(), gene))
   })
 
   # Refresh the allele dropdown in place whenever the selected locus changes
@@ -514,9 +516,9 @@ loci_info_server <- function(
   output$allele_sequence <- renderUI({
     req(db_path(), input$allele_select)
 
-    sequence <- load_allele_sequence(
-      db_path(),
-      as.integer(input$allele_select)
+    sequence <- guard_db_read(
+      "Loading the allele sequence",
+      load_allele_sequence(db_path(), as.integer(input$allele_select))
     )
     req(sequence)
     seq_cache(sequence)
@@ -546,7 +548,12 @@ loci_info_server <- function(
   output$download_locus <- downloadHandler(
     filename = function() paste0(selected_row()$Locus, ".fasta"),
     content = function(file) {
-      writeLines(locus_fasta(db_path(), selected_row()$.gene), file)
+      gene <- selected_row()$.gene
+      fasta <- guard_db("Exporting the locus FASTA", locus_fasta(db_path(), gene))
+      # No file written means the browser reports the download as failed,
+      # rather than saving an empty FASTA.
+      req(!db_failed(fasta))
+      writeLines(fasta, file)
     }
   )
 

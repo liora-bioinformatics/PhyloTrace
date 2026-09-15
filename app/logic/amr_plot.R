@@ -931,7 +931,7 @@ AMR_BODY_FRAC <- 0.62
 # Inches of body height one isolate should get. Labelled rows need room for the
 # name; unlabelled ones only need the band to be a band.
 AMR_ROW_IN_LABELLED <- 0.13
-AMR_ROW_IN_PLAIN <- 0.055
+AMR_ROW_IN_PLAIN <- 0.025
 
 # Ceiling on that pitch, so a six-isolate screen is not drawn as six fat
 # stripes with a legend beside it.
@@ -949,6 +949,12 @@ AMR_ASPECT_MAX <- viz_fit$ASPECT_MAX
 # five hundred rows to thirty wide columns drew a page several screens tall
 # of rows twice as deep as any of them needed.
 AMR_SQUARE_ASPECT_MAX <- 2
+
+# Most body height square cells may buy, in inches. Past it the rows share it
+# down to the band each needs (AMR_ROW_IN_PLAIN), so a thousand bare rows are a
+# page about as tall as it is wide, which the stage shows whole, rather than a
+# strip three times taller than wide.
+AMR_SQUARE_BODY_IN <- 12
 
 # The raw fit above reads taller than readers actually want by default — the
 # row-pitch ceiling alone made most real screens (even a middling few dozen
@@ -988,7 +994,7 @@ AMR_CLASS_STRIP_IN <- 0.16
 # Budgeted into title_in as well as drawn (see .decorate_class_dend), so the
 # gap comes out of the title's own room rather than pushing it into the gene
 # names above.
-AMR_TITLE_GAP_IN <- 0.03
+AMR_TITLE_GAP_IN <- 0.06
 
 # Clearance under the gene names, between the longest of them and the
 # element-type row below. AMR_CHAR_EM is an average over the alphabet, so a
@@ -1048,28 +1054,68 @@ AMR_COL_IN <- 0.135
 #' grows only as far as keeps a cell a cell (`AMR_GRID_MIN_IN`). A page made
 #' wide for labels nobody can read is only white space.
 #'
+#' A rotated gene name is as tall as its column is wide, so the column, not the
+#' type ceiling, is what caps it once a screen has many genes. The reader's
+#' text size therefore scales the column pitch and the ceiling with it: bigger
+#' text is a wider page, smaller text a narrower one, but never narrower than
+#' seats a name at the floor.
+#'
 #' @param n_cols Integer. Gene (or class) columns drawn.
 #' @param show_col_names Logical. Whether the gene names are wanted.
 #' @param n_strips Integer. Annotation strips beside the rows.
 #' @param base_in Numeric. The canvas before it grows.
+#' @param text_scale Numeric. The reader's text-size bias, 1 = fitted.
 #' @return Numeric inches.
 #' @export
 amr_canvas_width_in <- function(
   n_cols,
   show_col_names = TRUE,
   n_strips = 0L,
-  base_in = AMR_CANVAS_IN
+  base_in = AMR_CANVAS_IN,
+  text_scale = 1
 ) {
   n <- max(as.integer(n_cols %||% 1L), 1L)
+  k <- viz_fit$text_scale(text_scale)
   strips <- max(as.integer(n_strips %||% 0L), 0L) * AMR_STRIP_IN
   width_for <- function(cell_in) (n * cell_in + strips) / AMR_BODY_FRAC
-  ceiling_in <- base_in * viz_fit$CANVAS_MAX_FACTOR
-  bare <- .clamp(width_for(AMR_GRID_MIN_IN), base_in, ceiling_in)
+  bare_ceiling_in <- base_in * viz_fit$CANVAS_MAX_FACTOR
+  bare <- .clamp(width_for(AMR_GRID_MIN_IN), base_in, bare_ceiling_in)
+  ceiling_in <- bare_ceiling_in * max(k, 1)
   floor_cell_in <- AMR_COL_MIN_PT / 72 / AMR_LABEL_FILL
   if (isFALSE(show_col_names) || width_for(floor_cell_in) > ceiling_in) {
     return(round(bare, 2))
   }
-  round(.clamp(width_for(AMR_COL_IN), base_in, ceiling_in), 2)
+  cell_in <- max(AMR_COL_IN * k, floor_cell_in)
+  # Rounded up, so a page sized to seat names exactly at the floor still does.
+  ceiling(.clamp(width_for(cell_in), base_in, ceiling_in) * 100) / 100
+}
+
+#' The dendrogram depth control's default, in percent of the fitted depth.
+#' @export
+AMR_DEND_SCALE_DEFAULT <- 100
+
+# The fitted depth as a share of the canvas width: 1 cm on the base canvas.
+# Tied to the page rather than fixed, so a heatmap widened for a hundred gene
+# columns keeps trees in proportion to it instead of a sliver along its edge.
+AMR_DEND_WIDTH_FRAC <- 1 / (AMR_CANVAS_IN * 2.54)
+
+#' Depth both dendrograms are drawn at, in centimetres.
+#'
+#' @param scale_pct Numeric. The reader's depth, in percent of the fitted
+#'   depth; 0 draws no dendrogram.
+#' @param width_in Numeric. Canvas width in inches.
+#' @return Numeric centimetres.
+#' @export
+amr_dend_cm <- function(scale_pct = AMR_DEND_SCALE_DEFAULT, width_in = AMR_CANVAS_IN) {
+  pct <- suppressWarnings(as.numeric(scale_pct %||% AMR_DEND_SCALE_DEFAULT))
+  if (length(pct) != 1L || !is.finite(pct)) {
+    pct <- AMR_DEND_SCALE_DEFAULT
+  }
+  w <- suppressWarnings(as.numeric(width_in %||% AMR_CANVAS_IN))
+  if (length(w) != 1L || !is.finite(w) || w <= 0) {
+    w <- AMR_CANVAS_IN
+  }
+  round(max(pct, 0) / 100 * AMR_DEND_WIDTH_FRAC * w * 2.54, 3)
 }
 
 # Clearance between the matrix (isolate names included) and the legend column.
@@ -1204,6 +1250,17 @@ AMR_PREVALENCE_LEGEND_PT <- 9
 # Most of the canvas width the bar names may take beside the bars.
 AMR_PREVALENCE_LABEL_FRAC <- 0.35
 
+# Share of its row a bar name's type may take. Higher than the heatmap's
+# AMR_LABEL_FILL: one name per row with nothing drawn between them, where a
+# line of type at 0.9 of its pitch still clears the next line's ascenders.
+AMR_PREVALENCE_LABEL_FILL <- 0.9
+
+# Bars the fit gives the design name size in full. Past it the size the fitted
+# ratio buys falls with the square root of the bar count, down to the print
+# floor, so a hundred bars fit a page little taller than wide with names still
+# set as large as those rows hold - not a page three times as tall.
+AMR_PREVALENCE_FULL_BARS <- 40
+
 # Padding at each end of the bar axis, in bar rows (the discrete expansion).
 AMR_PREVALENCE_END_ROWS <- 0.6
 
@@ -1225,10 +1282,10 @@ AMR_PREVALENCE_AXIS_GAP_PT <- 2.2
 #' The rules in app/logic/viz_fit.R on a much simpler shape than the heatmap's.
 #' Every size is its design size times `text_scale`; a bar name is also cut
 #' back to the widest name the label column holds, measured rather than
-#' counted. The fitted aspect buys each bar the row that name needs, so a
-#' larger text size is a taller chart rather than names squeezed into the
-#' rows the old size bought; a ratio the reader set is used as given, and the
-#' names are cut back to the rows it leaves.
+#' counted. The fitted aspect buys each bar a row: the design size in full for
+#' up to `AMR_PREVALENCE_FULL_BARS` bars, less past that. The names are then
+#' set as large as the rows of the ratio in force hold, up to the size asked
+#' for, whether that ratio is the fitted one or one the reader set.
 #'
 #' Unlike every other label in this module a bar name is never dropped: a bar
 #' chart whose bars are not named says nothing at all, and nothing else on the
@@ -1290,9 +1347,11 @@ amr_prevalence_layout <- function(
   units <- max(length(labels), 1L) + 2 * AMR_PREVALENCE_END_ROWS
   sec_axis_for <- function(panel_in) panel_in > AMR_PREVALENCE_SEC_AXIS_IN
 
-  # The row one name needs at the size it can have; where no legible size fits
-  # the label column, the floor's, since a taller row cannot widen the column.
-  row_in <- max(min(want_row, width_pt), AMR_ROW_MIN_PT) / 72 / AMR_LABEL_FILL
+  # The row one name needs at the size the fit buys for this many bars; where
+  # no legible size fits the label column, the floor's, since a taller row
+  # cannot widen the column.
+  fit_pt <- want_row * min(1, sqrt(AMR_PREVALENCE_FULL_BARS / max(length(labels), 1L)))
+  row_in <- max(min(fit_pt, width_pt), AMR_ROW_MIN_PT) / 72 / AMR_PREVALENCE_LABEL_FILL
   fitted_panel <- units * row_in
   fitted_aspect <- round(
     .clamp(
@@ -1314,7 +1373,11 @@ amr_prevalence_layout <- function(
   sec_axis <- sec_axis_for(panel_in)
   panel_in <- max(panel_in - (if (sec_axis) axis_in else 0), 0.2)
   pitch <- panel_in / units
-  row_pt <- viz_fit$fit_type(want_row, min(72 * pitch * AMR_LABEL_FILL, width_pt), AMR_ROW_MIN_PT)
+  row_pt <- viz_fit$fit_type(
+    want_row,
+    min(72 * pitch * AMR_PREVALENCE_LABEL_FILL, width_pt),
+    AMR_ROW_MIN_PT
+  )
   legible <- viz_fit$type_drawn(row_pt, AMR_ROW_MIN_PT)
   row_pt <- max(row_pt, AMR_ROW_MIN_PT)
 
@@ -1567,7 +1630,7 @@ amr_auto_layout <- function(
   )
   solve_rows <- function(labelled) {
     row_in <- if (labelled) AMR_ROW_IN_LABELLED else AMR_ROW_IN_PLAIN
-    row_h <- .clamp(square_w, row_in, AMR_ROW_IN_MAX)
+    row_h <- .clamp(min(square_w, AMR_SQUARE_BODY_IN / n_rows), row_in, AMR_ROW_IN_MAX)
     a <- if (given_aspect) {
       as.numeric(aspect)
     } else {
@@ -2148,10 +2211,12 @@ amr_auto_layout <- function(
       # blank space.
       n <- length(labels(dend))
       heights <- ComplexHeatmap$dend_heights(dend)
+      # The connector stops where a tree's root would, so it keeps the same
+      # clearance under its title as a drawn dendrogram does.
       if (dend_cm > 0 && (n <= 1L || max(heights, 0) <= 0)) {
         grid.lines(
           x = unit(c(0.5, 0.5), "npc"),
-          y = unit.c(unit(0, "npc"), base),
+          y = unit(c(0, dend_cm), "cm"),
           gp = gpar(col = text_color)
         )
       } else if (n > 1L && max(heights, 0) > 0 && dend_cm > 0) {

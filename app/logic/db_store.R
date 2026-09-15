@@ -39,6 +39,7 @@ box::use(
 box::use(
   app / logic / database_functions[read_metadata_table],
   app / logic / db_events,
+  app / logic / db_guard[guard_db_read],
   app / logic / pymlst[existing_strains],
 )
 
@@ -64,7 +65,7 @@ new_store <- function(db_path = reactive(NULL), db_rev = db_events$new_bus()) {
   metadata <- reactive({
     db_events$depend(db_rev, "isolates", "metadata")
     req(db_path())
-    read_metadata_table(db_path())
+    guard_db_read("Loading isolate metadata", read_metadata_table(db_path()))
   })
 
   # The isolate pool: which isolates exist at all, read from `mlst` (the table
@@ -84,7 +85,7 @@ new_store <- function(db_path = reactive(NULL), db_rev = db_events$new_bus()) {
   isolates <- reactive({
     db_events$depend(db_rev, "isolates")
     req(db_path())
-    existing_strains(db_path())
+    guard_db_read("Loading the isolate list", existing_strains(db_path()))
   })
 
   list(metadata = metadata, isolates = isolates)

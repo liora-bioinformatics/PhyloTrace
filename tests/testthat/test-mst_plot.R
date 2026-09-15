@@ -1,6 +1,7 @@
 box::use(
   igraph[graph_from_data_frame, set_edge_attr],
   rlang[`%||%`],
+  stats[setNames],
   testthat[
     expect_equal,
     expect_false,
@@ -908,6 +909,25 @@ test_that("frames carry a laid-out, crossing-free drawing", {
   expect_false(fr$custom)
 })
 
+test_that("no branch is drawn exactly level, where vis-network loses its label", {
+  # A path fanned out from its middle leaves along the root's axis, so turned a
+  # quarter it is level. vis-network truncates positions to whole numbers, and
+  # the frames hand it whole numbers so that what it draws is what was checked.
+  path <- mst_graph(c("a", "b"), c("b", "c"), c(5, 5))
+  meta <- data.frame(isolate = c("a", "b", "c"))
+  for (rotation in c(0, 90, 180, 270)) {
+    fr <- mst_plot$mst_frames(path, meta, base_opts(rotation = rotation))
+    expect_identical(fr$nodes$y, round(fr$nodes$y))
+    expect_identical(fr$nodes$x, round(fr$nodes$x))
+    y <- setNames(fr$nodes$y, fr$nodes$id)
+    expect_true(all(y[fr$edges$from] != y[fr$edges$to]))
+  }
+  # Lifting a node levels nothing further along a level chain.
+  y <- impl$.unlevel_branches(c(0, 0, 0, 0), c(1, 2, 3), c(2, 3, 4))
+  expect_true(all(y[1:3] != y[2:4]))
+  expect_lte(max(abs(y)), 3)
+})
+
 test_that("a mapping turns the node into a pie of its members' values", {
   opts <- base_opts(layers = list(list(
     field = "country", title = "Country", aesthetic = "node_fill",
@@ -1118,15 +1138,16 @@ test_that("rotation moves the drawing without changing the tree", {
   )
   expect_false(isTRUE(all.equal(base$coords$x, turned$coords$x)))
   # A rotation is an isometry: every branch keeps its length and the layout
-  # stays crossing-free.
+  # stays crossing-free. Up to the whole-number positions the frames hand
+  # vis-network, which move each end by at most a unit and a lift.
   seg_len <- function(fr) {
-    ix <- stats::setNames(seq_len(nrow(fr$coords)), fr$coords$id)
+    ix <- setNames(seq_len(nrow(fr$coords)), fr$coords$id)
     f <- ix[fr$edges$from]
     t <- ix[fr$edges$to]
     sqrt((fr$coords$x[f] - fr$coords$x[t])^2 +
            (fr$coords$y[f] - fr$coords$y[t])^2)
   }
-  expect_equal(seg_len(base), seg_len(turned))
+  expect_lte(max(abs(seg_len(base) - seg_len(turned))), 3)
   expect_identical(
     mst_plot$mst_count_crossings(
       turned$coords, turned$edges$from, turned$edges$to
@@ -1503,6 +1524,57 @@ test_that("cluster names are left off when there are too many of them", {
   few <- many[1:3]
   size <- impl$.cluster_label_fit(few, 0, 0, 1, zoom = 1, px_per_pt = 2.4)
   expect_equal(size, round(impl$MST_CLUSTER_LABEL_PT * 2.4))
+})
+
+test_that("an allelic-distance label too long for its own branch overflows", {
+  # One edge, so `.edge_labels_clash` (which needs a neighbour to collide
+  # with) sees nothing wrong at any size — only the overflow check catches a
+  # number stranded on a branch shorter than it is.
+  fr <- list(
+    coords = data.frame(id = c("a", "b"), x = c(0, 30), y = c(0, 0)),
+    edges = data.frame(from = "a", to = "b", weight = 12345L)
+  )
+  expect_false(impl$.edge_labels_clash(fr, 20))
+  expect_false(impl$.edge_labels_overflow(fr, 6))
+  expect_true(impl$.edge_labels_overflow(fr, 20))
+})
+
+test_that("label size search shrinks a clashing size before hiding the label", {
+  # Two edges in a row; at the print-anchored size their labels collide, but a
+  # smaller size in the same search range does not. A one-shot fit (compute
+  # the anchor size, hide on clash) would have given up outright; the search
+  # is expected to find the smaller size instead.
+  fr <- list(
+    coords = data.frame(id = c("a", "b", "c"), x = c(0, 38, 76), y = c(0, 0, 0)),
+    nodes = data.frame(
+      id = c("a", "b", "c"), label = c("a", "b", "c"), size = c(2, 2, 2)
+    ),
+    edges = data.frame(from = c("a", "b"), to = c("b", "c"), weight = c(100L, 100L))
+  )
+  zoom <- 1
+  px_per_pt <- 20 / impl$MST_EDGE_LABEL_PT
+  expect_true(impl$.edge_labels_clash(fr, 20))
+  fit <- impl$.edge_label_fit(fr, zoom, px_per_pt)
+  expect_true(fit$show)
+  expect_lt(fit$size, 20)
+  expect_false(impl$.edge_labels_clash(fr, fit$size))
+  expect_false(impl$.edge_labels_overflow(fr, fit$size))
+
+  # Same shape of search for node labels: three-letter names 30 apart clash at
+  # the anchor size but not at a smaller one in range.
+  node_fr <- list(
+    coords = data.frame(id = c("a", "b", "c"), x = c(0, 30, 60), y = c(0, 0, 0)),
+    nodes = data.frame(
+      id = c("a", "b", "c"), label = c("aaa", "bbb", "ccc"), size = c(2, 2, 2)
+    )
+  )
+  node_zoom <- 1
+  node_px_per_pt <- 20 / impl$MST_LABEL_PT
+  expect_true(impl$.node_labels_clash(node_fr, 20))
+  node_fit <- impl$.node_label_fit(node_fr, node_zoom, node_px_per_pt, 3, 1000)
+  expect_true(node_fit$show)
+  expect_lt(node_fit$size, 20)
+  expect_false(impl$.node_labels_clash(node_fr, node_fit$size))
 })
 
 test_that("the view is framed on everything drawn, not on the nodes", {

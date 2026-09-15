@@ -129,7 +129,7 @@ set_default_inputs <- function(session) {
     amr_cluster_cols = TRUE,
     amr_cluster_distance = "binary",
     amr_cluster_method = "ward.D2",
-    amr_dend_size = 1,
+    amr_dend_scale = 100,
     amr_aspect_ratio = 0.9,
     zoom_view = "FALSE",
     amr_show_row_names = FALSE,
@@ -963,25 +963,28 @@ test_that("only the count-by level and the bar count re-fit the bar chart", {
       session$setInputs(amr_mode = "prevalence")
       generate(1L)
       session$flushReact()
-      before <- aspect_mirror()
       expect_null(hand_aspect()$prevalence)
+      # A ratio away from the fit, without marking it the reader's own, so
+      # any re-fit shows as a move back to the fit.
+      aspect_mirror(2)
+      session$flushReact()
 
       # Text size and the threshold filters change what the bars look like,
       # not how many there are - they resize within the ratio in force.
       session$setInputs(amr_text_size = 200)
       settle(session)
-      expect_equal(aspect_mirror(), before)
+      expect_equal(aspect_mirror(), 2)
 
       session$setInputs(amr_min_identity = 90)
       settle(session)
-      expect_equal(aspect_mirror(), before)
+      expect_equal(aspect_mirror(), 2)
 
-      # Raising how many bars are kept changes how many rows there are to
-      # seat, so it still follows the fit to a new ratio.
+      # Changing how many bars are kept changes how many rows there are to
+      # seat, so the chart goes back to its fit.
       session$setInputs(amr_top_n = 40)
       settle(session)
       expect_equal(aspect_mirror(), fitted_aspect())
-      expect_false(isTRUE(all.equal(aspect_mirror(), before)))
+      expect_false(isTRUE(all.equal(aspect_mirror(), 2)))
     }
   )
 })

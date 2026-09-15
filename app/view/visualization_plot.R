@@ -68,6 +68,7 @@ box::use(
 )
 box::use(
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_staging[imported_metadata_wide],
   app / logic / dist_cache[new_dist_cache],
   app / logic / field_labels[field_labels_for],
@@ -745,7 +746,11 @@ server <- function(
       req(local)
       local$source <- "local"
 
-      ext <- imported_metadata_wide(db_path(), imported_sets())
+      sets <- imported_sets()
+      ext <- guard_db_read(
+        "Loading staged typing results",
+        imported_metadata_wide(db_path(), sets)
+      )
       if (is.null(ext) || !nrow(ext)) {
         return(local)
       }
@@ -975,7 +980,10 @@ server <- function(
       if (is.null(meta)) {
         return(character(0))
       }
-      cols <- date_fields(db_path(), names(meta))
+      cols <- guard_db_read(
+        "Loading custom variables",
+        date_fields(db_path(), names(meta))
+      )
       stats::setNames(cols, field_labels_for(cols))
     })
 
@@ -1816,7 +1824,10 @@ server <- function(
         return(as.integer(parts[2]))
       }
       if (identical(parts[1], "plot")) {
-        row <- analysis_store$get_plot(db_path(), as.integer(parts[2]))
+        row <- guard_db_read(
+          "Loading saved plots",
+          analysis_store$get_plot(db_path(), as.integer(parts[2]))
+        )
         if (!is.null(row)) {
           return(as.integer(row$analysis_id))
         }
@@ -1843,7 +1854,10 @@ server <- function(
       if (is.null(aid)) {
         return(NULL)
       }
-      row <- analysis_store$get_analysis(db_path(), aid)
+      row <- guard_db_read(
+        "Loading saved Analyses",
+        analysis_store$get_analysis(db_path(), aid)
+      )
       if (is.null(row)) {
         return(NULL)
       }
@@ -1940,7 +1954,16 @@ server <- function(
       parts <- strsplit(target, ":", fixed = TRUE)[[1]]
       if (identical(parts[1], "plot")) {
         pid <- as.integer(parts[2])
-        existing <- analysis_store$get_plot(db_path(), pid)
+        existing <- guard_db(
+          "Saving the plot",
+          analysis_store$get_plot(db_path(), pid)
+        )
+        if (db_failed(existing)) {
+          if (is.function(on_done)) {
+            on_done(FALSE)
+          }
+          return(invisible(FALSE))
+        }
         analysis_id <- if (is.null(existing)) {
           NA_integer_
         } else {
@@ -2052,7 +2075,13 @@ server <- function(
       if (identical(parts[1], "plot")) {
         # Overwriting an existing saved plot destroys its prior snapshot and
         # thumbnail irreversibly — confirm before proceeding.
-        existing <- analysis_store$get_plot(db_path(), as.integer(parts[2]))
+        existing <- guard_db(
+          "Saving the plot",
+          analysis_store$get_plot(db_path(), as.integer(parts[2]))
+        )
+        if (db_failed(existing)) {
+          return(done(FALSE))
+        }
         pending_save_target(list(target = target, on_done = on_done))
         showModal(modalDialog(
           title = "Overwrite saved plot?",

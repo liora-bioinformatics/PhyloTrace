@@ -42,6 +42,7 @@ box::use(
   app / view / analysis_dashboard / item,
   app / logic / analysis_store,
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_store,
   jsonlite[fromJSON],
   rlang[`%||%`],
@@ -79,12 +80,18 @@ server <- function(
     # This Analysis's row (for its name) and its plots, refreshed on any change.
     analysis_row <- reactive({
       db_events$depend(db_rev, "analyses")
-      analysis_store$get_analysis(db_path(), analysis_id)
+      guard_db_read(
+        "Loading saved Analyses",
+        analysis_store$get_analysis(db_path(), analysis_id)
+      )
     })
 
     plots <- reactive({
       db_events$depend(db_rev, "analyses")
-      analysis_store$list_plots(db_path(), analysis_id)
+      guard_db_read(
+        "Loading saved plots",
+        analysis_store$list_plots(db_path(), analysis_id)
+      )
     })
 
     # The isolate set this Analysis resolves to *right now*: its restriction if
@@ -196,7 +203,13 @@ server <- function(
 
     observeEvent(input$confirm_delete_group, {
       removeModal()
-      analysis_store$delete_analysis(db_path(), analysis_id)
+      deleted <- guard_db(
+        "Deleting the Analysis",
+        analysis_store$delete_analysis(db_path(), analysis_id)
+      )
+      if (db_failed(deleted)) {
+        return()
+      }
       db_events$bump(db_rev, "analyses")
     })
 

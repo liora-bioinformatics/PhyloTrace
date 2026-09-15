@@ -21,6 +21,7 @@ box::use(
 box::use(
   app / logic / custom_fields,
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / field_labels[field_labels_for],
   app / logic / pymlst[existing_strains],
 )
@@ -120,7 +121,10 @@ server <- function(
 
     fields <- shiny$reactive({
       reload_token()
-      custom_fields$list_custom_fields(db_path())
+      guard_db_read(
+        "Loading custom variables",
+        custom_fields$list_custom_fields(db_path())
+      )
     })
 
     # Column name -> type, the bridge between the DT (which knows column names)
@@ -132,7 +136,7 @@ server <- function(
 
     isolates <- shiny$reactive({
       reload_token()
-      sort(existing_strains(db_path()))
+      sort(guard_db_read("Loading the isolate list", existing_strains(db_path())))
     })
 
     values_base <- shiny$reactive({
@@ -147,9 +151,12 @@ server <- function(
         return(NULL)
       }
 
-      custom_fields$append_custom(
-        data.frame(isolate = ids, stringsAsFactors = FALSE),
-        path
+      guard_db_read(
+        "Loading custom variables",
+        custom_fields$append_custom(
+          data.frame(isolate = ids, stringsAsFactors = FALSE),
+          path
+        )
       )
     })
 
@@ -661,7 +668,14 @@ server <- function(
     shiny$observeEvent(input$save, {
       shiny$req(is.data.frame(State$dirty), nrow(State$dirty) > 0)
       n <- nrow(State$dirty)
-      custom_fields$save_custom_values(db_path(), State$dirty)
+      # The edits stay pending on failure, so Save can simply be pressed again.
+      saved <- guard_db(
+        "Saving custom variable values",
+        custom_fields$save_custom_values(db_path(), State$dirty)
+      )
+      if (db_failed(saved)) {
+        return()
+      }
       State$dirty <- NULL
       State$pending <- FALSE
       reload()
@@ -929,7 +943,13 @@ server <- function(
     shiny$observeEvent(input$confirm_remove, {
       selected <- as.integer(input$remove_picker)
       shiny$removeModal()
-      custom_fields$delete_custom_field(db_path(), selected)
+      removed <- guard_db(
+        "Removing custom variables",
+        custom_fields$delete_custom_field(db_path(), selected)
+      )
+      if (db_failed(removed)) {
+        return()
+      }
       reload()
       shiny$showNotification(
         paste0(length(selected), " custom variable(s) removed."),

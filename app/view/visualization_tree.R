@@ -40,6 +40,7 @@ box::use(
   app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
+  app / logic / db_guard[guard_db_read],
   app / logic / dist_cache[new_dist_cache],
   app /
     logic /
@@ -2800,7 +2801,8 @@ server <- function(
       ) {
         return(NULL)
       }
-      amr_plot$amr_confidence_frame(amr_plot$load_amr_hits(path), meta$isolate)
+      hits <- guard_db_read("Loading AMR results", amr_plot$load_amr_hits(path))
+      amr_plot$amr_confidence_frame(hits, meta$isolate)
     })
 
     # Every gene one panel could draw, with what the picker needs to describe
@@ -2838,13 +2840,16 @@ server <- function(
       ) {
         return(.empty_catalog)
       }
-      hits <- amr_plot$load_amr_hits(path)
+      hits <- guard_db_read("Loading AMR results", amr_plot$load_amr_hits(path))
       hits <- hits[hits$isolate %in% meta$isolate, , drop = FALSE]
       if (!nrow(hits)) {
         return(.empty_catalog)
       }
       genes <- sort(unique(hits$gene_symbol))
-      sections <- amr_plot$load_amr_sections(path)
+      sections <- guard_db_read(
+        "Loading AMR results",
+        amr_plot$load_amr_sections(path)
+      )
       # The curated rollup class per gene — the same grouping the AMR-plot
       # engine's heatmap files its columns under by default — and AMRFinder's
       # own beside it. The element type is the same either way.
