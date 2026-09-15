@@ -78,6 +78,7 @@ box::use(
 box::use(
   app / logic / db_connect[LIVE_BUSY_TIMEOUT_MS],
   app / logic / db_events,
+  app / logic / db_guard[guard_db_read],
   app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[sync_metadata_table],
   app / logic / functions[render_info],
@@ -1410,11 +1411,13 @@ server <- function(
     existing <- reactive({
       Typing$refresh
       db_events$depend(db_rev, "isolates")
-      existing_strains(db_path())
+      guard_db_read("Loading the isolate list", existing_strains(db_path()))
     })
 
     # Total loci in the loaded scheme (denominator of the completeness metric).
-    scheme_total <- reactive(scheme_size(db_path()))
+    scheme_total <- reactive({
+      guard_db_read("Loading the scheme", scheme_size(db_path()))
+    })
 
     # Loaded-scheme summary shown to the user (total number of loci).
     output$scheme_info <- renderUI({

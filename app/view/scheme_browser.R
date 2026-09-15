@@ -52,6 +52,7 @@ box::use(
 )
 
 box::use(
+  app / logic / db_guard[db_failed, guard_db],
   app / logic / functions[render_info],
   app / logic / schemes[cgmlst_org_schemes],
   app / logic / pymlst[download_cgmlst_scheme, conda_env],
@@ -481,12 +482,19 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
       w$show()
       on.exit(w$hide())
 
-      # Run download
-      status <- download_cgmlst_scheme(
-        input$scheme_selector,
-        db_location,
-        env_name = conda_env
+      # Run download. It also writes to the new database file (the species name
+      # repair), so it is guarded like any other database write.
+      status <- guard_db(
+        "Downloading the scheme",
+        download_cgmlst_scheme(
+          input$scheme_selector,
+          db_location,
+          env_name = conda_env
+        )
       )
+      if (db_failed(status)) {
+        return()
+      }
 
       # Check download process status
       if (status$status == 1 | isFALSE(file.exists(db_location))) {
@@ -497,14 +505,15 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
           "failed"
         )
       } else if (status$status == 0) {
-        if (!is.null(scheme_overview())) {
-          download_scheme_overview(scheme_overview(), db_location)
-        }
-
-        # Store the scheme's target/locus table from cgmlst.org as a `targets`
-        # table. Self-contained and non-fatal: a fetch failure leaves the
-        # database otherwise intact.
-        download_scheme_targets(input$scheme_selector, db_location)
+        # Store the scheme overview and its target/locus table from cgmlst.org
+        # (`targets`). Both are supplementary: a failed write is reported but
+        # leaves the downloaded database loadable.
+        guard_db("Storing the scheme details", {
+          if (!is.null(scheme_overview())) {
+            download_scheme_overview(scheme_overview(), db_location)
+          }
+          download_scheme_targets(input$scheme_selector, db_location)
+        })
 
         # Case download has exit status 0
         download_status <- paste(

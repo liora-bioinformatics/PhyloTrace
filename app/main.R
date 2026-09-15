@@ -51,6 +51,7 @@ box::use(
   app / logic / database_functions[migrate_species_name, sync_metadata_table],
   app / logic / db_compat[check_db_loadable],
   app / logic / db_events[bump_all, new_bus],
+  app / logic / db_guard[db_failed, guard_db, report_db_failure],
   app / logic / db_store[new_store],
   app / logic / functions[render_info],
   app / logic / logging[log_event, start_session_log],
@@ -581,9 +582,21 @@ server <- function(id) {
       # `sync_metadata_table()`'s docs for why performing it lazily, inside
       # whichever reactive happened to read first, was the actual bug behind
       # modules disagreeing about which isolates existed.
-      migrate_species_name(db_path)
-      hash_database(db_path)
-      sync_metadata_table(db_path)
+      #
+      # All three write, so a lock held by another writer (another PhyloTrace
+      # session on the same file, or a typing run's pyMLST subprocess) past
+      # BUSY_TIMEOUT_MS fails them. The load is then abandoned and the session
+      # sent back to the start screen, where loading can simply be retried.
+      synced <- guard_db("Loading the database", {
+        migrate_species_name(db_path)
+        hash_database(db_path)
+        sync_metadata_table(db_path)
+      })
+      if (db_failed(synced)) {
+        w$hide()
+        return_to_start()
+        return()
+      }
 
       # All three of the above write. Readers keyed on db_path() invalidate
       # anyway when it changes, but a reload of the *same* path (the landing
@@ -910,12 +923,7 @@ server <- function(id) {
                 reload_data()
               },
               error = function(e) {
-                log_event("DB", "Reload failed", conditionMessage(e))
-                showNotification(
-                  paste("Could not reload the database:", conditionMessage(e)),
-                  type = "error",
-                  duration = 8
-                )
+                report_db_failure("Reloading the database", e)
               },
               finally = reload_waiter$hide()
             )

@@ -1475,16 +1475,26 @@ test_that("the element panels are measured before the heatmap exists", {
   expect_identical(sum(blocks$cols), ncol(mat))
 })
 
-test_that("the prevalence chart buys each bar the row its name needs", {
+test_that("the prevalence chart buys each bar a row, less of one as bars are added", {
   bars <- function(n) sprintf("gene%03d", seq_len(n))
   few <- amr_plot$amr_prevalence_layout(bars(8))
   many <- amr_plot$amr_prevalence_layout(bars(80))
   expect_gt(many$aspect, few$aspect)
   # ... and stops, rather than a chart nobody can scroll.
   expect_lte(amr_plot$amr_prevalence_layout(bars(2000))$aspect, impl$AMR_PREVALENCE_MAX)
-  # The names keep the size asked for, however many bars there are.
-  expect_equal(many$fontsize_row, few$fontsize_row, tolerance = 0.2)
+  # A few bars keep the design size; many are set as large as their rows hold.
+  expect_equal(few$fontsize_row, impl$AMR_PREVALENCE_LABEL_PT)
+  expect_lt(many$fontsize_row, few$fontsize_row)
+  expect_equal(
+    many$fontsize_row,
+    72 * many$row_pitch_in * impl$AMR_PREVALENCE_LABEL_FILL,
+    tolerance = 0.03
+  )
   expect_true(many$legible)
+  # A hundred bars fit a page little taller than wide.
+  hundred <- amr_plot$amr_prevalence_layout(bars(96))
+  expect_lt(hundred$aspect, 1.4)
+  expect_gt(hundred$fontsize_row, 6)
 
   # A larger text size is a taller chart with larger names in it, not larger
   # names squeezed into the rows the old size bought.
@@ -1798,6 +1808,27 @@ test_that("the canvas grows sideways for gene names it can set legibly", {
   )
 })
 
+test_that("a bigger text size widens the columns the gene names are set in", {
+  fit_at <- function(k) {
+    w <- amr_plot$amr_canvas_width_in(96, text_scale = k)
+    list(w = w, fit = amr_plot$amr_auto_layout(990, 96, width_in = w, text_scale = k))
+  }
+  small <- fit_at(0.6)
+  base <- fit_at(1)
+  big <- fit_at(2)
+  expect_gt(big$w, amr_plot$AMR_CANVAS_IN * viz_fit$CANVAS_MAX_FACTOR)
+  expect_gt(big$fit$fontsize_col, base$fit$fontsize_col * 1.8)
+  expect_lt(small$w, base$w)
+  # Smaller text narrows the page, but not past names legible at the floor.
+  expect_true(small$fit$cols_legible)
+  expect_gte(small$fit$fontsize_col, viz_fit$MIN_PRINT_PT)
+  # Names switched off are not text, so the size does not widen for them.
+  expect_equal(
+    amr_plot$amr_canvas_width_in(96, show_col_names = FALSE, text_scale = 2),
+    amr_plot$amr_canvas_width_in(96, show_col_names = FALSE)
+  )
+})
+
 test_that("text size moves every label's ceiling and none past its room", {
   args <- list(40, 20, show_row_names = TRUE, aspect = 2)
   base <- do.call(amr_plot$amr_auto_layout, args)
@@ -1840,6 +1871,20 @@ test_that("square cells stop buying height once the page is tall", {
   few_cols <- amr_plot$amr_auto_layout(500, 30)
   expect_lt(few_cols$aspect, 4)
   expect_gte(few_cols$row_pitch_in, impl$AMR_ROW_IN_PLAIN - 1e-6)
+  # A thousand bare rows under a hundred genes are a page about as tall as it
+  # is wide, not a strip.
+  width <- amr_plot$amr_canvas_width_in(96)
+  thousand <- amr_plot$amr_auto_layout(991, 96, width_in = width)
+  expect_lt(thousand$aspect, 1.6)
+  expect_gte(thousand$row_pitch_in, impl$AMR_ROW_IN_PLAIN - 1e-6)
+})
+
+test_that("the dendrogram depth is a share of the depth fitted to the page", {
+  expect_equal(amr_plot$amr_dend_cm(100), 1)
+  expect_equal(amr_plot$amr_dend_cm(200), 2)
+  expect_equal(amr_plot$amr_dend_cm(0), 0)
+  expect_equal(amr_plot$amr_dend_cm(100, amr_plot$AMR_CANVAS_IN * 2), 2)
+  expect_equal(amr_plot$amr_dend_cm(NULL), 1)
 })
 
 test_that("a label the fit found illegible is not drawn, whatever the switch", {

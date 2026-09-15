@@ -32,6 +32,7 @@ box::use(
       METADATA_FIXED_COLS
     ],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_sources[SOURCE_COL],
   app / logic / db_store,
   app / logic / field_labels[field_chips, field_labels_for],
@@ -319,7 +320,13 @@ server <- function(
     shiny$observeEvent(
       list(db_path(), ui_mounted()),
       {
-        present <- available_result_tables(db_path())
+        present <- guard_db(
+          "Checking the database contents",
+          available_result_tables(db_path())
+        )
+        if (db_failed(present)) {
+          return()
+        }
         toggleState("include_classical", condition = present$classical)
         toggleState("include_amr", condition = present$amr)
         if (!present$classical) {
@@ -401,7 +408,10 @@ server <- function(
       }
 
       if (length(selected_custom)) {
-        md <- append_custom(md, path, fields = selected_custom)
+        md <- guard_db_read(
+          "Loading custom variables",
+          append_custom(md, path, fields = selected_custom)
+        )
       }
       md
     })
@@ -423,7 +433,10 @@ server <- function(
     isolates <- shiny$reactive({
       db_events$depend(db_rev, "isolates")
       path <- db_path()
-      if (is.null(path) || is.na(path)) character(0) else existing_strains(path)
+      if (is.null(path) || is.na(path)) {
+        return(character(0))
+      }
+      guard_db_read("Loading the isolate list", existing_strains(path))
     })
 
     optional_meta <- shiny$reactive({
@@ -432,7 +445,8 @@ server <- function(
       if (is.null(path) || is.na(path)) {
         return(character(0))
       }
-      setdiff(metadata_columns(path), c(METADATA_FIXED_COLS, SOURCE_COL))
+      cols <- guard_db_read("Loading isolate metadata", metadata_columns(path))
+      setdiff(cols, c(METADATA_FIXED_COLS, SOURCE_COL))
     })
 
     selected_isolates <- shiny$reactiveVal(NULL)
@@ -487,7 +501,10 @@ server <- function(
       if (is.null(meta)) {
         return(character(0))
       }
-      cols <- date_fields(db_path(), names(meta))
+      cols <- guard_db_read(
+        "Loading custom variables",
+        date_fields(db_path(), names(meta))
+      )
       setNames(cols, field_labels_for(cols))
     })
 
@@ -772,7 +789,7 @@ server <- function(
       if (is.null(path) || is.na(path)) {
         return(character(0))
       }
-      exportable_custom_fields(path)
+      guard_db_read("Loading custom variables", exportable_custom_fields(path))
     })
 
     output$custom_picker_ui <- shiny$renderUI({
@@ -838,7 +855,10 @@ server <- function(
         return(NULL)
       }
 
-      p <- typing_preview(path, sel)
+      p <- guard_db_read(
+        "Preparing the export preview",
+        typing_preview(path, sel)
+      )
 
       if (typing()) {
         md <- typing_metadata()
@@ -846,11 +866,14 @@ server <- function(
         return(p)
       }
 
-      full <- export_preview(
-        path,
-        sel,
-        input$meta_cols %||% character(0),
-        custom_fields = input$custom_fields %||% character(0)
+      full <- guard_db_read(
+        "Preparing the export preview",
+        export_preview(
+          path,
+          sel,
+          input$meta_cols %||% character(0),
+          custom_fields = input$custom_fields %||% character(0)
+        )
       )
       p$columns <- full$columns
       p$custom_fields <- full$custom_fields

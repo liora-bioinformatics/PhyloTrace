@@ -64,6 +64,7 @@ box::use(
       append_amr_matrix
     ],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_store,
   app / logic / field_labels[field_labels_for, grouped_field_choices],
   app / logic / field_types[date_fields],
@@ -417,7 +418,10 @@ server <- function(
       # Append the classical-MLST columns for display only (see
       # append_classical_mlst): never persisted - the Save handler strips them
       # again before writing.
-      df <- append_classical_mlst(df, path)
+      df <- guard_db_read(
+        "Loading classical MLST results",
+        append_classical_mlst(df, path)
+      )
       appended_mlst <- attr(df, "mlst_cols", exact = TRUE)
 
       df[is.na(df)] <- ""
@@ -429,12 +433,12 @@ server <- function(
       # assigning "" into a gene column would coerce its call-state factor into
       # character - losing both the NA that means "gene not found" and DT's
       # automatic level dropdown for factor columns (see load_amr_matrix()).
-      df <- append_amr_matrix(df, path)
+      df <- guard_db_read("Loading AMR results", append_amr_matrix(df, path))
       appended_amr <- attr(df, "amr_cols", exact = TRUE)
       appended_amr_groups <- attr(df, "amr_gene_groups", exact = TRUE)
       appended_amr_labels <- attr(df, "amr_gene_labels", exact = TRUE)
 
-      df <- append_custom(df, path)
+      df <- guard_db_read("Loading custom variables", append_custom(df, path))
       appended_custom <- attr(df, "custom_cols", exact = TRUE)
 
       # Re-set last so they survive the NA replacement above.
@@ -634,7 +638,10 @@ server <- function(
     # never from guessing at the column's contents.
     custom_defs <- reactive({
       cols <- custom_cols()
-      defs <- list_custom_fields(db_path())
+      defs <- guard_db_read(
+        "Loading custom variables",
+        list_custom_fields(db_path())
+      )
       if (!is.data.frame(defs) || !nrow(defs)) {
         # Still carry `column`, so every consumer can index on it without
         # first re-checking whether any variables are defined.
@@ -666,7 +673,10 @@ server <- function(
     # on it would drop its time of day.
     date_cols <- reactive({
       df <- metadata_base()
-      date_fields(db_path(), names(df), types = "date")
+      guard_db_read(
+        "Loading custom variables",
+        date_fields(db_path(), names(df), types = "date")
+      )
     })
 
     observeEvent(metadata_base(), {
@@ -1599,7 +1609,14 @@ server <- function(
         ]
         n_meta <- nrow(dirty_meta)
         if (n_meta) {
-          save_metadata_table(db_path(), dirty_meta)
+          # Edits stay pending on failure, so Save can simply be pressed again.
+          saved <- guard_db(
+            "Saving metadata changes",
+            save_metadata_table(db_path(), dirty_meta)
+          )
+          if (db_failed(saved)) {
+            return()
+          }
         }
       }
       State$metadata_dirty <- NULL
@@ -1611,10 +1628,21 @@ server <- function(
         # orphan row no view can reach, so drop those the same way.
         dirty <- State$custom_dirty
         live <- db_events$reconcile_names(dirty$isolate, current$isolate)
-        save_custom_values(
-          db_path(),
-          dirty[!(dirty$isolate %in% live$dropped), ]
+        saved <- guard_db(
+          "Saving custom variable values",
+          save_custom_values(
+            db_path(),
+            dirty[!(dirty$isolate %in% live$dropped), ]
+          )
         )
+        if (db_failed(saved)) {
+          # The metadata half may already be written: announce it, or the other
+          # modules keep showing the values from before this save.
+          if (n_meta) {
+            db_events$bump(db_rev, "metadata")
+          }
+          return()
+        }
         State$custom_dirty <- NULL
       }
 
@@ -1774,7 +1802,13 @@ server <- function(
       removeModal()
       remove_waiter$show()
       on.exit(remove_waiter$hide())
-      remove_isolates(db_path(), isolates, keep_alleles = keep_alleles)
+      removed <- guard_db(
+        "Removing isolates",
+        remove_isolates(db_path(), isolates, keep_alleles = keep_alleles)
+      )
+      if (db_failed(removed)) {
+        return()
+      }
       # Drop them from the "was already here" baseline too, so bringing the same
       # isolate back later this session - re-typed or imported - still reads as
       # an addition. Without this the set-diff in session_added() returns to

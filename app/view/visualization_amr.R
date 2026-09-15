@@ -60,6 +60,7 @@ box::use(
   app / logic / amr_plot,
   app / logic / date_bins[bin_date_values],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app /
     logic /
     field_profile[
@@ -181,10 +182,18 @@ ASPECT_STEP <- 0.05
   round(min(max(snapped, ASPECT_MIN), ASPECT_MAX), 2)
 }
 
-# One depth for both dendrograms, in centimetres. They are read together and
-# there was never a reason to give them different depths; 0 draws neither,
-# keeping the clustering's row and column *order* while dropping the trees.
-DEND_DEFAULT <- 1
+# One depth for both dendrograms, in percent of the depth fitted to the canvas
+# (see amr_plot$amr_dend_cm()). They are read together and there was never a
+# reason to give them different depths; 0 draws neither, keeping the
+# clustering's row and column *order* while dropping the trees.
+DEND_DEFAULT <- amr_plot$AMR_DEND_SCALE_DEFAULT
+
+# A saved analysis from before the percent scale carries its depth in
+# centimetres, which the fitted depth was on the base canvas.
+.legacy_dend_scale <- function(cm) {
+  pct <- round(suppressWarnings(as.numeric(cm)) * DEND_DEFAULT / 10) * 10
+  if (length(pct) != 1L || !is.finite(pct)) DEND_DEFAULT else min(max(pct, 0), 300)
+}
 
 # The medium this engine maps variables onto, in mapping_engine.R's terms: a
 # repeatable colour strip beside the rows.
@@ -274,7 +283,7 @@ AMR_CONTROLS <- control_families(
     "amr_min_coverage",
     "amr_aspect_ratio",
     "amr_text_size",
-    "amr_dend_size"
+    "amr_dend_scale"
   ),
   radio_groups = c(
     "amr_level",
@@ -310,7 +319,7 @@ AMR_CONTROL_DEFAULTS <- list(
   amr_class_scale = CLASS_SCALE_DEFAULT,
   amr_cluster_distance = CLUSTER_DISTANCE_DEFAULT,
   amr_cluster_method = CLUSTER_METHOD_DEFAULT,
-  amr_dend_size = DEND_DEFAULT,
+  amr_dend_scale = DEND_DEFAULT,
   amr_bar_scale = BAR_SCALE_DEFAULT,
   amr_dend_color = DEND_COLOR_DEFAULT,
   amr_text_color = TEXT_COLOR_DEFAULT,
@@ -678,12 +687,13 @@ amr_controls <- function(ns) {
           )
         ),
         shiny$sliderInput(
-          ns("amr_dend_size"),
-          "Dendrogram depth (cm)",
+          ns("amr_dend_scale"),
+          "Dendrogram depth",
           min = 0,
-          max = 6,
+          max = 300,
           value = DEND_DEFAULT,
-          step = 0.5,
+          step = 10,
+          post = "%",
           ticks = FALSE
         )
       ),
@@ -933,7 +943,7 @@ server <- function(
         "amr_top_n",
         "amr_aspect_ratio",
         "amr_text_size",
-        "amr_dend_size"
+        "amr_dend_scale"
       )
     )
 
@@ -949,13 +959,16 @@ server <- function(
     amr_hits <- shiny$reactive({
       db_events$depend(db_rev, "amr", "isolates")
       shiny$req(db_path())
-      amr_plot$load_amr_hits(db_path())
+      guard_db_read("Loading AMR results", amr_plot$load_amr_hits(db_path()))
     })
 
     amr_sections <- shiny$reactive({
       db_events$depend(db_rev, "amr", "isolates")
       shiny$req(db_path())
-      amr_plot$load_amr_sections(db_path())
+      guard_db_read(
+        "Loading AMR results",
+        amr_plot$load_amr_sections(db_path())
+      )
     })
 
     # Fits both threshold sliders' min/max to what this screen actually
@@ -1731,7 +1744,11 @@ server <- function(
       # the run predates screening or screening was unavailable for the
       # species — point at where it gets produced rather than just reporting an
       # empty plot.
-      if (!amr_plot$has_amr_data(db_path())) {
+      has_amr <- guard_db("Loading AMR results", amr_plot$has_amr_data(db_path()))
+      if (db_failed(has_amr)) {
+        return(bail("The AMR plot could not be generated."))
+      }
+      if (!has_amr) {
         return(bail(
           shiny$tagList(
             shiny$tags$b("No AMR screening in this database."),
@@ -1770,7 +1787,9 @@ server <- function(
     # width the browser reports, so no size report from the client can redraw
     # the plot and the preview, the export and a saved Analysis are one
     # drawing. The heatmap grows it sideways for its gene columns (see
-    # amr_plot$amr_canvas_width_in()); the prevalence chart keeps the base.
+    # amr_plot$amr_canvas_width_in()), and wider still for a bigger text size,
+    # since a gene name can only be as large as its column is wide; the
+    # prevalence chart keeps the base.
     canvas_width <- function(col_names = show_col_names_mirror()) {
       if (identical(mode(), "prevalence")) {
         return(amr_plot$AMR_CANVAS_IN)
@@ -1778,7 +1797,8 @@ server <- function(
       amr_plot$amr_canvas_width_in(
         ncol(presence_mat()),
         col_names,
-        length(anno_layers())
+        length(anno_layers()),
+        text_scale = text_scale_percent(text_size_mirror())
       )
     }
     canvas_in <- shiny$reactive(canvas_width())
@@ -1911,10 +1931,11 @@ server <- function(
       shiny$req(ncol(mat) > 0)
       blocks <- amr_plot$amr_column_blocks(mat, grouping())
       elements <- amr_plot$amr_element_blocks(mat, grouping())
+      width_in <- canvas_width(col_names)
       list(
         n_rows = nrow(mat),
         n_cols = ncol(mat),
-        width_in = canvas_width(col_names),
+        width_in = width_in,
         show_row_names = row_names,
         show_col_names = col_names,
         show_element_names = show_element_names_mirror(),
@@ -1924,7 +1945,7 @@ server <- function(
         block_cols = blocks$cols,
         element_titles = elements$titles,
         element_cols = elements$cols,
-        dend_cm = settled$amr_dend_size() %||% DEND_DEFAULT,
+        dend_cm = amr_plot$amr_dend_cm(settled$amr_dend_scale(), width_in),
         n_strips = length(anno_layers()),
         # Only whether the drug classes are named as text over each block or
         # coloured into a strip - the element-type row below the body answers
@@ -2133,7 +2154,7 @@ server <- function(
           cluster_method = cluster_method,
           col_cluster_distance = cluster_distance,
           col_cluster_method = cluster_method,
-          dend_size = settled$amr_dend_size() %||% DEND_DEFAULT,
+          dend_size = amr_plot$amr_dend_cm(settled$amr_dend_scale(), canvas_in()),
           # Read from the mirrors, never from the inputs directly - same reason
           # as aspect_mirror above: refit_labels()'s decision would otherwise
           # not reach the first draw until updateSwitchInput's echo arrived a
@@ -2430,6 +2451,14 @@ server <- function(
           session,
           "amr_cluster_cols",
           selected = .legacy_cluster_cols(vals$amr_column_grouping)
+        )
+      }
+
+      if (is.null(vals$amr_dend_scale) && !is.null(vals$amr_dend_size)) {
+        shiny$updateSliderInput(
+          session,
+          "amr_dend_scale",
+          value = .legacy_dend_scale(vals$amr_dend_size)
         )
       }
 

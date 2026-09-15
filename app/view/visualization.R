@@ -66,6 +66,7 @@ box::use(
       append_classical_mlst,
     ],
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_staging[list_imported_sets],
   app / logic / db_store,
   app / logic / dist_cache[new_dist_cache],
@@ -450,17 +451,21 @@ server <- function(
       # `AMR_ABSENT` because a plot legend is where the difference between "the
       # screen found nothing" and "there was no screen" becomes visible: both
       # arrive as NA and only the first is an answer.
-      append_custom(
-        append_amr_matrix(
-          append_amr(
-            append_classical_mlst(store$metadata(), db_path()),
+      meta <- store$metadata()
+      guard_db_read(
+        "Loading isolate metadata",
+        append_custom(
+          append_amr_matrix(
+            append_amr(
+              append_classical_mlst(meta, db_path()),
+              db_path(),
+              absent = AMR_ABSENT
+            ),
             db_path(),
             absent = AMR_ABSENT
           ),
-          db_path(),
-          absent = AMR_ABSENT
-        ),
-        db_path()
+          db_path()
+        )
       )
     })
 
@@ -477,7 +482,10 @@ server <- function(
       meta <- viz_metadata()
       field_profiles(
         meta,
-        types = field_types(db_path(), names(meta)),
+        types = guard_db_read(
+          "Loading custom variables",
+          field_types(db_path(), names(meta))
+        ),
         mlst_cols = attr(meta, "mlst_cols"),
         amr_cols = attr(meta, "amr_cols"),
         custom_cols = attr(meta, "custom_cols")
@@ -492,7 +500,10 @@ server <- function(
     staged_sets <- reactive({
       db_events$depend(db_rev, "staged")
       req(db_path())
-      list_imported_sets(db_path())
+      guard_db_read(
+        "Loading staged typing results",
+        list_imported_sets(db_path())
+      )
     })
 
     # Local isolate count, and never an abort: viz_metadata() req()s a database,
@@ -516,14 +527,20 @@ server <- function(
       path <- db_path()
       none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       req(path)
-      df_a <- analysis_store$list_analyses(path)
+      df_a <- guard_db_read(
+        "Loading saved Analyses",
+        analysis_store$list_analyses(path)
+      )
       if (!nrow(df_a)) {
         return(none_entry)
       }
       groups <- lapply(seq_len(nrow(df_a)), function(i) {
         aid <- df_a$id[i]
         ch <- c("+ New plot" = paste0("analysis:", aid))
-        pl <- analysis_store$list_plots(path, aid)
+        pl <- guard_db_read(
+          "Loading saved plots",
+          analysis_store$list_plots(path, aid)
+        )
         if (nrow(pl)) {
           ch <- c(ch, stats::setNames(paste0("plot:", pl$id), pl$name))
         }
@@ -913,7 +930,13 @@ server <- function(
       {
         ctx <- launch_ctx()
         req(ctx)
-        row <- analysis_store$get_analysis(db_path(), ctx$analysis_id)
+        row <- guard_db(
+          "Opening the Analysis",
+          analysis_store$get_analysis(db_path(), ctx$analysis_id)
+        )
+        if (db_failed(row)) {
+          return()
+        }
         pending_preset(list(
           save_target = paste0("analysis:", ctx$analysis_id),
           analysis_name = if (is.null(row)) NULL else row$name,
@@ -937,8 +960,11 @@ server <- function(
       {
         ctx <- open_ctx()
         req(ctx)
-        row <- analysis_store$get_plot(db_path(), ctx$plot_id)
-        if (is.null(row)) {
+        row <- guard_db(
+          "Opening the saved plot",
+          analysis_store$get_plot(db_path(), ctx$plot_id)
+        )
+        if (db_failed(row) || is.null(row)) {
           return()
         }
 
@@ -958,7 +984,13 @@ server <- function(
 
         # A static Analysis selection overrides the plot's own snapshot, so
         # every plot in the Analysis stays on the same isolate set.
-        arow <- analysis_store$get_analysis(db_path(), row$analysis_id)
+        arow <- guard_db(
+          "Opening the saved plot",
+          analysis_store$get_analysis(db_path(), row$analysis_id)
+        )
+        if (db_failed(arow)) {
+          return()
+        }
         astatic <- if (is.null(arow)) {
           NULL
         } else {

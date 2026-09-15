@@ -55,6 +55,7 @@ box::use(
   app / logic / db_compat[check_import_compatibility],
   app / logic / db_events,
   app / logic / db_export[available_result_tables],
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app /
     logic /
     db_import[
@@ -455,7 +456,8 @@ server <- function(
       req(!is.null(p))
       local <- db_path()
       req(!is.null(local), !is.na(local))
-      parse_profile_file(p, scheme_loci(local))
+      loci <- guard_db_read("Loading the scheme", scheme_loci(local))
+      parse_profile_file(p, loci)
     })
 
     # The allele sequences, if supplied. These are what make a foreign profile —
@@ -503,7 +505,13 @@ server <- function(
     # Resolves profile allele links against database
     resolved <- reactive({
       req(typing())
-      resolve_profile(db_path(), parsed(), supplied_sequences())
+      # Read before the guard, so a malformed file keeps reporting as itself.
+      profile <- parsed()
+      sequences <- supplied_sequences()
+      guard_db_read(
+        "Matching the profile against the database",
+        resolve_profile(db_path(), profile, sequences)
+      )
     })
 
     # Checks whether staging typing results is blocked
@@ -517,7 +525,11 @@ server <- function(
       if (!isTRUE(r$linkable)) {
         return(character(0))
       }
-      intersect(r$isolates, taken_isolate_names(db_path()))
+      taken <- guard_db_read(
+        "Loading staged typing results",
+        taken_isolate_names(db_path())
+      )
+      intersect(r$isolates, taken)
     })
 
     # Extracts list of metadata columns provided in typing inputs
@@ -533,7 +545,10 @@ server <- function(
     staged_sets <- reactive({
       local_token()
       db_events$depend(db_rev, "staged")
-      list_imported_sets(db_path())
+      guard_db_read(
+        "Loading staged typing results",
+        list_imported_sets(db_path())
+      )
     })
 
     # -- Compatibility -------------------------------------------------------
@@ -547,7 +562,10 @@ server <- function(
       req(!is.null(local), !is.na(local), !is.null(ext))
       staged <- prep()
       req(!is.null(staged))
-      check_import_compatibility(local, staged$path)
+      guard_db_read(
+        "Checking the database to import",
+        check_import_compatibility(local, staged$path)
+      )
     })
 
     # Returns TRUE if database import compatibility is blocked
@@ -558,7 +576,11 @@ server <- function(
     # Classifies isolate collision status between local and external databases
     classification <- reactive({
       req(!blocked())
-      classify_isolate_collisions(db_path(), prep()$path)
+      ext <- prep()$path
+      guard_db_read(
+        "Checking the database to import",
+        classify_isolate_collisions(db_path(), ext)
+      )
     })
 
     # Returns names of isolates with name conflicts
@@ -571,7 +593,7 @@ server <- function(
     local_isolates <- reactive({
       local_token()
       db_events$depend(db_rev, "isolates")
-      existing_strains(db_path())
+      guard_db_read("Loading the isolate list", existing_strains(db_path()))
     })
 
     # Assembled from the per-isolate controls; the isolates the user never sees
@@ -600,7 +622,11 @@ server <- function(
     ext_meta_cols <- reactive({
       staged <- prep()
       req(!is.null(staged))
-      setdiff(metadata_columns(staged$path), METADATA_RESERVED)
+      cols <- guard_db_read(
+        "Reading the database to import",
+        metadata_columns(staged$path)
+      )
+      setdiff(cols, METADATA_RESERVED)
     })
 
     output$meta_picker_ui <- renderUI({
@@ -640,7 +666,10 @@ server <- function(
       db_events$depend(db_rev, "custom_fields")
       staged <- prep()
       req(!is.null(staged), !typing())
-      importable_custom_fields(db_path(), staged$path)
+      guard_db_read(
+        "Reading the database to import",
+        importable_custom_fields(db_path(), staged$path)
+      )
     })
 
     output$custom_picker_ui <- renderUI({
@@ -849,7 +878,12 @@ server <- function(
       # `classification()` is already cached; letting import_preview() recompute
       # it would re-hash every isolate profile on both sides each time a
       # resolution dropdown moves — seconds of lag on a real database.
-      p <- import_preview(db_path(), prep()$path, resolutions(), cl)
+      ext <- prep()$path
+      res <- resolutions()
+      p <- guard_db_read(
+        "Preparing the import summary",
+        import_preview(db_path(), ext, res, cl)
+      )
 
       transfer_cards(
         transfer_row(
@@ -1035,7 +1069,10 @@ server <- function(
       if (!length(clash)) {
         return(NULL)
       }
-      taken <- taken_isolate_names(db_path())
+      taken <- guard_db_read(
+        "Loading staged typing results",
+        taken_isolate_names(db_path())
+      )
       out <- character(0)
       for (nm in clash) {
         new <- suggest_rename_ext(nm, c(taken, out))
@@ -1147,7 +1184,16 @@ server <- function(
           observeEvent(
             input[[paste0("drop_", this)]],
             {
-              delete_imported_set(db_path(), this)
+              removed <- guard_db(
+                "Removing staged typing results",
+                delete_imported_set(db_path(), this)
+              )
+              if (db_failed(removed)) {
+                # once = TRUE has already retired this observer; re-reading the
+                # sets binds a fresh one, so the button can be pressed again.
+                local_token(local_token() + 1L)
+                return()
+              }
               local_token(local_token() + 1L)
               db_events$bump(db_rev, "staged")
               showNotification(

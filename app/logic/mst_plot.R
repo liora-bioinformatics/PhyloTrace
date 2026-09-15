@@ -119,6 +119,10 @@ MST_RELAX_MAX_SWING <- pi / 2
 MST_RELAX_STEP <- 0.12
 MST_RELAX_PARENT_SHARE <- 0.35
 
+# How far a level branch's end is lifted (.unlevel_branches()): one graph unit,
+# the smallest step vis-network keeps of a node position.
+MST_LEVEL_NUDGE <- 1
+
 # Node counts past which labels stop helping. A merged node in the reference
 # database carries up to 15 isolate names; 186 nodes' worth of them is the grey
 # smear the old defaults drew.
@@ -1067,6 +1071,26 @@ mst_rotate <- function(coords, degrees = 0) {
   coords
 }
 
+# Lifts nodes so that no branch is drawn exactly level. vis-network moves a
+# rotated edge label onto its branch only when the label's angle is non-zero;
+# a branch running exactly level from right to left has angle 0, so its
+# distance was written at the canvas origin instead — an orphaned number in
+# empty space. vis-network also keeps only the integer part of a position, so
+# any two ends sharing a whole-number height are level, which in a crowded
+# drawing is common. Expects whole-number heights. Repeated because lifting a
+# node can level the next branch along a level chain; bounded by the branch
+# count.
+.unlevel_branches <- function(y, from, to) {
+  for (i in seq_along(from)) {
+    level <- which(y[from] == y[to])
+    if (!length(level)) {
+      break
+    }
+    y[to[level]] <- y[to[level]] + MST_LEVEL_NUDGE
+  }
+  y
+}
+
 # --- 3. Controls fitted to the data ------------------------------------------
 
 #' Control values the fit returns for a small MST — and so the values the
@@ -1198,6 +1222,19 @@ MST_CLUSTER_PAD_FRAC <- 0.8
 MST_LABEL_PT <- 7
 MST_EDGE_LABEL_PT <- 6.5
 MST_CLUSTER_LABEL_PT <- 8
+
+# Range the node- and edge-label font search tries, in graph units — the same
+# span the two sliders cover. A search that could only ever land on 30 (the
+# old single-formula ceiling) is why a large collection's labels always drew
+# at the slider maximum instead of whatever size the drawing had room for.
+MST_FONT_MIN <- 6L
+MST_FONT_MAX <- 30L
+
+# Share of its own branch an allelic-distance label may take up. It is drawn
+# sitting on the line, so unlike a node label — which sits in open space below
+# the node — it can run onto the nodes at either end of its own branch; kept
+# under 1 for a margin at both ends.
+MST_EDGE_LABEL_ROOM <- 0.85
 
 # Mean advance of the bold sans-serif the cluster names are set in, in ems.
 MST_CLUSTER_LABEL_EM <- 0.62
@@ -1363,6 +1400,75 @@ MST_LABEL_CLASH_SHARE <- 0.1
   mean(rowSums(over) > 0) > MST_LABEL_CLASH_SHARE
 }
 
+# Does any allelic-distance label, set at `font`, run longer than
+# MST_EDGE_LABEL_ROOM of its own branch? `.edge_labels_clash` only catches a
+# label colliding with a *neighbour* — a single long number stranded on a
+# short branch near a hub has nothing beside it to collide with, and still
+# needs catching, because it runs onto the nodes at either end of its own
+# line rather than onto another label.
+.edge_labels_overflow <- function(fr, font) {
+  e <- fr$edges
+  if (!nrow(e)) {
+    return(FALSE)
+  }
+  ix <- setNames(seq_len(nrow(fr$coords)), fr$coords$id)
+  f <- ix[e$from]
+  t <- ix[e$to]
+  len <- sqrt(
+    (fr$coords$x[f] - fr$coords$x[t])^2 + (fr$coords$y[f] - fr$coords$y[t])^2
+  )
+  width <- nchar(as.character(e$weight)) * font * TEXT_EM
+  mean(width > len * MST_EDGE_LABEL_ROOM) > MST_LABEL_CLASH_SHARE
+}
+
+# The largest node-label size, in graph units, at which the labels are legible
+# on paper, fit beside the typical gap between two nodes (LABEL_ROOM) and do
+# not overlap one another beyond MST_LABEL_CLASH_SHARE — or the print-anchored
+# size with `show = FALSE`, for a drawing too crowded, or too printed-down,
+# for any size in range to clear all three. Searches downward the way
+# `.cluster_label_fit` does, rather than computing one size and only then
+# discovering it does not fit.
+.node_label_fit <- function(fr, zoom, px_per_pt, label_chars, typical) {
+  hi <- .clamp(round(MST_LABEL_PT * px_per_pt / zoom), MST_FONT_MIN, MST_FONT_MAX)
+  lo <- max(ceiling(MIN_PRINT_PT * px_per_pt / zoom), MST_FONT_MIN)
+  chars <- max(as.numeric(label_chars %||% 12), 1)
+  if (nrow(fr$nodes) > MST_LABEL_MAX_NODES || lo > hi) {
+    return(list(size = hi, show = FALSE))
+  }
+  for (s in seq(hi, lo, by = -1)) {
+    if (chars * s * TEXT_EM > typical * LABEL_ROOM) {
+      next
+    }
+    if (!.node_labels_clash(fr, s)) {
+      return(list(size = s, show = TRUE))
+    }
+  }
+  list(size = hi, show = FALSE)
+}
+
+# The largest allelic-distance size at which every branch still has room for
+# its own number (`.edge_labels_overflow`) and no two labels overlap
+# (`.edge_labels_clash`) — or the print-anchored size with `show = FALSE` when
+# nothing in range clears both.
+.edge_label_fit <- function(fr, zoom, px_per_pt) {
+  hi <- .clamp(
+    round(MST_EDGE_LABEL_PT * px_per_pt / zoom),
+    MST_FONT_MIN,
+    MST_FONT_MAX
+  )
+  lo <- max(ceiling(MIN_PRINT_PT * px_per_pt / zoom), MST_FONT_MIN)
+  if (nrow(fr$edges) > MST_EDGE_LABEL_MAX || lo > hi) {
+    return(list(size = hi, show = FALSE))
+  }
+  for (s in seq(hi, lo, by = -1)) {
+    if (.edge_labels_overflow(fr, s) || .edge_labels_clash(fr, s)) {
+      next
+    }
+    return(list(size = s, show = TRUE))
+  }
+  list(size = hi, show = FALSE)
+}
+
 #' Fit every geometry control to the drawing the graph actually makes.
 #'
 #' Two passes. The first lays the tree out without sizes (cheap) and decides
@@ -1370,8 +1476,9 @@ MST_LABEL_CLASH_SHARE <- 0.1
 #' spread that keeps a small tree's type within the sliders, and the node size
 #' the drawing's density allows. The second draws it at those sizes — the same
 #' frames the render then takes from the layout cache — and fits what depends
-#' on where things landed: the zoom the legend leaves, and whether the cluster
-#' names fit at all.
+#' on where things landed: the zoom the legend leaves, the node- and
+#' edge-label sizes a downward search finds room for (`.node_label_fit`,
+#' `.edge_label_fit`), and whether the cluster names fit at all.
 #'
 #' @param graph igraph MST from `compute_mst()`.
 #' @param metadata Isolate metadata frame.
@@ -1386,7 +1493,6 @@ MST_LABEL_CLASH_SHARE <- 0.1
 mst_fit_drawing <- function(graph, metadata, opts, label_chars = 12) {
   canvas <- .canvas_size(opts$canvas_px)
   px_per_pt <- canvas[[1]] / (MST_PRINT_IN * 72)
-  floor_px <- MIN_PRINT_PT * px_per_pt
   caption <- !isFALSE(opts$show_caption)
   drawn <- .drawn_graph(graph, opts)
   ids <- drawn$ids
@@ -1454,15 +1560,6 @@ mst_fit_drawing <- function(graph, metadata, opts, label_chars = 12) {
   r_max <- .clamp(round(r_max), 2, 60)
   r_min <- .clamp(round(r_max * 0.42), 1, r_max)
 
-  node_font <- .clamp(round(MST_LABEL_PT * px_per_pt / zoom), 6, 30)
-  edge_font <- .clamp(round(MST_EDGE_LABEL_PT * px_per_pt / zoom), 6, 30)
-  typical <- if (length(lens)) median(lens) * grow else MST_BASE_EDGE_PX
-  show_label <- n <= MST_LABEL_MAX_NODES &&
-    node_font * zoom >= floor_px &&
-    max(as.numeric(label_chars %||% 12), 1) * node_font * TEXT_EM <=
-      typical * LABEL_ROOM
-  show_edge_label <- length(lens) <= MST_EDGE_LABEL_MAX &&
-    edge_font * zoom >= floor_px
   pad <- .clamp(round(MST_CLUSTER_PAD_FRAC * r_max), 1, 60)
 
   # -- pass 2: the drawing at those sizes
@@ -1472,36 +1569,70 @@ mst_fit_drawing <- function(graph, metadata, opts, label_chars = 12) {
   fitted$node_size <- if (isTRUE(opts$scale_nodes)) c(r_min, r_max) else r_max
   fitted$rotation <- turn$degrees
   fitted$cluster_width <- pad
-  fitted$show_label <- show_label
-  fitted$node_font_size <- node_font
+  # Drawn on at build time regardless of what the search below decides to
+  # show, so the frames carry real label text and branch weights for the fit
+  # checks to measure — a size is fitted to what a label would actually say,
+  # not to "".
+  fitted$show_label <- TRUE
+  fitted$show_edge_label <- TRUE
   # Regions are built whether or not they are shown, so the names are sized for
   # the moment the reader switches them on.
   fitted$show_clusters <- TRUE
   fitted$cluster_label_size <- 0
   fr <- mst_frames(graph, metadata, fitted)
   box <- if (!isFALSE(opts$show_legend)) .legend_box_px(fr$legend, canvas)
-  ext <- fr$extent
-  if (show_label && .node_labels_clash(fr, node_font)) {
-    show_label <- FALSE
-    ext <- .drawn_extent(fr$coords$x, fr$coords$y, fr$nodes$size, fr$blobs)
-  }
-  if (show_edge_label && .edge_labels_clash(fr, edge_font)) {
-    show_edge_label <- FALSE
+
+  # The zoom a label size is judged against. Node labels are the one thing
+  # here that feeds back into their own budget: showing them grows the
+  # extent, which shrinks the zoom, which shrinks the print-anchored size that
+  # was computed from it. So this is measured twice — once bare, to search a
+  # node size against, and again with that size's labels actually counted in
+  # the extent, to settle the zoom everything after (the edge labels, the
+  # cluster names) is measured against. Two rounds is enough: the box a label
+  # adds is small next to the whole tree's.
+  bare <- .drawn_extent(fr$coords$x, fr$coords$y, fr$nodes$size, fr$blobs)
+  zoom_bare <- .fit_scale(
+    bare[[3]] - bare[[1]],
+    bare[[4]] - bare[[2]],
+    canvas,
+    box,
+    caption
+  )
+  ix <- setNames(seq_len(nrow(fr$coords)), fr$coords$id)
+  edge_len <- sqrt(
+    (fr$coords$x[ix[fr$edges$from]] - fr$coords$x[ix[fr$edges$to]])^2 +
+      (fr$coords$y[ix[fr$edges$from]] - fr$coords$y[ix[fr$edges$to]])^2
+  )
+  typical <- if (length(edge_len)) median(edge_len) else MST_BASE_EDGE_PX
+  node_fit <- .node_label_fit(fr, zoom_bare, px_per_pt, label_chars, typical)
+
+  ext <- if (node_fit$show) {
+    .drawn_extent(
+      fr$coords$x,
+      fr$coords$y,
+      fr$nodes$size,
+      fr$blobs,
+      labels = fr$nodes$label,
+      font = node_fit$size
+    )
+  } else {
+    bare
   }
   zoom <- .fit_scale(ext[[3]] - ext[[1]], ext[[4]] - ext[[2]], canvas, box, caption)
+  edge_fit <- .edge_label_fit(fr, zoom, px_per_pt)
 
   list(
     node_size = r_max,
     node_size_min = r_min,
     node_size_max = r_max,
-    node_font_size = node_font,
-    edge_font_size = edge_font,
+    node_font_size = node_fit$size,
+    edge_font_size = edge_fit$size,
     spread = spread,
     length_mode = mode,
-    show_label = show_label,
-    show_edge_label = show_edge_label,
+    show_label = node_fit$show,
+    show_edge_label = edge_fit$show,
     label_lines = base$label_lines,
-    labels_legible = show_label,
+    labels_legible = node_fit$show,
     rotation = turn$degrees,
     cluster_width = pad,
     cluster_label_size = .cluster_label_fit(
@@ -3457,6 +3588,15 @@ mst_frames <- function(graph, metadata, opts) {
     relax = TRUE
   )
   coords <- mst_rotate(coords, opts$rotation)
+  # Whole numbers, because vis-network truncates a node position to one: made
+  # here, the regions, the framing and the nodes all share the same set instead
+  # of the nodes sitting up to a unit off the regions painted around them.
+  coords$x <- round(coords$x)
+  coords$y <- .unlevel_branches(
+    round(coords$y),
+    match(edges$from, ids),
+    match(edges$to, ids)
+  )
 
   # -- cluster regions
   clusters <- NULL

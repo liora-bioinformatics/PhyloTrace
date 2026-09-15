@@ -36,6 +36,7 @@ box::use(
   ],
   app / logic / analysis_store,
   app / logic / db_events,
+  app / logic / db_guard[db_failed, guard_db, guard_db_read],
   jsonlite[fromJSON],
 )
 
@@ -113,7 +114,10 @@ server <- function(
     # This plot's current persisted row; re-read on every change tick.
     plot_row <- reactive({
       db_events$depend(db_rev, "analyses")
-      analysis_store$get_plot(db_path(), plot_id)
+      guard_db_read(
+        "Loading saved plots",
+        analysis_store$get_plot(db_path(), plot_id)
+      )
     })
 
     observeEvent(session_reset(), is_editing(FALSE), ignoreInit = TRUE)
@@ -153,7 +157,14 @@ server <- function(
       if (is_editing()) {
         new_name <- input$title_input
         if (!is.null(new_name) && nzchar(new_name)) {
-          analysis_store$rename_plot(db_path(), plot_id, new_name)
+          # Stays in edit mode on failure, so the typed name is not lost.
+          renamed <- guard_db(
+            "Renaming the plot",
+            analysis_store$rename_plot(db_path(), plot_id, new_name)
+          )
+          if (db_failed(renamed)) {
+            return()
+          }
           db_events$bump(db_rev, "analyses")
         }
         is_editing(FALSE)
@@ -185,7 +196,13 @@ server <- function(
 
     observeEvent(input$confirm_delete_box, {
       removeModal()
-      analysis_store$delete_plot(db_path(), plot_id)
+      deleted <- guard_db(
+        "Deleting the plot",
+        analysis_store$delete_plot(db_path(), plot_id)
+      )
+      if (db_failed(deleted)) {
+        return()
+      }
       db_events$bump(db_rev, "analyses")
     })
 
@@ -288,17 +305,28 @@ server <- function(
     # notification naming it.
     observeEvent(input$duplicate_plot, {
       req(plot_id)
-      new_id <- analysis_store$duplicate_plot(db_path(), plot_id)
+      new_id <- guard_db(
+        "Duplicating the plot",
+        analysis_store$duplicate_plot(db_path(), plot_id)
+      )
+      if (db_failed(new_id)) {
+        return()
+      }
       if (is.null(new_id)) {
         showNotification("Could not duplicate this plot.", type = "error")
         return()
       }
       db_events$bump(db_rev, "analyses")
-      copy <- analysis_store$get_plot(db_path(), new_id)
+      # The copy already exists; failing to read its name back only costs the
+      # notification its label.
+      copy <- guard_db(
+        "Loading the duplicated plot",
+        analysis_store$get_plot(db_path(), new_id)
+      )
       showNotification(
         paste0(
           "Duplicated as '",
-          if (is.null(copy)) "copy" else copy$name,
+          if (db_failed(copy) || is.null(copy)) "copy" else copy$name,
           "'."
         ),
         type = "message"

@@ -3,6 +3,7 @@ box::use(
   testthat[
     expect_equal,
     expect_false,
+    expect_gt,
     expect_identical,
     expect_setequal,
     expect_true,
@@ -720,16 +721,42 @@ test_that("Auto-fit re-solves the geometry and leaves the rest alone", {
     fit <- isolate(fitted$mst_node_label_fontsize)
 
     session$setInputs(mst_node_label_fontsize = 30, mst_color_node = "#FF0000")
-    session$setInputs(mst_layer_add = "host")
     session$flushReact()
     expect_equal(isolate(fitted$mst_node_label_fontsize), 30)
 
     session$setInputs(auto_fit = 1)
     session$flushReact()
+    # Nothing about the tree or the canvas changed, so the geometry re-solves
+    # to exactly what it was the first time.
     expect_equal(isolate(fitted$mst_node_label_fontsize), fit)
-    # Only the geometry: a colour and a mapping are deliberate choices.
-    expect_identical(length(mst_layers()), 1L)
+    # A colour is a deliberate choice, left alone.
     expect_equal(isolate(input$mst_color_node), "#FF0000")
+  })
+})
+
+test_that("Auto-fit leaves a mapping alone, even as the legend it adds moves the fit", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  testServer(visualization_mst$server, args = args_for(db, generate), {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+    fit_before <- isolate(fitted$mst_node_label_fontsize)
+
+    session$setInputs(mst_layer_add = "host")
+    session$flushReact()
+    expect_identical(length(mst_layers()), 1L)
+
+    session$setInputs(auto_fit = 1)
+    session$flushReact()
+    # The mapping itself is a deliberate choice, left alone by Auto-fit...
+    expect_identical(length(mst_layers()), 1L)
+    # ...even though the legend it now draws leaves less room for the tree on
+    # a small canvas: the view has to zoom out further to fit beside it, and a
+    # label anchored to a fixed size on the printed page has to grow in graph
+    # units to still land there.
+    expect_gt(isolate(fitted$mst_node_label_fontsize), fit_before)
   })
 })
 
