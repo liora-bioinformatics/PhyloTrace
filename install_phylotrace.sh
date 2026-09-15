@@ -37,18 +37,18 @@ if ! command -v conda >/dev/null 2>&1; then
 
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
         echo -e "\e[31mError: Neither curl nor wget is installed. Please install one of them first:\e[0m"
-        echo "To install curl:"
-        echo "  Ubuntu/Debian:  sudo apt install curl"
-        echo "  Arch Linux:     sudo pacman -S curl"
-        echo "  RHEL/Fedora:    sudo dnf install curl"
         echo "To install wget:"
         echo "  Ubuntu/Debian:  sudo apt install wget"
         echo "  Arch Linux:     sudo pacman -S wget"
         echo "  RHEL/Fedora:    sudo dnf install wget"
+        echo "To install curl:"
+        echo "  Ubuntu/Debian:  sudo apt install curl"
+        echo "  Arch Linux:     sudo pacman -S curl"
+        echo "  RHEL/Fedora:    sudo dnf install curl"
         exit 1
     fi
 
-    echo "Conda not found. Installing Miniconda into $HOME/miniconda3 ..."
+    echo "Conda not found. Installing Miniconda ..."
     MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-$(uname -m).sh"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$MINICONDA_URL" -o "$HOME/miniconda.sh"
@@ -60,7 +60,7 @@ if ! command -v conda >/dev/null 2>&1; then
         exit 1
     fi
     # No -b: run interactively so the user reads and accepts the license/ToS themselves.
-    bash "$HOME/miniconda.sh" -p "$HOME/miniconda3"
+    bash "$HOME/miniconda.sh"
     INSTALL_STATUS=$?
     rm "$HOME/miniconda.sh"
     if [ $INSTALL_STATUS -ne 0 ] || [ ! -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
@@ -72,22 +72,10 @@ if ! command -v conda >/dev/null 2>&1; then
     . "$HOME/miniconda3/etc/profile.d/conda.sh"
     SHELL_NAME="$(basename "${SHELL:-bash}")"
     conda init "$SHELL_NAME" >/dev/null 2>&1 || conda init bash
-    conda config --set auto_activate_base false
+    conda config --set auto_activate false
 
     echo ""
     echo -e "\e[33mMiniconda was just installed.\e[0m"
-
-    SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
-    case "$SHELL_NAME" in
-        bash|zsh)
-            echo -e "\e[33mRestarting the setup in a fresh shell...\e[0m"
-            exec "$SHELL" -l -c "source ~/.${SHELL_NAME}rc >/dev/null 2>&1; exec $(printf '%q' "$SCRIPT_PATH")"
-            ;;
-        *)
-            echo -e "\e[33mOpen a new terminal, then re-run this script to install PhyloTrace.\e[0m"
-            exit 0
-            ;;
-    esac
 fi
 
 CONDA_PATH="$(conda info --base)/bin/conda"
