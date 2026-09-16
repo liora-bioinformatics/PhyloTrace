@@ -233,6 +233,17 @@ test_that("genome_digests matches the serial path whatever the worker count", {
 })
 
 test_that("resolve_hash_workers leaves headroom and never over-forks", {
+  # Assumes fork() is available, which the ambient session may not agree
+  # with - RStudio and Positron both make .can_fork() probe FALSE (see
+  # .can_fork()'s hostile_frontend check), which would otherwise clamp every
+  # call below to 1 regardless of n_items/override and make this test a
+  # tautology when run from either front-end. Force the cached verdict so the
+  # test exercises the actual headroom/cap/override arithmetic everywhere.
+  fork_state <- environment(resolve_hash_workers)$.fork_state
+  saved <- fork_state$ok
+  on.exit(fork_state$ok <- saved, add = TRUE)
+  fork_state$ok <- TRUE
+
   expect_identical(resolve_hash_workers(1L), 1L)
   expect_identical(resolve_hash_workers(0L), 1L)
   expect_identical(resolve_hash_workers(NA_integer_), 1L)

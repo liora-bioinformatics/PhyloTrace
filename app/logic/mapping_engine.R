@@ -190,6 +190,20 @@ MAPPING_MEDIA <- list(
     caps = integer(0),
     max_layers = 1L,
     order = function(profile, n_units = NULL) "bar_fill"
+  ),
+  map = list(
+    # One channel, shared by the two map modes that draw a variable: Markers
+    # colour each point by it, Charts split each location's chart into its
+    # values. Either way a location holds several isolates and there is one
+    # colour scale to read them against, so a second variable would need a
+    # second, overlapping legend on the same marks.
+    pool = c("map_color"),
+    labels = c(map_color = "Colour"),
+    color = "map_color",
+    repeatable = character(0),
+    caps = integer(0),
+    max_layers = 1L,
+    order = function(profile, n_units = NULL) "map_color"
   )
 )
 

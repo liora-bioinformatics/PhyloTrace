@@ -7,6 +7,7 @@ box::use(
   shiny,
   bslib[tooltip, update_switch],
   RColorBrewer[brewer.pal, brewer.pal.info],
+  grDevices[colorRampPalette],
   stats[setNames],
   shinyWidgets[
     colorPickr,
@@ -155,6 +156,62 @@ color_scales <- list(
   )
 }
 
+#' Resolve a Palette Name a Colour-Ramp Builder Actually Recognises
+#'
+#' `leaflet::colorNumeric()`/`colorFactor()` only special-case `"viridis"`,
+#' `"magma"`, `"inferno"` and `"plasma"` as built-in continuous gradients
+#' (besides any RColorBrewer name); the rest of this app's Gradient family --
+#' `"cividis"`, `"turbo"`, `"mako"` -- falls straight through that lookup and
+#' gets treated as one literal, unparseable CSS colour, so every value renders
+#' the same (typically black, with an empty legend). Expanding those three
+#' into an explicit 256-stop ramp up front sidesteps the gap; every other name
+#' (a Brewer palette, or one of the four leaflet already knows) passes through
+#' unchanged.
+#'
+#' @param name Character. A palette name, typically from `color_scales`.
+#' @return Character. Either `name` unchanged, or a vector of hex colours.
+#' @export
+resolve_gradient_palette <- function(name) {
+  leaflet_native <- c("viridis", "magma", "inferno", "plasma")
+  if (isTRUE(name %in% color_scales$Gradient) && !name %in% leaflet_native) {
+    return(viridis(256, option = name))
+  }
+  name
+}
+
+#' Resolve a Qualitative Palette Name to Enough Distinct Colours
+#'
+#' Companion to `resolve_gradient_palette()`. RColorBrewer's qualitative
+#' palettes are tabulated, not generated -- Set1/Pastel1 stop at 9 colours,
+#' Set2/Dark2/Accent at 8, Set3/Paired at 12 -- and a caller that asks a
+#' Brewer-backed palette function (leaflet's `colorFactor()`, ggplot2's
+#' `scale_*_brewer()`, ...) for more than that only finds out via a
+#' `brewer.pal()` warning the first time the palette is actually used to
+#' colour values, since building the palette function and invoking it are two
+#' separate steps -- wrapping the *construction* call in `suppressWarnings()`
+#' does nothing, because the warning fires later, from inside the returned
+#' function. Expanding the palette to an explicit n-colour vector up front --
+#' the fix `tree_discrete_colors()` applies for the Tree engine -- sidesteps
+#' the call (and the warning) entirely, interpolating through the tabulated
+#' colours instead of asking Brewer for more than it has.
+#'
+#' @param name Character. A palette name, typically from `color_scales`.
+#' @param n Integer. Number of distinct levels the palette will colour.
+#' @return Either `name` unchanged (not a single Brewer name, or `n` within
+#'   its tabulated capacity), or a character vector of `n` hex colours.
+#' @export
+resolve_qualitative_palette <- function(name, n) {
+  n <- max(as.integer(n), 1L)
+  if (length(name) != 1 || !isTRUE(name %in% rownames(brewer.pal.info))) {
+    return(name)
+  }
+  max_n <- brewer.pal.info[name, "maxcolors"]
+  if (n <= max_n) {
+    return(name)
+  }
+  colorRampPalette(brewer.pal(max_n, name))(n)
+}
+
 #' Determine Suitable Color Scale Categories
 #'
 #' Filters available color scale families based on variable type and value distribution.
@@ -220,9 +277,13 @@ viz_color_reset_script <- shiny$singleton(shiny$tags$script(shiny$HTML(
 #' @param id Character. Input ID.
 #' @param label Character. Field label display text.
 #' @param value Character. Initial hex color string.
+#' @param opacity Logical. Show an alpha slider in the picker itself, so the
+#'   input value carries transparency as an 8-digit hex (`#RRGGBBAA`) once it
+#'   is lowered from 1. Lets one control stand in for a separate opacity
+#'   slider wherever a single flat colour is all a plot draws with.
 #' @return Shiny UI tag list.
 #' @export
-viz_color <- function(ns, id, label, value) {
+viz_color <- function(ns, id, label, value, opacity = FALSE) {
   shiny$div(
     class = "viz-color-row",
     # The row carries an id so a module can grey out a swatch whose element is
@@ -238,6 +299,7 @@ viz_color <- function(ns, id, label, value) {
         label = NULL,
         selected = value,
         update = "changestop",
+        opacity = opacity,
         interaction = list(clear = FALSE, save = FALSE),
         position = "right-start",
         width = "100%"
@@ -333,6 +395,12 @@ viz_color <- function(ns, id, label, value) {
 #' @param selected Character. Initially selected value.
 #' @param extra Named character vector of sentinel entries (name = label).
 #' @param placeholder Character. Empty-state text.
+#' @param multiple Logical. Allow several fields at once.
+#' @param max_values Integer. Most fields a multiple select takes; 0 for no cap.
+#' @param update_on Character. `"change"` (default) pushes every click straight
+#'   to the server; `"close"` waits until the dropdown closes, so a multi-select
+#'   the user is still clicking through doesn't trigger a rebuild per click (and
+#'   sidesteps a fast run of clicks racing the dropdown's own open state).
 #' @return A `virtualSelectInput`.
 #' @export
 field_select <- function(
@@ -342,24 +410,33 @@ field_select <- function(
   profiles = NULL,
   selected = NULL,
   extra = NULL,
-  placeholder = "Pick a variable ..."
+  placeholder = "Pick a variable ...",
+  multiple = FALSE,
+  max_values = 0L,
+  update_on = c("change", "close")
 ) {
+  update_on <- match.arg(update_on)
   has <- !is.null(profiles) && nrow(profiles) > 0L
   virtualSelectInput(
     ns(id),
     label,
     choices = if (has) .field_choices(profiles, extra) else as.list(extra),
     selected = selected %||% character(0),
-    multiple = FALSE,
+    multiple = multiple,
     search = TRUE,
     searchPlaceholderText = "Search variables ...",
     placeholder = placeholder,
+    updateOn = update_on,
     # Not a formal — reaches the widget config through `...`. Turns on the
     # second line of each option.
     hasOptionDescription = TRUE,
     # Defaults to TRUE for a single select, which would silently pick whatever
     # sorts first the moment the choices land.
     autoSelectFirstOption = FALSE,
+    # A capped select disables "select all" on its own; the count keeps a long
+    # selection from pushing the toggle button onto several lines.
+    maxValues = as.integer(max_values),
+    noOfDisplayValues = 2,
     # Eight rows, not five: with the AMR screen filed one drug class per
     # heading, a five-row box shows barely one class at a time.
     optionsCount = 8,
@@ -377,13 +454,17 @@ field_select <- function(
 #' @param profiles Data frame from `field_profile$field_profiles()`.
 #' @param selected Character. Value to select.
 #' @param extra Named character vector of sentinel entries.
+#' @param disable_ungroupable Logical. Grey out columns that cannot group the
+#'   isolates. Off for pickers that only *show* a value, such as a popup, where a
+#'   column unique per isolate is exactly what a reader wants to see.
 #' @export
 update_field_select <- function(
   session,
   id,
   profiles,
   selected = NULL,
-  extra = NULL
+  extra = NULL,
+  disable_ungroupable = TRUE
 ) {
   if (is.null(profiles) || !nrow(profiles)) {
     return(invisible(NULL))
@@ -397,7 +478,9 @@ update_field_select <- function(
     session = session,
     choices = .field_choices(profiles, extra),
     selected = selected %||% character(0),
-    disabledChoices = profiles$field[!profiles$groupable]
+    disabledChoices = if (disable_ungroupable) {
+      profiles$field[!profiles$groupable]
+    }
   )
 }
 

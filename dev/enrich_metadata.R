@@ -592,6 +592,28 @@ enrich_metadata <- function(
     for (c in present_geo) {
       meta[[c]][geo_empty] <- locations[[c]][idx][geo_empty]
     }
+
+    # A row that carries only its country (the usual shape of a public
+    # dataset) is refined *within* that country: its missing state, city and
+    # postcode are drawn from the same country's locations, so the recorded
+    # country is kept and the new fields stay congruent with it. Countries
+    # absent from the location table are left as they are.
+    finer <- setdiff(present_geo, "geo_loc_name_country")
+    if (!overwrite && "geo_loc_name_country" %in% present_geo && length(finer)) {
+      country <- as.character(meta[["geo_loc_name_country"]])
+      anchored <- !geo_empty &
+        !is_empty(country) &
+        Reduce(`&`, lapply(finer, function(c) is_empty(meta[[c]]))) &
+        country %in% locations$geo_loc_name_country
+      for (ctry in unique(country[anchored])) {
+        rows <- which(anchored & country == ctry)
+        pool <- which(locations$geo_loc_name_country == ctry)
+        pick <- pool[sample.int(length(pool), length(rows), replace = TRUE)]
+        for (c in finer) {
+          meta[[c]][rows] <- locations[[c]][pick]
+        }
+      }
+    }
   }
 
   # --- collection dates ----------------------------------------------------

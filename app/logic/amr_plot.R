@@ -30,7 +30,7 @@ box::use(
     waiver,
   ],
   ggplotify[as.ggplot],
-  grDevices[colorRampPalette],
+  grDevices[colorRampPalette, dev.cur, pdf],
   grid[
     gpar,
     grid.grabExpr,
@@ -2170,6 +2170,7 @@ amr_auto_layout <- function(
   slice,
   label,
   dend,
+  n_cols,
   title_in,
   dend_cm,
   text_color,
@@ -2208,9 +2209,17 @@ amr_auto_layout <- function(
       # genes a tree of zero height. Neither can go to grid.dendrogram(),
       # which errors on a height scale of zero width, so each is drawn as a
       # straight connector down to the block instead of a title floating over
-      # blank space.
-      n <- length(labels(dend))
-      heights <- ComplexHeatmap$dend_heights(dend)
+      # blank space. `n_cols` (the block's own column count, known before the
+      # heatmap was ever drawn - see .gene_panel) decides this rather than
+      # `dend` itself: a heatmap with only one column total never gets a
+      # dendrogram from ComplexHeatmap at all, `dend` arriving here as NULL,
+      # which the straight-connector branch below has to cover too.
+      n <- n_cols
+      heights <- if (inherits(dend, "dendrogram")) {
+        ComplexHeatmap$dend_heights(dend)
+      } else {
+        0
+      }
       # The connector stops where a tree's root would, so it keeps the same
       # clearance under its title as a drawn dendrogram does.
       if (dend_cm > 0 && (n <= 1L || max(heights, 0) <= 0)) {
@@ -2288,7 +2297,15 @@ amr_auto_layout <- function(
     ),
     class = list(
       split = factor(meta$group, levels = sort(unique(meta$group))),
-      cluster = ncol(mat) >= 3
+      # >= 2, not the panel's own gene cap: a class-split panel draws a
+      # per-slice dendrogram (or, with a slice too small to cluster, the
+      # straight connector .decorate_class_dend() falls back to) for every
+      # class regardless of how few genes the *whole* panel has - ask
+      # ComplexHeatmap for less than this and column_dend() hands back
+      # nothing for any slice, empty-handed rather than a set of bare
+      # leaves, which is exactly what left a small screen's class titles
+      # indexing past the end of an empty list.
+      cluster = ncol(mat) >= 2
     ),
     none
   )
@@ -2626,6 +2643,11 @@ amr_confidence_palette <- function(absent, partial, strong, present) {
       # against column_dend()'s list instead of trusting its names either
       # way.
       cats = cats,
+      # Each block's own column count, known here from `meta` regardless of
+      # whether column_dend() ends up able to hand back a dendrogram for it
+      # (see .decorate_class_dend) - a block never has to fall back to
+      # `labels(dend)` for a number this already has on hand.
+      counts = vapply(cats, function(g) sum(meta$group == g), integer(1)),
       title_in = opts$title_in %||% 1,
       dend_cm = dend_cm,
       text_color = text_color,
@@ -2942,6 +2964,19 @@ amr_as_ggplot <- function(
   width_in = 9,
   height_in = 9
 ) {
+  # grid.grabExpr()'s cleanup restores whatever device was current before it
+  # ran. Restoring to the null device (nothing open yet - true for the very
+  # first plot of a fresh R session, e.g. a plain `startShiny()` in a terminal)
+  # is documented to auto-open a brand-new device on `getOption("device")`
+  # instead of just re-selecting it: a real, visible interactive window in a
+  # bare R session, with nothing in this app that ever closes it. An IDE
+  # console (RStudio, Positron) already has a device of its own open by this
+  # point, so it never hits this path. Opening one first, and leaving it open
+  # for the life of the process, means there is always a real device to
+  # restore to.
+  if (identical(names(dev.cur()), "null device")) {
+    pdf(NULL)
+  }
   opt <- ComplexHeatmap$ht_opt
   opt$message <- FALSE
   opt$HEATMAP_LEGEND_PADDING <- unit(AMR_LEGEND_PAD_MM, "mm")
@@ -3012,11 +3047,19 @@ amr_as_ggplot <- function(
           cd <- list(cd)
         }
         for (k in seq_along(d$cats)) {
+          # column_dend() still comes up short for a block ComplexHeatmap
+          # never got to cluster at all - a panel with only one column in
+          # the whole heatmap draws no dendrogram machinery whatsoever, class
+          # split or not (see .column_layout's `cluster`). `k` past what it
+          # handed back is answered with NULL, not a crash: .decorate_class_dend
+          # already falls back to a plain connector whenever it isn't handed a
+          # real dendrogram.
           .decorate_class_dend(
             d$annotation,
             k,
             d$cats[[k]],
-            cd[[k]],
+            if (k <= length(cd)) cd[[k]] else NULL,
+            d$counts[[k]],
             d$title_in,
             d$dend_cm,
             d$text_color,

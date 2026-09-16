@@ -507,12 +507,15 @@ test_that("the tip points have no controls of their own", {
   # the marks a legend was drawn for, overriding the shape scale, fading them
   # out — so the panel is gone and the plot's own values are fixed.
   ids <- rendered_control_ids(impl$tree_controls(NS("x")), drop = character(0))
-  expect_false(any(c(
-    "nj_tippoint_show",
-    "nj_tippoint_shape",
-    "nj_tippoint_alpha",
-    "nj_tippoint_size"
-  ) %in% ids))
+  expect_false(any(
+    c(
+      "nj_tippoint_show",
+      "nj_tippoint_shape",
+      "nj_tippoint_alpha",
+      "nj_tippoint_size"
+    ) %in%
+      ids
+  ))
   # The fit still solves a point size; it simply has nowhere to be typed in.
   expect_true("nj_tippoint_size" %in% names(impl$FITTED_DEFAULTS))
 
@@ -568,7 +571,9 @@ test_that("the tree's own width is fixed, not taken from the browser", {
 })
 
 test_that("the branch mode alone decides the distance read-outs", {
-  expect_true(impl$TREE_CONTROL_DEFAULTS$nj_branch_lengths %in% tree_plot$BRANCH_MODES)
+  expect_true(
+    impl$TREE_CONTROL_DEFAULTS$nj_branch_lengths %in% tree_plot$BRANCH_MODES
+  )
   # No switch for either scale: a wrong one cannot be picked.
   ids <- rendered_control_ids(impl$tree_controls(NS("x")))
   expect_false(any(c("nj_axis_show", "nj_treescale_show") %in% ids))
@@ -589,7 +594,10 @@ test_that("the branch mode alone decides the distance read-outs", {
       expect_true(tree_opts()$treescale_show)
 
       # A cladogram writes its distances on the branches whatever the switch.
-      session$setInputs(nj_branch_lengths = "cladogram", nj_show_branch_label = FALSE)
+      session$setInputs(
+        nj_branch_lengths = "cladogram",
+        nj_show_branch_label = FALSE
+      )
       session$flushReact()
       expect_false(tree_opts()$axis_show)
       expect_false(tree_opts()$treescale_show)
@@ -601,11 +609,11 @@ test_that("the branch mode alone decides the distance read-outs", {
 test_that("the truncated mode is only offered a tree with something to cut", {
   # A synonym for "to scale" is not a choice, and a reader who picks it to see
   # what it does would get nothing for the click.
-  expect_setequal(
+  expect_identical(
     impl$branch_length_choices(FALSE),
     tree_plot$BRANCH_MODES[tree_plot$BRANCH_MODES != "shortened"]
   )
-  expect_setequal(impl$branch_length_choices(TRUE), tree_plot$BRANCH_MODES)
+  expect_identical(impl$branch_length_choices(TRUE), tree_plot$BRANCH_MODES)
 
   # The fixture's four isolates are far too few edges for a quartile to mean
   # anything (tree_plot's BRANCH_BREAK_MIN_EDGES), so Generate never has a
@@ -828,19 +836,28 @@ amr_fixture_db <- function(dir) {
   isolates <- sprintf("ISO-%02d", 1:8)
   genes <- list(
     list(
-      gene = "blaOXA-2", element = "AMR",
-      class = "BETA-LACTAM", drug_class = "Carbapenemase",
-      section = "matches", isolates = isolates[c(TRUE, FALSE)]
+      gene = "blaOXA-2",
+      element = "AMR",
+      class = "BETA-LACTAM",
+      drug_class = "Carbapenemase",
+      section = "matches",
+      isolates = isolates[c(TRUE, FALSE)]
     ),
     list(
-      gene = "aac(6')-Ib3", element = "AMR",
-      class = "AMINOGLYCOSIDE", drug_class = "Aminoglycoside (AAC)",
-      section = "matches", isolates = isolates[1:4]
+      gene = "aac(6')-Ib3",
+      element = "AMR",
+      class = "AMINOGLYCOSIDE",
+      drug_class = "Aminoglycoside (AAC)",
+      section = "matches",
+      isolates = isolates[1:4]
     ),
     list(
-      gene = "exoU", element = "VIRULENCE",
-      class = "VIRULENCE", drug_class = "Secretion system",
-      section = "virulence", isolates = isolates[c(TRUE, FALSE)]
+      gene = "exoU",
+      element = "VIRULENCE",
+      class = "VIRULENCE",
+      drug_class = "Secretion system",
+      section = "virulence",
+      isolates = isolates[c(TRUE, FALSE)]
     )
   )
   for (g in genes) {
@@ -1029,7 +1046,9 @@ test_that("colour is per panel where clustering and labels are shared", {
     session$setInputs(nj_heatmap_cluster = TRUE)
     session$flushReact()
     expect_true(all(vapply(
-      tree_opts()$heatmaps, function(h) isTRUE(h$cluster), logical(1)
+      tree_opts()$heatmaps,
+      function(h) isTRUE(h$cluster),
+      logical(1)
     )))
   })
 })
@@ -1144,14 +1163,14 @@ test_that("the colour mode picks which of the two colour controls is live", {
     session$setInputs(
       nj_heatmap_present = "#112233",
       nj_heatmap_color_mode = "scale",
-      nj_heatmap_heat_scale = "Blues"
+      nj_heatmap_heat_scale = "Oranges"
     )
     session$setInputs(nj_heatmap_apply = 1)
     session$flushReact()
 
     h <- tree_opts()$heatmaps[[1]]
     expect_identical(h$color_mode, "scale")
-    expect_identical(h$heat_scale, "Blues")
+    expect_identical(h$heat_scale, "Oranges")
     # The swatch the reader set before switching away is still on the record.
     expect_identical(h$color_present, "#112233")
   })
@@ -1191,21 +1210,21 @@ test_that("switching classification re-files the genes it keeps", {
     before <- tree_opts()$heatmaps[[1]]
     expect_identical(before$vocabulary, amr_plot$AMR_CLASS_VOCABULARY_DEFAULT)
 
-    session$setInputs(nj_heatmap_vocabulary = "amrfinder")
+    session$setInputs(nj_heatmap_vocabulary = "rollup")
     session$flushReact()
 
     after <- tree_opts()$heatmaps[[1]]
-    expect_identical(after$vocabulary, "amrfinder")
+    expect_identical(after$vocabulary, "rollup")
     expect_setequal(after$cols, before$cols)
-    # Same genes, re-filed: abritamr calls blaOXA-2 a carbapenemase, where
-    # AMRFinderPlus files it under the broad beta-lactam heading.
+    # Same genes, re-filed: AMRFinderPlus files blaOXA-2 under the broad
+    # beta-lactam heading, where abritamr calls it a carbapenemase.
     expect_identical(
       before$classes[match("blaOXA-2", before$cols)],
-      "Carbapenemase"
+      "Beta-lactam"
     )
     expect_identical(
       after$classes[match("blaOXA-2", after$cols)],
-      "Beta-lactam"
+      "Carbapenemase"
     )
   })
 })
@@ -1225,7 +1244,10 @@ test_that("clearing the gene picker keeps every gene", {
     expect_identical(tree_opts()$heatmaps[[1]]$cols, "blaOXA-2")
 
     set_genes(session, id, character(0))
-    expect_setequal(tree_opts()$heatmaps[[1]]$cols, c("blaOXA-2", "aac(6')-Ib3"))
+    expect_setequal(
+      tree_opts()$heatmaps[[1]]$cols,
+      c("blaOXA-2", "aac(6')-Ib3")
+    )
   })
 })
 
@@ -1606,13 +1628,19 @@ test_that("the aspect fit grows for a heatmap's header band", {
         nj_heatmap_element = TRUE
       )
       nj_heatmaps(list(list(
-        id = "H1", kind = "amr", level = "gene", title = "Resistance genes",
+        id = "H1",
+        kind = "amr",
+        level = "gene",
+        title = "Resistance genes",
         cols = paste0("g", 1:12),
         labels = rep("aac(6')-Ie/aph(2'')-Ia", 12),
         classes = rep("Beta-lactam", 12),
-        show_gene_names = TRUE, show_class_names = TRUE,
-        show_element_type = TRUE, element_pos = "top",
-        cluster = FALSE, dend_depth = 0
+        show_gene_names = TRUE,
+        show_class_names = TRUE,
+        show_element_type = TRUE,
+        element_pos = "top",
+        cluster = FALSE,
+        dend_depth = 0
       )))
       session$flushReact()
 
@@ -1690,19 +1718,20 @@ test_that("picking a node adds a highlight and clears the picker", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    sent <- record_input_messages(session)
+      set_tree_inputs(session)
+      session$flushReact()
+      sent <- record_input_messages(session)
 
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
 
-    clades <- nj_clades()
-    expect_length(clades, 1L)
-    expect_identical(clades[[1]]$node, "5")
-    expect_identical(clades[[1]]$label, "")
-    expect_identical(clades[[1]]$color, tree_plot$CLADE_PALETTE[[1]])
-    expect_true(any(grepl("nj_parentnode$", names(sent()))))}
+      clades <- nj_clades()
+      expect_length(clades, 1L)
+      expect_identical(clades[[1]]$node, "5")
+      expect_identical(clades[[1]]$label, "")
+      expect_identical(clades[[1]]$color, tree_plot$CLADE_PALETTE[[1]])
+      expect_true(any(grepl("nj_parentnode$", names(sent()))))
+    }
   )
 })
 
@@ -1713,17 +1742,18 @@ test_that("a second highlight opens in a different colour", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
 
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
-    session$setInputs(nj_parentnode = "6")
-    session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
+      session$setInputs(nj_parentnode = "6")
+      session$flushReact()
 
-    colors <- vapply(nj_clades(), function(cl) cl$color, character(1))
-    expect_length(unique(colors), 2L)
-    expect_true(all(colors %in% tree_plot$CLADE_PALETTE))}
+      colors <- vapply(nj_clades(), function(cl) cl$color, character(1))
+      expect_length(unique(colors), 2L)
+      expect_true(all(colors %in% tree_plot$CLADE_PALETTE))
+    }
   )
 })
 
@@ -1734,15 +1764,16 @@ test_that("the same node cannot be highlighted twice", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
 
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
 
-    expect_length(nj_clades(), 1L)}
+      expect_length(nj_clades(), 1L)
+    }
   )
 })
 
@@ -1751,15 +1782,16 @@ test_that("the picker stops offering a node that is already highlighted", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    sent <- record_input_messages(session)
+      set_tree_inputs(session)
+      session$flushReact()
+      sent <- record_input_messages(session)
 
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
 
-    last <- tail(grep("nj_parentnode$", names(sent()), value = TRUE), 1L)
-    expect_false("5" %in% sent()[[last]]$choices)}
+      last <- tail(grep("nj_parentnode$", names(sent()), value = TRUE), 1L)
+      expect_false("5" %in% sent()[[last]]$choices)
+    }
   )
 })
 
@@ -1768,23 +1800,24 @@ test_that("editing a highlight sets its caption and its colour", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
 
-    id <- nj_clades()[[1]]$id
-    session$setInputs(
-      nj_clade_edit = id,
-      nj_clade_label = "  Outbreak A  ",
-      nj_clade_color = "#123456"
-    )
-    session$setInputs(nj_clade_apply = 1L)
-    session$flushReact()
+      id <- nj_clades()[[1]]$id
+      session$setInputs(
+        nj_clade_edit = id,
+        nj_clade_label = "  Outbreak A  ",
+        nj_clade_color = "#123456"
+      )
+      session$setInputs(nj_clade_apply = 1L)
+      session$flushReact()
 
-    cl <- nj_clades()[[1]]
-    expect_identical(cl$label, "Outbreak A")
-    expect_identical(cl$color, "#123456")}
+      cl <- nj_clades()[[1]]
+      expect_identical(cl$label, "Outbreak A")
+      expect_identical(cl$color, "#123456")
+    }
   )
 })
 
@@ -1793,18 +1826,19 @@ test_that("removing a highlight removes only that one", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
-    session$setInputs(nj_parentnode = "6")
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
+      session$setInputs(nj_parentnode = "6")
+      session$flushReact()
 
-    session$setInputs(nj_clade_delete = nj_clades()[[1]]$id)
-    session$flushReact()
+      session$setInputs(nj_clade_delete = nj_clades()[[1]]$id)
+      session$flushReact()
 
-    expect_length(nj_clades(), 1L)
-    expect_identical(nj_clades()[[1]]$node, "6")}
+      expect_length(nj_clades(), 1L)
+      expect_identical(nj_clades()[[1]]$node, "6")
+    }
   )
 })
 
@@ -1813,14 +1847,15 @@ test_that("the highlights reach the plot as records", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
 
-    clades <- tree_opts()$clades
-    expect_length(clades, 1L)
-    expect_identical(clades[[1]]$node, "5")}
+      clades <- tree_opts()$clades
+      expect_length(clades, 1L)
+      expect_identical(clades[[1]]$node, "5")
+    }
   )
 })
 
@@ -1896,16 +1931,17 @@ test_that("Reset settings drops the clade highlights", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$flushReact()
-    expect_length(nj_clades(), 1L)
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$flushReact()
+      expect_length(nj_clades(), 1L)
 
-    reset_tree_settings()
-    session$flushReact()
+      reset_tree_settings()
+      session$flushReact()
 
-    expect_length(nj_clades(), 0L)}
+      expect_length(nj_clades(), 0L)
+    }
   )
 })
 
@@ -1914,32 +1950,34 @@ test_that("a saved Analysis restores its highlights, however it stored them", {
     visualization_tree$server,
     args = .clade_args(local_tempdir()),
     {
-    set_tree_inputs(session)
-    session$flushReact()
-    session$setInputs(nj_parentnode = "5")
-    session$setInputs(nj_parentnode = "6")
-    session$flushReact()
+      set_tree_inputs(session)
+      session$flushReact()
+      session$setInputs(nj_parentnode = "5")
+      session$setInputs(nj_parentnode = "6")
+      session$flushReact()
 
-    saved <- isolate(snapshot())
-    reset_tree_settings()
-    session$flushReact()
+      saved <- isolate(snapshot())
+      reset_tree_settings()
+      session$flushReact()
 
-    restore(saved)
-    session$flushReact()
-    expect_setequal(
-      vapply(nj_clades(), function(cl) cl$node, character(1)),
-      c("5", "6")
-    )
+      restore(saved)
+      session$flushReact()
+      expect_setequal(
+        vapply(nj_clades(), function(cl) cl$node, character(1)),
+        c("5", "6")
+      )
 
-    # And the shape a tree saved before highlights carried anything of their
-    # own was stored in: a node list and one shared swatch.
-    reset_tree_settings()
-    session$flushReact()
-    restore(list(nj_parentnode = c("5", "6"), nj_clade_scale = "#D0F221"))
-    session$flushReact()
+      # And the shape a tree saved before highlights carried anything of their
+      # own was stored in: a node list and one shared swatch.
+      reset_tree_settings()
+      session$flushReact()
+      restore(list(nj_parentnode = c("5", "6"), nj_clade_scale = "#D0F221"))
+      session$flushReact()
 
-    expect_length(nj_clades(), 2L)
-    expect_true(all(vapply(nj_clades(), function(cl) cl$color, "") ==
-      "#D0F221"))}
+      expect_length(nj_clades(), 2L)
+      expect_true(all(
+        vapply(nj_clades(), function(cl) cl$color, "") == "#D0F221"
+      ))
+    }
   )
 })

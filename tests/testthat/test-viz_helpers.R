@@ -3,6 +3,7 @@ box::use(
   testthat[
     expect_equal,
     expect_false,
+    expect_identical,
     expect_match,
     expect_named,
     expect_no_error,
@@ -286,4 +287,29 @@ test_that("a settled input reports the value a drag stopped on, once", {
     session$elapse(viz_helpers$PLOT_SETTLE_MS + 50)
     expect_equal(isolate(settled$size()), 140)
   })
+})
+
+test_that("resolve_gradient_palette only expands names a colour-ramp builder can't already resolve", {
+  # leaflet::colorNumeric()/colorFactor() only special-case "viridis", "magma",
+  # "inferno" and "plasma"; the rest of this app's Gradient family (cividis,
+  # turbo, mako) falls through their lookup untouched, and a Brewer palette
+  # name is recognised on its own regardless.
+  expect_identical(viz_helpers$resolve_gradient_palette("viridis"), "viridis")
+  expect_identical(viz_helpers$resolve_gradient_palette("Blues"), "Blues")
+  expanded <- viz_helpers$resolve_gradient_palette("turbo")
+  expect_true(length(expanded) > 1)
+  expect_true(all(grepl("^#[0-9A-Fa-f]{6,8}$", expanded)))
+})
+
+test_that("resolve_qualitative_palette only expands names past their tabulated capacity", {
+  # Set3 is tabulated up to 12 colours; asking a Brewer-backed palette function
+  # for more warns ("n too large...") and truncates rather than erroring, so
+  # the fix has to happen before that call, not around it.
+  expect_identical(viz_helpers$resolve_qualitative_palette("Set3", 8), "Set3")
+  expect_identical(viz_helpers$resolve_qualitative_palette("Set3", 12), "Set3")
+  expect_identical(viz_helpers$resolve_qualitative_palette("viridis", 20), "viridis")
+  expanded <- viz_helpers$resolve_qualitative_palette("Set3", 20)
+  expect_identical(length(expanded), 20L)
+  expect_identical(length(unique(expanded)), 20L)
+  expect_true(all(grepl("^#[0-9A-Fa-f]{6,8}$", expanded)))
 })

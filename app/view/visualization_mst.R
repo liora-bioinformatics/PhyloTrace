@@ -228,7 +228,7 @@ MST_CONTROL_DEFAULTS <- c(
     mst_legend_ori = "left",
     mst_show_scale_caption = TRUE,
     mst_text_color = "#000000",
-    mst_color_node = "#B2FACA",
+    mst_color_node = "#C3C3C3",
     mst_color_edge = "#000000",
     mst_edge_font_color = "#000000",
     mst_background_color = "#ffffff"
@@ -464,7 +464,7 @@ mst_controls <- function(ns, options_ui = NULL) {
         shiny$div(
           class = "viz-color-grid",
           viz_color(ns, "mst_text_color", "Text", "#000000"),
-          viz_color(ns, "mst_color_node", "Nodes", "#B2FACA"),
+          viz_color(ns, "mst_color_node", "Nodes", "#C3C3C3"),
           # No separate node-border swatch: the outline is the branch colour, so
           # the graph's linework is one decision instead of two that had to be
           # kept in agreement by hand.

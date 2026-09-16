@@ -516,6 +516,51 @@ server <- function(id) {
       ))
     }
 
+    # Builds the loading-overlay content for one stage of a database load,
+    # keeping the database name under the title so it stays visible while the
+    # title itself changes to narrate progress.
+    loading_stage_html <- function(stage, db_path) {
+      div(
+        class = "spinner-custom",
+        spin_flower(),
+        div(
+          tags$h5(stage),
+          if (length(db_path) && !is.na(db_path)) {
+            div(id = "db-load", basename(db_path))
+          }
+        )
+      )
+    }
+
+    # Shared between the two observers below: created and shown by the first
+    # (as soon as a load is requested, before db_path() has even changed) and
+    # updated/hidden by the second (once the database and what to do with it
+    # are known). A plain variable rather than a reactiveVal - both observers
+    # already run inside a reactive context of their own, and this only needs
+    # to survive between them, not itself trigger anything.
+    db_load_waiter <- NULL
+
+    # Fires the instant a load is requested (button click or external db),
+    # strictly before LANDING_PAGE_vals$load_database() below - that reactive
+    # only changes one tick later (see landing_page's fire_load()), once
+    # db_path() has cascaded into every downstream module's eager
+    # (suspendWhenHidden = FALSE) reads. Some of those are slow on a large
+    # database, so showing the overlay off this earlier signal - rather than
+    # from inside the observer below - means it is already on screen before
+    # that cascade starts, instead of the UI sitting merely unresponsive
+    # (cursor: wait, nothing painted) until the whole thing finishes.
+    observeEvent(
+      LANDING_PAGE_vals$loading_started(),
+      {
+        db_load_waiter <<- Waiter$new(
+          id = NULL,
+          html = loading_stage_html("Loading Database ...", NULL)
+        )
+        db_load_waiter$show()
+      },
+      ignoreInit = TRUE
+    )
+
     observeEvent(LANDING_PAGE_vals$load_database(), {
       db_path <- LANDING_PAGE_vals$db_path()
 
@@ -533,6 +578,7 @@ server <- function(id) {
       db_check <- check_db_loadable(db_path)
       if (!isTRUE(db_check$ok)) {
         log_event("DB", "Load aborted", db_check$reason)
+        if (!is.null(db_load_waiter)) db_load_waiter$hide()
         showModal(modalDialog(
           title = tagList(icon("triangle-exclamation"), " Database unavailable"),
           tags$p(db_check$reason),
@@ -553,175 +599,197 @@ server <- function(id) {
       db_gone(FALSE)
       db_gone_handled(FALSE)
 
-      # Full-page loading overlay. The panel HTML below is built synchronously
-      # here; the outputs inside those panels that opt out of suspendWhenHidden
-      # pre-render on the following flushes, i.e. underneath this overlay.
-      w <- Waiter$new(
-        id = NULL,
-        html = div(
-          class = "spinner-custom",
-          spin_flower(),
-          div(
-            tags$h5("Loading Database ..."),
-            if (length(db_path) && !is.na(db_path)) {
-              div(id = "db-load", basename(db_path))
-            }
+      # The overlay is already showing (from the loading_started observer
+      # above) - just point it at the actual file now that db_path is known.
+      w <- db_load_waiter
+      w$update(html = loading_stage_html("Loading Database ...", db_path))
+
+      # Step 2 (deferred to a later tick): db_path() changing in this same
+      # flush also wakes every other module's eager (suspendWhenHidden =
+      # FALSE) reads - some slow on a large database - so running the work
+      # below inline here would just add to that same block of synchronous
+      # work. Deferring it keeps this observer's share of it off the current
+      # flush; either way it now runs behind the overlay, already visible
+      # from the loading_started observer above. withReactiveDomain()
+      # restores the session so waiter/reactiveVal writes resolve; isolate()
+      # supplies the reactive context bump_all()/ui_mounted() need.
+      later::later(function() {
+        shiny::withReactiveDomain(session, shiny::isolate({
+          # Bring the scheme species up to the current spelling before
+          # anything reads the database, then fill in any missing allele
+          # hashes, then sync the metadata table - creating it and
+          # backfilling a row for every isolate `mlst` already has (this is
+          # only a no-op past the first load; a database opened before ever
+          # having a metadata table gets one here).
+          #
+          # This is the one explicit, deterministic sync call every module's
+          # read can rely on instead of triggering its own: see
+          # `sync_metadata_table()`'s docs for why performing it lazily,
+          # inside whichever reactive happened to read first, was the actual
+          # bug behind modules disagreeing about which isolates existed.
+          #
+          # The overlay title is updated ahead of each step so a long wait
+          # reads as visible progress instead of one static message.
+          #
+          # All three write, so a lock held by another writer (another
+          # PhyloTrace session on the same file, or a typing run's pyMLST
+          # subprocess) past BUSY_TIMEOUT_MS fails them. The load is then
+          # abandoned and the session sent back to the start screen, where
+          # loading can simply be retried.
+          synced <- guard_db("Loading the database", {
+            w$update(html = loading_stage_html(
+              "Checking scheme compatibility ...",
+              db_path
+            ))
+            migrate_species_name(db_path)
+
+            w$update(html = loading_stage_html(
+              "Computing allele hashes ...",
+              db_path
+            ))
+            hash_database(db_path)
+
+            w$update(html = loading_stage_html(
+              "Synchronizing isolate metadata ...",
+              db_path
+            ))
+            sync_metadata_table(db_path)
+          })
+          if (db_failed(synced)) {
+            w$hide()
+            return_to_start()
+            return()
+          }
+
+          w$update(html = loading_stage_html("Preparing workspace ...", db_path))
+
+          # All three of the above write. Readers keyed on db_path() invalidate
+          # anyway when it changes, but a reload of the *same* path (the landing
+          # page can re-fire load for the database already open) leaves db_path()
+          # untouched, so the revisions are what makes those reads re-run.
+          bump_all(db_rev)
+
+          app_panels <- list(
+            fillable_panel(
+              "Database Browser",
+              value = "database_panel",
+              strip_shinyfiles_assets(database$ui(ns("database")))
+            ),
+            fillable_panel(
+              "Analysis Dashboard",
+              value = "analysis_dashboard_panel",
+              strip_shinyfiles_assets(analysis_dashboard$ui(ns(
+                "analysis_dashboard"
+              )))
+            ),
+            fillable_panel(
+              "Visualization",
+              value = "visualization_panel",
+              strip_shinyfiles_assets(visualization$ui(ns("visualization")))
+            ),
+            fillable_panel(
+              "Add Isolates",
+              value = "typing_panel",
+              strip_shinyfiles_assets(typing$ui(ns("typing")))
+            )
           )
-        )
-      )
-      w$show()
 
-      # Bring the scheme species up to the current spelling before anything
-      # reads the database, then fill in any missing allele hashes, then sync
-      # the metadata table - creating it and backfilling a row for every
-      # isolate `mlst` already has (this is only a no-op past the first load;
-      # a database opened before ever having a metadata table gets one here).
-      #
-      # This is the one explicit, deterministic sync call every module's read
-      # can rely on instead of triggering its own: see
-      # `sync_metadata_table()`'s docs for why performing it lazily, inside
-      # whichever reactive happened to read first, was the actual bug behind
-      # modules disagreeing about which isolates existed.
-      #
-      # All three write, so a lock held by another writer (another PhyloTrace
-      # session on the same file, or a typing run's pyMLST subprocess) past
-      # BUSY_TIMEOUT_MS fails them. The load is then abandoned and the session
-      # sent back to the start screen, where loading can simply be retried.
-      synced <- guard_db("Loading the database", {
-        migrate_species_name(db_path)
-        hash_database(db_path)
-        sync_metadata_table(db_path)
-      })
-      if (db_failed(synced)) {
-        w$hide()
-        return_to_start()
-        return()
-      }
-
-      # All three of the above write. Readers keyed on db_path() invalidate
-      # anyway when it changes, but a reload of the *same* path (the landing
-      # page can re-fire load for the database already open) leaves db_path()
-      # untouched, so the revisions are what makes those reads re-run.
-      bump_all(db_rev)
-
-      app_panels <- list(
-        fillable_panel(
-          "Database Browser",
-          value = "database_panel",
-          strip_shinyfiles_assets(database$ui(ns("database")))
-        ),
-        fillable_panel(
-          "Analysis Dashboard",
-          value = "analysis_dashboard_panel",
-          strip_shinyfiles_assets(analysis_dashboard$ui(ns(
-            "analysis_dashboard"
-          )))
-        ),
-        fillable_panel(
-          "Visualization",
-          value = "visualization_panel",
-          strip_shinyfiles_assets(visualization$ui(ns("visualization")))
-        ),
-        fillable_panel(
-          "Add Isolates",
-          value = "typing_panel",
-          strip_shinyfiles_assets(typing$ui(ns("typing")))
-        )
-      )
-
-      targets <- c(
-        "scheme_browser_panel",
-        "database_panel",
-        "analysis_dashboard_panel",
-        "visualization_panel",
-        "typing_panel"
-      )
-
-      for (i in seq_along(app_panels)) {
-        nav_insert(
-          id = "tabs",
-          nav = app_panels[[i]],
-          target = targets[i],
-          position = "after",
-          select = i == 1L
-        )
-      }
-
-      # Both items below carry fixed element ids, so any copy left over from an
-      # earlier load has to go before another is inserted beside it.
-      remove_navbar_items()
-
-      nav_insert(
-        id = "tabs",
-        nav = nav_item(
-          actionButton(
-            inputId = ns("reset"),
-            label = NULL,
-            icon = icon("arrow-rotate-left"),
-            title = "Return to the start screen"
+          targets <- c(
+            "scheme_browser_panel",
+            "database_panel",
+            "analysis_dashboard_panel",
+            "visualization_panel",
+            "typing_panel"
           )
-        ),
-        target = "typing_panel",
-        position = "after"
-      )
 
-      nav_insert(
-        id = "tabs",
-        nav = nav_item(
-          style = "margin-left: auto;",
-          if (length(db_path) && !is.na(db_path)) {
-            div(
-              id = "loaded-db-path",
-              title = db_path,
-              basename(db_path)
+          for (i in seq_along(app_panels)) {
+            nav_insert(
+              id = "tabs",
+              nav = app_panels[[i]],
+              target = targets[i],
+              position = "after",
+              select = i == 1L
             )
           }
-        ),
-        target = "typing_panel",
-        position = "after"
-      )
 
-      nav_hide(id = "tabs", target = "landing_page_panel")
-      nav_hide(id = "tabs", target = "scheme_browser_panel")
+          # Both items below carry fixed element ids, so any copy left over from
+          # an earlier load has to go before another is inserted beside it.
+          remove_navbar_items()
 
-      if (!is.null(stat_json$last_db) && file.exists(stat_json$last_db)) {
-        stat_json$last_db <- db_path
-      } else {
-        stat_json <- list(last_db = db_path)
-      }
-      jsonlite::write_json(
-        stat_json,
-        file.path(app_local_share_path, "state.json"),
-        pretty = TRUE,
-        auto_unbox = TRUE
-      )
+          nav_insert(
+            id = "tabs",
+            nav = nav_item(
+              actionButton(
+                inputId = ns("reset"),
+                label = NULL,
+                icon = icon("arrow-rotate-left"),
+                title = "Return to the start screen"
+              )
+            ),
+            target = "typing_panel",
+            position = "after"
+          )
 
-      # Tell the modules their UI is (back) in the page, so each can re-apply
-      # the DOM state it drives from the server (see ui_mounted's definition).
-      #
-      # Deferred rather than bumped inline: an inline bump would run those
-      # modules' observers inside this same flush, putting their shinyjs
-      # messages in the same websocket batch as the panel HTML - and the client
-      # dispatches "custom" messages *before* "shiny-insert-tab", so the toggles
-      # would target elements that do not exist yet. A later() bump lands in the
-      # next flush, hence a separate batch, which the client processes only
-      # after this one's insertion has finished.
-      later::later(function() {
-        shiny::withReactiveDomain(
-          session,
-          ui_mounted(shiny::isolate(ui_mounted()) + 1L)
-        )
+          nav_insert(
+            id = "tabs",
+            nav = nav_item(
+              style = "margin-left: auto;",
+              if (length(db_path) && !is.na(db_path)) {
+                div(
+                  id = "loaded-db-path",
+                  title = db_path,
+                  basename(db_path)
+                )
+              }
+            ),
+            target = "typing_panel",
+            position = "after"
+          )
+
+          nav_hide(id = "tabs", target = "landing_page_panel")
+          nav_hide(id = "tabs", target = "scheme_browser_panel")
+
+          if (!is.null(stat_json$last_db) && file.exists(stat_json$last_db)) {
+            stat_json$last_db <- db_path
+          } else {
+            stat_json <- list(last_db = db_path)
+          }
+          jsonlite::write_json(
+            stat_json,
+            file.path(app_local_share_path, "state.json"),
+            pretty = TRUE,
+            auto_unbox = TRUE
+          )
+
+          # Tell the modules their UI is (back) in the page, so each can re-apply
+          # the DOM state it drives from the server (see ui_mounted's definition).
+          #
+          # Deferred rather than bumped inline: an inline bump would run those
+          # modules' observers inside this same flush, putting their shinyjs
+          # messages in the same websocket batch as the panel HTML - and the client
+          # dispatches "custom" messages *before* "shiny-insert-tab", so the toggles
+          # would target elements that do not exist yet. A later() bump lands in the
+          # next flush, hence a separate batch, which the client processes only
+          # after this one's insertion has finished.
+          later::later(function() {
+            shiny::withReactiveDomain(
+              session,
+              ui_mounted(shiny::isolate(ui_mounted()) + 1L)
+            )
+          })
+
+          # The overlay has already been visible for the duration of the work
+          # above, so hold it for one short extra buffer after the panels are
+          # ready - long enough that "Preparing workspace ..." is legible
+          # rather than swapped out the instant it appears. Hidden
+          # asynchronously via later() so this and the panel insertion above
+          # land in separate flushes and both are actually painted.
+          later::later(
+            function() shiny::withReactiveDomain(session, w$hide()),
+            delay = 1
+          )
+        }))
       })
-
-      # The load is near-instant, so hold the overlay for a short buffer to read
-      # as a deliberate loading step. Hide asynchronously via later() so the show
-      # and hide land in separate flushes and the overlay is actually painted.
-      # withReactiveDomain() restores the session inside the later callback so
-      # waiter can resolve it (otherwise w$hide() errors on a NULL session).
-      later::later(
-        function() shiny::withReactiveDomain(session, w$hide()),
-        delay = 1
-      )
     })
 
     # Increment data_reset so every subscribed module observer fires and

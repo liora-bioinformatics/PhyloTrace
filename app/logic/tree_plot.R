@@ -3790,6 +3790,29 @@ AXIS_FRAC_MAX <- 0.2
   .clamp(mm / row_mm / .y_span_rows(opts, n, runs, size), 0, AXIS_FRAC_MAX)
 }
 
+# Room the top expansion must also hold for a truncated branch's own label.
+# `tree_branch_layer()` lifts it `.break_rise_rows()` rows clear of the break
+# mark, and its glyphs reach further still on the `vjust` side `BRANCH_VJUST`
+# anchors from (negative, so the text hangs above that point) — neither of
+# which the header/flat reserve above knows about. Nothing about NJ/UPGMA's
+# row order keeps the longest branch, the one likeliest to be drawn truncated,
+# off the first or last row, so a bare tree (no header reserve at all) or a
+# header reserve sized only for column names could both come up short and
+# clip the value off the top edge.
+.branch_break_top_frac <- function(opts, tree_data, n_tip, height_in = NULL) {
+  if (!any(.branch_broken(tree_data))) {
+    return(0)
+  }
+  row_mm <- opts$row_mm
+  if (!isTRUE(is.finite(row_mm) && row_mm > 0)) {
+    row_mm <- 25.4 * TIP_ROW_IN
+  }
+  reach_rows <- .break_rise_rows(opts) +
+    (1 - BRANCH_VJUST) * .branch_label_size(opts) / row_mm
+  n <- max(as.integer(n_tip %||% 1L), 1L)
+  .clamp(reach_rows / .y_span_rows(opts, n), 0, AXIS_FRAC_MAX)
+}
+
 # The class-name band's depth, from the panels alone.
 #
 # `heatmap_class_runs()` needs the columns a panel actually drew, which is not
@@ -6605,18 +6628,26 @@ build_tree_ggtree <- function(tree, metadata, opts) {
                   height_in = plot_height_in
                 )
               ),
-              if (annotation_total(opts) > 0) {
-                heatmap_header_frac(
+              max(
+                if (annotation_total(opts) > 0) {
+                  heatmap_header_frac(
+                    opts,
+                    sum(tree_data$isTip),
+                    tree_span,
+                    axis_units,
+                    panel_in,
+                    plot_height_in
+                  )
+                } else {
+                  0.02
+                },
+                .branch_break_top_frac(
                   opts,
+                  tree_data,
                   sum(tree_data$isTip),
-                  tree_span,
-                  axis_units,
-                  panel_in,
                   plot_height_in
                 )
-              } else {
-                0.02
-              }
+              )
             )
           )
         )
@@ -7041,13 +7072,21 @@ build_tree_ggtree <- function(tree, metadata, opts) {
                   band_size,
                   plot_height_in
                 ),
-              heatmap_header_frac(
-                opts,
-                sum(tree_data$isTip),
-                tree_span,
-                axis_units,
-                panel_in,
-                plot_height_in
+              max(
+                heatmap_header_frac(
+                  opts,
+                  sum(tree_data$isTip),
+                  tree_span,
+                  axis_units,
+                  panel_in,
+                  plot_height_in
+                ),
+                .branch_break_top_frac(
+                  opts,
+                  tree_data,
+                  sum(tree_data$isTip),
+                  plot_height_in
+                )
               )
             )
           )

@@ -36,8 +36,8 @@ box::use(
     radioGroupButtons,
     updateRadioGroupButtons,
     pickerInput,
-    pickerOptions,
     updatePickerInput,
+    updateVirtualSelect,
   ],
   leaflet[
     leaflet,
@@ -47,7 +47,7 @@ box::use(
     leafletProxy,
     addTiles,
     addProviderTiles,
-    providerTileOptions,
+    tileOptions,
     addMapPane,
     addCircleMarkers,
     addPolygons,
@@ -60,58 +60,83 @@ box::use(
     markerClusterOptions,
     labelOptions,
     labelFormat,
+    pathOptions,
     colorFactor,
     colorNumeric,
-    colorBin,
-    colorQuantile,
     fitBounds,
     flyToBounds,
     flyTo,
     setView,
   ],
+  htmlwidgets[onRender],
   leaflet.extras[addFullscreenControl, addHeatmap],
   leaflet.minicharts[addMinicharts, clearMinicharts],
   rlang[`%||%`],
   tidygeocoder[geocode],
   shinyjs[runjs],
-  utils[URLencode, read.csv, write.csv],
-  waiter[Waiter, spin_flower, useWaiter],
+  utils[read.csv, write.csv],
 )
 box::use(
   app /
     logic /
     viz_helpers[
+      apply_controls,
+      collect_input_snapshot,
+      control_families,
       field_select,
       granularity_select,
-      update_field_select,
-      update_scale_select,
+      on_confirmed_reset,
+      resolve_gradient_palette,
+      resolve_qualitative_palette,
       scale_select,
-      color_scales,
       suitable_scale_categories,
+      update_field_select,
       viz_color,
-      reset_viz_colors,
-      reset_viz_radio_buttons,
-      collect_input_snapshot,
-      apply_input_snapshot,
     ],
   app / logic / date_bins[bin_date_values, is_binned],
   app / logic / db_events,
   app / logic / functions[render_info],
-  app / logic / mapping_engine[is_date_profile],
+  app /
+    logic /
+    mapping_engine[
+      aesthetic_block_reason,
+      assign_mapping_layer,
+      granularity_profile,
+      is_date_profile,
+      max_layers,
+      rebalance_layers,
+      set_layer_granularity,
+    ],
   app / logic / paths[app_local_share_path],
   app / logic / field_labels[field_label],
-  app / logic / field_profile[field_profiles_of = field_profiles, profile_for],
+  app /
+    logic /
+    field_profile[
+      field_profiles_of = field_profiles,
+      profile_for,
+      scale_categories_for,
+    ],
+  app /
+    logic /
+    viz_layers[
+      drop_layer,
+      find_layer,
+      layer_cards,
+      layer_defaults,
+      layer_has_field,
+      layer_id_source,
+      normalize_layers,
+    ],
 )
 
-# Non-API-key basemap providers offered in the Basemap select.
+# Basemap providers offered in the Basemap select. Only ones that serve tiles
+# without an API key: CARTO's basemaps now stamp "API KEY REQUIRED" across every
+# tile requested without one, so they are not offered.
 map_providers <- c(
   "OpenStreetMap" = "OpenStreetMap",
   "OSM Humanitarian" = "OpenStreetMap.HOT",
   "OSM (German style)" = "OpenStreetMap.DE",
   "OpenTopoMap" = "OpenTopoMap",
-  "Carto Light" = "CartoDB.Positron",
-  "Carto Dark" = "CartoDB.DarkMatter",
-  "Carto Voyager" = "CartoDB.Voyager",
   "Esri Satellite" = "Esri.WorldImagery",
   "Esri Topographic" = "Esri.WorldTopoMap",
   "Esri Streets" = "Esri.WorldStreetMap",
@@ -124,7 +149,7 @@ map_providers <- c(
 mode_tile_defaults <- c(
   Markers = "OpenStreetMap",
   Choropleth = "Esri.WorldGrayCanvas",
-  Heatmap = "CartoDB.Positron",
+  Heatmap = "Esri.WorldGrayCanvas",
   Charts = "Esri.WorldGrayCanvas"
 )
 
@@ -132,10 +157,127 @@ mode_tile_defaults <- c(
 # color fill still reads as "textured" wherever the fill isn't fully opaque,
 # so Choropleth mode renders no base tile layer at all (the "Base map" picker
 # is hidden for this mode; see choro_hide in map_controls()). Place names are
-# still useful for context, though, so a single labels-only tile layer (via
-# leaflet.providers' CartoDB "OnlyLabels" split) is placed in its own pane
-# stacked above the polygon overlay.
-choropleth_labels_provider <- "CartoDB.PositronOnlyLabels"
+# still useful for context, though, so Esri's labels-only reference layer for
+# its gray canvas is placed in its own pane stacked above the polygon overlay.
+# It is not in leaflet.providers, hence a URL rather than a provider name.
+choropleth_labels_url <- paste0(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/",
+  "World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+)
+choropleth_labels_attribution <- "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
+
+# --- Variable mapping and control defaults -----------------------------------
+
+# The medium this engine maps onto, in app/logic/mapping_engine.R's terms: one
+# colour channel that Markers draw as the point fill and Charts as the slices.
+MEDIUM <- "map"
+
+# Canonical shape of one mapping layer, shared with the other engines' snapshot
+# and restore paths.
+LAYER_DEFAULTS <- layer_defaults(MEDIUM)
+
+# Isolates whose mapped value is missing are always drawn in this grey, in every
+# mode that draws a variable.
+NA_COLOR <- "#808080"
+
+# Charts mode's fold-into-"Other" bucket (build_charts()) gets this fixed
+# light grey, distinct from NA_COLOR so a chart with both a real "Missing"
+# slice and an "Other" slice can still tell them apart.
+OTHER_COLOR <- "#BFBFBF"
+
+# Popup and hover pickers take at most this many fields: past that a popup is
+# taller than the map it opens over.
+MAX_LABEL_FIELDS <- 20L
+
+POPUP_DEFAULT <- c("isolate", "place", "sample_collection_date")
+HOVER_DEFAULT <- "isolate"
+
+# Every control the sidebar renders, filed under the family whose update path
+# restores it (see control_families() and the reset reference at the top of
+# viz_helpers.R). Absent on purpose: `map_layer_add` clears itself the moment
+# it is picked from, and `map_daterange` is fitted to the loaded data rather
+# than declared, so it is refitted after the catalogue rather than reset by it.
+MAP_CONTROLS <- control_families(
+  switches = c(
+    "map_scalebar",
+    "map_minimap",
+    "map_graticule",
+    "map_show_controls",
+    "map_legend",
+    "map_permanent",
+    "map_show_time_label",
+    "map_region_fixed_scale",
+    "map_region_permanent"
+  ),
+  pickers = c(
+    "map_mode",
+    "map_tiles",
+    "map_legend_pos",
+    "map_region_scale",
+    "map_heat_scale",
+    "map_chart_type"
+  ),
+  virtual_selects = c("map_popup", "map_hover_field"),
+  sliders = c(
+    "map_cluster_radius",
+    "map_radius",
+    "map_legend_opacity",
+    "map_label_size",
+    "map_region_opacity",
+    "map_heat_radius",
+    "map_heat_max",
+    "map_chart_size",
+    "map_chart_opacity",
+    "map_chart_cluster_radius",
+    "map_chart_max_categories"
+  ),
+  numerics = "map_legend_digits",
+  texts = "map_legend_title",
+  radio_groups = c("map_interval", "map_region_transform"),
+  colors = c("map_marker_color", "map_region_border")
+)
+
+# Every catalogued control's coded default. The widgets below are declared with
+# these same values.
+map_control_defaults <- function() {
+  list(
+    map_mode = "Markers",
+    map_tiles = mode_tile_defaults[["Markers"]],
+    map_scalebar = TRUE,
+    map_minimap = TRUE,
+    map_graticule = FALSE,
+    map_show_controls = TRUE,
+    map_cluster_radius = 0,
+    map_radius = 10,
+    map_marker_color = "#2C7FB8C7",
+    map_legend = TRUE,
+    map_legend_pos = "topleft",
+    map_legend_title = "",
+    map_legend_opacity = 0.85,
+    map_legend_digits = 2,
+    map_popup = POPUP_DEFAULT,
+    map_hover_field = HOVER_DEFAULT,
+    map_permanent = FALSE,
+    map_label_size = 12,
+    map_interval = "Day",
+    map_show_time_label = TRUE,
+    map_region_fixed_scale = TRUE,
+    map_region_transform = "Raw",
+    map_region_scale = "Oranges",
+    map_region_opacity = 0.7,
+    map_region_border = "#000000",
+    map_region_permanent = FALSE,
+    map_heat_radius = 25,
+    # Refitted to the busiest place after the catalogue is applied.
+    map_heat_max = 10,
+    map_heat_scale = "Oranges",
+    map_chart_type = "pie",
+    map_chart_size = 40,
+    map_chart_opacity = 0.7,
+    map_chart_cluster_radius = 100,
+    map_chart_max_categories = 0
+  )
+}
 
 # Natural Earth country polygons are fetched once and cached for the choropleth.
 .world_env <- new.env(parent = emptyenv())
@@ -548,94 +690,98 @@ build_popup <- function(coords, fields) {
   Reduce(function(a, b) paste(a, b, sep = "<br>"), rows)
 }
 
-# Resolve the effective Factor/Numeric/Bin/Quantile type for a variable: "Auto"
-# picks Numeric/Factor based on whether the values parse as numeric, and an
-# explicitly numeric-family type still falls back to Factor when they don't
-# (e.g. a date string). Shared by make_palette() (below) and the color-scale
-# category filter (the map_col_scale dispatcher), so the dropdown's filtering
-# and the actual renderer can never disagree about what a variable "is".
-resolve_scale_type <- function(scale_type, vals) {
-  num <- suppressWarnings(as.numeric(vals))
-  is_num <- !all(is.na(num))
-  type <- scale_type %||% "Auto"
-  if (identical(type, "Auto")) {
-    type <- if (is_num) "Numeric" else "Factor"
-  }
-  if (type %in% c("Numeric", "Bin", "Quantile") && !is_num) {
-    type <- "Factor"
-  }
-  type
+# Blank strings are missing values too: SQLite hands an unfilled cell back as
+# either, and both have to land on the grey rather than one earning a colour.
+blank_to_na <- function(vals) {
+  vals <- as.character(vals)
+  vals[!is.na(vals) & !nzchar(trimws(vals))] <- NA_character_
+  vals
 }
 
-# Resolve a color palette + values for a variable, honouring the requested
-# scale type. Numeric-only scales fall back to a factor scale when the variable
-# is not numeric, and any palette-construction error degrades to a factor scale.
-make_palette <- function(scale_type, palette, vals, reverse, na_color, bins) {
-  reverse <- isTRUE(reverse)
-  na_color <- na_color %||% "#808080"
-  type <- resolve_scale_type(scale_type, vals)
-  num <- suppressWarnings(as.numeric(vals))
+# The RGB portion of a colour string as "#RRGGBB", dropping any alpha byte an
+# opacity-enabled colour picker (see viz_color()'s `opacity` argument) may have
+# appended. Leaflet accepts an 8-digit hex directly, but the swatch's own alpha
+# is instead pulled out and applied through fillOpacity/opacity (see
+# build_markers()) so the two don't multiply into a darker-than-intended result.
+hex_rgb <- function(color) {
+  color <- as.character(color %||% "#000000")
+  if (grepl("^#[0-9A-Fa-f]{8}$", color)) substr(color, 1, 7) else color
+}
 
-  factor_pal <- function() {
-    list(
-      pal = colorFactor(
-        palette,
-        domain = vals,
-        reverse = reverse,
-        na.color = na_color
-      ),
-      values = vals,
-      type = "Factor"
-    )
+# The alpha channel of an 8-digit hex colour, in 0..1, or 1 for a plain 6-digit
+# one. This is what lets a single colour picker double as that element's
+# opacity control (see viz_color()'s `opacity` argument) instead of a separate
+# slider.
+hex_alpha <- function(color) {
+  color <- as.character(color %||% "#000000")
+  if (grepl("^#[0-9A-Fa-f]{8}$", color)) {
+    strtoi(substr(color, 8, 9), base = 16L) / 255
+  } else {
+    1
   }
-  n_bins <- as.integer(bins %||% 5)
-  # suppressWarnings: a qualitative palette (e.g. Set1) with more levels than it
-  # has colors warns via RColorBrewer but still interpolates a valid ramp.
-  suppressWarnings(tryCatch(
-    switch(
-      type,
-      Factor = factor_pal(),
-      Numeric = list(
-        pal = colorNumeric(
-          palette,
-          domain = num,
-          reverse = reverse,
-          na.color = na_color
-        ),
+}
+
+# A date column as days since the epoch, NA wherever a value does not parse.
+# Parsed one value at a time: as.Date() on a vector throws outright when its
+# first entry is not a date, rather than returning NA for it.
+date_days <- function(vals) {
+  vapply(
+    blank_to_na(vals),
+    function(v) {
+      if (is.na(v)) {
+        return(NA_real_)
+      }
+      as.numeric(tryCatch(as.Date(v), error = function(e) NA))
+    },
+    numeric(1),
+    USE.NAMES = FALSE
+  )
+}
+
+# The colour scale a mapping layer draws with, built over `vals`. A continuous
+# layer gets a numeric ramp (a date one over its days, so the legend can print
+# dates); everything else a factor scale. `convert` turns the values being drawn
+# into the space the scale was built in, so a frame filtered from the same data
+# is coloured consistently. Missing values are always NA_COLOR.
+layer_palette <- function(layer, vals) {
+  palette <- resolve_gradient_palette(layer$palette %||% "viridis")
+  is_date <- identical(layer$transform, "as_date")
+  if (isTRUE(layer$continuous)) {
+    convert <- if (is_date) {
+      date_days
+    } else {
+      function(x) suppressWarnings(as.numeric(blank_to_na(x)))
+    }
+    num <- convert(vals)
+    if (any(!is.na(num))) {
+      return(list(
+        pal = colorNumeric(palette, domain = num, na.color = NA_COLOR),
         values = num,
-        type = "Numeric"
-      ),
-      Bin = list(
-        pal = colorBin(
-          palette,
-          domain = num,
-          bins = n_bins,
-          reverse = reverse,
-          na.color = na_color
-        ),
-        values = num,
-        type = "Bin"
-      ),
-      Quantile = list(
-        pal = colorQuantile(
-          palette,
-          domain = num,
-          n = n_bins,
-          reverse = reverse,
-          na.color = na_color
-        ),
-        values = num,
-        type = "Quantile"
-      )
+        type = if (is_date) "Date" else "Numeric",
+        convert = convert
+      ))
+    }
+  }
+  vals <- blank_to_na(vals)
+  # A qualitative palette (e.g. Set1) with more levels than it has tabulated
+  # colours needs expanding up front -- see resolve_qualitative_palette() --
+  # since colorFactor() only calls brewer.pal() (and warns) the first time the
+  # palette function it returns is actually invoked to colour real values.
+  n <- length(unique(vals[!is.na(vals)]))
+  list(
+    pal = colorFactor(
+      resolve_qualitative_palette(palette, n),
+      domain = vals,
+      na.color = NA_COLOR
     ),
-    error = function(e) factor_pal()
-  ))
+    values = vals,
+    type = "Factor",
+    convert = blank_to_na
+  )
 }
 
 # --- mode renderers ----------------------------------------------------------
 
-# Styled point markers. layerId = isolate keeps each marker individually
-# addressable (e.g. for a future click-driven cross-filter).
 # A date variable coarsened to the interval the user picked. Applied inside the
 # two builders that read a mapped variable rather than upstream, so it happens
 # exactly once however the builder was reached — binning an already-binned
@@ -647,14 +793,34 @@ granular_vals <- function(vals, granularity) {
   as.character(bin_date_values(vals, granularity))
 }
 
+# The mapping layer a builder should draw, or NULL when none is set or its
+# column is absent from these coordinates.
+drawn_layer <- function(o, coords) {
+  layer <- o$layer
+  if (is.null(layer) || !isTRUE(layer$field %in% names(coords))) {
+    return(NULL)
+  }
+  layer
+}
+
+# Map pane the point markers are drawn into, so their opacity can be applied
+# to the layer as a whole (see build_markers()).
+MARKER_PANE <- "mapMarkers"
+
+# Styled point markers. layerId = isolate keeps each marker individually
+# addressable (e.g. for a future click-driven cross-filter).
 build_markers <- function(m, coords, o, full_coords = NULL) {
   cluster_opts <- if (o$cluster) {
+    # Spiderfying is always on: without it, isolates sharing one geocoded
+    # place stay a cluster at every zoom and can never be told apart. Coverage
+    # and zoom-to-bounds-on-click are likewise always on -- both are one-way
+    # conveniences (a hover outline, a click that zooms in) with no real reason
+    # to disable, so they no longer cost the user a decision.
     markerClusterOptions(
-      showCoverageOnHover = o$coverage,
-      spiderfyOnMaxZoom = o$spiderfy,
-      zoomToBoundsOnClick = o$zoom_to_bounds,
-      maxClusterRadius = o$cluster_radius,
-      disableClusteringAtZoom = o$cluster_zoom_level
+      showCoverageOnHover = TRUE,
+      spiderfyOnMaxZoom = TRUE,
+      zoomToBoundsOnClick = TRUE,
+      maxClusterRadius = o$cluster_radius
     )
   } else {
     NULL
@@ -671,44 +837,36 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     textsize = paste0(o$label_size, "px")
   )
 
-  use_var <- o$color_var &&
-    !is.null(o$col_var) &&
-    o$col_var %in% names(coords)
+  layer <- drawn_layer(o, coords)
   pal_info <- NULL
-  fill <- o$marker_color
-  if (use_var) {
+  fill <- hex_rgb(o$marker_color)
+  if (!is.null(layer)) {
     # "Fix color scale to full date range" (o$region_fixed_scale): build the
     # palette + legend from the full, unfiltered values so a category keeps its
     # color and the legend keeps every key as the date range animates — rather
     # than rescaling to whichever subset is currently visible. The fill is still
     # applied to the visible coords (a subset of the domain). Off: domain and
-    # fill both come from the visible subset, exactly as before.
+    # fill both come from the visible subset.
     fixed <- isTRUE(o$region_fixed_scale) &&
       !is.null(full_coords) &&
-      o$col_var %in% names(full_coords)
+      layer$field %in% names(full_coords)
     ref_vals <- granular_vals(
-      if (fixed) full_coords[[o$col_var]] else coords[[o$col_var]],
-      o$col_granularity
+      if (fixed) full_coords[[layer$field]] else coords[[layer$field]],
+      layer$granularity
     )
-    pal_info <- make_palette(
-      o$scale_type,
-      o$col_scale,
-      ref_vals,
-      o$reverse,
-      o$na_color,
-      o$bins
-    )
-    # Mirror make_palette()'s own numeric coercion so the fill maps the visible
-    # values through the same space the palette domain was built in.
-    apply_vals <- granular_vals(coords[[o$col_var]], o$col_granularity)
-    if (pal_info$type %in% c("Numeric", "Bin", "Quantile")) {
-      apply_vals <- suppressWarnings(as.numeric(apply_vals))
-    }
-    fill <- pal_info$pal(apply_vals)
+    pal_info <- layer_palette(layer, ref_vals)
+    fill <- pal_info$pal(pal_info$convert(
+      granular_vals(coords[[layer$field]], layer$granularity)
+    ))
   }
 
-  # weight = 0 draws no border, so a separate "show border" toggle is
-  # redundant; derive it straight from the border-width slider.
+  # Opacity (the Fill color picker's alpha, which also applies when a mapped
+  # layer supplies the hue) is set on the marker pane as a whole, not on each
+  # circle: isolates sharing a geocoded place draw one circle each, exactly on
+  # top of one another, and ~40 stacked circles at 50% alpha composite to a
+  # solid one, so a per-circle alpha only became visible near zero. Group
+  # opacity renders such a stack like a single circle at the chosen alpha.
+  m <- addMapPane(m, MARKER_PANE, zIndex = 410)
   m <- addCircleMarkers(
     m,
     data = coords,
@@ -716,39 +874,57 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     lat = ~latitude,
     layerId = ~isolate,
     radius = o$radius,
-    stroke = o$weight > 0,
-    color = o$stroke_color,
-    weight = o$weight,
+    stroke = TRUE,
+    color = "#000000",
+    weight = 1,
     opacity = 1,
     fillColor = fill,
-    fillOpacity = o$opacity,
+    fillOpacity = 1,
     popup = popup,
     label = label,
     labelOptions = lopts,
+    options = pathOptions(pane = MARKER_PANE),
     clusterOptions = cluster_opts
   )
+  # createPane() adds a fresh pane element on every render, so every copy is
+  # set rather than just the latest one.
+  m <- onRender(
+    m,
+    sprintf(
+      "function(el) {
+         el.querySelectorAll('.leaflet-%s-pane').forEach(function(pane) {
+           pane.style.opacity = %s;
+         });
+       }",
+      MARKER_PANE,
+      format(round(hex_alpha(o$marker_color), 3))
+    )
+  )
 
-  if (use_var && o$legend) {
+  if (!is.null(layer) && o$legend) {
     m <- addLegend(
       m,
       position = o$legend_pos,
       pal = pal_info$pal,
       values = pal_info$values,
-      title = if (nzchar(o$legend_title)) o$legend_title else o$col_var,
+      title = if (nzchar(o$legend_title)) o$legend_title else layer$title,
       # Swatches stay fully opaque so their colors read correctly; the
       # legend's background transparency (what map_legend_opacity actually
       # controls) is applied to the whole box in build_map() below.
       opacity = 1,
-      labFormat = labelFormat(digits = o$legend_digits)
+      labFormat = if (identical(pal_info$type, "Date")) {
+        labelFormat(transform = function(x) as.Date(x, origin = "1970-01-01"))
+      } else {
+        labelFormat(digits = o$legend_digits)
+      }
     )
   }
   m
 }
 
 # Choropleth: shade Natural Earth countries by the number of isolates whose
-# geo_loc_name_country matches, using the Color tab's palette + reverse toggle
-# (the color-by-variable controls don't apply here — the mapped variable is
-# always the isolate count).
+# geo_loc_name_country matches, using the Region tab's palette (the mapping
+# layers don't apply here — the mapped variable is always the isolate count).
 build_choropleth <- function(m, coords, o, full_coords = NULL) {
   world <- get_world()
   counts <- table(coords$geo_loc_name_country)
@@ -781,26 +957,31 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
     domain_n
   }
   pal <- suppressWarnings(colorNumeric(
-    o$col_scale,
+    resolve_gradient_palette(o$region_scale),
     domain = range(domain_vals, na.rm = TRUE),
-    na.color = "#f0f0f0",
-    reverse = o$reverse
+    na.color = "#f0f0f0"
   ))
   fill <- pal(vals)
   fill[is.na(vals)] <- "#f0f0f0"
 
-  # A leaflet label of NA (rather than "") skips binding a tooltip to that
-  # polygon entirely (see leaflet.js addLayers()), which is the native way to
-  # exclude specific rows from getting a hover/permanent label at all.
+  # Every country is labelled, those without isolates included: "0 isolates"
+  # is an answer, where no label at all reads as a country the map forgot.
   region_label <- paste0(
     world$name,
     ": ",
     ifelse(is.na(world$n), 0L, world$n),
     " isolates"
   )
-  if (isTRUE(o$region_label_nonzero)) {
-    region_label[is.na(world$n) | world$n == 0] <- NA
-  }
+
+  # "Always show labels" only pins the ones actually saying something: a
+  # country with zero isolates permanently printing "0 isolates" all over an
+  # otherwise empty map just adds noise. One labelOptions() per row (rather
+  # than the single shared object every other addPolygons() argument takes)
+  # is what lets `permanent` vary polygon by polygon here.
+  has_isolates <- !is.na(world$n) & world$n > 0
+  region_label_opts <- lapply(has_isolates, function(shown) {
+    labelOptions(permanent = isTRUE(o$region_permanent) && shown)
+  })
 
   m <- addPolygons(
     m,
@@ -811,7 +992,7 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
     weight = 1,
     smoothFactor = 0.3,
     label = region_label,
-    labelOptions = labelOptions(permanent = o$region_permanent),
+    labelOptions = region_label_opts,
     highlightOptions = highlightOptions(
       weight = 2,
       color = "#000000",
@@ -822,10 +1003,9 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
 
   if (o$legend && any(!is.na(domain_n))) {
     lpal <- suppressWarnings(colorNumeric(
-      o$col_scale,
+      resolve_gradient_palette(o$region_scale),
       domain = range(domain_n, na.rm = TRUE),
-      na.color = "#f0f0f0",
-      reverse = o$reverse
+      na.color = "#f0f0f0"
     ))
     m <- addLegend(
       m,
@@ -880,7 +1060,10 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # addHeatmap() do its own resampling. Colors below 0.2 are forced
   # transparent to preserve leaflet.heat's usual "fades out at low density"
   # look instead of solid-coloring even single-isolate points.
-  gradient_pal <- colorNumeric(o$heat_scale %||% "viridis", domain = c(0, 1))
+  gradient_pal <- colorNumeric(
+    resolve_gradient_palette(o$heat_scale %||% "viridis"),
+    domain = c(0, 1)
+  )
   gradient <- function(x) ifelse(x < 0.2, "rgba(0,0,0,0)", gradient_pal(x))
 
   # blur and the minimum-opacity floor are fixed rather than user-tunable
@@ -898,13 +1081,24 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
     minOpacity = 0.3,
     gradient = gradient
   )
+  # leaflet.heat divides every point's intensity by 2^(maxZoom - zoom), capped
+  # at 2^12, and maxZoom defaults to the map's own (18). At a country-level
+  # zoom that turned a place holding 300 isolates into an intensity of ~0.07
+  # against a max of 300, so the densest country drew as faintly as an empty
+  # one. maxZoom = 0 makes that factor 1 at every zoom, which is what lets `max`
+  # mean "isolates needed for full colour". addHeatmap() does not expose the
+  # option, so it is set on the call it just emitted.
+  last <- length(m$x$calls)
+  if (last && identical(m$x$calls[[last]]$method, "addHeatmap")) {
+    m$x$calls[[last]]$args[[4]]$maxZoom <- 0
+  }
 
   # Mirrors Choropleth's legend: same gradient the heat layer itself uses
   # (0 to the effective max), so the color a place shows on the map reads
   # back to an isolate count the same way Choropleth's fill does.
   if (o$legend) {
     lpal <- colorNumeric(
-      o$heat_scale %||% "viridis",
+      resolve_gradient_palette(o$heat_scale %||% "viridis"),
       domain = c(0, effective_max)
     )
     m <- addLegend(
@@ -935,14 +1129,13 @@ cluster_cell <- function(lng, lat, zoom, radius_px) {
   paste(floor(x / radius_px), floor(y / radius_px))
 }
 
-# One minichart per location, showing the composition of a categorical
-# variable, colored per o$chart_scale (a Qualitative palette — see the
-# comment on that picker in map_controls()). Most brewer Qualitative palettes
-# only have 8-12 distinct colors, so a variable with more than a handful of
-# levels (e.g. a near-unique field like collection date) would produce
-# unreadable slices and a legend that overflows the map — the least-frequent
-# levels are folded into "Other" to keep every chart legible regardless of
-# which variable is selected.
+# One minichart per location, showing the composition of the mapped variable
+# in the mapping layer's palette. Every level gets its own slice by default, so
+# the legend reads exactly like the one Markers draws for the same variable.
+# o$chart_max_categories (0 = off) optionally keeps only that many of the most
+# common levels and folds the rest into a single "Other" slice — for a variable
+# whose long tail would otherwise slice every chart too thin to read. Isolates
+# missing the value get their own grey "Missing" slice.
 #
 # With clustering on (and a known zoom), nearby locations are grouped by
 # pixel-grid cell so overlapping charts combine into one aggregate chart that
@@ -950,12 +1143,15 @@ cluster_cell <- function(lng, lat, zoom, radius_px) {
 # render before the client reports one, or the static HTML export, which has no
 # server to re-bin on zoom) it falls back to one chart per exact place.
 build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
-  var <- o$chart_var
-  if (is.null(var) || !var %in% names(coords)) {
+  layer <- drawn_layer(o, coords)
+  if (is.null(layer)) {
     return(m)
   }
+  var <- layer$field
 
-  max_categories <- 9
+  # 0 (the default) folds nothing: every level keeps its own slice and its own
+  # legend key, the way every other mode draws the same variable.
+  max_categories <- o$chart_max_categories %||% 0
 
   # "Fix color scale to full date range" (o$region_fixed_scale): derive the
   # category set — which levels get their own slice vs. fold into "Other" — the
@@ -966,24 +1162,44 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   fixed <- isTRUE(o$region_fixed_scale) &&
     !is.null(full_coords) &&
     var %in% names(full_coords)
-  ref_vals <- granular_vals(
+  ref_vals <- blank_to_na(granular_vals(
     if (fixed) full_coords[[var]] else coords[[var]],
-    o$chart_granularity
-  )
+    layer$granularity
+  ))
+  # The same value -> colour mapping Markers/Choropleth use (see
+  # layer_palette()), built from the full, unfolded category domain rather
+  # than just the levels that survive the top-N fold below: a palette scoped
+  # to the folded subset would rank those levels among themselves, so the
+  # same real-world category could come out a different colour depending on
+  # which mode drew it. It also supplies the display order below, so colour
+  # and order can't drift apart between modes.
+  pal_info <- layer_palette(layer, ref_vals)
   ref_freq <- sort(table(ref_vals), decreasing = TRUE)
-  folded <- length(ref_freq) > max_categories
+  folded <- max_categories > 0 && length(ref_freq) > max_categories
   top <- if (folded) {
     names(ref_freq)[seq_len(max_categories)]
   } else {
     names(ref_freq)
   }
-  # Master column/legend order; "Other" (the fold bucket) always last.
-  cats <- if (folded) c(top, "Other") else top
+  # Which levels survive the fold is a frequency question — keep the most
+  # common — but the order they are *listed* in is the palette's own domain
+  # order, the same order every other mode's legend reads in, so a category
+  # keeps its place on the shared colour ramp whichever mode drew it. Slices
+  # follow suit, since this one column order drives both.
+  top <- top[order(pal_info$convert(top))]
+  # Master column/legend order; "Other" (the fold bucket) and "Missing" last.
+  missing_label <- "Missing"
+  cats <- c(
+    top,
+    if (folded) "Other",
+    if (anyNA(ref_vals)) missing_label
+  )
 
-  vals <- granular_vals(coords[[var]], o$chart_granularity)
+  vals <- blank_to_na(granular_vals(coords[[var]], layer$granularity))
   if (folded) {
-    vals <- ifelse(vals %in% top, vals, "Other")
+    vals <- ifelse(is.na(vals) | vals %in% top, vals, "Other")
   }
+  vals[is.na(vals)] <- missing_label
 
   key <- if (isTRUE(o$chart_cluster) && !is.null(zoom)) {
     cluster_cell(
@@ -999,8 +1215,7 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # Force the full master category set as columns via a fixed-level factor, so
   # levels absent from the current frame still get a (zero) column. That keeps
   # both the palette and the minichart legend covering every category — when
-  # fixed, the complete full-range set; otherwise just the visible set, in
-  # frequency order with "Other" last (matching the old explicit reorder).
+  # fixed, the complete full-range set, otherwise just the visible set.
   cd <- as.data.frame.matrix(table(key, factor(vals, levels = cats)))
 
   # Each chart sits at the centroid of the points in its group; with the
@@ -1009,32 +1224,47 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   lng <- as.numeric(tapply(coords$longitude, key, mean)[rownames(cd)])
   lat <- as.numeric(tapply(coords$latitude, key, mean)[rownames(cd)])
 
-  # One color per category column, drawn from the chosen Qualitative palette
-  # (see scale_select(..., categories = "Qualitative") in map_controls()) via
-  # the same colorFactor() leaflet already uses for Markers-mode category
-  # coloring, so a brewer palette with fewer swatches than categories degrades
-  # the same way there too (an interpolated ramp, not a hard error).
-  chart_pal <- suppressWarnings(
-    colorFactor(o$chart_scale %||% "Set1", domain = names(cd))
-  )
+  # "Other" (the fold bucket) and "Missing" aren't real domain levels, so they
+  # take their own fixed greys; every other column takes its colour from the
+  # shared palette built above.
+  named <- !(names(cd) %in% c("Other", missing_label))
+  colors <- rep(NA_COLOR, ncol(cd))
+  colors[named] <- pal_info$pal(pal_info$convert(names(cd)[named]))
+  if ("Other" %in% names(cd)) {
+    colors[names(cd) == "Other"] <- OTHER_COLOR
+  }
 
-  addMinicharts(
+  m <- addMinicharts(
     m,
     lng = lng,
     lat = lat,
     type = o$chart_type,
     chartdata = cd,
-    colorPalette = chart_pal(names(cd)),
+    colorPalette = unname(colors),
     width = o$chart_size,
     opacity = o$chart_opacity,
-    # addMinicharts() defaults to legend=TRUE at a hardcoded "topright" —
-    # independent of (and ignoring) the shared Legend tab's own position
-    # control, which is why it used to collide with the topright date-range
-    # label regardless of what the user picked elsewhere. Wiring it to the
-    # same o$legend/o$legend_pos as the other modes' legends fixes both.
-    legend = isTRUE(o$legend),
-    legendPosition = o$legend_pos %||% "topright"
+    # minicharts draws a legend of its own, but it takes no title and ignores
+    # the shared Legend tab's styling, so this mode's legend always read as a
+    # different object from every other mode's. It is switched off in favour
+    # of the same addLegend() the other modes use, below.
+    legend = FALSE
   )
+
+  # The one legend every mode draws — same title, same swatch/background
+  # treatment, same position control — over the columns actually charted, in
+  # the column order set above. Colours come from `colors`, so the keys, their
+  # order and their colours are the Markers legend's for the same variable.
+  if (isTRUE(o$legend)) {
+    m <- addLegend(
+      m,
+      position = o$legend_pos,
+      colors = unname(colors),
+      labels = names(cd),
+      title = if (nzchar(o$legend_title)) o$legend_title else layer$title,
+      opacity = 1
+    )
+  }
+  m
 }
 
 # Human-readable "Date range" label — "YYYY-MM-DD to YYYY-MM-DD", or a
@@ -1054,9 +1284,12 @@ format_daterange_label <- function(rng) {
 # tiles, decorations, plugins, then the layer for the active mode. Shared by the
 # live renderer and the HTML export.
 build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
-  # zoomControl is a native leaflet map option (toggling it removes the +/-
-  # buttons entirely, rather than just hiding them behind CSS); the fullscreen
-  # button lives in the same corner, so one switch controls both.
+  # The native zoom control has no `position` argument of its own -- it always
+  # lands at Leaflet's hardcoded top-left, which is also where a "Top left"
+  # legend/anything else the Legend tab picks would go. Turning it off here
+  # and adding a custom one (below, alongside the fullscreen button) is what
+  # actually lets that corner mean top-left, rather than being permanently
+  # occupied by the zoom buttons regardless of what the position picker says.
   #
   # zoomSnap sets the granularity the map may rest at (0.25 = quarter-level
   # steps instead of integers), so mousewheel zoom can settle on fractional
@@ -1065,7 +1298,7 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # in step with the finer snap.
   m <- leaflet(
     options = leafletOptions(
-      zoomControl = o$show_controls,
+      zoomControl = FALSE,
       zoomSnap = 0.25,
       zoomDelta = 0.25,
       wheelPxPerZoomLevel = 120
@@ -1076,13 +1309,12 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # hidden for this mode (it had no visible effect once a fill covers the
   # polygons) and a busy or even muted tile image underneath still reads as
   # "textured" wherever the fill isn't fully opaque. Only a labels-only tile
-  # layer (see choropleth_labels_provider above) is kept, in its own pane
+  # layer (see choropleth_labels_url above) is kept, in its own pane
   # stacked above the polygon overlay, so place names stay legible for
   # context against an otherwise blank background.
-  labels_provider <- NULL
-  if (identical(o$mode, "Choropleth")) {
+  choropleth <- identical(o$mode, "Choropleth")
+  if (choropleth) {
     m <- addMapPane(m, "choroplethLabels", zIndex = 450)
-    labels_provider <- choropleth_labels_provider
   } else {
     m <- if (identical(o$tiles, "OpenStreetMap")) {
       addTiles(m)
@@ -1100,7 +1332,13 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
     m <- addSimpleGraticule(m)
   }
   if (o$show_controls) {
-    m <- addFullscreenControl(m, position = "topleft")
+    m <- addFullscreenControl(m, position = "bottomleft")
+    # this = the map instance (leaflet's htmlwidgets binding returns it from
+    # initialize(), which onRender() calls its hook against).
+    m <- onRender(
+      m,
+      "function(el, x) { L.control.zoom({ position: 'bottomleft' }).addTo(this); }"
+    )
   }
 
   if (is.null(coords) || !nrow(coords)) {
@@ -1117,11 +1355,12 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
 
   # Second half of the label sandwich set up above: added only now, after the
   # polygons, so it lands in the "choroplethLabels" pane stacked above them.
-  if (!is.null(labels_provider)) {
-    m <- addProviderTiles(
+  if (choropleth) {
+    m <- addTiles(
       m,
-      labels_provider,
-      options = providerTileOptions(pane = "choroplethLabels")
+      urlTemplate = choropleth_labels_url,
+      attribution = choropleth_labels_attribution,
+      options = tileOptions(pane = "choroplethLabels")
     )
   }
 
@@ -1157,14 +1396,15 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # below: (1) the measurement must run after layout — computing it once,
   # synchronously in onRender, read a stale/zero map height — so it's deferred
   # to requestAnimationFrame and re-run on every resize via a ResizeObserver;
-  # and (2) the cap can't be modelled from control *heights*, because the
-  # legend grows a different direction depending on which corner it's anchored
-  # in (a bottom-anchored legend grows up into the top-right date label, which
-  # a top-down height reservation doesn't account for). Instead the legend's
-  # fixed anchored edge and each obstacle's real position are measured live
-  # with getBoundingClientRect, and the cap is the gap between them.
+  # and (2) it must never be derived from the legend's own measured edges,
+  # which move as the cap is applied and so can chase themselves. The cap is
+  # instead the band this column has free — the map's height less its margins,
+  # less whatever the diagonally opposite corner occupies — minus the controls
+  # stacked with the legend inside its own corner: Leaflet lays each corner's
+  # controls out as one block growing away from the anchored edge, so a legend
+  # that takes the whole band pushes its neighbours clean off the map.
   if (isTRUE(o$legend)) {
-    m <- htmlwidgets::onRender(
+    m <- onRender(
       m,
       sprintf(
         "function(el, x) {
@@ -1176,13 +1416,6 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
            l.style.background = 'rgba(255, 255, 255, %s)';
            var mapRect = el.getBoundingClientRect();
            var dateLabel = el.querySelector('.map-date-label-control');
-           var minimap = el.querySelector('.leaflet-control-minimap');
-           // Which corner the legend is anchored in decides which way it grows
-           // and therefore which controls it can run into. `.leaflet-bottom`
-           // controls grow upward from their bottom edge; `.leaflet-top` ones
-           // grow downward from their top. `.leaflet-right` ones share the
-           // right edge with the date label (always top-right) and the minimap
-           // (always bottom-right).
            var isBottom = !!l.closest('.leaflet-bottom');
            var isRight = !!l.closest('.leaflet-right');
            // When the legend shares the top-right corner with the date label,
@@ -1194,28 +1427,41 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
            } else {
              l.style.marginTop = '';
            }
-           // The legend's anchored edge (its bottom if it grows up, its top if
-           // it grows down) stays fixed regardless of its own height, so it can
-           // be measured directly and the cap derived as the distance from that
-           // edge to the nearest obstacle — the live-measured position of the
-           // date label / minimap / map edge — rather than modelled from
-           // heights (which got the bottom-anchored case wrong before).
-           var lRect = l.getBoundingClientRect();
-           var avail;
-           if (isBottom) {
-             var topLimit = mapRect.top + EDGE;
-             if (dateLabel && isRight) {
-               topLimit = Math.max(topLimit, dateLabel.getBoundingClientRect().bottom + GAP);
+           // The band this column leaves the legend: the map's height less an
+           // edge margin, further limited by the corner container diagonally
+           // opposite the legend's own. Those two corners are independently
+           // anchored boxes with no mutual height reservation, so a top-left
+           // legend growing down runs straight into the zoom/fullscreen/scale
+           // controls anchored bottom-left unless this is measured live. On
+           // the right column it is the corner the date label (top-right) and
+           // minimap (bottom-right) already live in, so they are covered too.
+           var topLimit = mapRect.top + EDGE;
+           var bottomLimit = mapRect.bottom - EDGE;
+           var opposite = el.querySelector(
+             '.leaflet-' + (isBottom ? 'top' : 'bottom') +
+             '.leaflet-' + (isRight ? 'right' : 'left')
+           );
+           if (opposite && opposite.children.length) {
+             var oRect = opposite.getBoundingClientRect();
+             if (isBottom) {
+               topLimit = Math.max(topLimit, oRect.bottom + GAP);
+             } else {
+               bottomLimit = Math.min(bottomLimit, oRect.top - GAP);
              }
-             avail = lRect.bottom - topLimit;
-           } else {
-             var bottomLimit = mapRect.bottom - EDGE;
-             if (minimap && isRight) {
-               bottomLimit = Math.min(bottomLimit, minimap.getBoundingClientRect().top - GAP);
-             }
-             avail = bottomLimit - lRect.top;
            }
-           l.style.maxHeight = Math.max(avail, 60) + 'px';
+           // Whatever shares the legend's own corner is stacked with it in a
+           // single container, so it spends the same band: the zoom buttons
+           // above a bottom-left legend are pushed up (and off the map) by
+           // exactly the height the legend takes. Reserving their height here
+           // is what keeps them on it.
+           var stacked = 0;
+           Array.prototype.forEach.call(l.parentNode.children, function (sib) {
+             if (sib === l) return;
+             var h = sib.getBoundingClientRect().height;
+             if (h) stacked += h + GAP;
+           });
+           l.style.maxHeight =
+             Math.max(bottomLimit - topLimit - stacked, 60) + 'px';
            l.style.overflowY = 'auto';
            l.style.overflowX = 'hidden';
          }
@@ -1262,6 +1508,255 @@ frame_coords <- function(m, coords, fly = FALSE) {
 
 # --- control sidebar ---------------------------------------------------------
 
+# Entries the popup and hover pickers offer that are not metadata columns: the
+# isolate id, and for the popup the geocoded place string.
+label_sentinels <- function(id) {
+  if (identical(id, "map_popup")) {
+    c(Isolate = "isolate", Location = "place")
+  } else {
+    c(Isolate = "isolate")
+  }
+}
+
+# A slider whose value is a distance on screen: a marker cluster's radius, a
+# heat point's spread, a chart cluster's cell. Leaflet measures these in
+# pixels, and they are pixels on purpose — a fixed number of kilometres would
+# stop clustering at a world view and blow up at street level, which is the
+# opposite of what decluttering a map needs. What a pixel count does not say is
+# how far that reaches on the ground, so the slider carries a line that does,
+# for the current zoom, and dragging or hovering it outlines that reach on the
+# map itself (see reach_script). `shape` is "circle" for a radius and "square"
+# for a grid cell whose side is the value. `ring` names which layers on the map
+# the outline is drawn around, one per element: "cluster" (markers and cluster
+# icons), "chart" (minicharts, outlined by the grid cell they were binned in)
+# or "heat" (heat points). With nothing of that kind in view, or NULL, a single
+# outline is centred on the map.
+reach_slider <- function(
+  ns,
+  id,
+  label,
+  min,
+  max,
+  value,
+  step,
+  shape = "circle",
+  ring = NULL
+) {
+  attribs <- list(
+    class = "custom-slider map-reach-slider",
+    `data-map` = ns("map"),
+    `data-shape` = shape
+  )
+  if (!is.null(ring)) {
+    attribs$`data-ring` <- ring
+  }
+  do.call(
+    shiny$div,
+    c(
+      attribs,
+      list(
+        shiny$sliderInput(
+          ns(id),
+          label,
+          min = min,
+          max = max,
+          value = value,
+          step = step,
+          ticks = FALSE
+        ),
+        shiny$div(class = "map-reach-hint", "Shown in km once the map is drawn")
+      )
+    )
+  )
+}
+
+# Browser side of reach_slider(), installed once per page however many map tabs
+# are open. The ground distance is measured on the live map (Leaflet's own
+# distance between two screen points at its centre), so it is exact for the
+# projection and latitude on screen rather than an equator approximation.
+reach_script <- shiny$tags$script(shiny$HTML(
+  "(function(){
+    if (window.__phylotraceMapReach) return;
+    window.__phylotraceMapReach = true;
+    function mapFor(wrap) {
+      var id = wrap.getAttribute('data-map');
+      if (!id || !window.HTMLWidgets) return null;
+      var w = HTMLWidgets.find('#' + CSS.escape(id));
+      var map = w && w.getMap ? w.getMap() : null;
+      if (!map || !map.getContainer().offsetWidth) return null;
+      if (!map.__reachBound) {
+        map.__reachBound = true;
+        map.on('zoomend moveend resize', refreshAll);
+      }
+      return map;
+    }
+    function value(wrap) {
+      var input = wrap.querySelector('input.js-range-slider');
+      return input ? parseFloat(input.value) || 0 : 0;
+    }
+    function round(x) {
+      return x >= 10 ? Math.round(x).toLocaleString() : x.toFixed(1);
+    }
+    function refresh(wrap) {
+      var hint = wrap.querySelector('.map-reach-hint');
+      var map = mapFor(wrap);
+      if (!hint || !map) return;
+      var px = value(wrap);
+      var size = map.getSize();
+      var c = L.point(size.x / 2, size.y / 2);
+      var metres = map.distance(
+        map.containerPointToLatLng(c.subtract([px / 2, 0])),
+        map.containerPointToLatLng(c.add([px / 2, 0]))
+      );
+      var what = wrap.getAttribute('data-shape') === 'square' ?
+        ' across' : ' radius';
+      hint.textContent = '\\u2248 ' + round(metres / 1000) + ' km (' +
+        round(metres / 1609.344) + ' mi)' + what + ' at the current zoom';
+    }
+    function refreshAll() {
+      document.querySelectorAll('.map-reach-slider').forEach(refresh);
+    }
+    function isMinichart(layer) {
+      return !!(L.Minichart && layer instanceof L.Minichart);
+    }
+    // Lat/lngs of the layers the outline is drawn around, read from the map's
+    // own layers (a heatmap is one canvas, and minicharts share one SVG, so
+    // neither has a DOM element per point to measure).
+    function anchorLatLngs(kind, map) {
+      var out = [];
+      map.eachLayer(function(layer) {
+        if (kind === 'heat') {
+          if (L.HeatLayer && layer instanceof L.HeatLayer) {
+            (layer._latlngs || []).forEach(function(ll) { out.push(L.latLng(ll)); });
+          }
+        } else if (kind === 'chart') {
+          if (isMinichart(layer)) out.push(layer.getLatLng());
+        } else if (kind === 'cluster') {
+          // Visible cluster icons and unclustered circle markers; markers
+          // inside a cluster are not on the map, so are skipped by eachLayer.
+          if (!isMinichart(layer) && (layer instanceof L.CircleMarker ||
+              (layer instanceof L.Marker && layer._icon))) {
+            out.push(layer.getLatLng());
+          }
+        }
+      });
+      return out;
+    }
+    // Container-pixel centres to outline, one per distinct spot in view. A
+    // chart cell is outlined as the actual grid cell cluster_cell() bins it in
+    // (world pixels at this zoom, floored to the cell size), since charts in
+    // the same square merge whether or not their own centred squares overlap.
+    function anchors(wrap, map, d) {
+      var kind = wrap.getAttribute('data-ring');
+      if (!kind) return [];
+      var size = map.getSize();
+      var zoom = map.getZoom();
+      var seen = {};
+      var out = [];
+      anchorLatLngs(kind, map).forEach(function(ll) {
+        var p;
+        if (kind === 'chart') {
+          var w = map.project(ll, zoom);
+          var cell = L.point(
+            (Math.floor(w.x / d) + 0.5) * d,
+            (Math.floor(w.y / d) + 0.5) * d
+          );
+          p = map.latLngToContainerPoint(map.unproject(cell, zoom));
+        } else {
+          p = map.latLngToContainerPoint(ll);
+        }
+        if (p.x < -d || p.y < -d || p.x > size.x + d || p.y > size.y + d) return;
+        var key = Math.round(p.x) + ',' + Math.round(p.y);
+        if (seen[key]) return;
+        seen[key] = true;
+        out.push(p);
+      });
+      return out;
+    }
+    // The preview stays up for as long as its slider is hovered or dragged.
+    // Redrawn on a short timer while shown, so it follows the slider value,
+    // pans/zooms, and the map re-rendering its layers after a change.
+    var active = null;
+    var hovered = null;
+    var dragging = false;
+    var ticker = null;
+    function clearBoxes() {
+      document.querySelectorAll('.map-reach-preview').forEach(function(box) {
+        box.remove();
+      });
+    }
+    function draw() {
+      if (!active) return;
+      if (!document.body.contains(active)) { hide(); return; }
+      var map = mapFor(active);
+      if (!map) { clearBoxes(); return; }
+      var el = map.getContainer();
+      var square = active.getAttribute('data-shape') === 'square';
+      var d = square ? value(active) : 2 * value(active);
+      var size = map.getSize();
+      var centers = anchors(active, map, d);
+      if (!centers.length) centers = [L.point(size.x / 2, size.y / 2)];
+      // Capped so a dense, zoomed-out map doesn't paint hundreds of outlines.
+      centers = centers.slice(0, 300);
+      var cls = 'map-reach-preview' + (square ? ' map-reach-preview--square' : '');
+      var boxes = el.querySelectorAll(':scope > .map-reach-preview');
+      centers.forEach(function(c, i) {
+        var box = boxes[i];
+        if (!box) {
+          box = document.createElement('div');
+          el.appendChild(box);
+        }
+        box.className = cls;
+        box.style.width = d + 'px';
+        box.style.height = d + 'px';
+        box.style.left = c.x + 'px';
+        box.style.top = c.y + 'px';
+      });
+      for (var j = centers.length; j < boxes.length; j++) boxes[j].remove();
+    }
+    function hide() {
+      clearInterval(ticker);
+      ticker = null;
+      active = null;
+      clearBoxes();
+    }
+    function show(wrap) {
+      if (active !== wrap) {
+        hide();
+        active = wrap;
+      }
+      refresh(wrap);
+      draw();
+      if (!ticker) ticker = setInterval(draw, 150);
+    }
+    $(document).on('mouseenter', '.map-reach-slider', function() {
+      hovered = this;
+      show(this);
+    });
+    $(document).on('mouseleave', '.map-reach-slider', function() {
+      if (hovered === this) hovered = null;
+      if (!dragging && active === this) hide();
+    });
+    $(document).on('pointerdown', '.map-reach-slider', function() {
+      dragging = true;
+      show(this);
+    });
+    $(document).on('pointerup pointercancel', function() {
+      if (!dragging) return;
+      dragging = false;
+      if (active && hovered !== active) hide();
+    });
+    $(document).on('change', '.map-reach-slider input.js-range-slider', function() {
+      var wrap = this.closest('.map-reach-slider');
+      refresh(wrap);
+      if (active === wrap) draw();
+    });
+    $(document).on('shiny:value shown.bs.tab shown.bs.collapse', function() {
+      setTimeout(refreshAll, 0);
+    });
+  })();"
+))
+
 # Tabbed control panel (mirrors mst_controls / the Tree controls). A mode select
 # sits above the tabs; a small client-side script (below) shows only the tabs
 # and individual rows relevant to the current map mode / marker style.
@@ -1293,119 +1788,25 @@ map_controls <- function(ns) {
         value = "markers",
         icon = shiny$icon("location-dot"),
         accordion(
-          open = "Marker Style",
+          open = "Clustering",
           accordion_panel(
             "Clustering",
             icon = shiny$icon("object-group"),
-            shiny$div(
-              class = "custom-slider",
-              shiny$sliderInput(
-                ns("map_cluster_radius"),
-                "Cluster radius (px)",
-                min = 20,
-                max = 200,
-                value = 80,
-                step = 10
-              )
-            ),
-            input_switch(
-              ns("map_zoom_to_bounds"),
-              "Zoom to bounds on cluster click",
-              TRUE
-            ),
-            input_switch(ns("map_spiderfy"), "Spiderfy at max zoom", TRUE),
-            input_switch(ns("map_coverage"), "Show coverage on hover", TRUE),
-            # Raw Leaflet zoom levels (0 = world, ~18 = building) aren't
-            # self-explanatory on their own, so the full range is exposed as
-            # a slider with the old named presets kept on as reference
-            # labels underneath. 0 doubles as "None" — the zoom level the
-            # clusters stay disbanded until is meaningless once clustering
-            # itself is off, and nobody picks the world view as a real
-            # disable-at threshold — so it folds in what used to be a
-            # separate cluster on/off switch (and the "Marker style:
-            # Cluster" option before that): this one control now fully
-            # decides whether markers cluster at all, and — if so — the
-            # zoom level they stay clustered until.
-            shiny$div(
-              id = ns("cluster_zoom_wrap"),
-              class = "custom-slider cluster-zoom-slider",
-              shiny$sliderInput(
-                ns("map_cluster_zoom_level"),
-                "Clustering",
-                min = 0,
-                max = 18,
-                value = 7,
-                step = 1,
-                ticks = FALSE
-              ),
-              # A tick at every one of the 19 zoom levels the slider can
-              # land on, not just the 5 named ones — those 5 (the same
-              # values the labels below name) get the "major" class for a
-              # taller, darker mark so they still read as the meaningful
-              # stops.
-              shiny$div(
-                class = "cluster-zoom-slider_ticks",
-                lapply(0:18, function(v) {
-                  shiny$span(
-                    class = if (v %in% c(0, 4, 7, 11, 15)) {
-                      "cluster-zoom-slider_tick-major"
-                    },
-                    `data-pct` = v / 18 * 100
-                  )
-                })
-              ),
-              shiny$div(
-                class = "cluster-zoom-slider_labels",
-                shiny$span("None", `data-pct` = 0),
-                shiny$span("Country", `data-pct` = 22.22),
-                shiny$span("Region", `data-pct` = 38.89),
-                shiny$span("City", `data-pct` = 61.11),
-                shiny$span("Street", `data-pct` = 83.33)
-              ),
-              # ion.rangeSlider reserves extra horizontal space at each end of
-              # the widget for the value tooltip bubble, so the visible track
-              # (.irs-line) is narrower than — and inset from — the slider's
-              # own box by an amount CSS can't predict. Reading the rendered
-              # .irs-line back and placing each tick/label in pixels against
-              # it is the only way to actually line them up with the zoom
-              # levels they name; redone on resize and on any Bootstrap
-              # accordion "shown" (the track is 0-width while its panel is
-              # collapsed).
-              shiny$tags$script(shiny$HTML(local({
-                wrap_id <- ns("cluster_zoom_wrap")
-                paste0(
-                  "(function(){",
-                  "var wrap=document.getElementById('",
-                  wrap_id,
-                  "');",
-                  "if(!wrap)return;",
-                  "var groups=[",
-                  "wrap.querySelector('.cluster-zoom-slider_ticks'),",
-                  "wrap.querySelector('.cluster-zoom-slider_labels')",
-                  "];",
-                  "function position(){",
-                  "var line=wrap.querySelector('.irs-line');",
-                  "if(!line||!line.offsetWidth)return false;",
-                  "var lineRect=line.getBoundingClientRect();",
-                  "groups.forEach(function(group){",
-                  "var base=group.getBoundingClientRect();",
-                  "group.querySelectorAll('[data-pct]').forEach(function(el){",
-                  "var pct=parseFloat(el.getAttribute('data-pct'));",
-                  "el.style.left=((lineRect.left-base.left)+lineRect.width*pct/100)+'px';",
-                  "});",
-                  "});",
-                  "return true;",
-                  "}",
-                  "var tries=0;",
-                  "var timer=setInterval(function(){",
-                  "tries++;",
-                  "if(position()||tries>40)clearInterval(timer);",
-                  "},50);",
-                  "window.addEventListener('resize',position);",
-                  "if(window.jQuery)jQuery(document).on('shown.bs.collapse',position);",
-                  "})();"
-                )
-              })))
+            # A single slider now fully decides clustering: 0 means off, any
+            # other value is the pixel radius nearby markers combine within.
+            # This folds in what used to be a separate on/off switch (and,
+            # before that, both a "Marker style: Cluster" option and a
+            # separate "disable clustering past this zoom" slider) -- one
+            # control instead of three that could disagree with each other.
+            reach_slider(
+              ns,
+              "map_cluster_radius",
+              "Cluster radius (0 = off)",
+              min = 0,
+              max = 200,
+              value = 0,
+              step = 10,
+              ring = "cluster"
             )
           ),
           accordion_panel(
@@ -1422,81 +1823,188 @@ map_controls <- function(ns) {
                 step = 1
               )
             ),
-            shiny$div(
-              class = "custom-slider",
-              shiny$sliderInput(
-                ns("map_opacity"),
-                "Fill opacity",
-                min = 0.1,
-                max = 1,
-                value = 1,
-                step = 0.05
-              )
-            ),
-            viz_color(ns, "map_marker_color", "Fill color", "#2c7fb8"),
-            shiny$div(
-              class = "custom-slider",
-              shiny$sliderInput(
-                ns("map_weight"),
-                "Border width",
-                min = 0,
-                max = 6,
-                value = 0,
-                step = 0.5
-              )
-            ),
-            viz_color(ns, "map_stroke_color", "Border color", "#333333")
+            # The picker's own alpha slider stands in for a separate opacity
+            # control; it sets the whole marker layer's opacity (see
+            # build_markers()). The border is a fixed thin black outline.
+            viz_color(
+              ns,
+              "map_marker_color",
+              "Fill color",
+              "#2C7FB8C7",
+              opacity = TRUE
+            )
           )
         )
       ),
-      # Variable coloring ------------------------------------------------------
+      # Variable mapping -------------------------------------------------------
       nav_panel(
         "Mapping",
         value = "color",
         icon = shiny$icon("map-pin"),
+        # One picker over the *variables*, the same arrangement as the other
+        # engines: picking one adds a layer and app/logic/mapping_engine.R
+        # decides its palette from the variable's own profile. Markers draw it
+        # as the point fill, Charts as the slices. Missing values are grey.
+        field_select(ns, "map_layer_add", "Map a variable"),
+        shiny$uiOutput(ns("map_layers_ui"))
+      ),
+      # Charts (minicharts) -----------------------------------------------------
+      nav_panel(
+        "Charts",
+        value = "charts",
+        icon = shiny$icon("chart-pie"),
+        pickerInput(
+          ns("map_chart_type"),
+          "Chart type",
+          choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
+        ),
+        # One slice per level is the default (0 = all), so the chart legend
+        # reads exactly like the one Markers draws for the same variable.
+        # Raising this keeps only the N most common levels and folds the rest
+        # into a single "Other" slice — for a variable whose long tail would
+        # otherwise slice every chart too thin to read. See build_charts().
+        shiny$div(
+          class = "custom-slider",
+          shiny$sliderInput(
+            ns("map_chart_max_categories"),
+            "Top categories (0 = all)",
+            min = 0,
+            max = 20,
+            value = 0,
+            step = 1,
+            ticks = FALSE
+          )
+        ),
+        # Combine charts whose locations sit within this cell size of each
+        # other on screen into a single aggregate chart, splitting apart again
+        # as the map is zoomed in (see build_charts()/cluster_cell()). The
+        # minichart analog of Markers-mode clustering; 0 folds in what used to
+        # be a separate on/off switch, the same way map_cluster_radius's own
+        # 0 does for Markers.
+        reach_slider(
+          ns,
+          "map_chart_cluster_radius",
+          "Cluster cell size (0 = off)",
+          min = 0,
+          max = 200,
+          value = 100,
+          step = 10,
+          shape = "square",
+          ring = "chart"
+        ),
         accordion(
-          open = "Variable Mapping",
+          open = FALSE,
           accordion_panel(
-            "Variable Mapping",
-            icon = shiny$icon("layer-group"),
-            input_switch(ns("map_color_var"), "Color by variable", FALSE),
-            field_select(ns, "map_col_var", "Variable"),
-            shiny$uiOutput(ns("col_granularity_ui"))
-          ),
-          accordion_panel(
-            "Scale",
+            "Chart Style",
             icon = shiny$icon("sliders"),
-            scale_select(ns, "map_col_scale"),
+            # The variable each chart splits by is the mapping layer (Mapping tab).
             shiny$div(
-              id = ns("wrap_map_scale_type"),
-              shiny$radioButtons(
-                ns("map_scale_type"),
-                "Scale type",
-                choices = c("Auto", "Factor", "Numeric", "Bin", "Quantile"),
-                selected = "Auto",
-                inline = TRUE
+              class = "custom-slider",
+              shiny$sliderInput(
+                ns("map_chart_size"),
+                "Chart size",
+                min = 20,
+                max = 80,
+                value = 40,
+                step = 5
               )
             ),
             shiny$div(
-              id = ns("wrap_map_bins"),
-              shiny$div(
-                class = "custom-slider",
-                shiny$sliderInput(
-                  ns("map_bins"),
-                  "Bins (numeric)",
-                  min = 3,
-                  max = 9,
-                  value = 5,
-                  step = 1
-                )
+              class = "custom-slider",
+              shiny$sliderInput(
+                ns("map_chart_opacity"),
+                "Opacity",
+                min = 0.1,
+                max = 1,
+                value = 0.7,
+                step = 0.05
               )
-            ),
-            input_switch(ns("map_reverse"), "Reverse palette", FALSE),
-            shiny$div(
-              id = ns("wrap_map_na_color"),
-              viz_color(ns, "map_na_color", "Missing color", "#808080")
             )
           )
+        )
+      ),
+      # Choropleth (Region) ----------------------------------------------------
+      # Choropleth's only tab of its own, so it sits where Mapping does in the
+      # modes that have one. The fill is always the isolate count, so the
+      # palette lives here rather than on a mapping layer.
+      nav_panel(
+        "Region",
+        value = "region",
+        icon = shiny$icon("earth-europe"),
+        radioGroupButtons(
+          ns("map_region_transform"),
+          "Count scale",
+          choices = c("Raw", "Log"),
+          selected = "Raw",
+          justified = TRUE,
+          size = "sm"
+        ),
+        # A count is never categorical or diverging, so only ordered palettes.
+        scale_select(
+          ns,
+          "map_region_scale",
+          categories = c("Sequential", "Gradient"),
+          selected = "Oranges"
+        ),
+        shiny$div(
+          class = "custom-slider",
+          shiny$sliderInput(
+            ns("map_region_opacity"),
+            "Fill opacity",
+            min = 0.1,
+            max = 1,
+            value = 0.7,
+            step = 0.05
+          )
+        ),
+        viz_color(ns, "map_region_border", "Border color", "#000000"),
+        input_switch(
+          ns("map_region_permanent"),
+          "Always show labels",
+          FALSE
+        )
+      ),
+      # Heatmap (Density) -------------------------------------------------------
+      nav_panel(
+        "Density",
+        value = "density",
+        icon = shiny$icon("fire"),
+        # Pared down to the two knobs that actually change what the map
+        # communicates: how far each isolate's heat spreads, and how many
+        # co-located isolates it takes to hit full color. Blur and the
+        # minimum-opacity floor were dropped — they only fine-tune the same
+        # visual effect as Radius (softness/spread) and rarely need
+        # per-plot tuning, so leaving them user-adjustable mostly just added
+        # ways to produce a different-looking map from identical data.
+        reach_slider(
+          ns,
+          "map_heat_radius",
+          "Radius",
+          min = 5,
+          max = 50,
+          value = 25,
+          step = 1,
+          ring = "heat"
+        ),
+        shiny$div(
+          class = "custom-slider",
+          shiny$sliderInput(
+            ns("map_heat_max"),
+            "Max intensity (isolates)",
+            min = 1,
+            max = 50,
+            value = 10,
+            step = 1
+          )
+        ),
+        # Heat intensity is always a non-negative isolate density, never
+        # categorical or meaningfully diverging, so this picker is restricted
+        # to ordered palettes, like the Region tab's count scale.
+        scale_select(
+          ns,
+          "map_heat_scale",
+          categories = c("Sequential", "Gradient"),
+          selected = "Oranges"
         )
       ),
       # Legend -----------------------------------------------------------------
@@ -1508,6 +2016,7 @@ map_controls <- function(ns) {
         pickerInput(
           ns("map_legend_pos"),
           "Position",
+          selected = "topleft",
           choices = c(
             "Bottom right" = "bottomright",
             "Bottom left" = "bottomleft",
@@ -1556,34 +2065,33 @@ map_controls <- function(ns) {
         "Labels",
         value = "labels",
         icon = shiny$icon("tag"),
-        pickerInput(
-          ns("map_popup"),
-          "Popup fields",
-          choices = c(
-            "Isolate" = "isolate",
-            "Location" = "place",
-            "Collection Date" = "sample_collection_date"
-          ),
-          selected = c("isolate", "place", "sample_collection_date"),
+        # The database's columns replace these two sentinel-only choice lists
+        # as soon as it loads (see populate_metadata_selects()). update_on =
+        # "close": the map only needs to redraw once the picker is done being
+        # clicked through, not on every individual selection -- ticking
+        # several boxes in quick succession otherwise raced the dropdown's own
+        # open state and could close it mid-click.
+        field_select(
+          ns,
+          "map_popup",
+          sprintf("Popup fields (up to %d)", MAX_LABEL_FIELDS),
+          selected = POPUP_DEFAULT,
+          extra = label_sentinels("map_popup"),
+          placeholder = "Pick fields ...",
           multiple = TRUE,
-          options = pickerOptions(
-            actionsBox = TRUE,
-            liveSearch = TRUE,
-            selectedTextFormat = "count > 3",
-            container = "body"
-          )
+          max_values = MAX_LABEL_FIELDS,
+          update_on = "close"
         ),
-        pickerInput(
-          ns("map_hover_field"),
-          "Hover field(s)",
-          choices = NULL,
+        field_select(
+          ns,
+          "map_hover_field",
+          sprintf("Hover fields (up to %d)", MAX_LABEL_FIELDS),
+          selected = HOVER_DEFAULT,
+          extra = label_sentinels("map_hover_field"),
+          placeholder = "Pick fields ...",
           multiple = TRUE,
-          options = pickerOptions(
-            actionsBox = TRUE,
-            liveSearch = TRUE,
-            selectedTextFormat = "count > 3",
-            container = "body"
-          )
+          max_values = MAX_LABEL_FIELDS,
+          update_on = "close"
         ),
         input_switch(ns("map_permanent"), "Always show labels", FALSE),
         shiny$div(
@@ -1698,147 +2206,9 @@ map_controls <- function(ns) {
           "Fix color scale to full date range",
           TRUE
         )
-      ),
-      # Choropleth (Region) ----------------------------------------------------
-      nav_panel(
-        "Region",
-        value = "region",
-        icon = shiny$icon("earth-europe"),
-        shiny$radioButtons(
-          ns("map_region_transform"),
-          "Count scale",
-          choices = c("Raw", "Log"),
-          inline = TRUE
-        ),
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_region_opacity"),
-            "Fill opacity",
-            min = 0.1,
-            max = 1,
-            value = 0.7,
-            step = 0.05
-          )
-        ),
-        viz_color(ns, "map_region_border", "Border color", "#ffffff"),
-        input_switch(
-          ns("map_region_permanent"),
-          "Always show labels",
-          FALSE
-        ),
-        input_switch(
-          ns("map_region_label_nonzero"),
-          "Only label areas with isolates",
-          TRUE
-        )
-      ),
-      # Heatmap (Density) -------------------------------------------------------
-      nav_panel(
-        "Density",
-        value = "density",
-        icon = shiny$icon("fire"),
-        # Pared down to the two knobs that actually change what the map
-        # communicates: how far each isolate's heat spreads, and how many
-        # co-located isolates it takes to hit full color. Blur and the
-        # minimum-opacity floor were dropped — they only fine-tune the same
-        # visual effect as Radius (softness/spread) and rarely need
-        # per-plot tuning, so leaving them user-adjustable mostly just added
-        # ways to produce a different-looking map from identical data.
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_heat_radius"),
-            "Radius",
-            min = 5,
-            max = 50,
-            value = 25,
-            step = 1
-          )
-        ),
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_heat_max"),
-            "Max intensity (isolates)",
-            min = 1,
-            max = 50,
-            value = 10,
-            step = 1
-          )
-        ),
-        # Heat intensity is always a non-negative isolate density, never
-        # categorical or meaningfully diverging, so this picker is statically
-        # restricted (unlike map_col_scale below, which depends on whatever
-        # variable is currently mapped).
-        scale_select(
-          ns,
-          "map_heat_scale",
-          categories = c("Sequential", "Gradient")
-        )
-      ),
-      # Charts (minicharts) -----------------------------------------------------
-      nav_panel(
-        "Charts",
-        value = "charts",
-        icon = shiny$icon("chart-pie"),
-        pickerInput(
-          ns("map_chart_type"),
-          "Chart type",
-          choices = c("Pie" = "pie", "Bar" = "bar", "Polar area" = "polar-area")
-        ),
-        field_select(ns, "map_chart_var", "Variable"),
-        shiny$uiOutput(ns("chart_granularity_ui")),
-        # Each chart shows the composition of a categorical variable (see
-        # build_charts()'s max_categories folding below), so — like
-        # map_heat_scale above — this is a static restriction rather than a
-        # per-variable dynamic one: it's never numeric, so only Qualitative
-        # palettes are ever suitable.
-        scale_select(ns, "map_chart_scale", categories = "Qualitative"),
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_chart_size"),
-            "Chart size",
-            min = 20,
-            max = 80,
-            value = 40,
-            step = 5
-          )
-        ),
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_chart_opacity"),
-            "Opacity",
-            min = 0.1,
-            max = 1,
-            value = 1,
-            step = 0.05
-          )
-        ),
-        # Combine charts whose locations sit within the cluster radius of each
-        # other on screen into a single aggregate chart, splitting apart again
-        # as the map is zoomed in (see build_charts()/cluster_cell()). The
-        # minichart analog of Markers-mode clustering.
-        input_switch(
-          ns("map_chart_cluster"),
-          "Cluster overlapping charts",
-          TRUE
-        ),
-        shiny$div(
-          class = "custom-slider",
-          shiny$sliderInput(
-            ns("map_chart_cluster_radius"),
-            "Cluster radius (px)",
-            min = 20,
-            max = 200,
-            value = 100,
-            step = 10
-          )
-        )
       )
     ),
+    reach_script,
     # Geocoding feedback: how many isolates the last Generate was able to
     # place on the map, with a warning + a few example place names when some
     # couldn't be resolved. See output$map_geocode_status_ui in the server.
@@ -1873,40 +2243,25 @@ map_controls <- function(ns) {
     # batch.
     shiny$tags$script(shiny$HTML(local({
       mode_id <- ns("map_mode")
-      scale_type_name <- ns("map_scale_type")
-      choro_hide <- ns(c(
-        "wrap_map_tiles",
-        "wrap_map_scale_type",
-        "wrap_map_bins",
-        "wrap_map_na_color"
-      ))
-      digits_id <- ns("wrap_map_legend_digits")
-      js_arr <- function(x) {
-        paste0("[", paste0("'", x, "'", collapse = ","), "]")
-      }
+      tiles_wrap_id <- ns("wrap_map_tiles")
       paste0(
         "(function(){",
         "var modeSel='#",
         mode_id,
         "';",
-        "var scaleTypeName='",
-        scale_type_name,
+        "var tilesWrapId='",
+        tiles_wrap_id,
         "';",
-        "var scaleTypeSel='input[name=\"'+scaleTypeName+'\"]';",
-        "var digitsId='",
-        digits_id,
-        "';",
+        # Mapping ('color') only where a variable is drawn; Region only for
+        # Choropleth, which fills by isolate count instead.
         "var tabsByMode={",
-        "Markers:['basemap','markers','color','legend','labels','time','export'],",
-        "Choropleth:['basemap','color','legend','time','region','export'],",
-        "Heatmap:['basemap','time','density','legend','export'],",
-        "Charts:['basemap','time','charts','legend','export']};",
-        "var allTabs=['basemap','markers','color','legend','labels','time','region','density','charts','export'];",
-        "var choroHide=",
-        js_arr(choro_hide),
-        ";",
+        "Markers:['basemap','markers','color','legend','labels','time'],",
+        "Choropleth:['basemap','region','legend','time'],",
+        "Heatmap:['basemap','time','density','legend'],",
+        "Charts:['basemap','color','time','charts','legend']};",
+        "var allTabs=['basemap','markers','color','region','legend',",
+        "'labels','time','density','charts'];",
         "function curMode(){var el=document.querySelector(modeSel);return el?el.value:'Markers';}",
-        "function curScaleType(){var el=document.querySelector(scaleTypeSel+':checked');return el?el.value:'Auto';}",
         "function apply(){",
         "var modeEl=document.querySelector(modeSel);if(!modeEl)return;",
         "var wrap=modeEl.closest('.viz-nav-wrap');if(!wrap)return;",
@@ -1920,38 +2275,10 @@ map_controls <- function(ns) {
         "if(active&&vis.indexOf(active.getAttribute('data-value'))<0){",
         "var f=wrap.querySelector('.nav-link[data-value='+JSON.stringify(vis[0])+']');if(f){f.click();}",
         "}",
-        "choroHide.forEach(function(id){var el=document.getElementById(id);if(el)el.style.display=(m==='Choropleth')?'none':'';});",
-        # Choropleth colors purely by isolate count — there's no per-point
-        # "color by variable" to map — so the whole panel (not just its
-        # inputs) is hidden rather than left as an empty, awkward-looking
-        # shell. bslib's own accordion_panel() has no id/class param, but it
-        # does set data-value to the panel's title, giving a stable selector
-        # for the entire .accordion-item.
-        "var vmPanel=wrap.querySelector('.accordion-item[data-value=\"Variable Mapping\"]');",
-        "if(vmPanel){vmPanel.style.display=(m==='Choropleth')?'none':'';}",
-        # With Variable Mapping hidden, Choropleth's Color tab is down to a
-        # single "Scale" panel holding just the palette picker and reverse
-        # switch — too little content to justify an accordion header/chevron.
-        # Strip the header and force the body open so it reads as a plain
-        # section instead of a collapsible one; other modes keep the normal
-        # accordion since they still have two panels worth collapsing.
-        "var scalePanel=wrap.querySelector('.accordion-item[data-value=\"Scale\"]');",
-        "if(scalePanel){",
-        "scalePanel.classList.toggle('viz-accordion-flat',m==='Choropleth');",
-        "if(m==='Choropleth'){",
-        "var sc=scalePanel.querySelector('.accordion-collapse');",
-        "if(sc)sc.classList.add('show');",
-        "var sb=scalePanel.querySelector('.accordion-button');",
-        "if(sb){sb.classList.remove('collapsed');sb.setAttribute('aria-expanded','true');}",
+        "var tiles=document.getElementById(tilesWrapId);",
+        "if(tiles)tiles.style.display=(m==='Choropleth')?'none':'';",
         "}",
-        "}",
-        # Choropleth's legend (isolate count) is always numeric; within Markers
-        # mode, the legend is only numeric when the resolved scale type isn't
-        # a plain factor scale.
-        "var digitsEl=document.getElementById(digitsId);",
-        "if(digitsEl){digitsEl.style.display=(m==='Markers'&&curScaleType()==='Factor')?'none':'';}",
-        "}",
-        "$(document).on('change',modeSel+','+scaleTypeSel,apply);",
+        "$(document).on('change',modeSel,apply);",
         "var n=0,t=setInterval(function(){n++;if(document.querySelector(modeSel)){apply();}if(n>40){clearInterval(t);}},300);",
         "})();"
       )
@@ -2108,13 +2435,16 @@ server <- function(
     # also ticks the shared generate() — leaves this engine's result untouched.
     map_coords <- shiny$reactiveVal(NULL)
 
-    # A reopened plot's saved date granularities, parked for the two renderUIs
-    # that own those controls to apply on their next render. They cannot be
-    # pushed with an update*Input(): each control exists only once its variable
-    # picker reports a date field, which is a later flush than restore() runs
-    # in. Consumed on read - see visualization_epi.R for the fuller reasoning.
-    restore_col_granularity <- shiny$reactiveVal(NULL)
-    restore_chart_granularity <- shiny$reactiveVal(NULL)
+    # The variable mapped onto the markers or charts. At most one (see MEDIUM),
+    # but held as a list, because that is the shape every engine's mapping
+    # state, snapshot and restore path share.
+    map_layers <- shiny$reactiveVal(list())
+    map_layer_seq <- shiny$reactiveVal(0L)
+
+    # Whether the popup and hover pickers have been filled from a database yet
+    # (see populate_metadata_selects()). Plain state, not reactive: nothing
+    # should re-run because it flipped.
+    labels_filled <- FALSE
 
     # Geocoding success/failure summary for the currently generated map (see
     # build_map_coords()'s status list) — drives output$map_geocode_status_ui
@@ -2477,26 +2807,22 @@ server <- function(
       shiny$reactive({
         list(
           mode = input$map_mode %||% "Markers",
-          tiles = input$map_tiles %||% "OpenStreetMap",
+          # A basemap no longer offered (a saved plot on a CARTO one) draws
+          # the default rather than a watermarked tile.
+          tiles = if (isTRUE(input$map_tiles %in% map_providers)) {
+            input$map_tiles
+          } else {
+            "OpenStreetMap"
+          },
           scalebar = isTRUE(input$map_scalebar),
           minimap = isTRUE(input$map_minimap),
           graticule = isTRUE(input$map_graticule),
           show_controls = isTRUE(input$map_show_controls),
           radius = input$map_radius %||% 10,
-          opacity = input$map_opacity %||% 1,
-          marker_color = input$map_marker_color %||% "#2c7fb8",
-          stroke_color = input$map_stroke_color %||% "#333333",
-          weight = input$map_weight %||% 0,
-          color_var = isTRUE(input$map_color_var),
-          col_var = input$map_col_var,
-          col_granularity = input$map_col_granularity,
-          col_scale = input$map_col_scale %||% "viridis",
-          scale_type = input$map_scale_type %||% "Auto",
-          bins = input$map_bins %||% 5,
-          reverse = isTRUE(input$map_reverse),
-          na_color = input$map_na_color %||% "#808080",
+          marker_color = input$map_marker_color %||% "#2C7FB8C7",
+          layer = mapped_layer(),
           legend = isTRUE(input$map_legend),
-          legend_pos = input$map_legend_pos %||% "bottomright",
+          legend_pos = input$map_legend_pos %||% "topleft",
           legend_title = input$map_legend_title %||% "",
           legend_opacity = input$map_legend_opacity %||% 0.85,
           legend_digits = input$map_legend_digits %||% 2,
@@ -2506,32 +2832,23 @@ server <- function(
           label_size = input$map_label_size %||% 12,
           daterange = input$map_daterange,
           show_time_label = isTRUE(input$map_show_time_label),
-          cluster = (input$map_cluster_zoom_level %||% 7) > 0,
-          cluster_radius = input$map_cluster_radius %||% 80,
-          zoom_to_bounds = isTRUE(input$map_zoom_to_bounds),
-          spiderfy = isTRUE(input$map_spiderfy),
-          coverage = isTRUE(input$map_coverage),
-          cluster_zoom_level = {
-            lvl <- input$map_cluster_zoom_level %||% 7
-            if (lvl <= 0) NA_integer_ else as.integer(lvl)
-          },
+          cluster = (input$map_cluster_radius %||% 0) > 0,
+          cluster_radius = input$map_cluster_radius %||% 0,
           region_transform = input$map_region_transform %||% "Raw",
           region_fixed_scale = isTRUE(input$map_region_fixed_scale),
+          region_scale = input$map_region_scale %||% "Oranges",
           region_opacity = input$map_region_opacity %||% 0.7,
-          region_border = input$map_region_border %||% "#ffffff",
+          region_border = input$map_region_border %||% "#000000",
           region_permanent = isTRUE(input$map_region_permanent),
-          region_label_nonzero = isTRUE(input$map_region_label_nonzero),
           heat_radius = input$map_heat_radius %||% 25,
           heat_max = input$map_heat_max %||% 10,
           heat_scale = input$map_heat_scale %||% "viridis",
           chart_type = input$map_chart_type %||% "pie",
-          chart_var = input$map_chart_var,
-          chart_granularity = input$map_chart_granularity,
-          chart_scale = input$map_chart_scale %||% "Set1",
           chart_size = input$map_chart_size %||% 40,
-          chart_opacity = input$map_chart_opacity %||% 1,
-          chart_cluster = isTRUE(input$map_chart_cluster),
-          chart_cluster_radius = input$map_chart_cluster_radius %||% 100
+          chart_opacity = input$map_chart_opacity %||% 0.7,
+          chart_cluster = (input$map_chart_cluster_radius %||% 100) > 0,
+          chart_cluster_radius = input$map_chart_cluster_radius %||% 100,
+          chart_max_categories = input$map_chart_max_categories %||% 0
         )
       }),
       250
@@ -2718,224 +3035,297 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    # Restrict map_col_scale's choices to whichever color_scales categories
-    # actually suit the data currently driving it: isolate counts for
-    # Choropleth (always numeric, never diverging — a qualitative or diverging
-    # palette doesn't read well as a single ordered count), or the selected
-    # Markers-mode variable resolved the same way make_palette() itself would
-    # (via the shared resolve_scale_type()), so the dropdown and the renderer
-    # can never disagree about what a variable "is". Heatmap/Charts never show
-    # this selector at all (see the client-side tabsByMode script above), so
-    # they fall through to the "nothing pickable" branch, which is harmless.
-    shiny$observeEvent(
-      list(
-        input$map_mode,
-        input$map_col_var,
-        input$map_scale_type,
-        map_coords()
-      ),
-      {
-        mode <- input$map_mode %||% "Markers"
-        coords <- map_coords()
-        vals <- if (identical(mode, "Choropleth")) {
-          shiny$req(coords)
-          as.numeric(table(coords$geo_loc_name_country))
-        } else if (
-          identical(mode, "Markers") &&
-            isTRUE(input$map_col_var %in% names(coords))
-        ) {
-          shiny$req(coords)
-          coords[[input$map_col_var]]
-        } else {
-          character(0)
-        }
-        scale_type_in <- if (identical(mode, "Choropleth")) {
-          "Numeric"
-        } else {
-          input$map_scale_type
-        }
-        resolved <- resolve_scale_type(scale_type_in, vals)
-        cats <- if (!length(vals)) {
-          names(color_scales)
-        } else {
-          suitable_scale_categories(resolved, vals)
-        }
-        sel <- if (
-          isTRUE(
-            input$map_col_scale %in%
-              unlist(color_scales[cats], use.names = FALSE)
-          )
-        ) {
-          input$map_col_scale
-        } else {
-          color_scales[[cats[1]]][1]
-        }
-        update_scale_select(session, "map_col_scale", color_scales[cats], sel)
-      },
-      ignoreInit = TRUE
-    )
+    # --- Variable mapping layers --------------------------------------------
 
-    # Profile of whichever column a variable picker currently holds.
-    picked_profile <- function(field) {
-      if (is.null(field) || !nzchar(field)) {
-        return(NULL)
-      }
+    # Anything except the isolate id is a candidate variable.
+    mappable_fields <- shiny$reactive({
       meta <- viz_metadata()
-      profile_for(field_profiles() %||% field_profiles_of(meta), field)
-    }
-
-    # Only a date can be grouped by a calendar interval. Without it a
-    # collection date is one colour per isolate on the markers, and on the
-    # charts it is the near-unique field the top-N fold was written to survive.
-    output$col_granularity_ui <- shiny$renderUI({
-      render_info("visualization_map col_granularity_ui")
-      if (!is_date_profile(picked_profile(input$map_col_var))) {
-        return(NULL)
+      if (is.null(meta) || !length(names(meta))) {
+        return(character())
       }
-      # A restored plot's saved granularity wins for exactly one render, then
-      # the control's own value takes over again. Read isolated: the variable
-      # picker above is already this render's trigger, so also depending on the
-      # parked value would make this output invalidate itself.
-      pending <- shiny$isolate(restore_col_granularity())
-      if (!is.null(pending)) {
-        restore_col_granularity(NULL)
-      }
-      granularity_select(
-        ns,
-        "map_col_granularity",
-        pending %||% shiny$isolate(input$map_col_granularity),
-        values = viz_metadata()[[input$map_col_var]]
-      )
+      setdiff(names(meta), "isolate")
     })
 
-    output$chart_granularity_ui <- shiny$renderUI({
-      render_info("visualization_map chart_granularity_ui")
-      if (!is_date_profile(picked_profile(input$map_chart_var))) {
+    # Every column's profile, for the variable pickers and the mapping engine.
+    profiles <- shiny$reactive({
+      meta <- viz_metadata()
+      if (is.null(meta) || !length(names(meta))) {
         return(NULL)
       }
-      pending <- shiny$isolate(restore_chart_granularity())
-      if (!is.null(pending)) {
-        restore_chart_granularity(NULL)
-      }
-      granularity_select(
-        ns,
-        "map_chart_granularity",
-        pending %||% shiny$isolate(input$map_chart_granularity),
-        values = viz_metadata()[[input$map_chart_var]]
-      )
-    })
-
-    # Geocode + populate the metadata-backed selects and the date slider, only
-    # when Map is the active engine and Generate is clicked (mirrors the MST/Tree
-    # guard). The heavy geocoding is covered by the waiter spinner.
-    # map_col_var/map_chart_var/map_popup/map_hover_field's *choices* are all
-    # swapped out at Generate time for the loaded database's actual metadata
-    # columns (see below) — the UI-declared choices (NULL, for the selects;
-    # empty, for the pickers) are just placeholders shown before any data is
-    # loaded. shinyjs::reset() only knows how to restore the selected *value*
-    # it captured at page load (back when those placeholder choices were
-    # still current, i.e. empty); it never restores `choices`, so after
-    # Generate has swapped them out, that captured value usually isn't even
-    # among the current options any more, leaving the control visibly blank
-    # instead of at any real value. force_default = TRUE (Reset settings)
-    # always jumps to the same default Generate would use for metadata it's
-    # never seen a selection for; force_default = FALSE (Generate) keeps the
-    # current selection when it's still valid, so re-Generating doesn't
-    # clobber a deliberate user choice.
-    populate_metadata_selects <- function(force_default = FALSE) {
-      meta <- viz_metadata()
-      if (is.null(meta) || !nrow(meta)) {
-        return(invisible(NULL))
-      }
-      fields <- setdiff(names(meta), "isolate")
-      if (!length(fields)) {
-        return(invisible(NULL))
-      }
-
-      # Profiles carry each column's value count and declared type, which the
-      # picker shows as the option's second line. Until this, Map's variable
-      # pickers were the only ones in the app offering raw, unlabelled and
-      # ungrouped column names.
-      prof <- field_profiles() %||%
+      field_profiles() %||%
         field_profiles_of(
           meta,
           mlst_cols = attr(meta, "mlst_cols"),
           amr_cols = attr(meta, "amr_cols"),
           custom_cols = attr(meta, "custom_cols")
         )
-      prof <- prof[prof$field %in% fields, , drop = FALSE]
+    })
 
-      keep <- function(id, default) {
+    # Refill the variable, popup and hover pickers from the loaded database's
+    # own columns. Until this runs they list only their placeholders.
+    # `force_default` (Reset settings) puts popup and hover back on their
+    # defaults; otherwise a selection still valid for these columns is kept, and
+    # `popup` / `hover` (a restored plot) name one outright.
+    populate_metadata_selects <- function(
+      force_default = FALSE,
+      popup = NULL,
+      hover = NULL
+    ) {
+      prof <- profiles()
+      fields <- mappable_fields()
+      if (is.null(prof) || !nrow(prof) || !length(fields)) {
+        return(invisible(NULL))
+      }
+      prof <- prof[prof$field %in% fields, , drop = FALSE]
+      update_field_select(session, "map_layer_add", prof)
+
+      # The first fill always starts from the defaults: before it, the pickers
+      # held only their sentinels, so the browser has already dropped the
+      # default entries that are real columns (the collection date) from what
+      # it reports.
+      use_default <- force_default || !labels_filled
+      labels_filled <<- TRUE
+
+      # Popup and hover show a value rather than group by it, so a column
+      # unique per isolate is a perfectly good choice and stays enabled.
+      refill <- function(id, override, default) {
+        offered <- c(unname(label_sentinels(id)), fields)
+        wanted <- override %||%
+          if (use_default) default else input[[id]] %||% default
+        sel <- intersect(unlist(wanted), offered)
+        if (!length(sel)) {
+          sel <- intersect(default, offered)
+        }
         update_field_select(
           session,
           id,
           prof,
-          selected = if (!force_default && isTRUE(input[[id]] %in% fields)) {
-            input[[id]]
-          } else {
-            default
-          }
+          selected = sel[seq_len(min(length(sel), MAX_LABEL_FIELDS))],
+          extra = label_sentinels(id),
+          disable_ungroupable = FALSE
         )
       }
-      keep("map_col_var", fields[1])
-      keep(
-        "map_chart_var",
-        if ("specimen_source_id" %in% fields) {
-          "specimen_source_id"
-        } else {
-          fields[1]
+      refill("map_popup", popup, POPUP_DEFAULT)
+      refill("map_hover_field", hover, HOVER_DEFAULT)
+    }
+
+    # Fill the pickers as soon as a database is loaded rather than waiting for
+    # a Generate, so a variable can be mapped before the first map is drawn.
+    shiny$observeEvent(
+      profiles(),
+      populate_metadata_selects(),
+      ignoreNULL = TRUE
+    )
+
+    next_layer_id <- layer_id_source(map_layer_seq)
+
+    # Picking a variable adds it as the map's one mapping layer.
+    shiny$observeEvent(input$map_layer_add, {
+      field <- input$map_layer_add
+      shiny$req(nzchar(field %||% ""))
+      # Clear the picker straight away so the same variable can be re-picked
+      # after a delete, and so the selection cannot re-fire on a later flush.
+      updateVirtualSelect(
+        inputId = "map_layer_add",
+        session = session,
+        selected = character(0)
+      )
+
+      if (!isTRUE(field %in% mappable_fields())) {
+        return()
+      }
+      layers <- map_layers()
+      if (layer_has_field(layers, field)) {
+        return()
+      }
+      if (length(layers) >= max_layers(MEDIUM)) {
+        shiny$showNotification(
+          paste(
+            "A map can show only one variable at a time. Remove the current",
+            "mapping first."
+          ),
+          type = "warning"
+        )
+        return()
+      }
+      prof <- profile_for(profiles(), field)
+      layer <- assign_mapping_layer(
+        prof,
+        layers,
+        next_layer_id(),
+        MEDIUM,
+        viz_metadata()[[field]]
+      )
+      if (is.null(layer)) {
+        shiny$showNotification(
+          aesthetic_block_reason(prof, NULL, MEDIUM) %||%
+            "That variable cannot be mapped.",
+          type = "warning"
+        )
+        return()
+      }
+      map_layers(c(layers, list(layer)))
+    })
+
+    # One delegated handler per action rather than one observer per row: an
+    # observeEvent created inside renderUI is re-registered on every render, so
+    # the ids push their own value into a single input instead.
+    shiny$observeEvent(input$map_layer_delete, {
+      keep <- drop_layer(map_layers(), input$map_layer_delete)
+      map_layers(rebalance_layers(keep, profiles(), MEDIUM, viz_metadata()))
+    })
+
+    # The mapping card under the variable picker.
+    output$map_layers_ui <- shiny$renderUI({
+      render_info("visualization_map map_layers_ui")
+      layer_cards(
+        ns,
+        map_layers(),
+        MEDIUM,
+        "map_layer_edit",
+        "map_layer_delete",
+        empty_text = paste(
+          "No mapping yet - markers keep their fill colour and charts need a",
+          "variable to split by."
+        )
+      )
+    })
+
+    editing <- shiny$reactiveVal(NULL)
+
+    # The edit dialog: the palette and, for a date, its grouping. There is no
+    # "Show as" choice, because the medium has one channel.
+    shiny$observeEvent(input$map_layer_edit, {
+      l <- find_layer(map_layers(), input$map_layer_edit)
+      shiny$req(!is.null(l))
+      prof <- profile_for(profiles(), l$field)
+      shiny$req(!is.null(prof))
+      editing(l$id)
+
+      values <- viz_metadata()[[l$field]]
+      # The palette has to suit the variable as the chosen granularity leaves
+      # it: binned to months it is a category, not a continuum.
+      binned <- granularity_profile(prof, values, l$granularity)
+      # Parsed, not raw: an ungrouped date reaches the scale as a continuum,
+      # and out of SQLite it is a character column that no test for one can
+      # recognise.
+      shown <- if (is_date_profile(prof)) {
+        bin_date_values(values, l$granularity)
+      } else {
+        values
+      }
+      cats <- scale_categories_for(
+        if (isTRUE(binned$continuous)) shown else as.character(shown),
+        suitable_scale_categories(
+          if (isTRUE(binned$continuous)) "Numeric" else "Factor",
+          shown
+        )
+      )
+
+      shiny$showModal(shiny$modalDialog(
+        title = paste("Mapping:", l$title),
+        size = "s",
+        easyClose = TRUE,
+        if (is_date_profile(prof)) {
+          granularity_select(
+            ns,
+            "map_layer_granularity",
+            l$granularity,
+            label = "Group dates by",
+            values = values
+          )
+        },
+        scale_select(
+          ns,
+          "map_layer_palette",
+          categories = cats,
+          selected = l$palette
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(ns("map_layer_apply"), "Apply")
+        )
+      ))
+    })
+
+    # Apply the edit dialog to the layer it was opened for.
+    shiny$observeEvent(input$map_layer_apply, {
+      id <- editing()
+      shiny$req(!is.null(id))
+      layers <- lapply(map_layers(), function(l) {
+        if (!identical(l$id, id)) {
+          return(l)
         }
-      )
+        l$palette <- input$map_layer_palette %||% l$palette
+        l <- set_layer_granularity(
+          l,
+          input$map_layer_granularity,
+          viz_metadata()[[l$field]]
+        )
+        # Pinned: rebalance_layers() rebuilds automatic layers from scratch and
+        # would discard the palette just chosen.
+        l$auto <- FALSE
+        l
+      })
+      map_layers(rebalance_layers(layers, profiles(), MEDIUM, viz_metadata()))
+      editing(NULL)
+      shiny$removeModal()
+    })
 
-      # Popup fields: every metadata column (plus the synthetic geocoded
-      # "place"), fetched programmatically the same way as the selects above.
-      popup_ids <- unique(c("isolate", "place", fields))
-      popup_choices <- stats::setNames(
-        popup_ids,
-        vapply(popup_ids, field_label, character(1))
-      )
-      default_popup <- intersect(
-        c("isolate", "place", "sample_collection_date"),
-        popup_ids
-      )
-      prev_popup <- if (force_default) {
-        default_popup
-      } else {
-        intersect(input$map_popup %||% default_popup, popup_ids)
-      }
-      if (!length(prev_popup)) {
-        prev_popup <- default_popup
-      }
-      updatePickerInput(
-        session,
-        "map_popup",
-        choices = popup_choices,
-        selected = prev_popup
-      )
+    # The mapping the markers and charts are drawn with, or NULL for none.
+    mapped_layer <- function() {
+      layers <- map_layers()
+      if (length(layers)) layers[[1]] else NULL
+    }
 
-      # Hover field(s): same programmatically-fetched field set and labels as
-      # the popup picker, but multi-select so several fields can combine into
-      # one hover tooltip (see build_popup(), reused for the label content).
-      hover_ids <- unique(c("isolate", fields))
-      hover_choices <- stats::setNames(
-        hover_ids,
-        vapply(hover_ids, field_label, character(1))
+    # The legend's number digits only format a continuous, non-date scale on
+    # the markers, so it is hidden rather than left as a dead control. The
+    # Fill color row stays visible even once a mapping colours the markers by
+    # its hue instead: its opacity slider is still live then (see
+    # build_markers()), which the flat "Fill opacity" slider it replaced was.
+    shiny$observe({
+      layer <- mapped_layer()
+      shinyjs::toggle(
+        id = "wrap_map_legend_digits",
+        condition = identical(input$map_mode, "Markers") &&
+          isTRUE(layer$continuous) &&
+          !identical(layer$transform, "as_date")
       )
-      prev_hover <- if (force_default) {
-        "isolate"
-      } else {
-        intersect(input$map_hover_field %||% "isolate", hover_ids)
+    })
+
+    # Refit the controls solved from the generated coordinates rather than
+    # declared: the date range spans the data, and the heatmap's max intensity
+    # is the busiest place's isolate count, so the slider spans a range where
+    # moving it is visible instead of saturating everywhere.
+    fit_data_controls <- function(coords) {
+      if (is.null(coords) || !nrow(coords)) {
+        return(invisible(NULL))
       }
-      if (!length(prev_hover)) {
-        prev_hover <- "isolate"
+      dts <- suppressWarnings(as.Date(coords$sample_collection_date))
+      if (any(!is.na(dts))) {
+        lo <- min(dts, na.rm = TRUE)
+        hi <- max(dts, na.rm = TRUE)
+        daterange_bounds(c(lo, hi))
+        shiny$updateSliderInput(
+          session,
+          "map_daterange",
+          min = lo,
+          max = hi,
+          value = c(lo, hi)
+        )
       }
-      updatePickerInput(
+      max_per_place <- max(table(coords$place))
+      shiny$updateSliderInput(
         session,
-        "map_hover_field",
-        choices = hover_choices,
-        selected = prev_hover
+        "map_heat_max",
+        max = max(max_per_place, 10),
+        value = max_per_place
       )
     }
+
+    # Geocode + populate the metadata-backed selects and the date slider, only
+    # when Map is the active engine and Generate is clicked (mirrors the MST/Tree
+    # guard). The heavy geocoding is covered by the waiter spinner.
 
     shiny$observeEvent(generate(), {
       if (!identical(plot_type(), "Map")) {
@@ -2975,19 +3365,7 @@ server <- function(
           type = "warning"
         )
       } else {
-        dts <- suppressWarnings(as.Date(coords$sample_collection_date))
-        if (any(!is.na(dts))) {
-          lo <- min(dts, na.rm = TRUE)
-          hi <- max(dts, na.rm = TRUE)
-          daterange_bounds(c(lo, hi))
-          shiny$updateSliderInput(
-            session,
-            "map_daterange",
-            min = lo,
-            max = hi,
-            value = c(lo, hi)
-          )
-        }
+        fit_data_controls(coords)
         # "Hour" only makes sense to offer when the data actually carries a
         # time-of-day component — filter_coords() floors to whole days, so an
         # Hour animation over date-only data would silently collapse back to
@@ -3020,16 +3398,6 @@ server <- function(
           } else {
             "Day"
           }
-        )
-        # Fit the heatmap's "Max intensity" to the busiest place's isolate
-        # count, so the slider spans a range where changing it is actually
-        # visible instead of being saturated red everywhere.
-        max_per_place <- max(table(coords$place))
-        shiny$updateSliderInput(
-          session,
-          "map_heat_max",
-          max = max(max_per_place, 10),
-          value = max_per_place
         )
       }
       map_coords(coords)
@@ -3132,80 +3500,35 @@ server <- function(
 
     # Reset settings: restore every control in this engine's own sidebar to
     # its coded default, WITHOUT disturbing the already-geocoded plot (no
-    # re-Generate needed). Local to this module (see the "Reset settings"
-    # button above) — no confirmation modal, mirroring the directness of the
-    # "Reset view" button.
+    # re-Generate needed), and drop the mapping, which is reactiveVal state
+    # rather than a control. Shared by the "Reset settings" button and the
+    # top-level app-reset (session_reset) path above.
     #
-    # shinyjs::reset() alone is not enough here, for four reasons:
-    #  - map_daterange and map_col_var/map_chart_var/map_popup/
-    #    map_hover_field *are* plain <select>s / a sliderInput (a pickerInput
-    #    is a <select> underneath) that shinyjs::reset() recognizes and
-    #    restores — but only asynchronously (it round-trips through the
-    #    browser to read back each resettable element's page-load value
-    #    before calling the matching update*Input() on the server). A
-    #    same-tick call right after shinyjs::reset() would send the correct,
-    #    data-fitted values *first*, and shinyjs's own (stale, pre-Generate)
-    #    restoration would land *after* it and overwrite it — e.g.
-    #    map_daterange would flash the right dates, then silently revert to
-    #    its literal as-coded HTML default (Sys.Date()-30 .. Sys.Date()),
-    #    which both breaks the slider's date formatting client-side (it shows
-    #    the raw millisecond value) and, worse, makes filter_coords() exclude
-    #    all of the real data, so every marker vanishes until Generate is
-    #    clicked again. Deferring past that round-trip (typically well under
-    #    100ms locally) via shinyjs::delay() guarantees these run last and
-    #    win — see reset_data_fitted_controls() below.
-    #  - colorPickr (map_marker_color/map_stroke_color/map_region_border/
-    #    map_na_color) is a custom JS-rendered widget shinyjs::reset() doesn't
-    #    even recognize — see reset_viz_colors().
-    #  - radioGroupButtons (map_interval) IS recognized by shinyjs::reset(),
-    #    but it then calls shiny::updateRadioButtons(), which the widget's
-    #    own JS binding silently ignores — see reset_viz_radio_buttons().
-    #    map_cluster_zoom_level is a plain sliderInput now (like
-    #    map_cluster_radius above), so the blanket reset already handles it.
-    # All four are patched up explicitly below, right after the blanket reset.
-    reset_data_fitted_controls <- function() {
-      populate_metadata_selects(force_default = TRUE)
-
-      coords <- map_coords()
-      if (!is.null(coords) && nrow(coords) > 0) {
-        dts <- suppressWarnings(as.Date(coords$sample_collection_date))
-        if (any(!is.na(dts))) {
-          daterange_bounds(range(dts, na.rm = TRUE))
-          shiny$updateSliderInput(
-            session,
-            "map_daterange",
-            min = min(dts, na.rm = TRUE),
-            max = max(dts, na.rm = TRUE),
-            value = range(dts, na.rm = TRUE)
-          )
-        }
-      }
-    }
-
-    # Restore every sidebar control to its coded default. Shared by this
-    # engine's own "Reset settings" button and the top-level app-reset
-    # (session_reset) path above, so both routes return the controls
-    # identically.
+    # The catalogue (MAP_CONTROLS / map_control_defaults()) is what makes that
+    # complete: this used to be shinyjs::reset(), which silently skips every
+    # pickerInput, virtualSelectInput, colour swatch and radioGroupButtons in
+    # this panel (see the reference at the top of viz_helpers.R). The
+    # data-fitted controls are sent after it, unconditionally, so the fit is
+    # the message that lands.
     reset_map_settings <- function() {
       anim_playing(FALSE)
       anim_idx(0L)
-      shinyjs::reset(id = "controls_wrap")
+      # The seq goes back to zero with the layers, which is safe only because
+      # no card survives to address an id that will be handed out again.
+      map_layers(list())
+      map_layer_seq(0L)
 
-      reset_viz_colors(
-        session,
-        map_marker_color = "#2c7fb8",
-        map_stroke_color = "#333333",
-        map_region_border = "#ffffff",
-        map_na_color = "#808080"
-      )
-      reset_viz_radio_buttons(
-        session,
-        map_interval = "Day"
-      )
-      shinyjs::delay(400, reset_data_fitted_controls())
+      apply_controls(session, map_control_defaults(), MAP_CONTROLS)
+      populate_metadata_selects(force_default = TRUE)
+      fit_data_controls(map_coords())
     }
 
-    shiny$observeEvent(input$reset_settings, reset_map_settings())
+    on_confirmed_reset(
+      input,
+      session,
+      reset_map_settings,
+      "The mapped variable is removed with the rest."
+    )
 
     # Keep the wrapper output reactive while hidden: the Map engine's panel is
     # display:none-hidden by navset_hidden whenever another engine is active,
@@ -3214,89 +3537,98 @@ server <- function(
     # switch to the Map tab. output$map itself is deliberately left to the
     # default suspend-when-hidden behavior (see its own comment above).
     shiny$outputOptions(output, "plot_area", suspendWhenHidden = FALSE)
-    # Same reasoning for the two granularity pickers, which are the only place
-    # a restored plot's saved granularity can be applied: hidden inside a
-    # collapsed accordion panel they would suspend, and a suspended control
-    # cannot be reached by an update or re-render to pick the value up.
-    for (id in c("col_granularity_ui", "chart_granularity_ui")) {
-      shiny$outputOptions(output, id, suspendWhenHidden = FALSE)
-    }
 
     # ---- Dashboard "Save Analysis" contract ---------------------------------
-    snapshot <- shiny$reactive(collect_input_snapshot(input, "map_"))
+    # Snapshot the map_* controls plus the mapping layers, which are
+    # reactiveVal state rather than inputs.
+    snapshot <- shiny$reactive(c(
+      collect_input_snapshot(input, "map_"),
+      list(.layers = map_layers())
+    ))
+
+    # Rebuild a mapping layer from a snapshot saved before the map had layers.
+    # Markers kept their variable in map_color_var / map_col_var (grouping in
+    # map_col_granularity, palette in map_col_scale), Charts in map_chart_var /
+    # map_chart_granularity / map_chart_scale; the saved mode says which one
+    # the plot was showing.
+    migrate_legacy_mapping <- function(vals) {
+      charts <- identical(vals$map_mode, "Charts")
+      field <- if (charts) {
+        vals$map_chart_var
+      } else if (isTRUE(vals$map_color_var)) {
+        vals$map_col_var
+      }
+      if (is.null(field) || !isTRUE(field %in% mappable_fields())) {
+        return(NULL)
+      }
+      prof <- profile_for(profiles(), field)
+      if (is.null(prof)) {
+        return(NULL)
+      }
+      layer <- assign_mapping_layer(
+        prof,
+        list(),
+        "L1",
+        MEDIUM,
+        viz_metadata()[[field]],
+        granularity = if (charts) {
+          vals$map_chart_granularity
+        } else {
+          vals$map_col_granularity
+        }
+      )
+      if (is.null(layer)) {
+        return(NULL)
+      }
+      palette <- if (charts) vals$map_chart_scale else vals$map_col_scale
+      if (!is.null(palette)) {
+        layer$palette <- palette
+      }
+      # Pinned: the saved palette and grouping are the user's choices.
+      layer$auto <- FALSE
+      list(layer)
+    }
 
     restore <- function(vals) {
-      apply_input_snapshot(
-        session,
-        vals,
-        switches = c(
-          "map_color_var",
-          "map_coverage",
-          "map_graticule",
-          "map_legend",
-          "map_minimap",
-          "map_permanent",
-          "map_reverse",
-          "map_scalebar",
-          "map_show_controls",
-          "map_spiderfy",
-          "map_chart_cluster",
-          "map_region_fixed_scale",
-          "map_region_label_nonzero",
-          "map_region_permanent",
-          "map_show_time_label",
-          "map_zoom_to_bounds"
-        ),
-        selects = c(
-          "map_mode",
-          "map_tiles",
-          "map_legend_pos",
-          "map_chart_type",
-          "map_col_scale",
-          "map_chart_scale",
-          "map_heat_scale"
-        ),
-        sliders = c(
-          "map_radius",
-          "map_opacity",
-          "map_weight",
-          "map_bins",
-          "map_legend_opacity",
-          "map_label_size",
-          "map_cluster_radius",
-          "map_cluster_zoom_level",
-          "map_region_opacity",
-          "map_heat_radius",
-          "map_heat_max",
-          "map_chart_size",
-          "map_chart_opacity",
-          "map_chart_cluster_radius"
-        ),
-        numerics = "map_legend_digits",
-        texts = "map_legend_title",
-        colors = c(
-          "map_marker_color",
-          "map_stroke_color",
-          "map_na_color",
-          "map_region_border"
-        ),
-        radio_groups = "map_interval"
+      if (is.null(vals)) {
+        return(invisible(NULL))
+      }
+      # A basemap no longer offered (the CARTO ones) keeps the current one.
+      if (
+        !is.null(vals$map_tiles) && !isTRUE(vals$map_tiles %in% map_providers)
+      ) {
+        vals$map_tiles <- NULL
+      }
+      # Choropleth's palette used to be the shared map_col_scale, before it
+      # moved to the Region tab (a saved map_region_reverse, from back when the
+      # palette could be flipped, is simply dropped -- it isn't any more).
+      if (identical(vals$map_mode, "Choropleth")) {
+        vals$map_region_scale <- vals$map_region_scale %||% vals$map_col_scale
+      }
+
+      # Same catalogue a reset applies, holding saved values instead of the
+      # coded ones.
+      apply_controls(session, vals, MAP_CONTROLS)
+      # The popup and hover selections only stick once their choices exist, so
+      # they are sent again together with the database's columns.
+      populate_metadata_selects(
+        popup = vals$map_popup,
+        hover = vals$map_hover_field
       )
 
-      # Base radioButtons (scale mode / region transform).
-      if (!is.null(vals$map_scale_type)) {
-        shiny$updateRadioButtons(
-          session,
-          "map_scale_type",
-          selected = vals$map_scale_type
-        )
+      # The mapping is written straight into its reactiveVal. A layer on a
+      # column this database no longer has is dropped rather than drawn.
+      layers <- normalize_layers(vals$.layers, LAYER_DEFAULTS, MEDIUM)
+      if (!is.null(layers)) {
+        fields <- mappable_fields()
+        layers <- Filter(function(l) isTRUE(l$field %in% fields), layers)
       }
-      if (!is.null(vals$map_region_transform)) {
-        shiny$updateRadioButtons(
-          session,
-          "map_region_transform",
-          selected = vals$map_region_transform
-        )
+      if (!length(layers)) {
+        layers <- migrate_legacy_mapping(vals)
+      }
+      if (!is.null(layers)) {
+        map_layers(layers)
+        map_layer_seq(length(layers))
       }
 
       # Date-range slider: restore as Dates.
@@ -3308,64 +3640,6 @@ server <- function(
         if (!is.null(dr) && length(dr) == 2 && !any(is.na(dr))) {
           shiny$updateSliderInput(session, "map_daterange", value = dr)
         }
-      }
-
-      # Metadata-backed selects / pickers (mirror populate_metadata_selects()).
-      meta <- viz_metadata()
-      if (!is.null(meta) && nrow(meta)) {
-        fields <- setdiff(names(meta), "isolate")
-        if (length(fields)) {
-          prof <- field_profiles() %||%
-            field_profiles_of(
-              meta,
-              mlst_cols = attr(meta, "mlst_cols"),
-              amr_cols = attr(meta, "amr_cols"),
-              custom_cols = attr(meta, "custom_cols")
-            )
-          prof <- prof[prof$field %in% fields, , drop = FALSE]
-          for (id in c("map_col_var", "map_chart_var")) {
-            if (!is.null(vals[[id]])) {
-              update_field_select(session, id, prof, selected = vals[[id]])
-            }
-          }
-          popup_ids <- unique(c("isolate", "place", fields))
-          popup_choices <- stats::setNames(
-            popup_ids,
-            vapply(popup_ids, field_label, character(1))
-          )
-          if (!is.null(vals$map_popup)) {
-            updatePickerInput(
-              session,
-              "map_popup",
-              choices = popup_choices,
-              selected = intersect(unlist(vals$map_popup), popup_ids)
-            )
-          }
-          hover_ids <- unique(c("isolate", fields))
-          hover_choices <- stats::setNames(
-            hover_ids,
-            vapply(hover_ids, field_label, character(1))
-          )
-          if (!is.null(vals$map_hover_field)) {
-            updatePickerInput(
-              session,
-              "map_hover_field",
-              choices = hover_choices,
-              selected = intersect(unlist(vals$map_hover_field), hover_ids)
-            )
-          }
-        }
-      }
-
-      # The two granularity pickers are renderUI-owned and exist only once
-      # their variable picker reports a date field - which the calls above have
-      # only just asked the browser for. Parked for those renders to apply
-      # rather than updated here, where the controls need not exist yet.
-      if (!is.null(vals$map_col_granularity)) {
-        restore_col_granularity(vals$map_col_granularity)
-      }
-      if (!is.null(vals$map_chart_granularity)) {
-        restore_chart_granularity(vals$map_chart_granularity)
       }
     }
 

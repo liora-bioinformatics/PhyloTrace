@@ -1316,26 +1316,20 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0.05) 75%, transparent 75%);
 }
 
-// Leaflet's default zoom control is top-left; move it to bottom-left (the
-// app has a single leaflet map, so this doesn't need to be scoped further).
-.leaflet-top.leaflet-left {
-    top: auto;
-    bottom: 0;
-}
-
-// Still classed .leaflet-top (only repositioned above), so it never gets
-// Leaflet's own `.leaflet-bottom .leaflet-control { margin-bottom }` rule.
-.leaflet-top.leaflet-left .leaflet-control {
-    margin-bottom: 10px;
-}
-
+// Zoom and fullscreen are added at bottom-left (visualization_map.R), leaving
+// top-left free to actually mean top-left for whatever the Legend tab's
+// position picker points there -- previously the zoom control's real corner
+// was forced down here with plain CSS, dragging anything else added to
+// top-left (a legend included) down with it regardless of what its own
+// position said.
+//
 // Scale bar: Leaflet only anchors controls to corners, and it's added at
-// bottom-left (see addScaleBar in visualization_map.R) where it collided with
-// the zoom buttons we moved to the same corner above. Stretch the bottom-left
-// corner across the full map width (pointer-events kept off so the empty
-// stretch doesn't block panning) so the scale bar can be absolutely centered
-// along the bottom edge. Any other bottom-left control (e.g. a legend) keeps
-// its default left-anchored float and is unaffected.
+// bottom-left too (see addScaleBar in visualization_map.R), sharing it with
+// zoom/fullscreen. Stretch the bottom-left corner across the full map width
+// (pointer-events kept off so the empty stretch doesn't block panning) so the
+// scale bar can be absolutely centered along the bottom edge, clear of them.
+// Any other bottom-left control (e.g. a legend) keeps its default
+// left-anchored float, stacking above zoom/fullscreen instead.
 .leaflet-bottom.leaflet-left {
     right: 0;
     pointer-events: none;
@@ -3582,49 +3576,44 @@ table.dataTable thead>tr>th.sorting {
     left: 5px;
 }
 
-// Both positioned in JS (see the script next to the slider markup) —
-// .irs-line's rendered offset isn't a fixed CSS percentage of either box.
-.cluster-zoom-slider_ticks {
-    position: relative;
-    height: 6px;
-    margin-top: 2px;
-}
-
 .db-empty-hint {
     height: 100%;
     align-content: center;
 }
 
-.cluster-zoom-slider_ticks span {
-    position: absolute;
-    top: 0;
-    width: 1px;
-    height: 3px;
-    background: var(--bs-border-color);
-}
-
-.cluster-zoom-slider_ticks span.cluster-zoom-slider_tick-major {
-    height: 6px;
-    background: var(--bs-secondary-color);
-}
-
-.cluster-zoom-slider_labels {
-    position: relative;
-    height: 1rem;
-    margin-top: 2px;
-}
-
-.cluster-zoom-slider_labels span {
-    position: absolute;
-    top: 0;
-    font-size: 10px;
+// The ground distance a screen-distance slider reaches at the current zoom
+// (see reach_slider() in visualization_map.R).
+.map-reach-hint {
+    margin-top: -0.5rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.75rem;
     color: var(--bs-secondary-color);
-    white-space: nowrap;
-    transform: translateX(-50%);
 }
 
-.cluster-zoom-slider_labels span:first-child {
-    transform: translateX(0);
+// Outline of that reach around each marker/cluster, chart cell or heat point
+// in view (or one centred on the map), while the slider is hovered or
+// dragged. `left`/`top` are that point, set in JS; the transform centres the
+// box on it. Above the tile/overlay panes, below Leaflet's controls.
+.map-reach-preview {
+    position: absolute;
+    z-index: 650;
+    box-sizing: border-box;
+    border: 2px dashed var(--bs-primary);
+    border-radius: 50%;
+    background: rgba(var(--bs-primary-rgb), 0.08);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    animation: map-reach-in 0.2s ease;
+}
+
+.map-reach-preview--square {
+    border-radius: 0;
+}
+
+@keyframes map-reach-in {
+    from {
+        opacity: 0;
+    }
 }
 
 // Class, not the module's namespaced id, so it survives one map instance per

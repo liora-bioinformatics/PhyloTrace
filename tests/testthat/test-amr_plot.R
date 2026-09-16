@@ -437,7 +437,8 @@ test_that("class prevalence labels each class by its strongest section", {
     hits_fixture(),
     sections_fixture(),
     ISOLATES,
-    level = "class"
+    level = "class",
+    vocabulary = "rollup"
   )
 
   expect_identical(df$group[df$item == "Beta-lactam"], "Matches")
@@ -585,7 +586,8 @@ test_that("a gene the rollup files two ways takes the commoner class", {
     amr_plot$amr_presence_matrix(
       hits_fixture(),
       ISOLATES,
-      sections = split_rollup
+      sections = split_rollup,
+      vocabulary = "rollup"
     ),
     "genes"
   )
@@ -976,7 +978,8 @@ test_that("the class heading draws as text only where columns are split by class
         if (inherits(cd, "dendrogram")) cd <- list(cd)
         for (k in seq_along(d$cats)) {
           impl$.decorate_class_dend(
-            d$annotation, k, d$cats[[k]], cd[[k]],
+            d$annotation, k, d$cats[[k]],
+            if (k <= length(cd)) cd[[k]] else NULL, d$counts[[k]],
             d$title_in, d$dend_cm, d$text_color, d$size, d$rot
           )
         }
@@ -1712,11 +1715,11 @@ test_that("a dendrogram depth of zero hides the trees but keeps the order", {
 test_that("the section filter reaches the class-level prevalence bars", {
   all_sections <- amr_plot$amr_prevalence(
     hits_fixture(), sections_fixture(), ISOLATES,
-    level = "class"
+    level = "class", vocabulary = "rollup"
   )
   matches <- amr_plot$amr_prevalence(
     hits_fixture(), sections_fixture(), ISOLATES,
-    level = "class", keep_sections = "matches"
+    level = "class", keep_sections = "matches", vocabulary = "rollup"
   )
   expect_true("Adhesion" %in% all_sections$item)
   expect_false("Adhesion" %in% matches$item)

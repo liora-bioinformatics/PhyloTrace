@@ -91,12 +91,30 @@ server <- function(
       }
     }
 
+    # Bumped synchronously, in the same flush as the click (or the external-db
+    # trigger), so main.R can show the loading overlay before load_trigger
+    # below changes - db_path() cascades from that into every downstream
+    # module's eager (suspendWhenHidden = FALSE) reads, some of which are slow
+    # on a large database. Showing the overlay off this earlier signal means
+    # it's already on screen once that heavier work starts, instead of the UI
+    # sitting merely unresponsive until the whole cascade finishes.
+    loading_started <- shiny$reactiveVal(0L)
+
     # Combined load trigger: incremented by the UI button and by the external
     # db observer so that both paths share one downstream observeEvent.
     load_trigger <- shiny$reactiveVal(NULL)
     fire_load <- function() {
-      n <- load_trigger()
-      load_trigger(if (is.null(n)) 1L else n + 1L)
+      loading_started(loading_started() + 1L)
+
+      # Deferred one tick so the loading_started bump above reaches the
+      # client - and the overlay it triggers actually paints - before
+      # load_trigger changes db_path() and everything that cascades from it.
+      later::later(function() {
+        shiny$withReactiveDomain(session, shiny$isolate({
+          n <- load_trigger()
+          load_trigger(if (is.null(n)) 1L else n + 1L)
+        }))
+      })
     }
 
     # Incrementing this forces the db-location observe() to re-run after reset,
@@ -324,6 +342,7 @@ server <- function(
     # flush, i.e. before main.R has run its on-load migrations.
     list(
       create_scheme = shiny$reactive(input$create_new_db),
+      loading_started = shiny$reactive(loading_started()),
       load_database = shiny$reactive(load_trigger()),
       db_path = shiny$reactive(
         if (is.null(load_trigger())) NULL else db_location()[2]

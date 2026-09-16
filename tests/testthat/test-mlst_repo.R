@@ -105,6 +105,7 @@ test_that("every cgMLST scheme species resolves to the expected database", {
     "Corynebacterium diphtheriae" = "pasteur: Corynebacterium",
     "Corynebacterium pseudotuberculosis" = "pasteur: Corynebacterium",
     "Cronobacter sakazakii/malonaticus" = "pubmlst: Cronobacter spp.",
+    "Dermatophilus congolensis" = "-",
     "Enterococcus faecalis" = "pubmlst: Enterococcus faecalis",
     "Enterococcus faecium" = "pubmlst: Enterococcus faecium",
     "Escherichia coli" = "pubmlst: Escherichia spp.",

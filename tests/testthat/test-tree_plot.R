@@ -2888,6 +2888,24 @@ test_that("the axis numbers get the room they hang in", {
   expect_identical(impl$.axis_frac(off, 20, height_in = 3), 0)
 })
 
+test_that("a truncated branch's own label gets room above the top row", {
+  # tree_branch_layer() can lift a broken branch's value clear of its "//"
+  # mark, above the branch's own row - which the header/flat reserve knew
+  # nothing about and let the panel edge clip.
+  opts <- .annot_opts(20)
+  tree_data <- data.frame(y = c(1, 20), broken = c(FALSE, TRUE))
+  expect_gt(impl$.branch_break_top_frac(opts, tree_data, 20, height_in = 3), 0)
+  # No broken branch, nothing reserved.
+  none <- data.frame(y = c(1, 20), broken = c(FALSE, FALSE))
+  expect_identical(impl$.branch_break_top_frac(opts, none, 20, height_in = 3), 0)
+  # Bigger branch-label type needs more room clear of the row above it.
+  bigger <- within(opts, branch_size <- 8)
+  expect_gt(
+    impl$.branch_break_top_frac(bigger, tree_data, 20, height_in = 3),
+    impl$.branch_break_top_frac(opts, tree_data, 20, height_in = 3)
+  )
+})
+
 test_that("the last axis number gets the width it hangs in", {
   # pretty() can put the last tick on the tree's own depth, and the number is
   # centred on its tick - so half of "30" was drawn past the panel's right
