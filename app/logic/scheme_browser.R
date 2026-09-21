@@ -112,7 +112,12 @@ resolve_scheme_key <- function(species = NULL, scheme_overview = NULL) {
     plain,
     .drop_curator(plain),
     vapply(plain, mangle_species, character(1), USE.NAMES = FALSE),
-    vapply(.drop_curator(plain), mangle_species, character(1), USE.NAMES = FALSE)
+    vapply(
+      .drop_curator(plain),
+      mangle_species,
+      character(1),
+      USE.NAMES = FALSE
+    )
   )
 
   target <- .match_key(species)

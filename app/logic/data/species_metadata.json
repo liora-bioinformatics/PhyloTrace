@@ -152,6 +152,23 @@
     "summary_source": "synthesized"
   },
   {
+    "species": "Candidozyma_auris",
+    "abb": "Cauris",
+    "query_name": "Candidozyma auris",
+    "ncbi_taxid": 498019,
+    "scientific_name": "Candidozyma auris",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Ascomycota",
+      "class": "Saccharomycetes",
+      "order": "Saccharomycetales",
+      "family": "Metschnikowiaceae",
+      "genus": "Candidozyma"
+    },
+    "summary": "Candidozyma auris (formerly Candida auris) is an ascomycetous, budding yeast of the family Metschnikowiaceae. It is an emerging fungal pathogen that causes severe invasive candidiasis, bloodstream infections, and outbreaks in healthcare facilities. It is notorious for widespread multidrug resistance, environmental persistence, and rapid global dissemination.",
+    "summary_source": "synthesized"
+  },
+  {
     "species": "Clostridioides_difficile",
     "abb": "Cdifficile",
     "query_name": "Clostridioides difficile",

@@ -90,6 +90,13 @@ descriptions <- c(
     "worldwide, with poultry as the principal reservoir. cgMLST is used to",
     "distinguish the two species and trace foodborne transmission."
   ),
+  "Candidozyma_auris" = paste(
+    "Candidozyma auris (formerly Candida auris) is an ascomycetous, budding",
+    "yeast of the family Metschnikowiaceae. It is an emerging fungal pathogen",
+    "that causes severe invasive candidiasis, bloodstream infections, and",
+    "outbreaks in healthcare facilities. It is notorious for widespread multidrug",
+    "resistance, environmental persistence, and rapid global dissemination."
+  ),
   "Clostridioides_difficile" = paste(
     "Clostridioides difficile is a Gram-positive, rod-shaped, anaerobic,",
     "spore-forming bacterium of the family Peptostreptococcaceae. Its toxins",
@@ -339,8 +346,13 @@ records <- fromJSON(json_path, simplifyVector = FALSE)
 schemes <- read.csv(csv_path, stringsAsFactors = FALSE)
 
 if (length(records) != nrow(schemes)) {
-  stop("Record count (", length(records), ") != CSV rows (", nrow(schemes),
-       "); cannot re-align by position.")
+  stop(
+    "Record count (",
+    length(records),
+    ") != CSV rows (",
+    nrow(schemes),
+    "); cannot re-align by position."
+  )
 }
 
 genus_of <- function(x) sub("[ _].*$", "", trimws(x))
@@ -348,18 +360,31 @@ genus_of <- function(x) sub("[ _].*$", "", trimws(x))
 # Re-align the existing (organism-stable) taxonomy to the current CSV labels by
 # row position, then refresh species/abb. A genus sanity-check guards against a
 # reordered CSV.
-records <- Map(function(r, i) {
-  if (!identical(genus_of(r$species), genus_of(schemes$species[i]))) {
-    stop("Row ", i, " genus mismatch: JSON '", r$species,
-         "' vs CSV '", schemes$species[i], "'. CSV order may have changed.")
-  }
-  r$species <- schemes$species[i]
-  r$abb <- schemes$abb[i]
-  r
-}, records, seq_along(records))
+records <- Map(
+  function(r, i) {
+    if (!identical(genus_of(r$species), genus_of(schemes$species[i]))) {
+      stop(
+        "Row ",
+        i,
+        " genus mismatch: JSON '",
+        r$species,
+        "' vs CSV '",
+        schemes$species[i],
+        "'. CSV order may have changed."
+      )
+    }
+    r$species <- schemes$species[i]
+    r$abb <- schemes$abb[i]
+    r
+  },
+  records,
+  seq_along(records)
+)
 
-missing <- setdiff(vapply(records, function(r) r$species, character(1)),
-                   names(descriptions))
+missing <- setdiff(
+  vapply(records, function(r) r$species, character(1)),
+  names(descriptions)
+)
 if (length(missing) > 0) {
   stop("No synthesized description for: ", paste(missing, collapse = ", "))
 }
