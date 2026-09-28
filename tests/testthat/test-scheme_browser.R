@@ -191,6 +191,20 @@ test_that("an unidentifiable scheme resolves to NULL, not to a wrong one", {
   expect_null(scheme_browser$get_species_img("Wolbachia pipientis"))
 })
 
+# `wgMLST import` cannot tell these two apart (one name is a prefix of the
+# other), so the fallback relies on each resolving to its own scheme URL.
+test_that("a scheme and its species complex resolve to distinct URLs", {
+  expect_equal(
+    scheme_browser$scheme_url("Citrobacter freundii"),
+    "https://www.cgmlst.org/ncs/schema/Cfreundii/"
+  )
+  expect_equal(
+    scheme_browser$scheme_url("Citrobacter freundii/portucalensis/braakii/europaeus"),
+    "https://www.cgmlst.org/ncs/schema/Cfreundii_complex/"
+  )
+  expect_null(scheme_browser$scheme_url("Wolbachia pipientis"))
+})
+
 test_that("the scheme URL is read out of a stored overview table", {
   expect_equal(impl$.overview_abb(overview_of("Kpneumoniae_complex")), "Kpneumoniae_complex")
   expect_null(impl$.overview_abb(NULL))

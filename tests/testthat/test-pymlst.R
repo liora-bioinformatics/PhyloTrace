@@ -1,4 +1,7 @@
 box::use(
+  DBI[dbConnect, dbDisconnect, dbGetQuery],
+  processx[process],
+  RSQLite[SQLite],
   testthat[expect_false, expect_identical, expect_true, test_that],
   utils[tail],
   withr[local_tempdir],
@@ -20,8 +23,11 @@ test_that("typing_args asks for classical MLST only with a resolved scheme", {
 
   # Both halves are needed: the reference path to build into and the spec that
   # says what to build. A species alone buys nothing.
-  with_scheme <- args(species = "Enterococcus faecium", cla_db = "/tmp/c.db",
-                      cla_spec = "/tmp/c.spec")
+  with_scheme <- args(
+    species = "Enterococcus faecium",
+    cla_db = "/tmp/c.db",
+    cla_spec = "/tmp/c.spec"
+  )
   expect_true(all(c("-m", "/tmp/c.db", "-M", "/tmp/c.spec") %in% with_scheme))
 
   no_spec <- args(species = "Enterococcus faecium", cla_db = "/tmp/c.db")
@@ -34,7 +40,10 @@ test_that("typing_args asks for classical MLST only with a resolved scheme", {
 
 test_that("typing_args passes the classical search its own thresholds", {
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
+    "/db/x.db",
+    "/genomes/a.fna",
+    0.95,
+    0.9,
     species = "Acinetobacter baumannii",
     cla_identity = 0.9,
     cla_coverage = 0.85,
@@ -52,7 +61,10 @@ test_that("typing_args passes the classical search its own thresholds", {
 
 test_that("typing_args defaults the classical thresholds to pyMLST's own", {
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
+    "/db/x.db",
+    "/genomes/a.fna",
+    0.95,
+    0.9,
     species = "Acinetobacter baumannii",
     cla_db = "/tmp/c.db",
     cla_spec = "/tmp/c.spec"
@@ -75,7 +87,10 @@ test_that("typing_args omits classical thresholds when no scheme is built", {
   # Nothing to search, so the flags would be meaningless - and their absence is
   # what makes the script fall back to the allele-calling pair.
   args <- impl$typing_args(
-    "/db/x.db", "/genomes/a.fna", 0.95, 0.9,
+    "/db/x.db",
+    "/genomes/a.fna",
+    0.95,
+    0.9,
     species = "Acinetobacter baumannii"
   )
   expect_false(any(c("-I", "-C") %in% args))
@@ -83,7 +98,10 @@ test_that("typing_args omits classical thresholds when no scheme is built", {
 
 test_that("clamlst_status reports a single ST with a complete profile as known", {
   expect_identical(
-    pymlst$clamlst_status("11", "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"),
+    pymlst$clamlst_status(
+      "11",
+      "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"
+    ),
     "known"
   )
 })
@@ -95,19 +113,28 @@ test_that("clamlst_status treats an uncalled locus as partial, not a call", {
   )
   # An ST candidate list next to a missing locus must never read as "known".
   expect_identical(
-    pymlst$clamlst_status(AMBIGUOUS_STS, "gapA=,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"),
+    pymlst$clamlst_status(
+      AMBIGUOUS_STS,
+      "gapA=,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"
+    ),
     "partial"
   )
 })
 
 test_that("clamlst_status flags several STs over a complete profile as ambiguous", {
   expect_identical(
-    pymlst$clamlst_status("11;12", "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"),
+    pymlst$clamlst_status(
+      "11;12",
+      "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"
+    ),
     "ambiguous"
   )
   # Two alleles at one locus leave the profile undecided as well.
   expect_identical(
-    pymlst$clamlst_status("", "gapA=3;5,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"),
+    pymlst$clamlst_status(
+      "",
+      "gapA=3;5,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"
+    ),
     "ambiguous"
   )
 })
@@ -128,7 +155,10 @@ test_that("clamlst_status returns NA when nothing was called", {
     pymlst$clamlst_status(NA_character_, "gapA=,infB=,mdh="),
     NA_character_
   )
-  expect_identical(pymlst$clamlst_status(NA_character_, NA_character_), NA_character_)
+  expect_identical(
+    pymlst$clamlst_status(NA_character_, NA_character_),
+    NA_character_
+  )
 })
 
 # Two Enterococcus faecium profile rows sharing every allele but pstS, one of
@@ -195,20 +225,32 @@ test_that("st_from_profile reads an absent locus as the scheme's zero allele", {
 test_that("st_from_profile refuses anything but a single matching row", {
   # Two loci uncalled: no row carries a zero for both.
   expect_identical(
-    pymlst$st_from_profile("adk=1,atpA=1,ddl=1,gdh=1,gyd=,pstS=,purK=1", EFM_PROFILES),
+    pymlst$st_from_profile(
+      "adk=1,atpA=1,ddl=1,gdh=1,gyd=,pstS=,purK=1",
+      EFM_PROFILES
+    ),
     NA_character_
   )
   # An unregistered allele has no profile to match.
   expect_identical(
-    pymlst$st_from_profile("adk=99,atpA=1,ddl=1,gdh=1,gyd=1,pstS=,purK=1", EFM_PROFILES),
+    pymlst$st_from_profile(
+      "adk=99,atpA=1,ddl=1,gdh=1,gyd=1,pstS=,purK=1",
+      EFM_PROFILES
+    ),
     NA_character_
   )
   expect_identical(
-    pymlst$st_from_profile("adk=new,atpA=1,ddl=1,gdh=1,gyd=1,pstS=1,purK=1", EFM_PROFILES),
+    pymlst$st_from_profile(
+      "adk=new,atpA=1,ddl=1,gdh=1,gyd=1,pstS=1,purK=1",
+      EFM_PROFILES
+    ),
     NA_character_
   )
   # A locus the profile table does not describe.
-  expect_identical(pymlst$st_from_profile("xyzA=1", EFM_PROFILES), NA_character_)
+  expect_identical(
+    pymlst$st_from_profile("xyzA=1", EFM_PROFILES),
+    NA_character_
+  )
   expect_identical(pymlst$st_from_profile("adk=1", NULL), NA_character_)
 })
 
@@ -337,4 +379,122 @@ test_that("storing one isolate at a time matches storing them in one batch", {
 
   expect_identical(rows(incremental), rows(batch))
   expect_identical(nrow(rows(incremental)), 14L)
+})
+
+# Stands in for scheme-download.sh: prints the arguments it was given.
+fake_download_script <- function(dir) {
+  path <- file.path(dir, "fake-download.sh")
+  writeLines(
+    c("#!/bin/bash", "echo \"ARGS: $*\"", "echo \"Error: boom\" >&2"),
+    path
+  )
+  path
+}
+
+test_that("start_scheme_download hands the script its arguments and appends the log", {
+  dir <- local_tempdir()
+  log_file <- file.path(dir, "download.log")
+  writeLines("already here", log_file)
+
+  proc <- pymlst$start_scheme_download(
+    "Citrobacter freundii",
+    file.path(dir, "cf.db"),
+    log_file,
+    env_name = "SomeEnv",
+    scheme_url = "https://www.cgmlst.org/ncs/schema/Cfreundii/",
+    script_path = fake_download_script(dir)
+  )
+  proc$wait(10000)
+
+  log_lines <- readLines(log_file)
+  expect_identical(log_lines[1], "already here")
+  expect_identical(
+    log_lines[2],
+    paste(
+      "ARGS: -d cf.db -n Citrobacter freundii -e SomeEnv",
+      "-u https://www.cgmlst.org/ncs/schema/Cfreundii/"
+    )
+  )
+  # stderr lands in the same log, so the failure reason can be read back.
+  expect_identical(pymlst$scheme_download_error(log_lines), "boom")
+})
+
+test_that("start_scheme_download omits the fallback URL when there is none", {
+  dir <- local_tempdir()
+  log_file <- file.path(dir, "download.log")
+
+  proc <- pymlst$start_scheme_download(
+    "Escherichia coli",
+    file.path(dir, "ec.db"),
+    log_file,
+    overwrite = TRUE,
+    script_path = fake_download_script(dir)
+  )
+  proc$wait(10000)
+
+  expect_identical(
+    readLines(log_file)[1],
+    "ARGS: -d ec.db -n Escherichia coli -e PhyloTrace -f"
+  )
+})
+
+test_that("a scheme built by wgMLST create is recorded as a cgmlst.org import", {
+  dir <- local_tempdir()
+  source_of <- function(db) {
+    con <- dbConnect(SQLite(), db)
+    on.exit(dbDisconnect(con))
+    dbGetQuery(con, "SELECT source FROM mlst_type")$source
+  }
+
+  created <- file.path(dir, "created.db")
+  build_db(created, default_local(), scheme_source = "custom")
+  expect_true(pymlst$finish_scheme_download(
+    created,
+    c(
+      "Scheme download: import is ambiguous",
+      "Scheme download: done (wgMLST create)"
+    )
+  ))
+  expect_identical(source_of(created), "cgmlst.org")
+
+  # A scheme that was imported keeps whatever the import recorded.
+  imported <- file.path(dir, "imported.db")
+  build_db(imported, default_local(), scheme_source = "custom")
+  pymlst$finish_scheme_download(
+    imported,
+    "Scheme download: done (wgMLST import)"
+  )
+  expect_identical(source_of(imported), "custom")
+
+  expect_false(pymlst$finish_scheme_download(
+    file.path(dir, "missing.db"),
+    character(0)
+  ))
+})
+
+test_that("stop_scheme_download kills the download and removes its partial database", {
+  dir <- local_tempdir()
+  db <- file.path(dir, "partial.db")
+  writeLines("partial", db)
+  writeLines("journal", paste0(db, "-journal"))
+
+  proc <- processx::process$new("sleep", "60")
+  pymlst$stop_scheme_download(proc, db)
+
+  proc$wait(5000)
+  expect_false(proc$is_alive())
+  expect_false(file.exists(db))
+  expect_false(file.exists(paste0(db, "-journal")))
+})
+
+test_that("scheme_download_error reports the last error in the log", {
+  expect_identical(
+    pymlst$scheme_download_error(c(
+      "Scheme download: importing X",
+      "Error: More than 1 result found for 'X'",
+      "Error: download failed for the scheme alleles"
+    )),
+    "download failed for the scheme alleles"
+  )
+  expect_identical(pymlst$scheme_download_error("all fine"), NA_character_)
 })

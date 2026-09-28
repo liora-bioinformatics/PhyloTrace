@@ -238,6 +238,32 @@ download_scheme_overview <- function(scheme_overview, db_path) {
   invisible(TRUE)
 }
 
+#' Resolve cgMLST Scheme Download URL
+#'
+#' @description Builds the exact cgmlst.org scheme URL from the same `abb`
+#'   lookup `download_scheme_targets()` and `get_scheme_overview()` use. It
+#'   identifies a scheme even where its name is ambiguous to `wgMLST import`
+#'   (see `download_cgmlst_scheme()`).
+#'
+#' @param select_cgmlst Character string. Species name as selected in UI.
+#'
+#' @return Character string URL, or `NULL` when the species is not in the table.
+#' @export
+scheme_url <- function(select_cgmlst) {
+  select_cgmlst <- gsub(" ", "_", select_cgmlst)
+  selection <- cgmlst_org_schemes$species == select_cgmlst
+
+  if (!any(selection)) {
+    return(NULL)
+  }
+
+  paste0(
+    "https://www.cgmlst.org/ncs/schema/",
+    cgmlst_org_schemes$abb[which(selection)],
+    "/"
+  )
+}
+
 #' Fetch and Store Scheme Target Loci
 #'
 #' @description Retrieves locus definition tables directly from cgmlst.org and writes them

@@ -26,9 +26,11 @@ box::use(
     bindEvent,
     textInput,
     verbatimTextOutput,
-    showNotification
+    showNotification,
+    invalidateLater,
+    tags
   ],
-  shinyjs[disabled, useShinyjs, enable, disable, addClass, removeClass],
+  shinyjs[disabled, useShinyjs, enable, disable, addClass, removeClass, html],
   bslib[
     navset_card_tab,
     page_fillable,
@@ -55,7 +57,15 @@ box::use(
   app / logic / db_guard[db_failed, guard_db],
   app / logic / functions[render_info],
   app / logic / schemes[cgmlst_org_schemes],
-  app / logic / pymlst[download_cgmlst_scheme, conda_env],
+  app /
+    logic /
+    pymlst[
+      conda_env,
+      finish_scheme_download,
+      scheme_download_error,
+      start_scheme_download,
+      stop_scheme_download
+    ],
   app /
     logic /
     scheme_browser[
@@ -64,7 +74,8 @@ box::use(
       get_scheme_overview,
       get_species_img,
       get_species_details,
-      assemble_db_location
+      assemble_db_location,
+      scheme_url
     ]
 )
 
@@ -226,13 +237,34 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    Scheme_Browser <- reactiveValues(download_status = "", last_download = NULL)
+    Scheme_Browser <- reactiveValues(
+      download_status = "",
+      last_download = NULL,
+      # The running download: process, target file, log, scheme and start time.
+      download = NULL
+    )
+
+    # Plain mirror of the running download, so session teardown - outside any
+    # reactive context - can still stop it and remove its partial database.
+    live_download <- NULL
+    session$onSessionEnded(function() {
+      if (!is.null(live_download)) {
+        stop_scheme_download(live_download$proc, live_download$db)
+      }
+    })
 
     # Reset module state when the user returns to the landing screen.
-    # Clears the last download path so the "Load Database" button is disabled.
+    # Clears the last download path so the "Load Database" button is disabled,
+    # and abandons a download still in progress.
     observeEvent(
       session_reset(),
       {
+        if (!is.null(live_download)) {
+          stop_scheme_download(live_download$proc, live_download$db)
+          live_download$waiter$hide()
+          live_download <<- NULL
+        }
+        Scheme_Browser$download <- NULL
         Scheme_Browser$download_status <- ""
         Scheme_Browser$last_download <- NULL
       },
@@ -445,15 +477,21 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
     }) |>
       shiny::bindEvent(list(input$db_name, input$download_location))
 
-    # Event scheme download
+    # Start a scheme download in the background. A large scheme can take many
+    # minutes; running it synchronously would freeze every session and leave no
+    # way to cancel it.
     observeEvent(input$scheme_download, {
+      req(is.null(Scheme_Browser$download))
+
       db_location <- assemble_db_location(
         input$download_location,
         input$db_name
       )
       req(db_location)
 
-      # If database already exists exit
+      # Refusing an existing file also guarantees that whatever sits at
+      # db_location after a failed or cancelled download is this download's own
+      # partial file, safe to remove.
       if (file.exists(db_location)) {
         showNotification(
           paste(db_location, "already exists"),
@@ -463,78 +501,162 @@ server <- function(id, session_reset = shiny::reactive(0L)) {
         return()
       }
 
-      Scheme_Browser$download_status <- "Downloading ..."
+      scheme <- input$scheme_selector
+      log_file <- tempfile("scheme_download_", fileext = ".log")
+      file.create(log_file)
 
-      waiting_screen <- div(
-        class = "spinner-custom",
-        spin_flower(),
-        div(
-          h5("Downloading ..."),
-          div(id = "scheme-load", input$scheme_selector)
-        )
-      )
-
-      # Define spinner
-      w <- Waiter$new(
-        id = ns("scheme-download-container"),
-        html = waiting_screen
-      )
-      w$show()
-      on.exit(w$hide())
-
-      # Run download. It also writes to the new database file (the species name
-      # repair), so it is guarded like any other database write.
-      status <- guard_db(
-        "Downloading the scheme",
-        download_cgmlst_scheme(
-          input$scheme_selector,
+      proc <- tryCatch(
+        start_scheme_download(
+          scheme,
           db_location,
-          env_name = conda_env
-        )
+          log_file,
+          env_name = conda_env,
+          scheme_url = scheme_url(scheme)
+        ),
+        error = function(e) e
       )
-      if (db_failed(status)) {
+      if (inherits(proc, "error")) {
+        unlink(log_file)
+        showNotification(
+          paste("Could not start the download:", conditionMessage(proc)),
+          type = "error",
+          duration = 8
+        )
         return()
       }
 
-      # Check download process status
-      if (status$status == 1 | isFALSE(file.exists(db_location))) {
-        # Case download has exit status 1
-        download_status <- paste(
-          "Download of",
-          input$scheme_selector,
-          "failed"
+      waiter <- Waiter$new(
+        id = ns("scheme-download-container"),
+        html = div(
+          class = "spinner-custom",
+          spin_flower(),
+          div(
+            h5("Downloading ..."),
+            div(id = "scheme-load", scheme),
+            div(id = ns("download_elapsed"), "0:00 elapsed"),
+            tags$button(
+              type = "button",
+              class = "btn btn-primary",
+              onclick = sprintf(
+                "Shiny.setInputValue('%s', Date.now(), {priority: 'event'})",
+                ns("cancel_download")
+              ),
+              "Cancel"
+            )
+          )
         )
-      } else if (status$status == 0) {
-        # Store the scheme overview and its target/locus table from cgmlst.org
-        # (`targets`). Both are supplementary: a failed write is reported but
-        # leaves the downloaded database loadable.
-        guard_db("Storing the scheme details", {
-          if (!is.null(scheme_overview())) {
-            download_scheme_overview(scheme_overview(), db_location)
-          }
-          download_scheme_targets(input$scheme_selector, db_location)
-        })
+      )
+      waiter$show()
 
-        # Case download has exit status 0
-        download_status <- paste(
-          "Download of",
-          input$scheme_selector,
-          "was successful."
-        )
+      live_download <<- list(proc = proc, db = db_location, waiter = waiter)
+      Scheme_Browser$download_status <- "Downloading ..."
+      Scheme_Browser$download <- list(
+        proc = proc,
+        db = db_location,
+        log = log_file,
+        scheme = scheme,
+        overview = scheme_overview(),
+        started = Sys.time(),
+        cancelled = FALSE
+      )
+    })
 
-        # Remember the path of the last successful download so the
-        # "Load Database" click hands over this database rather than the
-        # current (possibly changed) input selection.
-        Scheme_Browser$last_download <- db_location
+    # Cancel the running download: its process tree is killed and its partial
+    # database removed; the poll below then reports the cancellation.
+    observeEvent(input$cancel_download, {
+      req(!is.null(Scheme_Browser$download))
+      Scheme_Browser$download$cancelled <- TRUE
+      stop_scheme_download(
+        Scheme_Browser$download$proc,
+        Scheme_Browser$download$db
+      )
+    })
 
-        enable("load_db")
-        addClass("load_db", "btn-attention")
+    # Poll the running download once a second: show the elapsed time while it
+    # runs, then finalise the database and report the outcome once it exits.
+    observe({
+      dl <- Scheme_Browser$download
+      if (is.null(dl)) {
+        return(NULL)
       }
 
-      # Return status
+      if (dl$proc$is_alive()) {
+        secs <- as.integer(difftime(Sys.time(), dl$started, units = "secs"))
+        html(
+          "download_elapsed",
+          sprintf("%d:%02d elapsed", secs %/% 60, secs %% 60)
+        )
+        invalidateLater(1000, session)
+        return(NULL)
+      }
+
+      Scheme_Browser$download <- NULL
+      live_download$waiter$hide()
+      live_download <<- NULL
+
+      log_lines <- if (file.exists(dl$log)) {
+        readLines(dl$log, warn = FALSE)
+      } else {
+        character(0)
+      }
+      unlink(dl$log)
+
+      if (isTRUE(dl$cancelled)) {
+        showNotification(
+          paste("Download of", dl$scheme, "cancelled"),
+          type = "warning",
+          duration = 5
+        )
+        return(NULL)
+      }
+
+      if (!identical(dl$proc$get_exit_status(), 0L) || !file.exists(dl$db)) {
+        stop_scheme_download(NULL, dl$db)
+        reason <- scheme_download_error(log_lines)
+        showNotification(
+          paste0(
+            "Download of ",
+            dl$scheme,
+            " failed",
+            if (!is.na(reason)) paste0(": ", reason) else ""
+          ),
+          type = "error",
+          duration = 10
+        )
+        return(NULL)
+      }
+
+      # Writes to the new database file (source and species repair), so it is
+      # guarded like any other database write.
+      finished <- guard_db(
+        "Downloading the scheme",
+        finish_scheme_download(dl$db, log_lines)
+      )
+      if (db_failed(finished)) {
+        return(NULL)
+      }
+
+      # Store the scheme overview and its target/locus table from cgmlst.org
+      # (`targets`). Both are supplementary: a failed write is reported but
+      # leaves the downloaded database loadable.
+      guard_db("Storing the scheme details", {
+        if (is.data.frame(dl$overview)) {
+          download_scheme_overview(dl$overview, dl$db)
+        }
+        download_scheme_targets(dl$scheme, dl$db)
+      })
+
+      # Remember the path of the last successful download so the
+      # "Load Database" click hands over this database rather than the
+      # current (possibly changed) input selection.
+      Scheme_Browser$last_download <- dl$db
+
+      enable("load_db")
+      addClass("load_db", "btn-attention")
+
       showNotification(
-        download_status,
-        type = ifelse(status$status == 0, "message", "error"),
+        paste("Download of", dl$scheme, "was successful."),
+        type = "message",
         duration = 5
       )
     })
