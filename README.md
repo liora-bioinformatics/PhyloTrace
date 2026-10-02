@@ -16,7 +16,7 @@ diagnostic procedures, for guiding treatment decisions, or for the management of
 patients.*
 
 [liora-bioinformatics.com/phylotrace](https://liora-bioinformatics.com/phylotrace) \|
-[phylotrace@liora-bioinformatics.com](mailto:phylotrace@liora-bioinformatics.com?subject=%5BGitHub%5D%20PhyloTrace)
+[info@liora-bioinformatics.com](mailto:info@liora-bioinformatics.com?subject=%5BGitHub%5D%20PhyloTrace)
 
 <br>
 
@@ -89,11 +89,26 @@ snapshotting the current database state makes analyses reproducible and shareabl
 
 <br>
 
-## Get PhyloTrace
+## Installation
 
-Installation binaries are provided free of charge, on request:
+Clone the repository and run the installer:
 
-📧 **[phylotrace@liora-bioinformatics.com](mailto:phylotrace@liora-bioinformatics.com?subject=PhyloTrace%20installation%20request)**
+```bash
+git clone https://github.com/liora-bioinformatics/PhyloTrace
+cd PhyloTrace
+bash install_phylotrace.sh
+```
+
+If conda isn't already installed, the script installs Miniconda for you and will prompt you
+to accept the license and confirm a few setup choices — answer those yes/no prompts to
+continue.
+
+Once installation finishes, launch PhyloTrace from your applications menu, or from the
+terminal with:
+
+```bash
+bash run_phylotrace.sh
+```
 
 ## Support & Services
 
@@ -101,7 +116,7 @@ PhyloTrace stays free and open source. Alongside it we offer an optional open-so
 service-and-support model for labs and institutions that want more — installation and deployment
 help, staff training, priority bug fixing, custom scheme integration, and commissioned feature work.
 Get in touch at
-[phylotrace@liora-bioinformatics.com](mailto:phylotrace@liora-bioinformatics.com?subject=PhyloTrace%20support%20enquiry).
+[info@liora-bioinformatics.com](mailto:info@liora-bioinformatics.com?subject=PhyloTrace%20support%20enquiry).
 
 ## Citation
 
