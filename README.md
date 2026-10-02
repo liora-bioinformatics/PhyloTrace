@@ -20,11 +20,19 @@ patients.*
 
 <br>
 
+<img src="app/static/images/partners_logo_round.svg" width="100%"/>
+
+<sup><sup>Developed in collaboration with Hochschule Furtwangen University (HFU) and Medical
+University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024.</sup></sup>
+
+<br>
+
+## Features
+
 ### Core-Genome Multilocus Sequence Typing (cgMLST and MLST)
 
-High-resolution strain typing using standardized cgMLST and classical MLST schemes. 40 bacterial
-schemes are currently available via [cgMLST.org](https://www.cgmlst.org) and PubMLST, and are
-continuously updated.
+High-resolution strain typing using standardized cgMLST and classical MLST schemes. 42 bacterial
+schemes are currently available via [cgMLST.org](https://www.cgmlst.org). Support for custom schemes will be added soon.
 
 <img src="docs/readme/typing-run.png" width="100%"/>
 
@@ -139,10 +147,3 @@ If you use PhyloTrace for your paper or publication, cite us with
 
 PhyloTrace is licensed under the
 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0) — see [LICENSE](LICENSE).
-
-<br>
-
-<img src="app/static/images/partners_logo_round.svg" width="50%"/>
-
-<sup><sup>Developed in collaboration with Hochschule Furtwangen University (HFU) and Medical
-University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024.</sup></sup>
