@@ -63,6 +63,7 @@ box::use(
   app / view / typing,
   app / view / analysis_dashboard,
   app / view / visualization,
+  app / view / issue_report,
 )
 
 fillable_panel <- function(...) {
@@ -126,6 +127,7 @@ ui <- function(id) {
       # recognisable from any tab, not just Add Isolates.
       nav_item(uiOutput(ns("typing_indicator"), inline = TRUE)),
       nav_item(paste0("v", APP_VERSION)),
+      issue_report$ui(ns("issue_report")),
       nav_item(
         actionButton(
           inputId = ns("toggle_dark"),
@@ -301,6 +303,8 @@ server <- function(id) {
       SCHEME_BROWSER_vals$load_db()
       isolate(SCHEME_BROWSER_vals$db_location())
     })
+
+    issue_report$server("issue_report")
 
     LANDING_PAGE_vals <- landing_page$server(
       "landing_page",

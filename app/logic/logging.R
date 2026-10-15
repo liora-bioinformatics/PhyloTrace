@@ -79,6 +79,12 @@ start_session_log <- function(db_path) {
   invisible(path)
 }
 
+#' Active Session Log File
+#'
+#' @return Path of the log opened by [start_session_log()], or NULL before one.
+#' @export
+session_log_file <- function() .state$file
+
 #' Generate Path for Typing Run Process Log
 #'
 #' Creates a unique timestamped file path in `logdir` to capture stdout/stderr
