@@ -9,8 +9,18 @@ box::use(
   stats[setNames],
 )
 box::use(
-  app / logic / db_compat[REF_SOUCHE],
   app / logic / db_connect[connect],
+  app /
+    logic /
+    overview_common[
+      blank_na,
+      check_list,
+      database_isolates,
+      modal,
+      read_cols,
+      tally,
+      threshold_pairs,
+    ],
 )
 
 #' Classical MLST Call Status Labels
@@ -76,38 +86,15 @@ PROV_COLS <- c(
   "isolate", "cla_status", "cla_scheme", "cla_scheme_version", "cla_repository"
 )
 
-TONE_RANK <- c(danger = 1L, warning = 2L, info = 3L, success = 4L)
-
 # Locus names travel through pyMLST's clean_geneid() (underscores become
 # hyphens), so names from different sources are compared stripped down.
 norm_locus <- function(x) gsub("[^[:alnum:]]", "", tolower(x))
-
-# Blank and NA collapse to NA so "not recorded" has a single spelling.
-blank_na <- function(x) {
-  x <- as.character(x)
-  x[!is.na(x) & !nzchar(trimws(x))] <- NA_character_
-  x
-}
 
 # A release key that treats an unrecorded version as the empty string.
 release_key <- function(repository, scheme, version) {
   version <- as.character(version)
   version[is.na(version)] <- ""
   paste(repository, scheme, version, sep = "\r")
-}
-
-# Reads `cols` from `table`, filling any column an older database lacks with NA
-# so every reader downstream sees one shape.
-read_cols <- function(con, table, cols) {
-  have <- intersect(cols, dbListFields(con, table))
-  df <- dbGetQuery(
-    con,
-    sprintf("SELECT %s FROM %s", paste(have, collapse = ", "), table)
-  )
-  for (col in setdiff(cols, have)) {
-    df[[col]] <- rep(NA_character_, nrow(df))
-  }
-  df[cols]
 }
 
 #' Load the Classical MLST Overview of a Database
@@ -124,24 +111,7 @@ load_mlst_overview <- function(db_path) {
   on.exit(dbDisconnect(con))
   tables <- dbListTables(con)
 
-  # `metadata` holds one row per isolate (sync_metadata_table() keeps it level
-  # with `mlst` after every typing run and import) and is read in milliseconds,
-  # where the distinct scan of `mlst` takes seconds on a large database.
-  isolates <- if ("metadata" %in% tables) {
-    dbGetQuery(
-      con,
-      "SELECT isolate FROM metadata WHERE isolate != ?",
-      params = list(REF_SOUCHE)
-    )$isolate
-  } else if ("mlst" %in% tables) {
-    dbGetQuery(
-      con,
-      "SELECT DISTINCT souche FROM mlst WHERE souche != ?",
-      params = list(REF_SOUCHE)
-    )$souche
-  } else {
-    character(0)
-  }
+  isolates <- database_isolates(con, tables)
   calls <- if ("classical_mlst" %in% tables) {
     read_cols(con, "classical_mlst", CALL_COLS)
   } else {
@@ -154,16 +124,6 @@ load_mlst_overview <- function(db_path) {
   }
 
   build_overview(isolates, calls, prov)
-}
-
-# Most frequent value of `x` (first one seen on a tie), or NA.
-modal <- function(x) {
-  x <- x[!is.na(x)]
-  if (!length(x)) {
-    return(NA_character_)
-  }
-  counts <- table(factor(x, levels = unique(x)))
-  names(counts)[which.max(counts)]
 }
 
 # One row per isolate: its merged status and the scheme release it was typed
@@ -521,30 +481,10 @@ release_table <- function(iso) {
   out[order(!out$Primary, out$Scheme, out$Release), , drop = FALSE]
 }
 
-# Counts of `x` as "a (n), b (m)" for a check's detail line.
-tally <- function(x, limit = 4L) {
-  counts <- sort(table(x), decreasing = TRUE)
-  shown <- sprintf("%s (%d)", names(counts), as.integer(counts))
-  if (length(shown) > limit) {
-    shown <- c(shown[seq_len(limit)], sprintf("%d more", length(shown) - limit))
-  }
-  paste(shown, collapse = ", ")
-}
-
-# Provenance checks over the whole database, most severe first. Each is one
-# row: what was checked, its tone, a sentence of detail and how many isolates
-# it concerns.
+# Provenance checks over the whole database, most severe first.
 provenance_checks <- function(iso, primary) {
-  checks <- list()
-  add <- function(check, tone, detail, n = NA_integer_) {
-    checks[[length(checks) + 1L]] <<- data.frame(
-      check = check,
-      tone = tone,
-      detail = detail,
-      n = as.integer(n),
-      stringsAsFactors = FALSE
-    )
-  }
+  checks <- check_list()
+  add <- checks$add
   typed <- iso[!is.na(iso$scheme), , drop = FALSE]
 
   if (!is.null(primary)) {
@@ -699,29 +639,7 @@ provenance_checks <- function(iso, primary) {
     )
   }
 
-  if (!length(checks)) {
-    return(data.frame(
-      check = character(0),
-      tone = character(0),
-      detail = character(0),
-      n = integer(0),
-      stringsAsFactors = FALSE
-    ))
-  }
-  out <- do.call(rbind, checks)
-  out[order(TONE_RANK[out$tone]), , drop = FALSE]
-}
-
-# "identity x / coverage y" per call, as recorded; NA where neither was.
-threshold_pairs <- function(identity, coverage) {
-  shown <- function(x) {
-    out <- format(as.numeric(x), trim = TRUE, drop0trailing = TRUE)
-    out[is.na(x)] <- "-"
-    out
-  }
-  out <- sprintf("identity %s / coverage %s", shown(identity), shown(coverage))
-  out[is.na(identity) & is.na(coverage)] <- NA_character_
-  out
+  checks$table()
 }
 
 #' Allele Frequencies of a Classical MLST Locus

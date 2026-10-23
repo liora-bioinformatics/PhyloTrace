@@ -14,8 +14,6 @@ box::use(
   app / logic / mlst_overview,
 )
 
-impl <- attr(mlst_overview, "namespace")
-
 SCHEME <- "Testus spp. (MLST)"
 
 call_rows <- function(
@@ -143,7 +141,8 @@ test_that("provenance checks flag every inconsistency, most severe first", {
   expect_equal(n[["Provenance mismatch"]], 1L)
   expect_equal(n[["Failed calls"]], 1L)
   expect_equal(n[["No classical record"]], 1L)
-  expect_false(is.unsorted(impl$TONE_RANK[checks$tone]))
+  severity <- c(danger = 1L, warning = 2L, info = 3L, success = 4L)
+  expect_false(is.unsorted(severity[checks$tone]))
 })
 
 test_that("a consistent database reports a single passing scheme check", {

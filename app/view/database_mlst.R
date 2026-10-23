@@ -5,30 +5,20 @@
 #' provenance diagnostics of every classical call in the database.
 
 box::use(
-  DT[DTOutput, JS, datatable, renderDT],
-  bslib[
-    as_fill_carrier,
-    as_fill_item,
-    as_fillable_container,
-    card,
-    card_body,
-    card_header,
-    nav_panel,
-    navset_card_tab,
-  ],
-  htmltools[HTML, htmlEscape],
+  DT[DTOutput, renderDT],
+  bslib[nav_panel, navset_card_tab],
+  htmltools[htmlEscape],
   shiny,
-  shinyWidgets[pickerInput, pickerOptions, updatePickerInput],
-  shinyjs[runjs],
+  shinyWidgets[updatePickerInput],
   stats[setNames],
-  utils[head, write.csv],
+  utils[write.csv],
 )
 
 box::use(
   app / logic / database_functions[load_db_species],
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
-  app / logic / functions[color_sequence, copy_to_clipboard, render_info, stat_tile],
+  app / logic / functions[copy_to_clipboard, render_info, stat_tile],
   app /
     logic /
     mlst_overview[
@@ -41,6 +31,7 @@ box::use(
       locus_alleles,
       simpson_diversity,
     ],
+  app / logic / overview_ui,
 )
 
 REPO_NAMES <- c(pubmlst = "PubMLST", pasteur = "Institut Pasteur (BIGSdb)")
@@ -53,16 +44,7 @@ TABLE_IDS <- c("cla_loci", "cla_sts", "cla_isolates")
 TOP_STS <- 12L
 TOP_ALLELES <- 6L
 
-# Clears a table's loading overlay once DataTables has drawn it.
-DRAW_SIGNAL <- JS(
-  "function(settings) {",
-  "  $(this.api().table().node())",
-  "    .closest('.loci-table-body').addClass('is-loaded');",
-  "}"
-)
-
-# Thousands-separated count.
-fmt <- function(x) format(x, big.mark = ",", trim = TRUE, scientific = FALSE)
+fmt <- overview_ui$fmt
 
 # The repository's display name, or the stored token when it is unknown.
 repo_name <- function(repo) {
@@ -70,115 +52,6 @@ repo_name <- function(repo) {
     return(NA_character_)
   }
   if (repo %in% names(REPO_NAMES)) REPO_NAMES[[repo]] else repo
-}
-
-# Card header with a CSV export button, as on the cgMLST loci table.
-table_header <- function(title, button_id) {
-  card_header(
-    class = "loci-info-header",
-    title,
-    shiny$downloadButton(
-      button_id,
-      "Export CSV",
-      icon = shiny$icon("file-csv"),
-      class = "btn-sm loci-export-btn"
-    )
-  )
-}
-
-# Fill/scroll card body holding a DataTable behind a loading overlay.
-table_body <- function(ns, id, label) {
-  card_body(
-    id = ns(paste0(id, "_body")),
-    class = "loci-table-body",
-    shiny$div(
-      class = "loci-table-loading",
-      shiny$div(
-        class = "loci-loading-inner",
-        shiny$div(class = "loci-spinner"),
-        shiny$p(label, class = "loci-loading_text")
-      )
-    ),
-    DTOutput(ns(id), fill = TRUE)
-  )
-}
-
-# One-cell table carrying a message in place of data, as the cgMLST overview
-# does for a database without scheme tables.
-message_table <- function(text) {
-  datatable(
-    data.frame(" " = text, check.names = FALSE),
-    rownames = FALSE,
-    colnames = "",
-    escape = FALSE,
-    selection = "none",
-    options = list(
-      dom = "t",
-      ordering = FALSE,
-      paging = FALSE,
-      initComplete = DRAW_SIGNAL
-    )
-  )
-}
-
-# Scrolling, filterable data table in the style of the cgMLST loci table.
-data_table <- function(df, selection = "none", filter = "top") {
-  datatable(
-    df,
-    rownames = FALSE,
-    filter = filter,
-    selection = selection,
-    class = "stripe row-border order-column",
-    options = list(
-      dom = "ti",
-      paging = FALSE,
-      scrollX = TRUE,
-      scrollY = "1px",
-      scrollCollapse = TRUE,
-      columnDefs = list(list(className = "dt-left", targets = "_all")),
-      initComplete = DRAW_SIGNAL
-    )
-  )
-}
-
-# Muted placeholder for a panel with nothing to show.
-empty_hint <- function(text) {
-  shiny$div(class = "db-empty-hint mlst-empty", shiny$icon("circle-info"), shiny$p(HTML(text)))
-}
-
-# Uppercase caption above a block inside a card.
-section_title <- function(text) shiny$div(class = "mlst-section-title", text)
-
-# Horizontal bars for a handful of counts: label, a bar scaled to the largest
-# count, the count and its share of `total`. `notes` replaces the share column
-# where a share means nothing; hovering a row shows its exact figures.
-bar_rows <- function(labels, counts, total, tones = NULL, notes = NULL) {
-  peak <- max(c(counts, 1))
-  shiny$div(
-    class = "mlst-bars",
-    lapply(seq_along(counts), function(i) {
-      share <- if (total > 0) 100 * counts[i] / total else 0
-      note <- if (is.null(notes)) sprintf("%.1f%%", share) else notes[i]
-      shiny$div(
-        class = "mlst-bar",
-        title = if (is.null(notes)) {
-          sprintf("%s: %s of %s isolates (%.1f%%)", labels[i], fmt(counts[i]), fmt(total), share)
-        } else {
-          sprintf("%s: %s %s", labels[i], fmt(counts[i]), note)
-        },
-        shiny$span(class = "mlst-bar_label", labels[i]),
-        shiny$div(
-          class = "mlst-bar_track",
-          shiny$div(
-            class = paste("mlst-bar_fill", if (!is.null(tones)) paste0("is-", tones[i])),
-            style = sprintf("width: %.1f%%;", 100 * counts[i] / peak)
-          )
-        ),
-        shiny$span(class = "mlst-bar_value", fmt(counts[i])),
-        shiny$span(class = "mlst-bar_share", note)
-      )
-    })
-  )
 }
 
 # Why there are no classical calls to show, as one HTML sentence.
@@ -216,225 +89,62 @@ empty_reason <- function(ov, species) {
   )
 }
 
-# Renders the UI layout for the Scheme Info tab.
-scheme_info_ui <- function(ns) {
-  as_fill_carrier(
-    shiny$div(
-      class = "scheme-info-layout",
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("Scheme Metadata"),
-              card_body(DTOutput(ns("scheme_table"), fill = TRUE))
-            )
-          )
-        )
-      ),
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-aside mlst-aside",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("Typing Summary"),
-              card_body(shiny$uiOutput(ns("typing_summary")))
-            )
-          )
-        )
-      )
-    )
-  )
-}
-
-# Renders the UI layout for the Loci Info tab.
-loci_info_ui <- function(ns) {
-  as_fill_carrier(
-    shiny$div(
-      class = "loci-info-layout",
-      as_fill_carrier(
-        shiny$div(
-          class = "loci-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              table_header("Loci Table", ns("export_loci")),
-              table_body(ns, "cla_loci", "Loading loci table ...")
-            )
-          )
-        )
-      ),
-      as_fillable_container(
-        shiny$div(
-          class = "loci-controls",
-          pickerInput(
-            ns("allele_select"),
-            label = "Select locus from table",
-            choices = character(0),
-            options = pickerOptions(
-              liveSearch = TRUE,
-              size = 10,
-              liveSearchPlaceholder = "Search alleles ...",
-              container = "body"
-            )
-          ),
-          shiny$uiOutput(ns("allele_bars")),
-          as_fill_carrier(
-            shiny$div(
-              class = "loci-allele-panel",
-              shiny$div(
-                class = "loci-allele-header",
-                shiny$div(
-                  class = "loci-allele-actions",
-                  shiny$actionButton(
-                    ns("copy_seq"),
-                    "Sequence",
-                    icon = shiny$icon("copy"),
-                    class = "btn-sm"
-                  ),
-                  shiny$actionButton(
-                    ns("copy_idx"),
-                    "Allele",
-                    icon = shiny$icon("hashtag"),
-                    class = "btn-sm"
-                  ),
-                  shiny$downloadButton(
-                    ns("download_locus"),
-                    "Locus",
-                    icon = shiny$icon("download"),
-                    class = "btn-sm"
-                  )
-                )
-              ),
-              as_fill_item(
-                shiny$div(class = "sequence", shiny$uiOutput(ns("allele_sequence")))
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-}
-
-# Renders the UI layout for the Distribution tab.
-distribution_ui <- function(ns) {
-  as_fill_carrier(
-    shiny$div(
-      class = "scheme-info-layout",
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              table_header("Sequence Types", ns("export_sts")),
-              table_body(ns, "cla_sts", "Loading sequence types ...")
-            )
-          )
-        )
-      ),
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-aside mlst-aside",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("ST Frequency"),
-              card_body(shiny$uiOutput(ns("st_bars")))
-            )
-          ),
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("Allele Diversity"),
-              card_body(shiny$uiOutput(ns("locus_bars")))
-            )
-          )
-        )
-      )
-    )
-  )
-}
-
-# Renders the UI layout for the Diagnostics tab.
-diagnostics_ui <- function(ns) {
-  as_fill_carrier(
-    shiny$div(
-      class = "scheme-info-layout",
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              table_header("Isolate Provenance", ns("export_isolates")),
-              table_body(ns, "cla_isolates", "Loading isolate provenance ...")
-            )
-          )
-        )
-      ),
-      as_fill_carrier(
-        shiny$div(
-          class = "scheme-aside mlst-aside",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("Checks"),
-              card_body(shiny$uiOutput(ns("checks")))
-            )
-          ),
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header("Scheme Releases"),
-              card_body(shiny$uiOutput(ns("releases")))
-            )
-          )
-        )
-      )
-    )
-  )
-}
-
 #' @export
 ui <- function(id) {
   ns <- shiny$NS(id)
 
   navset_card_tab(
-    nav_panel("Scheme Info", scheme_info_ui(ns)),
-    nav_panel("Loci Info", loci_info_ui(ns)),
-    nav_panel("Distribution", distribution_ui(ns)),
-    nav_panel("Diagnostics", diagnostics_ui(ns))
+    nav_panel(
+      "Scheme Info",
+      overview_ui$split_layout(
+        overview_ui$fill_card(
+          "Scheme Metadata",
+          DTOutput(ns("scheme_table"), fill = TRUE)
+        ),
+        overview_ui$fill_card("Typing Summary", shiny$uiOutput(ns("typing_summary")))
+      )
+    ),
+    nav_panel("Loci Info", overview_ui$loci_layout(ns, "cla_loci")),
+    nav_panel(
+      "Distribution",
+      overview_ui$split_layout(
+        overview_ui$table_card(
+          ns,
+          "cla_sts",
+          "Sequence Types",
+          "export_sts",
+          "Loading sequence types ..."
+        ),
+        list(
+          overview_ui$fill_card("ST Frequency", shiny$uiOutput(ns("st_bars"))),
+          overview_ui$fill_card("Allele Diversity", shiny$uiOutput(ns("locus_bars")))
+        )
+      )
+    ),
+    nav_panel(
+      "Diagnostics",
+      overview_ui$split_layout(
+        overview_ui$table_card(
+          ns,
+          "cla_isolates",
+          "Isolate Provenance",
+          "export_isolates",
+          "Loading isolate provenance ..."
+        ),
+        list(
+          overview_ui$fill_card("Checks", shiny$uiOutput(ns("checks"))),
+          overview_ui$fill_card("Scheme Releases", shiny$uiOutput(ns("releases")))
+        )
+      )
+    )
   )
 }
 
-# Key/value rows describing the primary scheme, as HTML-safe strings.
+# Key/value rows describing the primary scheme, values as HTML.
 scheme_rows <- function(ov, species) {
   pr <- ov$primary
   calls <- ov$isolates[ov$isolates$on_primary & ov$isolates$has_calls, , drop = FALSE]
   esc <- function(x) if (is.null(x) || is.na(x)) NA_character_ else htmlEscape(x)
-  link <- function(url, label = url) {
-    if (is.null(url) || is.na(url)) {
-      return(NA_character_)
-    }
-    sprintf(
-      "<a href='%s' target='_blank'>%s</a>",
-      htmlEscape(url, attribute = TRUE),
-      htmlEscape(label)
-    )
-  }
   distinct <- function(x) {
     x <- unique(x[!is.na(x)])
     if (!length(x)) NA_character_ else paste(x, collapse = ", ")
@@ -442,7 +152,11 @@ scheme_rows <- function(ov, species) {
 
   repo <- pr$repository
   repository <- if (!is.na(repo) && repo %in% names(REPO_HOMES)) {
-    link(REPO_HOMES[[repo]], repo_name(repo))
+    sprintf(
+      "<a href='%s' target='_blank'>%s</a>",
+      htmlEscape(REPO_HOMES[[repo]], attribute = TRUE),
+      htmlEscape(repo_name(repo))
+    )
   } else {
     esc(repo_name(repo))
   }
@@ -459,7 +173,7 @@ scheme_rows <- function(ov, species) {
   )[!is.na(calls$identity)])
   dates <- sort(substr(calls$called_at[!is.na(calls$called_at)], 1, 10))
 
-  rows <- c(
+  c(
     "Scheme" = esc(pr$scheme),
     "Repository" = repository,
     "Species" = esc(species),
@@ -487,12 +201,6 @@ scheme_rows <- function(ov, species) {
       NA_character_
     }
   )
-  rows <- rows[!is.na(rows)]
-  data.frame(
-    key = sprintf("<strong>%s</strong>", names(rows)),
-    value = unname(rows),
-    stringsAsFactors = FALSE
-  )
 }
 
 # Handles server logic for the scheme metadata and the typing summary.
@@ -501,18 +209,10 @@ scheme_info_server <- function(input, output, overview, species, reason) {
     render_info("output$scheme_table")
     ov <- overview()
     if (!identical(ov$state, "ok") || is.null(ov$primary)) {
-      return(message_table(reason()))
+      return(overview_ui$message_table(reason()))
     }
     rows <- scheme_rows(ov, species())
-    datatable(
-      rows,
-      class = "stripe row-border order-column",
-      colnames = rep("", ncol(rows)),
-      rownames = FALSE,
-      escape = FALSE,
-      selection = "none",
-      options = list(dom = "t", ordering = FALSE, paging = FALSE)
-    )
+    overview_ui$key_value_table(names(rows), unname(rows))
   })
 
   # Headline figures across every isolate, then how their calls came out.
@@ -522,14 +222,13 @@ scheme_info_server <- function(input, output, overview, species, reason) {
     iso <- ov$isolates
     total <- nrow(iso)
     if (!total) {
-      return(empty_hint("This database holds no isolates yet."))
+      return(overview_ui$empty_hint("This database holds no isolates yet."))
     }
     with_st <- sum(!is.na(iso$st))
     diversity <- simpson_diversity(ov$sts$Isolates)
 
     shiny$tagList(
-      shiny$div(
-        class = "mlst-stats",
+      overview_ui$stat_grid(
         stat_tile("Typed", sprintf("%s / %s", fmt(sum(iso$has_calls)), fmt(total)), "vial"),
         stat_tile("ST Assigned", sprintf("%.1f%%", 100 * with_st / total), "circle-check"),
         stat_tile("Distinct STs", fmt(nrow(ov$sts)), "fingerprint"),
@@ -539,10 +238,9 @@ scheme_info_server <- function(input, output, overview, species, reason) {
           "chart-simple"
         )
       ),
-      section_title("Call Status"),
-      bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone),
-      shiny$p(
-        class = "mlst-note",
+      overview_ui$section_title("Call Status"),
+      overview_ui$bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone),
+      overview_ui$overview_note(
         "Diversity is Simpson's index (Hunter-Gaston) over isolates with an ST:",
         "the chance that two of them carry different STs."
       )
@@ -571,9 +269,9 @@ loci_info_server <- function(
     render_info("output$cla_loci")
     ov <- overview()
     if (!nrow(ov$loci)) {
-      return(message_table(reason()))
+      return(overview_ui$message_table(reason()))
     }
-    data_table(
+    overview_ui$data_table(
       display_cols(ov$loci),
       selection = list(mode = "single", selected = 1),
       filter = "none"
@@ -617,20 +315,21 @@ loci_info_server <- function(
     df <- alleles()
     shiny$req(nrow(df) > 0)
     render_info("output$allele_bars")
-    called <- selected_row()$`Isolates Called`
-    shown <- head(df, TOP_ALLELES)
-    labels <- paste("Allele", shown$allele)
-    counts <- shown$count
-    tones <- rep("primary", nrow(shown))
-    if (nrow(df) > TOP_ALLELES) {
-      labels <- c(labels, sprintf("%d other alleles", nrow(df) - TOP_ALLELES))
-      counts <- c(counts, sum(df$count[-seq_len(TOP_ALLELES)]))
-      tones <- c(tones, "secondary")
-    }
+    bars <- overview_ui$fold_top(
+      paste("Allele", df$allele),
+      df$count,
+      TOP_ALLELES,
+      "%d other alleles"
+    )
     shiny$div(
-      class = "mlst-allele-bars",
-      section_title("Allele Frequency"),
-      bar_rows(labels, counts, called, tones = tones)
+      class = "overview-allele-bars",
+      overview_ui$section_title("Allele Frequency"),
+      overview_ui$bar_rows(
+        bars$labels,
+        bars$counts,
+        selected_row()$`Isolates Called`,
+        tones = bars$tones
+      )
     )
   })
 
@@ -661,13 +360,7 @@ loci_info_server <- function(
         )
       ))
     }
-
-    HTML(paste0(
-      "<div class=\"fasta-header\">&gt;",
-      htmlEscape(paste0(gene, "_", input$allele_select)),
-      "</div>",
-      color_sequence(sequence)
-    ))
+    overview_ui$sequence_view(paste0(gene, "_", input$allele_select), sequence)
   })
 
   # Copy actions -----------------------------------------------------------
@@ -715,7 +408,7 @@ distribution_server <- function(input, output, overview, reason) {
     render_info("output$cla_sts")
     ov <- overview()
     if (!nrow(ov$sts)) {
-      return(message_table(if (identical(ov$state, "ok")) {
+      return(overview_ui$message_table(if (identical(ov$state, "ok")) {
         "No isolate of the primary scheme has a Sequence Type assigned yet."
       } else {
         reason()
@@ -723,7 +416,7 @@ distribution_server <- function(input, output, overview, reason) {
     }
     sts <- ov$sts
     names(sts)[names(sts) == "Share"] <- "Share (%)"
-    data_table(sts)
+    overview_ui$data_table(sts)
   })
 
   # The most common STs among isolates of the primary scheme, followed by the
@@ -733,28 +426,23 @@ distribution_server <- function(input, output, overview, reason) {
     ov <- overview()
     iso <- ov$isolates[ov$isolates$on_primary & ov$isolates$has_calls, , drop = FALSE]
     if (!nrow(iso)) {
-      return(empty_hint(reason()))
+      return(overview_ui$empty_hint(reason()))
     }
-    sts <- ov$sts
-    shown <- head(sts, TOP_STS)
-    labels <- paste("ST", shown$ST)
-    counts <- shown$Isolates
-    tones <- rep("primary", nrow(shown))
-    if (nrow(sts) > TOP_STS) {
-      labels <- c(labels, sprintf("%d other STs", nrow(sts) - TOP_STS))
-      counts <- c(counts, sum(sts$Isolates[-seq_len(TOP_STS)]))
-      tones <- c(tones, "secondary")
-    }
+    bars <- overview_ui$fold_top(
+      paste("ST", ov$sts$ST),
+      ov$sts$Isolates,
+      TOP_STS,
+      "%d other STs"
+    )
     no_st <- sum(is.na(iso$st))
     if (no_st) {
-      labels <- c(labels, "No ST assigned")
-      counts <- c(counts, no_st)
-      tones <- c(tones, "warning")
+      bars$labels <- c(bars$labels, "No ST assigned")
+      bars$counts <- c(bars$counts, no_st)
+      bars$tones <- c(bars$tones, "warning")
     }
     shiny$tagList(
-      bar_rows(labels, counts, nrow(iso), tones = tones),
-      shiny$p(
-        class = "mlst-note",
+      overview_ui$bar_rows(bars$labels, bars$counts, nrow(iso), tones = bars$tones),
+      overview_ui$overview_note(
         sprintf("Shares are of the %s isolates with a stored profile.", fmt(nrow(iso)))
       )
     )
@@ -765,17 +453,16 @@ distribution_server <- function(input, output, overview, reason) {
     render_info("output$locus_bars")
     li <- overview()$loci
     if (!nrow(li)) {
-      return(empty_hint("No loci to show."))
+      return(overview_ui$empty_hint("No loci to show."))
     }
     shiny$tagList(
-      bar_rows(
+      overview_ui$bar_rows(
         li$Locus,
         li$`Observed Alleles`,
         0,
         notes = rep("alleles", nrow(li))
       ),
-      shiny$p(
-        class = "mlst-note",
+      overview_ui$overview_note(
         "Distinct registered alleles called per locus in this database."
       )
     )
@@ -841,6 +528,38 @@ isolate_rows <- function(ov) {
   out[order(!nzchar(flags), out$Isolate), , drop = FALSE]
 }
 
+# One entry per scheme release isolates were typed against.
+release_list <- function(rel) {
+  shiny$div(
+    class = "overview-groups",
+    lapply(seq_len(nrow(rel)), function(i) {
+      shiny$div(
+        class = "overview-group",
+        shiny$div(
+          class = "overview-group_head",
+          shiny$span(rel$Scheme[i]),
+          shiny$div(
+            class = "overview-group_badges",
+            if (isTRUE(rel$Primary[i])) {
+              shiny$span(class = "overview-badge is-primary", "Primary")
+            }
+          )
+        ),
+        shiny$div(
+          class = "overview-group_meta",
+          shiny$span(shiny$icon("server"), repo_name(rel$Repository[i])),
+          shiny$span(
+            shiny$icon("calendar"),
+            if (is.na(rel$Release[i])) "no release" else rel$Release[i]
+          ),
+          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(rel$Isolates[i]))),
+          shiny$span(shiny$icon("circle-check"), sprintf("%s with ST", fmt(rel$`With ST`[i])))
+        )
+      )
+    })
+  )
+}
+
 # Handles server logic for the provenance checks, releases and isolate table.
 diagnostics_server <- function(input, output, overview) {
   isolates <- shiny$reactive(isolate_rows(overview()))
@@ -849,77 +568,27 @@ diagnostics_server <- function(input, output, overview) {
     render_info("output$cla_isolates")
     rows <- isolates()
     if (!nrow(rows)) {
-      return(message_table("This database holds no isolates yet."))
+      return(overview_ui$message_table("This database holds no isolates yet."))
     }
-    data_table(rows)
+    overview_ui$data_table(rows)
   })
 
   output$checks <- shiny$renderUI({
     render_info("output$checks")
     checks <- overview()$checks
     if (!nrow(checks)) {
-      return(empty_hint("Nothing to check yet - no isolate has been typed."))
+      return(overview_ui$empty_hint("Nothing to check yet - no isolate has been typed."))
     }
-    tone_icon <- c(
-      danger = "circle-xmark",
-      warning = "triangle-exclamation",
-      info = "circle-info",
-      success = "circle-check"
-    )
-    shiny$div(
-      class = "mlst-checks",
-      lapply(seq_len(nrow(checks)), function(i) {
-        shiny$div(
-          class = paste0("mlst-check is-", checks$tone[i]),
-          shiny$icon(tone_icon[[checks$tone[i]]]),
-          shiny$div(
-            class = "mlst-check_body",
-            shiny$div(
-              class = "mlst-check_title",
-              shiny$span(checks$check[i]),
-              if (!is.na(checks$n[i])) {
-                shiny$span(class = "mlst-check_count", fmt(checks$n[i]))
-              }
-            ),
-            shiny$p(class = "mlst-check_detail", checks$detail[i])
-          )
-        )
-      })
-    )
+    overview_ui$checks_ui(checks)
   })
 
   output$releases <- shiny$renderUI({
     render_info("output$releases")
     rel <- overview()$releases
     if (!nrow(rel)) {
-      return(empty_hint("No isolate has been typed against a classical scheme."))
+      return(overview_ui$empty_hint("No isolate has been typed against a classical scheme."))
     }
-    shiny$div(
-      class = "mlst-releases",
-      lapply(seq_len(nrow(rel)), function(i) {
-        shiny$div(
-          class = "mlst-release",
-          shiny$div(
-            class = "mlst-release_head",
-            shiny$span(rel$Scheme[i]),
-            shiny$div(
-              class = "mlst-release_badges",
-              if (isTRUE(rel$Primary[i])) shiny$span(class = "mlst-badge is-primary", "Primary")
-            )
-          ),
-          shiny$div(
-            class = "mlst-release_meta",
-            shiny$span(shiny$icon("server"), repo_name(rel$Repository[i])),
-            shiny$span(
-              shiny$icon("calendar"),
-              if (is.na(rel$Release[i])) "no release" else rel$Release[i]
-            ),
-            shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(rel$Isolates[i]))),
-            shiny$span(shiny$icon("circle-check"), sprintf("%s with ST", fmt(rel$`With ST`[i])))
-          )
-        )
-      })
-    )
+    release_list(rel)
   })
 
   output$export_isolates <- shiny$downloadHandler(
@@ -940,8 +609,6 @@ server <- function(
   db_rev = db_events$new_bus()
 ) {
   shiny$moduleServer(id, function(input, output, session) {
-    ns <- session$ns
-
     # Every classical MLST record of the database, summarised once per change.
     # `isolates` because typing, removal and merges add or drop calls; `schema`
     # because a restore can replace them wholesale.
@@ -959,12 +626,7 @@ server <- function(
     })
 
     # Put the loading overlays back while a newly opened database's tables draw.
-    shiny$observeEvent(db_path(), {
-      runjs(sprintf(
-        "$('%s').removeClass('is-loaded');",
-        paste0("#", ns(paste0(TABLE_IDS, "_body")), collapse = ", ")
-      ))
-    })
+    shiny$observeEvent(db_path(), overview_ui$reset_table_overlays(session$ns, TABLE_IDS))
 
     # Why there are no classical calls to show, shared by every tab.
     reason <- shiny$reactive(empty_reason(overview(), species()))

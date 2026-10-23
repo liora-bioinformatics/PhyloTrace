@@ -1,565 +1,495 @@
 # app/view/database_cgmlst.R
 
-#' "cgMLST" interface of the Database menu: Scheme Info and Loci Info tabs.
+#' "cgMLST Overview" interface of the Database menu: the scheme, its loci,
+#' how completely the isolates were called and the provenance and assembly
+#' diagnostics of every isolate in the database.
 
 box::use(
-  bslib[
-    as_fill_carrier,
-    as_fill_item,
-    as_fillable_container,
-    card,
-    card_body,
-    card_header,
-    nav_panel,
-    navset_card_tab
-  ],
-  DT[DTOutput, JS, datatable, renderDT],
-  htmltools[HTML],
-  shiny[
-    NS,
-    a,
-    actionButton,
-    div,
-    downloadButton,
-    downloadHandler,
-    em,
-    icon,
-    imageOutput,
-    moduleServer,
-    observeEvent,
-    outputOptions,
-    p,
-    reactive,
-    reactiveVal,
-    renderImage,
-    renderUI,
-    req,
-    span,
-    tagList,
-    uiOutput
-  ],
-  shinyjs[runjs],
-  shinyWidgets[pickerInput, pickerOptions, updatePickerInput],
-  stats[setNames],
-  utils[write.csv]
+  DT[DTOutput, renderDT],
+  bslib[nav_panel, navset_card_tab],
+  shiny,
+  shinyWidgets[updatePickerInput],
+  stats[median, setNames],
+  utils[head, write.csv],
 )
 
 box::use(
   app /
     logic /
-    database_functions[
-      load_allele_sequence,
-      load_db_scheme_overview,
-      load_db_species,
-      load_loci_info,
-      load_locus_alleles,
-      locus_fasta
-    ],
+    cgmlst_overview[LOW_COMPLETENESS, load_cgmlst_overview],
+  app /
+    logic /
+    database_functions[load_allele_sequence, load_locus_alleles, locus_fasta],
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
-  app / logic / functions[color_sequence, copy_to_clipboard, render_info],
-  app /
-    logic /
-    scheme_browser[get_species_details, get_species_img, resolve_scheme_key]
+  app / logic / functions[copy_to_clipboard, render_info, stat_tile],
+  app / logic / overview_ui,
 )
 
-# Columns of the loci table shown to the user (the internal `.gene` column
-# that `load_loci_info` adds is intentionally excluded).
-display_cols <- c("Locus", "Gene", "Start", "Length", "Product", "Allele Count")
+# DataTables shown with a loading overlay until their first draw.
+TABLE_IDS <- c("cg_loci", "cg_isolates")
 
-# Renders the UI layout for the Scheme Info tab.
-scheme_info_ui <- function(ns) {
-  as_fill_carrier(
-    div(
-      class = "scheme-info-layout",
-      as_fill_carrier(
-        div(
-          class = "scheme-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header(
-                "Scheme Metadata"
-              ),
-              card_body(DTOutput(ns("local_scheme_table"), fill = TRUE))
-            )
-          )
-        )
-      ),
-      as_fill_carrier(
-        div(
-          class = "scheme-aside",
-          div(
-            class = "species-photo",
-            imageOutput(ns("species_img"), height = "auto"),
-            uiOutput(ns("species_caption"))
-          ),
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header(
-                "Details"
-              ),
-              card_body(
-                div(
-                  class = "species-card_article",
-                  uiOutput(ns("species_details")),
-                  uiOutput(ns("species_summary"))
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-}
+# Bars shown before the remainder is folded into one "other" row.
+TOP_ALLELES <- 6L
+TOP_MISSING <- 15L
 
-# Renders the UI layout for the Loci Info tab.
-loci_info_ui <- function(ns) {
-  as_fill_carrier(
-    div(
-      class = "loci-info-layout",
-      as_fill_carrier(
-        div(
-          class = "loci-info-main",
-          as_fill_item(
-            card(
-              fill = TRUE,
-              full_screen = TRUE,
-              card_header(
-                class = "loci-info-header",
-                "Loci Table",
-                downloadButton(
-                  ns("export_csv"),
-                  "Export CSV",
-                  icon = icon("file-csv"),
-                  class = "btn-sm loci-export-btn"
-                )
-              ),
-              card_body(
-                class = "loci-table-body",
-                div(
-                  class = "loci-table-loading",
-                  div(
-                    class = "loci-loading-inner",
-                    div(class = "loci-spinner"),
-                    p("Loading loci table ...", class = "loci-loading_text")
-                  )
-                ),
-                DTOutput(ns("db_loci"), fill = TRUE)
-              )
-            )
-          )
-        )
-      ),
-      as_fillable_container(
-        div(
-          class = "loci-controls",
-          pickerInput(
-            ns("allele_select"),
-            label = "Select locus from table",
-            choices = character(0),
-            options = pickerOptions(
-              liveSearch = TRUE,
-              size = 10,
-              liveSearchPlaceholder = "Search alleles ...",
-              container = "body"
-            )
-          ),
-          as_fill_carrier(
-            div(
-              class = "loci-allele-panel",
-              div(
-                class = "loci-allele-header",
-                div(
-                  class = "loci-allele-actions",
-                  actionButton(
-                    ns("copy_seq"),
-                    "Sequence",
-                    icon = icon("copy"),
-                    class = "btn-sm"
-                  ),
-                  actionButton(
-                    ns("copy_idx"),
-                    "Index",
-                    icon = icon("hashtag"),
-                    class = "btn-sm"
-                  ),
-                  downloadButton(
-                    ns("download_locus"),
-                    "Locus",
-                    icon = icon("download"),
-                    class = "btn-sm"
-                  )
-                )
-              ),
-              as_fill_item(
-                div(class = "sequence", uiOutput(ns("allele_sequence")))
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-}
+fmt <- overview_ui$fmt
 
 #' @export
 ui <- function(id) {
-  ns <- NS(id)
+  ns <- shiny$NS(id)
 
   navset_card_tab(
-    nav_panel("Scheme Info", scheme_info_ui(ns)),
-    nav_panel("Loci Info", loci_info_ui(ns))
-  )
-}
-
-# Handles server logic for displaying scheme overview and species metadata.
-# Both reads are scheme-level, so they follow the `schema` revision only: a
-# merge or a restore can replace the scheme, while adding or removing isolates
-# leaves it untouched.
-scheme_info_server <- function(input, output, session, db_path, db_rev) {
-  scheme_overview <- reactive({
-    req(db_path())
-    db_events$depend(db_rev, "schema")
-    guard_db_read("Loading the scheme", load_db_scheme_overview(db_path()))
-  })
-
-  scheme_species <- reactive({
-    req(db_path())
-    db_events$depend(db_rev, "schema")
-    guard_db_read("Loading the scheme", load_db_species(db_path()))
-  })
-
-  # The scheme this database was built from, as named by the scheme table. What
-  # pyMLST stored in `mlst_type.species` is not that name, so the overview's
-  # cgmlst.org URL gets the first say - see resolve_scheme_key().
-  scheme_key <- reactive({
-    resolve_scheme_key(scheme_species(), scheme_overview())
-  })
-
-  # Caption and metadata lookups follow the resolved scheme; an unknown scheme
-  # still shows whatever species name the database carries.
-  species_label <- reactive({
-    key <- scheme_key()
-    if (is.null(key)) scheme_species() else gsub("_", " ", key)
-  })
-
-  output$local_scheme_table <- renderDT({
-    overview <- scheme_overview()
-
-    if (is.null(overview) || isFALSE(is.data.frame(overview))) {
-      overview <- data.frame(
-        " " = paste(
-          "No 'Scheme Overview' table found. <br> Try rebuilding",
-          "the schema in the <strong>Create Scheme</strong> module"
+    nav_panel(
+      "Scheme Info",
+      overview_ui$split_layout(
+        overview_ui$fill_card(
+          "Scheme Metadata",
+          DTOutput(ns("scheme_table"), fill = TRUE)
         ),
-        check.names = FALSE
+        overview_ui$fill_card("Typing Summary", shiny$uiOutput(ns("typing_summary")))
       )
-    }
-
-    render_info("output$local_scheme_table")
-
-    datatable(
-      overview,
-      class = 'stripe row-border order-column',
-      colnames = rep("", ncol(overview)),
-      rownames = FALSE,
-      escape = FALSE,
-      selection = "none",
-      options = list(dom = "t", ordering = FALSE, paging = FALSE)
+    ),
+    nav_panel("Loci Info", overview_ui$loci_layout(ns, "cg_loci")),
+    nav_panel(
+      "Distribution",
+      overview_ui$split_layout(
+        list(
+          overview_ui$fill_card("Missing Loci per Isolate", shiny$uiOutput(ns("missing_bars"))),
+          overview_ui$fill_card("Most Often Missing Loci", shiny$uiOutput(ns("top_missing")))
+        ),
+        overview_ui$fill_card("Alleles per Locus", shiny$uiOutput(ns("allele_bins")))
+      )
+    ),
+    nav_panel(
+      "Diagnostics",
+      overview_ui$split_layout(
+        overview_ui$table_card(
+          ns,
+          "cg_isolates",
+          "Isolate Provenance",
+          "export_isolates",
+          "Loading isolate provenance ..."
+        ),
+        list(
+          overview_ui$fill_card("Checks", shiny$uiOutput(ns("checks"))),
+          overview_ui$fill_card("Typing Settings", shiny$uiOutput(ns("settings")))
+        )
+      )
     )
-  })
-
-  output$species_img <- renderImage(
-    {
-      src <- get_species_img(scheme_key())
-      req(src)
-
-      render_info("output$species_img")
-
-      list(src = src)
-    },
-    deleteFile = FALSE
   )
+}
 
-  species_record <- reactive({
-    key <- scheme_key()
-    req(key)
-
-    get_species_details(key)
-  })
-
-  output$species_caption <- renderUI({
-    render_info("output$species_caption")
-
-    species <- species_label()
-    req(species)
-
-    details <- species_record()
-
-    tagList(
-      div(
-        class = "species-photo_badges",
-        if (!is.null(details) && !is.null(details$rank)) {
-          span(details$rank, class = "species-details_rank")
-        },
-        if (!is.null(details) && !is.null(details$ncbi_taxid)) {
-          a(
-            href = paste0(
-              "https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=",
-              details$ncbi_taxid
-            ),
-            target = "_blank",
-            class = "species-details_taxid",
-            paste0("NCBI:txid", details$ncbi_taxid)
-          )
-        }
-      ),
-      div(
-        class = "species-photo_caption",
-        span(em(species), class = "species-photo_name")
-      )
-    )
-  })
-
-  output$species_details <- renderUI({
-    render_info("output$species_details")
-
-    req(species_label())
-
-    details <- species_record()
-
-    if (is.null(details)) {
-      return(div(
-        class = "species-details_empty",
-        "No metadata available for this species."
-      ))
+# Handles server logic for the scheme metadata and the typing summary.
+scheme_info_server <- function(input, output, overview) {
+  output$scheme_table <- renderDT({
+    render_info("output$scheme_table")
+    scheme <- overview()$scheme
+    if (!is.data.frame(scheme) || !nrow(scheme)) {
+      return(overview_ui$message_table(paste(
+        "No 'Scheme Overview' table found. <br> Try rebuilding",
+        "the schema in the <strong>Create Scheme</strong> module"
+      )))
     }
-
-    ranks <- c("phylum", "class", "order", "family", "genus")
-    chips <- lapply(ranks, function(rank) {
-      value <- details$lineage[[rank]]
-      if (is.null(value)) {
-        return(NULL)
-      }
-      div(
-        class = "species-details_chip",
-        span(toupper(rank), class = "species-details_chip-rank"),
-        span(value, class = "species-details_chip-value")
-      )
-    })
-
-    div(
-      class = "species-details",
-      div(class = "species-details_lineage", chips)
-    )
+    # Values are kept as stored: the scheme URL arrives as a link.
+    overview_ui$key_value_table(as.character(scheme$key), as.character(scheme$value))
   })
 
-  output$species_summary <- renderUI({
-    render_info("output$species_summary")
+  # Headline figures across every isolate, then how complete their profiles are.
+  output$typing_summary <- shiny$renderUI({
+    render_info("output$typing_summary")
+    ov <- overview()
+    iso <- ov$isolates
+    typed <- iso[iso$typed, , drop = FALSE]
+    if (!nrow(typed)) {
+      return(overview_ui$empty_hint("This database holds no typed isolates yet."))
+    }
+    med <- median(typed$completeness, na.rm = TRUE)
 
-    details <- species_record()
-    req(!is.null(details), !is.null(details$summary))
-
-    p(details$summary, class = "species-details_summary")
+    shiny$tagList(
+      overview_ui$stat_grid(
+        stat_tile("Isolates", fmt(nrow(typed)), "vial"),
+        stat_tile(
+          "Loci",
+          if (is.na(ov$locus_count)) "-" else fmt(ov$locus_count),
+          "table-columns"
+        ),
+        stat_tile("Alleles", fmt(sum(ov$loci$`Allele Count`)), "dna"),
+        stat_tile(
+          "Median Completeness",
+          if (is.na(med)) "-" else sprintf("%.1f%%", med),
+          "circle-check"
+        )
+      ),
+      overview_ui$section_title("Profile Completeness"),
+      overview_ui$bar_rows(
+        ov$completeness$label,
+        ov$completeness$n,
+        nrow(typed),
+        tones = ov$completeness$tone
+      ),
+      overview_ui$overview_note(
+        "Completeness is the share of the scheme's loci called per isolate;",
+        sprintf("below %s%% an isolate is flagged in Diagnostics.", format(LOW_COMPLETENESS))
+      )
+    )
   })
 }
 
-# Handles server logic for browsing loci, inspecting sequence alleles, and exporting data.
-loci_info_server <- function(
-  input,
-  output,
-  session,
-  db_path,
-  session_reset,
-  db_rev
-) {
-  ns <- session$ns
-
-  # Sequence of the currently displayed allele, cached so the "Sequence" copy
-  # button does not have to re-query the database.
-  seq_cache <- reactiveVal(NULL)
+# Handles server logic for the loci table, allele usage and sequence viewer.
+loci_info_server <- function(input, output, session, db_path, overview, session_reset) {
+  # Sequence of the displayed allele, cached so the "Sequence" copy button does
+  # not have to re-query the database.
+  seq_cache <- shiny$reactiveVal(NULL)
 
   # Reset module state when the user returns to the landing screen.
-  observeEvent(session_reset(), seq_cache(NULL), ignoreInit = TRUE)
+  shiny$observeEvent(session_reset(), seq_cache(NULL), ignoreInit = TRUE)
 
-  observeEvent(db_path(), {
-    runjs("$('.loci-table-body').removeClass('is-loaded');")
-  })
+  display_cols <- function(df) df[, setdiff(names(df), ".gene"), drop = FALSE]
 
-  # `isolates` as well as `schema`: the "Allele Count" column counts distinct
-  # alleles per locus off the `mlst` table, so typing and isolate removal move
-  # these numbers even though the scheme itself has not changed.
-  loci_info <- reactive({
-    req(db_path())
-    db_events$depend(db_rev, "schema", "isolates")
-    guard_db_read("Loading the scheme loci", load_loci_info(db_path()))
-  })
-
-  output$db_loci <- renderDT({
-    render_info("output$db_loci")
-
-    li <- loci_info()
-
-    # Clear the loading overlay once the table has drawn
-    draw_signal <- JS(
-      "function(settings) {",
-      "  $(this.api().table().node())",
-      "    .closest('.loci-table-body').addClass('is-loaded');",
-      "}"
-    )
-
-    if (is.null(li)) {
-      return(datatable(
-        data.frame(
-          " " = paste(
-            "No 'targets' table found. Re-download the scheme to",
-            "populate loci info."
-          ),
-          check.names = FALSE
-        ),
-        rownames = FALSE,
-        colnames = "",
-        selection = "none",
-        options = list(
-          dom = "t",
-          ordering = FALSE,
-          paging = FALSE,
-          initComplete = draw_signal
-        )
+  output$cg_loci <- renderDT({
+    render_info("output$cg_loci")
+    li <- overview()$loci
+    if (!nrow(li)) {
+      return(overview_ui$message_table(
+        "No loci found. Re-download the scheme to populate loci info."
       ))
     }
-
-    datatable(
-      li[, display_cols, drop = FALSE],
-      rownames = FALSE,
-      filter = "top",
-      selection = list(mode = "single", selected = 1),
-      class = "stripe row-border order-column",
-      options = list(
-        dom = "ti",
-        paging = FALSE,
-        scrollX = TRUE,
-        scrollY = "1px",
-        scrollCollapse = TRUE,
-        columnDefs = list(list(className = "dt-left", targets = "_all")),
-        initComplete = draw_signal
-      )
+    overview_ui$data_table(
+      display_cols(li),
+      selection = list(mode = "single", selected = 1)
     )
   })
 
-  # The selected row's `mlst` gene name (used to key the detail queries) and
-  # its display Locus (used for the FASTA download name).
-  selected_row <- reactive({
-    li <- loci_info()
-    req(li)
-    row <- input$db_loci_rows_selected
-    req(length(row) == 1)
+  # The selected locus row (its `.gene` keys the allele lookups).
+  selected_row <- shiny$reactive({
+    li <- overview()$loci
+    row <- input$cg_loci_rows_selected
+    shiny$req(nrow(li) > 0, length(row) == 1)
     li[row, , drop = FALSE]
   })
 
-  # Distinct alleles of the selected locus with in-database usage.
-  alleles <- reactive({
-    req(db_path())
+  # Distinct alleles of the selected locus with their in-database usage.
+  alleles <- shiny$reactive({
+    shiny$req(db_path())
     gene <- selected_row()$.gene
     guard_db_read("Loading the locus alleles", load_locus_alleles(db_path(), gene))
   })
 
-  # Refresh the allele dropdown in place whenever the selected locus changes
-  observeEvent(alleles(), {
+  # Refresh the allele dropdown whenever the selected locus changes.
+  shiny$observeEvent(alleles(), {
     df <- alleles()
-    req(nrow(df) > 0)
-
+    shiny$req(nrow(df) > 0)
     total <- sum(df$count)
     labels <- ifelse(
       df$present,
       sprintf(
-        "Allele %s - %d times in DB (%.1f%%)",
+        "Allele %s - %s isolate(s) (%.1f%%)",
         df$seqid,
-        df$count,
-        100 * df$count / total
+        fmt(df$count),
+        100 * df$count / max(total, 1)
       ),
       sprintf("Allele %s - not present", df$seqid)
     )
-
     updatePickerInput(
       session,
       "allele_select",
-      label = paste("Selected Locus:", selected_row()$.gene),
+      label = paste("Selected Locus:", selected_row()$Locus),
       choices = setNames(as.character(df$seqid), labels),
       selected = as.character(df$seqid[1])
     )
   })
 
-  output$allele_sequence <- renderUI({
-    req(db_path(), input$allele_select)
+  # Most frequent alleles of the selected locus, the rest folded into one row.
+  output$allele_bars <- shiny$renderUI({
+    df <- alleles()
+    df <- df[df$present, , drop = FALSE]
+    shiny$req(nrow(df) > 0)
+    render_info("output$allele_bars")
+    bars <- overview_ui$fold_top(
+      paste("Allele", df$seqid),
+      df$count,
+      TOP_ALLELES,
+      "%d other alleles"
+    )
+    shiny$div(
+      class = "overview-allele-bars",
+      overview_ui$section_title("Allele Frequency"),
+      overview_ui$bar_rows(
+        bars$labels,
+        bars$counts,
+        selected_row()$`Isolates Called`,
+        tones = bars$tones
+      )
+    )
+  })
 
+  output$allele_sequence <- shiny$renderUI({
+    shiny$req(db_path(), input$allele_select)
     sequence <- guard_db_read(
       "Loading the allele sequence",
       load_allele_sequence(db_path(), as.integer(input$allele_select))
     )
-    req(sequence)
+    shiny$req(sequence)
     seq_cache(sequence)
-
     render_info("output$allele_sequence")
-
-    HTML(paste0(
-      "<div class=\"fasta-header\">&gt;",
-      input$allele_select,
-      "</div>",
-      color_sequence(sequence)
-    ))
+    overview_ui$sequence_view(input$allele_select, sequence)
   })
 
   # Copy actions -----------------------------------------------------------
-  observeEvent(input$copy_seq, {
-    req(seq_cache())
+  shiny$observeEvent(input$copy_seq, {
+    shiny$req(seq_cache())
     copy_to_clipboard(seq_cache())
   })
 
-  observeEvent(input$copy_idx, {
-    req(input$allele_select)
+  shiny$observeEvent(input$copy_idx, {
+    shiny$req(input$allele_select)
     copy_to_clipboard(input$allele_select)
   })
 
   # Downloads --------------------------------------------------------------
-  output$download_locus <- downloadHandler(
+  output$download_locus <- shiny$downloadHandler(
     filename = function() paste0(selected_row()$Locus, ".fasta"),
     content = function(file) {
-      gene <- selected_row()$.gene
-      fasta <- guard_db("Exporting the locus FASTA", locus_fasta(db_path(), gene))
+      fasta <- guard_db(
+        "Exporting the locus FASTA",
+        locus_fasta(db_path(), selected_row()$.gene)
+      )
       # No file written means the browser reports the download as failed,
       # rather than saving an empty FASTA.
-      req(!db_failed(fasta))
+      shiny$req(!db_failed(fasta), length(fasta) > 0)
       writeLines(fasta, file)
     }
   )
 
-  output$export_csv <- downloadHandler(
-    filename = function() "loci_info.csv",
+  output$export_loci <- shiny$downloadHandler(
+    filename = function() "cgmlst_loci.csv",
     content = function(file) {
-      li <- loci_info()
-      req(li)
-      write.csv(li[, display_cols, drop = FALSE], file, row.names = FALSE)
+      li <- overview()$loci
+      shiny$req(nrow(li) > 0)
+      write.csv(display_cols(li), file, row.names = FALSE)
     }
   )
 
-  outputOptions(output, "allele_sequence", suspendWhenHidden = FALSE)
+  shiny$outputOptions(output, "allele_sequence", suspendWhenHidden = FALSE)
+}
+
+# Handles server logic for the completeness and allele distributions.
+distribution_server <- function(input, output, overview) {
+  n_typed <- shiny$reactive(sum(overview()$isolates$typed))
+
+  # How many of the scheme's loci each typed isolate is missing.
+  output$missing_bars <- shiny$renderUI({
+    render_info("output$missing_bars")
+    bins <- overview()$missing_bins
+    if (!n_typed()) {
+      return(overview_ui$empty_hint("This database holds no typed isolates yet."))
+    }
+    shiny$tagList(
+      overview_ui$bar_rows(
+        bins$label,
+        bins$n,
+        n_typed(),
+        tones = ifelse(bins$label == "None", "success", "primary")
+      ),
+      overview_ui$overview_note(
+        sprintf(
+          "Loci without a call, per isolate, out of the scheme's %s.",
+          fmt(overview()$locus_count)
+        )
+      )
+    )
+  })
+
+  # Loci most often left uncalled, as a share of the typed isolates.
+  output$top_missing <- shiny$renderUI({
+    render_info("output$top_missing")
+    li <- overview()$loci
+    li <- li[li$Missing > 0, , drop = FALSE]
+    if (!nrow(li)) {
+      return(overview_ui$empty_hint("Every locus was called in every typed isolate."))
+    }
+    li <- head(li[order(-li$Missing), , drop = FALSE], TOP_MISSING)
+    shiny$tagList(
+      overview_ui$bar_rows(li$Locus, li$Missing, n_typed(), tones = rep("warning", nrow(li))),
+      overview_ui$overview_note(
+        "Share of typed isolates without a call at the locus; loci missed this",
+        "often may be absent from the population or hard to assemble."
+      )
+    )
+  })
+
+  # How many distinct alleles the database holds per locus.
+  output$allele_bins <- shiny$renderUI({
+    render_info("output$allele_bins")
+    ov <- overview()
+    if (!nrow(ov$loci)) {
+      return(overview_ui$empty_hint("No loci to show."))
+    }
+    shiny$tagList(
+      overview_ui$bar_rows(
+        ifelse(
+          ov$allele_bins$label == "1",
+          "1 allele",
+          paste(ov$allele_bins$label, "alleles")
+        ),
+        ov$allele_bins$n,
+        nrow(ov$loci),
+        unit = "loci"
+      ),
+      overview_ui$overview_note(
+        "Loci by number of distinct alleles in this database, the scheme's",
+        "reference allele included."
+      )
+    )
+  })
+}
+
+# Per-isolate provenance table, flagged rows first.
+isolate_rows <- function(iso) {
+  flags <- character(nrow(iso))
+  add_flag <- function(hit, text) {
+    flags[hit] <<- ifelse(nzchar(flags[hit]), paste(flags[hit], text, sep = "; "), text)
+  }
+  add_flag(iso$low_completeness, "low completeness")
+  add_flag(iso$duplicate, "duplicate assembly")
+  add_flag(iso$other_version, "other scheme version")
+  add_flag(iso$odd_size, "unusual size")
+  add_flag(iso$other_thresholds, "other thresholds")
+  add_flag(iso$fragmented, "fragmented")
+  add_flag(iso$typed & !iso$in_prov, "no provenance")
+
+  out <- data.frame(
+    Isolate = iso$isolate,
+    Flags = flags,
+    `Completeness (%)` = iso$completeness,
+    Loci = iso$loci,
+    Missing = iso$missing,
+    # pyMLST's "Added N new MLST genes": calls written for the isolate.
+    `Genes Added` = iso$alleles_added,
+    Partial = iso$partial,
+    Filled = iso$filled,
+    Removed = iso$removed,
+    Contigs = iso$contigs,
+    `Length (bp)` = iso$length,
+    Identity = iso$identity,
+    Coverage = iso$coverage,
+    `Scheme Version` = iso$scheme_version,
+    pyMLST = iso$pymlst_version,
+    BLAT = iso$blat_version,
+    MAFFT = iso$mafft_version,
+    `Typed At` = substr(iso$typed_at, 1, 19),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  out[order(!nzchar(flags), out$Isolate), , drop = FALSE]
+}
+
+# One entry per combination of settings isolates were typed with.
+settings_list <- function(settings, current_version) {
+  shiny$div(
+    class = "overview-groups",
+    lapply(seq_len(nrow(settings)), function(i) {
+      version <- settings$scheme_version[i]
+      shiny$div(
+        class = "overview-group",
+        shiny$div(
+          class = "overview-group_head",
+          shiny$span(
+            if (!isTRUE(settings$recorded[i])) {
+              "Provenance not recorded"
+            } else if (is.na(version)) {
+              "Scheme version not recorded"
+            } else {
+              paste("Scheme version", version)
+            }
+          ),
+          shiny$div(
+            class = "overview-group_badges",
+            if (!is.na(version) && identical(version, current_version)) {
+              shiny$span(class = "overview-badge is-primary", "Current")
+            }
+          )
+        ),
+        shiny$div(
+          class = "overview-group_meta",
+          if (!is.na(settings$thresholds[i])) {
+            shiny$span(shiny$icon("sliders"), settings$thresholds[i])
+          },
+          if (!is.na(settings$tools[i])) {
+            shiny$span(shiny$icon("toolbox"), settings$tools[i])
+          },
+          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(settings$isolates[i])))
+        )
+      )
+    })
+  )
+}
+
+# Handles server logic for the provenance checks, settings and isolate table.
+diagnostics_server <- function(input, output, overview) {
+  isolates <- shiny$reactive(isolate_rows(overview()$isolates))
+
+  output$cg_isolates <- renderDT({
+    render_info("output$cg_isolates")
+    rows <- isolates()
+    if (!nrow(rows)) {
+      return(overview_ui$message_table("This database holds no isolates yet."))
+    }
+    overview_ui$data_table(rows)
+  })
+
+  output$checks <- shiny$renderUI({
+    render_info("output$checks")
+    checks <- overview()$checks
+    if (!nrow(checks)) {
+      return(overview_ui$empty_hint("Nothing to check yet - no isolate has been typed."))
+    }
+    overview_ui$checks_ui(checks)
+  })
+
+  output$settings <- shiny$renderUI({
+    render_info("output$settings")
+    ov <- overview()
+    if (!nrow(ov$settings)) {
+      return(overview_ui$empty_hint("No isolate has been typed yet."))
+    }
+    settings_list(ov$settings, ov$scheme_version)
+  })
+
+  output$export_isolates <- shiny$downloadHandler(
+    filename = function() "cgmlst_isolate_provenance.csv",
+    content = function(file) {
+      rows <- isolates()
+      shiny$req(nrow(rows) > 0)
+      write.csv(rows, file, row.names = FALSE)
+    }
+  )
 }
 
 #' @export
 server <- function(
   id,
-  db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L),
+  db_path = shiny$reactive(NULL),
+  session_reset = shiny$reactive(0L),
   db_rev = db_events$new_bus()
 ) {
-  moduleServer(id, function(input, output, session) {
-    scheme_info_server(input, output, session, db_path, db_rev)
-    loci_info_server(input, output, session, db_path, session_reset, db_rev)
+  shiny$moduleServer(id, function(input, output, session) {
+    # Every cgMLST figure of the database, summarised once per change.
+    # `isolates` because typing, removal and merges move every count; `schema`
+    # because a merge or restore can replace the scheme itself.
+    overview <- shiny$reactive({
+      shiny$req(db_path())
+      db_events$depend(db_rev, "isolates", "schema")
+      guard_db_read("Loading the cgMLST overview", load_cgmlst_overview(db_path()))
+    })
+
+    # Put the loading overlays back while a newly opened database's tables draw.
+    shiny$observeEvent(db_path(), overview_ui$reset_table_overlays(session$ns, TABLE_IDS))
+
+    scheme_info_server(input, output, overview)
+    loci_info_server(input, output, session, db_path, overview, session_reset)
+    distribution_server(input, output, overview)
+    diagnostics_server(input, output, overview)
   })
 }

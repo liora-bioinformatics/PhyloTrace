@@ -9,6 +9,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_store,
   app / logic / functions[sidebar_menu],
+  app / view / database_amr,
   app / view / database_browser,
   app / view / database_cgmlst,
   app / view / database_custom,
@@ -38,6 +39,11 @@ db_menu <- list(
     value = "mlst_overview",
     label = "MLST Overview",
     module = database_mlst
+  ),
+  list(
+    value = "amr_overview",
+    label = "AMR Overview",
+    module = database_amr
   ),
   list(
     value = "import",

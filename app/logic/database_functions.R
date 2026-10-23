@@ -36,9 +36,6 @@ box::use(
   rlang[`%||%`],
 )
 
-# Helper: normalizes locus names by converting underscores to hyphens for matching.
-.norm_locus <- function(x) gsub("[-_]", "-", x)
-
 #' Tables Keyed on Isolate Name
 #'
 #' Character vector of PhyloTrace-managed tables that use `isolate` as a key.
@@ -959,53 +956,6 @@ save_metadata_table <- function(db_path, edits) {
   )
 
   invisible(n)
-}
-
-#' Fetch Scheme Loci Summary with Allele Counts
-#'
-#' Returns scheme targets supplemented with distinct allele counts per target locus.
-#'
-#' @param db_path Character path to the SQLite database file.
-#' @return Data frame listing locus attributes and allele counts, or `NULL` if missing.
-#' @export
-load_loci_info <- function(db_path) {
-  con <- connect(db_path)
-  on.exit(dbDisconnect(con))
-
-  tables <- dbListTables(con)
-  if (isFALSE(all(c("targets", "mlst") %in% tables))) {
-    message("Database does not contain 'targets' and 'mlst' tables")
-    return(NULL)
-  }
-
-  targets <- dbReadTable(con, "targets")
-
-  # Distinct alleles per locus (the synthetic "ref" allele is counted too, as
-  # it is a valid scheme allele).
-  counts <- dbGetQuery(
-    con,
-    "SELECT gene, COUNT(DISTINCT seqid) AS n FROM mlst GROUP BY gene"
-  )
-
-  idx <- match(.norm_locus(targets$Locus), .norm_locus(counts$gene))
-
-  targets$.gene <- counts$gene[idx]
-  allele_count <- counts$n[idx]
-  allele_count[is.na(allele_count)] <- 0L
-  targets[["Allele Count"]] <- allele_count
-
-  # `Start`/`Length` come back as character when stored as TEXT in SQLite, which
-  # makes the DataTable sort them lexicographically. Coerce to numeric so they
-  # (and the already-integer allele count) sort numerically.
-  for (col in c("Start", "Length")) {
-    if (col %in% names(targets)) {
-      targets[[col]] <- suppressWarnings(as.numeric(targets[[col]]))
-    }
-  }
-
-  targets$Alleles <- NULL
-
-  targets
 }
 
 #' Load Locus Allele Usage

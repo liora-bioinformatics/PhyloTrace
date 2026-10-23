@@ -2421,6 +2421,10 @@ $session-new-tint: 20%;
     text-align: left;
     padding-left: 1rem;
     border-radius: 2rem;
+    // Bootstrap fades text and background in opposite directions, so a button
+    // losing `active` passes through grey-on-grey and its label briefly
+    // vanishes. Colours switch instantly; only the focus ring still animates.
+    transition: box-shadow 0.15s ease-in-out;
 }
 
 // Import / Export panels. Unlike Browse Entries these hold flowing content
@@ -4194,16 +4198,13 @@ label {
 .tab-pane[data-value="visualization_panel"],
 .tab-pane[data-value="cgmlst_overview"],
 .tab-pane[data-value="mlst_overview"],
+.tab-pane[data-value="amr_overview"],
 .tab-pane[data-value="scheme_browser_panel"] {
     .bslib-card .card-header {
         height: 49px;
     }
 }
 
-// Bootstrap joins the active tab to the card body by overlapping the header's
-// bottom border, which only lines up at the header's natural height. Anchoring
-// the tabs to the header's bottom edge keeps them seamless under any fixed
-// header height (like the 49px above).
 .bslib-card>.card-header {
     background-color: #fafafa;
 }
@@ -4212,15 +4213,18 @@ label {
     background-color: #2b3035;
 }
 
-[data-bs-theme="dark"] .bslib-card>.card-header:has(>.card-header-tabs) {
-    background-color: #1c1f23;
-    border-bottom-color: #373b3e;
+.bslib-card:has(>.card-header>.card-header-tabs) {
+    border-radius: 0;
 }
 
+// Tabset headers span the page edge to edge. Their divider is an inset shadow
+// rather than a border so the active tab's background paints over it and
+// merges with the card body. Anchoring the tabs to the header's bottom edge
+// keeps that seamless under any fixed header height (like the 49px above).
 .bslib-card>.card-header:has(>.card-header-tabs) {
     border-radius: 0;
-    background-color: #f3f4f6;
-    border-bottom-color: #dee2e6;
+    border-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--bs-border-color);
     display: flex;
     align-items: flex-end;
     padding-bottom: 0;
@@ -5236,17 +5240,17 @@ table.dataTable thead>tr>th.sorting {
 .datepicker-dropdown {
     z-index: 9999 !important;
 }
-// MLST Overview (app/view/database_mlst.R). Reuses the cgMLST Overview's
-// Scheme Info / Loci Info layouts; the aside is a little wider to fit two stat
-// tiles across, and stacks two cards when a tab has more than one.
-.scheme-info-layout>.scheme-aside.mlst-aside {
+// Database overviews (cgMLST, MLST; app/logic/overview_ui.R). The aside is a
+// little wider than the Scheme Info one to fit two stat tiles across, and
+// stacks two cards when a tab has more than one.
+.scheme-info-layout>.scheme-aside.overview-aside {
     flex: 0 0 460px;
     width: 460px;
     gap: var(--bs-gutter-x, 1.5rem);
     min-height: 0;
 }
 
-.mlst-stats {
+.overview-stats {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.75rem;
@@ -5258,7 +5262,7 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-.mlst-section-title {
+.overview-section-title {
     margin: 0 0 0.6rem;
     font-size: 0.68rem;
     font-weight: 600;
@@ -5267,13 +5271,13 @@ table.dataTable thead>tr>th.sorting {
     color: var(--bs-secondary-color);
 }
 
-.mlst-note {
+.overview-note {
     margin: 0.9rem 0 0;
     font-size: 0.75rem;
     color: var(--bs-secondary-color);
 }
 
-.mlst-empty {
+.overview-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -5295,13 +5299,13 @@ table.dataTable thead>tr>th.sorting {
 // Horizontal bar rows (bar_rows()): label, track, count, share. Thin bars with
 // rounded ends on a recessive track; the figures stay in text colours and the
 // bar alone carries the tone.
-.mlst-bars {
+.overview-bars {
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
 }
 
-.mlst-bar {
+.overview-bar {
     display: grid;
     grid-template-columns: minmax(5rem, 9rem) minmax(0, 1fr) 3.2rem 3.4rem;
     align-items: center;
@@ -5310,24 +5314,24 @@ table.dataTable thead>tr>th.sorting {
     cursor: default;
 }
 
-.mlst-bar_label {
+.overview-bar_label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.mlst-bar_track {
+.overview-bar_track {
     height: 0.6rem;
     border-radius: 4px;
     background: var(--bs-tertiary-bg);
     overflow: hidden;
 }
 
-.mlst-bar:hover .mlst-bar_track {
+.overview-bar:hover .overview-bar_track {
     box-shadow: 0 0 0 1px var(--bs-border-color);
 }
 
-.mlst-bar_fill {
+.overview-bar_fill {
     height: 100%;
     min-width: 2px;
     border-radius: 4px;
@@ -5354,70 +5358,70 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-.mlst-bar_value {
+.overview-bar_value {
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     text-align: right;
 }
 
-.mlst-bar_share {
+.overview-bar_share {
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
     text-align: right;
     color: var(--bs-secondary-color);
 }
 
-.mlst-allele-bars {
+.overview-allele-bars {
     flex: 0 0 auto;
 }
 
 // Provenance checks: one row per check, the tone on the left edge and the icon.
-.mlst-checks {
+.overview-checks {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
 }
 
-.mlst-check {
-    --mlst-tone: var(--bs-secondary-color);
+.overview-check {
+    --overview-tone: var(--bs-secondary-color);
     display: flex;
     align-items: flex-start;
     gap: 0.65rem;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--bs-border-color);
-    border-left: 3px solid var(--mlst-tone);
+    border-left: 3px solid var(--overview-tone);
     border-radius: 8px;
 
     >i,
     >svg {
         flex: 0 0 auto;
         margin-top: 0.2rem;
-        color: var(--mlst-tone);
+        color: var(--overview-tone);
     }
 
     &.is-success {
-        --mlst-tone: var(--bs-success);
+        --overview-tone: var(--bs-success);
     }
 
     &.is-info {
-        --mlst-tone: var(--bs-info);
+        --overview-tone: var(--bs-info);
     }
 
     &.is-warning {
-        --mlst-tone: var(--bs-warning);
+        --overview-tone: var(--bs-warning);
     }
 
     &.is-danger {
-        --mlst-tone: var(--bs-danger);
+        --overview-tone: var(--bs-danger);
     }
 }
 
-.mlst-check_body {
+.overview-check_body {
     min-width: 0;
     flex: 1 1 auto;
 }
 
-.mlst-check_title {
+.overview-check_title {
     display: flex;
     justify-content: space-between;
     gap: 0.5rem;
@@ -5425,20 +5429,20 @@ table.dataTable thead>tr>th.sorting {
     font-weight: 600;
 }
 
-.mlst-check_count {
+.overview-check_count {
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     color: var(--bs-secondary-color);
 }
 
-.mlst-check_detail {
+.overview-check_detail {
     margin: 0.2rem 0 0;
     font-size: 0.8rem;
     color: var(--bs-secondary-color);
 }
 
-// Scheme releases list on the Diagnostics tab.
-.mlst-release {
+// Grouped lists on the Diagnostics tab (scheme releases, typing settings).
+.overview-group {
     padding: 0.55rem 0;
     border-bottom: 1px solid var(--bs-border-color-translucent);
     font-size: 0.82rem;
@@ -5452,7 +5456,7 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-.mlst-release_head {
+.overview-group_head {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -5460,13 +5464,13 @@ table.dataTable thead>tr>th.sorting {
     font-weight: 600;
 }
 
-.mlst-release_badges {
+.overview-group_badges {
     display: flex;
     gap: 0.35rem;
     flex: 0 0 auto;
 }
 
-.mlst-badge {
+.overview-badge {
     display: inline-flex;
     align-items: center;
     height: 1.3rem;
@@ -5484,7 +5488,7 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-.mlst-release_meta {
+.overview-group_meta {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 0.9rem;
@@ -5602,5 +5606,50 @@ table.dataTable thead>tr>th.sorting {
 
     td:first-child {
         white-space: nowrap;
+    }
+}
+
+// A switch sitting in a table card's header between its title and the export
+// button (AMR Overview's element type). Pushed right, next to the button.
+.overview-header-controls {
+    margin-left: auto;
+    margin-right: 0.75rem;
+
+    .btn-group {
+        margin-block: -0.25rem;
+    }
+}
+
+.overview-section-gap {
+    height: 1.25rem;
+}
+
+// Details of one selected call (AMR Overview's Elements tab): label column and
+// value column, the values free to wrap.
+.overview-detail {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 0.25rem 0.5rem;
+
+    dl {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 0.45rem 1rem;
+        margin: 0;
+        font-size: 0.85rem;
+    }
+
+    dt {
+        font-size: 0.68rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--bs-secondary-color);
+        padding-top: 0.1rem;
+    }
+
+    dd {
+        margin: 0;
+        overflow-wrap: anywhere;
     }
 }
