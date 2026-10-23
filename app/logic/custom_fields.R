@@ -23,7 +23,7 @@ box::use(
   app / logic / database_functions[metadata_columns],
   app /
     logic /
-    field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, MLST_COL_PREFIX],
+    field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, field_labels_for, MLST_COL_PREFIX],
   app / logic / logging[log_event],
 )
 
@@ -162,6 +162,25 @@ field_levels <- function(levels_json) {
   out[!is.na(out) & nzchar(out)]
 }
 
+#' Allowed Values of a Listed Variable Type
+#'
+#' The fixed set a `boolean` or `category` cell may hold, which the grids offer
+#' as a dropdown instead of a free-text editor.
+#'
+#' @param type Variable type slug.
+#' @param levels_json Stored levels JSON (categories only).
+#' @return Character vector of allowed values, or `NULL` for free-form types.
+#' @export
+listed_levels <- function(type, levels_json = NULL) {
+  if (identical(type, "boolean")) {
+    return(c("yes", "no"))
+  }
+  if (identical(type, "category")) {
+    return(field_levels(levels_json))
+  }
+  NULL
+}
+
 #' Encode Categorical Levels for Storage
 #'
 #' Cleans, sorts, and serializes custom level strings into a JSON array scalar.
@@ -226,6 +245,17 @@ list_custom_fields <- function(db_path) {
   fields
 }
 
+#' Comparison Key of a Field Name or Label
+#'
+#' Lower-cased, with everything but letters and digits dropped, so names compare
+#' by what the user sees: "geo_loc_name_country" is shown as "Country", and
+#' "sampling_site", "Sampling-Site" and "Sampling Site" all read the same.
+#'
+#' @param x Character vector of names or display labels.
+#' @return Character vector of keys.
+#' @export
+field_key <- function(x) gsub("[^a-z0-9]", "", tolower(x))
+
 #' Validate Proposed Custom Field Name
 #'
 #' Checks candidate field names for syntax validity, reserved prefixes, and collisions
@@ -256,12 +286,22 @@ validate_custom_name <- function(db_path, name, id = NULL) {
       ))
     }
   }
-  if (tolower(name) %in% tolower(metadata_columns(db_path))) {
+  meta <- metadata_columns(db_path)
+  if (tolower(name) %in% tolower(meta)) {
     return("A metadata field of that name already exists.")
   }
+  shown <- meta[field_key(field_labels_for(meta)) == field_key(name)]
+  if (length(shown)) {
+    return(sprintf(
+      "The standard field \"%s\" (%s) is already shown under that name.",
+      field_labels_for(shown[[1]]),
+      shown[[1]]
+    ))
+  }
 
+  # Compared by key: "ct_value" and "ct-value" would both read "Ct Value".
   existing <- list_custom_fields(db_path)
-  clash <- existing[tolower(existing$name) == tolower(name), , drop = FALSE]
+  clash <- existing[field_key(existing$name) == field_key(name), , drop = FALSE]
   if (!is.null(id)) {
     clash <- clash[clash$id != id, , drop = FALSE]
   }
@@ -551,7 +591,9 @@ coerce_custom_value <- function(value, type, levels = NULL) {
       if (is.na(num)) {
         bad("Numbers only, e.g. 12.5.")
       } else {
-        ok(format(num, scientific = FALSE, trim = TRUE))
+        # 15 significant digits: format()'s default of 7 would round away
+        # precision the user typed or imported (0.123456789 -> 0.1234568).
+        ok(format(num, scientific = FALSE, trim = TRUE, digits = 15))
       }
     },
     date = {

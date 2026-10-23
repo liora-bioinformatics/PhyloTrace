@@ -2249,6 +2249,47 @@ $session-new-tint: 20%;
     font-weight: 600;
 }
 
+// Gesture hints under a grid's sidebar (sheet_hints() / key_hints() in
+// app/logic/sheet_grid.R): keys on the left, what they do on the right.
+.sheet-hints {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.3rem 0.5rem;
+    align-items: center;
+    font-size: 0.72rem;
+    color: var(--bs-secondary-color);
+
+    kbd {
+        margin-right: 0.15rem;
+        padding: 0 0.25rem;
+        font-size: 0.65rem;
+        color: var(--bs-body-color);
+        background: var(--bs-tertiary-bg);
+        border: 1px solid var(--bs-border-color);
+        box-shadow: none;
+        white-space: nowrap;
+    }
+}
+
+.sheet-hint-keys {
+    white-space: nowrap;
+}
+
+.sheet-hints-note {
+    grid-column: 1 / -1;
+    font-style: italic;
+}
+
+// The fill handle as it looks on the grid (.sheet-corner::after).
+.sheet-hint-handle {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-left: 0.3rem;
+    background: var(--bs-primary);
+    outline: 1px solid var(--bs-body-bg);
+}
+
 .selection-stats-empty {
     font-size: 0.8rem;
     font-style: italic;
@@ -2266,7 +2307,7 @@ $session-new-tint: 20%;
     height: 100%;
 }
 
-// .browse-sidebar (Browse Entries only - see database_browser.R) stretches to
+// .browse-sidebar (Browse Entries and Custom Variables) stretches to
 // fill that now-100%-tall .sidebar-content rather than shrinking to its own
 // content's height, which is what lets .selection-stats-slot's
 // margin-top:auto below push it all the way to the bottom edge instead of
@@ -2318,6 +2359,62 @@ $session-new-tint: 20%;
 .dt-selection-mode table.dataTable thead th.dt-hdr-ungrouped,
 .dt-selection-mode table.dataTable tbody td {
     cursor: pointer;
+}
+
+// Spreadsheet range selection in Edit mode (app/js/dt-sheet.js). Painted as an
+// inset shadow, the way DataTables draws its own row selection, so it layers
+// over every background tint (session-new/import rows, the pinned column)
+// instead of competing with those rules. !important beats DataTables' own
+// sorted-column shadow.
+.sheet-grid {
+    outline: none;
+
+    table.dataTable tbody td.sheet-sel {
+        box-shadow: inset 0 0 0 9999px rgba(var(--bs-primary-rgb), 0.16) !important;
+    }
+
+    table.dataTable tbody td.sheet-sel.sheet-active {
+        box-shadow:
+            inset 0 0 0 2px var(--bs-primary),
+            inset 0 0 0 9999px rgba(var(--bs-primary-rgb), 0.06) !important;
+    }
+
+    // Cells a fill-handle drag is about to write.
+    table.dataTable tbody td.sheet-fill {
+        box-shadow: inset 0 0 0 9999px rgba(var(--bs-primary-rgb), 0.07) !important;
+        outline: 1px dashed var(--bs-primary);
+        outline-offset: -1px;
+    }
+
+    // The fill handle on the range's bottom-right cell. The pinned column is
+    // already position: sticky, which positions the handle just as well -
+    // making it relative would unpin it.
+    table.dataTable tbody td.sheet-corner:not(.dtfc-fixed-left) {
+        position: relative;
+    }
+
+    table.dataTable tbody td.sheet-corner::after {
+        content: "";
+        position: absolute;
+        right: -1px;
+        bottom: -1px;
+        width: 7px;
+        height: 7px;
+        background: var(--bs-primary);
+        border: 1px solid var(--bs-body-bg);
+        cursor: crosshair;
+        z-index: 2;
+    }
+
+    // A drag selects cells, not the text inside them.
+    table.dataTable tbody {
+        user-select: none;
+    }
+
+    table.dataTable tbody td input,
+    table.dataTable tbody td textarea {
+        user-select: text;
+    }
 }
 
 .db-menu-item {
@@ -3453,6 +3550,9 @@ table.dataTable thead>tr>th.sorting {
 
 .loci-export-btn {
     width: auto;
+    // Overhangs the header's padding instead of stretching it, so a header with
+    // an export button keeps the height of one without.
+    margin-block: -0.25rem;
 }
 
 // The three allele actions (copy sequence / copy index / download locus).
@@ -3682,6 +3782,12 @@ table.dataTable thead>tr>th.sorting {
 // so the DataTable fills the card and scrolls internally (paging is off and
 // scrollY = "1px" + scrollCollapse enables the scrolling body). Only the fill
 // wiring is copied here - not the editable-cell cursor styling.
+// Tables fill their card: no inset around them. Two classes to outrank
+// Bootstrap's own `.card-body` padding regardless of stylesheet order.
+.card-body.loci-table-body {
+    padding: 0;
+}
+
 .loci-table-body {
     overflow: hidden;
     // Anchor the absolutely-positioned loading overlay.
@@ -3714,6 +3820,9 @@ table.dataTable thead>tr>th.sorting {
         min-height: 0 !important;
         max-height: none !important;
         overflow-y: auto !important;
+        // DT's FixedColumns stylesheet is loaded app-wide and draws a left rule
+        // on every scrolling body; tables here run edge to edge instead.
+        border-left: 0 !important;
     }
 
     .dataTables_info {
@@ -4084,9 +4193,41 @@ label {
 .tab-pane[data-value="custom_fields"],
 .tab-pane[data-value="visualization_panel"],
 .tab-pane[data-value="cgmlst_overview"],
+.tab-pane[data-value="mlst_overview"],
 .tab-pane[data-value="scheme_browser_panel"] {
     .bslib-card .card-header {
         height: 49px;
+    }
+}
+
+// Bootstrap joins the active tab to the card body by overlapping the header's
+// bottom border, which only lines up at the header's natural height. Anchoring
+// the tabs to the header's bottom edge keeps them seamless under any fixed
+// header height (like the 49px above).
+.bslib-card>.card-header {
+    background-color: #fafafa;
+}
+
+[data-bs-theme="dark"] .bslib-card>.card-header {
+    background-color: #2b3035;
+}
+
+[data-bs-theme="dark"] .bslib-card>.card-header:has(>.card-header-tabs) {
+    background-color: #1c1f23;
+    border-bottom-color: #373b3e;
+}
+
+.bslib-card>.card-header:has(>.card-header-tabs) {
+    border-radius: 0;
+    background-color: #f3f4f6;
+    border-bottom-color: #dee2e6;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 0;
+
+    >.card-header-tabs {
+        flex: 1 1 auto;
+        margin-bottom: 0;
     }
 }
 
@@ -4918,6 +5059,166 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
+// The empty state's two ways in sit side by side; the import button's own
+// w-100 (it fills the sidebar elsewhere) would push the other onto a new line.
+.custom-fields-hint_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+
+    .w-100 {
+        width: auto !important;
+    }
+}
+
+// "Import from Table" wizard (app/view/database_custom_import.R), built on the
+// .selection-modal frame.
+.table-import-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-right: auto;
+}
+
+.table-import-step {
+    font-size: 0.75rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+// Step 1 holds a summary, not a table: size the dialog to it rather than to
+// the viewport-tall .selection-modal frame step 2 needs.
+.table-import-modal.is-check .modal-content {
+    height: auto;
+}
+
+// Step 2's body has no top padding (the toolbar carries that space instead):
+// a sticky header pins below the scrollport's padding, which rows would
+// otherwise scroll through above it.
+.table-import-modal:not(.is-check) {
+    .modal-body {
+        padding-top: 0;
+    }
+
+    .table-import-toolbar {
+        padding-top: 1.5rem;
+    }
+}
+
+// Hover list of isolate names on the wizard's stat tiles: names never wrap
+// mid-identifier, and the list is capped server-side (.TIP_MAX).
+.table-import-tooltip {
+    --bs-tooltip-max-width: 28rem;
+}
+
+.table-import-tip {
+    text-align: left;
+    font-family: monospace;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.table-import-tip_more {
+    margin-top: 0.25rem;
+    font-family: var(--bs-body-font-family);
+    font-style: italic;
+}
+
+// A labelled picker in the wizard's toolbar (sheet, key column).
+.table-import-pick {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+
+    .form-group,
+    .shiny-input-container {
+        margin-bottom: 0;
+    }
+}
+
+// The wizard's menus are attached to the modal (see .MENU_CONTAINER in
+// database_custom_import.R), where bootstrap-select pins them to the button's
+// width; let them grow to their longest option instead of wrapping it.
+.table-import-modal .bs-container .dropdown-menu {
+    min-width: 100%;
+    width: max-content;
+
+    .dropdown-item,
+    .text,
+    .text-muted {
+        white-space: nowrap;
+    }
+}
+
+.table-import-section {
+    margin: 1rem 0 0.6rem;
+    font-weight: 600;
+}
+
+// Column, action, name, type and result: a grid rather than a <table>, so the
+// rows' controls line up without table layout resizing them as results change.
+.table-import-row {
+    display: grid;
+    grid-template-columns:
+        minmax(9rem, 1.2fr) minmax(11rem, 1.3fr) minmax(9rem, 1fr)
+        minmax(9rem, 0.9fr) minmax(12rem, 1.6fr);
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid var(--bs-border-color);
+
+    .form-group,
+    .shiny-input-container {
+        margin-bottom: 0;
+    }
+
+    &.is-header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--bs-body-bg);
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--bs-secondary-color);
+    }
+}
+
+.table-import-cell {
+    min-width: 0;
+
+    &.is-column {
+        overflow-wrap: anywhere;
+    }
+
+    &.is-status {
+        font-size: 0.85rem;
+    }
+}
+
+.table-import-notes {
+    margin-bottom: 0.5rem;
+    padding-left: 1.2rem;
+    color: var(--bs-secondary-color);
+    font-size: 0.9rem;
+}
+
+.table-import-target {
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.table-import-sample {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .custom-fields-hint_examples {
     list-style: none;
     padding-left: 0;
@@ -4934,4 +5235,372 @@ table.dataTable thead>tr>th.sorting {
 
 .datepicker-dropdown {
     z-index: 9999 !important;
+}
+// MLST Overview (app/view/database_mlst.R). Reuses the cgMLST Overview's
+// Scheme Info / Loci Info layouts; the aside is a little wider to fit two stat
+// tiles across, and stacks two cards when a tab has more than one.
+.scheme-info-layout>.scheme-aside.mlst-aside {
+    flex: 0 0 460px;
+    width: 460px;
+    gap: var(--bs-gutter-x, 1.5rem);
+    min-height: 0;
+}
+
+.mlst-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+
+    // bslib spaces stacked cards with a bottom margin; the grid gap does it here.
+    .stat-box {
+        margin-bottom: 0;
+    }
+}
+
+.mlst-section-title {
+    margin: 0 0 0.6rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+}
+
+.mlst-note {
+    margin: 0.9rem 0 0;
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+.mlst-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 34rem;
+    margin: 0 auto;
+
+    i,
+    svg {
+        font-size: 1.4rem;
+        opacity: 0.6;
+    }
+
+    p {
+        margin: 0;
+    }
+}
+
+// Horizontal bar rows (bar_rows()): label, track, count, share. Thin bars with
+// rounded ends on a recessive track; the figures stay in text colours and the
+// bar alone carries the tone.
+.mlst-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.mlst-bar {
+    display: grid;
+    grid-template-columns: minmax(5rem, 9rem) minmax(0, 1fr) 3.2rem 3.4rem;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.82rem;
+    cursor: default;
+}
+
+.mlst-bar_label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mlst-bar_track {
+    height: 0.6rem;
+    border-radius: 4px;
+    background: var(--bs-tertiary-bg);
+    overflow: hidden;
+}
+
+.mlst-bar:hover .mlst-bar_track {
+    box-shadow: 0 0 0 1px var(--bs-border-color);
+}
+
+.mlst-bar_fill {
+    height: 100%;
+    min-width: 2px;
+    border-radius: 4px;
+    background: var(--bs-primary);
+
+    &.is-success {
+        background: var(--bs-success);
+    }
+
+    &.is-info {
+        background: var(--bs-info);
+    }
+
+    &.is-warning {
+        background: var(--bs-warning);
+    }
+
+    &.is-danger {
+        background: var(--bs-danger);
+    }
+
+    &.is-secondary {
+        background: var(--bs-secondary-color);
+    }
+}
+
+.mlst-bar_value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.mlst-bar_share {
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--bs-secondary-color);
+}
+
+.mlst-allele-bars {
+    flex: 0 0 auto;
+}
+
+// Provenance checks: one row per check, the tone on the left edge and the icon.
+.mlst-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.mlst-check {
+    --mlst-tone: var(--bs-secondary-color);
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--bs-border-color);
+    border-left: 3px solid var(--mlst-tone);
+    border-radius: 8px;
+
+    >i,
+    >svg {
+        flex: 0 0 auto;
+        margin-top: 0.2rem;
+        color: var(--mlst-tone);
+    }
+
+    &.is-success {
+        --mlst-tone: var(--bs-success);
+    }
+
+    &.is-info {
+        --mlst-tone: var(--bs-info);
+    }
+
+    &.is-warning {
+        --mlst-tone: var(--bs-warning);
+    }
+
+    &.is-danger {
+        --mlst-tone: var(--bs-danger);
+    }
+}
+
+.mlst-check_body {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.mlst-check_title {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.mlst-check_count {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--bs-secondary-color);
+}
+
+.mlst-check_detail {
+    margin: 0.2rem 0 0;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+// Scheme releases list on the Diagnostics tab.
+.mlst-release {
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+    font-size: 0.82rem;
+
+    &:first-child {
+        padding-top: 0;
+    }
+
+    &:last-child {
+        border-bottom: none;
+    }
+}
+
+.mlst-release_head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+
+.mlst-release_badges {
+    display: flex;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+}
+
+.mlst-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 1.3rem;
+    padding: 0 0.45rem;
+    border: 1px dashed;
+    border-radius: 6px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+
+    &.is-primary {
+        color: var(--bs-primary);
+    }
+}
+
+.mlst-release_meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.9rem;
+    margin-top: 0.2rem;
+    color: var(--bs-secondary-color);
+
+    i,
+    svg {
+        margin-right: 0.3rem;
+        opacity: 0.7;
+    }
+}
+
+// Floating help button (app/view/help.R), bottom-right of the module it
+// belongs to; hidden along with that module's panel.
+.help-fab {
+    position: fixed;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 1030;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 1.1rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    background: var(--bs-body-bg);
+}
+
+// Help dialog: a portrait sheet of paper, taller than wide, that scrolls
+// inside rather than growing past the viewport.
+.help-modal {
+    .modal-dialog {
+        max-width: min(46rem, 94vw);
+        margin: 1rem auto;
+    }
+
+    .modal-content {
+        height: min(calc(100vh - 2rem), 66rem);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 2.5rem 3rem;
+    }
+}
+
+.help-page {
+    line-height: 1.55;
+
+    h1 {
+        font-size: 1.6rem;
+        margin-bottom: 0.75rem;
+    }
+
+    h2 {
+        font-size: 1.15rem;
+        margin: 2rem 0 0.6rem;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px solid var(--bs-border-color);
+    }
+
+    h3 {
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin: 1.25rem 0 0.4rem;
+    }
+
+    ul {
+        padding-left: 1.2rem;
+    }
+
+    li {
+        margin-bottom: 0.3rem;
+    }
+
+    code {
+        font-size: 0.85em;
+    }
+}
+
+.help-lead {
+    font-size: 1.05rem;
+    color: var(--bs-secondary-color);
+}
+
+.help-note {
+    font-size: 0.9rem;
+    color: var(--bs-secondary-color);
+}
+
+// Term / explanation pairs, side by side.
+.help-terms {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1rem;
+    margin-bottom: 1rem;
+
+    dt {
+        font-weight: 600;
+    }
+
+    dd {
+        margin: 0;
+    }
+}
+
+.help-table {
+    font-size: 0.9rem;
+
+    td:first-child {
+        white-space: nowrap;
+    }
 }

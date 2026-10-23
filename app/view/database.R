@@ -10,10 +10,11 @@ box::use(
   app / logic / db_store,
   app / logic / functions[sidebar_menu],
   app / view / database_browser,
-  app / view / database_custom,
   app / view / database_cgmlst,
-  app / view / database_import,
+  app / view / database_custom,
   app / view / database_export,
+  app / view / database_import,
+  app / view / database_mlst,
 )
 
 # Sidebar menu definition
@@ -32,6 +33,11 @@ db_menu <- list(
     value = "cgmlst_overview",
     label = "cgMLST Overview",
     module = database_cgmlst
+  ),
+  list(
+    value = "mlst_overview",
+    label = "MLST Overview",
+    module = database_mlst
   ),
   list(
     value = "import",

@@ -3,6 +3,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / custom_fields[custom_col],
   app / logic / database_functions[read_metadata_table],
   app / view / database_browser,
 )
@@ -253,4 +254,283 @@ test_that("Discard drops the buffered cell edit without writing it", {
   })
 
   expect_identical(read_metadata_table(path)$geo_loc_name_country, "Germany")
+})
+
+# ---------------------------------------------------------------------------
+# Spreadsheet batches (app/js/dt-sheet.js -> metadata_table_sheet)
+# ---------------------------------------------------------------------------
+
+# One paste/cut/delete batch as the client sends it: columnar, keyed by isolate.
+.sheet_batch <- function(isolate, col, value, skipped = 0L) {
+  list(op = "edit", isolate = isolate, col = col, value = value, skipped = skipped)
+}
+
+test_that("a pasted block buffers one diff entry per cell", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B", "C")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(
+        c("C", "A"),
+        c(col, col),
+        c("Spain", "France")
+      )
+    )
+    session$flushReact()
+
+    dirty <- State$metadata_dirty[order(State$metadata_dirty$isolate), ]
+    expect_identical(dirty$isolate, c("A", "C"))
+    expect_identical(dirty$value, c("France", "Spain"))
+    expect_identical(State$data$geo_loc_name_country, c("France", "Germany", "Spain"))
+    expect_true(State$pending)
+  })
+})
+
+test_that("read-only columns are never written, whatever the batch says", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(
+        c("A", "A"),
+        c(.col_idx(State, "isolate"), .col_idx(State, "organism")),
+        c("Z", "Other species")
+      )
+    )
+    session$flushReact()
+
+    expect_null(State$metadata_dirty)
+    expect_identical(State$data$isolate, "A")
+    expect_false(isTRUE(State$pending))
+  })
+})
+
+test_that("a pasted date must be YYYY-MM-DD; the valid ones still go through", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "sample_collection_date")
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(
+        c("A", "B"),
+        c(col, col),
+        c("2025-03-04", "04.03.2025")
+      )
+    )
+    session$flushReact()
+
+    expect_identical(State$metadata_dirty$isolate, "A")
+    expect_identical(State$metadata_dirty$value, "2025-03-04")
+    expect_identical(State$data$sample_collection_date[[2]], "2024-01-02")
+  })
+})
+
+test_that("custom-variable cells are validated and normalised by their type", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B", "C")))
+  seed_custom(path, list(
+    age = list(type = "integer"),
+    risk = list(type = "category", levels = '["High","Low"]')
+  ))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    age <- .col_idx(State, custom_col("age"))
+    risk <- .col_idx(State, custom_col("risk"))
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(
+        c("A", "B", "A", "B", "C"),
+        c(age, age, risk, risk, risk),
+        c("42", "forty", "high", "Medium", "")
+      )
+    )
+    session$flushReact()
+
+    dirty <- State$custom_dirty
+    expect_identical(nrow(dirty), 2L)
+    expect_identical(dirty$value[dirty$isolate == "A"], c("42", "High"))
+    expect_identical(State$data[[custom_col("age")]], c(42, NA, NA))
+    expect_identical(State$data[[custom_col("risk")]], c("High", NA, NA))
+  })
+})
+
+test_that("clearing cells stores empty values and drops no-op clears", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  seed_custom(path, list(note = list(type = "text", values = c(A = "x"))))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    country <- .col_idx(State, "geo_loc_name_country")
+    note <- .col_idx(State, custom_col("note"))
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(
+        c("A", "A", "B"),
+        c(country, note, note),
+        c("", "", "")
+      )
+    )
+    session$flushReact()
+
+    expect_identical(State$metadata_dirty$value, "")
+    expect_identical(State$custom_dirty$isolate, "A")
+    expect_true(is.na(State$custom_dirty$value))
+  })
+})
+
+test_that("a later batch replaces cells still pending from an earlier one", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(c("A", "B"), c(col, col), c("France", "Spain"))
+    )
+    session$flushReact()
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch("B", col, "Italy")
+    )
+    session$flushReact()
+
+    dirty <- State$metadata_dirty[order(State$metadata_dirty$isolate), ]
+    expect_identical(dirty$value, c("France", "Italy"))
+  })
+})
+
+test_that("undo restores a pasted block and redo re-applies it", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(c("A", "B"), c(col, col), c("France", "Spain"))
+    )
+    session$flushReact()
+    session$setInputs(metadata_table_sheet = list(op = "undo"))
+    session$flushReact()
+    expect_identical(State$data$geo_loc_name_country, c("Germany", "Germany"))
+
+    session$setInputs(metadata_table_sheet = list(op = "redo"))
+    session$flushReact()
+    expect_identical(State$data$geo_loc_name_country, c("France", "Spain"))
+  })
+})
+
+test_that("undo covers single-cell edits and restores values validation would reject", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  meta <- meta_df("A")
+  meta$sample_collection_date <- "04.03.2020"
+  build_db(path, default_local(), metadata = meta)
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "sample_collection_date")
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = col, value = "2020-03-04")
+    )
+    session$flushReact()
+    expect_identical(State$data$sample_collection_date, "2020-03-04")
+
+    session$setInputs(metadata_table_sheet = list(op = "undo"))
+    session$flushReact()
+    expect_identical(State$data$sample_collection_date, "04.03.2020")
+    expect_null(State$metadata_dirty)
+  })
+})
+
+test_that("a new edit drops the redo steps, and discard drops the history", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df("A"))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    col <- .col_idx(State, "geo_loc_name_country")
+    edit <- function(value) {
+      session$setInputs(metadata_table_sheet = .sheet_batch("A", col, value))
+      session$flushReact()
+    }
+
+    edit("France")
+    session$setInputs(metadata_table_sheet = list(op = "undo"))
+    session$flushReact()
+    edit("Spain")
+    session$setInputs(metadata_table_sheet = list(op = "redo"))
+    session$flushReact()
+    expect_identical(State$data$geo_loc_name_country, "Spain")
+
+    session$setInputs(discard = 1)
+    session$flushReact()
+    session$setInputs(metadata_table_sheet = list(op = "undo"))
+    session$flushReact()
+    expect_identical(State$data$geo_loc_name_country, "Germany")
+    expect_false(State$pending)
+  })
+})
+
+test_that("undoing back to the saved values leaves nothing pending", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+  seed_custom(path, list(age = list(type = "integer", values = c(A = "3"))))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    country <- .col_idx(State, "geo_loc_name_country")
+    age <- .col_idx(State, custom_col("age"))
+
+    session$setInputs(
+      metadata_table_sheet = .sheet_batch(c("A", "A"), c(country, age), c("test", "9"))
+    )
+    session$flushReact()
+    expect_true(State$pending)
+
+    session$setInputs(metadata_table_sheet = list(op = "undo"))
+    session$flushReact()
+    expect_null(State$metadata_dirty)
+    expect_null(State$custom_dirty)
+    expect_false(State$pending)
+  })
+})
+
+test_that("a row drag in Selection mode is applied without error", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = meta_df(c("A", "B")))
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    session$setInputs(selection_mode = "on", metadata_table_rows_selected = 1L)
+    session$setInputs(
+      metadata_table_row_drag = list(isolate = list("A", "B"), select = TRUE)
+    )
+    expect_silent(session$flushReact())
+  })
 })

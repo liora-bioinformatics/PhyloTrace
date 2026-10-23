@@ -335,6 +335,40 @@ test_that("store_clamlst_results persists an ST only for an unambiguous call", {
   expect_false(any(grepl(";", stored$st, fixed = TRUE), na.rm = TRUE))
 })
 
+test_that("store_clamlst_results keeps calls with alleles the reference lacks", {
+  # With reference sequences loaded, an allele the reference does not hold - a
+  # novel "new" or a multi-hit "3;7" - used to abort the isolate's whole write.
+  db <- file.path(local_tempdir(), "db.sqlite")
+  con <- DBI::dbConnect(RSQLite::SQLite(), db)
+  DBI::dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
+  DBI::dbDisconnect(con)
+
+  results <- data.frame(
+    strain = c("novel", "multi"),
+    st = c(NA_character_, NA_character_),
+    alleles = c("adk=1,sodA=new", "adk=1,sodA=3;7"),
+    cla_status = c("novel", "ambiguous"),
+    stringsAsFactors = FALSE
+  )
+  refs <- list(
+    sequences = c("adk\t1" = "ACGT", "sodA\t3" = "GGCC", "sodA\t7" = "TTAA"),
+    alembic = NA_character_
+  )
+  expect_true(pymlst$store_clamlst_results(db, results, refs = refs))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), db)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  stored <- DBI::dbGetQuery(
+    con,
+    "SELECT isolate, gene, allele, sequence, status FROM classical_mlst
+      ORDER BY isolate, gene"
+  )
+  expect_identical(stored$isolate, c("multi", "multi", "novel", "novel"))
+  expect_identical(stored$allele, c("1", "3;7", "1", "new"))
+  expect_identical(stored$sequence, c("ACGT", NA, "ACGT", NA))
+  expect_identical(stored$status, c("ambiguous", "ambiguous", "novel", "novel"))
+})
+
 test_that("storing one isolate at a time matches storing them in one batch", {
   # Results are banked isolate by isolate while the run is live and swept again
   # at the end, so a strain can be written more than once - it must land as if

@@ -49,6 +49,7 @@ function isExemptFromShield(el) {
     el.closest(".vis-network") ||              // Graph node dragging
     el.closest(".pickr") ||                    // Color picker dragging
     el.closest("table.dataTable tbody") ||     // Row selection and dblclick inline edits
+    el.closest(".sheet-grid") ||               // Spreadsheet grid keys (Enter commits; dt-sheet.js)
     isMultiSelectMenu(el) ||
     (el.tagName === "INPUT" && el.type === "number") || // Stepper arrows
     // Tab/pill navigation (e.g. the top-level nav bar, bslib accordions):

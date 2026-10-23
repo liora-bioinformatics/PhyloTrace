@@ -116,6 +116,7 @@ test_that("coerce_custom_value canonicalises per type and rejects the rest", {
   expect_identical(value("12.5", "numeric"), "12.5")
   # Never stored in scientific notation - it must round-trip as written.
   expect_identical(value("1000000", "numeric"), "1000000")
+  expect_identical(value("0.123456789", "numeric"), "0.123456789")
   expect_false(ok("12,5", "numeric"))
 
   expect_identical(value("2026-07-21", "date"), "2026-07-21")
@@ -270,4 +271,16 @@ test_that("update_custom_field renames and delete_custom_field cascades", {
 
 test_that("custom_col prefixes with the shared reserved prefix", {
   expect_identical(custom_fields$custom_col("ward"), "custom_ward")
+})
+
+test_that("validate_custom_name rejects names that read like an existing field", {
+  path <- fixture()
+  # geo_loc_name_country is shown as "Country", sample_collection_date as
+  # "Collection Date": a custom variable of that name would look identical.
+  expect_match(custom_fields$validate_custom_name(path, "Country"), "Country")
+  expect_match(custom_fields$validate_custom_name(path, "collection-date"), "Collection Date")
+  expect_null(custom_fields$validate_custom_name(path, "Country_of_origin"))
+
+  custom_fields$create_custom_field(path, "sampling_site", "text")
+  expect_match(custom_fields$validate_custom_name(path, "Sampling-Site"), "custom variable")
 })

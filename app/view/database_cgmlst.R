@@ -15,7 +15,6 @@ box::use(
   ],
   DT[DTOutput, JS, datatable, renderDT],
   htmltools[HTML],
-  jsonlite[toJSON],
   shiny[
     NS,
     a,
@@ -58,7 +57,7 @@ box::use(
     ],
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
-  app / logic / functions[render_info],
+  app / logic / functions[color_sequence, copy_to_clipboard, render_info],
   app /
     logic /
     scheme_browser[get_species_details, get_species_img, resolve_scheme_key]
@@ -67,23 +66,6 @@ box::use(
 # Columns of the loci table shown to the user (the internal `.gene` column
 # that `load_loci_info` adds is intentionally excluded).
 display_cols <- c("Locus", "Gene", "Start", "Length", "Product", "Allele Count")
-
-# Wrap each nucleotide in a span so the viewer can color it via SCSS.
-color_sequence <- function(sequence) {
-  sequence <- gsub("A", "<span class='base-a'>A</span>", sequence)
-  sequence <- gsub("T", "<span class='base-t'>T</span>", sequence)
-  sequence <- gsub("G", "<span class='base-g'>G</span>", sequence)
-  sequence <- gsub("C", "<span class='base-c'>C</span>", sequence)
-  sequence
-}
-
-# Push text to the client-side clipboard.
-copy_to_clipboard <- function(text) {
-  runjs(sprintf(
-    "navigator.clipboard.writeText(%s);",
-    toJSON(text, auto_unbox = TRUE)
-  ))
-}
 
 # Renders the UI layout for the Scheme Info tab.
 scheme_info_ui <- function(ns) {

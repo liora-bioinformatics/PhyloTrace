@@ -3,7 +3,6 @@
 # Shared UI component generators and helper utilities for Shiny modules.
 
 box::use(
-  shiny[div, actionButton, icon, tagList],
   bslib[
     as_fill_carrier,
     card,
@@ -12,6 +11,9 @@ box::use(
     value_box,
     value_box_theme
   ],
+  jsonlite[toJSON],
+  shiny[actionButton, div, icon, tagList],
+  shinyjs[runjs],
 )
 
 #' Build a Vertical Sidebar Menu of Action Buttons
@@ -113,4 +115,32 @@ render_info <- function(output) {
     output,
     "' UI"
   )
+}
+
+#' Color a Nucleotide Sequence
+#'
+#' Wraps each nucleotide in a span so the sequence viewers can color it via SCSS.
+#'
+#' @param sequence Character scalar nucleotide sequence.
+#' @return Character scalar of HTML markup.
+#' @export
+color_sequence <- function(sequence) {
+  sequence <- gsub("A", "<span class='base-a'>A</span>", sequence)
+  sequence <- gsub("T", "<span class='base-t'>T</span>", sequence)
+  sequence <- gsub("G", "<span class='base-g'>G</span>", sequence)
+  sequence <- gsub("C", "<span class='base-c'>C</span>", sequence)
+  sequence
+}
+
+#' Copy Text to the Clipboard
+#'
+#' Pushes text to the client-side clipboard of the current session.
+#'
+#' @param text Character scalar to copy.
+#' @export
+copy_to_clipboard <- function(text) {
+  runjs(sprintf(
+    "navigator.clipboard.writeText(%s);",
+    toJSON(text, auto_unbox = TRUE)
+  ))
 }

@@ -29,6 +29,7 @@ box::use(
   bslib[as_fill_carrier, layout_sidebar, sidebar],
   shinyjs[disabled, disable, enable, addClass, removeClass],
   shinyWidgets[radioGroupButtons, virtualSelectInput],
+  stats[setNames],
   waiter[Waiter, spin_flower, useWaiter, autoWaiter],
   htmltools[tags],
   DT[
@@ -47,10 +48,8 @@ box::use(
   app /
     logic /
     custom_fields[
-      CUSTOM_TYPES,
       NUMERIC_TYPES,
       append_custom,
-      coerce_custom_value,
       custom_col,
       list_custom_fields,
       save_custom_values
@@ -66,9 +65,16 @@ box::use(
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_store,
-  app / logic / field_labels[field_labels_for, grouped_field_choices],
+  app / logic / field_labels[
+    AMR_COL_PREFIX,
+    CUSTOM_COL_PREFIX,
+    field_labels_for,
+    grouped_field_choices,
+    MLST_COL_PREFIX
+  ],
   app / logic / field_types[date_fields],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
+  app / logic / sheet_grid,
 )
 
 # Synthetic picker-choice values for the AMR drug-class / virulence-stress
@@ -104,6 +110,20 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
 # `disable$columns` goes through no such adjustment and stays 0-based, which is
 # why READONLY_COLS is indexed with .dt_idx() directly.
 .dt_editable_idx <- function(all_cols, cols) .dt_idx(all_cols, cols) + 1L
+
+# Hover text of a column header: the identifier behind the displayed label, as
+# a table import must head its column to fill this one - the column name of a
+# standard field, the bare name of a custom variable. Derived MLST / AMR columns
+# cannot be imported and get none.
+.header_title <- function(col) {
+  if (startsWith(col, CUSTOM_COL_PREFIX)) {
+    return(substring(col, nchar(CUSTOM_COL_PREFIX) + 1L))
+  }
+  if (startsWith(col, MLST_COL_PREFIX) || startsWith(col, AMR_COL_PREFIX)) {
+    return(NULL)
+  }
+  col
+}
 
 # A two-row DT header (see DT's `container` argument): row one names each
 # category over a colspan of the columns in it, row two names the columns
@@ -147,6 +167,7 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
   add_leaf <- function(col) {
     leaf[[length(leaf) + 1L]] <<- tags$th(
       class = "dt-hdr-leaf",
+      title = .header_title(col),
       `data-col-idx` = unname(col_idx[col]),
       unname(labels[col])
     )
@@ -158,6 +179,7 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
       top[[length(top) + 1L]] <- tags$th(
         rowspan = 2,
         class = "dt-hdr-ungrouped",
+        title = .header_title(cols[i]),
         `data-col-idx` = unname(col_idx[cols[i]]),
         unname(labels[cols[i]])
       )
@@ -260,7 +282,8 @@ ui <- function(id) {
                   selected = "off",
                   justified = TRUE,
                   width = "100%"
-                )
+                ),
+                uiOutput(ns("mode_hint_ui"))
               ),
               div(
                 class = "sidebar-control-group",
@@ -820,6 +843,7 @@ server <- function(
       {
         State$data <- NULL
         State$pending <- FALSE
+        sheet_grid$clear_history(history)
         reload_token(reload_token() + 1L)
       },
       ignoreInit = TRUE
@@ -1049,15 +1073,20 @@ server <- function(
       # Every listener is on the wrapper in the capture phase, because that is
       # the one place that sees a click before all three things that would
       # otherwise act on it: DataTables' sort handlers (bound on the header
-      # cells), its row/cell selection (delegated on the table), and the app's
-      # own single-click-to-edit shim (delegated on `document`, see
-      # app/js/index.js). Stopping an event there reliably suppresses the
-      # behaviour that does not belong to the current mode.
+      # cells), its row/cell selection (delegated on the table), and DT's
+      # double-click cell editor. Stopping an event there reliably suppresses
+      # the behaviour that does not belong to the current mode.
       selection_js <- sprintf(
         "var host = document.getElementById(%s);
               var selOn = function() {
                 return !!host && host.classList.contains('dt-selection-mode');
               };
+              // Edit mode's spreadsheet layer (app/js/dt-sheet.js). It stands
+              // down in Selection mode, where clicks pick whole rows and
+              // columns instead - and a drag picks a run of rows
+              // (app/js/dt-row-drag.js).
+              %s
+              App.attachRowDrag(api, { inputId: %s, isActive: selOn });
               // Mirrored onto the tables as well as their container, so both
               // `.dt-selection-mode table` and `table.dt-selection-mode` work
               // as CSS hooks (scrollX clones the table three times over).
@@ -1068,6 +1097,7 @@ server <- function(
               };
               Shiny.addCustomMessageHandler(%s, function(msg) {
                 applyMode(msg && msg.on);
+                if (msg && msg.on) sheet.clear();
               });
               applyMode(%s);
 
@@ -1107,17 +1137,13 @@ server <- function(
                   if (footerCell) $(footerCell).trigger('click');
                 }, true);
 
-                // Body: never open a cell editor while selecting. Both events
-                // matter - a real double-click reaches DT's own dblclick
-                // binding, and a single click reaches the shim that
-                // synthesises one from it.
-                ['click', 'dblclick'].forEach(function(evt) {
-                  wrapperEl.addEventListener(evt, function(e) {
-                    if (!selOn()) return;
-                    if (!e.target.closest('.dataTables_scrollBody tbody td')) return;
-                    e.stopPropagation();
-                  }, true);
-                });
+                // Body: never open DT's double-click cell editor while
+                // selecting.
+                wrapperEl.addEventListener('dblclick', function(e) {
+                  if (!selOn()) return;
+                  if (!e.target.closest('.dataTables_scrollBody tbody td')) return;
+                  e.stopPropagation();
+                }, true);
 
                 // Body: never toggle a row while editing. DT selects rows on
                 // mousedown, a different event from the click the editor opens
@@ -1131,6 +1157,13 @@ server <- function(
                 }, true);
               }",
         jsonlite::toJSON(ns("metadata_table"), auto_unbox = TRUE),
+        sheet_grid$sheet_attach_js(
+          ns("metadata_table_sheet"),
+          readonly_idx,
+          sheet_grid$sheet_lists(cols, custom_defs()),
+          active = "function() { return !selOn(); }"
+        ),
+        jsonlite::toJSON(ns("metadata_table_row_drag"), auto_unbox = TRUE),
         jsonlite::toJSON(ns("dt_selection_mode"), auto_unbox = TRUE),
         if (isolate(identical(input$selection_mode, "on"))) "true" else "false",
         jsonlite::toJSON(ns("select_all_isolates"), auto_unbox = TRUE)
@@ -1204,10 +1237,6 @@ server <- function(
               var tableNode = api.table().node();
 
               %s
-
-              $(tableNode).on('keyup', 'input', function(e) {
-                if (e.key === 'Enter') this.blur();
-              });
 
               // A native date input only accepts YYYY-MM-DD, so a stored value
               // in any other shape (legacy rows, an import) lands in the editor
@@ -1320,6 +1349,36 @@ server <- function(
       ignoreInit = TRUE
     )
 
+    # What the *other* mode does, under the Edit/Select toggle.
+    output$mode_hint_ui <- renderUI({
+      div(
+        class = "selection-stats-empty",
+        if (identical(input$selection_mode, "on")) {
+          paste(
+            "Switch to Edit to change values like in a spreadsheet:",
+            "type, paste, fill, undo."
+          )
+        } else {
+          "Switch to Select to pick whole rows or columns, e.g. to remove isolates."
+        }
+      )
+    })
+
+    # A drag across rows in Selection mode (app/js/dt-row-drag.js): the swept
+    # isolates all take the state DT gave the row the drag started on. Merged
+    # into DT's own selection, so selected rows a filter hides are kept.
+    observeEvent(input$metadata_table_row_drag, {
+      req(identical(input$selection_mode, "on"), is.data.frame(State$data))
+      msg <- input$metadata_table_row_drag
+      rows <- match(as.character(unlist(msg$isolate)), State$data$isolate)
+      rows <- rows[!is.na(rows)]
+      current <- input$metadata_table_rows_selected
+      selectRows(
+        proxy,
+        if (isTRUE(msg$select)) union(current, rows) else setdiff(current, rows)
+      )
+    })
+
     # Isolate header click (Selection mode only - see the forwarder built into
     # metadata_table's initComplete): toggles every row through the same path
     # DT's own row-click handler uses, rather than reimplementing row
@@ -1353,9 +1412,9 @@ server <- function(
       # round trip - this output would otherwise render the outgoing selection
       # once, in Edit mode, before the cleared value arrives.
       if (!identical(input$selection_mode, "on")) {
-        return(div(
-          class = "selection-stats-empty",
-          "Turn on Selection to inspect rows or columns in the table."
+        return(tagList(
+          div(class = "control-group-label", "Table gestures"),
+          sheet_grid$sheet_hints()
         ))
       }
 
@@ -1364,9 +1423,17 @@ server <- function(
       cols <- if (length(col_idx)) names(df)[col_idx + 1L] else character(0)
 
       if (!length(rows) && !length(cols)) {
-        return(div(
-          class = "selection-stats-empty",
-          "Select rows or columns in the table to see statistics here."
+        return(tagList(
+          div(class = "control-group-label", "Table gestures"),
+          sheet_grid$key_hints(
+            list(
+              list(keys = tags$kbd("Row"), what = "Select an isolate"),
+              list(keys = tags$kbd("Drag"), what = "Select or unselect several"),
+              list(keys = tags$kbd("Header"), what = "Select a field"),
+              list(keys = tags$kbd("Isolate"), what = "Click its header to select all")
+            ),
+            note = "Select rows or columns to see statistics here."
+          )
         ))
       }
 
@@ -1421,18 +1488,32 @@ server <- function(
       div(class = "selection-stats", lines)
     })
 
-    # Apply cell edit to in-memory state and push to table without full re-render.
+    # Undo/redo steps for this grid's edits (see app/logic/sheet_grid.R). Kept
+    # across saves, so a saved change can still be undone into a new pending
+    # edit; dropped on discard and whenever a different database is shown.
+    history <- sheet_grid$new_history()
+
+    # Validates a batch of cell edits and applies the accepted ones to in-memory
+    # state, pushing the result to the table without a full re-render. `edits`
+    # holds one row per cell: `row` (in State$data), `column` and `value` (as
+    # typed or pasted); `skipped` counts read-only cells the client already left
+    # out, for the report. DT's single-cell editor, the spreadsheet layer's
+    # paste/cut/delete/fill and undo/redo (`kind`) all land here, so every route
+    # obeys the same rules and is recorded in the same history.
     #
     # Two destinations behind one table: a metadata column is edited in place in
     # State$data and buffered in State$metadata_dirty for save_metadata_table(),
-    # while a custom-variable column is validated against its declared type
-    # first and buffered in State$custom_dirty for save_custom_values(). Both
-    # dirty buffers are tidy one-row-per-cell diffs, isolate/column/value, so a
-    # save writes exactly the cells the user touched rather than a whole
+    # while a custom-variable column is buffered in State$custom_dirty for
+    # save_custom_values(). Both dirty buffers are tidy one-row-per-cell diffs,
+    # so a save writes exactly the cells the user touched rather than a whole
     # snapshot - see save_metadata_table()'s docs for why that distinction is
     # what keeps two sessions editing the same database from clobbering each
-    # other. Mirrors the same flow in database_custom.R, which is why the
-    # rejection and no-op handling below read the same.
+    # other. Mirrors the same flow in database_custom.R.
+    #
+    # Typed cells are validated by type: a custom variable by its declared
+    # type, any other date column (sample_collection_date) as a date, a numeric
+    # metadata column as a number. Free-text metadata is stored as given. Undo
+    # and redo restore values the grid held before, so they skip validation.
     #
     # replaceData() is skipped for a genuine no-op: DT's own blur handler fires
     # cell_edit for a no-op click on an empty cell too (JS null vs. the
@@ -1456,122 +1537,132 @@ server <- function(
     # last rendered, even though the save to the database already had the
     # right values (a full reload always showed them correctly, since that
     # goes through a real render). See conversation 2026-07-28 for the repro.
+    apply_cell_edits <- function(edits, skipped = 0L, kind = "edit") {
+      df <- State$data
+      # The client never offers read-only cells, but the payload is not what
+      # decides that.
+      locked <- is.na(edits$column) |
+        edits$column %in% c(READONLY_COLS, mlst_cols(), amr_cols())
+      defs <- custom_defs()
+      dates <- date_cols()
+      numeric_cols <- setdiff(names(df)[vapply(df, is.numeric, logical(1))], defs$column)
+
+      res <- sheet_grid$apply_edits(
+        df,
+        edits[!locked, , drop = FALSE],
+        # First match wins, so a custom variable's own type comes first.
+        types = c(
+          setNames(defs$type, defs$column),
+          setNames(rep("date", length(dates)), dates),
+          setNames(rep("numeric", length(numeric_cols)), numeric_cols)
+        ),
+        levels = setNames(defs$levels, defs$column),
+        na_cols = c(defs$column, numeric_cols),
+        trusted = kind != "edit"
+      )
+
+      changed <- res$changed
+      if (nrow(changed)) {
+        isolates <- df$isolate[changed$row]
+        custom <- changed$column %in% defs$column
+        # A cell put back to its saved value (typically by an undo) is no
+        # longer an unsaved change.
+        pristine <- sheet_grid$matches_base(
+          isolate(metadata_base()),
+          isolates,
+          changed$column,
+          changed$value
+        )
+        State$data <- res$data
+        State$metadata_dirty <- sheet_grid$merge_dirty(
+          State$metadata_dirty,
+          data.frame(
+            isolate = isolates[!custom],
+            column = changed$column[!custom],
+            value = changed$value[!custom],
+            stringsAsFactors = FALSE
+          ),
+          c("isolate", "column"),
+          pristine[!custom]
+        )
+        State$custom_dirty <- sheet_grid$merge_dirty(
+          State$custom_dirty,
+          data.frame(
+            field_id = defs$id[match(changed$column[custom], defs$column)],
+            isolate = isolates[custom],
+            value = changed$value[custom],
+            stringsAsFactors = FALSE
+          ),
+          c("field_id", "isolate"),
+          pristine[custom]
+        )
+        State$pending <- !is.null(State$metadata_dirty) || !is.null(State$custom_dirty)
+        sheet_grid$record_step(
+          history,
+          data.frame(
+            isolate = isolates,
+            column = changed$column,
+            value = changed$old,
+            stringsAsFactors = FALSE
+          ),
+          kind
+        )
+      }
+      # A rejected single-cell edit already shows its new value client-side,
+      # so a rejection needs the redraw too.
+      if (nrow(changed) || nrow(res$rejected)) {
+        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      }
+
+      report <- sheet_grid$edit_report(res$rejected, skipped + sum(locked))
+      if (!is.null(report)) {
+        showNotification(
+          report,
+          type = if (nrow(res$rejected)) "warning" else "message",
+          duration = 6
+        )
+      }
+    }
+
+    # DT's own single-cell editor.
     observeEvent(input$metadata_table_cell_edit, {
       req(is.data.frame(State$data))
       info <- input$metadata_table_cell_edit
-      col <- names(State$data)[info$col + 1L]
-
-      if (!col %in% custom_cols()) {
-        old_value <- State$data[[col]][[info$row]]
-        State$data <- editData(State$data, info, rownames = FALSE)
-        new_value <- State$data[[col]][[info$row]]
-
-        unchanged <- if (is.na(old_value) || is.na(new_value)) {
-          is.na(old_value) && is.na(new_value)
-        } else {
-          old_value == new_value
-        }
-        if (isTRUE(unchanged)) {
-          return()
-        }
-
-        entry <- data.frame(
-          isolate = State$data$isolate[[info$row]],
-          column = col,
-          value = new_value,
-          stringsAsFactors = FALSE
-        )
-        # One row per cell: re-editing a cell before saving replaces its
-        # pending value rather than queuing a second write for it.
-        keep <- if (is.null(State$metadata_dirty)) {
-          NULL
-        } else {
-          State$metadata_dirty[
-            !(State$metadata_dirty$isolate == entry$isolate &
-              State$metadata_dirty$column == entry$column),
-            ,
-            drop = FALSE
-          ]
-        }
-        State$metadata_dirty <- rbind(keep, entry)
-
-        State$pending <- TRUE
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-        return()
-      }
-
-      defs <- custom_defs()
-      def <- defs[defs$column == col, , drop = FALSE]
-      req(nrow(def) == 1)
-
-      checked <- coerce_custom_value(
-        info$value,
-        def$type[[1]],
-        def$levels[[1]]
-      )
-
-      if (!isTRUE(checked$ok)) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-        showNotification(
-          paste0(
-            "\"",
-            info$value,
-            "\" is not a valid ",
-            tolower(CUSTOM_TYPES[[def$type[[1]]]]),
-            " value. ",
-            checked$reason
-          ),
-          type = "warning",
-          duration = 6
-        )
-        return()
-      }
-
-      stored <- checked$value
-      # Keep the column's R type so a numeric variable still sorts as a number.
-      new_value <- if (def$type[[1]] %in% NUMERIC_TYPES) {
-        suppressWarnings(as.numeric(stored))
-      } else {
-        stored
-      }
-
-      # DT fires cell_edit whenever the input's value differs from the cell's
-      # raw JS data, and an empty custom cell is NA (`null` in JS) while the
-      # editor always reads back "" on blur — so a click-in/click-out with no
-      # typing would otherwise mark the table dirty. Compare the real values.
-      old_value <- State$data[[col]][[info$row]]
-      unchanged <- if (is.na(old_value) || is.na(new_value)) {
-        is.na(old_value) && is.na(new_value)
-      } else {
-        old_value == new_value
-      }
-      if (isTRUE(unchanged)) {
-        return()
-      }
-
-      State$data[[col]][info$row] <- new_value
-
-      entry <- data.frame(
-        field_id = def$id[[1]],
-        isolate = State$data$isolate[[info$row]],
-        value = stored,
+      apply_cell_edits(data.frame(
+        row = as.integer(info$row),
+        column = names(State$data)[as.integer(info$col) + 1L],
+        value = as.character(info$value),
         stringsAsFactors = FALSE
-      )
-      # One row per cell: re-editing a cell replaces its pending value.
-      keep <- if (is.null(State$custom_dirty)) {
-        NULL
-      } else {
-        State$custom_dirty[
-          !(State$custom_dirty$field_id == entry$field_id &
-            State$custom_dirty$isolate == entry$isolate),
-          ,
-          drop = FALSE
-        ]
-      }
-      State$custom_dirty <- rbind(keep, entry)
-      State$pending <- TRUE
-      replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      ))
     })
+
+    # The spreadsheet layer (app/js/dt-sheet.js): a pasted, cut, cleared or
+    # filled block, or an undo/redo request.
+    observeEvent(input$metadata_table_sheet, {
+      req(is.data.frame(State$data))
+      msg <- input$metadata_table_sheet
+      if (identical(msg$op, "edit")) {
+        apply_cell_edits(
+          sheet_grid$decode_batch(msg, State$data),
+          skipped = sum(as.integer(msg$skipped))
+        )
+        return()
+      }
+      req(msg$op %in% c("undo", "redo"))
+      step <- sheet_grid$take_step(history, msg$op)
+      req(step)
+      apply_cell_edits(
+        data.frame(
+          row = match(step$isolate, State$data$isolate),
+          column = step$column,
+          value = step$value,
+          stringsAsFactors = FALSE
+        ),
+        kind = msg$op
+      )
+    })
+
+    observeEvent(db_path(), sheet_grid$clear_history(history))
 
     # Enable/disable both action buttons together based on pending edits
     observeEvent(State$pending, {
@@ -1697,6 +1788,7 @@ server <- function(
       State$metadata_dirty <- NULL
       State$custom_dirty <- NULL
       State$pending <- FALSE
+      sheet_grid$clear_history(history)
       reload_token(isolate(reload_token()) + 1L)
       fresh <- metadata_base()
       State$data <- fresh

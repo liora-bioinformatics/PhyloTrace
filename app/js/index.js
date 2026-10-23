@@ -6,6 +6,9 @@ import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";
 import "./viz-scale-swatch";
 
+export { attachRowDrag } from "./dt-row-drag";
+export { attachSheet } from "./dt-sheet";
+
 /**
  * Determines whether an input element is exempt from character set sanitization.
  *
@@ -36,12 +39,6 @@ document.addEventListener("input", function (event) {
   if (!regex.test(el.value)) {
     el.value = el.value.replace(/[^a-zA-Z0-9_-]/g, "");
   }
-});
-
-// Converts single-click interactions into double-clicks to enable immediate cell editing in DataTables.
-$(document).on("click", ".edit-table table.dataTable tbody td", function (e) {
-  if (e.target !== this) return; // Ignore clicks targetting active cell editors
-  $(this).trigger("dblclick");
 });
 
 // Fades out and cleans up the initial splash loading screen upon initial Shiny idle.

@@ -66,6 +66,7 @@ dependencies:
   - r-shinyfiles
   - r-shinyjs
   - r-shinywidgets
+  - r-stringi
   - r-svglite
   - r-terra
   - r-testthat

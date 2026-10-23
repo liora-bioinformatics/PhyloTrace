@@ -1140,8 +1140,10 @@ store_clamlst_results <- function(
     if (is.na(gene) || is.na(allele) || !length(refs$sequences)) {
       return(NA_character_)
     }
-    val <- refs$sequences[[paste(gene, allele, sep = "\t")]]
-    if (is.null(val)) NA_character_ else val
+    # Single-bracket lookup: an allele the reference does not hold ("new", a
+    # multi-hit "3;7") must come back NA. `[[` throws on a missing name, which
+    # rolled back the isolate's whole call.
+    unname(refs$sequences[paste(gene, allele, sep = "\t")])
   }
   alembic_version <- refs$alembic
 

@@ -3,10 +3,11 @@
 # "Custom Variables" interface of the Database menu.
 #
 # Lets the user define their own typed, per-isolate fields (see
-# app/logic/custom_fields.R) and fill them in: an overview of what is defined
-# and an editable isolate x variable table. This is the *only* place custom
-# values are written — every other view (Browse Entries, the visualization
-# engines) merges them in read-only.
+# app/logic/custom_fields.R) and fill them in: an overview of what is defined,
+# an editable isolate x variable table, and bulk import from an isolate-keyed
+# table (app/view/database_custom_import.R). Custom values are written only
+# here and in Browse Entries' grid; the visualization engines merge them in
+# read-only.
 
 box::use(
   bslib,
@@ -22,29 +23,18 @@ box::use(
   app / logic / custom_fields,
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
-  app / logic / field_labels[field_labels_for],
+  app / logic / field_labels[CUSTOM_COL_PREFIX, field_labels_for],
   app / logic / pymlst[existing_strains],
+  app / logic / sheet_grid,
+  app / view / database_custom_import,
+  app / view / help,
 )
-
-# The allowed values a `boolean` cell offers; `category` takes its own levels.
-BOOLEAN_LEVELS <- c("yes", "no")
 
 # 0-based DT column indices for `cols` within `all_cols`; NAs dropped.
 # Mirrors the helper in database_browser.R.
 .dt_idx <- function(all_cols, cols) {
   idx <- match(cols, all_cols)
   as.integer(idx[!is.na(idx)] - 1L)
-}
-
-# Returns allowed values for a given variable type, or NULL if free-form.
-.type_levels <- function(type, levels_json) {
-  if (identical(type, "boolean")) {
-    return(BOOLEAN_LEVELS)
-  }
-  if (identical(type, "category")) {
-    return(custom_fields$field_levels(levels_json))
-  }
-  NULL
 }
 
 # Splits comma-separated user input into a clean vector of levels.
@@ -62,6 +52,8 @@ ui <- function(id) {
   bslib$as_fill_carrier(
     shiny$div(
       id = ns("module-container"),
+      database_custom_import$ui(ns("import")),
+      help$ui(ns("help")),
       bslib$as_fill_carrier(shiny$uiOutput(ns("body"), fill = TRUE))
     )
   )
@@ -176,6 +168,7 @@ server <- function(
         State$data <- NULL
         State$dirty <- NULL
         State$pending <- FALSE
+        sheet_grid$clear_history(history)
         reload_token(reload_token() + 1L)
       },
       ignoreInit = TRUE
@@ -200,9 +193,12 @@ server <- function(
           width = 300,
           open = TRUE,
           fillable = TRUE,
+          # Stretched to full height like Browse Entries' sidebar, so the
+          # gesture hints can sit at the bottom (see main.scss).
+          class = "browse-entries-sidebar",
           bslib$as_fill_carrier(
             shiny$div(
-              class = "sidebar-control",
+              class = "sidebar-control browse-sidebar",
               shiny$div(
                 class = "sidebar-control-group",
                 shiny$div(class = "control-group-label", "Variables"),
@@ -211,7 +207,8 @@ server <- function(
                   "New Variable",
                   icon = shiny$icon("plus"),
                   width = "100%"
-                )
+                ),
+                database_custom_import$open_button(ns("import"), width = "100%")
               ),
               shiny$div(
                 class = "sidebar-control-group",
@@ -247,6 +244,10 @@ server <- function(
                     width = "100%"
                   )
                 )
+              ),
+              shiny$div(
+                class = "sidebar-control-group selection-stats-slot",
+                shiny$uiOutput(ns("values_hints_ui"))
               )
             )
           )
@@ -282,6 +283,15 @@ server <- function(
       )
     })
 
+    # Gesture hints for the Values grid, shown while that tab is open.
+    output$values_hints_ui <- shiny$renderUI({
+      shiny$req(identical(input$tabs, "Values"))
+      shiny$tagList(
+        shiny$div(class = "control-group-label", "Table gestures"),
+        sheet_grid$sheet_hints()
+      )
+    })
+
     # -- Definitions table ---------------------------------------------------
 
     output$fields_table <- DT$renderDT({
@@ -296,7 +306,7 @@ server <- function(
         `Allowed values` = vapply(
           seq_len(nrow(defs)),
           function(i) {
-            lv <- .type_levels(defs$type[[i]], defs$levels[[i]])
+            lv <- custom_fields$listed_levels(defs$type[[i]], defs$levels[[i]])
             if (is.null(lv)) "—" else paste(lv, collapse = ", ")
           },
           character(1)
@@ -379,20 +389,6 @@ server <- function(
       editable_date_idx <- date_idx + 1L
       editable_numeric_idx <- numeric_idx + 1L
 
-      # Values drawn from a fixed list get a native <select> swapped in for
-      # DT's own text input the moment it's created (see initComplete below),
-      # instead of a free-text box hinting at the allowed values. coerce_custom_value()
-      # stays the authority on what may actually be stored.
-      defs <- fields()
-      lists <- list()
-      for (i in seq_len(nrow(defs))) {
-        lv <- .type_levels(defs$type[[i]], defs$levels[[i]])
-        idx <- .dt_idx(cols, custom_fields$custom_col(defs$name[[i]]))
-        if (!is.null(lv) && length(lv) && length(idx)) {
-          lists[[as.character(idx)]] <- lv
-        }
-      }
-
       DT$datatable(
         df,
         rownames = FALSE,
@@ -436,63 +432,16 @@ server <- function(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
-              var lists = %s;
+              // The spreadsheet layer (app/js/dt-sheet.js): range
+              // selection, clipboard, fill, undo/redo and the dropdown editor
+              // for category / yes-no cells.
+              %s
 
-              // A category/boolean cell may only ever hold one of a fixed
-              // set of values, so the moment DT creates its plain text input
-              // for such a cell, swap in a native <select> offering exactly
-              // those options — instead of hinting at them on a free-text
-              // box. The original input is kept in the DOM (merely hidden)
-              // so DT's own blur handler, and the Shiny wiring behind it,
-              // keep doing the actual commit: this code only ever writes the
-              // chosen option back into that input and triggers blur.
-              $(tableNode).on('focusin', 'input', function() {
-                var $input = $(this);
-                if ($input.data('categorySwapped')) return;
-                var cell = $input.closest('td');
-                if (!cell.length) return;
-                var idx = api.cell(cell[0]).index();
-                if (!idx) return;
-                var options = lists[idx.column];
-                if (!options || !options.length) return;
-
-                $input.data('categorySwapped', true);
-                var current = $input.val();
-                var $select = $('<select class=\"dt-category-select\"></select>');
-                options.forEach(function(v) {
-                  $select.append($('<option></option>').val(v).text(v));
-                });
-                if (options.indexOf(current) === -1) {
-                  $select.prepend($('<option></option>').val(current).text(current));
-                }
-                $select.val(current);
-
-                // Guarded so the natural change -> blur sequence (selecting
-                // an option fires 'change' without blurring the <select>
-                // first) can't run this twice: the handlers are unbound and
-                // the element removed on first entry. Blur must commit
-                // synchronously, not deferred: a click on a *different* cell
-                // blurs this select before dispatching its own click event
-                // (see index.js's click -> dblclick promotion), and a
-                // deferred commit would still be pending when that other
-                // cell's editor opens — the table.draw() it triggers a tick
-                // later would then wipe out the new editor, so the click
-                // would appear to do nothing and a second one would be
-                // needed.
-                var commit = function() {
-                  var chosen = $select.val();
-                  $select.off().remove();
-                  $input.val(chosen);
-                  $input.trigger('blur');
-                };
-                $select.on('change', commit);
-                $select.on('blur', commit);
-                $select.on('keyup', function(e) {
-                  if (e.key === 'Escape') commit();
-                });
-
-                $input.hide().after($select);
-                $select.trigger('focus');
+              // Hover text: the identifier behind each header label, as a
+              // table import must head its column to fill this one.
+              var titles = %s;
+              api.columns().every(function(i) {
+                if (titles[i]) $(this.header()).attr('title', titles[i]);
               });
 
               // A native date input only accepts YYYY-MM-DD, so a value stored
@@ -515,10 +464,6 @@ server <- function(
                 if (!isNaN(d.getTime())) this.value = d.toISOString().split('T')[0];
               });
 
-              $(tableNode).on('keyup', 'input', function(e) {
-                if (e.key === 'Enter') this.blur();
-              });
-
               // With scrollX, DT fixes each column's width once (split into
               // the separate header/body tables the 'One scrollport per
               // table' CSS then re-unifies) and white-space: nowrap (see
@@ -539,7 +484,12 @@ server <- function(
               });
               api.columns.adjust();
             }",
-            as.character(toJSON(lists, auto_unbox = FALSE))
+            sheet_grid$sheet_attach_js(
+              ns("values_table_sheet"),
+              isolate_idx,
+              sheet_grid$sheet_lists(cols, fields())
+            ),
+            toJSON(sub(paste0("^", CUSTOM_COL_PREFIX), "", cols))
           ))
         )
       )
@@ -547,121 +497,143 @@ server <- function(
 
     proxy <- DT$dataTableProxy("values_table", session = session)
 
-    # Every edit is validated against its variable's type before it reaches the
-    # in-memory frame: a rejected value is rolled back in the table, so what the
-    # user sees is always what would be saved.
+    # Undo/redo steps for this grid's edits (see app/logic/sheet_grid.R). Kept
+    # across saves, dropped on discard and whenever a different database is
+    # shown.
+    history <- sheet_grid$new_history()
+
+    # Validates a batch of cell edits against each variable's type and applies
+    # the accepted ones, so what the user sees is always what would be saved: a
+    # rejected value is rolled back in the table. `edits` holds `row` (in
+    # State$data), `column` and `value`; `skipped` counts read-only cells the
+    # client already left out. DT's single-cell editor, the spreadsheet layer's
+    # paste/cut/delete/fill and undo/redo (`kind`, which skips validation to
+    # restore what the grid held) all land here. Mirrors apply_cell_edits() in
+    # database_browser.R.
+    #
+    # replaceData() runs only when something changed or was rejected. A no-op
+    # (DT fires cell_edit for a click-in/click-out on an empty cell, since its
+    # `null` never equals the editor's "") must not round-trip: the redraw
+    # would tear out an editor the user has meanwhile opened in another cell.
+    # An accepted edit always redraws, even when the stored form is identical
+    # to what the client shows: DT's blur handler updates the cell's data
+    # without draw(), leaving the sort/filter caches stale until the next
+    # draw, which would blank every cell edited since.
+    apply_cell_edits <- function(edits, skipped = 0L, kind = "edit") {
+      df <- State$data
+      defs <- fields()
+      cols <- custom_fields$custom_col(defs$name)
+      locked <- is.na(edits$column) | edits$column == "isolate"
+
+      res <- sheet_grid$apply_edits(
+        df,
+        edits[!locked, , drop = FALSE],
+        types = setNames(defs$type, cols),
+        levels = setNames(defs$levels, cols),
+        na_cols = cols,
+        trusted = kind != "edit"
+      )
+
+      changed <- res$changed
+      if (nrow(changed)) {
+        isolates <- df$isolate[changed$row]
+        State$data <- res$data
+        # A cell put back to its saved value (typically by an undo) is no
+        # longer an unsaved change.
+        State$dirty <- sheet_grid$merge_dirty(
+          State$dirty,
+          data.frame(
+            field_id = defs$id[match(changed$column, cols)],
+            isolate = isolates,
+            value = changed$value,
+            stringsAsFactors = FALSE
+          ),
+          c("field_id", "isolate"),
+          sheet_grid$matches_base(
+            shiny$isolate(values_base()),
+            isolates,
+            changed$column,
+            changed$value
+          )
+        )
+        State$pending <- !is.null(State$dirty)
+        sheet_grid$record_step(
+          history,
+          data.frame(
+            isolate = isolates,
+            column = changed$column,
+            value = changed$old,
+            stringsAsFactors = FALSE
+          ),
+          kind
+        )
+      }
+      if (nrow(changed) || nrow(res$rejected)) {
+        DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+      }
+
+      report <- sheet_grid$edit_report(res$rejected, skipped + sum(locked))
+      if (!is.null(report)) {
+        shiny$showNotification(
+          report,
+          type = if (nrow(res$rejected)) "warning" else "message",
+          duration = 6
+        )
+      }
+    }
+
+    # DT's own single-cell editor.
     shiny$observeEvent(input$values_table_cell_edit, {
       shiny$req(is.data.frame(State$data))
       info <- input$values_table_cell_edit
-      col <- names(State$data)[info$col + 1L]
-      defs <- fields()
-      def <- defs[custom_fields$custom_col(defs$name) == col, , drop = FALSE]
-      shiny$req(nrow(def) == 1)
+      apply_cell_edits(data.frame(
+        row = as.integer(info$row),
+        column = names(State$data)[as.integer(info$col) + 1L],
+        value = as.character(info$value),
+        stringsAsFactors = FALSE
+      ))
+    })
 
-      checked <- custom_fields$coerce_custom_value(
-        info$value,
-        def$type[[1]],
-        def$levels[[1]]
-      )
-
-      if (!isTRUE(checked$ok)) {
-        DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-        shiny$showNotification(
-          paste0(
-            "\"",
-            info$value,
-            "\" is not a valid ",
-            tolower(custom_fields$CUSTOM_TYPES[[def$type[[1]]]]),
-            " value. ",
-            checked$reason
-          ),
-          type = "warning",
-          duration = 6
+    # The spreadsheet layer (app/js/dt-sheet.js): a pasted, cut, cleared or
+    # filled block, or an undo/redo request.
+    shiny$observeEvent(input$values_table_sheet, {
+      shiny$req(is.data.frame(State$data))
+      msg <- input$values_table_sheet
+      if (identical(msg$op, "edit")) {
+        apply_cell_edits(
+          sheet_grid$decode_batch(msg, State$data),
+          skipped = sum(as.integer(msg$skipped))
         )
         return()
       }
-
-      stored <- checked$value
-      # The displayed frame keeps the column's R type, so a numeric variable
-      # keeps sorting as a number rather than as a string.
-      new_value <- if (def$type[[1]] %in% custom_fields$NUMERIC_TYPES) {
-        suppressWarnings(as.numeric(stored))
-      } else {
-        stored
-      }
-
-      # DT's own inline editor fires a cell_edit event whenever the input's
-      # value differs from the cell's raw JS data even when nothing was
-      # typed: an empty (NA) cell serialises to `null`, but the editor input
-      # always reads back as `""` on blur, so `"" !== null` trips DT's change
-      # check on a no-op click. Re-check the actual value here so that
-      # doesn't mark the panel dirty (compare, not `df[is.na(df)] <- ""` as
-      # database_browser.R's metadata_table does — that would coerce this
-      # table's numeric columns to character and break their sort order).
-      old_value <- State$data[[col]][[info$row]]
-      unchanged <- if (is.na(old_value) || is.na(new_value)) {
-        is.na(old_value) && is.na(new_value)
-      } else {
-        old_value == new_value
-      }
-      if (isTRUE(unchanged)) {
-        # No replaceData() here: nothing in State$data actually changed, so
-        # there is nothing to correct on the client. Calling it anyway (as
-        # this used to) sends a round trip on *every* no-op blur — and
-        # because the NA/"" mismatch above means a never-yet-filled cell
-        # always takes this branch, that fired on virtually every click in a
-        # freshly-created variable's empty column. If the user had already
-        # clicked into a *different* cell to start editing it by the time
-        # that round trip's replaceData() landed, its table-wide redraw tore
-        # out the new cell's still-open editor out from under them — so the
-        # first click appeared to do nothing and a second one was needed.
-        return()
-      }
-
-      State$data[[col]][info$row] <- new_value
-
-      entry <- data.frame(
-        field_id = def$id[[1]],
-        isolate = State$data$isolate[[info$row]],
-        value = stored,
-        stringsAsFactors = FALSE
+      shiny$req(msg$op %in% c("undo", "redo"))
+      step <- sheet_grid$take_step(history, msg$op)
+      shiny$req(step)
+      apply_cell_edits(
+        data.frame(
+          row = match(step$isolate, State$data$isolate),
+          column = step$column,
+          value = step$value,
+          stringsAsFactors = FALSE
+        ),
+        kind = msg$op
       )
-      # One row per cell: re-editing a cell replaces its pending value.
-      keep <- if (is.null(State$dirty)) {
-        NULL
-      } else {
-        State$dirty[
-          !(State$dirty$field_id == entry$field_id &
-            State$dirty$isolate == entry$isolate),
-          ,
-          drop = FALSE
-        ]
-      }
-      State$dirty <- rbind(keep, entry)
-      State$pending <- TRUE
-      # Unlike the no-op case above, an *accepted* edit always gets a
-      # replaceData() round trip, even when the canonical stored form is
-      # byte-identical to what the user typed: DT's blur handler updates the
-      # cell's data client-side without ever calling draw(), so the table's
-      # per-row sort/filter caches are never rebuilt for that edit and stay
-      # built from the pre-edit data. Skipping replaceData() here left the
-      # next column-header sort click as the first thing to force a draw -
-      # at which point DataTables rebuilt those stale caches and blanked
-      # every cell edited since the table last rendered, even though the
-      # value was already saved correctly (a full reload always showed it
-      # right, since that goes through a real render).
-      DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
     })
 
+    shiny$observeEvent(db_path(), sheet_grid$clear_history(history))
+
+    # Import is held back while edits are pending: its reload would discard them.
     shiny$observeEvent(State$pending, {
       if (isTRUE(State$pending)) {
         enable("save")
         addClass("save", "btn-attention")
         enable("discard")
+        disable("import-open")
       } else {
         disable("save")
         removeClass("save", "btn-attention")
         disable("discard")
+        enable("import-open")
       }
     })
 
@@ -687,6 +659,7 @@ server <- function(
     })
 
     shiny$observeEvent(input$discard, {
+      sheet_grid$clear_history(history)
       fresh <- values_base()
       State$data <- fresh
       State$dirty <- NULL
@@ -709,7 +682,7 @@ server <- function(
         shiny$textInput(
           ns("var_levels"),
           "Allowed values",
-          value = paste(.type_levels(type, def$levels[[1]]), collapse = ", "),
+          value = paste(custom_fields$listed_levels(type, def$levels[[1]]), collapse = ", "),
           placeholder = "blood, urine, wound"
         ),
         shiny$div(
@@ -867,6 +840,24 @@ server <- function(
       reload()
     })
 
+    help$server("help", topic = "custom_variables")
+
+    # -- Import from table ---------------------------------------------------
+
+    # A merge into a standard metadata field changes the metadata table too, so
+    # that domain is announced alongside reload()'s custom_fields bump.
+    database_custom_import$server(
+      "import",
+      db_path = db_path,
+      blocked = shiny$reactive(isTRUE(State$pending)),
+      on_imported = function(counts) {
+        reload()
+        if (isTRUE(counts$metadata)) {
+          db_events$bump(db_rev, "metadata")
+        }
+      }
+    )
+
     # -- Remove --------------------------------------------------------------
 
     output$remove_picker_ui <- shiny$renderUI({
@@ -1001,11 +992,21 @@ empty_hint <- function(ns) {
       "The type decides what may be entered: a whole-number cell refuses",
       "\"12.5\", a category cell only accepts one of its allowed values."
     ),
-    shiny$actionButton(
-      ns("add_var_empty"),
-      "Create the first variable",
-      icon = shiny$icon("plus"),
-      class = "btn-success"
+    shiny$p(
+      class = "text-muted",
+      "Already keep this information in a spreadsheet? Import it: a table with",
+      "one row per isolate, the isolate name in a column headed \"isolate\"",
+      "(or the first column), and one column per variable."
+    ),
+    shiny$div(
+      class = "custom-fields-hint_actions",
+      shiny$actionButton(
+        ns("add_var_empty"),
+        "Create the first variable",
+        icon = shiny$icon("plus"),
+        class = "btn-success"
+      ),
+      database_custom_import$open_button(ns("import"))
     )
   )
 }
