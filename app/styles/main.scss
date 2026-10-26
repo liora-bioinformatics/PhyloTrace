@@ -5263,6 +5263,13 @@ table.dataTable thead>tr>th.sorting {
     min-height: 0;
 }
 
+// Cards stacked in the aside share its height equally and each scroll, so a
+// long list in one (many settings groups) cannot squeeze the other to nothing.
+.scheme-info-layout>.scheme-aside.overview-aside>.html-fill-item {
+    flex: 1 1 0;
+    min-height: 0;
+}
+
 .overview-stats {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5727,8 +5734,11 @@ table.dataTable thead>tr>th.sorting {
 .overview-allele-info {
     display: flex;
     gap: 0.6rem;
-    margin: -0.25rem 0 0.25rem;
+    // Pulled towards the picker and the buttons: it belongs to the picked allele
+    // rather than being a block of its own in the column's 1.5rem rhythm.
+    margin: -1rem 0 -0.75rem;
     font-size: 0.75rem;
+    white-space: nowrap;
 }
 
 .overview-allele-info_label {
@@ -5741,8 +5751,6 @@ table.dataTable thead>tr>th.sorting {
 
 .overview-allele-info_value {
     font-family: monospace;
-    overflow-wrap: anywhere;
-    user-select: all;
 }
 
 // The AMR Overview's carrier search keeps to its column: a long selected label
@@ -5770,4 +5778,10 @@ table.dataTable thead>tr>th.sorting {
 
 .selectize-dropdown .option {
     overflow-wrap: anywhere;
+}
+
+// Server-side selectize dropdowns (AMR Overview's carrier search) stay inside
+// the window like every other picker.
+.selectize-dropdown-content {
+    max-height: min(18rem, 45vh);
 }

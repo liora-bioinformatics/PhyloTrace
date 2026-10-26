@@ -45,3 +45,9 @@ test_that("key_value_table drops unrecorded rows and escapes labels", {
   expect_identical(nrow(widget$x$data), 1L)
   expect_true(grepl("A&lt;b&gt;", widget$x$data$key[1], fixed = TRUE))
 })
+
+test_that("count_label pluralizes its noun", {
+  expect_identical(overview_ui$count_label(1), "1 isolate")
+  expect_identical(overview_ui$count_label(1204), "1,204 isolates")
+  expect_identical(overview_ui$count_label(0), "0 isolates")
+})

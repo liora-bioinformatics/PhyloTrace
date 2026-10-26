@@ -1,8 +1,9 @@
 # app/view/database_isolates.R
 
 #' "Isolate Overview" interface of the Database menu: where the isolates came
-#' from, the assemblies they were typed from, how those assemblies are
-#' distributed and the record diagnostics of every isolate and typing run.
+#' from, the assemblies they were typed from, which analyses they went through,
+#' how those assemblies are distributed and the record diagnostics of every
+#' isolate and typing run.
 
 box::use(
   DT[DTOutput, renderDT],
@@ -19,17 +20,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_guard[guard_db_read],
   app / logic / functions[copy_to_clipboard, render_info, stat_tile],
-  app /
-    logic /
-    isolate_overview[
-      CONTIGUITY,
-      LOCAL_LABEL,
-      format_bp,
-      format_duration,
-      isolate_flags,
-      load_isolate_overview,
-      one_isolate_checks,
-    ],
+  app / logic / isolate_overview,
   app / logic / overview_ui,
 )
 
@@ -41,6 +32,14 @@ TOP_SOURCES <- 6L
 
 fmt <- overview_ui$fmt
 
+# Display label of contiguity class keys.
+contiguity_label <- function(key) {
+  isolate_overview$CONTIGUITY$label[match(key, isolate_overview$CONTIGUITY$key)]
+}
+
+# Display label of analysis outcome keys.
+outcome_label <- function(key) unname(isolate_overview$OUTCOME_LABELS[key])
+
 NO_ISOLATES <- "This database holds no isolates yet."
 
 NO_ASSEMBLIES <- paste(
@@ -49,8 +48,8 @@ NO_ASSEMBLIES <- paste(
 )
 
 CONTIGUITY_HINT <- paste(
-  "Isolates by contig count of their assembly. Complete: up to 10 contigs, typical",
-  "of long-read or hybrid assemblies. Draft: 11-200, typical of short reads.",
+  "Isolates by contig count of their assembly. Near-complete: up to 10 contigs,",
+  "typical of long-read or hybrid assemblies. Draft: 11-200, typical of short reads.",
   "Fragmented: 201-500. Highly fragmented: over 500, where loci go missing."
 )
 
@@ -99,7 +98,9 @@ ui <- function(id) {
           shiny$uiOutput(ns("collection_summary")),
           hint = paste(
             CONTIGUITY_HINT,
-            "Origin separates isolates typed in this database from imported ones."
+            "Analyses counts isolates with results of each analysis, those that",
+            "failed, were switched off or never ran it falling short. Origin separates",
+            "isolates typed in this database from imported ones."
           )
         )
       )
@@ -183,8 +184,9 @@ isolates_ui <- function(ns) {
         "export_isolates",
         "Loading isolates ...",
         hint = paste(
-          "Every isolate with its origin, the assembly it was typed from and its",
-          "typing run. Flagged rows come first; select a row for its details."
+          "Every isolate with its origin, which analyses it went through, the",
+          "assembly it was typed from and its typing run. Flagged rows come first;",
+          "select a row for its details."
         )
       )
     )),
@@ -218,6 +220,30 @@ isolates_ui <- function(ns) {
   ))
 }
 
+# How many isolates have results of each analysis, and how many fell short.
+analyses_row <- function(analyses, n) {
+  parts <- vapply(
+    seq_len(nrow(analyses)),
+    function(i) {
+      a <- analyses[i, ]
+      short <- c(
+        if (a$failed) sprintf("%s failed", fmt(a$failed)),
+        if (a$skipped) sprintf("%s skipped", fmt(a$skipped)),
+        if (a$missing) sprintf("%s not run", fmt(a$missing))
+      )
+      sprintf(
+        "%s %s / %s%s",
+        a$label,
+        fmt(a$done),
+        fmt(n),
+        if (length(short)) sprintf(" (%s)", paste(short, collapse = ", ")) else ""
+      )
+    },
+    character(1)
+  )
+  htmlEscape(paste(parts, collapse = "; "))
+}
+
 # Key/value rows describing the collection, values as HTML.
 collection_rows <- function(ov, species) {
   iso <- ov$isolates
@@ -242,6 +268,7 @@ collection_rows <- function(ov, species) {
         esc(paste(sort(unique(imported)), collapse = ", "))
       )
     },
+    "Analyses" = analyses_row(ov$analyses, n),
     "Typing Period" = if (length(dates)) {
       esc(if (dates[1] == dates[length(dates)]) {
         format(dates[1])
@@ -268,10 +295,11 @@ collection_rows <- function(ov, species) {
       NA_character_
     },
     "Digest Algorithm" = one_or_mixed(recorded$algorithm),
-    "Assembly Length" = esc(median_range(iso$length, format_bp)),
+    "Assembly Length" = esc(median_range(iso$length, isolate_overview$format_bp)),
     "Contigs" = esc(median_range(iso$contigs, fmt)),
     "Typing Time" = if (any(!is.na(iso$elapsed))) {
-      esc(sprintf("%s per isolate (median)", format_duration(median(iso$elapsed, na.rm = TRUE))))
+      typical <- isolate_overview$format_duration(median(iso$elapsed, na.rm = TRUE))
+      esc(sprintf("%s per isolate (median)", typical))
     } else {
       NA_character_
     }
@@ -302,7 +330,7 @@ collection_info_server <- function(input, output, overview, species) {
     }
     med_contigs <- if (any(!is.na(iso$contigs))) median(iso$contigs, na.rm = TRUE) else NA
     origin <- overview_ui$fold_top(ov$origin$label, ov$origin$n, TOP_SOURCES, "%d other sources")
-    origin$tones[origin$labels == LOCAL_LABEL] <- "success"
+    origin$tones[origin$labels == isolate_overview$LOCAL_LABEL] <- "success"
 
     shiny$tagList(
       overview_ui$stat_grid(
@@ -310,7 +338,7 @@ collection_info_server <- function(input, output, overview, species) {
         stat_tile("Assemblies", sprintf("%s / %s", fmt(sum(!iso$no_assembly)), fmt(n)), "dna"),
         stat_tile(
           "Median Length",
-          if (is.na(ov$median_length)) "-" else format_bp(ov$median_length),
+          if (is.na(ov$median_length)) "-" else isolate_overview$format_bp(ov$median_length),
           "ruler-horizontal"
         ),
         stat_tile(
@@ -319,6 +347,18 @@ collection_info_server <- function(input, output, overview, species) {
           "puzzle-piece"
         )
       ),
+      overview_ui$section_title("Analyses"),
+      overview_ui$bar_rows(
+        ov$analyses$label,
+        ov$analyses$done,
+        n,
+        tones = ifelse(
+          ov$analyses$done == n,
+          "success",
+          ifelse(ov$analyses$failed > 0, "warning", "secondary")
+        )
+      ),
+      shiny$div(class = "overview-section-gap"),
       overview_ui$section_title("Assembly Contiguity"),
       overview_ui$bar_rows(ov$contiguity$label, ov$contiguity$n, n, tones = ov$contiguity$tone),
       shiny$div(class = "overview-section-gap"),
@@ -330,12 +370,15 @@ collection_info_server <- function(input, output, overview, species) {
 
 # Per-isolate table, flagged rows first.
 isolate_rows <- function(iso) {
-  flags <- isolate_flags(iso)
-  contiguity <- CONTIGUITY$label[match(iso$contiguity, CONTIGUITY$key)]
+  flags <- isolate_overview$isolate_flags(iso)
+  contiguity <- contiguity_label(iso$contiguity)
   out <- data.frame(
     Isolate = iso$isolate,
     Flags = flags,
-    Source = ifelse(iso$imported, iso$source, LOCAL_LABEL),
+    Source = ifelse(iso$imported, iso$source, isolate_overview$LOCAL_LABEL),
+    cgMLST = outcome_label(iso$cgmlst),
+    MLST = outcome_label(iso$mlst),
+    AMR = outcome_label(iso$amr),
     Assembly = contiguity,
     Contigs = iso$contigs,
     `Length (bp)` = iso$length,
@@ -358,9 +401,9 @@ detail_rows <- function(row, median_length, median_contigs) {
   } else {
     sprintf(" (%+.1f%% vs. median)", 100 * (row$length - median_length) / median_length)
   }
-  contiguity <- CONTIGUITY$label[match(row$contiguity, CONTIGUITY$key)]
+  contiguity <- contiguity_label(row$contiguity)
   rows <- c(
-    Source = if (row$imported) paste("Imported from", row$source) else LOCAL_LABEL,
+    Source = if (row$imported) paste("Imported from", row$source) else isolate_overview$LOCAL_LABEL,
     Assembly = if (is.na(contiguity)) {
       NA
     } else {
@@ -372,6 +415,9 @@ detail_rows <- function(row, median_length, median_contigs) {
     } else {
       sprintf("%s (median %s)", fmt(row$contigs), fmt(median_contigs))
     },
+    cgMLST = outcome_label(row$cgmlst),
+    `Classical MLST` = outcome_label(row$mlst),
+    `AMR Screening` = outcome_label(row$amr),
     `Mean Contig` = if (is.na(row$mean_contig)) NA else paste(fmt(row$mean_contig), "bp"),
     `File Size` = if (is.na(row$file_bytes)) {
       NA
@@ -386,7 +432,7 @@ detail_rows <- function(row, median_length, median_contigs) {
     `Same Assembly As` = row$twins,
     Run = row$run_id,
     `Typed At` = substr(row$typed_at, 1, 19),
-    `Typing Time` = format_duration(row$elapsed),
+    `Typing Time` = isolate_overview$format_duration(row$elapsed),
     PhyloTrace = row$phylotrace
   )
   rows <- rows[!is.na(rows) & nzchar(rows)]
@@ -423,7 +469,7 @@ isolates_server <- function(input, output, overview) {
   output$isolate_checks <- shiny$renderUI({
     i <- selected()
     render_info("output$isolate_checks")
-    checks <- one_isolate_checks(overview()$isolates, i)
+    checks <- isolate_overview$one_isolate_checks(overview()$isolates, i)
     if (!nrow(checks)) {
       checks <- data.frame(
         check = "No flags",
@@ -490,7 +536,7 @@ distribution_server <- function(input, output, overview) {
       return(overview_ui$empty_hint(NO_ASSEMBLIES))
     }
     shiny$tagList(
-      overview_ui$section_title(sprintf("Median %s", format_bp(ov$median_length))),
+      overview_ui$section_title(sprintf("Median %s", isolate_overview$format_bp(ov$median_length))),
       overview_ui$bar_rows(ov$size_bins$label, ov$size_bins$n, sized, tones = ov$size_bins$tone)
     )
   })
@@ -565,7 +611,7 @@ environment_list <- function(env) {
             shiny$icon("fingerprint"),
             if (is.na(env$algorithm[i])) "No assembly digest" else env$algorithm[i]
           ),
-          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(env$isolates[i]))),
+          shiny$span(shiny$icon("vial"), overview_ui$count_label(env$isolates[i])),
           if (env$runs[i] > 0) {
             shiny$span(
               shiny$icon("list-check"),
@@ -635,7 +681,10 @@ server <- function(
     overview <- shiny$reactive({
       shiny$req(db_path())
       db_events$depend(db_rev, "isolates", "schema")
-      guard_db_read("Loading the isolate overview", load_isolate_overview(db_path()))
+      guard_db_read(
+        "Loading the isolate overview",
+        isolate_overview$load_isolate_overview(db_path())
+      )
     })
 
     # Species of the database's scheme, shown with the collection.

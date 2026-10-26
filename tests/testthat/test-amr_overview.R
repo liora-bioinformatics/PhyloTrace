@@ -210,3 +210,18 @@ test_that("load_amr_overview reads a mock database end to end", {
   expect_true(all(c("contig", "start", "stop", "strand", "ref_accession") %in% names(calls)))
   expect_identical(unique(calls$isolate), carrier)
 })
+
+test_that("group_carriers counts overlapping groups' isolates once", {
+  results <- rbind(
+    hit_rows("A", "blaTEM-1"),
+    hit_rows("A", "tet(A)", class = "TETRACYCLINE"),
+    hit_rows("B", "tet(A)", class = "TETRACYCLINE")
+  )
+  ov <- amr_overview$build_amr_overview(c("A", "B"), results)
+
+  expect_identical(
+    amr_overview$group_carriers(ov$hits, "Resistance", c("Beta-lactam", "Tetracycline")),
+    2L
+  )
+  expect_identical(amr_overview$group_carriers(ov$hits, "Stress", "Mercury"), 0L)
+})

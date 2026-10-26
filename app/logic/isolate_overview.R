@@ -1,17 +1,19 @@
 # app/logic/isolate_overview.R
 #
 # The isolates of a whole database: where each came from, the assembly it was
-# typed from, when and in which typing run, and the record-keeping checks the
-# "Isolate Overview" view is built from. Everything is derived on read from
-# `metadata`, `genome_hashes` and the run-level columns of `typing_provenance`
-# that the cgMLST, MLST and AMR overviews leave aside.
+# typed from, when and in which typing run, which analyses it went through, and
+# the record-keeping checks the "Isolate Overview" view is built from.
+# Everything is derived on read from `metadata`, `genome_hashes`, the run-level
+# columns of `typing_provenance` that the cgMLST, MLST and AMR overviews leave
+# aside, and which isolates `mlst`, `classical_mlst` and `amr_results` hold.
 
 box::use(
-  DBI[dbDisconnect, dbListTables],
+  DBI[dbDisconnect, dbGetQuery, dbListTables],
   stats[median, setNames],
   utils[head],
 )
 box::use(
+  app / logic / db_compat[REF_SOUCHE],
   app / logic / db_connect[connect],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / overview_common,
@@ -28,10 +30,34 @@ box::use(
 CONTIGUITY <- data.frame(
   upper = c(10, 200, 500, Inf),
   key = c("complete", "draft", "fragmented", "highly_fragmented"),
-  label = c("Complete", "Draft", "Fragmented", "Highly fragmented"),
+  label = c("Near-complete", "Draft", "Fragmented", "Highly fragmented"),
   tone = c("success", "primary", "warning", "danger"),
   stringsAsFactors = FALSE
 )
+
+#' Analyses an Isolate Goes Through
+#'
+#' @description Key, short label (flags, table columns) and full label of each
+#'   analysis a typing run performs.
+#'
+#' @export
+ANALYSES <- data.frame(
+  key = c("cgmlst", "mlst", "amr"),
+  short = c("cgMLST", "MLST", "AMR"),
+  label = c("cgMLST profile", "Classical MLST", "AMR screening"),
+  stringsAsFactors = FALSE
+)
+
+#' Analysis Outcome Labels
+#'
+#' @description Display label of each per-isolate analysis outcome.
+#'
+#' @export
+OUTCOME_LABELS <- c(done = "Done", failed = "Failed", skipped = "Skipped", missing = "Not run")
+
+# Classical MLST statuses that mean allele calls were made; with none stored,
+# the results were lost on the way into the database.
+CLA_CALLED <- c("known", "inferred", "novel", "partial", "ambiguous")
 
 #' Label of an Isolate Typed in This Database
 #'
@@ -64,7 +90,8 @@ HASH_COLS <- c(
 
 PROV_COLS <- c(
   "isolate", "run_id", "typed_at", "elapsed_seconds", "phylotrace_version",
-  "genome_digest", "algorithm", "n_contigs", "total_length"
+  "genome_digest", "algorithm", "n_contigs", "total_length", "cla_status",
+  "amr_status"
 )
 
 META_COLS <- c("isolate", SOURCE_COL, "called_at")
@@ -86,12 +113,25 @@ load_isolate_overview <- function(db_path) {
   read_if <- function(table, cols) {
     if (table %in% tables) overview_common$read_cols(con, table, cols)
   }
+  # Isolates a result table holds rows for; NULL when the table is absent.
+  holders <- function(table, col) {
+    if (table %in% tables) {
+      dbGetQuery(
+        con,
+        sprintf("SELECT DISTINCT %s AS isolate FROM %s WHERE %s != ?", col, table, col),
+        params = list(REF_SOUCHE)
+      )$isolate
+    }
+  }
 
   build_isolate_overview(
     isolates = overview_common$database_isolates(con, tables),
     meta = read_if("metadata", META_COLS),
     hashes = read_if("genome_hashes", HASH_COLS),
-    prov = read_if("typing_provenance", PROV_COLS)
+    prov = read_if("typing_provenance", PROV_COLS),
+    profiled = holders("mlst", "souche"),
+    classical = holders("classical_mlst", "isolate"),
+    screened = holders("amr_results", "isolate")
   )
 }
 
@@ -106,24 +146,36 @@ load_isolate_overview <- function(db_path) {
 #'   `called_at`), or `NULL`.
 #' @param hashes Data frame of `genome_hashes` rows, or `NULL`.
 #' @param prov Data frame of `typing_provenance` rows, or `NULL`.
+#' @param profiled Character vector of isolates with a cgMLST allele profile, or
+#'   `NULL` to take every isolate as profiled.
+#' @param classical Character vector of isolates with stored classical MLST
+#'   calls, or `NULL` when the table is absent.
+#' @param screened Character vector of isolates with stored AMR elements, or
+#'   `NULL` when the table is absent.
 #'
 #' @return A list with `state` (`"ok"` or `"none"`), `isolates`, `orphans`
-#'   (isolate names of records left behind, by table), `runs`, `environments`,
-#'   `contiguity`, `origin`, `contig_bins`, `size_bins`, `median_length`,
-#'   `timeline` and `checks`.
+#'   (isolate names of records left behind, by table), `analyses`, `runs`,
+#'   `environments`, `contiguity`, `origin`, `contig_bins`, `size_bins`,
+#'   `median_length`, `timeline` and `checks`.
 #' @export
 build_isolate_overview <- function(
   isolates = character(0),
   meta = NULL,
   hashes = NULL,
-  prov = NULL
+  prov = NULL,
+  profiled = NULL,
+  classical = NULL,
+  screened = NULL
 ) {
   isolates <- unique(as.character(isolates))
   isolates <- isolates[!is.na(isolates)]
   iso <- isolate_table(isolates, meta, hashes, prov)
+  iso <- add_analyses(iso, prov, profiled, classical, screened)
   orphans <- list(
-    hashes = orphaned(hashes, isolates),
-    provenance = orphaned(prov, isolates)
+    hashes = orphaned(hashes$isolate, isolates),
+    provenance = orphaned(prov$isolate, isolates),
+    classical = orphaned(classical, isolates),
+    amr = orphaned(screened, isolates)
   )
   sized <- iso$length[!is.na(iso$length)]
   median_length <- if (length(sized)) median(sized) else NA_real_
@@ -132,6 +184,7 @@ build_isolate_overview <- function(
     state = if (nrow(iso)) "ok" else "none",
     isolates = iso,
     orphans = orphans,
+    analyses = analysis_counts(iso),
     runs = run_table(iso),
     environments = environment_table(iso),
     contiguity = contiguity_counts(iso$contiguity),
@@ -150,12 +203,81 @@ build_isolate_overview <- function(
 }
 
 # Isolates a table holds records of that are no longer in the database.
-orphaned <- function(df, isolates) {
-  if (is.null(df) || !nrow(df)) {
+orphaned <- function(names, isolates) {
+  if (!length(names)) {
     return(character(0))
   }
-  left <- unique(overview_common$blank_na(df$isolate))
+  left <- unique(overview_common$blank_na(names))
   sort(left[!is.na(left) & !(left %in% isolates)])
+}
+
+# Outcome of one analysis per isolate: `done` where results are stored, else
+# what the provenance recorded of the step (`failed`, `skipped`), else
+# `missing` - never run, or run before its outcome was recorded.
+analysis_outcome <- function(stored, recorded, failed, skipped = "skipped") {
+  out <- rep("missing", length(stored))
+  out[recorded %in% failed] <- "failed"
+  out[recorded %in% skipped] <- "skipped"
+  out[stored] <- "done"
+  out
+}
+
+# The outcome of each analysis per isolate, and the gaps: an analysis an
+# isolate never went through (not run or switched off) although others in the
+# database did, which leaves it out of every comparison built on it.
+add_analyses <- function(iso, prov, profiled, classical, screened) {
+  at <- if (is.null(prov)) rep(NA_integer_, nrow(iso)) else match(iso$isolate, prov$isolate)
+  recorded <- function(col) {
+    if (is.null(prov) || !(col %in% names(prov))) {
+      rep(NA_character_, nrow(iso))
+    } else {
+      tolower(overview_common$blank_na(prov[[col]][at]))
+    }
+  }
+  amr_status <- recorded("amr_status")
+
+  # An isolate without a profile has nothing for allele calling to have
+  # skipped: with a provenance row it was typed and lost its profile.
+  iso$cgmlst <- analysis_outcome(
+    if (is.null(profiled)) rep(TRUE, nrow(iso)) else iso$isolate %in% profiled,
+    ifelse(iso$in_prov, "failed", NA_character_),
+    "failed",
+    character(0)
+  )
+  iso$mlst <- analysis_outcome(
+    iso$isolate %in% classical,
+    recorded("cla_status"),
+    c("failed", CLA_CALLED)
+  )
+  # A screen that found nothing stores no elements; its provenance says done.
+  iso$amr <- analysis_outcome(
+    iso$isolate %in% screened | amr_status %in% "done",
+    amr_status,
+    c("failed", "incomplete")
+  )
+  for (key in ANALYSES$key) {
+    outcome <- iso[[key]]
+    iso[[paste0(key, "_gap")]] <- outcome %in% c("missing", "skipped") & any(outcome == "done")
+  }
+  iso
+}
+
+# Isolates per outcome of each analysis.
+analysis_counts <- function(iso) {
+  out <- data.frame(
+    key = ANALYSES$key,
+    label = ANALYSES$label,
+    stringsAsFactors = FALSE
+  )
+  for (outcome in names(OUTCOME_LABELS)) {
+    out[[outcome]] <- vapply(
+      ANALYSES$key,
+      function(key) sum(iso[[key]] == outcome),
+      integer(1),
+      USE.NAMES = FALSE
+    )
+  }
+  out
 }
 
 #' Contiguity Class of Assemblies
@@ -441,8 +563,7 @@ environment_table <- function(iso) {
 
 # Whether each isolate carries any flag of the isolate table.
 flag_any <- function(iso) {
-  iso$changed | iso$duplicate | iso$odd_size | iso$fragmented | iso$other_algorithm |
-    iso$no_assembly
+  nzchar(isolate_flags(iso))
 }
 
 #' Flags of Each Isolate
@@ -463,6 +584,12 @@ isolate_flags <- function(iso) {
   add_flag(iso$fragmented, "fragmented")
   add_flag(iso$other_algorithm, "other digest algorithm")
   add_flag(iso$no_assembly, "no assembly record")
+  add_flag(iso$cgmlst != "done", "no allele profile")
+  for (i in 2:nrow(ANALYSES)) {
+    key <- ANALYSES$key[i]
+    add_flag(iso[[key]] == "failed", paste(ANALYSES$short[i], "failed"))
+    add_flag(iso[[paste0(key, "_gap")]], paste("no", ANALYSES$short[i]))
+  }
   flags
 }
 
@@ -511,6 +638,64 @@ isolate_checks <- function(iso, orphans) {
     )
   }
 
+  no_profile <- iso$cgmlst != "done"
+  if (any(no_profile)) {
+    add(
+      "No allele profile",
+      "warning",
+      sprintf(
+        paste(
+          "%d isolate(s) have no cgMLST allele profile: %s. They are left out of",
+          "every allele-distance analysis; retype them from their assemblies."
+        ),
+        sum(no_profile),
+        paste(head(iso$isolate[no_profile], 5), collapse = ", ")
+      ),
+      sum(no_profile)
+    )
+  }
+
+  failed <- iso$mlst == "failed" | iso$amr == "failed"
+  if (any(failed)) {
+    add(
+      "Failed analyses",
+      "warning",
+      sprintf(
+        paste(
+          "%d isolate(s) have an analysis that failed or whose results were not",
+          "stored: %s. Retyping them may succeed."
+        ),
+        sum(failed),
+        overview_common$tally(c(
+          rep(ANALYSES$label[2], sum(iso$mlst == "failed")),
+          rep(ANALYSES$label[3], sum(iso$amr == "failed"))
+        ))
+      ),
+      sum(failed)
+    )
+  }
+
+  gap <- iso$mlst_gap | iso$amr_gap
+  if (any(gap)) {
+    add(
+      "Analyses not run",
+      "info",
+      sprintf(
+        paste(
+          "%d isolate(s) lack an analysis other isolates in the database have: %s.",
+          "Typed before the analysis existed or with it switched off, or imported",
+          "without its results; they are missing from its plots and comparisons."
+        ),
+        sum(gap),
+        overview_common$tally(c(
+          rep(ANALYSES$label[2], sum(iso$mlst_gap)),
+          rep(ANALYSES$label[3], sum(iso$amr_gap))
+        ))
+      ),
+      sum(gap)
+    )
+  }
+
   complete <- iso$contiguity %in% "complete"
   draft <- !is.na(iso$contiguity) & !complete
   if (any(complete) && any(draft)) {
@@ -519,8 +704,8 @@ isolate_checks <- function(iso, orphans) {
       "warning",
       sprintf(
         paste(
-          "%d isolate(s) have complete or near-complete assemblies (up to %d",
-          "contigs, typical of long-read or hybrid sequencing) next to %d draft",
+          "%d isolate(s) have near-complete assemblies (up to %d contigs, typical",
+          "of long-read or hybrid sequencing) next to %d draft",
           "assemblies (typical of short reads). Long-read-only assemblies can carry",
           "small indel errors that show up as extra allele differences, so compare",
           "isolates across sequencing technologies with care."
@@ -612,20 +797,26 @@ isolate_checks <- function(iso, orphans) {
     )
   }
 
-  left <- unique(c(orphans$hashes, orphans$provenance))
+  left <- unique(unlist(orphans, use.names = FALSE))
   if (length(left)) {
+    tables <- c(
+      hashes = "assembly records",
+      provenance = "typing provenance",
+      classical = "classical MLST",
+      amr = "AMR results"
+    )
     add(
       "Orphaned records",
       "info",
       sprintf(
         paste(
-          "%d assembly and %d provenance record(s) belong to isolates no longer in",
-          "the database (%s), left behind by an earlier removal. They are not shown",
-          "anywhere else and can be ignored."
+          "Records of %d isolate(s) no longer in the database (%s) remain in: %s.",
+          "PhyloTrace removes these with the isolate, so the database file was",
+          "edited outside the app; other overviews may still count them as isolates."
         ),
-        length(orphans$hashes),
-        length(orphans$provenance),
-        overview_common$tally(left, limit = 3L)
+        length(left),
+        paste(head(left, 3), collapse = ", "),
+        overview_common$tally(rep(tables[names(orphans)], lengths(orphans)))
       ),
       length(left)
     )
@@ -708,6 +899,29 @@ one_isolate_checks <- function(iso, i) {
       "info",
       "Typed before assemblies were hashed, or imported without its records."
     )
+  }
+  if (row$cgmlst != "done") {
+    add(
+      "No allele profile",
+      "warning",
+      "Left out of every allele-distance analysis; retype it from its assembly."
+    )
+  }
+  for (i in 2:nrow(ANALYSES)) {
+    key <- ANALYSES$key[i]
+    if (row[[key]] == "failed") {
+      add(
+        paste(ANALYSES$label[i], "failed"),
+        "warning",
+        "The step failed or its results were not stored; retyping may succeed."
+      )
+    } else if (row[[paste0(key, "_gap")]]) {
+      add(
+        paste("No", ANALYSES$label[i]),
+        "info",
+        "Other isolates in the database have it; this one is missing from its comparisons."
+      )
+    }
   }
   checks$table()
 }

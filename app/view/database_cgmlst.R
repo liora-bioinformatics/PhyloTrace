@@ -8,7 +8,7 @@ box::use(
   DT[DTOutput, renderDT],
   bslib[nav_panel, navset_card_tab],
   shiny,
-  shinyWidgets[updatePickerInput],
+  shinyWidgets[updateVirtualSelect],
   stats[median, setNames],
   utils[head, write.csv],
 )
@@ -241,9 +241,9 @@ loci_info_server <- function(input, output, session, db_path, overview) {
       ),
       sprintf("Allele %s - not present", df$seqid)
     )
-    updatePickerInput(
-      session,
+    updateVirtualSelect(
       "allele_select",
+      session = session,
       label = paste("Selected Locus:", selected_row()$Locus),
       choices = setNames(as.character(df$seqid), labels),
       selected = as.character(df$seqid[1])
@@ -465,7 +465,7 @@ settings_list <- function(settings, current_version) {
           if (!is.na(settings$tools[i])) {
             shiny$span(shiny$icon("toolbox"), settings$tools[i])
           },
-          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(settings$isolates[i])))
+          shiny$span(shiny$icon("vial"), overview_ui$count_label(settings$isolates[i]))
         )
       )
     })

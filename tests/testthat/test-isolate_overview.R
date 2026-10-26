@@ -210,7 +210,7 @@ test_that("distributions count every recorded assembly", {
   expect_identical(sum(ov$size_bins$n), 11L)
   expect_identical(ov$size_bins$n[ov$size_bins$label == "Over 20% larger"], 1L)
   expect_identical(ov$origin$label, c("Typed here", "peer-lab"))
-  expect_identical(ov$contiguity$label, c("Complete", "Draft", "Fragmented", "Not recorded"))
+  expect_identical(ov$contiguity$label, c("Near-complete", "Draft", "Fragmented", "Not recorded"))
 })
 
 test_that("unparsable or impossible figures read as unknown", {
@@ -329,4 +329,93 @@ test_that("a clean mock database passes every record check", {
   expect_identical(ov$checks$check, "Record consistency")
   expect_false(any(nzchar(isolate_overview$isolate_flags(ov$isolates))))
   expect_equal(sum(ov$contiguity$n), 12L)
+})
+
+test_that("analysis outcomes merge stored results with recorded steps", {
+  prov <- data.frame(
+    isolate = c("A", "B", "C", "D", "E"),
+    cla_status = c("known", "failed", "known", "skipped", NA),
+    amr_status = c("done", "incomplete", "done", "skipped", NA),
+    stringsAsFactors = FALSE
+  )
+  iso <- isolate_overview$build_isolate_overview(
+    isolates = c("A", "B", "C", "D", "E", "F"),
+    prov = prov,
+    profiled = c("A", "B", "C", "D", "F"),
+    classical = c("A", "F"),
+    screened = "B"
+  )$isolates
+
+  # C's call was recorded but none stored; its clean AMR screen stores nothing.
+  expect_identical(iso$mlst, c("done", "failed", "failed", "skipped", "missing", "done"))
+  expect_identical(iso$amr, c("done", "done", "done", "skipped", "missing", "missing"))
+  # E was typed (provenance) but lost its profile; F never had a provenance row.
+  expect_identical(iso$cgmlst, c("done", "done", "done", "done", "failed", "done"))
+  expect_identical(iso$mlst_gap, c(FALSE, FALSE, FALSE, TRUE, TRUE, FALSE))
+  expect_identical(iso$amr_gap, c(FALSE, FALSE, FALSE, TRUE, TRUE, TRUE))
+})
+
+test_that("analysis gaps and failures are flagged and checked", {
+  ov <- isolate_overview$build_isolate_overview(
+    isolates = c("A", "B", "C"),
+    prov = data.frame(isolate = c("A", "B"), amr_status = c("done", "failed")),
+    profiled = c("A", "B"),
+    classical = "A"
+  )
+  flags <- isolate_overview$isolate_flags(ov$isolates)
+
+  expect_identical(
+    flags,
+    c(
+      "no assembly record",
+      "no assembly record; no MLST; AMR failed",
+      "no assembly record; no allele profile; no MLST; no AMR"
+    )
+  )
+  expect_true(all(
+    c("No allele profile", "Failed analyses", "Analyses not run") %in% ov$checks$check
+  ))
+  expect_identical(ov$checks$n[ov$checks$check == "Analyses not run"], 2L)
+  expect_identical(ov$analyses$done, c(2L, 1L, 1L))
+  expect_identical(ov$analyses$failed, c(0L, 0L, 1L))
+  expect_identical(
+    isolate_overview$one_isolate_checks(ov$isolates, 2L)$check,
+    c("AMR screening failed", "No assembly record", "No Classical MLST")
+  )
+})
+
+test_that("an analysis no isolate went through is no gap", {
+  iso <- isolate_overview$build_isolate_overview(
+    isolates = c("A", "B"),
+    prov = data.frame(isolate = c("A", "B"), cla_status = "skipped")
+  )$isolates
+
+  expect_false(any(iso$mlst_gap | iso$amr_gap))
+  expect_identical(iso$mlst, c("skipped", "skipped"))
+})
+
+test_that("result rows of removed isolates count as orphans", {
+  ov <- isolate_overview$build_isolate_overview(
+    isolates = "A",
+    classical = c("A", "GONE"),
+    screened = "GONE2"
+  )
+
+  expect_identical(ov$orphans$classical, "GONE")
+  expect_identical(ov$orphans$amr, "GONE2")
+  expect_identical(ov$checks$n[ov$checks$check == "Orphaned records"], 2L)
+})
+
+test_that("failed and missing analyses of the mock database surface", {
+  path <- file.path(local_tempdir(), "mock.db")
+  scenarios <- c("failed", "untyped", "calls_without_alleles", "amr_failed", "amr_unscreened")
+  plan <- quiet(mock_database$mock_database(path, n_isolates = 80, scenarios = scenarios))
+  iso <- isolate_overview$load_isolate_overview(path)$isolates
+  at <- function(sc) match(plan$isolate[plan$scenario %in% sc], iso$isolate)
+
+  expect_true(all(iso$cgmlst == "done"))
+  expect_true(all(iso$mlst[at(c("failed", "calls_without_alleles"))] == "failed"))
+  expect_true(all(iso$mlst_gap[at("untyped")]))
+  expect_true(all(iso$amr[at("amr_failed")] == "failed"))
+  expect_true(all(iso$amr_gap[at("amr_unscreened")]))
 })

@@ -625,6 +625,21 @@ amr_checks <- function(iso, hits) {
   out
 }
 
+#' Isolates Carrying Any of Several Groups
+#'
+#' @description Groups overlap - one isolate carries several drug classes - so
+#'   the isolates behind a set of groups are counted once each, not summed.
+#'
+#' @param hits Data frame of annotated element calls (`overview$hits`).
+#' @param type Character element type (`ELEMENT_TYPES`).
+#' @param groups Character group names.
+#'
+#' @return Integer number of distinct isolates.
+#' @export
+group_carriers <- function(hits, type, groups) {
+  length(unique(hits$isolate[hits$type %in% type & hits$group %in% groups]))
+}
+
 #' Carriers of One Element
 #'
 #' @param hits Data frame of annotated element calls (`overview$hits`).

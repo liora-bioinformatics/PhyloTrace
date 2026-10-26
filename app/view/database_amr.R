@@ -22,6 +22,7 @@ box::use(
       ELEMENT_TYPES,
       SCREEN_LABELS,
       element_carriers,
+      group_carriers,
       load_amr_overview,
       load_element_calls,
       profile_table,
@@ -442,7 +443,7 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
     shiny$updateSelectizeInput(
       session,
       "carrier",
-      label = sprintf("Carrier (%s isolates)", fmt(nrow(c))),
+      label = sprintf("Carrier (%s)", overview_ui$count_label(nrow(c))),
       choices = data.frame(
         value = c$Isolate,
         label = sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
@@ -508,6 +509,15 @@ distribution_server <- function(input, output, overview, reason) {
       return(overview_ui$empty_hint(sprintf("No %s elements found.", tolower(type()))))
     }
     bars <- overview_ui$fold_top(groups$group, groups$isolates, TOP_GROUPS, "%d other groups")
+    # The folded groups overlap, so their row counts the isolates carrying any
+    # of them, not the sum of their counts.
+    if (nrow(groups) > TOP_GROUPS) {
+      bars$counts[length(bars$counts)] <- group_carriers(
+        ov$hits,
+        type(),
+        groups$group[-seq_len(TOP_GROUPS)]
+      )
+    }
     shiny$tagList(
       overview_ui$section_title(GROUP_TITLES[[type()]]),
       overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
@@ -618,7 +628,7 @@ settings_list <- function(settings) {
           if (!is.na(settings$tools[i])) {
             shiny$span(shiny$icon("toolbox"), settings$tools[i])
           },
-          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(settings$isolates[i])))
+          shiny$span(shiny$icon("vial"), overview_ui$count_label(settings$isolates[i]))
         )
       )
     })

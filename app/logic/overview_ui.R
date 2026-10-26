@@ -17,7 +17,7 @@ box::use(
   ],
   htmltools[HTML, htmlEscape],
   shiny,
-  shinyWidgets[pickerInput, pickerOptions],
+  shinyWidgets[virtualSelectInput],
   shinyjs[runjs],
 )
 box::use(
@@ -87,6 +87,17 @@ hint_icon <- function(title, hint = NULL) {
     hint,
     placement = "bottom"
   )
+}
+
+#' Count with Its Noun
+#'
+#' @param n Numeric count.
+#' @param noun Character singular noun; the plural adds an "s".
+#'
+#' @return Character such as `"1 isolate"` or `"1,204 isolates"`.
+#' @export
+count_label <- function(n, noun = "isolate") {
+  paste(fmt(n), ifelse(n == 1, noun, paste0(noun, "s")))
 }
 
 #' Fillable Overview Card
@@ -246,16 +257,21 @@ loci_layout <- function(
     as_fillable_container(shiny$div(
       class = "loci-controls",
       shiny$uiOutput(ns("allele_bars")),
-      pickerInput(
+      # A popup over the whole window rather than a menu under the toggle, as
+      # every virtualSelectInput in the app: it can never run off the screen,
+      # and its virtual list renders only the visible options of a long locus.
+      virtualSelectInput(
         ns("allele_select"),
         label = "Select locus from table",
         choices = character(0),
-        options = pickerOptions(
-          liveSearch = TRUE,
-          size = 10,
-          liveSearchPlaceholder = "Search alleles ...",
-          container = "body"
-        )
+        search = TRUE,
+        searchPlaceholderText = "Search alleles ...",
+        optionsCount = 10,
+        hideClearButton = TRUE,
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       ),
       shiny$uiOutput(ns("allele_info")),
       as_fill_carrier(shiny$div(
@@ -524,16 +540,25 @@ sequence_view <- function(sequence) HTML(color_sequence(sequence))
 #'
 #' @param label Character label, e.g. `"SHA-256"`.
 #' @param value Character value; nothing is shown when it is `NA` or `NULL`.
+#' @param keep Integer characters kept at each end of a longer value, which is
+#'   cut in the middle to fit one line; the full value shows on hover.
 #'
-#' @return A small labelled line, its value selectable.
+#' @return A small labelled line.
 #' @export
-allele_info <- function(label, value) {
+allele_info <- function(label, value, keep = 12L) {
   if (is.null(value) || is.na(value)) {
     return(NULL)
   }
+  n <- nchar(value)
+  shown <- if (n > 2L * keep + 1L) {
+    paste0(substr(value, 1L, keep), "\u2026", substr(value, n - keep + 1L, n))
+  } else {
+    value
+  }
   shiny$div(
     class = "overview-allele-info",
+    title = value,
     shiny$span(class = "overview-allele-info_label", label),
-    shiny$span(class = "overview-allele-info_value", value)
+    shiny$span(class = "overview-allele-info_value", shown)
   )
 }

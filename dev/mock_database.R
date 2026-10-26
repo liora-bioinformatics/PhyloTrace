@@ -819,8 +819,9 @@ write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screen
   dbAppendTable(con, "typing_provenance", prov)
 }
 
-# Assembly and provenance rows of isolates removed before removal cleaned up
-# after itself.
+# Assembly and provenance rows of isolates that are not in the database, as
+# when the file is edited outside PhyloTrace - the app's own removal never
+# leaves any behind.
 write_orphans <- function(path) {
   con <- connect(path)
   on.exit(dbDisconnect(con))

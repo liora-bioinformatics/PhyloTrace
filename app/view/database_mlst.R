@@ -9,7 +9,7 @@ box::use(
   bslib[nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
-  shinyWidgets[updatePickerInput],
+  shinyWidgets[updateVirtualSelect],
   stats[setNames],
   utils[write.csv],
 )
@@ -354,9 +354,9 @@ loci_info_server <- function(
       fmt(df$count),
       df$share
     )
-    updatePickerInput(
-      session,
+    updateVirtualSelect(
       "allele_select",
+      session = session,
       label = paste("Selected Locus:", selected_row()$Locus),
       choices = setNames(df$allele, labels),
       selected = df$allele[1]
@@ -599,7 +599,7 @@ release_list <- function(rel) {
             shiny$icon("calendar"),
             if (is.na(rel$Release[i])) "no release" else rel$Release[i]
           ),
-          shiny$span(shiny$icon("vial"), sprintf("%s isolates", fmt(rel$Isolates[i]))),
+          shiny$span(shiny$icon("vial"), overview_ui$count_label(rel$Isolates[i])),
           shiny$span(shiny$icon("circle-check"), sprintf("%s with ST", fmt(rel$`With ST`[i])))
         )
       )
