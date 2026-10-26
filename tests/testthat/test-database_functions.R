@@ -13,6 +13,7 @@ box::use(
   app /
     logic /
     database_functions[
+      load_allele,
       load_classical_mlst,
       migrate_species_name,
       read_metadata_table,
@@ -619,4 +620,20 @@ test_that("a screened isolate that carries nothing says so; an unscreened one do
   # B was screened and has no merA; C was never screened at all.
   expect_identical(as.character(filled[[gene]]), c("Match", AMR_ABSENT, NA))
   expect_identical(filled$amr_Metal, c("merA", AMR_ABSENT, NA))
+})
+
+test_that("load_allele returns an allele's sequence with its hash", {
+  path <- file.path(local_tempdir(), "db.sqlite")
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  DBI::dbWriteTable(con, "sequences", data.frame(id = 1:2, sequence = c("ACGT", "GGCC")))
+  DBI::dbDisconnect(con)
+
+  # A database not hashed yet still yields the sequence.
+  expect_identical(load_allele(path, 2L), list(sequence = "GGCC", hash = NA_character_))
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  DBI::dbWriteTable(con, "hashes", data.frame(id = 1:2, hash = c("h1", "h2")))
+  DBI::dbDisconnect(con)
+  expect_identical(load_allele(path, 1L), list(sequence = "ACGT", hash = "h1"))
+  expect_null(load_allele(path, 3L))
 })

@@ -129,7 +129,9 @@ test_that("types group by drug class, stress target and virulence factor", {
 })
 
 test_that("profiles cover every screened isolate, none included", {
-  prof <- scenario()$profiles$Resistance
+  ov <- scenario()
+  screened <- ov$isolates[ov$isolates$screened, ]
+  prof <- amr_overview$profile_table("Resistance", ov$hits, screened)
 
   expect_identical(sum(prof$Isolates), 6L)
   expect_true("(none)" %in% prof$Profile)
@@ -165,13 +167,25 @@ test_that("a database without screens reports why", {
   expect_identical(none$status$status, "unscreened")
 })
 
-test_that("element_hits lists one element's calls, best first", {
+test_that("element_carriers lists each carrier once, best call first", {
   ov <- scenario()
-  h <- amr_overview$element_hits(ov$hits, "blaTEM-1", "Resistance")
+  carriers <- amr_overview$element_carriers(ov$hits, "blaTEM-1", "Resistance")
 
-  expect_identical(nrow(h), 4L)
-  expect_identical(h$tier[1], "Perfect")
-  expect_identical(h$tier[4], "Partial")
+  expect_identical(nrow(carriers), 4L)
+  expect_identical(carriers$Call, c("Perfect", "Perfect", "Strong", "Partial"))
+  expect_identical(carriers$Isolate[4], "C")
+  expect_identical(carriers$Hits, rep(1L, 4))
+})
+
+test_that("classes spelled with underscores group with their spaced twin", {
+  results <- rbind(
+    hit_rows("A", "fusB", class = "FUSIDIC_ACID"),
+    hit_rows("B", "fusC", class = "FUSIDIC ACID")
+  )
+  ov <- amr_overview$build_amr_overview(c("A", "B"), results)
+
+  expect_identical(ov$groups$Resistance$group, "Fusidic acid")
+  expect_identical(ov$groups$Resistance$isolates, 2L)
 })
 
 test_that("load_amr_overview reads a mock database end to end", {
@@ -187,4 +201,12 @@ test_that("load_amr_overview reads a mock database end to end", {
   expect_identical(ov$state, "ok")
   expect_true(nrow(ov$elements) > 0)
   expect_true(all(c("Failed screens", "Mixed AMRFinderPlus databases") %in% ov$checks$check))
+
+  # Where a call sits is read on demand, for one carrier at a time.
+  top <- ov$elements[1, ]
+  carrier <- amr_overview$element_carriers(ov$hits, top$Element, top$Type)$Isolate[1]
+  calls <- amr_overview$load_element_calls(path, carrier, top$Element, top$Type)
+  expect_true(nrow(calls) >= 1)
+  expect_true(all(c("contig", "start", "stop", "strand", "ref_accession") %in% names(calls)))
+  expect_identical(unique(calls$isolate), carrier)
 })

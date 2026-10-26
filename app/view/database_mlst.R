@@ -101,7 +101,14 @@ ui <- function(id) {
           "Scheme Metadata",
           DTOutput(ns("scheme_table"), fill = TRUE)
         ),
-        overview_ui$fill_card("Typing Summary", shiny$uiOutput(ns("typing_summary")))
+        overview_ui$fill_card(
+          "Typing Summary",
+          shiny$uiOutput(ns("typing_summary")),
+          hint = paste(
+            "Diversity is Simpson's index (Hunter-Gaston) over isolates with an ST:",
+            "the chance that two of them carry different STs."
+          )
+        )
       )
     ),
     nav_panel("Loci Info", overview_ui$loci_layout(ns, "cla_loci")),
@@ -116,8 +123,19 @@ ui <- function(id) {
           "Loading sequence types ..."
         ),
         list(
-          overview_ui$fill_card("ST Frequency", shiny$uiOutput(ns("st_bars"))),
-          overview_ui$fill_card("Allele Diversity", shiny$uiOutput(ns("locus_bars")))
+          overview_ui$fill_card(
+            "ST Frequency",
+            shiny$uiOutput(ns("st_bars")),
+            hint = paste(
+              "Most common STs of the primary scheme. Shares are of the isolates",
+              "with a stored allele profile on that scheme."
+            )
+          ),
+          overview_ui$fill_card(
+            "Allele Diversity",
+            shiny$uiOutput(ns("locus_bars")),
+            hint = "Distinct registered alleles called per locus in this database."
+          )
         )
       )
     ),
@@ -239,11 +257,7 @@ scheme_info_server <- function(input, output, overview, species, reason) {
         )
       ),
       overview_ui$section_title("Call Status"),
-      overview_ui$bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone),
-      overview_ui$overview_note(
-        "Diversity is Simpson's index (Hunter-Gaston) over isolates with an ST:",
-        "the chance that two of them carry different STs."
-      )
+      overview_ui$bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone)
     )
   })
 }
@@ -441,10 +455,7 @@ distribution_server <- function(input, output, overview, reason) {
       bars$tones <- c(bars$tones, "warning")
     }
     shiny$tagList(
-      overview_ui$bar_rows(bars$labels, bars$counts, nrow(iso), tones = bars$tones),
-      overview_ui$overview_note(
-        sprintf("Shares are of the %s isolates with a stored profile.", fmt(nrow(iso)))
-      )
+      overview_ui$bar_rows(bars$labels, bars$counts, nrow(iso), tones = bars$tones)
     )
   })
 
@@ -461,9 +472,6 @@ distribution_server <- function(input, output, overview, reason) {
         li$`Observed Alleles`,
         0,
         notes = rep("alleles", nrow(li))
-      ),
-      overview_ui$overview_note(
-        "Distinct registered alleles called per locus in this database."
       )
     )
   })

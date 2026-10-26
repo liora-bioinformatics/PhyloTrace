@@ -3497,6 +3497,8 @@ table.dataTable thead>tr>th.sorting {
 .scheme-info-layout>.scheme-info-main {
     flex: 1 1 auto;
     min-width: 0;
+    // Cards stacked in the main column (cgMLST Distribution) keep apart.
+    gap: var(--bs-gutter-x, 1.5rem);
 }
 
 // Species photo + Details card stack. A fixed (non-shrinking) width keeps the
@@ -4564,6 +4566,16 @@ label {
 // still degrades gracefully.
 .bootstrap-select .dropdown-menu {
     max-width: calc(100vw - 1rem);
+}
+
+// The same cap for height. A picker created empty and filled later through
+// updatePickerInput (the overviews' allele and isolate pickers) gets its
+// option list's max-height inline-set to the whole list's height, thousands
+// of px, so `size` never applies and the menu runs off the bottom of the
+// window. `!important` beats that inline style; the list scrolls inside.
+.bootstrap-select .dropdown-menu .inner {
+    max-height: min(24rem, 60vh) !important;
+    overflow-y: auto !important;
 }
 
 // bootstrap-select's own sizing (setMenuSize in its bundled JS) only shrinks
@@ -5652,4 +5664,86 @@ table.dataTable thead>tr>th.sorting {
         margin: 0;
         overflow-wrap: anywhere;
     }
+}
+
+// Card title with a question mark that explains the card on hover or focus
+// (overview_ui card_title()); the explanation lives in a tooltip, not the body.
+.overview-card-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.overview-hint {
+    display: inline-flex;
+    color: var(--bs-secondary-color);
+    font-size: 0.85em;
+    cursor: help;
+
+    &:hover,
+    &:focus-visible {
+        color: var(--bs-primary);
+        outline: none;
+    }
+}
+
+// The AMR Overview's carriers table: a compact, paged list beside the element
+// table, its search box spanning the column.
+.overview-carriers {
+    flex: 0 0 auto;
+    font-size: 0.82rem;
+
+    .dataTables_filter {
+        float: none;
+        text-align: left;
+        margin-bottom: 0.4rem;
+
+        label,
+        input {
+            width: 100%;
+            margin: 0;
+        }
+    }
+
+    .dataTables_paginate {
+        margin-top: 0.4rem;
+        font-size: 0.78rem;
+    }
+
+    table.dataTable tbody td {
+        overflow-wrap: anywhere;
+    }
+}
+
+
+// Overview card headers (cgMLST, MLST, AMR): shorter than the 49px the tab bar
+// keeps, with the title centred whether or not an export button sits beside it.
+.tab-pane[data-value="cgmlst_overview"],
+.tab-pane[data-value="mlst_overview"],
+.tab-pane[data-value="amr_overview"] {
+    .bslib-card .card-header:not(:has(> .card-header-tabs)) {
+        height: 42px;
+        display: flex;
+        align-items: center;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
+}
+
+// Overview table cells stop at two lines (overview_ui CLAMP_CELL); the full
+// value shows on hover.
+.overview-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+// The allele hash shown under a FASTA header (cgMLST Loci Info).
+.fasta-hash {
+    margin-bottom: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--bs-secondary-color);
+    overflow-wrap: anywhere;
 }

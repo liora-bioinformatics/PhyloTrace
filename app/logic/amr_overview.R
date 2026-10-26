@@ -8,7 +8,7 @@
 # `typing_provenance`.
 
 box::use(
-  DBI[dbDisconnect, dbListTables],
+  DBI[dbDisconnect, dbGetQuery, dbListTables],
   stats[median, setNames],
 )
 box::use(
@@ -85,10 +85,12 @@ PARTIAL_METHOD <- "PARTIAL|INTERNAL_STOP|HMM"
 COUNT_BREAKS <- c(-Inf, 0, 1, 2, 5, 10, 20, Inf)
 COUNT_LABELS <- c("None", "1", "2", "3-5", "6-10", "11-20", "Over 20")
 
+# Columns the overview summarises. Where a call sits (contig, position,
+# strand, reference accession) is only ever shown for one call at a time, so
+# it is read on demand by load_element_calls() instead of for every call.
 RESULT_COLS <- c(
-  "isolate", "gene_symbol", "sequence_name", "element_type", "element_subtype",
-  "class", "subclass", "method", "pct_coverage", "pct_identity", "contig",
-  "start", "stop", "strand", "ref_accession", "ref_name", "organism",
+  "isolate", "gene_symbol", "element_type", "element_subtype", "class",
+  "subclass", "method", "pct_coverage", "pct_identity", "ref_name", "organism",
   "point_mutations", "abritamr_version", "amrfinder_version",
   "amrfinder_db_version", "called_at"
 )
@@ -130,9 +132,9 @@ load_amr_overview <- function(db_path) {
 #' @param prov Data frame of `typing_provenance` rows, or `NULL`.
 #'
 #' @return A list with `state` (`"ok"`, `"skipped"` or `"none"`), `isolates`,
-#'   `hits` (annotated `amr_results` rows), `elements`, `profiles`, `groups`
-#'   and `counts` (each a list by element type), `status`, `settings` and
-#'   `checks`.
+#'   `hits` (annotated `amr_results` rows), `elements`, `groups` and `counts`
+#'   (each a list by element type), `status`, `settings` and `checks`. Profiles
+#'   are built per type on demand, with `profile_table()`.
 #' @export
 build_amr_overview <- function(isolates = character(0), results = NULL, prov = NULL) {
   hits <- annotate_hits(results)
@@ -153,7 +155,6 @@ build_amr_overview <- function(isolates = character(0), results = NULL, prov = N
     isolates = iso,
     hits = hits,
     elements = element_table(hits, nrow(screened)),
-    profiles = setNames(lapply(types, profile_table, hits = hits, screened = screened), types),
     groups = setNames(lapply(types, group_table, hits = hits), types),
     counts = setNames(lapply(types, count_bins, hits = hits, screened = screened), types),
     status = status_table(iso$status),
@@ -175,8 +176,10 @@ annotate_hits <- function(results) {
   subtype <- toupper(blank_na(hits$element_subtype))
   hits$type <- ifelse(type %in% names(ELEMENT_TYPES), ELEMENT_TYPES[type], type)
   hits$subtype <- ifelse(subtype %in% names(SUBTYPE_LABELS), SUBTYPE_LABELS[subtype], subtype)
-  hits$class <- amr_class_label(blank_na(hits$class))
-  hits$subclass <- amr_class_label(blank_na(hits$subclass))
+  # Some AMRFinderPlus classes arrive with underscores ("FUSIDIC_ACID") next to
+  # the same class spelled with a space; both must read, and group, as one.
+  hits$class <- amr_class_label(gsub("_", " ", blank_na(hits$class), fixed = TRUE))
+  hits$subclass <- amr_class_label(gsub("_", " ", blank_na(hits$subclass), fixed = TRUE))
   # Resistance groups by drug class; stress by what it protects against, the
   # subtype when no class is given (heat, acid); virulence has no classes, so
   # its factors stand for themselves.
@@ -265,6 +268,23 @@ isolate_table <- function(isolates, hits, prov) {
   iso
 }
 
+# Most frequent non-NA `value` within each group of `key`, in the order of
+# `levels` (the first seen on a tie), NA for a group without any value.
+group_mode <- function(key, value, levels) {
+  out <- rep(NA_character_, length(levels))
+  ok <- !is.na(value)
+  if (!any(ok)) {
+    return(out)
+  }
+  k <- key[ok]
+  v <- as.character(value[ok])
+  freq <- stats::ave(seq_along(k), k, v, FUN = length)
+  o <- order(match(k, levels), -freq)
+  top <- !duplicated(k[o])
+  out[match(k[o][top], levels)] <- v[o][top]
+  out
+}
+
 # One row per element: what it is, how many screened isolates carry it and how
 # confidently it was called.
 element_table <- function(hits, n_screened) {
@@ -290,51 +310,69 @@ element_table <- function(hits, n_screened) {
     return(empty)
   }
   key <- paste(hits$gene_symbol, hits$type, hits$subtype, sep = "\r")
-  by_key <- split(seq_len(nrow(hits)), factor(key, levels = unique(key)))
-  rows <- lapply(by_key, function(i) {
-    h <- hits[i, , drop = FALSE]
-    # Each isolate counts once, at its best call of the element.
-    rank <- match(h$tier, AMR_CONFIDENCE_STATES)
-    best <- h[order(h$isolate, -rank), , drop = FALSE]
-    best <- best[!duplicated(best$isolate), , drop = FALSE]
-    tiers <- table(factor(best$tier, levels = AMR_CONFIDENCE_STATES))
-    data.frame(
-      Element = h$gene_symbol[1],
-      Type = h$type[1],
-      Subtype = h$subtype[1],
-      Class = modal(h$class),
-      Subclass = modal(h$subclass),
-      Isolates = nrow(best),
-      `Prevalence (%)` = round(100 * nrow(best) / max(n_screened, 1), 1),
-      Perfect = as.integer(tiers[["Perfect"]]),
-      Strong = as.integer(tiers[["Strong"]]),
-      Partial = as.integer(tiers[["Partial"]]),
-      Putative = as.integer(tiers[["Putative"]]),
-      `Identity (%)` = round(mean(h$pct_identity, na.rm = TRUE), 2),
-      `Coverage (%)` = round(mean(h$pct_coverage, na.rm = TRUE), 2),
-      Reference = modal(h$ref_name),
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    )
-  })
-  out <- do.call(rbind, rows)
-  rownames(out) <- NULL
-  out$`Identity (%)`[is.nan(out$`Identity (%)`)] <- NA
-  out$`Coverage (%)`[is.nan(out$`Coverage (%)`)] <- NA
+  keys <- unique(key)
+  first <- match(keys, key)
+  # Each isolate counts once per element, at its best call of it.
+  rank <- match(hits$tier, AMR_CONFIDENCE_STATES)
+  o <- order(key, hits$isolate, -rank)
+  best <- !duplicated(paste(key[o], hits$isolate[o], sep = "\r"))
+  best_key <- factor(key[o][best], levels = keys)
+  tiers <- table(best_key, factor(hits$tier[o][best], levels = AMR_CONFIDENCE_STATES))
+  carriers <- tabulate(best_key, nbins = length(keys))
+  mean_of <- function(x) {
+    out <- tapply(x, factor(key, levels = keys), mean, na.rm = TRUE)
+    out <- round(as.numeric(out), 2)
+    out[is.nan(out)] <- NA
+    out
+  }
+
+  out <- data.frame(
+    Element = hits$gene_symbol[first],
+    Type = hits$type[first],
+    Subtype = hits$subtype[first],
+    Class = group_mode(key, hits$class, keys),
+    Subclass = group_mode(key, hits$subclass, keys),
+    Isolates = carriers,
+    `Prevalence (%)` = round(100 * carriers / max(n_screened, 1), 1),
+    Perfect = as.integer(tiers[, "Perfect"]),
+    Strong = as.integer(tiers[, "Strong"]),
+    Partial = as.integer(tiers[, "Partial"]),
+    Putative = as.integer(tiers[, "Putative"]),
+    `Identity (%)` = mean_of(hits$pct_identity),
+    `Coverage (%)` = mean_of(hits$pct_coverage),
+    Reference = group_mode(key, hits$ref_name, keys),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
   type_order <- match(out$Type, unname(ELEMENT_TYPES))
   out[order(type_order, -out$Isolates, out$Element), , drop = FALSE]
 }
 
-# Distinct element combinations of one type among screened isolates, with how
-# many isolates carry each; isolates without any form one "none" profile.
+#' Element Profiles of One Type
+#'
+#' @description Distinct element combinations of one type among screened
+#'   isolates, with how many isolates carry each; isolates without any form one
+#'   "(none)" profile.
+#'
+#' @param type Character element type (`ELEMENT_TYPES`).
+#' @param hits Data frame of annotated element calls (`overview$hits`).
+#' @param screened Data frame of the screened isolates' rows.
+#'
+#' @return Data frame of profiles, most frequent first.
+#' @export
 profile_table <- function(type, hits, screened) {
-  h <- hits[hits$type == type, , drop = FALSE]
-  genes <- tapply(h$gene_symbol, h$isolate, function(g) paste(sort(unique(g)), collapse = ", "))
-  classes <- tapply(h$class, h$isolate, function(cl) {
-    cl <- sort(unique(cl[!is.na(cl)]))
-    if (length(cl)) paste(cl, collapse = ", ") else NA_character_
-  })
-  n_genes <- tapply(h$gene_symbol, h$isolate, function(g) length(unique(g)))
+  h <- hits[hits$type == type, c("isolate", "gene_symbol", "class"), drop = FALSE]
+  # Sorted distinct pairs, joined per isolate in one split.
+  joined <- function(values) {
+    pairs <- unique(data.frame(isolate = h$isolate, value = values)[!is.na(values), ])
+    pairs <- pairs[order(pairs$isolate, pairs$value), , drop = FALSE]
+    parts <- split(pairs$value, pairs$isolate)
+    list(text = vapply(parts, paste, character(1), collapse = ", "), n = lengths(parts))
+  }
+  gene_sets <- joined(h$gene_symbol)
+  genes <- gene_sets$text
+  n_genes <- gene_sets$n
+  classes <- joined(h$class)$text
   profile <- unname(genes[screened$isolate])
   profile[is.na(profile)] <- "(none)"
   if (!length(profile)) {
@@ -587,17 +625,60 @@ amr_checks <- function(iso, hits) {
   out
 }
 
-#' Element Calls of One Element
+#' Carriers of One Element
 #'
 #' @param hits Data frame of annotated element calls (`overview$hits`).
 #' @param element Character gene symbol.
 #' @param type Character element type (`ELEMENT_TYPES`).
 #'
-#' @return The element's calls, best call first, one per isolate and hit.
+#' @return One row per isolate carrying the element, at its best call, best
+#'   calls first: `Isolate`, `Call`, `Identity (%)`, `Coverage (%)` and `Hits`
+#'   (how often the element was found in the isolate).
 #' @export
-element_hits <- function(hits, element, type) {
+element_carriers <- function(hits, element, type) {
   h <- hits[hits$gene_symbol %in% element & hits$type %in% type, , drop = FALSE]
-  h[order(-match(h$tier, AMR_CONFIDENCE_STATES), h$isolate), , drop = FALSE]
+  rank <- match(h$tier, AMR_CONFIDENCE_STATES)
+  h <- h[order(-rank, h$isolate, -h$pct_identity), , drop = FALSE]
+  n_hits <- table(h$isolate)
+  h <- h[!duplicated(h$isolate), , drop = FALSE]
+  data.frame(
+    Isolate = h$isolate,
+    Call = h$tier,
+    `Identity (%)` = h$pct_identity,
+    `Coverage (%)` = h$pct_coverage,
+    Hits = as.integer(n_hits[h$isolate]),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Load One Isolate's Calls of One Element
+#'
+#' @description Reads every stored call of an element in one isolate, with
+#'   where it sits - the detail the overview does not keep in memory.
+#'
+#' @param db_path Character path to the SQLite database file.
+#' @param isolate Character isolate name.
+#' @param element Character gene symbol.
+#' @param type Character element type (`ELEMENT_TYPES`).
+#'
+#' @return Annotated `amr_results` rows, best call first.
+#' @export
+load_element_calls <- function(db_path, isolate, element, type) {
+  code <- names(ELEMENT_TYPES)[match(type, ELEMENT_TYPES)]
+  if (is.na(code)) {
+    code <- toupper(type)
+  }
+  con <- connect(db_path)
+  on.exit(dbDisconnect(con))
+  rows <- dbGetQuery(
+    con,
+    "SELECT * FROM amr_results
+      WHERE isolate = ? AND gene_symbol = ? AND UPPER(element_type) = ?",
+    params = list(isolate, element, code)
+  )
+  calls <- annotate_hits(rows)
+  calls[order(-match(calls$tier, AMR_CONFIDENCE_STATES)), , drop = FALSE]
 }
 
 #' Median of a Count

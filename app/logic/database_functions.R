@@ -991,25 +991,41 @@ load_locus_alleles <- function(db_path, gene) {
   df[order(!df$present, -df$count), , drop = FALSE]
 }
 
-#' Fetch Allele Sequence Text
+#' Fetch an Allele's Sequence and Hash
 #'
-#' Looks up the nucleotide sequence string corresponding to a specific sequence ID.
+#' Looks up an allele's nucleotide sequence and its SHA-256 hash. The integer
+#' id is local to one database; the hash identifies the same sequence in any
+#' other, which is what imports match alleles on.
 #'
 #' @param db_path Character path to the SQLite database file.
 #' @param seqid Integer sequence identifier.
-#' @return Character scalar nucleotide sequence, or `NULL` if not found.
+#' @return A list with `sequence` and `hash` (`NA` when the database has no
+#'   hash for it yet), or `NULL` if the allele is not found.
 #' @export
-load_allele_sequence <- function(db_path, seqid) {
+load_allele <- function(db_path, seqid) {
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
-  res <- dbGetQuery(
-    con,
-    "SELECT sequence FROM sequences WHERE id = ?",
-    params = list(seqid)
-  )$sequence
+  res <- if ("hashes" %in% dbListTables(con)) {
+    dbGetQuery(
+      con,
+      "SELECT s.sequence, h.hash FROM sequences s
+         LEFT JOIN hashes h ON h.id = s.id
+        WHERE s.id = ?",
+      params = list(seqid)
+    )
+  } else {
+    dbGetQuery(
+      con,
+      "SELECT sequence, NULL AS hash FROM sequences WHERE id = ?",
+      params = list(seqid)
+    )
+  }
 
-  if (!length(res)) NULL else res[[1]]
+  if (!nrow(res)) {
+    return(NULL)
+  }
+  list(sequence = res$sequence[[1]], hash = as.character(res$hash[[1]]))
 }
 
 #' Format Locus Alleles as FASTA

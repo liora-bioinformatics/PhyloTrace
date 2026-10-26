@@ -6,12 +6,12 @@
 #' database.
 
 box::use(
-  DT[DTOutput, renderDT],
+  DT[DTOutput, datatable, renderDT],
   bslib[as_fill_carrier, as_fill_item, as_fillable_container, nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
-  shinyWidgets[pickerInput, pickerOptions, radioGroupButtons, updatePickerInput],
-  stats[median, setNames],
+  shinyWidgets[radioGroupButtons],
+  stats[median],
   utils[write.csv],
 )
 
@@ -21,8 +21,10 @@ box::use(
     amr_overview[
       ELEMENT_TYPES,
       SCREEN_LABELS,
-      element_hits,
+      element_carriers,
       load_amr_overview,
+      load_element_calls,
+      profile_table,
     ],
   app / logic / database_functions[load_db_species],
   app / logic / db_events,
@@ -72,8 +74,12 @@ empty_reason <- function(ov) {
   )
 }
 
+# Carriers listed per page of the carriers table; the table pages on the server,
+# so an element carried by thousands of isolates sends one page at a time.
+CARRIER_PAGE <- 8L
+
 # Renders the UI layout for the Elements tab: the element table next to the
-# isolate picker, the call-quality chart and the selected call's details.
+# selected element's call quality, its carriers and one carrier's calls.
 elements_ui <- function(ns) {
   as_fill_carrier(shiny$div(
     class = "loci-info-layout",
@@ -84,23 +90,23 @@ elements_ui <- function(ns) {
         "amr_elements",
         "Elements",
         "export_elements",
-        "Loading elements ..."
+        "Loading elements ...",
+        hint = paste(
+          "Perfect, Strong, Partial and Putative count carrying isolates by their best",
+          "call (AMRFinderPlus method): an exact match, a match clearing the",
+          "element's curated identity and coverage cut-offs, a partial or",
+          "interrupted match, and a bare HMM motif."
+        )
       )
     )),
     as_fillable_container(shiny$div(
       class = "loci-controls",
-      pickerInput(
-        ns("hit_select"),
-        label = "Select element from table",
-        choices = character(0),
-        options = pickerOptions(
-          liveSearch = TRUE,
-          size = 10,
-          liveSearchPlaceholder = "Search isolates ...",
-          container = "body"
-        )
-      ),
       shiny$uiOutput(ns("element_bars")),
+      shiny$div(
+        class = "overview-carriers",
+        overview_ui$section_title("Carriers"),
+        DTOutput(ns("amr_carriers"))
+      ),
       as_fill_carrier(shiny$div(
         class = "loci-allele-panel",
         as_fill_item(shiny$div(class = "overview-detail", shiny$uiOutput(ns("hit_detail"))))
@@ -121,7 +127,15 @@ ui <- function(id) {
           "Screening Metadata",
           DTOutput(ns("screening_table"), fill = TRUE)
         ),
-        overview_ui$fill_card("Screening Summary", shiny$uiOutput(ns("screening_summary")))
+        overview_ui$fill_card(
+          "Screening Summary",
+          shiny$uiOutput(ns("screening_summary")),
+          hint = paste(
+            "Element types count screened isolates carrying at least one element of",
+            "each type; acquired genes and point mutations are both resistance. Drug",
+            "classes count every reported determinant, intrinsic ones included."
+          )
+        )
       )
     ),
     nav_panel("Elements", elements_ui(ns)),
@@ -134,6 +148,10 @@ ui <- function(id) {
           "Profiles",
           "export_profiles",
           "Loading profiles ...",
+          hint = paste(
+            "Distinct element combinations of the selected type and how many",
+            "screened isolates carry each; isolates without any form the (none) profile."
+          ),
           controls = radioGroupButtons(
             ns("dist_type"),
             label = NULL,
@@ -143,8 +161,19 @@ ui <- function(id) {
           )
         ),
         list(
-          overview_ui$fill_card("Element Groups", shiny$uiOutput(ns("group_bars"))),
-          overview_ui$fill_card("Elements per Isolate", shiny$uiOutput(ns("count_bars")))
+          overview_ui$fill_card(
+            "Element Groups",
+            shiny$uiOutput(ns("group_bars")),
+            hint = paste(
+              "Screened isolates carrying at least one element of each group of the",
+              "selected type; an isolate can count towards several."
+            )
+          ),
+          overview_ui$fill_card(
+            "Elements per Isolate",
+            shiny$uiOutput(ns("count_bars")),
+            hint = "Screened isolates by number of distinct elements of the selected type."
+          )
         )
       )
     ),
@@ -291,20 +320,50 @@ screening_info_server <- function(input, output, overview, species, reason) {
         shiny$tagList(
           shiny$div(class = "overview-section-gap"),
           overview_ui$section_title("Element Types"),
-          overview_ui$bar_rows(names(types), unname(types), n),
-          overview_ui$overview_note(
-            "Screened isolates carrying at least one element of each type;",
-            "acquired genes and point mutations are both resistance. Drug classes",
-            "count every reported determinant, intrinsic ones included."
-          )
+          overview_ui$bar_rows(names(types), unname(types), n)
         )
       }
     )
   })
 }
 
-# Handles server logic for the element table, call quality and hit details.
-elements_server <- function(input, output, session, overview, reason) {
+# One stored call as label/value rows: what it is, where it sits and how well
+# it matches its reference.
+call_rows <- function(hit) {
+  num <- function(x) if (is.na(x)) "-" else paste0(format(round(x, 2), nsmall = 2), "%")
+  rows <- c(
+    Element = hit$gene_symbol,
+    Name = hit$sequence_name,
+    Type = paste(hit$type, "-", hit$subtype),
+    Class = if (is.na(hit$subclass) || identical(hit$subclass, hit$class)) {
+      hit$class
+    } else {
+      paste(hit$class, "/", hit$subclass)
+    },
+    Call = sprintf("%s (%s)", hit$tier, hit$method),
+    Identity = num(hit$pct_identity),
+    Coverage = num(hit$pct_coverage),
+    Contig = hit$contig,
+    Position = if (is.na(hit$start)) {
+      NA
+    } else {
+      sprintf("%s-%s (%s)", hit$start, hit$stop, hit$strand)
+    },
+    Reference = if (is.na(hit$ref_accession)) {
+      NA
+    } else {
+      paste(hit$ref_accession, hit$ref_name, sep = " - ")
+    }
+  )
+  rows <- rows[!is.na(rows) & nzchar(rows)]
+  shiny$tags$dl(
+    lapply(names(rows), function(k) shiny$tagList(shiny$tags$dt(k), shiny$tags$dd(rows[[k]])))
+  )
+}
+
+# Handles server logic for the element table, call quality, carriers and the
+# selected carrier's calls.
+elements_server <- function(input, output, session, db_path, overview, reason) {
   output$amr_elements <- renderDT({
     render_info("output$amr_elements")
     ov <- overview()
@@ -326,34 +385,10 @@ elements_server <- function(input, output, session, overview, reason) {
     el[row, , drop = FALSE]
   })
 
-  # Every call of the selected element, best first.
-  calls <- shiny$reactive({
+  # Isolates carrying the selected element, best call first.
+  carriers <- shiny$reactive({
     el <- selected()
-    element_hits(overview()$hits, el$Element, el$Type)
-  })
-
-  # Offer the isolates carrying the selected element, best call first.
-  shiny$observeEvent(calls(), {
-    h <- calls()
-    shiny$req(nrow(h) > 0)
-    ids <- as.character(seq_len(nrow(h)))
-    labels <- sprintf(
-      "%s - %s (%s%% identity)",
-      h$isolate,
-      h$tier,
-      format(round(h$pct_identity, 1), nsmall = 1)
-    )
-    updatePickerInput(
-      session,
-      "hit_select",
-      label = sprintf(
-        "Selected Element: %s (%s isolates)",
-        selected()$Element,
-        fmt(selected()$Isolates)
-      ),
-      choices = setNames(ids, labels),
-      selected = ids[1]
-    )
+    element_carriers(overview()$hits, el$Element, el$Type)
   })
 
   # Isolates carrying the selected element by their best call of it.
@@ -369,44 +404,43 @@ elements_server <- function(input, output, session, overview, reason) {
     )
   })
 
-  # The selected call: where it sits and how well it matches its reference.
+  # Carriers, one page at a time: DT pages on the server, so the browser never
+  # holds more than one page however many isolates carry the element.
+  output$amr_carriers <- renderDT(
+    {
+      render_info("output$amr_carriers")
+      datatable(
+        carriers(),
+        rownames = FALSE,
+        selection = list(mode = "single", selected = 1),
+        class = "compact stripe row-border",
+        options = list(
+          dom = "ftp",
+          pageLength = CARRIER_PAGE,
+          pagingType = "simple",
+          language = list(search = "", searchPlaceholder = "Search isolates ..."),
+          columnDefs = list(list(className = "dt-left", targets = "_all"))
+        )
+      )
+    },
+    server = TRUE
+  )
+
+  # Every stored call of the element in the selected carrier, read on demand.
   output$hit_detail <- shiny$renderUI({
-    h <- calls()
-    i <- suppressWarnings(as.integer(input$hit_select))
-    shiny$req(nrow(h) > 0, length(i) == 1, !is.na(i), i <= nrow(h))
-    render_info("output$hit_detail")
-    hit <- h[i, , drop = FALSE]
-    num <- function(x) if (is.na(x)) "-" else paste0(format(round(x, 2), nsmall = 2), "%")
-    rows <- c(
-      Isolate = hit$isolate,
-      Element = hit$gene_symbol,
-      Name = hit$sequence_name,
-      Type = paste(hit$type, "-", hit$subtype),
-      Class = if (is.na(hit$subclass) || identical(hit$subclass, hit$class)) {
-        hit$class
-      } else {
-        paste(hit$class, "/", hit$subclass)
-      },
-      Call = sprintf("%s (%s)", hit$tier, hit$method),
-      Identity = num(hit$pct_identity),
-      Coverage = num(hit$pct_coverage),
-      Contig = hit$contig,
-      Position = if (is.na(hit$start)) {
-        NA
-      } else {
-        sprintf("%s-%s (%s)", hit$start, hit$stop, hit$strand)
-      },
-      Reference = if (is.na(hit$ref_accession)) {
-        NA
-      } else {
-        paste(hit$ref_accession, hit$ref_name, sep = " - ")
-      }
+    c <- carriers()
+    row <- input$amr_carriers_rows_selected
+    shiny$req(nrow(c) > 0, length(row) == 1, row <= nrow(c), db_path())
+    el <- selected()
+    calls <- guard_db_read(
+      "Loading the element calls",
+      load_element_calls(db_path(), c$Isolate[row], el$Element, el$Type)
     )
-    rows <- rows[!is.na(rows) & nzchar(rows)]
-    shiny$tags$dl(
-      lapply(names(rows), function(k) {
-        shiny$tagList(shiny$tags$dt(k), shiny$tags$dd(rows[[k]]))
-      })
+    shiny$req(nrow(calls) > 0)
+    render_info("output$hit_detail")
+    shiny$tagList(
+      overview_ui$section_title(c$Isolate[row]),
+      lapply(seq_len(nrow(calls)), function(i) call_rows(calls[i, , drop = FALSE]))
     )
   })
 
@@ -424,10 +458,16 @@ elements_server <- function(input, output, session, overview, reason) {
 distribution_server <- function(input, output, overview, reason) {
   type <- shiny$reactive(if (is.null(input$dist_type)) ELEMENT_TYPES[["AMR"]] else input$dist_type)
 
+  # Profiles of the selected type, built only once the tab asks for them.
+  profiles <- shiny$reactive({
+    ov <- overview()
+    profile_table(type(), ov$hits, ov$isolates[ov$isolates$screened, , drop = FALSE])
+  })
+
   output$amr_profiles <- renderDT({
     render_info("output$amr_profiles")
     ov <- overview()
-    profiles <- ov$profiles[[type()]]
+    profiles <- profiles()
     if (!identical(ov$state, "ok") || is.null(profiles) || !nrow(profiles)) {
       return(overview_ui$message_table(reason()))
     }
@@ -449,11 +489,7 @@ distribution_server <- function(input, output, overview, reason) {
     bars <- overview_ui$fold_top(groups$group, groups$isolates, TOP_GROUPS, "%d other groups")
     shiny$tagList(
       overview_ui$section_title(GROUP_TITLES[[type()]]),
-      overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones),
-      overview_ui$overview_note(
-        "Screened isolates carrying at least one element of each group; an isolate",
-        "can count towards several."
-      )
+      overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
     )
   })
 
@@ -467,17 +503,14 @@ distribution_server <- function(input, output, overview, reason) {
       return(overview_ui$empty_hint(reason()))
     }
     shiny$tagList(
-      overview_ui$bar_rows(counts$label, counts$n, n),
-      overview_ui$overview_note(
-        sprintf("Distinct %s elements per screened isolate.", tolower(type()))
-      )
+      overview_ui$bar_rows(counts$label, counts$n, n)
     )
   })
 
   output$export_profiles <- shiny$downloadHandler(
     filename = function() sprintf("amr_%s_profiles.csv", tolower(type())),
     content = function(file) {
-      profiles <- overview()$profiles[[type()]]
+      profiles <- profiles()
       shiny$req(nrow(profiles) > 0)
       write.csv(profiles, file, row.names = FALSE)
     }
@@ -644,7 +677,7 @@ server <- function(
     reason <- shiny$reactive(empty_reason(overview()))
 
     screening_info_server(input, output, overview, species, reason)
-    elements_server(input, output, session, overview, reason)
+    elements_server(input, output, session, db_path, overview, reason)
     distribution_server(input, output, overview, reason)
     diagnostics_server(input, output, overview)
   })

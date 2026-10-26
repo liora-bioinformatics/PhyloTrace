@@ -19,7 +19,7 @@ box::use(
     cgmlst_overview[LOW_COMPLETENESS, load_cgmlst_overview],
   app /
     logic /
-    database_functions[load_allele_sequence, load_locus_alleles, locus_fasta],
+    database_functions[load_allele, load_locus_alleles, locus_fasta],
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / functions[copy_to_clipboard, render_info, stat_tile],
@@ -47,18 +47,49 @@ ui <- function(id) {
           "Scheme Metadata",
           DTOutput(ns("scheme_table"), fill = TRUE)
         ),
-        overview_ui$fill_card("Typing Summary", shiny$uiOutput(ns("typing_summary")))
+        overview_ui$fill_card(
+          "Typing Summary",
+          shiny$uiOutput(ns("typing_summary")),
+          hint = sprintf(
+            paste(
+              "Completeness is the share of the scheme's loci called per isolate;",
+              "below %s%% an isolate is flagged in Diagnostics."
+            ),
+            format(LOW_COMPLETENESS)
+          )
+        )
       )
     ),
-    nav_panel("Loci Info", overview_ui$loci_layout(ns, "cg_loci")),
+    nav_panel(
+      "Loci Info",
+      overview_ui$loci_layout(ns, "cg_loci", index_label = "Hash", index_icon = "fingerprint")
+    ),
     nav_panel(
       "Distribution",
       overview_ui$split_layout(
         list(
-          overview_ui$fill_card("Missing Loci per Isolate", shiny$uiOutput(ns("missing_bars"))),
-          overview_ui$fill_card("Most Often Missing Loci", shiny$uiOutput(ns("top_missing")))
+          overview_ui$fill_card(
+            "Missing Loci per Isolate",
+            shiny$uiOutput(ns("missing_bars")),
+            hint = "Typed isolates by how many of the scheme's loci were left without a call."
+          ),
+          overview_ui$fill_card(
+            "Most Often Missing Loci",
+            shiny$uiOutput(ns("top_missing")),
+            hint = paste(
+              "Share of typed isolates without a call at the locus; loci missed this",
+              "often may be absent from the population or hard to assemble."
+            )
+          )
         ),
-        overview_ui$fill_card("Alleles per Locus", shiny$uiOutput(ns("allele_bins")))
+        overview_ui$fill_card(
+          "Alleles per Locus",
+          shiny$uiOutput(ns("allele_bins")),
+          hint = paste(
+            "Loci by number of distinct alleles in this database, the scheme's",
+            "reference allele included."
+          )
+        )
       )
     ),
     nav_panel(
@@ -127,10 +158,6 @@ scheme_info_server <- function(input, output, overview) {
         ov$completeness$n,
         nrow(typed),
         tones = ov$completeness$tone
-      ),
-      overview_ui$overview_note(
-        "Completeness is the share of the scheme's loci called per isolate;",
-        sprintf("below %s%% an isolate is flagged in Diagnostics.", format(LOW_COMPLETENESS))
       )
     )
   })
@@ -138,8 +165,8 @@ scheme_info_server <- function(input, output, overview) {
 
 # Handles server logic for the loci table, allele usage and sequence viewer.
 loci_info_server <- function(input, output, session, db_path, overview, session_reset) {
-  # Sequence of the displayed allele, cached so the "Sequence" copy button does
-  # not have to re-query the database.
+  # Sequence and hash of the displayed allele, cached so the copy buttons do not
+  # have to re-query the database.
   seq_cache <- shiny$reactiveVal(NULL)
 
   # Reset module state when the user returns to the landing screen.
@@ -226,25 +253,28 @@ loci_info_server <- function(input, output, session, db_path, overview, session_
 
   output$allele_sequence <- shiny$renderUI({
     shiny$req(db_path(), input$allele_select)
-    sequence <- guard_db_read(
+    allele <- guard_db_read(
       "Loading the allele sequence",
-      load_allele_sequence(db_path(), as.integer(input$allele_select))
+      load_allele(db_path(), as.integer(input$allele_select))
     )
-    shiny$req(sequence)
-    seq_cache(sequence)
+    shiny$req(allele)
+    seq_cache(allele)
     render_info("output$allele_sequence")
-    overview_ui$sequence_view(input$allele_select, sequence)
+    overview_ui$sequence_view(input$allele_select, allele$sequence, allele$hash)
   })
 
   # Copy actions -----------------------------------------------------------
   shiny$observeEvent(input$copy_seq, {
     shiny$req(seq_cache())
-    copy_to_clipboard(seq_cache())
+    copy_to_clipboard(seq_cache()$sequence)
   })
 
+  # The allele's hash identifies it across databases, unlike its local id; the
+  # id stands in only where the database has no hash for it yet.
   shiny$observeEvent(input$copy_idx, {
-    shiny$req(input$allele_select)
-    copy_to_clipboard(input$allele_select)
+    allele <- seq_cache()
+    shiny$req(allele)
+    copy_to_clipboard(if (is.na(allele$hash)) input$allele_select else allele$hash)
   })
 
   # Downloads --------------------------------------------------------------
@@ -291,12 +321,6 @@ distribution_server <- function(input, output, overview) {
         bins$n,
         n_typed(),
         tones = ifelse(bins$label == "None", "success", "primary")
-      ),
-      overview_ui$overview_note(
-        sprintf(
-          "Loci without a call, per isolate, out of the scheme's %s.",
-          fmt(overview()$locus_count)
-        )
       )
     )
   })
@@ -311,11 +335,7 @@ distribution_server <- function(input, output, overview) {
     }
     li <- head(li[order(-li$Missing), , drop = FALSE], TOP_MISSING)
     shiny$tagList(
-      overview_ui$bar_rows(li$Locus, li$Missing, n_typed(), tones = rep("warning", nrow(li))),
-      overview_ui$overview_note(
-        "Share of typed isolates without a call at the locus; loci missed this",
-        "often may be absent from the population or hard to assemble."
-      )
+      overview_ui$bar_rows(li$Locus, li$Missing, n_typed(), tones = rep("warning", nrow(li)))
     )
   })
 
@@ -336,10 +356,6 @@ distribution_server <- function(input, output, overview) {
         ov$allele_bins$n,
         nrow(ov$loci),
         unit = "loci"
-      ),
-      overview_ui$overview_note(
-        "Loci by number of distinct alleles in this database, the scheme's",
-        "reference allele included."
       )
     )
   })

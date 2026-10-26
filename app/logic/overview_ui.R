@@ -13,6 +13,7 @@ box::use(
     card,
     card_body,
     card_header,
+    tooltip,
   ],
   htmltools[HTML, htmlEscape],
   shiny,
@@ -28,6 +29,18 @@ DRAW_SIGNAL <- JS(
   "function(settings) {",
   "  $(this.api().table().node())",
   "    .closest('.loci-table-body').addClass('is-loaded');",
+  "}"
+)
+
+# Wraps every displayed cell in a two-line clamp, the full value on hover.
+# Values arrive already escaped (DT's `escape`), so only quotes need escaping
+# for the title attribute.
+CLAMP_CELL <- JS(
+  "function(data, type) {",
+  "  if (type !== 'display' || data === null || data === undefined) return data;",
+  "  var text = String(data);",
+  "  return '<div class=\"overview-clamp\" title=\"' + text.replace(/\"/g, '&quot;') +",
+  "    '\">' + text + '</div>';",
   "}"
 )
 
@@ -47,19 +60,43 @@ TONE_ICONS <- c(
 #' @export
 fmt <- function(x) format(x, big.mark = ",", trim = TRUE, scientific = FALSE)
 
+# A card title followed by a question mark that explains the card on hover
+# (and on keyboard focus).
+card_title <- function(title, hint = NULL) {
+  if (is.null(hint)) {
+    return(title)
+  }
+  shiny$span(
+    class = "overview-card-title",
+    title,
+    tooltip(
+      shiny$span(
+        class = "overview-hint",
+        tabindex = "0",
+        `aria-label` = paste("About", title),
+        shiny$icon("circle-question")
+      ),
+      hint,
+      placement = "bottom"
+    )
+  )
+}
+
 #' Fillable Overview Card
 #'
 #' @param header Character title, or a `card_header()`.
 #' @param ... Card body contents.
 #' @param body_class Optional extra class of the card body.
+#' @param hint Optional character text shown on hovering a question mark next
+#'   to a character title.
 #'
 #' @return A fill item wrapping a full-screen-capable `bslib::card()`.
 #' @export
-fill_card <- function(header, ..., body_class = NULL) {
+fill_card <- function(header, ..., body_class = NULL, hint = NULL) {
   as_fill_item(card(
     fill = TRUE,
     full_screen = TRUE,
-    if (is.character(header)) card_header(header) else header,
+    if (is.character(header)) card_header(card_title(header, hint)) else header,
     card_body(class = body_class, ...)
   ))
 }
@@ -87,13 +124,15 @@ split_layout <- function(main, aside) {
 #' @param title Character card title.
 #' @param button_id Namespaced id of the download button.
 #' @param controls Optional UI placed between the title and the button.
+#' @param hint Optional character text shown on hovering a question mark next
+#'   to the title.
 #'
 #' @return A `bslib::card_header()`.
 #' @export
-table_header <- function(title, button_id, controls = NULL) {
+table_header <- function(title, button_id, controls = NULL, hint = NULL) {
   card_header(
     class = "loci-info-header",
-    title,
+    card_title(title, hint),
     if (!is.null(controls)) shiny$div(class = "overview-header-controls", controls),
     shiny$downloadButton(
       button_id,
@@ -115,14 +154,16 @@ table_header <- function(title, button_id, controls = NULL) {
 #' @param export_id Output id of the CSV download (unnamespaced).
 #' @param label Character loading message.
 #' @param controls Optional UI shown in the card header, before the button.
+#' @param hint Optional character text shown on hovering a question mark next
+#'   to the title.
 #'
 #' @return A `fill_card()`.
 #' @export
-table_card <- function(ns, id, title, export_id, label, controls = NULL) {
+table_card <- function(ns, id, title, export_id, label, controls = NULL, hint = NULL) {
   as_fill_item(card(
     fill = TRUE,
     full_screen = TRUE,
-    table_header(title, ns(export_id), controls),
+    table_header(title, ns(export_id), controls, hint),
     card_body(
       id = ns(paste0(id, "_body")),
       class = "loci-table-body",
@@ -163,10 +204,13 @@ reset_table_overlays <- function(ns, ids) {
 #'
 #' @param ns Namespace function of the module.
 #' @param table_id Output id of the loci table (unnamespaced).
+#' @param index_label Character label of the `copy_idx` button, naming what it
+#'   copies.
+#' @param index_icon Character Font Awesome icon of that button.
 #'
 #' @return A fill carrier.
 #' @export
-loci_layout <- function(ns, table_id) {
+loci_layout <- function(ns, table_id, index_label = "Allele", index_icon = "hashtag") {
   as_fill_carrier(shiny$div(
     class = "loci-info-layout",
     as_fill_carrier(shiny$div(
@@ -201,8 +245,8 @@ loci_layout <- function(ns, table_id) {
             ),
             shiny$actionButton(
               ns("copy_idx"),
-              "Allele",
-              icon = shiny$icon("hashtag"),
+              index_label,
+              icon = shiny$icon(index_icon),
               class = "btn-sm"
             ),
             shiny$downloadButton(
@@ -252,7 +296,8 @@ message_table <- function(text) {
 #' @param selection DT selection setting.
 #' @param filter DT column filter position.
 #'
-#' @return A DT widget that fills its `table_card()` and scrolls internally.
+#' @return A DT widget that fills its `table_card()` and scrolls internally;
+#'   no cell runs longer than two lines.
 #' @export
 data_table <- function(df, selection = "none", filter = "top") {
   datatable(
@@ -267,7 +312,7 @@ data_table <- function(df, selection = "none", filter = "top") {
       scrollX = TRUE,
       scrollY = "1px",
       scrollCollapse = TRUE,
-      columnDefs = list(list(className = "dt-left", targets = "_all")),
+      columnDefs = list(list(className = "dt-left", targets = "_all", render = CLAMP_CELL)),
       initComplete = DRAW_SIGNAL
     )
   )
@@ -319,14 +364,6 @@ empty_hint <- function(text) {
 #' @return An uppercase caption above a block inside a card.
 #' @export
 section_title <- function(text) shiny$div(class = "overview-section-title", text)
-
-#' Footnote
-#'
-#' @param ... Text pieces, pasted with spaces.
-#'
-#' @return A muted note below a chart.
-#' @export
-overview_note <- function(...) shiny$p(class = "overview-note", paste(...))
 
 #' Grid of Stat Tiles
 #'
@@ -449,14 +486,18 @@ checks_ui <- function(checks) {
 #'
 #' @param header Character FASTA header (without `>`).
 #' @param sequence Character nucleotide sequence.
+#' @param hash Optional character sequence hash, shown under the header.
 #'
-#' @return HTML of the header line and the colored sequence.
+#' @return HTML of the header line, the hash and the colored sequence.
 #' @export
-sequence_view <- function(header, sequence) {
+sequence_view <- function(header, sequence, hash = NULL) {
   HTML(paste0(
     "<div class=\"fasta-header\">&gt;",
     htmlEscape(header),
     "</div>",
+    if (!is.null(hash) && !is.na(hash)) {
+      sprintf("<div class=\"fasta-hash\">SHA-256 %s</div>", htmlEscape(hash))
+    },
     color_sequence(sequence)
   ))
 }
