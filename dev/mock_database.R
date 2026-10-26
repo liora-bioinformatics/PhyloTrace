@@ -27,9 +27,10 @@ box::use(
 )
 box::use(
   app / logic / amr[store_amr_results],
+  app / logic / app_meta[APP_VERSION],
   app / logic / database_functions[sync_metadata_table],
   app / logic / db_connect[connect],
-  app / logic / genome_hash[GENOME_HASHES_DDL],
+  app / logic / genome_hash[GENOME_HASHES_DDL, GENOME_HASH_ALGORITHM],
   app / logic / provenance[PROVENANCE_DDL, scheme_provenance],
   app / logic / pymlst[hash_database, store_clamlst_results],
 )
@@ -37,10 +38,13 @@ box::use(
 #' Mock Database Scenarios
 #'
 #' @description Every scenario `mock_database()` can apply, with what it does.
-#'   All but the last four each claim their own slice of isolates, so any
-#'   combination can be applied at once; `skipped` and `no_classical` replace
-#'   classical MLST for the whole database, `amr_skipped` and `no_amr` AMR
-#'   screening, and each overrides the slices of what it replaces.
+#'   All but the last five each claim their own slice of isolates, so any
+#'   combination can be applied at once; the isolate-record ones
+#'   (`RECORD_SCENARIOS`) slice the isolates a second time, independently of
+#'   the rest. `orphan_records` adds records of
+#'   isolates that are not in the database; `skipped` and `no_classical`
+#'   replace classical MLST for the whole database, `amr_skipped` and `no_amr`
+#'   AMR screening, and each overrides the slices of what it replaces.
 #'
 #' @export
 MOCK_SCENARIOS <- c(
@@ -63,6 +67,11 @@ MOCK_SCENARIOS <- c(
   amr_unscreened = "Some isolates without any AMR screening record",
   amr_no_point_mutations = "Some isolates screened without point mutations",
   amr_results_lost = "Some isolates with fewer AMR elements stored than reported",
+  assembly_changed = "Some isolates whose assembly record was replaced after typing",
+  long_read_assemblies = "Some isolates with complete long-read assemblies (1-8 contigs)",
+  no_assembly_record = "Some isolates without an assembly record (typed before hashing)",
+  imported = "Some isolates imported from another database, with its own run and version",
+  orphan_records = "Assembly and provenance records of isolates no longer in the database",
   skipped = "No scheme available: classical MLST skipped for every isolate",
   no_classical = "No classical MLST tables at all (database typed before it existed)",
   amr_skipped = "AMR screening switched off for every isolate",
@@ -89,7 +98,11 @@ SLICE_SHARE <- c(
   amr_failed = 0.03,
   amr_unscreened = 0.03,
   amr_no_point_mutations = 0.03,
-  amr_results_lost = 0.03
+  amr_results_lost = 0.03,
+  assembly_changed = 0.03,
+  long_read_assemblies = 0.06,
+  no_assembly_record = 0.04,
+  imported = 0.08
 )
 
 # Slice scenarios that concern AMR screening.
@@ -159,15 +172,38 @@ AMR_DB_VERSION <- "2024-07-22.1"
 AMR_OLD_DB_VERSION <- "2023-11-15.1"
 AMR_TOOLS <- c(abritamr = "1.0.19", amrfinder = "3.12.8")
 
-# Slice scenarios that concern cgMLST, and so still apply when classical MLST
-# is replaced for the whole database.
+# Slice scenarios that concern cgMLST or the isolate records, and so still
+# apply when classical MLST is replaced for the whole database.
 CG_SCENARIOS <- c(
   "low_completeness",
   "duplicate_assemblies",
   "mixed_cg_thresholds",
   "scheme_version_change",
-  "unusual_assemblies"
+  "unusual_assemblies",
+  "assembly_changed",
+  "long_read_assemblies",
+  "no_assembly_record",
+  "imported"
 )
+
+# Slice scenarios that concern the isolate records - origin and assembly
+# record. They touch nothing the other scenarios do, so they slice the isolates
+# a second time on their own, sparing those whose assembly or provenance
+# another scenario already rewrites.
+RECORD_SCENARIOS <- c("assembly_changed", "long_read_assemblies", "no_assembly_record", "imported")
+RECORD_SPARED <- c("untyped", "duplicate_assemblies", "unusual_assemblies")
+
+# Where `imported` isolates came from: the peer's source label, the run that
+# typed them there and the PhyloTrace version it ran.
+PEER <- list(
+  source = "partner-lab",
+  run_id = "typing_20250611_090000_partner.log",
+  typed_at = "2025-06-11 09:00:00",
+  version = "1.5.0"
+)
+
+# Isolates whose records outlived them under `orphan_records`.
+ORPHANS <- c("MOCK_GONE_1", "MOCK_GONE_2")
 
 PRIMARY <- list(
   scheme = "Testus spp. (MLST)",
@@ -338,8 +374,9 @@ write_core <- function(con, calls, species) {
   )
 }
 
-# Fills a few metadata fields so filters and plots have something to show.
-fill_metadata <- function(con, isolates) {
+# Fills a few metadata fields so filters and plots have something to show, and
+# stamps `imported` isolates with the peer's source label as a merge does.
+fill_metadata <- function(con, isolates, record) {
   meta <- dbReadTable(con, "metadata")
   at <- match(meta$isolate, isolates)
   dates <- as.Date("2023-01-01") + sample(0:1000, length(isolates), replace = TRUE)
@@ -350,6 +387,7 @@ fill_metadata <- function(con, isolates) {
     nrow(meta),
     replace = TRUE
   )
+  meta$source[meta$isolate %in% isolates[record %in% "imported"]] <- PEER$source
   dbWriteTable(con, "metadata", meta, overwrite = TRUE)
 }
 
@@ -673,9 +711,11 @@ assign_twins <- function(isolates, slice) {
 }
 
 # One assembly hash row per isolate, in the app's own table definition: a
-# typical length and contig count, a duplicate sharing its twin's assembly, and
-# `unusual_assemblies` alternately inflated (contamination) or truncated.
-write_hashes <- function(path, isolates, slice, twin) {
+# typical length and contig count, a duplicate sharing its twin's assembly,
+# `unusual_assemblies` alternately inflated (contamination) or truncated and
+# `long_read_assemblies` closed into a handful of contigs. `no_assembly_record`
+# isolates get no row; the returned table still holds theirs.
+write_hashes <- function(path, isolates, slice, twin, record) {
   n <- length(isolates)
   hashes <- data.frame(
     isolate = isolates,
@@ -684,7 +724,7 @@ write_hashes <- function(path, isolates, slice, twin) {
       function(i) paste(sample(c(0:9, letters[1:6]), 32, replace = TRUE), collapse = ""),
       character(1)
     ),
-    algorithm = "sha512t24u",
+    algorithm = GENOME_HASH_ALGORITHM,
     n_contigs = as.integer(round(runif(n, 30, 90))),
     total_length = as.integer(round(GENOME_LENGTH * runif(n, 0.98, 1.02))),
     hashed_at = "2026-09-30 10:00:00"
@@ -696,6 +736,8 @@ write_hashes <- function(path, isolates, slice, twin) {
     hashes$total_length[setdiff(odd, inflated)] * 0.7
   )
   hashes$n_contigs[odd] <- hashes$n_contigs[odd] * 6L
+  closed <- which(record %in% "long_read_assemblies")
+  hashes$n_contigs[closed] <- 1L + (seq_along(closed) - 1L) %% 8L
   copies <- which(!is.na(twin))
   hashes[copies, c("genome_digest", "n_contigs", "total_length")] <-
     hashes[twin[copies], c("genome_digest", "n_contigs", "total_length")]
@@ -704,20 +746,22 @@ write_hashes <- function(path, isolates, slice, twin) {
   con <- connect(path)
   on.exit(dbDisconnect(con))
   dbExecute(con, GENOME_HASHES_DDL)
-  dbAppendTable(con, "genome_hashes", hashes)
+  dbAppendTable(con, "genome_hashes", hashes[!(record %in% "no_assembly_record"), ])
   hashes
 }
 
 # One provenance row per typed isolate, in the app's own table definition,
 # with the allele-calling figures a run records next to the classical step.
-write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screens) {
+# Isolates of one scheme release were typed in one run on its release day.
+write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screens, record) {
   rows <- plan[plan$in_prov, , drop = FALSE]
+  rec <- record[match(rows$isolate, plan$isolate)]
   cg <- scheme_provenance(path)
   prov <- data.frame(
     isolate = rows$isolate,
-    run_id = "mock_database",
+    run_id = sprintf("typing_%s_100000_mock.log", gsub("-", "", rows$version)),
     typed_at = paste(rows$version, "10:00:00"),
-    phylotrace_version = "mock",
+    phylotrace_version = APP_VERSION,
     cg_scheme_database = cg$cg_scheme_database,
     cg_scheme_version = cg$cg_scheme_version,
     cg_species = cg$cg_species,
@@ -727,9 +771,16 @@ write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screen
     mafft_version = "v7.525"
   )
   at <- match(rows$isolate, hashes$isolate)
-  prov$genome_digest <- hashes$genome_digest[at]
-  prov$n_contigs <- hashes$n_contigs[at]
-  prov$total_length <- hashes$total_length[at]
+  # Typed before hashing: no assembly figures were recorded either.
+  hashed <- !(rec %in% "no_assembly_record")
+  prov$genome_digest <- ifelse(hashed, hashes$genome_digest[at], NA)
+  prov$algorithm <- ifelse(hashed, hashes$algorithm[at], NA)
+  prov$file_sha256 <- NA_character_
+  prov$n_contigs <- ifelse(hashed, hashes$n_contigs[at], NA)
+  prov$total_length <- ifelse(hashed, hashes$total_length[at], NA)
+  # The assembly typed was another than the one on record now.
+  changed <- rec %in% "assembly_changed"
+  prov$genome_digest[changed] <- sprintf("replaced%024d", seq_len(sum(changed)))
   found <- unname(loci[rows$isolate])
   prov$cg_loci_found <- found
   prov$cg_completeness <- round(100 * found / n_loci, 1)
@@ -740,6 +791,11 @@ write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screen
   prov$cg_partial_genes <- rpois(nrow(rows), 3)
   prov$cg_filled_genes <- pmin(prov$cg_partial_genes, rpois(nrow(rows), 2))
   prov$cg_removed_genes <- prov$cg_partial_genes - prov$cg_filled_genes
+  prov$elapsed_seconds <- round(runif(nrow(rows), 25, 70), 1)
+  peer <- rec %in% "imported"
+  prov$run_id[peer] <- PEER$run_id
+  prov$typed_at[peer] <- PEER$typed_at
+  prov$phylotrace_version[peer] <- PEER$version
   at_screen <- match(rows$isolate, screens$isolate)
   for (col in c(
     "amr_status", "amr_organism", "amr_point_mutations", "amr_elements",
@@ -763,6 +819,38 @@ write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screen
   dbAppendTable(con, "typing_provenance", prov)
 }
 
+# Assembly and provenance rows of isolates removed before removal cleaned up
+# after itself.
+write_orphans <- function(path) {
+  con <- connect(path)
+  on.exit(dbDisconnect(con))
+  n <- length(ORPHANS)
+  digests <- sprintf("orphan%026d", seq_len(n))
+  dbAppendTable(
+    con,
+    "genome_hashes",
+    data.frame(
+      isolate = ORPHANS,
+      genome_digest = digests,
+      algorithm = GENOME_HASH_ALGORITHM,
+      n_contigs = 50L,
+      total_length = as.integer(GENOME_LENGTH),
+      hashed_at = "2025-01-15 10:00:00"
+    )
+  )
+  dbAppendTable(
+    con,
+    "typing_provenance",
+    data.frame(
+      isolate = ORPHANS,
+      run_id = "typing_20250115_100000_mock.log",
+      typed_at = "2025-01-15 10:00:00",
+      genome_digest = digests,
+      algorithm = GENOME_HASH_ALGORITHM
+    )
+  )
+}
+
 #' Generate a Mock PhyloTrace Database
 #'
 #' @description Writes an artificial database with cgMLST allele calls, metadata,
@@ -778,8 +866,9 @@ write_provenance <- function(path, plan, classical, hashes, loci, n_loci, screen
 #'   caller's random number stream is left untouched.
 #' @param overwrite Logical; replace an existing file at `path`.
 #'
-#' @return Invisibly, the per-isolate plan: scenario, classical status, ST and
-#'   the scheme release each isolate was given.
+#' @return Invisibly, the per-isolate plan: scenario, isolate-record scenario
+#'   (`record`), classical status, ST and the scheme release each isolate was
+#'   given.
 #' @export
 mock_database <- function(
   path,
@@ -833,7 +922,12 @@ mock_database <- function(
   if (!identical(amr, "full")) {
     sliced <- setdiff(sliced, AMR_SCENARIOS)
   }
-  slice <- allocate_slices(isolates, sliced)
+  slice <- allocate_slices(isolates, setdiff(sliced, RECORD_SCENARIOS))
+  record <- rep(NA_character_, n_isolates)
+  if (any(RECORD_SCENARIOS %in% sliced)) {
+    open <- !(slice %in% RECORD_SPARED)
+    record[open] <- allocate_slices(isolates[open], intersect(sliced, RECORD_SCENARIOS))
+  }
   twin <- assign_twins(isolates, slice)
 
   calls <- cg_alleles(isolates, lineage, n_loci, slice, twin)
@@ -843,9 +937,9 @@ mock_database <- function(
   hash_database(path)
   sync_metadata_table(path)
   con <- connect(path)
-  fill_metadata(con, isolates)
+  fill_metadata(con, isolates, record)
   dbDisconnect(con)
-  hashes <- write_hashes(path, isolates, slice, twin)
+  hashes <- write_hashes(path, isolates, slice, twin, record)
 
   plan <- classical_plan(isolates, lineage, slice)
   if (identical(classical, "full")) {
@@ -853,7 +947,10 @@ mock_database <- function(
   }
   loci <- table(calls$souche[calls$souche != "ref"])
   screens <- write_amr(path, isolates, lineage, slice, amr)
-  write_provenance(path, plan, classical, hashes, loci, n_loci, screens)
+  write_provenance(path, plan, classical, hashes, loci, n_loci, screens, record)
+  if ("orphan_records" %in% scenarios) {
+    write_orphans(path)
+  }
 
   message(sprintf(
     "Mock database written to %s: %d isolates, %d loci, scenarios: %s",
@@ -862,5 +959,6 @@ mock_database <- function(
     n_loci,
     if (length(scenarios)) paste(scenarios, collapse = ", ") else "none"
   ))
+  plan$record <- record
   invisible(plan)
 }

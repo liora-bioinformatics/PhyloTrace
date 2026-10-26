@@ -6,13 +6,14 @@ box::use(
   app / logic / amr_overview[load_amr_overview],
   app / logic / cgmlst_overview[load_cgmlst_overview],
   app / logic / db_compat[check_db_loadable],
+  app / logic / isolate_overview[load_isolate_overview],
   app / logic / mlst_overview[load_mlst_overview],
   dev / mock_database,
 )
 
 SLICES <- setdiff(
   names(mock_database$MOCK_SCENARIOS),
-  c("skipped", "no_classical", "amr_skipped", "no_amr")
+  c("orphan_records", "skipped", "no_classical", "amr_skipped", "no_amr")
 )
 
 quiet <- function(expr) suppressMessages(expr)
@@ -60,7 +61,7 @@ test_that("every slice scenario surfaces in the overviews", {
   ov <- load_mlst_overview(path)
   checks <- ov$checks$check
 
-  expect_true(all(SLICES %in% plan$scenario))
+  expect_true(all(SLICES %in% c(plan$scenario, plan$record)))
   expect_true(all(
     c(
       "Mixed schemes", "Outdated unresolved calls", "Profile releases",
@@ -84,6 +85,15 @@ test_that("every slice scenario surfaces in the overviews", {
       "Results missing", "Failed screens", "Mixed AMRFinderPlus databases",
       "Point mutations partly screened", "No screening record"
     ) %in% amr
+  ))
+
+  isolates <- load_isolate_overview(path)$checks$check
+  expect_true(all(
+    c(
+      "Assembly changed since typing", "Duplicate assemblies", "Mixed assembly types",
+      "Unusual assembly size", "Fragmented assemblies", "Mixed PhyloTrace versions",
+      "No assembly record"
+    ) %in% isolates
   ))
 })
 

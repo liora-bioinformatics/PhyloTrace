@@ -15,6 +15,7 @@ box::use(
   app / view / database_custom,
   app / view / database_export,
   app / view / database_import,
+  app / view / database_isolates,
   app / view / database_mlst,
 )
 
@@ -29,6 +30,11 @@ db_menu <- list(
     value = "custom_fields",
     label = "Custom Variables",
     module = database_custom
+  ),
+  list(
+    value = "isolate_overview",
+    label = "Isolate Overview",
+    module = database_isolates
   ),
   list(
     value = "cgmlst_overview",

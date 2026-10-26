@@ -45,7 +45,8 @@ ui <- function(id) {
       overview_ui$split_layout(
         overview_ui$fill_card(
           "Scheme Metadata",
-          DTOutput(ns("scheme_table"), fill = TRUE)
+          DTOutput(ns("scheme_table"), fill = TRUE),
+          hint = "The cgMLST scheme as downloaded from cgmlst.org when the database was built."
         ),
         overview_ui$fill_card(
           "Typing Summary",
@@ -62,7 +63,18 @@ ui <- function(id) {
     ),
     nav_panel(
       "Loci Info",
-      overview_ui$loci_layout(ns, "cg_loci", index_label = "Hash", index_icon = "fingerprint")
+      overview_ui$loci_layout(
+        ns,
+        "cg_loci",
+        index_label = "Hash",
+        index_icon = "fingerprint",
+        table_hint = paste(
+          "Allele Count: distinct alleles in this database, the scheme's reference",
+          "allele included. Isolates Called and Missing: typed isolates with and",
+          "without a call at the locus. Alleles are numbered per database; the",
+          "SHA-256 hash identifies one across databases."
+        )
+      )
     ),
     nav_panel(
       "Distribution",
@@ -100,11 +112,29 @@ ui <- function(id) {
           "cg_isolates",
           "Isolate Provenance",
           "export_isolates",
-          "Loading isolate provenance ..."
+          "Loading isolate provenance ...",
+          hint = paste(
+            "How every isolate was typed: completeness, pyMLST's gene counts",
+            "(added, partial, filled, removed), its assembly's contigs and length,",
+            "thresholds and tool versions. Flagged rows come first; each flag is",
+            "explained in Checks."
+          )
         ),
         list(
-          overview_ui$fill_card("Checks", shiny$uiOutput(ns("checks"))),
-          overview_ui$fill_card("Typing Settings", shiny$uiOutput(ns("settings")))
+          overview_ui$fill_card(
+            "Checks",
+            shiny$uiOutput(ns("checks")),
+            hint = overview_ui$CHECKS_HINT
+          ),
+          overview_ui$fill_card(
+            "Typing Settings",
+            shiny$uiOutput(ns("settings")),
+            hint = paste(
+              "Isolates grouped by the scheme version, allele-calling thresholds and",
+              "tool versions they were typed with. One group means comparable allele",
+              "distances; Current marks the scheme version the database carries now."
+            )
+          )
         )
       )
     )
@@ -164,14 +194,7 @@ scheme_info_server <- function(input, output, overview) {
 }
 
 # Handles server logic for the loci table, allele usage and sequence viewer.
-loci_info_server <- function(input, output, session, db_path, overview, session_reset) {
-  # Sequence and hash of the displayed allele, cached so the copy buttons do not
-  # have to re-query the database.
-  seq_cache <- shiny$reactiveVal(NULL)
-
-  # Reset module state when the user returns to the landing screen.
-  shiny$observeEvent(session_reset(), seq_cache(NULL), ignoreInit = TRUE)
-
+loci_info_server <- function(input, output, session, db_path, overview) {
   display_cols <- function(df) df[, setdiff(names(df), ".gene"), drop = FALSE]
 
   output$cg_loci <- renderDT({
@@ -251,30 +274,37 @@ loci_info_server <- function(input, output, session, db_path, overview, session_
     )
   })
 
-  output$allele_sequence <- shiny$renderUI({
+  # The picked allele's sequence and hash, read once for the viewer, the hash
+  # line and both copy buttons.
+  allele <- shiny$reactive({
     shiny$req(db_path(), input$allele_select)
     allele <- guard_db_read(
       "Loading the allele sequence",
       load_allele(db_path(), as.integer(input$allele_select))
     )
     shiny$req(allele)
-    seq_cache(allele)
+    allele
+  })
+
+  output$allele_info <- shiny$renderUI({
+    overview_ui$allele_info("SHA-256", allele()$hash)
+  })
+
+  output$allele_sequence <- shiny$renderUI({
     render_info("output$allele_sequence")
-    overview_ui$sequence_view(input$allele_select, allele$sequence, allele$hash)
+    overview_ui$sequence_view(allele()$sequence)
   })
 
   # Copy actions -----------------------------------------------------------
   shiny$observeEvent(input$copy_seq, {
-    shiny$req(seq_cache())
-    copy_to_clipboard(seq_cache()$sequence)
+    copy_to_clipboard(allele()$sequence)
   })
 
   # The allele's hash identifies it across databases, unlike its local id; the
   # id stands in only where the database has no hash for it yet.
   shiny$observeEvent(input$copy_idx, {
-    allele <- seq_cache()
-    shiny$req(allele)
-    copy_to_clipboard(if (is.na(allele$hash)) input$allele_select else allele$hash)
+    hash <- allele()$hash
+    copy_to_clipboard(if (is.na(hash)) input$allele_select else hash)
   })
 
   # Downloads --------------------------------------------------------------
@@ -504,7 +534,7 @@ server <- function(
     shiny$observeEvent(db_path(), overview_ui$reset_table_overlays(session$ns, TABLE_IDS))
 
     scheme_info_server(input, output, overview)
-    loci_info_server(input, output, session, db_path, overview, session_reset)
+    loci_info_server(input, output, session, db_path, overview)
     distribution_server(input, output, overview)
     diagnostics_server(input, output, overview)
   })

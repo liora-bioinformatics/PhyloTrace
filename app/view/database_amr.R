@@ -6,7 +6,7 @@
 #' database.
 
 box::use(
-  DT[DTOutput, datatable, renderDT],
+  DT[DTOutput, renderDT],
   bslib[as_fill_carrier, as_fill_item, as_fillable_container, nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
@@ -74,9 +74,10 @@ empty_reason <- function(ov) {
   )
 }
 
-# Carriers listed per page of the carriers table; the table pages on the server,
-# so an element carried by thousands of isolates sends one page at a time.
-CARRIER_PAGE <- 8L
+# Carriers offered at once by the carrier search. The search runs on the server
+# (server-side selectize), so an element carried by thousands of isolates only
+# ever sends this many matches to the browser.
+CARRIER_MATCHES <- 50L
 
 # Renders the UI layout for the Elements tab: the element table next to the
 # selected element's call quality, its carriers and one carrier's calls.
@@ -102,10 +103,16 @@ elements_ui <- function(ns) {
     as_fillable_container(shiny$div(
       class = "loci-controls",
       shiny$uiOutput(ns("element_bars")),
-      shiny$div(
-        class = "overview-carriers",
-        overview_ui$section_title("Carriers"),
-        DTOutput(ns("amr_carriers"))
+      shiny$selectizeInput(
+        ns("carrier"),
+        label = "Carrier",
+        choices = NULL,
+        width = "100%",
+        options = list(
+          placeholder = "Search isolates ...",
+          maxOptions = CARRIER_MATCHES,
+          dropdownParent = "body"
+        )
       ),
       as_fill_carrier(shiny$div(
         class = "loci-allele-panel",
@@ -125,7 +132,12 @@ ui <- function(id) {
       overview_ui$split_layout(
         overview_ui$fill_card(
           "Screening Metadata",
-          DTOutput(ns("screening_table"), fill = TRUE)
+          DTOutput(ns("screening_table"), fill = TRUE),
+          hint = paste(
+            "How the isolates were screened: abritamr runs NCBI AMRFinderPlus for",
+            "resistance, virulence and stress elements; a supported organism adds",
+            "resistance point mutations."
+          )
         ),
         overview_ui$fill_card(
           "Screening Summary",
@@ -185,11 +197,29 @@ ui <- function(id) {
           "amr_isolates",
           "Isolate Screening",
           "export_isolates",
-          "Loading isolate screening ..."
+          "Loading isolate screening ...",
+          hint = paste(
+            "What every isolate's screen found: acquired genes, point mutations,",
+            "virulence and stress elements, the drug classes covered and partial",
+            "calls, with the settings used. Flagged rows come first; each flag is",
+            "explained in Checks."
+          )
         ),
         list(
-          overview_ui$fill_card("Checks", shiny$uiOutput(ns("checks"))),
-          overview_ui$fill_card("Screening Settings", shiny$uiOutput(ns("settings")))
+          overview_ui$fill_card(
+            "Checks",
+            shiny$uiOutput(ns("checks")),
+            hint = overview_ui$CHECKS_HINT
+          ),
+          overview_ui$fill_card(
+            "Screening Settings",
+            shiny$uiOutput(ns("settings")),
+            hint = paste(
+              "Isolates grouped by AMRFinderPlus database, organism (point mutations)",
+              "and tool versions. Isolates outside the most used group can miss",
+              "elements the others would report."
+            )
+          )
         )
       )
     )
@@ -404,44 +434,35 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
     )
   })
 
-  # Carriers, one page at a time: DT pages on the server, so the browser never
-  # holds more than one page however many isolates carry the element.
-  output$amr_carriers <- renderDT(
-    {
-      render_info("output$amr_carriers")
-      datatable(
-        carriers(),
-        rownames = FALSE,
-        selection = list(mode = "single", selected = 1),
-        class = "compact stripe row-border",
-        options = list(
-          dom = "ftp",
-          pageLength = CARRIER_PAGE,
-          pagingType = "simple",
-          language = list(search = "", searchPlaceholder = "Search isolates ..."),
-          columnDefs = list(list(className = "dt-left", targets = "_all"))
-        )
-      )
-    },
-    server = TRUE
-  )
+  # Offer the selected element's carriers, best call first. Server-side: the
+  # browser receives only the matches of what is typed, CARRIER_MATCHES at most.
+  shiny$observeEvent(carriers(), {
+    c <- carriers()
+    shiny$req(nrow(c) > 0)
+    shiny$updateSelectizeInput(
+      session,
+      "carrier",
+      label = sprintf("Carrier (%s isolates)", fmt(nrow(c))),
+      choices = data.frame(
+        value = c$Isolate,
+        label = sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
+      ),
+      selected = c$Isolate[1],
+      server = TRUE
+    )
+  })
 
   # Every stored call of the element in the selected carrier, read on demand.
   output$hit_detail <- shiny$renderUI({
-    c <- carriers()
-    row <- input$amr_carriers_rows_selected
-    shiny$req(nrow(c) > 0, length(row) == 1, row <= nrow(c), db_path())
+    shiny$req(db_path(), input$carrier)
     el <- selected()
     calls <- guard_db_read(
       "Loading the element calls",
-      load_element_calls(db_path(), c$Isolate[row], el$Element, el$Type)
+      load_element_calls(db_path(), input$carrier, el$Element, el$Type)
     )
     shiny$req(nrow(calls) > 0)
     render_info("output$hit_detail")
-    shiny$tagList(
-      overview_ui$section_title(c$Isolate[row]),
-      lapply(seq_len(nrow(calls)), function(i) call_rows(calls[i, , drop = FALSE]))
-    )
+    lapply(seq_len(nrow(calls)), function(i) call_rows(calls[i, , drop = FALSE]))
   })
 
   output$export_elements <- shiny$downloadHandler(

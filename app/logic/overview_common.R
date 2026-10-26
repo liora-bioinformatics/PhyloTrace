@@ -1,11 +1,12 @@
 # app/logic/overview_common.R
 #
-# Data helpers shared by the Database overviews (cgMLST, MLST): reading the
-# isolate list and optional table columns, tallying values, and assembling
-# provenance checks into one ordered table.
+# Data helpers shared by the Database overviews (cgMLST, MLST, AMR, Isolates):
+# reading the isolate list and optional table columns, tallying values, flagging
+# unusual assemblies and assembling provenance checks into one ordered table.
 
 box::use(
   DBI[dbGetQuery, dbListFields],
+  stats[median],
 )
 box::use(
   app / logic / db_compat[REF_SOUCHE],
@@ -13,6 +14,29 @@ box::use(
 
 # Severity order of a check's tone, most severe first.
 TONE_RANK <- c(danger = 1L, warning = 2L, info = 3L, success = 4L)
+
+#' Assembly Size Tolerance
+#'
+#' @description Share of the median assembly length an assembly may be off by
+#'   before it is flagged; a genome within a species rarely varies by more.
+#'
+#' @export
+SIZE_TOLERANCE <- 0.2
+
+#' Fragmented Assembly Thresholds
+#'
+#' @description An assembly with `FRAGMENT_FACTOR` times the median contig
+#'   count, and at least `FRAGMENT_MIN` contigs, is flagged as fragmented.
+#'
+#' @export
+FRAGMENT_FACTOR <- 3
+
+#' @rdname FRAGMENT_FACTOR
+#' @export
+FRAGMENT_MIN <- 100
+
+# Medians need a handful of assemblies before an outlier means anything.
+OUTLIER_MIN_N <- 5
 
 #' Collapse Blank Strings to NA
 #'
@@ -77,6 +101,35 @@ database_isolates <- function(con, tables) {
   } else {
     character(0)
   }
+}
+
+#' Flag Unusual Assemblies
+#'
+#' @description Assemblies far off the collection's median length, and ones
+#'   split into many more contigs than is usual for it. Both need at least
+#'   five recorded assemblies to compare against; fewer flag nothing.
+#'
+#' @param sizes Numeric vector of assembly lengths (bp), `NA` where unknown.
+#' @param contigs Numeric vector of contig counts, `NA` where unknown.
+#'
+#' @return A list of two logical vectors parallel to the input: `odd_size`
+#'   (more than `SIZE_TOLERANCE` off the median length) and `fragmented`.
+#' @export
+assembly_outliers <- function(sizes, contigs) {
+  sized <- sizes[!is.na(sizes)]
+  pieces <- contigs[!is.na(contigs)]
+  odd_size <- if (length(sized) >= OUTLIER_MIN_N) {
+    m <- median(sized)
+    !is.na(sizes) & abs(sizes - m) > SIZE_TOLERANCE * m
+  } else {
+    rep(FALSE, length(sizes))
+  }
+  fragmented <- if (length(pieces) >= OUTLIER_MIN_N) {
+    !is.na(contigs) & contigs > FRAGMENT_FACTOR * median(pieces) & contigs >= FRAGMENT_MIN
+  } else {
+    rep(FALSE, length(contigs))
+  }
+  list(odd_size = odd_size, fragmented = fragmented)
 }
 
 #' Most Frequent Value

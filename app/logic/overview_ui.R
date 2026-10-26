@@ -32,6 +32,17 @@ DRAW_SIGNAL <- JS(
   "}"
 )
 
+#' Checks Card Hint
+#'
+#' @description What the Checks card of every overview shows.
+#'
+#' @export
+CHECKS_HINT <- paste(
+  "Consistency checks over every isolate, most severe first. Red makes results",
+  "incomparable, yellow needs attention, blue is for information and green",
+  "confirms consistency. The number counts the isolates concerned."
+)
+
 # Wraps every displayed cell in a two-line clamp, the full value on hover.
 # Values arrive already escaped (DT's `escape`), so only quotes need escaping
 # for the title attribute.
@@ -60,25 +71,21 @@ TONE_ICONS <- c(
 #' @export
 fmt <- function(x) format(x, big.mark = ",", trim = TRUE, scientific = FALSE)
 
-# A card title followed by a question mark that explains the card on hover
-# (and on keyboard focus).
-card_title <- function(title, hint = NULL) {
+# A question mark that explains a card on hover (and on keyboard focus), set at
+# the right end of the card header; nothing when there is no hint.
+hint_icon <- function(title, hint = NULL) {
   if (is.null(hint)) {
-    return(title)
+    return(NULL)
   }
-  shiny$span(
-    class = "overview-card-title",
-    title,
-    tooltip(
-      shiny$span(
-        class = "overview-hint",
-        tabindex = "0",
-        `aria-label` = paste("About", title),
-        shiny$icon("circle-question")
-      ),
-      hint,
-      placement = "bottom"
-    )
+  tooltip(
+    shiny$span(
+      class = "overview-hint",
+      tabindex = "0",
+      `aria-label` = paste("About", title),
+      shiny$icon("circle-question")
+    ),
+    hint,
+    placement = "bottom"
   )
 }
 
@@ -96,7 +103,7 @@ fill_card <- function(header, ..., body_class = NULL, hint = NULL) {
   as_fill_item(card(
     fill = TRUE,
     full_screen = TRUE,
-    if (is.character(header)) card_header(card_title(header, hint)) else header,
+    if (is.character(header)) card_header(header, hint_icon(header, hint)) else header,
     card_body(class = body_class, ...)
   ))
 }
@@ -132,13 +139,17 @@ split_layout <- function(main, aside) {
 table_header <- function(title, button_id, controls = NULL, hint = NULL) {
   card_header(
     class = "loci-info-header",
-    card_title(title, hint),
-    if (!is.null(controls)) shiny$div(class = "overview-header-controls", controls),
-    shiny$downloadButton(
-      button_id,
-      "Export CSV",
-      icon = shiny$icon("file-csv"),
-      class = "btn-sm loci-export-btn"
+    title,
+    shiny$div(
+      class = "overview-header-end",
+      if (!is.null(controls)) shiny$div(class = "overview-header-controls", controls),
+      shiny$downloadButton(
+        button_id,
+        "Export CSV",
+        icon = shiny$icon("file-csv"),
+        class = "btn-sm loci-export-btn"
+      ),
+      hint_icon(title, hint)
     )
   )
 }
@@ -197,28 +208,44 @@ reset_table_overlays <- function(ns, ids) {
 
 #' Loci Info Tab
 #'
-#' @description The loci table next to the allele picker, the allele frequency
-#'   chart and the sequence viewer. Output and input ids are fixed:
-#'   `allele_select`, `allele_bars`, `allele_sequence`, `copy_seq`, `copy_idx`,
-#'   `download_locus` and `export_loci`.
+#' @description The loci table next to the allele frequency chart, the allele
+#'   picker, a line of allele details and the sequence viewer. Output and input
+#'   ids are fixed: `allele_bars`, `allele_select`, `allele_info`,
+#'   `allele_sequence`, `copy_seq`, `copy_idx`, `download_locus` and
+#'   `export_loci`.
 #'
 #' @param ns Namespace function of the module.
 #' @param table_id Output id of the loci table (unnamespaced).
 #' @param index_label Character label of the `copy_idx` button, naming what it
 #'   copies.
 #' @param index_icon Character Font Awesome icon of that button.
+#' @param table_hint Optional character hint of the loci table.
 #'
 #' @return A fill carrier.
 #' @export
-loci_layout <- function(ns, table_id, index_label = "Allele", index_icon = "hashtag") {
+loci_layout <- function(
+  ns,
+  table_id,
+  index_label = "Allele",
+  index_icon = "hashtag",
+  table_hint = NULL
+) {
   as_fill_carrier(shiny$div(
     class = "loci-info-layout",
     as_fill_carrier(shiny$div(
       class = "loci-info-main",
-      table_card(ns, table_id, "Loci Table", "export_loci", "Loading loci table ...")
+      table_card(
+        ns,
+        table_id,
+        "Loci Table",
+        "export_loci",
+        "Loading loci table ...",
+        hint = table_hint
+      )
     )),
     as_fillable_container(shiny$div(
       class = "loci-controls",
+      shiny$uiOutput(ns("allele_bars")),
       pickerInput(
         ns("allele_select"),
         label = "Select locus from table",
@@ -230,7 +257,7 @@ loci_layout <- function(ns, table_id, index_label = "Allele", index_icon = "hash
           container = "body"
         )
       ),
-      shiny$uiOutput(ns("allele_bars")),
+      shiny$uiOutput(ns("allele_info")),
       as_fill_carrier(shiny$div(
         class = "loci-allele-panel",
         shiny$div(
@@ -482,22 +509,31 @@ checks_ui <- function(checks) {
   )
 }
 
-#' Colored FASTA View
+#' Colored Sequence View
 #'
-#' @param header Character FASTA header (without `>`).
+#' @description The allele it shows is named by the picker above it, so the
+#'   sequence stands alone.
+#'
 #' @param sequence Character nucleotide sequence.
-#' @param hash Optional character sequence hash, shown under the header.
 #'
-#' @return HTML of the header line, the hash and the colored sequence.
+#' @return HTML of the colored sequence.
 #' @export
-sequence_view <- function(header, sequence, hash = NULL) {
-  HTML(paste0(
-    "<div class=\"fasta-header\">&gt;",
-    htmlEscape(header),
-    "</div>",
-    if (!is.null(hash) && !is.na(hash)) {
-      sprintf("<div class=\"fasta-hash\">SHA-256 %s</div>", htmlEscape(hash))
-    },
-    color_sequence(sequence)
-  ))
+sequence_view <- function(sequence) HTML(color_sequence(sequence))
+
+#' Allele Details Line
+#'
+#' @param label Character label, e.g. `"SHA-256"`.
+#' @param value Character value; nothing is shown when it is `NA` or `NULL`.
+#'
+#' @return A small labelled line, its value selectable.
+#' @export
+allele_info <- function(label, value) {
+  if (is.null(value) || is.na(value)) {
+    return(NULL)
+  }
+  shiny$div(
+    class = "overview-allele-info",
+    shiny$span(class = "overview-allele-info_label", label),
+    shiny$span(class = "overview-allele-info_value", value)
+  )
 }

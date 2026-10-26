@@ -4201,6 +4201,7 @@ label {
 .tab-pane[data-value="cgmlst_overview"],
 .tab-pane[data-value="mlst_overview"],
 .tab-pane[data-value="amr_overview"],
+.tab-pane[data-value="isolate_overview"],
 .tab-pane[data-value="scheme_browser_panel"] {
     .bslib-card .card-header {
         height: 49px;
@@ -5621,15 +5622,17 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// A switch sitting in a table card's header between its title and the export
-// button (AMR Overview's element type). Pushed right, next to the button.
-.overview-header-controls {
+// Right end of a table card's header: a switch (AMR Overview's element type),
+// the export button and the hint, in that order.
+.overview-header-end {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     margin-left: auto;
-    margin-right: 0.75rem;
+}
 
-    .btn-group {
-        margin-block: -0.25rem;
-    }
+.overview-header-controls .btn-group {
+    margin-block: -0.25rem;
 }
 
 .overview-section-gap {
@@ -5666,16 +5669,13 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// Card title with a question mark that explains the card on hover or focus
-// (overview_ui card_title()); the explanation lives in a tooltip, not the body.
-.overview-card-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-}
-
+// The question mark that explains a card on hover or focus (overview_ui
+// hint_icon()), at the right end of its header; the explanation lives in a
+// tooltip, not the body.
 .overview-hint {
     display: inline-flex;
+    align-items: center;
+    margin-left: auto;
     color: var(--bs-secondary-color);
     font-size: 0.85em;
     cursor: help;
@@ -5687,44 +5687,26 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// The AMR Overview's carriers table: a compact, paged list beside the element
-// table, its search box spanning the column.
-.overview-carriers {
-    flex: 0 0 auto;
-    font-size: 0.82rem;
-
-    .dataTables_filter {
-        float: none;
-        text-align: left;
-        margin-bottom: 0.4rem;
-
-        label,
-        input {
-            width: 100%;
-            margin: 0;
-        }
-    }
-
-    .dataTables_paginate {
-        margin-top: 0.4rem;
-        font-size: 0.78rem;
-    }
-
-    table.dataTable tbody td {
-        overflow-wrap: anywhere;
-    }
+// Several calls of one element in an isolate (AMR Overview) are set apart.
+.overview-detail dl + dl {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--bs-border-color-translucent);
 }
 
 
-// Overview card headers (cgMLST, MLST, AMR): shorter than the 49px the tab bar
-// keeps, with the title centred whether or not an export button sits beside it.
+// Overview card headers (cgMLST, MLST, AMR, Isolates): shorter than the 49px
+// the tab bar keeps, with the title centred whether or not an export button
+// sits beside it.
 .tab-pane[data-value="cgmlst_overview"],
 .tab-pane[data-value="mlst_overview"],
-.tab-pane[data-value="amr_overview"] {
+.tab-pane[data-value="amr_overview"],
+.tab-pane[data-value="isolate_overview"] {
     .bslib-card .card-header:not(:has(> .card-header-tabs)) {
         height: 42px;
         display: flex;
         align-items: center;
+        justify-content: space-between;
         padding-top: 0;
         padding-bottom: 0;
     }
@@ -5740,10 +5722,52 @@ table.dataTable thead>tr>th.sorting {
     overflow: hidden;
 }
 
-// The allele hash shown under a FASTA header (cgMLST Loci Info).
-.fasta-hash {
-    margin-bottom: 0.4rem;
-    font-size: 0.72rem;
+// A line of allele details between the picker and the sequence (the cgMLST
+// allele hash).
+.overview-allele-info {
+    display: flex;
+    gap: 0.6rem;
+    margin: -0.25rem 0 0.25rem;
+    font-size: 0.75rem;
+}
+
+.overview-allele-info_label {
+    flex: 0 0 auto;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     color: var(--bs-secondary-color);
+}
+
+.overview-allele-info_value {
+    font-family: monospace;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+// The AMR Overview's carrier search keeps to its column: a long selected label
+// is cut with an ellipsis instead of widening the control, and its options wrap.
+.loci-controls .selectize-control {
+    width: 100%;
+    max-width: 100%;
+
+    // Padding and border inside the 100%, not on top of it, and no growing to
+    // fit the label (Bootstrap 5's selectize theme sets min-width: fit-content).
+    .selectize-input {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        overflow: hidden;
+
+        > .item {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+}
+
+.selectize-dropdown .option {
     overflow-wrap: anywhere;
 }

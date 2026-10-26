@@ -68,3 +68,19 @@ test_that("read_cols fills columns an older table lacks", {
   expect_identical(names(out), c("a", "b"))
   expect_true(all(is.na(out$b)))
 })
+
+test_that("assembly_outliers flags size and fragmentation against the median", {
+  sizes <- c(3e6, 3.02e6, 2.98e6, 3.01e6, 4.5e6, 2e6, NA)
+  contigs <- c(50, 55, 60, 45, 400, 52, NA)
+  out <- overview_common$assembly_outliers(sizes, contigs)
+
+  expect_identical(out$odd_size, c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE))
+  expect_identical(out$fragmented, c(FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE))
+})
+
+test_that("assembly_outliers flags nothing below five assemblies", {
+  out <- overview_common$assembly_outliers(c(1e6, 9e6, NA), c(1, 900, NA))
+
+  expect_identical(out$odd_size, c(FALSE, FALSE, FALSE))
+  expect_identical(out$fragmented, c(FALSE, FALSE, FALSE))
+})

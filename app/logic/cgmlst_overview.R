@@ -14,17 +14,7 @@ box::use(
 box::use(
   app / logic / db_compat[REF_SOUCHE],
   app / logic / db_connect[connect],
-  app /
-    logic /
-    overview_common[
-      blank_na,
-      check_list,
-      database_isolates,
-      modal,
-      read_cols,
-      tally,
-      threshold_pairs,
-    ],
+  app / logic / overview_common,
   app / logic / provenance[overview_value],
 )
 
@@ -49,15 +39,6 @@ MISSING_BREAKS <- c(-Inf, 0, 5, 10, 25, 50, 100, Inf)
 MISSING_LABELS <- c("None", "1-5", "6-10", "11-25", "26-50", "51-100", "Over 100")
 ALLELE_BREAKS <- c(-Inf, 1, 5, 10, 25, 50, 100, 250, Inf)
 ALLELE_LABELS <- c("1", "2-5", "6-10", "11-25", "26-50", "51-100", "101-250", "Over 250")
-
-# An assembly this far off the database's median length is flagged; a genome
-# within a species rarely varies by more.
-SIZE_TOLERANCE <- 0.2
-
-# An assembly with this many times the median contig count, and at least
-# FRAGMENT_MIN contigs, is flagged as fragmented.
-FRAGMENT_FACTOR <- 3
-FRAGMENT_MIN <- 100
 
 PROV_COLS <- c(
   "isolate", "typed_at", "cg_scheme_version", "cg_identity", "cg_coverage",
@@ -110,18 +91,18 @@ load_cgmlst_overview <- function(db_path) {
   }
 
   build_cg_overview(
-    isolates = database_isolates(con, tables),
+    isolates = overview_common$database_isolates(con, tables),
     scheme = read_table("scheme_overview"),
     targets = read_table("targets"),
     locus_counts = locus_counts,
     per_isolate = per_isolate,
     prov = if ("typing_provenance" %in% tables) {
-      read_cols(con, "typing_provenance", PROV_COLS)
+      overview_common$read_cols(con, "typing_provenance", PROV_COLS)
     } else {
       NULL
     },
     hashes = if ("genome_hashes" %in% tables) {
-      read_cols(con, "genome_hashes", HASH_COLS)
+      overview_common$read_cols(con, "genome_hashes", HASH_COLS)
     } else {
       NULL
     }
@@ -247,14 +228,14 @@ isolate_table <- function(isolates, per_isolate, prov, hashes, locus_count, sche
     removed = as_int(from_prov("cg_removed_genes")),
     contigs = as_int(either("n_contigs")),
     length = suppressWarnings(as.numeric(either("total_length"))),
-    digest = blank_na(either("genome_digest")),
+    digest = overview_common$blank_na(either("genome_digest")),
     identity = suppressWarnings(as.numeric(from_prov("cg_identity"))),
     coverage = suppressWarnings(as.numeric(from_prov("cg_coverage"))),
-    scheme_version = blank_na(from_prov("cg_scheme_version")),
-    pymlst_version = blank_na(from_prov("pymlst_version")),
-    blat_version = blank_na(from_prov("blat_version")),
-    mafft_version = blank_na(from_prov("mafft_version")),
-    typed_at = blank_na(from_prov("typed_at")),
+    scheme_version = overview_common$blank_na(from_prov("cg_scheme_version")),
+    pymlst_version = overview_common$blank_na(from_prov("pymlst_version")),
+    blat_version = overview_common$blank_na(from_prov("blat_version")),
+    mafft_version = overview_common$blank_na(from_prov("mafft_version")),
+    typed_at = overview_common$blank_na(from_prov("typed_at")),
     in_prov = !is.na(at_prov),
     stringsAsFactors = FALSE
   )
@@ -263,26 +244,14 @@ isolate_table <- function(isolates, per_isolate, prov, hashes, locus_count, sche
   iso$low_completeness <- typed & !is.na(completeness) & completeness < LOW_COMPLETENESS
   dup <- !is.na(iso$digest) & iso$digest %in% iso$digest[duplicated(iso$digest)]
   iso$duplicate <- dup
-  sized <- iso$length[!is.na(iso$length)]
-  iso$odd_size <- if (length(sized) >= 5) {
-    m <- median(sized)
-    !is.na(iso$length) & abs(iso$length - m) > SIZE_TOLERANCE * m
-  } else {
-    rep(FALSE, nrow(iso))
-  }
-  pieces <- iso$contigs[!is.na(iso$contigs)]
-  iso$fragmented <- if (length(pieces) >= 5) {
-    !is.na(iso$contigs) &
-      iso$contigs > FRAGMENT_FACTOR * median(pieces) &
-      iso$contigs >= FRAGMENT_MIN
-  } else {
-    rep(FALSE, nrow(iso))
-  }
+  outliers <- overview_common$assembly_outliers(iso$length, iso$contigs)
+  iso$odd_size <- outliers$odd_size
+  iso$fragmented <- outliers$fragmented
   iso$other_version <- !is.na(scheme_version) &
     !is.na(iso$scheme_version) &
     iso$scheme_version != scheme_version
-  pair <- threshold_pairs(iso$identity, iso$coverage)
-  iso$other_thresholds <- !is.na(pair) & pair != modal(pair)
+  pair <- overview_common$threshold_pairs(iso$identity, iso$coverage)
+  iso$other_thresholds <- !is.na(pair) & pair != overview_common$modal(pair)
   iso
 }
 
@@ -351,7 +320,7 @@ settings_table <- function(iso) {
       stringsAsFactors = FALSE
     ))
   }
-  thresholds <- threshold_pairs(typed$identity, typed$coverage)
+  thresholds <- overview_common$threshold_pairs(typed$identity, typed$coverage)
   tools <- ifelse(
     is.na(typed$pymlst_version),
     NA_character_,
@@ -377,7 +346,7 @@ settings_table <- function(iso) {
 
 # Provenance and quality checks over the whole database, most severe first.
 cg_checks <- function(iso, scheme_version) {
-  checks <- check_list()
+  checks <- overview_common$check_list()
   add <- checks$add
   typed <- iso[iso$typed, , drop = FALSE]
   if (!nrow(typed)) {
@@ -424,7 +393,7 @@ cg_checks <- function(iso, scheme_version) {
       sprintf(
         "%d isolate(s) were typed against scheme version %s; the database now carries %s.",
         sum(typed$other_version),
-        tally(typed$scheme_version[typed$other_version]),
+        overview_common$tally(typed$scheme_version[typed$other_version]),
         scheme_version
       ),
       sum(typed$other_version)
@@ -441,20 +410,20 @@ cg_checks <- function(iso, scheme_version) {
           "of %s bp - possibly contaminated (larger) or incomplete (smaller)."
         ),
         sum(typed$odd_size),
-        round(100 * SIZE_TOLERANCE),
+        round(100 * overview_common$SIZE_TOLERANCE),
         format(median(typed$length, na.rm = TRUE), big.mark = ",", scientific = FALSE)
       ),
       sum(typed$odd_size)
     )
   }
 
-  pairs <- threshold_pairs(typed$identity, typed$coverage)
+  pairs <- overview_common$threshold_pairs(typed$identity, typed$coverage)
   pairs <- pairs[!is.na(pairs)]
   if (length(unique(pairs)) > 1) {
     add(
       "Mixed thresholds",
       "warning",
-      sprintf("Alleles were called with different thresholds: %s.", tally(pairs)),
+      sprintf("Alleles were called with different thresholds: %s.", overview_common$tally(pairs)),
       sum(typed$other_thresholds)
     )
   }
@@ -469,7 +438,7 @@ cg_checks <- function(iso, scheme_version) {
           "count; loci split across contigs are more often missed."
         ),
         sum(typed$fragmented),
-        FRAGMENT_FACTOR
+        overview_common$FRAGMENT_FACTOR
       ),
       sum(typed$fragmented)
     )
@@ -483,7 +452,11 @@ cg_checks <- function(iso, scheme_version) {
       add(
         sprintf("Mixed %s versions", name),
         "info",
-        sprintf("Alleles were called with several %s versions: %s.", name, tally(versions)),
+        sprintf(
+          "Alleles were called with several %s versions: %s.",
+          name,
+          overview_common$tally(versions)
+        ),
         length(versions) - max(table(versions))
       )
     }

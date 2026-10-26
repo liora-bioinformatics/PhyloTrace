@@ -99,7 +99,12 @@ ui <- function(id) {
       overview_ui$split_layout(
         overview_ui$fill_card(
           "Scheme Metadata",
-          DTOutput(ns("scheme_table"), fill = TRUE)
+          DTOutput(ns("scheme_table"), fill = TRUE),
+          hint = paste(
+            "The classical MLST scheme most isolates were called against (the",
+            "primary scheme), as recorded with their calls. Latest Release is the",
+            "newest profile-table date among them."
+          )
         ),
         overview_ui$fill_card(
           "Typing Summary",
@@ -111,7 +116,19 @@ ui <- function(id) {
         )
       )
     ),
-    nav_panel("Loci Info", overview_ui$loci_layout(ns, "cla_loci")),
+    nav_panel(
+      "Loci Info",
+      overview_ui$loci_layout(
+        ns,
+        "cla_loci",
+        table_hint = paste(
+          "Loci of the primary scheme. Observed Alleles: distinct registered",
+          "alleles called. Missing: typed isolates without a call at the locus.",
+          "Unresolved: novel (new) or multi-hit calls. Top Allele: the most",
+          "frequent allele and its share."
+        )
+      )
+    ),
     nav_panel(
       "Distribution",
       overview_ui$split_layout(
@@ -120,7 +137,12 @@ ui <- function(id) {
           "cla_sts",
           "Sequence Types",
           "export_sts",
-          "Loading sequence types ..."
+          "Loading sequence types ...",
+          hint = paste(
+            "One row per ST of the primary scheme with its allele profile. Call is",
+            "Inferred where the ST was found in the scheme's profile table rather",
+            "than reported by the search itself."
+          )
         ),
         list(
           overview_ui$fill_card(
@@ -147,11 +169,28 @@ ui <- function(id) {
           "cla_isolates",
           "Isolate Provenance",
           "export_isolates",
-          "Loading isolate provenance ..."
+          "Loading isolate provenance ...",
+          hint = paste(
+            "How every isolate was called: status, ST, scheme release, thresholds",
+            "and tool version. Flagged rows come first; each flag is explained in Checks."
+          )
         ),
         list(
-          overview_ui$fill_card("Checks", shiny$uiOutput(ns("checks"))),
-          overview_ui$fill_card("Scheme Releases", shiny$uiOutput(ns("releases")))
+          overview_ui$fill_card(
+            "Checks",
+            shiny$uiOutput(ns("checks")),
+            hint = overview_ui$CHECKS_HINT
+          ),
+          overview_ui$fill_card(
+            "Scheme Releases",
+            shiny$uiOutput(ns("releases")),
+            hint = paste(
+              "Isolates grouped by the scheme and profile-table release they were",
+              "called against. Several releases of one scheme leave known STs valid,",
+              "but unresolved calls on an older one may resolve on retyping; a",
+              "second scheme makes STs incomparable."
+            )
+          )
         )
       )
     )
@@ -374,7 +413,7 @@ loci_info_server <- function(
         )
       ))
     }
-    overview_ui$sequence_view(paste0(gene, "_", input$allele_select), sequence)
+    overview_ui$sequence_view(sequence)
   })
 
   # Copy actions -----------------------------------------------------------
