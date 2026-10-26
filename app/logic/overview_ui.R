@@ -1,8 +1,9 @@
 # app/logic/overview_ui.R
 #
-# UI building blocks shared by the Database overviews (cgMLST, MLST): the card
-# layouts, the loci tab, scrolling tables with a loading overlay, horizontal bar
-# charts and the provenance check list.
+# UI building blocks shared by the Database overviews (cgMLST, MLST, AMR,
+# Isolates): the card layouts, the loci tab, scrolling tables with a loading
+# overlay and their row selection, horizontal bar charts and the provenance
+# check list.
 
 box::use(
   DT[DTOutput, JS, datatable],
@@ -21,7 +22,7 @@ box::use(
   shinyjs[runjs],
 )
 box::use(
-  app / logic / functions[color_sequence],
+  app / logic / functions[color_sequence, table_loading],
 )
 
 # Clears a table's loading overlay once DataTables has drawn it.
@@ -43,17 +44,21 @@ CHECKS_HINT <- paste(
   "confirms consistency. The number counts the isolates concerned."
 )
 
-# Wraps every displayed cell in a two-line clamp, the full value on hover.
-# Values arrive already escaped (DT's `escape`), so only quotes need escaping
-# for the title attribute.
-CLAMP_CELL <- JS(
+# Cuts a text cell to one line, the full value on hover. Values arrive already
+# escaped (DT's `escape`), so only quotes need escaping for the title attribute.
+TRUNCATE_CELL <- JS(
   "function(data, type) {",
   "  if (type !== 'display' || data === null || data === undefined) return data;",
   "  var text = String(data);",
-  "  return '<div class=\"overview-clamp\" title=\"' + text.replace(/\"/g, '&quot;') +",
+  "  return '<div class=\"overview-truncate\" title=\"' + text.replace(/\"/g, '&quot;') +",
   "    '\">' + text + '</div>';",
   "}"
 )
+
+# Viewports' worth of rows Scroller draws at a time. Its viewport is the
+# window height (see `.loci-table-body` in main.scss), more than any table card
+# shows, so three leave ample rows above and below the visible ones.
+SCROLL_BUFFER <- 3L
 
 # Icon shown with each check tone.
 TONE_ICONS <- c(
@@ -189,14 +194,7 @@ table_card <- function(ns, id, title, export_id, label, controls = NULL, hint = 
     card_body(
       id = ns(paste0(id, "_body")),
       class = "loci-table-body",
-      shiny$div(
-        class = "loci-table-loading",
-        shiny$div(
-          class = "loci-loading-inner",
-          shiny$div(class = "loci-spinner"),
-          shiny$p(label, class = "loci-loading_text")
-        )
-      ),
+      table_loading(label),
       DTOutput(ns(id), fill = TRUE)
     )
   ))
@@ -257,52 +255,57 @@ loci_layout <- function(
     as_fillable_container(shiny$div(
       class = "loci-controls",
       shiny$uiOutput(ns("allele_bars")),
-      # A popup over the whole window rather than a menu under the toggle, as
-      # every virtualSelectInput in the app: it can never run off the screen,
-      # and its virtual list renders only the visible options of a long locus.
-      virtualSelectInput(
-        ns("allele_select"),
-        label = "Select locus from table",
-        choices = character(0),
-        search = TRUE,
-        searchPlaceholderText = "Search alleles ...",
-        optionsCount = 10,
-        hideClearButton = TRUE,
-        dropboxWrapper = "body",
-        showDropboxAsPopup = TRUE,
-        popupDropboxBreakpoint = "10000px",
-        width = "100%"
-      ),
-      shiny$uiOutput(ns("allele_info")),
+      # The picker, hash line, buttons and sequence all describe the picked allele,
+      # so they sit in one group; only the frequency bars above stand apart.
       as_fill_carrier(shiny$div(
-        class = "loci-allele-panel",
-        shiny$div(
-          class = "loci-allele-header",
-          shiny$div(
-            class = "loci-allele-actions",
-            shiny$actionButton(
-              ns("copy_seq"),
-              "Sequence",
-              icon = shiny$icon("copy"),
-              class = "btn-sm"
-            ),
-            shiny$actionButton(
-              ns("copy_idx"),
-              index_label,
-              icon = shiny$icon(index_icon),
-              class = "btn-sm"
-            ),
-            shiny$downloadButton(
-              ns("download_locus"),
-              "Locus",
-              icon = shiny$icon("download"),
-              class = "btn-sm"
-            )
-          )
+        class = "loci-allele-group",
+        # A popup over the whole window rather than a menu under the toggle, as
+        # every virtualSelectInput in the app: it can never run off the screen,
+        # and its virtual list renders only the visible options of a long locus.
+        virtualSelectInput(
+          ns("allele_select"),
+          label = "Select locus from table",
+          choices = character(0),
+          search = TRUE,
+          searchPlaceholderText = "Search alleles ...",
+          optionsCount = 10,
+          hideClearButton = TRUE,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          width = "100%"
         ),
-        as_fill_item(
-          shiny$div(class = "sequence", shiny$uiOutput(ns("allele_sequence")))
-        )
+        shiny$uiOutput(ns("allele_info")),
+        as_fill_carrier(shiny$div(
+          class = "loci-allele-panel",
+          shiny$div(
+            class = "loci-allele-header",
+            shiny$div(
+              class = "loci-allele-actions",
+              shiny$actionButton(
+                ns("copy_seq"),
+                "Sequence",
+                icon = shiny$icon("copy"),
+                class = "btn-sm"
+              ),
+              shiny$actionButton(
+                ns("copy_idx"),
+                index_label,
+                icon = shiny$icon(index_icon),
+                class = "btn-sm"
+              ),
+              shiny$downloadButton(
+                ns("download_locus"),
+                "Locus",
+                icon = shiny$icon("download"),
+                class = "btn-sm"
+              )
+            )
+          ),
+          as_fill_item(
+            shiny$div(class = "sequence", shiny$uiOutput(ns("allele_sequence")))
+          )
+        ))
       ))
     ))
   ))
@@ -335,30 +338,74 @@ message_table <- function(text) {
 
 #' Scrolling Data Table
 #'
+#' @description Rows are drawn as the table scrolls (DataTables' Scroller), so
+#'   only the rows around the visible ones exist in the page, however many
+#'   `df` has. Every row is one line high, as Scroller requires: text cells
+#'   are cut short, their full value shown on hover.
+#'
 #' @param df Data frame to show.
 #' @param selection DT selection setting.
 #' @param filter DT column filter position.
 #'
-#' @return A DT widget that fills its `table_card()` and scrolls internally;
-#'   no cell runs longer than two lines.
+#' @return A DT widget that fills its `table_card()` and scrolls internally.
 #' @export
 data_table <- function(df, selection = "none", filter = "top") {
+  text_cols <- which(vapply(df, function(x) is.character(x) || is.factor(x), logical(1)))
   datatable(
     df,
     rownames = FALSE,
     filter = filter,
     selection = selection,
     class = "stripe row-border order-column",
+    extensions = "Scroller",
     options = list(
       dom = "ti",
-      paging = FALSE,
+      deferRender = TRUE,
+      scroller = list(displayBuffer = SCROLL_BUFFER),
       scrollX = TRUE,
       scrollY = "1px",
       scrollCollapse = TRUE,
-      columnDefs = list(list(className = "dt-left", targets = "_all", render = CLAMP_CELL)),
+      columnDefs = list(
+        list(className = "dt-left", targets = "_all"),
+        list(render = TRUNCATE_CELL, targets = unname(text_cols) - 1L)
+      ),
       initComplete = DRAW_SIGNAL
     )
   )
+}
+
+#' Selected Row of a Data Table
+#'
+#' @description Follows the single-row selection of a `data_table()`. The row
+#'   is kept in a `reactiveVal`, which ignores a value identical to the one it
+#'   holds, so the panels built on it re-render only when another row is
+#'   selected or its data changes, not each time DataTables reports the same
+#'   selection again. An empty selection, which DataTables reports whenever a
+#'   table is rebuilt, keeps the last row.
+#'
+#' @param input Module `input`.
+#' @param table_id Output id of the table (unnamespaced).
+#' @param rows Function (e.g. a reactive) returning the data frame the table
+#'   shows, in the order it was given to `data_table()`.
+#'
+#' @return A reactive returning the selected one-row data frame; it stops with
+#'   `req()` until a row is selected and once the row no longer exists.
+#' @export
+selected_row <- function(input, table_id, rows) {
+  current <- shiny$reactiveVal(NULL)
+  input_id <- paste0(table_id, "_rows_selected")
+
+  # Store the selected row. `rows()` is read only once a row is selected, so
+  # a table that was never shown loads nothing.
+  shiny$observe({
+    row <- input[[input_id]]
+    shiny$req(length(row) == 1)
+    df <- rows()
+    current(if (row <= nrow(df)) df[row, , drop = FALSE])
+  })
+
+  # The stored row, stopping while there is none.
+  shiny$reactive(shiny$req(current()))
 }
 
 #' Key/Value Table
@@ -407,6 +454,26 @@ empty_hint <- function(text) {
 #' @return An uppercase caption above a block inside a card.
 #' @export
 section_title <- function(text) shiny$div(class = "overview-section-title", text)
+
+#' Captioned Block Stack
+#'
+#' @param ... `section()`s.
+#'
+#' @return A plain block stack; unlike the card body it adds no gap of its own,
+#'   so the sections sit close together.
+#' @export
+sections <- function(...) shiny$div(class = "overview-sections", ...)
+
+#' Captioned Block
+#'
+#' @param title Character caption.
+#' @param ... Content below the caption, e.g. `bar_rows()`.
+#'
+#' @return A caption with its content.
+#' @export
+section <- function(title, ...) {
+  shiny$div(class = "overview-section", section_title(title), ...)
+}
 
 #' Grid of Stat Tiles
 #'

@@ -100,6 +100,7 @@ test_that("every cgMLST scheme species resolves to the expected database", {
     "Burkholderia mallei (FLI)" = "pubmlst: Burkholderia mallei",
     "Burkholderia pseudomallei" = "pubmlst: Burkholderia pseudomallei",
     "Campylobacter jejuni/coli" = "pubmlst: Campylobacter jejuni/coli",
+    "Candidozyma auris" = "-",
     "Clostridioides difficile" = "pubmlst: Clostridioides difficile",
     "Clostridium perfringens" = "pubmlst: Clostridium perfringens",
     "Corynebacterium diphtheriae" = "pasteur: Corynebacterium",
@@ -150,7 +151,11 @@ test_that("every cgMLST scheme species resolves to the expected database", {
     character(1)
   )
 
-  expect_identical(resolved, expected)
+  # cgmlst_schemes.csv is the single source of truth: every species in it needs
+  # an entry here and none may linger after its row is removed. The order of
+  # this record is free; the CSV's is not.
+  expect_setequal(names(expected), names(resolved))
+  expect_identical(resolved, expected[names(resolved)])
 })
 
 test_that("match_mlst_scheme takes the repository's own plain MLST scheme", {

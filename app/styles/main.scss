@@ -1858,6 +1858,39 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 .db-page_body {
     overflow: hidden;
     padding: 0.5rem;
+    // Anchors the loading overlay (functions.R table_loading) laid over the
+    // grid until its first draw.
+    position: relative;
+
+    // DataTables' processing indicator (functions.R table_processing) as a
+    // translucent version of that overlay, over the whole grid while a server
+    // request is answered and its rows drawn. DataTables shows and hides it
+    // through an inline `display`, so it stays a block box here.
+    div.dataTables_processing {
+        position: absolute;
+        inset: 0;
+        width: auto;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        z-index: 20;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: rgba(51, 62, 72, 0.6);
+
+        // DataTables' own animated dots, replaced by the spinner.
+        >div:not(.loci-loading-inner) {
+            display: none;
+        }
+    }
+
+    // Not over a cell edit's reload (app/js/dt-quiet-reload.js), and not
+    // stacked on the loading overlay while the grid's first draw is pending.
+    .dt-quiet div.dataTables_processing,
+    &:has(.loci-table-loading) div.dataTables_processing {
+        display: none !important;
+    }
 
     .datatables {
         height: 100%;
@@ -3785,9 +3818,9 @@ table.dataTable thead>tr>th.sorting {
 
 // color-coded nucleotide viewer.
 // Loci table body: mirror the Browse Entries (.db-page_body) fill/scroll rules
-// so the DataTable fills the card and scrolls internally (paging is off and
-// scrollY = "1px" + scrollCollapse enables the scrolling body). Only the fill
-// wiring is copied here - not the editable-cell cursor styling.
+// so the DataTable fills the card and scrolls internally (scrollY = "1px" +
+// scrollCollapse enables the scrolling body, Scroller draws its rows). Only the
+// fill wiring is copied here - not the editable-cell cursor styling.
 // Tables fill their card: no inset around them. Two classes to outrank
 // Bootstrap's own `.card-body` padding regardless of stylesheet order.
 .card-body.loci-table-body {
@@ -3805,7 +3838,10 @@ table.dataTable thead>tr>th.sorting {
 
     .dataTables_wrapper {
         height: 100%;
-        display: flex;
+        // Outranks Scroller's `div.dts { display: block !important }`, which
+        // would let the scrolling body grow to its max-height and push the
+        // card body into scrolling as well.
+        display: flex !important;
         flex-direction: column;
     }
 
@@ -3824,11 +3860,26 @@ table.dataTable thead>tr>th.sorting {
     .dataTables_scrollBody {
         flex: 1 1 auto !important;
         min-height: 0 !important;
-        max-height: none !important;
+        // Scroller sizes its viewport from the computed max-height, which
+        // `none` leaves at zero. The window height is never reached inside a
+        // card - the flex fill decides the height - but gives Scroller a real
+        // length, a little more than the visible rows.
+        max-height: 100vh !important;
         overflow-y: auto !important;
         // DT's FixedColumns stylesheet is loaded app-wide and draws a left rule
         // on every scrolling body; tables here run edge to edge instead.
         border-left: 0 !important;
+    }
+
+    // Scroller places rows by one measured row height, so no cell may wrap.
+    table.dataTable tbody td {
+        white-space: nowrap;
+    }
+
+    // Scroller stripes the scrolling body as a placeholder for rows still
+    // loading; it shows below a short table, so keep the body plain.
+    div.dts div.dataTables_scrollBody {
+        background: none;
     }
 
     .dataTables_info {
@@ -3897,6 +3948,20 @@ table.dataTable thead>tr>th.sorting {
 // buttons and the sequence are no longer split into a bordered header/body.
 // as_fill_carrier makes this a flex column; the header keeps its natural height
 // and the sequence fill-item grows and scrolls the remaining space.
+.loci-allele-group {
+    min-height: 0;
+    gap: 0.75rem;
+
+    // An empty hash line (MLST has none) must not add a second gap.
+    >.shiny-html-output:empty {
+        display: none;
+    }
+
+    .form-group {
+        margin-bottom: 0;
+    }
+}
+
 .loci-allele-panel {
     min-height: 0;
     gap: 0.75rem;
@@ -4240,13 +4305,6 @@ label {
 
 .tab-pane[data-value="database_panel"] .bslib-sidebar-layout>.main {
     padding: 0;
-}
-
-#app-database-custom_fields-body .bslib-card:first-child,
-.tab-pane[data-value="cgmlst_overview"]>div:first-child,
-#app-scheme_browser-scheme-download-container>.bslib-card:first-child {
-    border-radius: 0;
-    border: none;
 }
 
 .tab-pane[data-value="visualization_panel"] {
@@ -4616,6 +4674,14 @@ label {
 
 .vscomp-option-text {
     overflow-wrap: anywhere;
+}
+
+// virtual-select's hover label (the "A, B, + 21 more..." summary on the toggle)
+// is a body-level popper whose inline z-index is the picker's own (2), so any
+// positioned sibling in the page - the sidebar's radio buttons, the table's
+// scroll area - paints over it. Inline style, hence `!important`.
+.tooltip-comp {
+    z-index: 2000 !important;
 }
 
 // selectize (plain `selectInput`) sizes its dropdown to the control, so it can
@@ -5181,8 +5247,7 @@ table.dataTable thead>tr>th.sorting {
 .table-import-row {
     display: grid;
     grid-template-columns:
-        minmax(9rem, 1.2fr) minmax(11rem, 1.3fr) minmax(9rem, 1fr)
-        minmax(9rem, 0.9fr) minmax(12rem, 1.6fr);
+        minmax(9rem, 1.2fr) minmax(11rem, 1.3fr) minmax(9rem, 1fr) minmax(9rem, 0.9fr) minmax(12rem, 1.6fr);
     gap: 0.75rem;
     align-items: center;
     padding: 0.45rem 0;
@@ -5253,6 +5318,7 @@ table.dataTable thead>tr>th.sorting {
 .datepicker-dropdown {
     z-index: 9999 !important;
 }
+
 // Database overviews (cgMLST, MLST; app/logic/overview_ui.R). The aside is a
 // little wider than the Scheme Info one to fit two stat tiles across, and
 // stacks two cards when a tab has more than one.
@@ -5282,8 +5348,26 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
+// Summary blocks (sections()): a plain stack, since the card body's own gap
+// would otherwise spread the captions and rows apart.
+.overview-sections {
+    display: block;
+
+    .overview-stats {
+        margin-bottom: 0.9rem;
+    }
+}
+
+.overview-section {
+    margin-bottom: 0.9rem;
+
+    &:last-child {
+        margin-bottom: 0;
+    }
+}
+
 .overview-section-title {
-    margin: 0 0 0.6rem;
+    margin: 0 0 0.35rem;
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.05em;
@@ -5322,7 +5406,7 @@ table.dataTable thead>tr>th.sorting {
 .overview-bars {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 0.3rem;
 }
 
 .overview-bar {
@@ -5642,8 +5726,18 @@ table.dataTable thead>tr>th.sorting {
     margin-block: -0.25rem;
 }
 
-.overview-section-gap {
-    height: 1.25rem;
+// AMR Distribution's element-type picker: one equal-width column per choice
+// instead of widths following each label's text. `1fr` columns size to the
+// widest label; the hidden `.btn-check` inputs are absolutely positioned and
+// take no column.
+#app-database-amr_overview-dist_type .btn-group-container-sw {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+}
+
+#app-database-amr_overview-dist_type .btn-group-container-sw .btn {
+    white-space: nowrap;
 }
 
 // Details of one selected call (AMR Overview's Elements tab): label column and
@@ -5684,7 +5778,6 @@ table.dataTable thead>tr>th.sorting {
     align-items: center;
     margin-left: auto;
     color: var(--bs-secondary-color);
-    font-size: 0.85em;
     cursor: help;
 
     &:hover,
@@ -5695,7 +5788,7 @@ table.dataTable thead>tr>th.sorting {
 }
 
 // Several calls of one element in an isolate (AMR Overview) are set apart.
-.overview-detail dl + dl {
+.overview-detail dl+dl {
     margin-top: 0.75rem;
     padding-top: 0.75rem;
     border-top: 1px solid var(--bs-border-color-translucent);
@@ -5719,14 +5812,13 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// Overview table cells stop at two lines (overview_ui CLAMP_CELL); the full
-// value shows on hover.
-.overview-clamp {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
+// Overview table text cells stop at one line (overview_ui TRUNCATE_CELL), as
+// every row must be one line high for Scroller; the full value shows on hover.
+.overview-truncate {
+    max-width: 20rem;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 // A line of allele details between the picker and the sequence (the cgMLST
@@ -5734,9 +5826,6 @@ table.dataTable thead>tr>th.sorting {
 .overview-allele-info {
     display: flex;
     gap: 0.6rem;
-    // Pulled towards the picker and the buttons: it belongs to the picked allele
-    // rather than being a block of its own in the column's 1.5rem rhythm.
-    margin: -1rem 0 -0.75rem;
     font-size: 0.75rem;
     white-space: nowrap;
 }
@@ -5767,7 +5856,7 @@ table.dataTable thead>tr>th.sorting {
         min-width: 0;
         overflow: hidden;
 
-        > .item {
+        >.item {
             max-width: 100%;
             overflow: hidden;
             text-overflow: ellipsis;

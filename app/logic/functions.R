@@ -12,7 +12,7 @@ box::use(
     value_box_theme
   ],
   jsonlite[toJSON],
-  shiny[actionButton, div, icon, tagList],
+  shiny[actionButton, div, icon, p, tagList],
   shinyjs[runjs],
 )
 
@@ -117,18 +117,53 @@ render_info <- function(output) {
   )
 }
 
+# The spinner and message the table loading overlays centre.
+loading_inner <- function(label) {
+  div(
+    class = "loci-loading-inner",
+    div(class = "loci-spinner"),
+    p(label, class = "loci-loading_text")
+  )
+}
+
+#' Table Loading Overlay
+#'
+#' @description A dark overlay with a spinner and a message, laid over a
+#'   DataTable until its first draw. Positioned absolutely against the nearest
+#'   positioned ancestor, so it never disturbs the table's fill layout.
+#'
+#' @param label Character loading message.
+#' @return A `div.loci-table-loading`.
+#' @export
+table_loading <- function(label) {
+  div(class = "loci-table-loading", loading_inner(label))
+}
+
+#' Table Processing Indicator
+#'
+#' @description The spinner and message for DataTables' own processing
+#'   indicator (`processing = TRUE` with `"r"` in `dom`), which a server-side
+#'   table shows from each request until its rows are drawn. main.scss turns
+#'   the indicator into a translucent overlay where it is used.
+#'
+#' @param label Character message.
+#' @return Character HTML for `options$language$processing`.
+#' @export
+table_processing <- function(label) as.character(loading_inner(label))
+
 #' Color a Nucleotide Sequence
 #'
-#' Wraps each nucleotide in a span so the sequence viewers can color it via SCSS.
+#' Wraps each run of one nucleotide in a span so the sequence viewers can color
+#' it via SCSS; a run takes one element instead of one per base.
 #'
 #' @param sequence Character scalar nucleotide sequence.
 #' @return Character scalar of HTML markup.
 #' @export
 color_sequence <- function(sequence) {
-  sequence <- gsub("A", "<span class='base-a'>A</span>", sequence)
-  sequence <- gsub("T", "<span class='base-t'>T</span>", sequence)
-  sequence <- gsub("G", "<span class='base-g'>G</span>", sequence)
-  sequence <- gsub("C", "<span class='base-c'>C</span>", sequence)
+  sequence <- gsub("(A+)", "<span class='base-a'>\\1</span>", sequence, perl = TRUE)
+  sequence <- gsub("(T+)", "<span class='base-t'>\\1</span>", sequence, perl = TRUE)
+  sequence <- gsub("(G+)", "<span class='base-g'>\\1</span>", sequence, perl = TRUE)
+  sequence <- gsub("(C+)", "<span class='base-c'>\\1</span>", sequence, perl = TRUE)
   sequence
 }
 
@@ -137,10 +172,22 @@ color_sequence <- function(sequence) {
 #' Pushes text to the client-side clipboard of the current session.
 #'
 #' @param text Character scalar to copy.
+#' @param confirm_input Optional namespaced input id. When given, the browser sets it
+#'   once the clipboard write has succeeded, so an observer can confirm the copy; a
+#'   refused write (e.g. no clipboard permission) leaves it untouched.
 #' @export
-copy_to_clipboard <- function(text) {
+copy_to_clipboard <- function(text, confirm_input = NULL) {
+  confirm <- if (is.null(confirm_input)) {
+    ""
+  } else {
+    sprintf(
+      ".then(function() { Shiny.setInputValue(%s, Date.now(), {priority: 'event'}); })",
+      toJSON(confirm_input, auto_unbox = TRUE)
+    )
+  }
   runjs(sprintf(
-    "navigator.clipboard.writeText(%s);",
-    toJSON(text, auto_unbox = TRUE)
+    "navigator.clipboard.writeText(%s)%s;",
+    toJSON(text, auto_unbox = TRUE),
+    confirm
   ))
 }

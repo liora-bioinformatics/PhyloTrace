@@ -8,7 +8,7 @@ box::use(
   DT[DTOutput, renderDT],
   bslib[nav_panel, navset_card_tab],
   shiny,
-  shinyWidgets[updateVirtualSelect],
+  shinyWidgets[show_toast, updateVirtualSelect],
   stats[median, setNames],
   utils[head, write.csv],
 )
@@ -54,7 +54,7 @@ ui <- function(id) {
           hint = sprintf(
             paste(
               "Completeness is the share of the scheme's loci called per isolate;",
-              "below %s%% an isolate is flagged in Diagnostics."
+              "below %s%% an isolate is flagged in Diagnostics. The median completeness shows the collection's average."
             ),
             format(LOW_COMPLETENESS)
           )
@@ -153,7 +153,10 @@ scheme_info_server <- function(input, output, overview) {
       )))
     }
     # Values are kept as stored: the scheme URL arrives as a link.
-    overview_ui$key_value_table(as.character(scheme$key), as.character(scheme$value))
+    overview_ui$key_value_table(
+      as.character(scheme$key),
+      as.character(scheme$value)
+    )
   })
 
   # Headline figures across every isolate, then how complete their profiles are.
@@ -163,11 +166,13 @@ scheme_info_server <- function(input, output, overview) {
     iso <- ov$isolates
     typed <- iso[iso$typed, , drop = FALSE]
     if (!nrow(typed)) {
-      return(overview_ui$empty_hint("This database holds no typed isolates yet."))
+      return(overview_ui$empty_hint(
+        "This database holds no typed isolates yet."
+      ))
     }
     med <- median(typed$completeness, na.rm = TRUE)
 
-    shiny$tagList(
+    overview_ui$sections(
       overview_ui$stat_grid(
         stat_tile("Isolates", fmt(nrow(typed)), "vial"),
         stat_tile(
@@ -177,17 +182,19 @@ scheme_info_server <- function(input, output, overview) {
         ),
         stat_tile("Alleles", fmt(sum(ov$loci$`Allele Count`)), "dna"),
         stat_tile(
-          "Median Completeness",
+          "Completeness",
           if (is.na(med)) "-" else sprintf("%.1f%%", med),
           "circle-check"
         )
       ),
-      overview_ui$section_title("Profile Completeness"),
-      overview_ui$bar_rows(
-        ov$completeness$label,
-        ov$completeness$n,
-        nrow(typed),
-        tones = ov$completeness$tone
+      overview_ui$section(
+        "Profile Completeness",
+        overview_ui$bar_rows(
+          ov$completeness$label,
+          ov$completeness$n,
+          nrow(typed),
+          tones = ov$completeness$tone
+        )
       )
     )
   })
@@ -212,18 +219,18 @@ loci_info_server <- function(input, output, session, db_path, overview) {
   })
 
   # The selected locus row (its `.gene` keys the allele lookups).
-  selected_row <- shiny$reactive({
-    li <- overview()$loci
-    row <- input$cg_loci_rows_selected
-    shiny$req(nrow(li) > 0, length(row) == 1)
-    li[row, , drop = FALSE]
+  selected_row <- overview_ui$selected_row(input, "cg_loci", function() {
+    overview()$loci
   })
 
   # Distinct alleles of the selected locus with their in-database usage.
   alleles <- shiny$reactive({
     shiny$req(db_path())
     gene <- selected_row()$.gene
-    guard_db_read("Loading the locus alleles", load_locus_alleles(db_path(), gene))
+    guard_db_read(
+      "Loading the locus alleles",
+      load_locus_alleles(db_path(), gene)
+    )
   })
 
   # Refresh the allele dropdown whenever the selected locus changes.
@@ -291,20 +298,31 @@ loci_info_server <- function(input, output, session, db_path, overview) {
   })
 
   output$allele_sequence <- shiny$renderUI({
+    sequence <- allele()$sequence
     render_info("output$allele_sequence")
-    overview_ui$sequence_view(allele()$sequence)
+    overview_ui$sequence_view(sequence)
   })
 
   # Copy actions -----------------------------------------------------------
+  # Confirms a copy once the browser reports the clipboard write succeeded.
+  shiny$observeEvent(input$copied, {
+    show_toast(
+      title = "Copied to clipboard",
+      type = "success",
+      position = "bottom-end",
+      timer = 3000
+    )
+  })
+
   shiny$observeEvent(input$copy_seq, {
-    copy_to_clipboard(allele()$sequence)
+    copy_to_clipboard(allele()$sequence, session$ns("copied"))
   })
 
   # The allele's hash identifies it across databases, unlike its local id; the
   # id stands in only where the database has no hash for it yet.
   shiny$observeEvent(input$copy_idx, {
     hash <- allele()$hash
-    copy_to_clipboard(if (is.na(hash)) input$allele_select else hash)
+    copy_to_clipboard(if (is.na(hash)) input$allele_select else hash, session$ns("copied"))
   })
 
   # Downloads --------------------------------------------------------------
@@ -343,7 +361,9 @@ distribution_server <- function(input, output, overview) {
     render_info("output$missing_bars")
     bins <- overview()$missing_bins
     if (!n_typed()) {
-      return(overview_ui$empty_hint("This database holds no typed isolates yet."))
+      return(overview_ui$empty_hint(
+        "This database holds no typed isolates yet."
+      ))
     }
     shiny$tagList(
       overview_ui$bar_rows(
@@ -361,11 +381,18 @@ distribution_server <- function(input, output, overview) {
     li <- overview()$loci
     li <- li[li$Missing > 0, , drop = FALSE]
     if (!nrow(li)) {
-      return(overview_ui$empty_hint("Every locus was called in every typed isolate."))
+      return(overview_ui$empty_hint(
+        "Every locus was called in every typed isolate."
+      ))
     }
     li <- head(li[order(-li$Missing), , drop = FALSE], TOP_MISSING)
     shiny$tagList(
-      overview_ui$bar_rows(li$Locus, li$Missing, n_typed(), tones = rep("warning", nrow(li)))
+      overview_ui$bar_rows(
+        li$Locus,
+        li$Missing,
+        n_typed(),
+        tones = rep("warning", nrow(li))
+      )
     )
   })
 
@@ -395,7 +422,11 @@ distribution_server <- function(input, output, overview) {
 isolate_rows <- function(iso) {
   flags <- character(nrow(iso))
   add_flag <- function(hit, text) {
-    flags[hit] <<- ifelse(nzchar(flags[hit]), paste(flags[hit], text, sep = "; "), text)
+    flags[hit] <<- ifelse(
+      nzchar(flags[hit]),
+      paste(flags[hit], text, sep = "; "),
+      text
+    )
   }
   add_flag(iso$low_completeness, "low completeness")
   add_flag(iso$duplicate, "duplicate assembly")
@@ -465,7 +496,10 @@ settings_list <- function(settings, current_version) {
           if (!is.na(settings$tools[i])) {
             shiny$span(shiny$icon("toolbox"), settings$tools[i])
           },
-          shiny$span(shiny$icon("vial"), overview_ui$count_label(settings$isolates[i]))
+          shiny$span(
+            shiny$icon("vial"),
+            overview_ui$count_label(settings$isolates[i])
+          )
         )
       )
     })
@@ -489,7 +523,9 @@ diagnostics_server <- function(input, output, overview) {
     render_info("output$checks")
     checks <- overview()$checks
     if (!nrow(checks)) {
-      return(overview_ui$empty_hint("Nothing to check yet - no isolate has been typed."))
+      return(overview_ui$empty_hint(
+        "Nothing to check yet - no isolate has been typed."
+      ))
     }
     overview_ui$checks_ui(checks)
   })
@@ -527,11 +563,17 @@ server <- function(
     overview <- shiny$reactive({
       shiny$req(db_path())
       db_events$depend(db_rev, "isolates", "schema")
-      guard_db_read("Loading the cgMLST overview", load_cgmlst_overview(db_path()))
+      guard_db_read(
+        "Loading the cgMLST overview",
+        load_cgmlst_overview(db_path())
+      )
     })
 
     # Put the loading overlays back while a newly opened database's tables draw.
-    shiny$observeEvent(db_path(), overview_ui$reset_table_overlays(session$ns, TABLE_IDS))
+    shiny$observeEvent(
+      db_path(),
+      overview_ui$reset_table_overlays(session$ns, TABLE_IDS)
+    )
 
     scheme_info_server(input, output, overview)
     loci_info_server(input, output, session, db_path, overview)

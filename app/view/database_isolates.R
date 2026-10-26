@@ -332,7 +332,7 @@ collection_info_server <- function(input, output, overview, species) {
     origin <- overview_ui$fold_top(ov$origin$label, ov$origin$n, TOP_SOURCES, "%d other sources")
     origin$tones[origin$labels == isolate_overview$LOCAL_LABEL] <- "success"
 
-    shiny$tagList(
+    overview_ui$sections(
       overview_ui$stat_grid(
         stat_tile("Isolates", fmt(n), "vial"),
         stat_tile("Assemblies", sprintf("%s / %s", fmt(sum(!iso$no_assembly)), fmt(n)), "dna"),
@@ -347,23 +347,27 @@ collection_info_server <- function(input, output, overview, species) {
           "puzzle-piece"
         )
       ),
-      overview_ui$section_title("Analyses"),
-      overview_ui$bar_rows(
-        ov$analyses$label,
-        ov$analyses$done,
-        n,
-        tones = ifelse(
-          ov$analyses$done == n,
-          "success",
-          ifelse(ov$analyses$failed > 0, "warning", "secondary")
+      overview_ui$section(
+        "Analyses",
+        overview_ui$bar_rows(
+          ov$analyses$label,
+          ov$analyses$done,
+          n,
+          tones = ifelse(
+            ov$analyses$done == n,
+            "success",
+            ifelse(ov$analyses$failed > 0, "warning", "secondary")
+          )
         )
       ),
-      shiny$div(class = "overview-section-gap"),
-      overview_ui$section_title("Assembly Contiguity"),
-      overview_ui$bar_rows(ov$contiguity$label, ov$contiguity$n, n, tones = ov$contiguity$tone),
-      shiny$div(class = "overview-section-gap"),
-      overview_ui$section_title("Origin"),
-      overview_ui$bar_rows(origin$labels, origin$counts, n, tones = origin$tones)
+      overview_ui$section(
+        "Assembly Contiguity",
+        overview_ui$bar_rows(ov$contiguity$label, ov$contiguity$n, n, tones = ov$contiguity$tone)
+      ),
+      overview_ui$section(
+        "Origin",
+        overview_ui$bar_rows(origin$labels, origin$counts, n, tones = origin$tones)
+      )
     )
   })
 }
@@ -455,12 +459,12 @@ isolates_server <- function(input, output, overview) {
     overview_ui$data_table(r, selection = list(mode = "single", selected = 1))
   })
 
+  # The selected row of the isolate table.
+  selected_isolate <- overview_ui$selected_row(input, "iso_table", rows)
+
   # Index of the selected isolate in the overview's isolate table.
   selected <- shiny$reactive({
-    r <- rows()
-    row <- input$iso_table_rows_selected
-    shiny$req(nrow(r) > 0, length(row) == 1, row <= nrow(r))
-    i <- match(r$Isolate[row], overview()$isolates$isolate)
+    i <- match(selected_isolate()$Isolate, overview()$isolates$isolate)
     shiny$req(!is.na(i))
     i
   })

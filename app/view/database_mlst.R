@@ -9,7 +9,7 @@ box::use(
   bslib[nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
-  shinyWidgets[updateVirtualSelect],
+  shinyWidgets[show_toast, updateVirtualSelect],
   stats[setNames],
   utils[write.csv],
 )
@@ -284,7 +284,7 @@ scheme_info_server <- function(input, output, overview, species, reason) {
     with_st <- sum(!is.na(iso$st))
     diversity <- simpson_diversity(ov$sts$Isolates)
 
-    shiny$tagList(
+    overview_ui$sections(
       overview_ui$stat_grid(
         stat_tile("Typed", sprintf("%s / %s", fmt(sum(iso$has_calls)), fmt(total)), "vial"),
         stat_tile("ST Assigned", sprintf("%.1f%%", 100 * with_st / total), "circle-check"),
@@ -295,8 +295,10 @@ scheme_info_server <- function(input, output, overview, species, reason) {
           "chart-simple"
         )
       ),
-      overview_ui$section_title("Call Status"),
-      overview_ui$bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone)
+      overview_ui$section(
+        "Call Status",
+        overview_ui$bar_rows(ov$status$label, ov$status$n, total, tones = ov$status$tone)
+      )
     )
   })
 }
@@ -313,8 +315,18 @@ loci_info_server <- function(
 ) {
   seq_cache <- shiny$reactiveVal(NULL)
 
+  # The allele shown in the sequence viewer with the locus it belongs to.
+  # Allele numbers repeat across loci, and on a new locus the selected row
+  # changes before the picker is refilled; following the pair instead of both
+  # separately keeps the viewer from drawing the new locus with the previous
+  # locus's allele first.
+  picked <- shiny$reactiveVal(NULL)
+
   # Reset module state when the user returns to the landing screen.
-  shiny$observeEvent(session_reset(), seq_cache(NULL), ignoreInit = TRUE)
+  shiny$observeEvent(session_reset(), {
+    seq_cache(NULL)
+    picked(NULL)
+  }, ignoreInit = TRUE)
 
   display_cols <- function(df) df[, setdiff(names(df), ".gene"), drop = FALSE]
 
@@ -332,12 +344,7 @@ loci_info_server <- function(
   })
 
   # The selected locus row (its `.gene` keys the allele lookups).
-  selected_row <- shiny$reactive({
-    li <- overview()$loci
-    row <- input$cla_loci_rows_selected
-    shiny$req(nrow(li) > 0, length(row) == 1)
-    li[row, , drop = FALSE]
-  })
+  selected_row <- overview_ui$selected_row(input, "cla_loci", function() overview()$loci)
 
   # Allele usage of the selected locus, from the overview already in memory.
   alleles <- shiny$reactive({
@@ -361,6 +368,14 @@ loci_info_server <- function(
       choices = setNames(df$allele, labels),
       selected = df$allele[1]
     )
+    picked(list(gene = selected_row()$.gene, allele = df$allele[1]))
+  })
+
+  # Follow the picker when another allele of the locus is chosen. Its echo of
+  # the allele set above leaves `picked` as it is.
+  shiny$observeEvent(input$allele_select, {
+    shiny$req(input$allele_select)
+    picked(list(gene = selected_row()$.gene, allele = input$allele_select))
   })
 
   # Most frequent alleles of the selected locus, the rest folded into one row.
@@ -387,18 +402,18 @@ loci_info_server <- function(
   })
 
   output$allele_sequence <- shiny$renderUI({
-    shiny$req(db_path(), input$allele_select)
+    shiny$req(db_path(), picked())
     pr <- overview()$primary
     shiny$req(pr)
-    gene <- selected_row()$.gene
+    pick <- picked()
     render_info("output$allele_sequence")
 
     sequence <- guard_db_read(
       "Loading the allele sequence",
       load_cla_allele_sequence(
         db_path(),
-        gene,
-        input$allele_select,
+        pick$gene,
+        pick$allele,
         pr$scheme,
         pr$repository
       )
@@ -409,7 +424,7 @@ loci_info_server <- function(
         class = "species-details_empty",
         sprintf(
           "No reference sequence stored for allele %s - novel and multi-hit calls carry none.",
-          input$allele_select
+          pick$allele
         )
       ))
     }
@@ -417,14 +432,24 @@ loci_info_server <- function(
   })
 
   # Copy actions -----------------------------------------------------------
+  # Confirms a copy once the browser reports the clipboard write succeeded.
+  shiny$observeEvent(input$copied, {
+    show_toast(
+      title = "Copied to clipboard",
+      type = "success",
+      position = "bottom-end",
+      timer = 3000
+    )
+  })
+
   shiny$observeEvent(input$copy_seq, {
     shiny$req(seq_cache())
-    copy_to_clipboard(seq_cache())
+    copy_to_clipboard(seq_cache(), session$ns("copied"))
   })
 
   shiny$observeEvent(input$copy_idx, {
     shiny$req(input$allele_select)
-    copy_to_clipboard(input$allele_select)
+    copy_to_clipboard(input$allele_select, session$ns("copied"))
   })
 
   # Downloads --------------------------------------------------------------

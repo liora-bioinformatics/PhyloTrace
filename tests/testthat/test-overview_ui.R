@@ -1,5 +1,6 @@
 box::use(
-  testthat[expect_identical, expect_match, expect_true, test_that],
+  shiny[moduleServer, observe, reactive, testServer],
+  testthat[expect_false, expect_identical, expect_match, expect_true, test_that],
 )
 box::use(
   app / logic / overview_ui,
@@ -50,4 +51,64 @@ test_that("count_label pluralizes its noun", {
   expect_identical(overview_ui$count_label(1), "1 isolate")
   expect_identical(overview_ui$count_label(1204), "1,204 isolates")
   expect_identical(overview_ui$count_label(0), "0 isolates")
+})
+
+test_that("data_table draws rows on demand and truncates only text columns", {
+  widget <- overview_ui$data_table(
+    data.frame(name = c("a", "b"), n = 1:2, flag = c("x", "y"), stringsAsFactors = FALSE)
+  )
+  defs <- widget$x$options$columnDefs
+
+  expect_true("dt-ext-scroller" %in% vapply(widget$dependencies, `[[`, "", "name"))
+  expect_false(isFALSE(widget$x$options$paging))
+  expect_identical(defs[[2]]$targets, c(0L, 2L))
+})
+
+test_that("selected_row re-runs its dependents only when the selection changes", {
+  testServer(
+    function(id) {
+      moduleServer(id, function(input, output, session) {
+        rows <- data.frame(x = c("a", "b"), stringsAsFactors = FALSE)
+        selected <- overview_ui$selected_row(input, "tbl", function() rows)
+        counter <- new.env()
+        counter$runs <- 0L
+        shown <- reactive({
+          x <- selected()$x
+          counter$runs <- counter$runs + 1L
+          x
+        })
+        observe(shown())
+      })
+    },
+    {
+      session$setInputs(tbl_rows_selected = 1L)
+      expect_identical(shown(), "a")
+      session$setInputs(tbl_rows_selected = integer(0))
+      session$setInputs(tbl_rows_selected = 1L)
+      expect_identical(counter$runs, 1L)
+      session$setInputs(tbl_rows_selected = 2L)
+      expect_identical(shown(), "b")
+      expect_identical(counter$runs, 2L)
+    }
+  )
+})
+
+test_that("sequence_view wraps each run of one base in a single span", {
+  html <- as.character(overview_ui$sequence_view("AATGGGC"))
+
+  expect_identical(
+    html,
+    paste0(
+      "<span class='base-a'>AA</span><span class='base-t'>T</span>",
+      "<span class='base-g'>GGG</span><span class='base-c'>C</span>"
+    )
+  )
+})
+
+test_that("section pairs a caption with its content inside a plain stack", {
+  html <- as.character(overview_ui$sections(overview_ui$section("Origin", "rows")))
+
+  expect_match(html, "overview-sections", fixed = TRUE)
+  expect_match(html, "overview-section-title\">Origin", fixed = TRUE)
+  expect_match(html, "rows", fixed = TRUE)
 })

@@ -24,6 +24,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / field_labels[CUSTOM_COL_PREFIX, field_labels_for],
+  app / logic / functions[table_loading, table_processing],
   app / logic / pymlst[existing_strains],
   app / logic / sheet_grid,
   app / view / database_custom_import,
@@ -276,6 +277,9 @@ server <- function(
             "Values",
             bslib$as_fill_carrier(shiny$div(
               class = "db-page_body custom-fields-values allow-free-text edit-table",
+              # Covers the grid until its first draw (removed in
+              # values_table's initComplete).
+              table_loading("Loading values ..."),
               DT$DTOutput(ns("values_table"), fill = TRUE)
             ))
           )
@@ -367,7 +371,17 @@ server <- function(
           rownames = FALSE,
           escape = FALSE,
           selection = "none",
-          options = list(dom = "t", ordering = FALSE)
+          options = list(
+            dom = "t",
+            ordering = FALSE,
+            # Drawn like the real grid would be: lift the loading overlay.
+            initComplete = DT$JS(
+              "function() {",
+              "  $(this.api().table().node())",
+              "    .closest('.db-page_body').find('.loci-table-loading').remove();",
+              "}"
+            )
+          )
         ))
       }
 
@@ -410,7 +424,12 @@ server <- function(
         # tables edit the same underlying values and should behave alike.
         extensions = "FixedColumns",
         options = list(
-          dom = "ti",
+          # "r": DataTables' processing indicator, shown over the grid from
+          # each server request (sort, filter, an edit's replaceData()) until
+          # its rows are drawn.
+          dom = "rti",
+          processing = TRUE,
+          language = list(processing = table_processing("Updating values ...")),
           paging = FALSE,
           scrollX = TRUE,
           scrollY = "1px",
@@ -432,6 +451,8 @@ server <- function(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
+              // The rows are drawn: lift the loading overlay.
+              $(tableNode).closest('.db-page_body').find('.loci-table-loading').remove();
               // The spreadsheet layer (app/js/dt-sheet.js): range
               // selection, clipboard, fill, undo/redo and the dropdown editor
               // for category / yes-no cells.
@@ -569,6 +590,12 @@ server <- function(
         )
       }
       if (nrow(changed) || nrow(res$rejected)) {
+        # No processing overlay over this reload: it would cover the grid
+        # after every edit, and catch the click meant for the next cell.
+        session$sendCustomMessage(
+          "pt-dt-quiet-reload",
+          list(id = session$ns("values_table"))
+        )
         DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
       }
 

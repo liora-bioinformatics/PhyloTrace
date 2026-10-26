@@ -73,6 +73,7 @@ box::use(
     MLST_COL_PREFIX
   ],
   app / logic / field_types[date_fields],
+  app / logic / functions[table_loading, table_processing],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / sheet_grid,
 )
@@ -423,6 +424,9 @@ server <- function(
     # have not committed.
     reload_token <- reactiveVal(0L)
 
+    # Counts metadata_base()'s reads, each stamped on the frame it returns.
+    base_version <- 0L
+
     metadata_base <- reactive({
       reload_token()
       path <- db_path()
@@ -470,6 +474,11 @@ server <- function(
       attr(df, "amr_gene_groups") <- appended_amr_groups
       attr(df, "amr_gene_labels") <- appended_amr_labels
       attr(df, "custom_cols") <- appended_custom
+      # Tells the grid's render a fresh read from one it has already drawn
+      # (see output$metadata_table): a re-read can return a frame equal to the
+      # last one, so its contents cannot tell the two apart.
+      base_version <<- base_version + 1L
+      attr(df, "base_version") <- base_version
       df
     })
 
@@ -496,6 +505,25 @@ server <- function(
     # which should get the normal start-visible/start-hidden default - apart
     # from one the user deliberately hid. Written and read only there.
     col_picker_seen <- character(0)
+
+    # Whether the column picker has reported a selection yet. Until it has,
+    # input$col_picker is NULL for "not there yet", not "nothing picked", and
+    # the grid starts from the default visibility instead.
+    picker_reported <- FALSE
+
+    # AMR groups whose gene columns the grid is built with. A group's genes
+    # join the grid the first time it is picked and then stay (hiding them is
+    # a visibility toggle like any other column's). DataTables builds a cell
+    # for every column of every row on every draw, shown or hidden, and a large
+    # database has hundreds of gene columns - so the grid carries only those
+    # the user has asked to see. Group labels rather than columns: the
+    # synthetic `amr_g<n>` names are reassigned on every read.
+    loaded_amr_groups <- reactiveVal(character(0))
+
+    # The version of metadata_base() and the columns the grid was last
+    # rendered with, read back by the next render (see output$metadata_table).
+    rendered_version <- NULL
+    rendered_cols <- character(0)
 
     session_added <- reactive({
       df <- metadata_base()
@@ -717,6 +745,97 @@ server <- function(
       if (is.null(df)) character(0) else setdiff(names(df), "isolate")
     })
 
+    # The AMR groups a picker selection names (each picked as one token). The
+    # selection is NULL until the picker reports, and when nothing is picked.
+    picked_amr_groups <- function(selected) {
+      if (!is.character(selected)) {
+        return(character(0))
+      }
+      sub(
+        paste0("^", AMR_GROUP_TOKEN_PREFIX),
+        "",
+        selected[startsWith(selected, AMR_GROUP_TOKEN_PREFIX)]
+      )
+    }
+
+    # The columns the grid is built with, in frame order: every column except
+    # the genes of AMR groups not loaded (see loaded_amr_groups). Every DT
+    # column index - an edit's, a sheet batch's, a selected column's - is a
+    # position in this vector, not in names(State$data). Groups the picker
+    # already holds count as loaded, so a database opened with AMR groups still
+    # picked from the last one shows them. isolate(): only a load or a fresh
+    # read may change the grid's columns, and both re-render it.
+    grid_cols <- reactive({
+      df <- metadata_base()
+      if (is.null(df)) {
+        return(character(0))
+      }
+      groups <- amr_gene_groups()
+      wanted <- union(loaded_amr_groups(), picked_amr_groups(isolate(input$col_picker)))
+      setdiff(names(df), names(groups)[!groups %in% wanted])
+    })
+
+    # `df` cut to the grid's columns: what the table is rendered and replaced
+    # with.
+    grid_frame <- function(df) df[, intersect(grid_cols(), names(df)), drop = FALSE]
+
+    # The grid's sort order, column filters and - in Selection mode - selected
+    # rows and columns as last reported by the table drawn with `from`
+    # columns, moved by column name onto a grid of `to` columns: a re-render
+    # that adds columns shifts every index after them. `order` is empty when
+    # nothing carries over, so the render keeps its default sort.
+    carried_view <- function(from, to) {
+      move <- function(idx) match(from[as.integer(idx) + 1L], to) - 1L
+
+      order <- list()
+      for (entry in isolate(input$metadata_table_state)$order) {
+        entry <- unlist(entry, use.names = FALSE)
+        at <- if (length(entry) == 2) move(entry[1]) else NA_integer_
+        if (!is.na(at)) {
+          order[[length(order) + 1L]] <- list(at, as.character(entry[2]))
+        }
+      }
+
+      # One filter string per column, in the order of `from`.
+      filters <- as.character(isolate(input$metadata_table_search_columns))
+      filters <- setNames(filters, from[seq_along(filters)])
+      search_cols <- lapply(to, function(col) {
+        list(search = if (col %in% names(filters)) unname(filters[col]) else "")
+      })
+
+      selected <- NULL
+      if (identical(isolate(input$selection_mode), "on")) {
+        sel_cols <- move(isolate(input$metadata_table_columns_selected))
+        selected <- list(
+          rows = as.integer(isolate(input$metadata_table_rows_selected)),
+          cols = sel_cols[!is.na(sel_cols)]
+        )
+      }
+
+      list(order = order, search_cols = search_cols, selected = selected)
+    }
+
+    # The grid columns a picker selection shows and hides. An AMR group is
+    # picked as one token standing for all its gene columns; the always-shown
+    # `isolate` is in neither set.
+    picker_visibility <- function(selected, cols) {
+      if (!is.character(selected)) {
+        selected <- character(0)
+      }
+      groups <- amr_gene_groups()
+      gene_cols <- intersect(names(groups), cols)
+      shown_genes <- intersect(
+        names(groups)[groups %in% picked_amr_groups(selected)],
+        gene_cols
+      )
+      optional <- setdiff(cols, c("isolate", names(groups)))
+      picked_cols <- selected[!startsWith(selected, AMR_GROUP_TOKEN_PREFIX)]
+      list(
+        show = c(intersect(optional, picked_cols), shown_genes),
+        hide = c(setdiff(optional, picked_cols), setdiff(gene_cols, shown_genes))
+      )
+    }
+
     output$col_picker_ui <- renderUI({
       # This output reruns on every metadata_base() refresh - including a
       # Discard, which bumps reload_token() precisely to catch this grid up
@@ -844,6 +963,7 @@ server <- function(
         State$data <- NULL
         State$pending <- FALSE
         sheet_grid$clear_history(history)
+        loaded_amr_groups(character(0))
         reload_token(reload_token() + 1L)
       },
       ignoreInit = TRUE
@@ -882,12 +1002,33 @@ server <- function(
         ))
       }
 
-      DTOutput(ns("metadata_table"), fill = TRUE)
+      # The overlay covers the grid from here until its first draw (removed in
+      # metadata_table's initComplete); autoWaiter only covers the server
+      # building the widget, not the browser fetching and drawing its rows.
+      tagList(
+        table_loading("Loading entries ..."),
+        DTOutput(ns("metadata_table"), fill = TRUE)
+      )
     })
 
     output$metadata_table <- renderDT({
-      df <- metadata_base()
-      req(df)
+      base <- metadata_base()
+      req(base)
+
+      # A fresh read is drawn as read. Any other render - an AMR group's genes
+      # joining the grid - redraws the grid the user is looking at: from
+      # State$data, which holds the edits not saved yet (only a fresh read
+      # replaces it, see the observer on metadata_base()), and with the view
+      # they left it in. isolate(): State$data changes with every edit, which
+      # replaceData() pushes without a re-render.
+      current <- isolate(State$data)
+      version <- attr(base, "base_version", exact = TRUE)
+      fresh_read <- !identical(version, rendered_version) || !is.data.frame(current)
+      df <- grid_frame(if (fresh_read) base else current)
+      cols <- names(df)
+      view <- if (!fresh_read) carried_view(rendered_cols, cols)
+      rendered_version <<- version
+      rendered_cols <<- cols
 
       # Isolates that entered this database during the current session, split by
       # provenance: typed ones get the .session-new-row class, merged-in ones
@@ -899,7 +1040,6 @@ server <- function(
       has_new <- length(new_isolates) > 0
       has_imported <- length(imported_isolates) > 0
 
-      cols <- names(df)
       # Default-sorted on below via options$order: newest isolate first, so a
       # session's new rows (highlighted via .session-new-row) surface at the
       # top without needing to scroll or track a "just added" state.
@@ -907,10 +1047,19 @@ server <- function(
       # MLST / AMR columns are derived from typing (classical_mlst / amr_summary)
       # and are never editable here. Custom variables are: their edits are
       # validated and routed to phylotrace_custom_values on save. The derived
-      # ones additionally start hidden, until the user opts into their category.
+      # ones additionally start hidden, until the user opts into their category;
+      # once the picker has reported, the grid shows what it holds instead, so
+      # a re-render never undoes the user's column choices.
       derived <- c(mlst_cols(), amr_cols())
       readonly_idx <- .dt_idx(cols, c(READONLY_COLS, derived))
-      hidden_idx <- .dt_idx(cols, derived)
+      hidden_idx <- .dt_idx(
+        cols,
+        if (picker_reported) {
+          picker_visibility(isolate(input$col_picker), cols)$hide
+        } else {
+          derived
+        }
+      )
       # Two bases on purpose — see .dt_editable_idx(). The className targets
       # below are columnDefs (0-based); the editable list is not.
       date_idx <- .dt_idx(cols, date_cols())
@@ -1208,7 +1357,12 @@ server <- function(
         selection = list(target = "row+column"),
         extensions = "FixedColumns",
         options = list(
-          dom = "ti",
+          # "r": DataTables' processing indicator, shown over the grid from
+          # each server request (sort, filter, an edit's replaceData(), a
+          # column toggle's redraw) until its rows are drawn.
+          dom = "rti",
+          processing = TRUE,
+          language = list(processing = table_processing("Updating entries ...")),
           paging = FALSE,
           scrollX = TRUE,
           scrollY = "1px",
@@ -1235,6 +1389,27 @@ server <- function(
             "function(settings) {
               var api = this.api();
               var tableNode = api.table().node();
+
+              // The rows are drawn: lift the loading overlay (table_ui).
+              $(tableNode).closest('.db-page_body').find('.loci-table-loading').remove();
+
+              // The scroll position, kept per grid so that a re-render of the
+              // same data (an AMR group's genes joining it) puts the user
+              // back where they were. A fresh read starts from the top, as
+              // it always has.
+              var scrollBody = $(tableNode).closest('.dataTables_scrollBody')[0];
+              var views = window.ptGridScroll = window.ptGridScroll || {};
+              var viewKey = %s;
+              if (!%s) delete views[viewKey];
+              if (scrollBody) {
+                if (views[viewKey]) {
+                  scrollBody.scrollTop = views[viewKey].top;
+                  scrollBody.scrollLeft = views[viewKey].left;
+                }
+                scrollBody.addEventListener('scroll', function() {
+                  views[viewKey] = { top: scrollBody.scrollTop, left: scrollBody.scrollLeft };
+                }, { passive: true });
+              }
 
               %s
 
@@ -1297,6 +1472,8 @@ server <- function(
                 .children('.dataTables_info')
                 .addClass('session-legend-row');
             }",
+            jsonlite::toJSON(ns("metadata_table"), auto_unbox = TRUE),
+            if (fresh_read) "false" else "true",
             selection_js
           )),
           # DataTables rebuilds the info div's *content* from scratch on every
@@ -1320,8 +1497,19 @@ server <- function(
       if (!is.null(sketch)) {
         dt_args$container <- sketch
       }
-      if (length(called_at_idx)) {
+      if (length(view$order)) {
+        dt_args$options$order <- view$order
+      } else if (length(called_at_idx)) {
         dt_args$options$order <- list(list(called_at_idx, "desc"))
+      }
+      # Column filters and the selection carried over from the grid this
+      # render replaces (see carried_view()). DT fills its filter row from
+      # `searchCols`.
+      if (!is.null(view)) {
+        dt_args$options$searchCols <- view$search_cols
+      }
+      if (!is.null(view$selected)) {
+        dt_args$selection$selected <- view$selected
       }
       do.call(datatable, dt_args)
     })
@@ -1420,7 +1608,7 @@ server <- function(
 
       rows <- input$metadata_table_rows_selected
       col_idx <- input$metadata_table_columns_selected
-      cols <- if (length(col_idx)) names(df)[col_idx + 1L] else character(0)
+      cols <- if (length(col_idx)) grid_cols()[col_idx + 1L] else character(0)
 
       if (!length(rows) && !length(cols)) {
         return(tagList(
@@ -1611,7 +1799,10 @@ server <- function(
       # A rejected single-cell edit already shows its new value client-side,
       # so a rejection needs the redraw too.
       if (nrow(changed) || nrow(res$rejected)) {
-        replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
+        # No processing overlay over this reload: it would cover the grid
+        # after every edit, and catch the click meant for the next cell.
+        session$sendCustomMessage("pt-dt-quiet-reload", list(id = ns("metadata_table")))
+        replaceData(proxy, grid_frame(State$data), resetPaging = FALSE, rownames = FALSE)
       }
 
       report <- sheet_grid$edit_report(res$rejected, skipped + sum(locked))
@@ -1630,7 +1821,7 @@ server <- function(
       info <- input$metadata_table_cell_edit
       apply_cell_edits(data.frame(
         row = as.integer(info$row),
-        column = names(State$data)[as.integer(info$col) + 1L],
+        column = grid_cols()[as.integer(info$col) + 1L],
         value = as.character(info$value),
         stringsAsFactors = FALSE
       ))
@@ -1643,7 +1834,7 @@ server <- function(
       msg <- input$metadata_table_sheet
       if (identical(msg$op, "edit")) {
         apply_cell_edits(
-          sheet_grid$decode_batch(msg, State$data),
+          sheet_grid$decode_batch(msg, grid_frame(State$data)),
           skipped = sum(as.integer(msg$skipped))
         )
         return()
@@ -1792,7 +1983,7 @@ server <- function(
       reload_token(isolate(reload_token()) + 1L)
       fresh <- metadata_base()
       State$data <- fresh
-      replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
+      replaceData(proxy, grid_frame(fresh), resetPaging = FALSE, rownames = FALSE)
     })
 
     # Isolates the "Remove" button acts on: the metadata grid's row selection
@@ -1932,39 +2123,31 @@ server <- function(
     # ordinary field, but an AMR group is picked as a single synthetic token
     # (AMR_GROUP_TOKEN_PREFIX + drug class - see col_picker_ui): resolve those
     # back to the real gene columns they stand for before looking up DT
-    # indices against the frame's actual column order.
+    # indices against the grid's actual column order.
+    #
+    # A group whose genes are not in the grid yet cannot be shown by a
+    # visibility toggle: it is loaded instead, which re-renders the grid with
+    # its genes, every other column's visibility taken from this same
+    # selection (see output$metadata_table).
     observeEvent(
       input$col_picker,
       {
-        df <- metadata_base()
-        req(is.data.frame(df))
+        req(is.data.frame(metadata_base()))
+        picker_reported <<- TRUE
 
         selected <- input$col_picker
-        if (!is.character(selected)) {
-          selected <- character(0)
-        }
-        is_group_token <- startsWith(selected, AMR_GROUP_TOKEN_PREFIX)
-        selected_groups <- sub(
-          paste0("^", AMR_GROUP_TOKEN_PREFIX),
-          "",
-          selected[is_group_token]
-        )
-
         groups <- amr_gene_groups()
-        gene_cols <- names(groups)
-        shown_genes <- gene_cols[groups %in% selected_groups]
+        cols <- grid_cols()
+        in_grid <- unique(groups[intersect(names(groups), cols)])
+        new_groups <- setdiff(intersect(picked_amr_groups(selected), groups), in_grid)
+        if (length(new_groups)) {
+          loaded_amr_groups(union(loaded_amr_groups(), c(in_grid, new_groups)))
+          return()
+        }
 
-        optional <- setdiff(optional_cols(), gene_cols)
-        selected_cols <- selected[!is_group_token]
-
-        show_idx <- .dt_idx(
-          names(df),
-          c(intersect(optional, selected_cols), shown_genes)
-        )
-        hide_idx <- .dt_idx(
-          names(df),
-          c(setdiff(optional, selected_cols), setdiff(gene_cols, shown_genes))
-        )
+        vis <- picker_visibility(selected, cols)
+        show_idx <- .dt_idx(cols, vis$show)
+        hide_idx <- .dt_idx(cols, vis$hide)
 
         # Deliberately not showCols()/hideCols(): each ends in its own
         # columns.adjust(), and that re-measure is the expensive part of a

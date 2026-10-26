@@ -10,8 +10,8 @@ box::use(
   bslib[as_fill_carrier, as_fill_item, as_fillable_container, nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
-  shinyWidgets[radioGroupButtons],
-  stats[median],
+  shinyWidgets[radioGroupButtons, updateVirtualSelect, virtualSelectInput],
+  stats[median, setNames],
   utils[write.csv],
 )
 
@@ -75,11 +75,6 @@ empty_reason <- function(ov) {
   )
 }
 
-# Carriers offered at once by the carrier search. The search runs on the server
-# (server-side selectize), so an element carried by thousands of isolates only
-# ever sends this many matches to the browser.
-CARRIER_MATCHES <- 50L
-
 # Renders the UI layout for the Elements tab: the element table next to the
 # selected element's call quality, its carriers and one carrier's calls.
 elements_ui <- function(ns) {
@@ -104,16 +99,20 @@ elements_ui <- function(ns) {
     as_fillable_container(shiny$div(
       class = "loci-controls",
       shiny$uiOutput(ns("element_bars")),
-      shiny$selectizeInput(
+      # A popup over the whole window like the allele picker; its virtual list
+      # renders only the visible options of an element carried by thousands.
+      virtualSelectInput(
         ns("carrier"),
         label = "Carrier",
-        choices = NULL,
-        width = "100%",
-        options = list(
-          placeholder = "Search isolates ...",
-          maxOptions = CARRIER_MATCHES,
-          dropdownParent = "body"
-        )
+        choices = character(0),
+        search = TRUE,
+        searchPlaceholderText = "Search isolates ...",
+        optionsCount = 10,
+        hideClearButton = TRUE,
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       ),
       as_fill_carrier(shiny$div(
         class = "loci-allele-panel",
@@ -330,7 +329,7 @@ screening_info_server <- function(input, output, overview, species, reason) {
       "Stress elements" = sum(screened$stress > 0)
     )
 
-    shiny$tagList(
+    overview_ui$sections(
       overview_ui$stat_grid(
         stat_tile("Screened", sprintf("%s / %s", fmt(n), fmt(nrow(iso))), "vial"),
         stat_tile(
@@ -345,14 +344,12 @@ screening_info_server <- function(input, output, overview, species, reason) {
         ),
         stat_tile("Distinct Elements", fmt(nrow(ov$elements)), "dna")
       ),
-      overview_ui$section_title("Screening Status"),
-      overview_ui$bar_rows(ov$status$label, ov$status$n, nrow(iso), tones = ov$status$tone),
+      overview_ui$section(
+        "Screening Status",
+        overview_ui$bar_rows(ov$status$label, ov$status$n, nrow(iso), tones = ov$status$tone)
+      ),
       if (n) {
-        shiny$tagList(
-          shiny$div(class = "overview-section-gap"),
-          overview_ui$section_title("Element Types"),
-          overview_ui$bar_rows(names(types), unname(types), n)
-        )
+        overview_ui$section("Element Types", overview_ui$bar_rows(names(types), unname(types), n))
       }
     )
   })
@@ -409,12 +406,13 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
   })
 
   # The selected element row.
-  selected <- shiny$reactive({
-    el <- overview()$elements
-    row <- input$amr_elements_rows_selected
-    shiny$req(nrow(el) > 0, length(row) == 1)
-    el[row, , drop = FALSE]
-  })
+  selected <- overview_ui$selected_row(input, "amr_elements", function() overview()$elements)
+
+  # The carrier shown in the call detail with the element it was picked for.
+  # On a new element the selected row changes before the carrier search is
+  # refilled; following the pair instead of both separately keeps the detail
+  # from drawing the new element in the previous element's carrier first.
+  carrier <- shiny$reactiveVal(NULL)
 
   # Isolates carrying the selected element, best call first.
   carriers <- shiny$reactive({
@@ -435,31 +433,42 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
     )
   })
 
-  # Offer the selected element's carriers, best call first. Server-side: the
-  # browser receives only the matches of what is typed, CARRIER_MATCHES at most.
+  # Offer the selected element's carriers, best call first.
   shiny$observeEvent(carriers(), {
     c <- carriers()
-    shiny$req(nrow(c) > 0)
-    shiny$updateSelectizeInput(
-      session,
+    el <- selected()
+    if (!nrow(c)) {
+      carrier(NULL)
+      return()
+    }
+    updateVirtualSelect(
       "carrier",
+      session = session,
       label = sprintf("Carrier (%s)", overview_ui$count_label(nrow(c))),
-      choices = data.frame(
-        value = c$Isolate,
-        label = sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
+      choices = setNames(
+        c$Isolate,
+        sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
       ),
-      selected = c$Isolate[1],
-      server = TRUE
+      selected = c$Isolate[1]
     )
+    carrier(list(element = el$Element, type = el$Type, isolate = c$Isolate[1]))
+  })
+
+  # Follow the search when another carrier of the element is chosen. Its echo
+  # of the carrier set above leaves `carrier` as it is.
+  shiny$observeEvent(input$carrier, {
+    shiny$req(input$carrier)
+    el <- selected()
+    carrier(list(element = el$Element, type = el$Type, isolate = input$carrier))
   })
 
   # Every stored call of the element in the selected carrier, read on demand.
   output$hit_detail <- shiny$renderUI({
-    shiny$req(db_path(), input$carrier)
-    el <- selected()
+    shiny$req(db_path(), carrier())
+    pick <- carrier()
     calls <- guard_db_read(
       "Loading the element calls",
-      load_element_calls(db_path(), input$carrier, el$Element, el$Type)
+      load_element_calls(db_path(), pick$isolate, pick$element, pick$type)
     )
     shiny$req(nrow(calls) > 0)
     render_info("output$hit_detail")

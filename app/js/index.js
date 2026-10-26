@@ -1,6 +1,7 @@
 import "./busy-shield";
 import "./dt-column-sizing";
 import "./dt-column-visibility";
+import "./dt-quiet-reload";
 import "./dt-visibility-resync";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";

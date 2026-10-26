@@ -1,4 +1,5 @@
 box::use(
+  jsonlite[fromJSON],
   shiny[reactive, testServer],
   withr[local_tempdir],
 )
@@ -6,6 +7,7 @@ box::use(
   app / logic / custom_fields[custom_col],
   app / logic / database_functions[read_metadata_table],
   app / view / database_browser,
+  dev / mock_database,
 )
 
 impl <- attr(database_browser, "namespace")
@@ -532,5 +534,95 @@ test_that("a row drag in Selection mode is applied without error", {
       metadata_table_row_drag = list(isolate = list("A", "B"), select = TRUE)
     )
     expect_silent(session$flushReact())
+  })
+})
+
+# ---------------------------------------------------------------------------
+# AMR gene columns join the grid only once their group is picked
+# ---------------------------------------------------------------------------
+
+# A mock database with AMR screens, plus a custom variable: the one column
+# that sits after the gene columns in the full frame, so its grid index moves
+# when genes join.
+amr_db <- function(dir) {
+  path <- file.path(dir, "mock.db")
+  suppressMessages(mock_database$mock_database(path, n_isolates = 12L))
+  seed_custom(path, list(age = list(type = "integer")))
+  path
+}
+
+# The grid widget's options as rendered.
+rendered_options <- function(output) fromJSON(output$metadata_table, simplifyVector = FALSE)$x$options
+
+group_token <- function(group) paste0(impl$AMR_GROUP_TOKEN_PREFIX, group)
+
+test_that("gene columns stay out of the grid until their group is picked", {
+  path <- amr_db(local_tempdir())
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    groups <- amr_gene_groups()
+    expect_gt(length(groups), 0)
+    expect_length(intersect(names(groups), grid_cols()), 0)
+    expect_identical(grid_cols(), setdiff(names(State$data), names(groups)))
+
+    group <- unname(groups[1])
+    session$setInputs(col_picker = group_token(group))
+    expect_setequal(intersect(names(groups), grid_cols()), names(groups)[groups == group])
+
+    # Hiding a loaded group is a visibility toggle: its genes stay in the grid.
+    session$setInputs(col_picker = character(0))
+    expect_setequal(intersect(names(groups), grid_cols()), names(groups)[groups == group])
+  })
+})
+
+test_that("an edit's column index is a position in the grid, not in the frame", {
+  path <- amr_db(local_tempdir())
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    session$setInputs(col_picker = group_token(unname(amr_gene_groups()[1])))
+    age <- custom_col("age")
+    expect_false(identical(match(age, grid_cols()), match(age, names(State$data))))
+
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = match(age, grid_cols()) - 1L, value = "42")
+    )
+    session$flushReact()
+
+    expect_equal(State$data[[age]][1], 42)
+    expect_identical(nrow(State$custom_dirty), 1L)
+    expect_null(State$metadata_dirty)
+  })
+})
+
+test_that("loading a group keeps unsaved edits and carries sort and filters by name", {
+  path <- amr_db(local_tempdir())
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    age <- custom_col("age")
+    before <- grid_cols()
+    session$setInputs(
+      metadata_table_cell_edit = list(row = 1, col = match(age, before) - 1L, value = "7"),
+      metadata_table_state = list(order = list(list(match(age, before) - 1L, "asc"))),
+      metadata_table_search_columns = ifelse(before == age, "1 ... 9", "")
+    )
+    session$flushReact()
+    invisible(output$metadata_table)
+
+    session$setInputs(col_picker = group_token(unname(amr_gene_groups()[1])))
+    after <- grid_cols()
+    expect_gt(length(after), length(before))
+    opts <- rendered_options(output)
+
+    # The re-render is not a fresh read: the pending edit survives it.
+    expect_true(State$pending)
+    expect_equal(State$data[[age]][1], 7)
+    # Sort and filter follow the column to its new index.
+    expect_identical(opts$order[[1]][[1]], match(age, after) - 1L)
+    expect_identical(opts$order[[1]][[2]], "asc")
+    expect_identical(opts$searchCols[[match(age, after)]]$search, "1 ... 9")
+    expect_identical(opts$searchCols[[1]]$search, "")
   })
 })
