@@ -5792,16 +5792,40 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
-// AMR Overview's source switch, at the right end of the tab bar and centred on
-// the tab buttons' height.
-.amr-source-switch {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    padding-inline: 0.5rem;
+// AMR Overview's source switch, at the right end of the tab bar. The tabs sit
+// on the header's bottom edge, so a flex item would line up with them; taken
+// out of the flow it centres on the whole 49px header instead.
+.card-header:has(.amr-source-switch) {
+    position: relative;
+}
 
-    .form-group {
-        margin-bottom: 0;
+.nav-item:has(> .amr-source-switch) {
+    position: absolute;
+    right: var(--bs-card-cap-padding-x, 1rem);
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.amr-source-switch .form-group {
+    margin-bottom: 0;
+}
+
+.amr-source-switch .btn-group {
+    margin-block: 0;
+}
+
+// The hover hint wraps each label, so the label takes over the button's padding
+// to make the whole button, not just its text, the hover target.
+.amr-source-switch .btn {
+    padding: 0;
+
+    bslib-tooltip {
+        display: contents;
+    }
+
+    span {
+        display: block;
+        padding: var(--bs-btn-padding-y) var(--bs-btn-padding-x);
     }
 }
 

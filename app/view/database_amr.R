@@ -14,8 +14,8 @@ box::use(
     card_header,
     nav_item,
     nav_panel,
-    nav_spacer,
     navset_card_tab,
+    tooltip,
   ],
   htmltools[htmlEscape],
   shiny,
@@ -56,6 +56,18 @@ TOP_GROUPS <- 12L
 TIER_TONES <- list(
   amrfinder = c("success", "primary", "warning", "secondary"),
   abritamr = c("success", "primary", "warning")
+)
+
+# What each source reads, shown on hovering its button in the tab bar.
+SOURCE_HINTS <- c(
+  abritamr = paste(
+    "abritamr's curated summary: allele names, curated drug classes (e.g. AmpC,",
+    "Carbapenemase) and Match / Inexact / Partial calls."
+  ),
+  amrfinder = paste(
+    "AMRFinderPlus's own calls: gene-family names, broad drug classes, Perfect to",
+    "Putative call quality, identity, coverage and location."
+  )
 )
 
 abritamr_source <- function(source) identical(source, AMR_SOURCES[["abritamr"]])
@@ -254,7 +266,6 @@ ui <- function(id) {
         )
       )
     ),
-    nav_spacer(),
     # Which tool's reading of the screen every tab shows. The two disagree on
     # element names (abritamr names gene-family hits by allele), drug classes and
     # call quality, so the module reads one at a time instead of mixing them.
@@ -264,7 +275,10 @@ ui <- function(id) {
         radioGroupButtons(
           ns("source"),
           label = NULL,
-          choices = AMR_SOURCES,
+          choiceNames = lapply(names(AMR_SOURCES), function(label) {
+            tooltip(shiny$span(label), SOURCE_HINTS[[AMR_SOURCES[[label]]]], placement = "bottom")
+          }),
+          choiceValues = unname(AMR_SOURCES),
           selected = AMR_SOURCES[["abritamr"]],
           size = "sm"
         )
