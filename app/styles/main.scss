@@ -5771,22 +5771,35 @@ table.dataTable thead>tr>th.sorting {
     margin-left: auto;
 }
 
+.overview-header-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+
+    .form-group {
+        margin-bottom: 0;
+    }
+}
+
 .overview-header-controls .btn-group {
     margin-block: -0.25rem;
 }
 
-// AMR Distribution's element-type picker: one equal-width column per choice
-// instead of widths following each label's text. `1fr` columns size to the
-// widest label; the hidden `.btn-check` inputs are absolutely positioned and
-// take no column.
-#app-database-amr_overview-dist_type .btn-group-container-sw {
-    display: grid !important;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-}
+// AMR Distribution's classification and element-type pickers: one equal-width
+// column per choice instead of widths following each label's text. `1fr`
+// columns size to the widest label; the hidden `.btn-check` inputs are
+// absolutely positioned and take no column.
+#app-database-amr_overview-dist_class,
+#app-database-amr_overview-dist_type {
+    .btn-group-container-sw {
+        display: grid !important;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
+    }
 
-#app-database-amr_overview-dist_type .btn-group-container-sw .btn {
-    white-space: nowrap;
+    .btn-group-container-sw .btn {
+        white-space: nowrap;
+    }
 }
 
 // Details of one selected call (AMR Overview's Elements tab): label column and

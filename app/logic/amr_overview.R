@@ -4,7 +4,8 @@
 # element counts, per-element prevalence and call quality, the element profiles
 # and groups of each element type (Resistance, Virulence, Stress) and the
 # provenance checks the "AMR Overview" view is built from. Everything is
-# derived on read from `amr_results` (one row per AMRFinderPlus element) and
+# derived on read from `amr_results` (one row per AMRFinderPlus element),
+# `amr_summary` (abritamr's curated drug classes of the same elements) and
 # `typing_provenance`.
 
 box::use(
@@ -12,7 +13,14 @@ box::use(
   stats[median, setNames],
 )
 box::use(
-  app / logic / amr_plot[AMR_CONFIDENCE_STATES, amr_method_confidence],
+  app /
+    logic /
+    amr_plot[
+      AMR_CLASS_VOCABULARIES,
+      AMR_CLASS_VOCABULARY_DEFAULT,
+      AMR_CONFIDENCE_STATES,
+      amr_method_confidence,
+    ],
   app / logic / db_connect[connect],
   app / logic / field_labels[amr_class_label],
   app /
@@ -95,6 +103,8 @@ RESULT_COLS <- c(
   "amrfinder_db_version", "called_at"
 )
 
+SUMMARY_COLS <- c("isolate", "drug_class", "genes")
+
 PROV_COLS <- c(
   "isolate", "amr_status", "amr_organism", "amr_point_mutations", "amr_elements",
   "amr_abritamr_version", "amr_amrfinder_version", "amr_amrfinder_db_version"
@@ -117,6 +127,7 @@ load_amr_overview <- function(db_path) {
   build_amr_overview(
     isolates = database_isolates(con, tables),
     results = if ("amr_results" %in% tables) read_cols(con, "amr_results", RESULT_COLS),
+    summary = if ("amr_summary" %in% tables) read_cols(con, "amr_summary", SUMMARY_COLS),
     prov = if ("typing_provenance" %in% tables) read_cols(con, "typing_provenance", PROV_COLS)
   )
 }
@@ -130,14 +141,21 @@ load_amr_overview <- function(db_path) {
 #' @param isolates Character vector of every isolate in the database.
 #' @param results Data frame of `amr_results` rows, or `NULL`.
 #' @param prov Data frame of `typing_provenance` rows, or `NULL`.
+#' @param summary Data frame of `amr_summary` rows, or `NULL`.
 #'
 #' @return A list with `state` (`"ok"`, `"skipped"` or `"none"`), `isolates`,
-#'   `hits` (annotated `amr_results` rows), `elements`, `groups` and `counts`
-#'   (each a list by element type), `status`, `settings` and `checks`. Profiles
-#'   are built per type on demand, with `profile_table()`.
+#'   `hits` (annotated `amr_results` rows), `elements`, `groups` (a list by
+#'   classification, `AMR_CLASS_VOCABULARIES`, then by element type), `counts`
+#'   (a list by element type), `status`, `settings` and `checks`. Profiles are
+#'   built per type on demand, with `profile_table()`.
 #' @export
-build_amr_overview <- function(isolates = character(0), results = NULL, prov = NULL) {
-  hits <- annotate_hits(results)
+build_amr_overview <- function(
+  isolates = character(0),
+  results = NULL,
+  prov = NULL,
+  summary = NULL
+) {
+  hits <- annotate_hits(results, summary)
   iso <- isolate_table(as.character(isolates), hits, prov)
   screened <- iso[iso$screened, , drop = FALSE]
   types <- unname(ELEMENT_TYPES)
@@ -155,7 +173,10 @@ build_amr_overview <- function(isolates = character(0), results = NULL, prov = N
     isolates = iso,
     hits = hits,
     elements = element_table(hits, nrow(screened)),
-    groups = setNames(lapply(types, group_table, hits = hits), types),
+    groups = lapply(
+      setNames(nm = unname(AMR_CLASS_VOCABULARIES)),
+      function(v) setNames(lapply(types, group_table, hits = hits, vocabulary = v), types)
+    ),
     counts = setNames(lapply(types, count_bins, hits = hits, screened = screened), types),
     status = status_table(iso$status),
     settings = settings_table(screened),
@@ -163,8 +184,28 @@ build_amr_overview <- function(isolates = character(0), results = NULL, prov = N
   )
 }
 
-# The element calls with their type, group and call quality spelled out.
-annotate_hits <- function(results) {
+# Class abritamr filed each call under in its isolate's summary, NA where it
+# did not summarise the call (a partial hit to a gene family can reach
+# `amr_results` without it). abritamr carries its quality flags on the gene
+# name ("blaOXA-23*") where the hit table does not, so the key is the stripped
+# symbol.
+rollup_class <- function(hits, summary) {
+  if (is.null(summary) || !nrow(summary) || !nrow(hits)) {
+    return(rep(NA_character_, nrow(hits)))
+  }
+  class <- blank_na(summary$drug_class)
+  key <- paste(summary$isolate, sub("[*^]+$", "", summary$genes), sep = "\r")[!is.na(class)]
+  class <- trimws(class[!is.na(class)])
+  class[match(paste(hits$isolate, hits$gene_symbol, sep = "\r"), key)]
+}
+
+# Columns of the annotated hits holding each call's class and group under one
+# classification (`AMR_CLASS_VOCABULARIES`).
+class_col <- function(vocabulary) if (identical(vocabulary, "rollup")) "rollup_class" else "class"
+group_col <- function(vocabulary) if (identical(vocabulary, "rollup")) "rollup_group" else "group"
+
+# The element calls with their type, groups and call quality spelled out.
+annotate_hits <- function(results, summary = NULL) {
   if (is.null(results) || !nrow(results)) {
     results <- as.data.frame(
       setNames(replicate(length(RESULT_COLS), character(0), simplify = FALSE), RESULT_COLS),
@@ -180,14 +221,22 @@ annotate_hits <- function(results) {
   # the same class spelled with a space; both must read, and group, as one.
   hits$class <- amr_class_label(gsub("_", " ", blank_na(hits$class), fixed = TRUE))
   hits$subclass <- amr_class_label(gsub("_", " ", blank_na(hits$subclass), fixed = TRUE))
+  hits$abritamr_class <- rollup_class(hits, summary)
+  # Under abritamr's classification a call it never summarised keeps its
+  # AMRFinderPlus class, as in the visualization's gene heatmap.
+  hits$rollup_class <- ifelse(is.na(hits$abritamr_class), hits$class, hits$abritamr_class)
   # Resistance groups by drug class; stress by what it protects against, the
   # subtype when no class is given (heat, acid); virulence has no classes, so
   # its factors stand for themselves.
-  hits$group <- ifelse(
-    hits$type == ELEMENT_TYPES[["VIRULENCE"]],
-    hits$gene_symbol,
-    ifelse(is.na(hits$class), hits$subtype, hits$class)
-  )
+  group_of <- function(class) {
+    ifelse(
+      hits$type == ELEMENT_TYPES[["VIRULENCE"]],
+      hits$gene_symbol,
+      ifelse(is.na(class), hits$subtype, class)
+    )
+  }
+  hits$group <- group_of(hits$class)
+  hits$rollup_group <- group_of(hits$rollup_class)
   hits$tier <- AMR_CONFIDENCE_STATES[amr_method_confidence(hits$method) + 1L]
   hits$partial <- grepl(PARTIAL_METHOD, toupper(as.character(hits$method)))
   hits$pct_identity <- suppressWarnings(as.numeric(hits$pct_identity))
@@ -294,6 +343,7 @@ element_table <- function(hits, n_screened) {
     Subtype = character(0),
     Class = character(0),
     Subclass = character(0),
+    `abritamr Class` = character(0),
     Isolates = integer(0),
     `Prevalence (%)` = numeric(0),
     Perfect = integer(0),
@@ -332,6 +382,7 @@ element_table <- function(hits, n_screened) {
     Subtype = hits$subtype[first],
     Class = group_mode(key, hits$class, keys),
     Subclass = group_mode(key, hits$subclass, keys),
+    `abritamr Class` = group_mode(key, hits$abritamr_class, keys),
     Isolates = carriers,
     `Prevalence (%)` = round(100 * carriers / max(n_screened, 1), 1),
     Perfect = as.integer(tiers[, "Perfect"]),
@@ -357,11 +408,13 @@ element_table <- function(hits, n_screened) {
 #' @param type Character element type (`ELEMENT_TYPES`).
 #' @param hits Data frame of annotated element calls (`overview$hits`).
 #' @param screened Data frame of the screened isolates' rows.
+#' @param vocabulary Classification the profiles' classes are named in, one of
+#'   `AMR_CLASS_VOCABULARIES`.
 #'
 #' @return Data frame of profiles, most frequent first.
 #' @export
-profile_table <- function(type, hits, screened) {
-  h <- hits[hits$type == type, c("isolate", "gene_symbol", "class"), drop = FALSE]
+profile_table <- function(type, hits, screened, vocabulary = AMR_CLASS_VOCABULARY_DEFAULT) {
+  h <- hits[hits$type == type, , drop = FALSE]
   # Sorted distinct pairs, joined per isolate in one split.
   joined <- function(values) {
     pairs <- unique(data.frame(isolate = h$isolate, value = values)[!is.na(values), ])
@@ -372,7 +425,7 @@ profile_table <- function(type, hits, screened) {
   gene_sets <- joined(h$gene_symbol)
   genes <- gene_sets$text
   n_genes <- gene_sets$n
-  classes <- joined(h$class)$text
+  classes <- joined(h[[class_col(vocabulary)]])$text
   profile <- unname(genes[screened$isolate])
   profile[is.na(profile)] <- "(none)"
   if (!length(profile)) {
@@ -401,11 +454,12 @@ profile_table <- function(type, hits, screened) {
   out
 }
 
-# Isolates carrying at least one element of each group of one type, most
-# frequent first.
-group_table <- function(type, hits) {
-  h <- hits[hits$type == type & !is.na(hits$group), c("isolate", "group"), drop = FALSE]
-  h <- unique(h)
+# Isolates carrying at least one element of each group of one type under one
+# classification, most frequent first.
+group_table <- function(type, hits, vocabulary) {
+  group <- hits[[group_col(vocabulary)]]
+  keep <- hits$type == type & !is.na(group)
+  h <- unique(data.frame(isolate = hits$isolate[keep], group = group[keep]))
   if (!nrow(h)) {
     return(data.frame(group = character(0), isolates = integer(0), stringsAsFactors = FALSE))
   }
@@ -633,11 +687,14 @@ amr_checks <- function(iso, hits) {
 #' @param hits Data frame of annotated element calls (`overview$hits`).
 #' @param type Character element type (`ELEMENT_TYPES`).
 #' @param groups Character group names.
+#' @param vocabulary Classification the groups are named in, one of
+#'   `AMR_CLASS_VOCABULARIES`.
 #'
 #' @return Integer number of distinct isolates.
 #' @export
-group_carriers <- function(hits, type, groups) {
-  length(unique(hits$isolate[hits$type %in% type & hits$group %in% groups]))
+group_carriers <- function(hits, type, groups, vocabulary = AMR_CLASS_VOCABULARY_DEFAULT) {
+  in_groups <- hits[[group_col(vocabulary)]] %in% groups
+  length(unique(hits$isolate[hits$type %in% type & in_groups]))
 }
 
 #' Carriers of One Element
@@ -677,7 +734,7 @@ element_carriers <- function(hits, element, type) {
 #' @param element Character gene symbol.
 #' @param type Character element type (`ELEMENT_TYPES`).
 #'
-#' @return Annotated `amr_results` rows, best call first.
+#' @return Annotated `amr_results` rows with abritamr's class, best call first.
 #' @export
 load_element_calls <- function(db_path, isolate, element, type) {
   code <- names(ELEMENT_TYPES)[match(type, ELEMENT_TYPES)]
@@ -692,7 +749,14 @@ load_element_calls <- function(db_path, isolate, element, type) {
       WHERE isolate = ? AND gene_symbol = ? AND UPPER(element_type) = ?",
     params = list(isolate, element, code)
   )
-  calls <- annotate_hits(rows)
+  summary <- if ("amr_summary" %in% dbListTables(con)) {
+    dbGetQuery(
+      con,
+      "SELECT isolate, drug_class, genes FROM amr_summary WHERE isolate = ?",
+      params = list(isolate)
+    )
+  }
+  calls <- annotate_hits(rows, summary)
   calls[order(-match(calls$tier, AMR_CONFIDENCE_STATES)), , drop = FALSE]
 }
 

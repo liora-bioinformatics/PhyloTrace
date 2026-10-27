@@ -2,8 +2,8 @@
 
 #' "AMR Overview" interface of the Database menu: the screening setup, every
 #' detected element with its call quality, the Resistance, Virulence and Stress
-#' distributions and the provenance diagnostics of every AMR screen in the
-#' database.
+#' distributions under AMRFinderPlus's or abritamr's drug classes and the
+#' provenance diagnostics of every AMR screen in the database.
 
 box::use(
   DT[DTOutput, renderDT],
@@ -34,6 +34,7 @@ box::use(
       load_element_calls,
       profile_table,
     ],
+  app / logic / amr_plot[AMR_CLASS_VOCABULARIES, AMR_CLASS_VOCABULARY_DEFAULT],
   app / logic / database_functions[load_db_species],
   app / logic / db_events,
   app / logic / db_guard[guard_db_read],
@@ -54,6 +55,9 @@ TIER_TONES <- c(
   Partial = "warning",
   Putative = "secondary"
 )
+
+# Classifications the Distribution tab can group by, labelled by their tool.
+CLASSIFICATION_LABELS <- c(amrfinder = "AMRFinderPlus", rollup = "abritamr")
 
 # What a type's groups are called on screen.
 GROUP_TITLES <- c(
@@ -99,7 +103,9 @@ elements_ui <- function(ns) {
           "Perfect, Strong, Partial and Putative count carrying isolates by their best",
           "call (AMRFinderPlus method): an exact match, a match clearing the",
           "element's curated identity and coverage cut-offs, a partial or",
-          "interrupted match, and a bare HMM motif."
+          "interrupted match, and a bare HMM motif. Class and Subclass are",
+          "AMRFinderPlus's; abritamr Class is the curated class abritamr files the",
+          "element under (empty where abritamr did not summarise it)."
         )
       )
     )),
@@ -171,14 +177,27 @@ ui <- function(id) {
           "Loading profiles ...",
           hint = paste(
             "Distinct element combinations of the selected type and how many",
-            "screened isolates carry each; isolates without any form the (none) profile."
+            "screened isolates carry each; isolates without any form the (none) profile.",
+            "Classes follow the selected classification: AMRFinderPlus's broad drug",
+            "classes or abritamr's curated ones (e.g. AmpC, Carbapenemase, ESBL",
+            "instead of Beta-lactam). Virulence factors are not classified."
           ),
-          controls = radioGroupButtons(
-            ns("dist_type"),
-            label = NULL,
-            choices = unname(ELEMENT_TYPES),
-            selected = ELEMENT_TYPES[["AMR"]],
-            size = "sm"
+          controls = shiny$tagList(
+            radioGroupButtons(
+              ns("dist_class"),
+              label = NULL,
+              choiceNames = unname(CLASSIFICATION_LABELS[AMR_CLASS_VOCABULARIES]),
+              choiceValues = unname(AMR_CLASS_VOCABULARIES),
+              selected = AMR_CLASS_VOCABULARY_DEFAULT,
+              size = "sm"
+            ),
+            radioGroupButtons(
+              ns("dist_type"),
+              label = NULL,
+              choices = unname(ELEMENT_TYPES),
+              selected = ELEMENT_TYPES[["AMR"]],
+              size = "sm"
+            )
           )
         ),
         list(
@@ -391,6 +410,7 @@ call_rows <- function(hit) {
     } else {
       paste(hit$class, "/", hit$subclass)
     },
+    `abritamr Class` = hit$abritamr_class,
     Call = sprintf("%s (%s)", hit$tier, hit$method),
     Identity = num(hit$pct_identity),
     Coverage = num(hit$pct_coverage),
@@ -541,10 +561,16 @@ profile_detail <- function(row, with_classes) {
 distribution_server <- function(input, output, overview, reason) {
   type <- shiny$reactive(if (is.null(input$dist_type)) ELEMENT_TYPES[["AMR"]] else input$dist_type)
 
+  # The classification profiles and groups are named in.
+  vocabulary <- shiny$reactive(
+    if (is.null(input$dist_class)) AMR_CLASS_VOCABULARY_DEFAULT else input$dist_class
+  )
+
   # Profiles of the selected type, built only once the tab asks for them.
   profiles <- shiny$reactive({
     ov <- overview()
-    profile_table(type(), ov$hits, ov$isolates[ov$isolates$screened, , drop = FALSE])
+    screened <- ov$isolates[ov$isolates$screened, , drop = FALSE]
+    profile_table(type(), ov$hits, screened, vocabulary())
   })
 
   output$amr_profiles <- renderDT({
@@ -587,7 +613,7 @@ distribution_server <- function(input, output, overview, reason) {
   output$group_bars <- shiny$renderUI({
     render_info("output$group_bars")
     ov <- overview()
-    groups <- ov$groups[[type()]]
+    groups <- ov$groups[[vocabulary()]][[type()]]
     n <- sum(ov$isolates$screened)
     if (!n || is.null(groups) || !nrow(groups)) {
       return(overview_ui$empty_hint(sprintf("No %s elements found.", tolower(type()))))
@@ -599,7 +625,8 @@ distribution_server <- function(input, output, overview, reason) {
       bars$counts[length(bars$counts)] <- group_carriers(
         ov$hits,
         type(),
-        groups$group[-seq_len(TOP_GROUPS)]
+        groups$group[-seq_len(TOP_GROUPS)],
+        vocabulary()
       )
     }
     overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
@@ -618,7 +645,13 @@ distribution_server <- function(input, output, overview, reason) {
   })
 
   output$export_profiles <- shiny$downloadHandler(
-    filename = function() sprintf("amr_%s_profiles.csv", tolower(type())),
+    filename = function() {
+      sprintf(
+        "amr_%s_%s_profiles.csv",
+        tolower(type()),
+        tolower(CLASSIFICATION_LABELS[[vocabulary()]])
+      )
+    },
     content = function(file) {
       profiles <- profiles()
       shiny$req(nrow(profiles) > 0)

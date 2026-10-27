@@ -123,9 +123,9 @@ test_that("elements count each isolate once, at its best call", {
 test_that("types group by drug class, stress target and virulence factor", {
   ov <- scenario()
 
-  expect_identical(ov$groups$Resistance$group[1], "Beta-lactam")
-  expect_true(all(c("Mercury", "Heat") %in% ov$groups$Stress$group))
-  expect_identical(ov$groups$Virulence$group, "fimH")
+  expect_identical(ov$groups$amrfinder$Resistance$group[1], "Beta-lactam")
+  expect_true(all(c("Mercury", "Heat") %in% ov$groups$amrfinder$Stress$group))
+  expect_identical(ov$groups$amrfinder$Virulence$group, "fimH")
 })
 
 test_that("profiles cover every screened isolate, none included", {
@@ -184,8 +184,8 @@ test_that("classes spelled with underscores group with their spaced twin", {
   )
   ov <- amr_overview$build_amr_overview(c("A", "B"), results)
 
-  expect_identical(ov$groups$Resistance$group, "Fusidic acid")
-  expect_identical(ov$groups$Resistance$isolates, 2L)
+  expect_identical(ov$groups$amrfinder$Resistance$group, "Fusidic acid")
+  expect_identical(ov$groups$amrfinder$Resistance$isolates, 2L)
 })
 
 test_that("load_amr_overview reads a mock database end to end", {
@@ -209,6 +209,42 @@ test_that("load_amr_overview reads a mock database end to end", {
   expect_true(nrow(calls) >= 1)
   expect_true(all(c("contig", "start", "stop", "strand", "ref_accession") %in% names(calls)))
   expect_identical(unique(calls$isolate), carrier)
+})
+
+test_that("abritamr's classification regroups the same elements", {
+  results <- rbind(
+    hit_rows("A", "blaOXA-23"),
+    hit_rows("A", "blaADC", method = "PARTIALX"),
+    hit_rows("B", "blaOXA-23"),
+    hit_rows("B", "merA", type = "STRESS", subtype = "METAL", class = "MERCURY")
+  )
+  summary <- data.frame(
+    isolate = c("A", "B", "B"),
+    drug_class = c("Carbapenemase", "Carbapenemase", "Metal"),
+    genes = c("blaOXA-23*", "blaOXA-23", "merA"),
+    stringsAsFactors = FALSE
+  )
+  ov <- amr_overview$build_amr_overview(c("A", "B"), results, summary = summary)
+  rollup <- ov$groups$rollup
+
+  # abritamr never summarised blaADC, so it keeps its AMRFinderPlus class.
+  expect_identical(rollup$Resistance$group, c("Carbapenemase", "Beta-lactam"))
+  expect_identical(rollup$Resistance$isolates, c(2L, 1L))
+  expect_identical(ov$groups$amrfinder$Resistance$group, "Beta-lactam")
+  expect_identical(rollup$Stress$group, "Metal")
+
+  el <- ov$elements
+  expect_identical(el$`abritamr Class`[el$Element == "blaOXA-23"], "Carbapenemase")
+  expect_true(is.na(el$`abritamr Class`[el$Element == "blaADC"]))
+
+  screened <- ov$isolates[ov$isolates$screened, ]
+  prof <- amr_overview$profile_table("Resistance", ov$hits, screened, "rollup")
+  expect_identical(prof$Classes[prof$Profile == "blaADC, blaOXA-23"], "Beta-lactam, Carbapenemase")
+  expect_identical(
+    amr_overview$group_carriers(ov$hits, "Resistance", "Carbapenemase", "rollup"),
+    2L
+  )
+  expect_identical(amr_overview$group_carriers(ov$hits, "Resistance", "Carbapenemase"), 0L)
 })
 
 test_that("group_carriers counts overlapping groups' isolates once", {
