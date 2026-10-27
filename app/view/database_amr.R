@@ -2,8 +2,8 @@
 
 #' "AMR Overview" interface of the Database menu: the screening setup, every
 #' detected element with its call quality, the Resistance, Virulence and Stress
-#' distributions under AMRFinderPlus's or abritamr's drug classes and the
-#' provenance diagnostics of every AMR screen in the database.
+#' distributions and the provenance diagnostics of every AMR screen in the
+#' database, read from AMRFinderPlus's calls or abritamr's curated summary.
 
 box::use(
   DT[DTOutput, renderDT],
@@ -12,7 +12,9 @@ box::use(
     as_fill_item,
     as_fillable_container,
     card_header,
+    nav_item,
     nav_panel,
+    nav_spacer,
     navset_card_tab,
   ],
   htmltools[htmlEscape],
@@ -26,15 +28,17 @@ box::use(
   app /
     logic /
     amr_overview[
+      AMR_SOURCES,
+      CALL_TIERS,
       ELEMENT_TYPES,
       SCREEN_LABELS,
+      build_amr_overview,
       element_carriers,
       group_carriers,
-      load_amr_overview,
+      load_amr_records,
       load_element_calls,
       profile_table,
     ],
-  app / logic / amr_plot[AMR_CLASS_VOCABULARIES, AMR_CLASS_VOCABULARY_DEFAULT],
   app / logic / database_functions[load_db_species],
   app / logic / db_events,
   app / logic / db_guard[guard_db_read],
@@ -48,16 +52,13 @@ TABLE_IDS <- c("amr_elements", "amr_profiles", "amr_isolates")
 # Bars shown before the remainder is folded into one "other" row.
 TOP_GROUPS <- 12L
 
-# Tone of each call-quality tier, best first.
-TIER_TONES <- c(
-  Perfect = "success",
-  Strong = "primary",
-  Partial = "warning",
-  Putative = "secondary"
+# Tone of each call tier, parallel to `CALL_TIERS`.
+TIER_TONES <- list(
+  amrfinder = c("success", "primary", "warning", "secondary"),
+  abritamr = c("success", "primary", "warning")
 )
 
-# Classifications the Distribution tab can group by, labelled by their tool.
-CLASSIFICATION_LABELS <- c(amrfinder = "AMRFinderPlus", rollup = "abritamr")
+abritamr_source <- function(source) identical(source, AMR_SOURCES[["abritamr"]])
 
 # What a type's groups are called on screen.
 GROUP_TITLES <- c(
@@ -100,12 +101,12 @@ elements_ui <- function(ns) {
         "export_elements",
         "Loading elements ...",
         hint = paste(
-          "Perfect, Strong, Partial and Putative count carrying isolates by their best",
-          "call (AMRFinderPlus method): an exact match, a match clearing the",
-          "element's curated identity and coverage cut-offs, a partial or",
-          "interrupted match, and a bare HMM motif. Class and Subclass are",
-          "AMRFinderPlus's; abritamr Class is the curated class abritamr files the",
-          "element under (empty where abritamr did not summarise it)."
+          "Call columns count carrying isolates by their best call. AMRFinderPlus:",
+          "Perfect (exact match), Strong (clears the element's curated identity and",
+          "coverage cut-offs), Partial (partial or interrupted match) and Putative",
+          "(bare HMM motif). abritamr names gene-family hits by allele: Match (an",
+          "exact allele, or a gene outside a family), Inexact (* - no exact allele,",
+          "named after the closest reference) and Partial (its partials)."
         )
       )
     )),
@@ -177,27 +178,14 @@ ui <- function(id) {
           "Loading profiles ...",
           hint = paste(
             "Distinct element combinations of the selected type and how many",
-            "screened isolates carry each; isolates without any form the (none) profile.",
-            "Classes follow the selected classification: AMRFinderPlus's broad drug",
-            "classes or abritamr's curated ones (e.g. AmpC, Carbapenemase, ESBL",
-            "instead of Beta-lactam). Virulence factors are not classified."
+            "screened isolates carry each; isolates without any form the (none) profile."
           ),
-          controls = shiny$tagList(
-            radioGroupButtons(
-              ns("dist_class"),
-              label = NULL,
-              choiceNames = unname(CLASSIFICATION_LABELS[AMR_CLASS_VOCABULARIES]),
-              choiceValues = unname(AMR_CLASS_VOCABULARIES),
-              selected = AMR_CLASS_VOCABULARY_DEFAULT,
-              size = "sm"
-            ),
-            radioGroupButtons(
-              ns("dist_type"),
-              label = NULL,
-              choices = unname(ELEMENT_TYPES),
-              selected = ELEMENT_TYPES[["AMR"]],
-              size = "sm"
-            )
+          controls = radioGroupButtons(
+            ns("dist_type"),
+            label = NULL,
+            choices = unname(ELEMENT_TYPES),
+            selected = ELEMENT_TYPES[["AMR"]],
+            size = "sm"
           )
         ),
         list(
@@ -241,10 +229,11 @@ ui <- function(id) {
           "export_isolates",
           "Loading isolate screening ...",
           hint = paste(
-            "What every isolate's screen found: acquired genes, point mutations,",
-            "virulence and stress elements, the drug classes covered and partial",
-            "calls, with the settings used. Flagged rows come first; each flag is",
-            "explained in Checks."
+            "What every isolate's screen found: resistance (AMRFinderPlus: acquired",
+            "genes and point mutations; abritamr: inexact calls), virulence and",
+            "stress elements, the drug classes covered and partial calls, with the",
+            "settings used. Flagged rows come first; each flag is explained in",
+            "Checks, which always read the AMRFinderPlus screen."
           )
         ),
         list(
@@ -262,6 +251,22 @@ ui <- function(id) {
               "elements the others would report."
             )
           )
+        )
+      )
+    ),
+    nav_spacer(),
+    # Which tool's reading of the screen every tab shows. The two disagree on
+    # element names (abritamr names gene-family hits by allele), drug classes and
+    # call quality, so the module reads one at a time instead of mixing them.
+    nav_item(
+      shiny$div(
+        class = "amr-source-switch",
+        radioGroupButtons(
+          ns("source"),
+          label = NULL,
+          choices = AMR_SOURCES,
+          selected = AMR_SOURCES[["abritamr"]],
+          size = "sm"
         )
       )
     )
@@ -301,9 +306,12 @@ screening_rows <- function(ov, species) {
   found <- vapply(
     unname(ELEMENT_TYPES),
     function(type) {
-      sub <- sort(unique(hits$subtype[hits$type == type]))
-      if (!length(sub)) {
+      if (!any(hits$type == type)) {
         return(NA_character_)
+      }
+      sub <- sort(unique(hits$subtype[hits$type == type & !is.na(hits$subtype)]))
+      if (!length(sub)) {
+        return(type)
       }
       sprintf("%s (%s)", type, tolower(paste(sub, collapse = ", ")))
     },
@@ -325,6 +333,11 @@ screening_rows <- function(ov, species) {
     "AMRFinderPlus Database" = one_or_mixed(screened$db_version),
     "Organism" = organism_row,
     "Species" = esc(species),
+    "Elements From" = if (abritamr_source(ov$source)) {
+      "abritamr summary (curated classes, allele names)"
+    } else {
+      "AMRFinderPlus calls"
+    },
     "Elements Found" = if (length(found)) esc(paste(found, collapse = "; ")) else NA_character_,
     "Distinct Elements" = fmt(nrow(ov$elements)),
     "Screened" = sprintf("%s of %s isolates", fmt(nrow(screened)), fmt(nrow(ov$isolates))),
@@ -364,9 +377,17 @@ screening_info_server <- function(input, output, overview, species, reason) {
     screened <- iso[iso$screened, , drop = FALSE]
     n <- nrow(screened)
     med_classes <- if (n) median(screened$classes) else NA
+    resistance <- if (abritamr_source(ov$source)) {
+      c("Inexact calls" = sum(screened$inexact > 0))
+    } else {
+      c(
+        "Acquired genes" = sum(screened$acquired > 0),
+        "Point mutations" = sum(screened$point > 0)
+      )
+    }
     types <- c(
-      "Acquired genes" = sum(screened$acquired > 0),
-      "Point mutations" = sum(screened$point > 0),
+      "Resistance" = sum(screened$resistance > 0),
+      resistance,
       "Virulence factors" = sum(screened$virulence > 0),
       "Stress elements" = sum(screened$stress > 0)
     )
@@ -410,7 +431,6 @@ call_rows <- function(hit) {
     } else {
       paste(hit$class, "/", hit$subclass)
     },
-    `abritamr Class` = hit$abritamr_class,
     Call = sprintf("%s (%s)", hit$tier, hit$method),
     Identity = num(hit$pct_identity),
     Coverage = num(hit$pct_coverage),
@@ -425,6 +445,27 @@ call_rows <- function(hit) {
     } else {
       paste(hit$ref_accession, hit$ref_name, sep = " - ")
     }
+  )
+  rows <- rows[!is.na(rows) & nzchar(rows)]
+  shiny$tags$dl(
+    lapply(names(rows), function(k) shiny$tagList(shiny$tags$dt(k), shiny$tags$dd(rows[[k]])))
+  )
+}
+
+# One abritamr call as label/value rows: the allele it was named, the class and
+# file it was reported under and what its call state means.
+summary_rows <- function(hit) {
+  call_text <- c(
+    Match = "Match - an exact allele, or a gene outside an AMRFinderPlus gene family",
+    Inexact = "Inexact (*) - no exact allele; named after the closest reference",
+    Partial = "Partial - reported among abritamr's partial matches"
+  )
+  rows <- c(
+    Element = hit$gene_symbol,
+    Type = hit$type,
+    Class = hit$class,
+    Call = call_text[[hit$tier]],
+    `Reported In` = sprintf("summary_%s.txt", hit$section)
   )
   rows <- rows[!is.na(rows) & nzchar(rows)]
   shiny$tags$dl(
@@ -471,12 +512,14 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
   output$element_bars <- shiny$renderUI({
     el <- selected()
     render_info("output$element_bars")
-    tiers <- names(TIER_TONES)
+    source <- overview()$source
+    tiers <- CALL_TIERS[[source]]
+    shiny$req(all(tiers %in% names(el)))
     counts <- vapply(tiers, function(t) el[[t]], integer(1))
     shiny$div(
       class = "overview-allele-bars",
       overview_ui$section_title("Call Quality"),
-      overview_ui$bar_rows(tiers, counts, el$Isolates, tones = unname(TIER_TONES))
+      overview_ui$bar_rows(tiers, counts, el$Isolates, tones = TIER_TONES[[source]])
     )
   })
 
@@ -494,7 +537,11 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
       label = sprintf("Carrier (%s)", overview_ui$count_label(nrow(c))),
       choices = setNames(
         c$Isolate,
-        sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
+        ifelse(
+          is.na(c$`Identity (%)`),
+          sprintf("%s - %s", c$Isolate, c$Call),
+          sprintf("%s - %s (%.1f%% identity)", c$Isolate, c$Call, c$`Identity (%)`)
+        )
       ),
       selected = c$Isolate[1]
     )
@@ -509,10 +556,24 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
     carrier(list(element = el$Element, type = el$Type, isolate = input$carrier))
   })
 
-  # Every stored call of the element in the selected carrier, read on demand.
+  # Every stored call of the element in the selected carrier: abritamr's from
+  # the summary in memory, AMRFinderPlus's with their location read on demand.
   output$hit_detail <- shiny$renderUI({
     shiny$req(db_path(), carrier())
     pick <- carrier()
+    ov <- overview()
+    if (abritamr_source(ov$source)) {
+      hits <- ov$hits
+      calls <- hits[
+        hits$isolate == pick$isolate & hits$gene_symbol == pick$element & hits$type == pick$type,
+        ,
+        drop = FALSE
+      ]
+      shiny$req(nrow(calls) > 0)
+      render_info("output$hit_detail")
+      calls <- calls[order(-calls$rank), , drop = FALSE]
+      return(lapply(seq_len(nrow(calls)), function(i) summary_rows(calls[i, , drop = FALSE])))
+    }
     calls <- guard_db_read(
       "Loading the element calls",
       load_element_calls(db_path(), pick$isolate, pick$element, pick$type)
@@ -523,7 +584,7 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
   })
 
   output$export_elements <- shiny$downloadHandler(
-    filename = function() "amr_elements.csv",
+    filename = function() sprintf("amr_%s_elements.csv", overview()$source),
     content = function(file) {
       el <- overview()$elements
       shiny$req(nrow(el) > 0)
@@ -561,16 +622,10 @@ profile_detail <- function(row, with_classes) {
 distribution_server <- function(input, output, overview, reason) {
   type <- shiny$reactive(if (is.null(input$dist_type)) ELEMENT_TYPES[["AMR"]] else input$dist_type)
 
-  # The classification profiles and groups are named in.
-  vocabulary <- shiny$reactive(
-    if (is.null(input$dist_class)) AMR_CLASS_VOCABULARY_DEFAULT else input$dist_class
-  )
-
   # Profiles of the selected type, built only once the tab asks for them.
   profiles <- shiny$reactive({
     ov <- overview()
-    screened <- ov$isolates[ov$isolates$screened, , drop = FALSE]
-    profile_table(type(), ov$hits, screened, vocabulary())
+    profile_table(type(), ov$hits, ov$isolates[ov$isolates$screened, , drop = FALSE])
   })
 
   output$amr_profiles <- renderDT({
@@ -613,7 +668,7 @@ distribution_server <- function(input, output, overview, reason) {
   output$group_bars <- shiny$renderUI({
     render_info("output$group_bars")
     ov <- overview()
-    groups <- ov$groups[[vocabulary()]][[type()]]
+    groups <- ov$groups[[type()]]
     n <- sum(ov$isolates$screened)
     if (!n || is.null(groups) || !nrow(groups)) {
       return(overview_ui$empty_hint(sprintf("No %s elements found.", tolower(type()))))
@@ -625,8 +680,7 @@ distribution_server <- function(input, output, overview, reason) {
       bars$counts[length(bars$counts)] <- group_carriers(
         ov$hits,
         type(),
-        groups$group[-seq_len(TOP_GROUPS)],
-        vocabulary()
+        groups$group[-seq_len(TOP_GROUPS)]
       )
     }
     overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
@@ -645,13 +699,7 @@ distribution_server <- function(input, output, overview, reason) {
   })
 
   output$export_profiles <- shiny$downloadHandler(
-    filename = function() {
-      sprintf(
-        "amr_%s_%s_profiles.csv",
-        tolower(type()),
-        tolower(CLASSIFICATION_LABELS[[vocabulary()]])
-      )
-    },
+    filename = function() sprintf("amr_%s_%s_profiles.csv", overview()$source, tolower(type())),
     content = function(file) {
       profiles <- profiles()
       shiny$req(nrow(profiles) > 0)
@@ -660,8 +708,9 @@ distribution_server <- function(input, output, overview, reason) {
   )
 }
 
-# Per-isolate screening table, flagged rows first.
-isolate_rows <- function(iso) {
+# Per-isolate screening table, flagged rows first. The element counts come
+# from `source`; the flags and settings from the AMRFinderPlus screen.
+isolate_rows <- function(iso, source) {
   flags <- character(nrow(iso))
   add_flag <- function(hit, text) {
     flags[hit] <<- ifelse(nzchar(flags[hit]), paste(flags[hit], text, sep = "; "), text)
@@ -676,12 +725,16 @@ isolate_rows <- function(iso) {
   )
   add_flag(iso$partial > 0, "partial elements")
 
+  counts <- if (abritamr_source(source)) {
+    data.frame(Resistance = iso$resistance, Inexact = iso$inexact)
+  } else {
+    data.frame(`Acquired Genes` = iso$acquired, `Point Mutations` = iso$point, check.names = FALSE)
+  }
   out <- data.frame(
     Isolate = iso$isolate,
     Flags = flags,
     Status = unname(SCREEN_LABELS[iso$status]),
-    `Acquired Genes` = iso$acquired,
-    `Point Mutations` = iso$point,
+    counts,
     Virulence = iso$virulence,
     Stress = iso$stress,
     `Drug Classes` = iso$classes,
@@ -696,9 +749,7 @@ isolate_rows <- function(iso) {
     stringsAsFactors = FALSE
   )
   unscreened <- !iso$screened
-  counted <- c(
-    "Acquired Genes", "Point Mutations", "Virulence", "Stress", "Drug Classes", "Partial"
-  )
+  counted <- c(names(counts), "Virulence", "Stress", "Drug Classes", "Partial")
   for (col in counted) {
     out[[col]][unscreened] <- NA
   }
@@ -749,7 +800,10 @@ settings_list <- function(settings) {
 
 # Handles server logic for the checks, screening settings and isolate table.
 diagnostics_server <- function(input, output, overview) {
-  isolates <- shiny$reactive(isolate_rows(overview()$isolates))
+  isolates <- shiny$reactive({
+    ov <- overview()
+    isolate_rows(ov$isolates, ov$source)
+  })
 
   output$amr_isolates <- renderDT({
     render_info("output$amr_isolates")
@@ -779,7 +833,7 @@ diagnostics_server <- function(input, output, overview) {
   })
 
   output$export_isolates <- shiny$downloadHandler(
-    filename = function() "amr_isolate_screening.csv",
+    filename = function() sprintf("amr_%s_isolate_screening.csv", overview()$source),
     content = function(file) {
       rows <- isolates()
       shiny$req(nrow(rows) > 0)
@@ -796,14 +850,21 @@ server <- function(
   db_rev = db_events$new_bus()
 ) {
   shiny$moduleServer(id, function(input, output, session) {
-    # Every AMR screening record of the database, summarised once per change.
-    # `amr` because a typing run's screens land there, `isolates` because
-    # removal and merges add or drop them, `schema` because a restore can
-    # replace them wholesale.
-    overview <- shiny$reactive({
+    # Every AMR screening record of the database, read once per change. `amr`
+    # because a typing run's screens land there, `isolates` because removal and
+    # merges add or drop them, `schema` because a restore can replace them
+    # wholesale.
+    records <- shiny$reactive({
       shiny$req(db_path())
       db_events$depend(db_rev, "amr", "isolates", "schema")
-      guard_db_read("Loading the AMR overview", load_amr_overview(db_path()))
+      guard_db_read("Loading the AMR overview", load_amr_records(db_path()))
+    })
+
+    # The records summarised from the selected source; switching re-summarises
+    # without reading the database again.
+    overview <- shiny$reactive({
+      source <- if (is.null(input$source)) AMR_SOURCES[["abritamr"]] else input$source
+      do.call(build_amr_overview, c(records(), source = source))
     })
 
     # Species of the database's scheme, shown with the screening setup.

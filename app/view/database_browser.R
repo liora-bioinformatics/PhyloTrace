@@ -1101,9 +1101,9 @@ server <- function(
             parts,
             paste0(
               '<span class="amr-legend">',
-              '<span class="amr-call amr-call-match" title="Match — reported without a quality flag (an exact or allele match for an AMR gene family; point mutations and virulence/stress genes are never flagged)">&#10003;</span> match&ensp;',
-              '<span class="amr-call amr-call-inexact" title="Inexact — flagged * by abritamr: a BLAST hit close to, but not identical to, a known reference allele">&#10003;*</span> inexact&ensp;',
-              '<span class="amr-call amr-call-partial" title="Partial — from abritamr&#39;s partials set (e.g. an internal stop codon): the gene is likely truncated or non-functional">~</span> partial',
+              '<span class="amr-call amr-call-match" title="Match — reported without abritamr&#39;s * flag: an exact allele, or a gene outside an AMRFinderPlus gene family (point mutations are never flagged)">&#10003;</span> match&ensp;',
+              '<span class="amr-call amr-call-inexact" title="Inexact — flagged * by abritamr: a gene-family hit with no exact allele match, named after its closest reference allele">&#10003;*</span> inexact&ensp;',
+              '<span class="amr-call amr-call-partial" title="Partial — one of abritamr&#39;s partial matches: cut at a contig end, interrupted (e.g. an internal stop codon) or a bare HMM motif; the gene may be truncated or non-functional">~</span> partial',
               '</span>'
             )
           )
@@ -1176,13 +1176,13 @@ server <- function(
               "function(data, type) {
                 if (type !== 'display') return data;
                 if (data === 'Match') {
-                  return '<span class=\"amr-call amr-call-match\" title=\"Match — reported without a quality flag (an exact or allele match for an AMR gene family; point mutations and virulence/stress genes are never flagged)\">&#10003;</span>';
+                  return '<span class=\"amr-call amr-call-match\" title=\"Match — reported without abritamr&#39;s * flag: an exact allele, or a gene outside an AMRFinderPlus gene family (point mutations are never flagged)\">&#10003;</span>';
                 }
                 if (data === 'Inexact') {
-                  return '<span class=\"amr-call amr-call-inexact\" title=\"Inexact — flagged * by abritamr: a BLAST hit close to, but not identical to, a known reference allele\">&#10003;*</span>';
+                  return '<span class=\"amr-call amr-call-inexact\" title=\"Inexact — flagged * by abritamr: a gene-family hit with no exact allele match, named after its closest reference allele\">&#10003;*</span>';
                 }
                 if (data === 'Partial') {
-                  return '<span class=\"amr-call amr-call-partial\" title=\"Partial — from abritamr&#39;s partials set (e.g. an internal stop codon): the gene is likely truncated or non-functional\">~</span>';
+                  return '<span class=\"amr-call amr-call-partial\" title=\"Partial — one of abritamr&#39;s partial matches: cut at a contig end, interrupted (e.g. an internal stop codon) or a bare HMM motif; the gene may be truncated or non-functional\">~</span>';
                 }
                 return '';
               }"

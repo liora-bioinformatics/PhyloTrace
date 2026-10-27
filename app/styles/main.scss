@@ -5771,26 +5771,16 @@ table.dataTable thead>tr>th.sorting {
     margin-left: auto;
 }
 
-.overview-header-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-
-    .form-group {
-        margin-bottom: 0;
-    }
-}
-
 .overview-header-controls .btn-group {
     margin-block: -0.25rem;
 }
 
-// AMR Distribution's classification and element-type pickers: one equal-width
-// column per choice instead of widths following each label's text. `1fr`
-// columns size to the widest label; the hidden `.btn-check` inputs are
-// absolutely positioned and take no column.
-#app-database-amr_overview-dist_class,
-#app-database-amr_overview-dist_type {
+// AMR Overview's element-type picker (Distribution) and source switch (tab
+// bar): one equal-width column per choice instead of widths following each
+// label's text. `1fr` columns size to the widest label; the hidden `.btn-check`
+// inputs are absolutely positioned and take no column.
+#app-database-amr_overview-dist_type,
+#app-database-amr_overview-source {
     .btn-group-container-sw {
         display: grid !important;
         grid-auto-flow: column;
@@ -5799,6 +5789,19 @@ table.dataTable thead>tr>th.sorting {
 
     .btn-group-container-sw .btn {
         white-space: nowrap;
+    }
+}
+
+// AMR Overview's source switch, at the right end of the tab bar and centred on
+// the tab buttons' height.
+.amr-source-switch {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding-inline: 0.5rem;
+
+    .form-group {
+        margin-bottom: 0;
     }
 }
 
@@ -5887,6 +5890,18 @@ table.dataTable thead>tr>th.sorting {
 // name like "Mean Contig (bp)" over several lines.
 table.dataTable.overview-table thead th {
     white-space: nowrap;
+}
+
+// The global `th.sorting { padding-top: 0 }` rule leaves the header label
+// above the cell's middle, where DT centres its sort arrows (50% of the cell),
+// and only on columns not currently sorted. Symmetric padding with a middle
+// alignment puts label and arrows on one line in every sort state.
+table.dataTable.overview-table thead>tr>th,
+.values-table table.dataTable thead>tr>th,
+.custom-fields-values table.dataTable thead>tr>th {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    vertical-align: middle;
 }
 
 // A line of allele details between the picker and the sequence (the cgMLST
