@@ -411,32 +411,6 @@ test_that("Reset settings clears the mapping", {
   )
 })
 
-test_that("session reset tears down the generated curve", {
-  generate <- reactiveVal(0L)
-  session_reset <- reactiveVal(0L)
-
-  testServer(
-    visualization_epi$server,
-    args = list(
-      viz_metadata = reactive(meta_fixture()),
-      generate = generate,
-      plot_type = reactiveVal("Epi"),
-      session_reset = session_reset
-    ),
-    {
-      set_default_inputs(session)
-      generate(1L)
-      session$flushReact()
-      expect_true(generated())
-
-      session_reset(1L)
-      session$flushReact()
-
-      expect_false(generated())
-    }
-  )
-})
-
 test_that("the mapping picker offers the metadata fields but not the plotted date", {
   # The choices are this database's own columns, unknown until the metadata
   # exists, so they are pushed at the picker rather than declared with it.

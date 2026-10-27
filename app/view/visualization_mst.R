@@ -613,7 +613,6 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   db_rev = db_events$new_bus(),
-  session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
   # coverage and group, built once by the coordinator
@@ -1531,22 +1530,6 @@ server <- function(
       visUpdateNodes(proxy, fr$nodes)
       visUpdateEdges(proxy, fr$edges)
     })
-
-    # Top-level app-reset: clear the computed graph so the stale visNetwork is
-    # torn down (not just hidden behind the re-shown prompt), and restore the
-    # sidebar controls to their defaults — mirroring the local "Reset settings"
-    # button.
-    shiny$observeEvent(
-      session_reset(),
-      {
-        mst_obj(NULL)
-        drawn(NULL)
-        shell_built(NULL)
-        generated(FALSE)
-        reset_mst_settings()
-      },
-      ignoreInit = TRUE
-    )
 
     # The plot output element is kept mounted so that each Generate re-renders
     # the *same* output. The "press Generate" prompt is an overlay toggled

@@ -1,6 +1,6 @@
 box::use(
-  shiny[isolate, reactive, reactiveVal, testServer],
-  testthat[expect_identical, expect_true, test_that],
+  shiny[isolate, reactive, testServer],
+  testthat[expect_identical, expect_null, expect_true, test_that],
 )
 box::use(
   app / logic / db_events,
@@ -19,18 +19,13 @@ meta_for <- function(isolates) {
 # touches a database file; only the tab registry's lifetime is under test.
 with_open_tab <- function(expr) {
   bus <- db_events$new_bus()
-  # A reactiveVal rather than the signature's default reactive(), so the test
-  # can raise the signal the way app/main.R does.
-  reset <- reactiveVal(0L)
   testServer(
     visualization$server,
     args = list(
       db_path = reactive(NULL),
-      db_rev = bus,
-      session_reset = reset
+      db_rev = bus
     ),
     {
-      raise_reset <- function() reset(isolate(reset()) + 1L)
       session$flushReact()
       create_tab("AMR", "Plot 1")
       session$flushReact()
@@ -39,16 +34,6 @@ with_open_tab <- function(expr) {
     }
   )
 }
-
-test_that("a session reset takes every plot tab down", {
-  # main.R removes the whole Visualization panel before raising this, so the
-  # tab servers have to be destroyed explicitly or they outlive their markup.
-  with_open_tab(quote({
-    raise_reset()
-    session$flushReact()
-    expect_identical(length(isolate(tabs())), 0L)
-  }))
-})
 
 test_that("a database revision bump leaves open plot tabs alone", {
   # "Reload Database" bumps every revision and leaves the panels standing. If
@@ -88,32 +73,26 @@ test_that("a surviving tab is still alive after a revision bump", {
   c(found, unlist(lapply(as.list(x), .calls_matching, pred = pred), FALSE))
 }
 
-test_that("main.R wires Visualization to session_reset, not data_reset", {
-  # The module's teardown destroys tab servers without removing their nav
-  # markup, which is only safe because input$reset removes the whole panel
-  # first. data_reset is the signal that looks interchangeable and is not:
-  # "Reload Database" raises it and leaves every panel standing, which left a
-  # blank, inert plot tab that could not even be closed.
+test_that("main.R hands Visualization no reset signal", {
+  # "Reload Database" raises data_reset and leaves every panel standing; a
+  # teardown on it left a blank, inert plot tab that could not even be closed.
+  # Returning to the start screen restarts the session, so no signal is needed
+  # for that either.
   #
   # Asserted against the source because the defect was in the wiring, not in
-  # either module — both behave correctly for the signal they are handed.
+  # the module.
   hits <- .calls_matching(
     parse("../../app/main.R"),
     function(cl) identical(paste(deparse(cl[[1]]), collapse = ""), "visualization$server")
   )
   expect_identical(length(hits), 1L)
-  expect_identical(as.list(hits[[1]])$session_reset, as.symbol("session_reset"))
+  expect_null(as.list(hits[[1]])$session_reset)
 })
 
-test_that("tab ids are never reused after a reset", {
-  # tab_seq keeps counting, so a stale client-side reference from the previous
-  # database can never address a new tab.
+test_that("an open tab with no generated plot is not counted as unsaved", {
+  # main.R lists unsaved plots in its close-database dialog; a tab nobody
+  # pressed Generate in has nothing to lose.
   with_open_tab(quote({
-    first <- names(isolate(tabs()))[[1]]
-    raise_reset()
-    session$flushReact()
-    create_tab("AMR", "Plot 2")
-    session$flushReact()
-    expect_true(!identical(names(isolate(tabs()))[[1]], first))
+    expect_identical(isolate(unsaved_plots()), 0L)
   }))
 })

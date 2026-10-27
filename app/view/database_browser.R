@@ -38,7 +38,6 @@ box::use(
     datatable,
     editData,
     dataTableProxy,
-    replaceData,
     selectColumns,
     selectRows
   ],
@@ -73,7 +72,7 @@ box::use(
     MLST_COL_PREFIX
   ],
   app / logic / field_types[date_fields],
-  app / logic / functions[table_loading, table_processing],
+  app / logic / functions[table_loading],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / sheet_grid,
 )
@@ -134,7 +133,7 @@ READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
 # The rowspan matters for the frozen first column. DataTables maps each column
 # to a single header cell, and for an ungrouped column it picks the row-one
 # cell - so splitting `isolate` into an empty row-one cell plus a labelled
-# row-two one hands FixedColumns the *empty* cell to pin, leaving the visible
+# row-two one hands the pin (`dtfc-fixed-left`) the *empty* cell, leaving the visible
 # "Isolate" label to scroll away with the body. One rowspan cell is the column's
 # only header cell, so the label is what gets pinned.
 #
@@ -641,7 +640,7 @@ server <- function(
     # "AMR screening" span, which would say nothing a gene name doesn't.
     #
     # `isolate` is deliberately left out: it is the frozen first column, and
-    # leaving it ungrouped keeps the FixedColumns clone simple (see
+    # leaving it ungrouped keeps its single pinned header cell (see
     # .grouped_header_sketch()).
     header_groups <- reactive({
       df <- metadata_base()
@@ -988,10 +987,17 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    output$table_ui <- renderUI({
-      df <- metadata_base()
+    # Whether the database has entries to show. The grid's container below
+    # follows only this, not every read: a re-read (Discard, a reload)
+    # re-renders the grid inside the container it already has. Rebuilt along
+    # with the container, a grid hundreds of columns wide spent over a minute
+    # in the browser - DT's widget restyles the whole new table once per
+    # filter cell while it sets up the filter row.
+    has_entries <- reactiveVal(FALSE)
+    observe(has_entries(!is.null(metadata_base())))
 
-      if (is.null(df)) {
+    output$table_ui <- renderUI({
+      if (!has_entries()) {
         return(div(
           class = "db-empty-hint",
           "No entries in this database yet.",
@@ -1019,8 +1025,9 @@ server <- function(
       # joining the grid - redraws the grid the user is looking at: from
       # State$data, which holds the edits not saved yet (only a fresh read
       # replaces it, see the observer on metadata_base()), and with the view
-      # they left it in. isolate(): State$data changes with every edit, which
-      # replaceData() pushes without a re-render.
+      # they left it in. isolate(): State$data changes with every edit, whose
+      # cells are pushed to the grid without a re-render (see
+      # apply_cell_edits()).
       current <- isolate(State$data)
       version <- attr(base, "base_version", exact = TRUE)
       fresh_read <- !identical(version, rendered_version) || !is.data.frame(current)
@@ -1150,8 +1157,13 @@ server <- function(
         )
       }
 
+      # `dtfc-fixed-left` pins `isolate` with a sticky cell (main.scss), under
+      # the class name of the FixedColumns extension the rest of the styling
+      # keys off. The extension itself re-styled every drawn cell on every draw
+      # and column re-measure, a pass over rows x columns^2 cells.
       column_defs <- list(
         list(className = "dt-left", targets = "_all"),
+        list(className = "dtfc-fixed-left", targets = 0L),
         list(className = "col-readonly", targets = readonly_idx)
       )
       if (length(gene_idx)) {
@@ -1241,6 +1253,9 @@ server <- function(
               // as CSS hooks (scrollX clones the table three times over).
               var applyMode = function(on) {
                 if (!host) return;
+                // DT keeps a row's selection on its DOM node, and the grid
+                // only creates the nodes of rows it has drawn.
+                if (on) App.createAllRows(api);
                 host.classList.toggle('dt-selection-mode', !!on);
                 $(host).find('table').toggleClass('dt-selection-mode', !!on);
               };
@@ -1355,19 +1370,15 @@ server <- function(
         # input$metadata_table_rows_selected / _columns_selected in
         # selection_stats_ui below.
         selection = list(target = "row+column"),
-        extensions = "FixedColumns",
-        options = list(
-          # "r": DataTables' processing indicator, shown over the grid from
-          # each server request (sort, filter, an edit's replaceData(), a
-          # column toggle's redraw) until its rows are drawn.
-          dom = "rti",
-          processing = TRUE,
-          language = list(processing = table_processing("Updating entries ...")),
-          paging = FALSE,
+        # Client-side, with only the rows in view drawn (see
+        # sheet_grid$window_options()): an edit, sort or filter redraws a
+        # window of rows in the browser instead of fetching and rebuilding
+        # every row from the server.
+        options = c(sheet_grid$window_options(), list(
+          dom = "ti",
           scrollX = TRUE,
           scrollY = "1px",
           scrollCollapse = TRUE,
-          fixedColumns = list(leftColumns = 1),
           columnDefs = column_defs,
           # Tag rows for isolates added this session (data[0] is the isolate,
           # since rownames = FALSE) so main.scss can tint them.
@@ -1393,21 +1404,25 @@ server <- function(
               // The rows are drawn: lift the loading overlay (table_ui).
               $(tableNode).closest('.db-page_body').find('.loci-table-loading').remove();
 
+              // Only the rows in view are drawn (app/js/dt-grid-window.js).
+              App.attachGridWindow(api);
+
               // The scroll position, kept per grid so that a re-render of the
               // same data (an AMR group's genes joining it) puts the user
               // back where they were. A fresh read starts from the top, as
-              // it always has.
-              var scrollBody = $(tableNode).closest('.dataTables_scrollBody')[0];
+              // it always has. The grid's one scrollport is .dataTables_scroll
+              // (main.scss), with its full height already padded out above.
+              var scroller = $(tableNode).closest('.dataTables_scroll')[0];
               var views = window.ptGridScroll = window.ptGridScroll || {};
               var viewKey = %s;
               if (!%s) delete views[viewKey];
-              if (scrollBody) {
+              if (scroller) {
                 if (views[viewKey]) {
-                  scrollBody.scrollTop = views[viewKey].top;
-                  scrollBody.scrollLeft = views[viewKey].left;
+                  scroller.scrollTop = views[viewKey].top;
+                  scroller.scrollLeft = views[viewKey].left;
                 }
-                scrollBody.addEventListener('scroll', function() {
-                  views[viewKey] = { top: scrollBody.scrollTop, left: scrollBody.scrollLeft };
+                scroller.addEventListener('scroll', function() {
+                  views[viewKey] = { top: scroller.scrollTop, left: scroller.scrollLeft };
                 }, { passive: true });
               }
 
@@ -1438,13 +1453,10 @@ server <- function(
               //
               // DataTables fires column-visibility.dt once *per column*, not
               // once per change, so toggling a whole category announces 33 of
-              // them. Running the pass below on each one is quadratic in the
-              // worst way: columns.adjust() re-measures every column against a
-              // table that (paging = FALSE) has every row in the DOM, and each
-              // adjust in turn fires column-sizing.dt, which is what
-              // FixedColumns rebuilds its pinned column from - walking every
-              // cell. Toggling the AMR category that way blocked the main
-              // thread for ~45 seconds and had Chrome offering \"Page
+              // them, and columns.adjust() re-measures every column each time.
+              // Run per event, that blocked the main thread for ~45 seconds
+              // (back when every row was drawn and FixedColumns re-styled all
+              // of them on each measure) and had Chrome offering \"Page
               // Unresponsive\".
               //
               // The whole burst is synchronous, so a zero-delay timer coalesces
@@ -1492,7 +1504,7 @@ server <- function(
             }",
             jsonlite::toJSON(legend_html, auto_unbox = TRUE)
           ))
-        )
+        ))
       )
       if (!is.null(sketch)) {
         dt_args$container <- sketch
@@ -1512,7 +1524,7 @@ server <- function(
         dt_args$selection$selected <- view$selected
       }
       do.call(datatable, dt_args)
-    })
+    }, server = FALSE)
 
     proxy <- dataTableProxy("metadata_table", session = session)
 
@@ -1703,28 +1715,15 @@ server <- function(
     # metadata column as a number. Free-text metadata is stored as given. Undo
     # and redo restore values the grid held before, so they skip validation.
     #
-    # replaceData() is skipped for a genuine no-op: DT's own blur handler fires
-    # cell_edit for a no-op click on an empty cell too (JS null vs. the
-    # editor's blur value "" never compare equal), so calling it unconditionally
-    # sent a round trip on virtually every click into a not-yet-filled cell. If
-    # the user had already clicked into a *different* cell to start editing it
-    # by the time that round trip's replaceData() landed, its table-wide
-    # redraw tore that cell's still-open editor out from under them — so the
-    # first click on it appeared to do nothing and a second one was needed.
-    # See the same fix in database_custom.R's values_table_cell_edit observer.
-    #
-    # But for an *accepted* edit, replaceData() always runs, even when the
-    # value R stored is byte-identical to what the client already shows: DT's
-    # blur handler updates its cell's data client-side (cell().data()) without
-    # ever calling draw(), so the table's per-row sort/filter caches are never
-    # rebuilt for that edit. They stay built from the pre-edit (blank) data
-    # until something forces a real draw. Skipping replaceData() here used to
-    # be exactly that shortcut - and its absence meant the *next* column-header
-    # sort click was the first thing to force a draw, at which point DataTables
-    # rebuilt those stale caches and blanked every cell edited since the table
-    # last rendered, even though the save to the database already had the
-    # right values (a full reload always showed them correctly, since that
-    # goes through a real render). See conversation 2026-07-28 for the repro.
+    # Every cell the batch names is then pushed back to the grid with the value
+    # it now holds (sheet_grid$patch_cells()): an accepted edit's stored form,
+    # a rejected one's previous value, whatever a paste, fill or undo wrote.
+    # The grid redraws only for cells that differ from what it shows, and
+    # never under an open editor (app/js/dt-grid-patch.js) - the table-wide
+    # reload this replaced tore out an editor the user had meanwhile opened in
+    # the next cell. DT's own editor draws the grid itself after committing,
+    # as it does for every client-side table, so its sort and filter caches
+    # are never left built from the data before the edit.
     apply_cell_edits <- function(edits, skipped = 0L, kind = "edit") {
       df <- State$data
       # The client never offers read-only cells, but the payload is not what
@@ -1797,13 +1796,14 @@ server <- function(
         )
       }
       # A rejected single-cell edit already shows its new value client-side,
-      # so a rejection needs the redraw too.
-      if (nrow(changed) || nrow(res$rejected)) {
-        # No processing overlay over this reload: it would cover the grid
-        # after every edit, and catch the click meant for the next cell.
-        session$sendCustomMessage("pt-dt-quiet-reload", list(id = ns("metadata_table")))
-        replaceData(proxy, grid_frame(State$data), resetPaging = FALSE, rownames = FALSE)
-      }
+      # so it is pushed back like an accepted one.
+      sheet_grid$patch_cells(
+        session,
+        ns("metadata_table"),
+        grid_frame(State$data),
+        edits$row,
+        edits$column
+      )
 
       report <- sheet_grid$edit_report(res$rejected, skipped + sum(locked))
       if (!is.null(report)) {
@@ -1971,19 +1971,18 @@ server <- function(
       )
     })
 
-    # Discard: re-fetch from DB and push back to the table without re-render.
-    # Bumps reload_token first because metadata_base() may be holding a read
-    # from before a change this grid skipped while edits were pending —
-    # discarding has to land on the database as it is now, not as it was.
+    # Discard: re-fetch from DB, which also re-renders the grid from that read
+    # (metadata_table follows metadata_base()). Bumps
+    # reload_token first because metadata_base() may be holding a read from
+    # before a change this grid skipped while edits were pending — discarding
+    # has to land on the database as it is now, not as it was.
     observeEvent(input$discard, {
       State$metadata_dirty <- NULL
       State$custom_dirty <- NULL
       State$pending <- FALSE
       sheet_grid$clear_history(history)
       reload_token(isolate(reload_token()) + 1L)
-      fresh <- metadata_base()
-      State$data <- fresh
-      replaceData(proxy, grid_frame(fresh), resetPaging = FALSE, rownames = FALSE)
+      State$data <- metadata_base()
     })
 
     # Isolates the "Remove" button acts on: the metadata grid's row selection

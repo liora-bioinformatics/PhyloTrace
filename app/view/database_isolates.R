@@ -10,6 +10,7 @@ box::use(
   bslib[as_fill_carrier, as_fill_item, as_fillable_container, nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
+  shinyWidgets[show_toast],
   stats[median],
   utils[write.csv],
 )
@@ -191,7 +192,9 @@ isolates_ui <- function(ns) {
       )
     )),
     as_fillable_container(shiny$div(
+      id = ns("side"),
       class = "loci-controls",
+      overview_ui$side_gate_ui(ns, "side"),
       shiny$uiOutput(ns("isolate_checks")),
       as_fill_carrier(shiny$div(
         class = "loci-allele-panel",
@@ -447,7 +450,7 @@ detail_rows <- function(row, median_length, median_contigs) {
 
 # Handles server logic for the isolate table, the selected isolate's flags,
 # details and copy buttons.
-isolates_server <- function(input, output, overview) {
+isolates_server <- function(input, output, session, overview) {
   rows <- shiny$reactive(isolate_rows(overview()$isolates))
 
   output$iso_table <- renderDT({
@@ -458,6 +461,10 @@ isolates_server <- function(input, output, overview) {
     }
     overview_ui$data_table(r, selection = list(mode = "single", selected = 1))
   })
+
+  # The side panel only has something to show for a selected isolate; without
+  # any, its lone buttons would sit next to the table's message.
+  overview_ui$side_gate(output, session, "side", function() nrow(rows()) > 0)
 
   # The selected row of the isolate table.
   selected_isolate <- overview_ui$selected_row(input, "iso_table", rows)
@@ -498,20 +505,30 @@ isolates_server <- function(input, output, overview) {
   })
 
   # Copy actions -----------------------------------------------------------
+  # Confirms a copy once the browser reports the clipboard write succeeded.
+  shiny$observeEvent(input$copied, {
+    show_toast(
+      title = "Copied to clipboard",
+      type = "success",
+      position = "bottom-end",
+      timer = 3000
+    )
+  })
+
   shiny$observeEvent(input$copy_name, {
-    copy_to_clipboard(overview()$isolates$isolate[selected()])
+    copy_to_clipboard(overview()$isolates$isolate[selected()], session$ns("copied"))
   })
 
   shiny$observeEvent(input$copy_digest, {
     digest <- overview()$isolates$digest[selected()]
     shiny$req(!is.na(digest))
-    copy_to_clipboard(digest)
+    copy_to_clipboard(digest, session$ns("copied"))
   })
 
   shiny$observeEvent(input$copy_sha, {
     sha <- overview()$isolates$file_sha256[selected()]
     shiny$req(!is.na(sha))
-    copy_to_clipboard(sha)
+    copy_to_clipboard(sha, session$ns("copied"))
   })
 
   output$export_isolates <- shiny$downloadHandler(
@@ -702,7 +719,7 @@ server <- function(
     shiny$observeEvent(db_path(), overview_ui$reset_table_overlays(session$ns, TABLE_IDS))
 
     collection_info_server(input, output, overview, species)
-    isolates_server(input, output, overview)
+    isolates_server(input, output, session, overview)
     distribution_server(input, output, overview)
     diagnostics_server(input, output, overview)
   })

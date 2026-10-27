@@ -8,6 +8,7 @@ box::use(
   DT[DTOutput, renderDT],
   bslib[nav_panel, navset_card_tab],
   shiny,
+  shinyjs[toggleState],
   shinyWidgets[show_toast, updateVirtualSelect],
   stats[median, setNames],
   utils[head, write.csv],
@@ -233,10 +234,21 @@ loci_info_server <- function(input, output, session, db_path, overview) {
     )
   })
 
+  # The allele shown in the viewer with the locus it belongs to. It is set
+  # here as well as by the picker, so the viewer never depends on the browser
+  # echoing the picker's refill (which is not sent if the picker was not ready
+  # for the first update); following the pair keeps it from drawing a new
+  # locus with the previous locus's allele.
+  picked <- shiny$reactiveVal(NULL)
+
   # Refresh the allele dropdown whenever the selected locus changes.
   shiny$observeEvent(alleles(), {
     df <- alleles()
-    shiny$req(nrow(df) > 0)
+    if (!nrow(df)) {
+      updateVirtualSelect("allele_select", session = session, choices = character(0))
+      picked(NULL)
+      return()
+    }
     total <- sum(df$count)
     labels <- ifelse(
       df$present,
@@ -248,13 +260,27 @@ loci_info_server <- function(input, output, session, db_path, overview) {
       ),
       sprintf("Allele %s - not present", df$seqid)
     )
-    updateVirtualSelect(
-      "allele_select",
-      session = session,
-      label = paste("Selected Locus:", selected_row()$Locus),
-      choices = setNames(as.character(df$seqid), labels),
-      selected = as.character(df$seqid[1])
-    )
+    row <- selected_row()
+    refill <- function() {
+      updateVirtualSelect(
+        "allele_select",
+        session = session,
+        label = paste("Selected Locus:", row$Locus),
+        choices = setNames(as.character(df$seqid), labels),
+        selected = as.character(df$seqid[1])
+      )
+    }
+    refill()
+    # Sent again after the flush: on the tab's first visit the picker can
+    # still be initialising when the first update reaches it.
+    session$onFlushed(refill, once = TRUE)
+    picked(list(gene = row$.gene, seqid = df$seqid[1]))
+  })
+
+  # Follow the picker when another allele of the locus is chosen.
+  shiny$observeEvent(input$allele_select, {
+    shiny$req(input$allele_select)
+    picked(list(gene = selected_row()$.gene, seqid = as.integer(input$allele_select)))
   })
 
   # Most frequent alleles of the selected locus, the rest folded into one row.
@@ -284,16 +310,25 @@ loci_info_server <- function(input, output, session, db_path, overview) {
   # The picked allele's sequence and hash, read once for the viewer, the hash
   # line and both copy buttons.
   allele <- shiny$reactive({
-    shiny$req(db_path(), input$allele_select)
+    shiny$req(db_path(), picked())
+    pick <- picked()
+    shiny$req(pick$gene == selected_row()$.gene)
     allele <- guard_db_read(
       "Loading the allele sequence",
-      load_allele(db_path(), as.integer(input$allele_select))
+      load_allele(db_path(), as.integer(pick$seqid))
     )
     shiny$req(allele)
     allele
   })
 
+  # The picked allele's hash, or a hint while there is no allele to pick.
   output$allele_info <- shiny$renderUI({
+    if (!nrow(overview()$loci)) {
+      return(overview_ui$empty_hint("No locus is selected - the loci table is empty."))
+    }
+    if (!nrow(alleles())) {
+      return(overview_ui$empty_hint("No alleles are recorded for this locus."))
+    }
     overview_ui$allele_info("SHA-256", allele()$hash)
   })
 
@@ -304,6 +339,14 @@ loci_info_server <- function(input, output, session, db_path, overview) {
   })
 
   # Copy actions -----------------------------------------------------------
+  # The copy buttons and the locus download act on the picked allele's locus, so
+  # they stay disabled while none is picked.
+  shiny$observe({
+    toggleState("copy_seq", condition = !is.null(picked()))
+    toggleState("copy_idx", condition = !is.null(picked()))
+    toggleState("download_locus", condition = !is.null(picked()))
+  })
+
   # Confirms a copy once the browser reports the clipboard write succeeded.
   shiny$observeEvent(input$copied, {
     show_toast(
@@ -322,7 +365,7 @@ loci_info_server <- function(input, output, session, db_path, overview) {
   # id stands in only where the database has no hash for it yet.
   shiny$observeEvent(input$copy_idx, {
     hash <- allele()$hash
-    copy_to_clipboard(if (is.na(hash)) input$allele_select else hash, session$ns("copied"))
+    copy_to_clipboard(if (is.na(hash)) picked()$seqid else hash, session$ns("copied"))
   })
 
   # Downloads --------------------------------------------------------------

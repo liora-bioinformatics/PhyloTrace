@@ -651,7 +651,6 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   db_rev = db_events$new_bus(),
-  session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
   # coverage and group, built once by the coordinator
@@ -1441,15 +1440,6 @@ server <- function(
       shiny$updateDateInput(session, "epi_anno_start", value = d$start)
       shiny$updateDateInput(session, "epi_anno_end", value = d$end)
     })
-
-    shiny$observeEvent(
-      session_reset(),
-      {
-        generated(FALSE)
-        reset_epi_settings()
-      },
-      ignoreInit = TRUE
-    )
 
     shiny$observeEvent(generate(), {
       if (!identical(plot_type(), "Epi")) {

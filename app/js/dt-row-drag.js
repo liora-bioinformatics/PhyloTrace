@@ -9,6 +9,11 @@
  * {isolate, select} message, and the server applies them through
  * DT::selectRows(), which keeps DT's own selection state (and the
  * `_rows_selected` input) authoritative - including rows a filter is hiding.
+ *
+ * Rows are addressed by display position in the table's current order, so a
+ * drag also covers rows a windowed grid (app/js/dt-grid-window.js) has
+ * scrolled out of its drawn window meanwhile; their nodes exist while
+ * selection is on (createAllRows()).
  */
 
 /**
@@ -24,7 +29,7 @@ export function attachRowDrag(api, opts) {
   function rowOf(el) {
     var tr = el && el.closest ? el.closest("tr") : null;
     if (!tr || tr.parentNode !== body || tr.querySelector(".dataTables_empty")) return -1;
-    return tr.sectionRowIndex;
+    return api.page.info().start + tr.sectionRowIndex;
   }
 
   function sweep(to) {
@@ -32,9 +37,9 @@ export function attachRowDrag(api, opts) {
     drag.to = to;
     var lo = Math.min(drag.from, to);
     var hi = Math.max(drag.from, to);
-    for (var r = 0; r < body.rows.length; r++) {
+    for (var r = 0; r < drag.nodes.length; r++) {
       var on = r >= lo && r <= hi ? drag.select : drag.before[r];
-      body.rows[r].classList.toggle("selected", on);
+      if (drag.nodes[r]) drag.nodes[r].classList.toggle("selected", on);
     }
   }
 
@@ -44,12 +49,15 @@ export function attachRowDrag(api, opts) {
     if (e.button !== 0 || e.shiftKey || !opts.isActive()) return;
     var from = rowOf(e.target);
     if (from < 0) return;
+    // Every row in display order, drawn or not.
+    var nodes = api.rows({ search: "applied", order: "applied" }).nodes().toArray();
     drag = {
       from: from,
       to: from,
-      select: body.rows[from].classList.contains("selected"),
-      before: [].map.call(body.rows, function (tr) {
-        return tr.classList.contains("selected");
+      nodes: nodes,
+      select: nodes[from].classList.contains("selected"),
+      before: nodes.map(function (tr) {
+        return !!tr && tr.classList.contains("selected");
       }),
     };
   });

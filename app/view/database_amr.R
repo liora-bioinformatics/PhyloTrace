@@ -7,7 +7,14 @@
 
 box::use(
   DT[DTOutput, renderDT],
-  bslib[as_fill_carrier, as_fill_item, as_fillable_container, nav_panel, navset_card_tab],
+  bslib[
+    as_fill_carrier,
+    as_fill_item,
+    as_fillable_container,
+    card_header,
+    nav_panel,
+    navset_card_tab,
+  ],
   htmltools[htmlEscape],
   shiny,
   shinyWidgets[radioGroupButtons, updateVirtualSelect, virtualSelectInput],
@@ -97,7 +104,9 @@ elements_ui <- function(ns) {
       )
     )),
     as_fillable_container(shiny$div(
+      id = ns("side"),
       class = "loci-controls",
+      overview_ui$side_gate_ui(ns, "side"),
       shiny$uiOutput(ns("element_bars")),
       # A popup over the whole window like the allele picker; its virtual list
       # renders only the visible options of an element carried by thousands.
@@ -174,12 +183,26 @@ ui <- function(id) {
         ),
         list(
           overview_ui$fill_card(
-            "Element Groups",
-            shiny$uiOutput(ns("group_bars")),
+            "Profile Details",
+            shiny$uiOutput(ns("profile_detail")),
+            body_class = "overview-profile",
             hint = paste(
-              "Screened isolates carrying at least one element of each group of the",
-              "selected type; an isolate can count towards several."
+              "Select a profile to read it in full: every element of the combination",
+              "and, for resistance, the drug classes they cover."
             )
+          ),
+          overview_ui$fill_card(
+            card_header(
+              shiny$textOutput(ns("group_title"), inline = TRUE),
+              overview_ui$hint_icon(
+                "Element Groups",
+                paste(
+                  "Screened isolates carrying at least one element of each group of the",
+                  "selected type; an isolate can count towards several."
+                )
+              )
+            ),
+            shiny$uiOutput(ns("group_bars"))
           ),
           overview_ui$fill_card(
             "Elements per Isolate",
@@ -405,6 +428,10 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
     overview_ui$data_table(ov$elements, selection = list(mode = "single", selected = 1))
   })
 
+  # The side panel only has something to show for a selected element; without
+  # any, the lone carrier search would sit next to the table's message.
+  overview_ui$side_gate(output, session, "side", function() nrow(overview()$elements) > 0)
+
   # The selected element row.
   selected <- overview_ui$selected_row(input, "amr_elements", function() overview()$elements)
 
@@ -485,6 +512,31 @@ elements_server <- function(input, output, session, db_path, overview, reason) {
   )
 }
 
+# One profile as every element and, when
+# `with_classes`, the drug classes they cover as chips that wrap instead of cut.
+profile_detail <- function(row, with_classes) {
+  split_list <- function(x) {
+    if (is.na(x) || !nzchar(x)) character(0) else strsplit(x, ", ", fixed = TRUE)[[1]]
+  }
+  elements <- if (identical(row$Profile, "(none)")) character(0) else split_list(row$Profile)
+  classes <- split_list(row$Classes)
+  chip_section <- function(title, labels, tone) {
+    overview_ui$section(
+      sprintf("%s (%s)", title, fmt(length(labels))),
+      overview_ui$chips(labels, tone)
+    )
+  }
+
+  overview_ui$sections(
+    if (length(elements)) {
+      chip_section("Elements", elements, "primary")
+    } else {
+      overview_ui$empty_hint("Isolates of this profile carry no element of the selected type.")
+    },
+    if (with_classes && length(classes)) chip_section("Drug Classes", classes, "secondary")
+  )
+}
+
 # Handles server logic for the per-type profiles, groups and counts.
 distribution_server <- function(input, output, overview, reason) {
   type <- shiny$reactive(if (is.null(input$dist_type)) ELEMENT_TYPES[["AMR"]] else input$dist_type)
@@ -505,8 +557,31 @@ distribution_server <- function(input, output, overview, reason) {
     if (type() != ELEMENT_TYPES[["AMR"]]) {
       profiles$Classes <- NULL
     }
-    overview_ui$data_table(profiles)
+    overview_ui$data_table(profiles, selection = list(mode = "single", selected = 1))
   })
+
+  # The selected profile row.
+  selected_profile <- overview_ui$selected_row(input, "amr_profiles", profiles)
+
+  # The selected profile in full: every element and class, which the truncated
+  # table cells cannot show; a hint while there is no profile to select.
+  output$profile_detail <- shiny$renderUI({
+    render_info("output$profile_detail")
+    ov <- overview()
+    if (!identical(ov$state, "ok")) {
+      return(overview_ui$empty_hint(reason()))
+    }
+    if (is.null(profiles()) || !nrow(profiles())) {
+      return(overview_ui$empty_hint(sprintf("No %s profiles found.", tolower(type()))))
+    }
+    row <- selected_profile()
+    # The stored row outlives a switch of type until the new table is selected.
+    shiny$req(row$Profile %in% profiles()$Profile)
+    profile_detail(row, type() == ELEMENT_TYPES[["AMR"]])
+  })
+
+  # What the groups of the selected type are called.
+  output$group_title <- shiny$renderText(GROUP_TITLES[[type()]])
 
   # Isolates per group of the selected type, the rest folded into one row.
   output$group_bars <- shiny$renderUI({
@@ -527,10 +602,7 @@ distribution_server <- function(input, output, overview, reason) {
         groups$group[-seq_len(TOP_GROUPS)]
       )
     }
-    shiny$tagList(
-      overview_ui$section_title(GROUP_TITLES[[type()]]),
-      overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
-    )
+    overview_ui$bar_rows(bars$labels, bars$counts, n, tones = bars$tones)
   })
 
   # Screened isolates by how many distinct elements of the type they carry.
@@ -540,11 +612,9 @@ distribution_server <- function(input, output, overview, reason) {
     counts <- ov$counts[[type()]]
     n <- sum(ov$isolates$screened)
     if (!n) {
-      return(overview_ui$empty_hint(reason()))
+      return(overview_ui$empty_hint("No isolate has been screened yet."))
     }
-    shiny$tagList(
-      overview_ui$bar_rows(counts$label, counts$n, n)
-    )
+    overview_ui$bar_rows(counts$label, counts$n, n)
   })
 
   output$export_profiles <- shiny$downloadHandler(

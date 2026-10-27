@@ -3340,6 +3340,19 @@ MST_LAYOUT_CACHE_SIZE <- 4L
   c(x0, y0, x1, y1)
 }
 
+#' Forget Every Remembered MST Layout
+#'
+#' The cache outlives Shiny sessions, so app/logic/session_restart.R clears it
+#' when the user returns to the start screen: the next database starts from
+#' nothing rather than next to the last one's layouts.
+#'
+#' @return Called for its side effect.
+#' @export
+clear_layout_cache <- function() {
+  rm(list = ls(.layout_cache, all.names = TRUE), envir = .layout_cache)
+  invisible(NULL)
+}
+
 # Look a layout up by its arguments, solving and remembering it on a miss.
 .cached_layout <- function(...) {
   args <- list(...)

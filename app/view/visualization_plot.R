@@ -626,7 +626,6 @@ server <- function(
   # plot is stored under, so it must not be re-derived from the type here.
   name = NULL,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L),
   # Local per-isolate metadata, read and cached once by the coordinator.
   viz_metadata = shiny::reactive(NULL),
   # One row per metadata column: its declared type, distinct-value count,
@@ -1455,7 +1454,6 @@ server <- function(
         # database directly (AMR hits, the tree's AMR matrix, the MST's scheme
         # overview) need it to know when those reads went stale.
         db_rev = db_rev,
-        session_reset = gate(session_reset),
         # Resolved, never NULL - see engine_isolates. Declared by every engine
         # but read only by the two that compute a distance matrix.
         selected_isolates = gate(engine_isolates),

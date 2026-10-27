@@ -2,10 +2,12 @@
  * Spreadsheet-style range selection, clipboard and keyboard editing on top of a
  * DataTables grid that keeps DT's own `editable` cell editor.
  *
- * The selection lives in display coordinates (row position in the drawn tbody,
- * position among the visible columns) and is only translated to data
- * coordinates when an action runs, so sorting, filtering and the full redraw
- * every replaceData() causes never desync it - each `draw` simply repaints it.
+ * The selection lives in display coordinates (row position in the table's
+ * current order, position among the visible columns) and is only translated
+ * to data coordinates when an action runs, so sorting, filtering and redraws
+ * never desync it - each `draw` simply repaints it. A grid may draw only a
+ * window of its rows (app/js/dt-grid-window.js): a row outside it keeps its
+ * place in the selection and is scrolled to when the keyboard moves onto it.
  *
  * Nothing here writes cell data. Paste, cut, delete and fill hand Shiny one
  * batch of {isolate, col, value} edits, keyed by the row's column-0 value
@@ -13,7 +15,7 @@
  * dates, custom-variable types) stays the single authority on what is stored.
  * Undo/redo is server-side too (app/logic/sheet_grid.R keeps the history), so
  * it covers single-cell edits made in DT's own editor as well. The table
- * catches up through the server's own replaceData().
+ * catches up through the cells the server pushes back (app/js/dt-grid-patch.js).
  */
 
 var SEL = "sheet-sel";
@@ -111,6 +113,11 @@ export function attachSheet(api, opts) {
   var editOnClick = false;
   var pointer = null;
   var raf = 0;
+  // A cell the keyboard moved onto outside the drawn window, revealed (and
+  // its editor opened, for a key typed meanwhile) once the window is drawn
+  // over it.
+  var pendingReveal = null;
+  var pendingOpen = null;
 
   wrapper.tabIndex = -1;
   wrapper.classList.add("sheet-grid");
@@ -123,10 +130,30 @@ export function attachSheet(api, opts) {
     Shiny.setInputValue(opts.inputId, msg, { priority: "event" });
   }
 
+  // `rows`: the drawn rows, the first of them at display position `start`;
+  // `nr`: rows in the table's current order, drawn or not.
   function dims() {
     var rows = api.table().body().rows;
     var empty = !rows.length || rows[0].cells[0].classList.contains("dataTables_empty");
-    return { rows: rows, nr: empty ? 0 : rows.length, nc: empty ? 0 : rows[0].cells.length };
+    var info = api.page.info();
+    return {
+      rows: rows,
+      start: info.start,
+      nr: empty ? 0 : info.recordsDisplay,
+      nc: empty ? 0 : rows[0].cells.length,
+    };
+  }
+
+  // The drawn cell at display row `r`, visible column `c`, or null when the
+  // row is outside the drawn window.
+  function cellAt(d, r, c) {
+    var tr = d.rows[r - d.start];
+    return tr ? tr.cells[c] : null;
+  }
+
+  // The display row of a drawn body cell.
+  function rowOf(td) {
+    return api.page.info().start + td.parentNode.sectionRowIndex;
   }
 
   // The body cell `el` sits in, or null for headers, filters and open editors.
@@ -181,9 +208,12 @@ export function attachSheet(api, opts) {
     sel.fr = clamp(sel.fr, 0, d.nr - 1);
     sel.ac = clamp(sel.ac, 0, d.nc - 1);
     sel.fc = clamp(sel.fc, 0, d.nc - 1);
+    // Only the drawn part of a range is marked; the rest is marked when the
+    // window is drawn over it.
     var mark = function (g, cls) {
-      for (var r = g.r0; r <= g.r1; r++) {
-        var cells = d.rows[r].cells;
+      var r1 = Math.min(g.r1, d.start + d.rows.length - 1);
+      for (var r = Math.max(g.r0, d.start); r <= r1; r++) {
+        var cells = d.rows[r - d.start].cells;
         for (var c = g.c0; c <= g.c1; c++) {
           cells[c].classList.add(cls);
           painted.push(cells[c]);
@@ -193,11 +223,15 @@ export function attachSheet(api, opts) {
     var g = range();
     mark(g, SEL);
     if (fill) mark(fillRange(), FILL);
-    d.rows[sel.ar].cells[sel.ac].classList.add(ACTIVE);
-    d.rows[g.r1].cells[g.c1].classList.add(CORNER);
+    var active = cellAt(d, sel.ar, sel.ac);
+    var corner = cellAt(d, g.r1, g.c1);
+    if (active) active.classList.add(ACTIVE);
+    if (corner) corner.classList.add(CORNER);
   }
 
   function select(r, c, extend) {
+    pendingReveal = null;
+    pendingOpen = null;
     if (extend && sel) {
       sel.fr = r;
       sel.fc = c;
@@ -214,7 +248,7 @@ export function attachSheet(api, opts) {
   }
 
   // Scrolls `td` into view clear of the sticky header and the pinned column.
-  function reveal(td) {
+  function revealCell(td) {
     var box = scroller.getBoundingClientRect();
     var cell = td.getBoundingClientRect();
     var head = scroller.querySelector(".dataTables_scrollHead");
@@ -230,6 +264,24 @@ export function attachSheet(api, opts) {
     else if (cell.right > right) scroller.scrollLeft += cell.right - right;
   }
 
+  // Scrolls display cell (r, c) into view. A row outside the drawn window is
+  // scrolled to by the row height (every row draws at one height); the window
+  // follows the scroll, and the cell is fully revealed once it is drawn.
+  function reveal(r, c) {
+    var d = dims();
+    var td = cellAt(d, r, c);
+    if (td) {
+      revealCell(td);
+      return;
+    }
+    var rowHeight = d.rows.length ? api.table().body().offsetHeight / d.rows.length : 0;
+    if (!rowHeight) return;
+    var head = scroller.querySelector(".dataTables_scrollHead");
+    var view = scroller.clientHeight - (head ? head.offsetHeight : 0);
+    pendingReveal = { r: r, c: c };
+    scroller.scrollTop = r < d.start ? r * rowHeight : (r + 1) * rowHeight - view;
+  }
+
   function move(dr, dc, extend, toEdge) {
     var d = dims();
     if (!sel || !d.nr) return;
@@ -243,7 +295,7 @@ export function attachSheet(api, opts) {
       c = clamp(c + dc, 0, d.nc - 1);
     }
     select(r, c, extend);
-    reveal(d.rows[r].cells[c]);
+    reveal(r, c);
   }
 
   // The range's raw values (not their rendered marks) as rows of text.
@@ -343,7 +395,15 @@ export function attachSheet(api, opts) {
     var d = dims();
     if (!sel || !d.nr) return;
     if (readonly[api.columns(":visible").indexes()[sel.ac]]) return;
-    var td = d.rows[sel.ar].cells[sel.ac];
+    var td = cellAt(d, sel.ar, sel.ac);
+    if (!td) {
+      // Scrolled out of the drawn window: bring it back first. Keys typed
+      // before it is drawn add up, as they would in the editor.
+      var typed = pendingOpen && seed !== undefined ? (pendingOpen.seed || "") + seed : seed;
+      reveal(sel.ar, sel.ac);
+      if (pendingReveal) pendingOpen = { seed: typed, byMouse: byMouse };
+      return;
+    }
     if (td.querySelector("input, textarea, select")) return;
     $(td).trigger("dblclick");
     var select = td.querySelector("select");
@@ -389,7 +449,7 @@ export function attachSheet(api, opts) {
   function track(el) {
     var td = bodyCell(el);
     if (!td || !sel) return;
-    var r = td.parentNode.sectionRowIndex;
+    var r = rowOf(td);
     var c = td.cellIndex;
     if (drag === "fill") {
       setFill(r, c);
@@ -443,7 +503,7 @@ export function attachSheet(api, opts) {
         fill = null;
         return;
       }
-      var r = td.parentNode.sectionRowIndex;
+      var r = rowOf(td);
       var c = td.cellIndex;
       editOnClick =
         !e.shiftKey &&
@@ -665,7 +725,18 @@ export function attachSheet(api, opts) {
     });
   }
 
-  api.on("draw.dt", paint);
+  api.on("draw.dt", function () {
+    paint();
+    var target = pendingReveal;
+    var open = pendingOpen;
+    if (!target) return;
+    var td = cellAt(dims(), target.r, target.c);
+    if (!td) return;
+    pendingReveal = null;
+    pendingOpen = null;
+    revealCell(td);
+    if (open) openEditor(open.seed, open.byMouse);
+  });
   api.on("column-visibility.dt", clear);
 
   return { clear: clear };

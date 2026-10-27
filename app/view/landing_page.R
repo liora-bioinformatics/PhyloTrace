@@ -60,8 +60,7 @@ ui <- function(id) {
 #' @export
 server <- function(
   id,
-  external_db = shiny$reactive(NULL),
-  session_reset = shiny$reactive(0L)
+  external_db = shiny$reactive(NULL)
 ) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -117,18 +116,6 @@ server <- function(
       })
     }
 
-    # Incrementing this forces the db-location observe() to re-run after reset,
-    # even when input$db_location hasn't changed.
-    db_location_trigger <- shiny$reactiveVal(0L)
-
-    shiny$observeEvent(
-      session_reset(),
-      {
-        load_trigger(NULL)
-        db_location_trigger(db_location_trigger() + 1L)
-      },
-      ignoreInit = TRUE
-    )
 
     # Observe a database location
     shiny$observeEvent(external_db(), {
@@ -185,13 +172,9 @@ server <- function(
     )
 
     # Observe current database path.
-    # Depends on db_location_trigger so it also re-runs after a session reset,
-    # even when input$db_location has not changed.
     # Falls back to disk (not in-memory) so it picks up whatever main.R wrote
-    # during this session.
+    # in an earlier session.
     shiny$observe({
-      db_location_trigger()
-
       loc <- NULL
 
       location_input <- parseFilePaths(
@@ -267,12 +250,6 @@ server <- function(
 
     # Render selected database
     output$selected_database <- renderDT({
-      # Depend on db_location_trigger directly so this re-reads file.info()
-      # from disk after a session reset, even when db_location()'s value is
-      # unchanged (e.g. same db path, just modified on disk) and therefore
-      # would not otherwise invalidate this output.
-      db_location_trigger()
-
       render_info("output$selected_database")
 
       # Get database metadata
@@ -335,9 +312,9 @@ server <- function(
     # one. `db_location()` is populated at startup from state.json so the landing
     # page can offer "Last used: …", and it moves as soon as the user picks a
     # file - but neither of those means the database is open. Gating on
-    # `load_trigger()` (NULL until Load is pressed, NULL again after a session
-    # reset) keeps every downstream module from querying - or migrating - a file
-    # the user has not asked for yet. Without the gate the Database Browser and
+    # `load_trigger()` (NULL until Load is pressed) keeps every downstream
+    # module from querying - or migrating - a file the user has not asked for
+    # yet. Without the gate the Database Browser and
     # Custom Variables panels read the remembered database on the first reactive
     # flush, i.e. before main.R has run its on-load migrations.
     list(

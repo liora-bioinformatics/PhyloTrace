@@ -1,12 +1,16 @@
 import "./busy-shield";
 import "./dt-column-sizing";
 import "./dt-column-visibility";
-import "./dt-quiet-reload";
+import "./dt-filter-exact";
+import "./dt-filter-popup";
+import "./dt-filter-scope";
+import "./dt-grid-patch";
 import "./dt-visibility-resync";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";
 import "./viz-scale-swatch";
 
+export { attachGridWindow, createAllRows } from "./dt-grid-window";
 export { attachRowDrag } from "./dt-row-drag";
 export { attachSheet } from "./dt-sheet";
 

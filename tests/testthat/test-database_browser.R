@@ -626,3 +626,24 @@ test_that("loading a group keeps unsaved edits and carries sort and filters by n
     expect_identical(opts$searchCols[[1]]$search, "")
   })
 })
+
+test_that("the grid is client-side and windowed, its first column pinned by class", {
+  path <- amr_db(local_tempdir())
+
+  testServer(database_browser$server, args = list(db_path = reactive(path)), {
+    session$flushReact()
+    widget <- fromJSON(output$metadata_table, simplifyVector = FALSE)$x
+    opts <- widget$options
+
+    # Client-side: the rows travel with the widget, there is no ajax source.
+    expect_length(widget$data, length(grid_cols()))
+    expect_null(opts$ajax)
+    expect_true(opts$paging)
+    expect_true(opts$deferRender)
+    # Pinned by a sticky class, not the FixedColumns extension.
+    expect_null(opts$fixedColumns)
+    pinned <- Filter(function(d) identical(d$className, "dtfc-fixed-left"), opts$columnDefs)
+    expect_identical(unlist(pinned[[1]]$targets), 0L)
+    expect_match(opts$initComplete, "App.attachGridWindow(api)", fixed = TRUE)
+  })
+})

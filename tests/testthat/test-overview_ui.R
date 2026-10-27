@@ -64,6 +64,21 @@ test_that("data_table draws rows on demand and truncates only text columns", {
   expect_identical(defs[[2]]$targets, c(0L, 2L))
 })
 
+test_that("data_table shows whole-number doubles as integers", {
+  widget <- overview_ui$data_table(data.frame(
+    start = c(1, 1338040),
+    share = c(34.4, 0.8),
+    day = as.Date(c("2024-01-01", "2024-01-02")),
+    big = c(1, 3e9)
+  ))
+  data <- widget$x$data
+
+  expect_true(is.integer(data$start))
+  expect_true(is.double(data$share))
+  expect_true(inherits(data$day, "Date"))
+  expect_true(is.double(data$big))
+})
+
 test_that("selected_row re-runs its dependents only when the selection changes", {
   testServer(
     function(id) {
@@ -111,4 +126,34 @@ test_that("section pairs a caption with its content inside a plain stack", {
   expect_match(html, "overview-sections", fixed = TRUE)
   expect_match(html, "overview-section-title\">Origin", fixed = TRUE)
   expect_match(html, "rows", fixed = TRUE)
+})
+
+test_that("chips shows every label in full with its tone", {
+  html <- as.character(overview_ui$chips(c("blaTEM-1", "aph(3'')-Ib"), "secondary"))
+
+  expect_match(html, "overview-chip is-secondary\">blaTEM-1", fixed = TRUE)
+  expect_match(html, "aph(3'')-Ib", fixed = TRUE)
+  expect_identical(lengths(regmatches(html, gregexpr("overview-chip ", html))), 2L)
+})
+
+test_that("side_gate hides the side panel's namespaced id only while it has nothing to show", {
+  server <- function(id) {
+    moduleServer(id, function(input, output, session) {
+      overview_ui$side_gate(output, session, "side", reactive(input$rows))
+    })
+  }
+
+  testServer(server, {
+    session$setInputs(rows = FALSE)
+    expect_match(output$side_gate$html, "#mod-side { display: none", fixed = TRUE)
+    session$setInputs(rows = TRUE)
+    expect_identical(length(as.character(output$side_gate$html)), 0L)
+  }, args = list(id = "mod"))
+})
+
+test_that("side_gate_ui is a hidden placeholder bound to the gate output", {
+  html <- as.character(overview_ui$side_gate_ui(shiny::NS("mod"), "side"))
+
+  expect_match(html, "id=\"mod-side_gate\"", fixed = TRUE)
+  expect_match(html, "display: none;", fixed = TRUE)
 })

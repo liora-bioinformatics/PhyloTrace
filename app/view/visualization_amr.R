@@ -849,7 +849,6 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   db_rev = db_events$new_bus(),
-  session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
   # coverage and group, built once by the coordinator
@@ -1710,15 +1709,6 @@ server <- function(
         duration = 5
       )
     })
-
-    shiny$observeEvent(
-      session_reset(),
-      {
-        generated(FALSE)
-        reset_amr_settings()
-      },
-      ignoreInit = TRUE
-    )
 
     # --- generate -----------------------------------------------------------
 

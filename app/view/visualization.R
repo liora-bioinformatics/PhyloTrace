@@ -401,7 +401,6 @@ ui <- function(id) {
 server <- function(
   id,
   db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L),
   # Dashboard integration: `launch_ctx` fires when "Add Plot" was clicked for an
   # Analysis (carries its id); `open_ctx` fires when a saved plot was clicked to
   # reopen it (carries its plot id). `db_rev`'s `analyses` revision is what both
@@ -641,7 +640,6 @@ server <- function(
         plot_type = plot_type,
         name = name,
         db_path = db_path,
-        session_reset = session_reset,
         viz_metadata = viz_metadata,
         viz_field_profiles = viz_field_profiles,
         staged_sets = staged_sets,
@@ -658,10 +656,8 @@ server <- function(
       tid
     }
 
-    # Tear a tab down as completely as Shiny allows. `remove_ui` is FALSE only
-    # on session reset, where app/main.R has already removed the whole
-    # Visualization panel and there is no nav left to remove from.
-    close_tab <- function(tid, remove_ui = TRUE, collect = TRUE) {
+    # Tear a tab down as completely as Shiny allows.
+    close_tab <- function(tid) {
       reg <- isolate(tabs())
       entry <- reg[[tid]]
       if (is.null(entry)) {
@@ -678,30 +674,24 @@ server <- function(
       reg[[tid]] <- NULL
       tabs(reg)
 
-      if (remove_ui) {
-        was_active <- identical(isolate(input$plot_set), tid)
-        nav_remove(id = "plot_set", target = tid)
-        # Removing the selected pane leaves the navset showing nothing — but
-        # only then: closing a background tab must not pull the user off the
-        # plot they are looking at.
-        if (was_active) {
-          nav_select(
-            "plot_set",
-            selected = if (length(reg)) {
-              utils::tail(names(reg), 1L)
-            } else {
-              .NEW_TAB
-            }
-          )
-        }
+      was_active <- identical(isolate(input$plot_set), tid)
+      nav_remove(id = "plot_set", target = tid)
+      # Removing the selected pane leaves the navset showing nothing — but
+      # only then: closing a background tab must not pull the user off the
+      # plot they are looking at.
+      if (was_active) {
+        nav_select(
+          "plot_set",
+          selected = if (length(reg)) {
+            utils::tail(names(reg), 1L)
+          } else {
+            .NEW_TAB
+          }
+        )
       }
 
       # Without this R keeps the freed pages and the reclaim is invisible.
-      # `collect` is FALSE when closing tabs in a loop, so a session reset pays
-      # for one collection rather than one per open plot.
-      if (collect) {
-        gc()
-      }
+      gc()
       invisible(NULL)
     }
 
@@ -1028,35 +1018,12 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    # On session reset every plot belongs to the previous database. app/main.R
-    # removes the whole Visualization panel and re-inserts a fresh one, so
-    # there is no nav to remove from — but the tab servers are still resident
-    # here and have to be taken down explicitly. `tab_seq` deliberately keeps
-    # counting, so ids from the old session are never handed out again.
-    #
-    # `remove_ui = FALSE` makes this a contract, not a preference: whatever is
-    # wired to `session_reset` MUST already have removed this module's panel.
-    # Raise it without doing so and every tab becomes a destroyed server behind
-    # nav markup that is still on screen — visibly a plot tab, but blank and
-    # inert, with even its close button dead. app/main.R's `data_reset` is the
-    # signal that looks right and is not: "Reload Database" raises it and leaves
-    # the panels standing. A reload needs no teardown here at all; the plots
-    # belong to the same database, and db_rev refreshes what they read.
-    observeEvent(
-      session_reset(),
-      {
-        for (tid in names(isolate(tabs()))) {
-          close_tab(tid, remove_ui = FALSE, collect = FALSE)
-        }
-        tabs(list())
-        dist_cache$clear()
-        gc()
-        pending_preset(NULL)
-        closing_tab(NULL)
-      },
-      ignoreInit = TRUE
-    )
+    # Plot tabs holding a plot not saved to an Analysis; main.R names them
+    # when asking before the database is closed.
+    unsaved_plots <- reactive({
+      sum(vapply(tabs(), function(e) isTRUE(e$handle$dirty()), logical(1)))
+    })
 
-    invisible(NULL)
+    list(unsaved_plots = unsaved_plots)
   })
 }

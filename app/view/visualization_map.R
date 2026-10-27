@@ -2400,7 +2400,6 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   db_rev = db_events$new_bus(),
-  session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
   # coverage and group, built once by the coordinator
@@ -3481,28 +3480,10 @@ server <- function(
       capture_data = shiny$reactive(input$export_capture)
     )
 
-    # On session reset (top-level app-reset), clear the markers and cached
-    # coordinates so the stale map is torn down, and restore the sidebar
-    # controls to their defaults — mirroring the local "Reset settings" button
-    # (reset_map_settings(), defined below).
-    shiny$observeEvent(
-      session_reset(),
-      {
-        map_coords(NULL)
-        map_geocode_status(NULL)
-        generated(FALSE)
-        anim_playing(FALSE)
-        anim_idx(0L)
-        reset_map_settings()
-      },
-      ignoreInit = TRUE
-    )
-
     # Reset settings: restore every control in this engine's own sidebar to
     # its coded default, WITHOUT disturbing the already-geocoded plot (no
     # re-Generate needed), and drop the mapping, which is reactiveVal state
-    # rather than a control. Shared by the "Reset settings" button and the
-    # top-level app-reset (session_reset) path above.
+    # rather than a control.
     #
     # The catalogue (MAP_CONTROLS / map_control_defaults()) is what makes that
     # complete: this used to be shinyjs::reset(), which silently skips every

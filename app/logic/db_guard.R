@@ -11,8 +11,11 @@ box::use(
   app / logic / logging[log_event],
 )
 
-# Returned by guard_db() in place of a value when the guarded work failed.
-FAILED <- structure(list(), class = "db_guard_failure")
+# Returned by guard_db() in place of a value when the guarded work failed,
+# carrying the user-facing reason for callers that report it themselves.
+failure <- function(reason) {
+  structure(list(reason = reason), class = "db_guard_failure")
+}
 
 #' Describe a Database Error for the User
 #'
@@ -74,15 +77,15 @@ report_db_failure <- function(action, e) {
 #' @param action Character scalar naming the action for the log and the
 #'   notification, e.g. `"Removing isolates"`.
 #' @param expr The database work, evaluated once.
-#' @return The value of `expr`, or a failure marker to test with [db_failed()].
+#' @return The value of `expr`, or a failure marker to test with [db_failed()]
+#'   whose `reason` element holds the user-facing reason.
 #' @export
 guard_db <- function(action, expr) {
   tryCatch(expr, error = function(e) {
     if (inherits(e, "shiny.silent.error")) {
       stop(e)
     }
-    report_db_failure(action, e)
-    FAILED
+    failure(report_db_failure(action, e))
   })
 }
 

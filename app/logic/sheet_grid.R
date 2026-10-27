@@ -3,10 +3,11 @@
 # Server half of the spreadsheet layer (app/js/dt-sheet.js) shared by the
 # editable isolate grids: validating and applying cell edit batches, the
 # undo/redo history, the user-facing report, and the glue that wires a DT grid
-# to the client-side layer.
+# to the client-side layer: windowed drawing and the cell values pushed back
+# after an edit.
 
 box::use(
-  htmltools[tagList, tags],
+  htmltools[htmlEscape, tagList, tags],
   jsonlite[toJSON],
   stringi[stri_replace_all_regex, stri_trans_nfc, stri_trim_both],
 )
@@ -28,6 +29,10 @@ HISTORY_LIMIT <- 100L
 #' value travels into plot labels and exports.
 #' @export
 MAX_CELL_CHARS <- 50L
+
+# Rows a windowed grid draws before app/js/dt-grid-window.js sizes the window
+# to the view.
+GRID_WINDOW <- 100L
 
 # Rejected values are quoted back in notifications up to this many characters.
 PREVIEW_CHARS <- 30L
@@ -467,6 +472,79 @@ sheet_attach_js <- function(
     MAX_CELL_CHARS,
     active
   )
+}
+
+#' DataTables Options of a Windowed Grid
+#'
+#' The editable grids page through their rows without showing it: DataTables
+#' draws one page, a window of rows that app/js/dt-grid-window.js (attached in
+#' `initComplete` with `App.attachGridWindow(api)`) keeps over the rows in view.
+#' The info line still counts every row.
+#'
+#' @return A list to merge into a client-side `datatable()`'s `options`.
+#' @export
+window_options <- function() {
+  list(
+    paging = TRUE,
+    pageLength = GRID_WINDOW,
+    lengthChange = FALSE,
+    deferRender = TRUE,
+    language = list(info = "Showing 1 to _TOTAL_ of _TOTAL_ entries")
+  )
+}
+
+# Values as a client-side DT grid holds them: datatable() HTML-escapes text
+# and factor columns before sending them (its `escape = TRUE` default), so
+# a value pushed later is escaped the same way to read, sort and edit alike.
+.client_values <- function(x) {
+  if (is.character(x) || is.factor(x)) htmlEscape(as.character(x)) else x
+}
+
+#' Push Cell Values to a Client-Side Grid
+#'
+#' Sends the current values of the given cells to the grid rendered from `df`
+#' (app/js/dt-grid-patch.js applies them), in place of a full reload: only the
+#' cells whose value differs from what the grid holds are redrawn.
+#'
+#' @param session Shiny session.
+#' @param id Namespaced output id of the grid.
+#' @param df Data frame the grid shows, its columns in grid order.
+#' @param rows Rows of `df`, one per cell.
+#' @param cols Column names, one per cell. Cells naming no row or column of
+#'   `df` are skipped.
+#' @export
+patch_cells <- function(session, id, df, rows, cols) {
+  keep <- !is.na(rows) & rows >= 1L & rows <= nrow(df) & cols %in% names(df)
+  rows <- as.integer(rows[keep])
+  cols <- cols[keep]
+  if (!length(rows)) {
+    return(invisible(NULL))
+  }
+  values <- lapply(seq_along(rows), function(k) .client_values(df[[cols[k]]][rows[k]]))
+  session$sendCustomMessage(
+    "pt-dt-patch",
+    list(
+      id = id,
+      rows = as.list(rows - 1L),
+      cols = as.list(match(cols, names(df)) - 1L),
+      values = values
+    )
+  )
+  invisible(NULL)
+}
+
+#' Replace Every Row of a Client-Side Grid
+#'
+#' @param session Shiny session.
+#' @param id Namespaced output id of the grid.
+#' @param df The new data, with the columns the grid was rendered with.
+#' @export
+replace_rows <- function(session, id, df) {
+  session$sendCustomMessage(
+    "pt-dt-patch",
+    list(id = id, data = unname(lapply(df, function(x) I(.client_values(x)))))
+  )
+  invisible(NULL)
 }
 
 #' Gesture Hints

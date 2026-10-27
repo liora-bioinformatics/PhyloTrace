@@ -111,6 +111,13 @@ html.pt-busy-hold {
     --bs-btn-disabled-opacity: 0.3;
 }
 
+// shinyjs disables a downloadButton (an <a>) with a bare `disabled` attribute,
+// which Bootstrap only styles and blocks on real <button>s.
+a.btn[disabled] {
+    pointer-events: none;
+    opacity: var(--bs-btn-disabled-opacity);
+}
+
 // Card header with a help tooltip pushed to the far right.
 .help-header {
     display: flex;
@@ -1862,36 +1869,6 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     // grid until its first draw.
     position: relative;
 
-    // DataTables' processing indicator (functions.R table_processing) as a
-    // translucent version of that overlay, over the whole grid while a server
-    // request is answered and its rows drawn. DataTables shows and hides it
-    // through an inline `display`, so it stays a block box here.
-    div.dataTables_processing {
-        position: absolute;
-        inset: 0;
-        width: auto;
-        height: auto;
-        margin: 0;
-        padding: 0;
-        z-index: 20;
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
-        background: rgba(51, 62, 72, 0.6);
-
-        // DataTables' own animated dots, replaced by the spinner.
-        >div:not(.loci-loading-inner) {
-            display: none;
-        }
-    }
-
-    // Not over a cell edit's reload (app/js/dt-quiet-reload.js), and not
-    // stacked on the loading overlay while the grid's first draw is pending.
-    .dt-quiet div.dataTables_processing,
-    &:has(.loci-table-loading) div.dataTables_processing {
-        display: none !important;
-    }
-
     .datatables {
         height: 100%;
     }
@@ -1951,6 +1928,33 @@ table.dataTable>tbody>tr.selected>* {
     table.dataTable thead tr>.dtfc-fixed-left,
     table.dataTable tbody tr>.dtfc-fixed-left {
         background-color: var(--bs-body-bg);
+    }
+}
+
+// The editable grids pin their first column (`isolate`) themselves: the
+// columnDef class `dtfc-fixed-left` (database_browser.R, database_custom.R)
+// makes its cells sticky, which is all the FixedColumns extension did for one
+// column - only it also re-styled every drawn cell on every draw. Same class
+// name, so the fill and tint rules here apply to both kinds of pinned column.
+.edit-table {
+    table.dataTable thead tr>.dtfc-fixed-left,
+    table.dataTable tbody tr>.dtfc-fixed-left {
+        position: sticky;
+        left: 0;
+    }
+
+    table.dataTable thead tr>.dtfc-fixed-left {
+        z-index: 3;
+    }
+
+    table.dataTable tbody tr>.dtfc-fixed-left {
+        z-index: 1;
+    }
+
+    // The containing block DT's filter dropdowns position against, which
+    // FixedColumns used to set inline.
+    .dataTables_scroll {
+        position: relative;
     }
 }
 
@@ -3845,16 +3849,31 @@ table.dataTable thead>tr>th.sorting {
         flex-direction: column;
     }
 
+    // While a filter popup is open DT sets the header and body to
+    // `overflow: visible` and this wrapper to `overflow-x: scroll`, so the
+    // popup can hang out of the clipped header. That added a second scrollbar
+    // and stopped the header from scrolling with the body; the `!important`s
+    // here keep the layout as it is, and the popup escapes the header by being
+    // fixed instead (app/js/dt-filter-popup.js).
     .dataTables_scroll {
         flex: 1 1 auto;
         min-height: 0;
         display: flex;
         flex-direction: column;
+        overflow: visible !important;
     }
 
     .dataTables_scrollHead {
         flex-shrink: 0;
         overflow: hidden !important;
+    }
+
+    // DataTables copies the header, filter popups included, into the scrolling
+    // body on every draw to size the columns. A popup open during a draw (a
+    // filter just applied) is copied open, and its absolute position lets it
+    // escape the zero-height copy: a second, dead slider below the real one.
+    .dataTables_scrollBody > table > thead {
+        visibility: hidden;
     }
 
     .dataTables_scrollBody {
@@ -4395,10 +4414,10 @@ label {
     width: 100%;
 }
 
+// Centred by .modal's align-content above. No min-height: Bootstrap's own
+// centring recipe sizes the dialog to the viewport minus its margins, and with
+// a mismatched margin it ends up taller than the viewport and scrolls the page.
 .start-modal .modal-dialog {
-    display: flex;
-    align-items: center;
-    min-height: calc(100% - 1rem);
     width: auto;
     max-width: 500px;
     margin: 1.75rem auto;
@@ -5592,6 +5611,36 @@ table.dataTable thead>tr>th.sorting {
     }
 }
 
+// The selected profile of AMR Overview's Distribution tab: the longest card of
+// the aside, so it takes twice the height of the bar cards beside it.
+.scheme-info-layout>.scheme-aside.overview-aside>.html-fill-item:has(.overview-profile) {
+    flex-grow: 2;
+}
+
+.overview-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.overview-chip {
+    padding: 0.15rem 0.55rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+    background: var(--bs-tertiary-bg);
+
+    &.is-primary {
+        color: var(--bs-primary);
+        border-color: var(--bs-primary);
+    }
+
+    &.is-secondary {
+        color: var(--bs-body-color);
+    }
+}
+
 .overview-group_meta {
     display: flex;
     flex-wrap: wrap;
@@ -5818,6 +5867,12 @@ table.dataTable thead>tr>th.sorting {
     max-width: 20rem;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+// Column headers never wrap: the tables scroll sideways rather than stack a
+// name like "Mean Contig (bp)" over several lines.
+table.dataTable.overview-table thead th {
     white-space: nowrap;
 }
 

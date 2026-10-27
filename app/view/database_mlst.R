@@ -9,6 +9,7 @@ box::use(
   bslib[nav_panel, navset_card_tab],
   htmltools[htmlEscape],
   shiny,
+  shinyjs[toggleState],
   shinyWidgets[show_toast, updateVirtualSelect],
   stats[setNames],
   utils[write.csv],
@@ -354,7 +355,11 @@ loci_info_server <- function(
   # Refresh the allele dropdown whenever the selected locus changes.
   shiny$observeEvent(alleles(), {
     df <- alleles()
-    shiny$req(nrow(df) > 0)
+    if (!nrow(df)) {
+      updateVirtualSelect("allele_select", session = session, choices = character(0))
+      picked(NULL)
+      return()
+    }
     labels <- sprintf(
       "Allele %s - %s isolate(s) (%.1f%%)",
       df$allele,
@@ -401,6 +406,16 @@ loci_info_server <- function(
     )
   })
 
+  # A hint in the place of the allele details while there is no allele to pick.
+  output$allele_info <- shiny$renderUI({
+    if (!nrow(overview()$loci)) {
+      return(overview_ui$empty_hint("No locus is selected - the loci table is empty."))
+    }
+    if (!nrow(alleles())) {
+      overview_ui$empty_hint("No alleles are recorded for this locus.")
+    }
+  })
+
   output$allele_sequence <- shiny$renderUI({
     shiny$req(db_path(), picked())
     pr <- overview()$primary
@@ -432,6 +447,15 @@ loci_info_server <- function(
   })
 
   # Copy actions -----------------------------------------------------------
+  # The copy buttons and the locus download act on the picked allele's locus, so
+  # they stay disabled while none is picked, and the sequence one also while
+  # the allele has no stored sequence.
+  shiny$observe({
+    toggleState("copy_idx", condition = !is.null(picked()))
+    toggleState("download_locus", condition = !is.null(picked()))
+    toggleState("copy_seq", condition = !is.null(picked()) && !is.null(seq_cache()))
+  })
+
   # Confirms a copy once the browser reports the clipboard write succeeded.
   shiny$observeEvent(input$copied, {
     show_toast(
@@ -566,7 +590,6 @@ isolate_rows <- function(ov) {
   add_flag(iso$prov_differs, "provenance differs")
   add_flag(!iso$has_calls & iso$status %in% CALLED_STATUSES, "no alleles stored")
 
-  n_loci <- length(ov$loci$Locus)
   out <- data.frame(
     Isolate = iso$isolate,
     Status = ifelse(
@@ -579,15 +602,14 @@ isolate_rows <- function(ov) {
     Scheme = iso$scheme,
     Repository = vapply(iso$repository, repo_name, character(1), USE.NAMES = FALSE),
     Release = iso$version,
-    # Out of the primary scheme's loci only where the isolate was typed against
-    # it; another scheme has its own locus count.
+    # Out of the loci of the scheme the isolate itself was typed against.
     `Loci Called` = ifelse(
       !iso$has_calls,
       NA_character_,
       ifelse(
-        iso$on_primary & n_loci > 0,
-        sprintf("%d / %d", iso$n_loci, n_loci),
-        as.character(iso$n_loci)
+        is.na(iso$scheme_loci),
+        as.character(iso$n_loci),
+        sprintf("%d / %d", iso$n_loci, iso$scheme_loci)
       )
     ),
     Identity = iso$identity,

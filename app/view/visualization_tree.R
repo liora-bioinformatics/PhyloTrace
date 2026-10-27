@@ -1316,7 +1316,6 @@ server <- function(
   id,
   db_path = shiny$reactive(NULL),
   db_rev = db_events$new_bus(),
-  session_reset = shiny$reactive(0L),
   viz_metadata = shiny$reactive(NULL),
   # Per-column profile of the metadata: declared type, distinct-value count,
   # coverage and group, built once by the coordinator
@@ -2262,20 +2261,6 @@ server <- function(
       shiny$req(p)
       tree_plot$build_tree_ggtree(p$tree, p$metadata, p$opts)
     })
-
-    # Top-level app-reset: clear the computed tree so the stale plot image is
-    # torn down (not just hidden behind the re-shown prompt), and restore the
-    # sidebar controls to their defaults — mirroring the local "Reset
-    # settings" button.
-    shiny$observeEvent(
-      session_reset(),
-      {
-        tree_obj(NULL)
-        generated(FALSE)
-        reset_tree_settings()
-      },
-      ignoreInit = TRUE
-    )
 
     # Recompute the tree. Fires on Generate, and also on the computation options
     # that now live in this engine's own sidebar rather than the tab's — the

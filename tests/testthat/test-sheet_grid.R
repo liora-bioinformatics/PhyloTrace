@@ -1,4 +1,7 @@
 box::use(
+  jsonlite[toJSON],
+)
+box::use(
   app / logic / sheet_grid,
 )
 
@@ -250,4 +253,60 @@ test_that("undo/redo restore long or uncleaned legacy values exactly", {
     trusted = TRUE
   )
   expect_identical(res$data$host[[1]], legacy)
+})
+
+# A session standing in for Shiny's, keeping the custom messages it is sent.
+.recording_session <- function() {
+  sent <- new.env()
+  sent$messages <- list()
+  list(
+    sent = sent,
+    sendCustomMessage = function(type, message) {
+      sent$messages[[length(sent$messages) + 1L]] <- list(type = type, message = message)
+    }
+  )
+}
+
+test_that("window_options() pages without page controls and counts every row", {
+  opts <- sheet_grid$window_options()
+  expect_true(opts$paging)
+  expect_true(opts$deferRender)
+  expect_false(opts$lengthChange)
+  expect_identical(opts$pageLength, impl$GRID_WINDOW)
+  expect_false(grepl("_START_|_END_", opts$language$info))
+})
+
+test_that("patch_cells() sends each cell's stored value at 0-based grid positions", {
+  session <- .recording_session()
+  df <- .grid()
+  df$host[2] <- "a<b & c"
+  sheet_grid$patch_cells(session, "grid", df, c(2L, 1L, 2L), c("host", "custom_n", "custom_n"))
+
+  expect_length(session$sent$messages, 1L)
+  sent <- session$sent$messages[[1]]
+  expect_identical(sent$type, "pt-dt-patch")
+  expect_identical(sent$message$id, "grid")
+  expect_identical(unlist(sent$message$rows), c(1L, 0L, 1L))
+  expect_identical(unlist(sent$message$cols), c(1L, 2L, 2L))
+  # Escaped as datatable() escapes the text it sends; numbers stay numbers.
+  expect_identical(sent$message$values[[1]], "a&lt;b &amp; c")
+  expect_identical(sent$message$values[[2]], 1.5)
+  expect_true(is.na(sent$message$values[[3]]))
+})
+
+test_that("patch_cells() skips cells off the grid and sends nothing for none", {
+  session <- .recording_session()
+  sheet_grid$patch_cells(session, "grid", .grid(), c(NA, 9L, 1L), c("host", "host", "gone"))
+  expect_length(session$sent$messages, 0L)
+})
+
+test_that("replace_rows() sends every column as an array, a single row too", {
+  session <- .recording_session()
+  sheet_grid$replace_rows(session, "grid", .grid()[1, , drop = FALSE])
+  data <- session$sent$messages[[1]]$message$data
+  expect_length(data, 4L)
+  expect_null(names(data))
+  # As Shiny serialises a custom message.
+  json <- toJSON(data, auto_unbox = TRUE, na = "null")
+  expect_identical(as.character(json), '[["A"],["cow"],[1.5],[null]]')
 })

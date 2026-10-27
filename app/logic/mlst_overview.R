@@ -188,6 +188,20 @@ isolate_table <- function(isolates, calls, prov) {
   out
 }
 
+# Loci of the scheme each isolate was typed against, counted as the distinct
+# loci any stored call of that repository/scheme carries; NA without a scheme.
+scheme_locus_counts <- function(iso, calls) {
+  key <- function(repository, scheme) paste(repository, scheme, sep = "\r")
+  per_scheme <- tapply(
+    norm_locus(calls$gene),
+    key(calls$repository, calls$scheme),
+    function(genes) length(unique(genes))
+  )
+  out <- as.integer(per_scheme[key(iso$repository, iso$scheme)])
+  out[is.na(iso$scheme)] <- NA_integer_
+  out
+}
+
 #' Summarise a Database's Classical MLST Records
 #'
 #' @description Merges stored calls and provenance into the per-isolate,
@@ -256,6 +270,7 @@ build_overview <- function(
   } else {
     iso$on_primary & !is.na(iso$version) & iso$version < primary$latest
   }
+  iso$scheme_loci <- scheme_locus_counts(iso, calls)
   # Calls searched at other thresholds than most of the database's.
   pair <- threshold_pairs(iso$identity, iso$coverage)
   pair[!iso$has_calls] <- NA_character_

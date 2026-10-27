@@ -24,7 +24,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / field_labels[CUSTOM_COL_PREFIX, field_labels_for],
-  app / logic / functions[table_loading, table_processing],
+  app / logic / functions[table_loading],
   app / logic / pymlst[existing_strains],
   app / logic / sheet_grid,
   app / view / database_custom_import,
@@ -419,25 +419,20 @@ server <- function(
           date = editable_date_idx
         ),
         selection = "none",
-        # Pins the isolate column while the variable columns scroll
-        # horizontally, matching Browse Entries' metadata_table — the two
-        # tables edit the same underlying values and should behave alike.
-        extensions = "FixedColumns",
-        options = list(
-          # "r": DataTables' processing indicator, shown over the grid from
-          # each server request (sort, filter, an edit's replaceData()) until
-          # its rows are drawn.
-          dom = "rti",
-          processing = TRUE,
-          language = list(processing = table_processing("Updating values ...")),
-          paging = FALSE,
+        # Client-side, with only the rows in view drawn - the same as Browse
+        # Entries' metadata_table, as the two tables edit the same underlying
+        # values and should behave alike (see sheet_grid$window_options()).
+        options = c(sheet_grid$window_options(), list(
+          dom = "ti",
           scrollX = TRUE,
           scrollY = "1px",
           scrollCollapse = TRUE,
-          fixedColumns = list(leftColumns = 1),
           columnDefs = c(
             list(
               list(className = "dt-left", targets = "_all"),
+              # Pins the isolate column while the variable columns scroll
+              # horizontally (main.scss).
+              list(className = "dtfc-fixed-left", targets = 0L),
               list(className = "col-readonly", targets = isolate_idx)
             ),
             # Reserve the width a native date input needs, so opening the
@@ -453,6 +448,8 @@ server <- function(
               var tableNode = api.table().node();
               // The rows are drawn: lift the loading overlay.
               $(tableNode).closest('.db-page_body').find('.loci-table-loading').remove();
+              // Only the rows in view are drawn (app/js/dt-grid-window.js).
+              App.attachGridWindow(api);
               // The spreadsheet layer (app/js/dt-sheet.js): range
               // selection, clipboard, fill, undo/redo and the dropdown editor
               // for category / yes-no cells.
@@ -512,11 +509,9 @@ server <- function(
             ),
             toJSON(sub(paste0("^", CUSTOM_COL_PREFIX), "", cols))
           ))
-        )
+        ))
       )
-    })
-
-    proxy <- DT$dataTableProxy("values_table", session = session)
+    }, server = FALSE)
 
     # Undo/redo steps for this grid's edits (see app/logic/sheet_grid.R). Kept
     # across saves, dropped on discard and whenever a different database is
@@ -532,14 +527,10 @@ server <- function(
     # restore what the grid held) all land here. Mirrors apply_cell_edits() in
     # database_browser.R.
     #
-    # replaceData() runs only when something changed or was rejected. A no-op
-    # (DT fires cell_edit for a click-in/click-out on an empty cell, since its
-    # `null` never equals the editor's "") must not round-trip: the redraw
-    # would tear out an editor the user has meanwhile opened in another cell.
-    # An accepted edit always redraws, even when the stored form is identical
-    # to what the client shows: DT's blur handler updates the cell's data
-    # without draw(), leaving the sort/filter caches stale until the next
-    # draw, which would blank every cell edited since.
+    # Every cell the batch names is pushed back with the value it now holds
+    # (sheet_grid$patch_cells()), which redraws only cells that differ from
+    # what the grid shows and never under an open editor - see the same flow
+    # in database_browser.R.
     apply_cell_edits <- function(edits, skipped = 0L, kind = "edit") {
       df <- State$data
       defs <- fields()
@@ -589,15 +580,13 @@ server <- function(
           kind
         )
       }
-      if (nrow(changed) || nrow(res$rejected)) {
-        # No processing overlay over this reload: it would cover the grid
-        # after every edit, and catch the click meant for the next cell.
-        session$sendCustomMessage(
-          "pt-dt-quiet-reload",
-          list(id = session$ns("values_table"))
-        )
-        DT$replaceData(proxy, State$data, resetPaging = FALSE, rownames = FALSE)
-      }
+      sheet_grid$patch_cells(
+        session,
+        session$ns("values_table"),
+        State$data,
+        edits$row,
+        edits$column
+      )
 
       report <- sheet_grid$edit_report(res$rejected, skipped + sum(locked))
       if (!is.null(report)) {
@@ -691,7 +680,7 @@ server <- function(
       State$data <- fresh
       State$dirty <- NULL
       State$pending <- FALSE
-      DT$replaceData(proxy, fresh, resetPaging = FALSE, rownames = FALSE)
+      sheet_grid$replace_rows(session, session$ns("values_table"), fresh)
     })
 
     # -- New / edit variable -------------------------------------------------
@@ -782,6 +771,14 @@ server <- function(
               placeholder = "What this variable records, and how it is filled in."
             ),
             footer = shiny$tagList(
+              if (editing) {
+                shiny$actionButton(
+                  ns("delete_edited"),
+                  "Delete",
+                  icon = shiny$icon("trash"),
+                  class = "btn-danger me-auto"
+                )
+              },
               shiny$modalButton("Cancel"),
               shiny$actionButton(
                 ns(if (editing) "confirm_edit" else "confirm_new"),
@@ -976,10 +973,53 @@ server <- function(
       )
     })
 
-    # Nothing to return: this panel's writes are announced on the shared
-    # revision bus, which every other reader of custom variables follows
-    # directly. The `changed` reactive it used to hand back had no consumer.
-    invisible(NULL)
+    # Replaces the edit dialog with a confirmation for deleting the variable being edited.
+    shiny$observeEvent(input$delete_edited, {
+      id <- editing_id()
+      shiny$req(!is.null(id))
+      defs <- fields()
+      name <- defs$name[defs$id == id]
+      shiny$req(length(name) == 1)
+
+      shiny$showModal(shiny$modalDialog(
+        title = "Delete custom variable",
+        paste0(
+          "Permanently delete \"", name, "\" and every value stored for it? ",
+          "This cannot be undone."
+        ),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(
+            ns("confirm_delete_edited"),
+            "Delete",
+            class = "btn-danger"
+          )
+        ),
+        easyClose = TRUE
+      ))
+    })
+
+    # Deletes the variable that was open in the edit dialog once the user has confirmed.
+    shiny$observeEvent(input$confirm_delete_edited, {
+      id <- editing_id()
+      shiny$req(!is.null(id))
+      shiny$removeModal()
+      editing_id(NULL)
+      removed <- guard_db(
+        "Deleting custom variable",
+        custom_fields$delete_custom_field(db_path(), id)
+      )
+      if (db_failed(removed)) {
+        return()
+      }
+      reload()
+      shiny$showNotification("Custom variable deleted.", type = "message", duration = 3)
+    })
+
+    # Its writes are announced on the shared revision bus, which every other
+    # reader of custom variables follows directly. What it returns is whether
+    # the grid holds edits not yet saved, for main.R's close-database dialog.
+    list(pending = shiny$reactive(isTRUE(State$pending)))
   })
 }
 

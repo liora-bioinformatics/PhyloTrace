@@ -231,3 +231,14 @@ test_that("load_mlst_overview reads a database end to end", {
     c(">a_1\nACGT", ">a_2\nTTAA")
   )
 })
+
+test_that("scheme_loci counts the loci of each isolate's own scheme", {
+  calls <- rbind(
+    call_rows("A", c(l1 = "1", l2 = "1", l3 = "1")),
+    call_rows("B", c(l1 = "1", l2 = "1")),
+    call_rows("E", c(m1 = "1", m2 = "1"), scheme = "Other spp. (MLST)")
+  )
+  ov <- mlst_overview$build_overview(c("A", "B", "E", "F"), calls, NULL)
+  iso <- ov$isolates[match(c("A", "B", "E", "F"), ov$isolates$isolate), ]
+  expect_equal(iso$scheme_loci, c(3L, 3L, 2L, NA))
+})

@@ -139,18 +139,6 @@ table_loading <- function(label) {
   div(class = "loci-table-loading", loading_inner(label))
 }
 
-#' Table Processing Indicator
-#'
-#' @description The spinner and message for DataTables' own processing
-#'   indicator (`processing = TRUE` with `"r"` in `dom`), which a server-side
-#'   table shows from each request until its rows are drawn. main.scss turns
-#'   the indicator into a translucent overlay where it is used.
-#'
-#' @param label Character message.
-#' @return Character HTML for `options$language$processing`.
-#' @export
-table_processing <- function(label) as.character(loading_inner(label))
-
 #' Color a Nucleotide Sequence
 #'
 #' Wraps each run of one nucleotide in a span so the sequence viewers can color

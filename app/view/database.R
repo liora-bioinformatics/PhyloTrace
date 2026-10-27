@@ -134,9 +134,10 @@ server <- function(
 
     # Start each interface module's server under its own namespace and forward
     # session_reset so each sub-module can reset its own state.
-    # Browse Entries' return value (pending) is captured and re-exposed so
-    # main.R can check for unsaved edits. The import module signals a completed
-    # merge/restore through `imported`, which main.R turns into a reload prompt.
+    # Browse Entries' and Custom Variables' return values (pending) are
+    # captured and re-exposed so main.R can check for unsaved edits. The import
+    # module signals a completed merge/restore through `imported`, which main.R
+    # turns into a reload prompt.
     #
     # db_rev goes to every sub-module: each writes some corner of the database
     # that at least one of the others reads. It replaces the local
@@ -146,6 +147,7 @@ server <- function(
     # `store` (the shared metadata cache, app/logic/db_store.R) goes only to
     # the two sub-modules that display the metadata table.
     browse_entries_vals <- NULL
+    custom_vals <- NULL
     import_vals <- NULL
     for (item in db_menu) {
       extra <- switch(
@@ -173,6 +175,9 @@ server <- function(
       if (identical(item$value, "browse_entries")) {
         browse_entries_vals <- result
       }
+      if (identical(item$value, "custom_fields")) {
+        custom_vals <- result
+      }
       if (identical(item$value, "import")) {
         import_vals <- result
       }
@@ -193,6 +198,7 @@ server <- function(
 
     list(
       pending = browse_entries_vals$pending,
+      custom_pending = custom_vals$pending,
       imported = import_vals$imported
     )
   })

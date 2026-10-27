@@ -19,7 +19,7 @@ box::use(
   htmltools[HTML, htmlEscape],
   shiny,
   shinyWidgets[virtualSelectInput],
-  shinyjs[runjs],
+  shinyjs[disabled, runjs],
 )
 box::use(
   app / logic / functions[color_sequence, table_loading],
@@ -76,8 +76,16 @@ TONE_ICONS <- c(
 #' @export
 fmt <- function(x) format(x, big.mark = ",", trim = TRUE, scientific = FALSE)
 
-# A question mark that explains a card on hover (and on keyboard focus), set at
-# the right end of the card header; nothing when there is no hint.
+#' Card Header Hint
+#'
+#' @description A question mark that explains a card on hover (and on keyboard
+#'   focus), set at the right end of the card header.
+#'
+#' @param title Character card title, named for screen readers.
+#' @param hint Optional character text shown on hover.
+#'
+#' @return The hint, or `NULL` when there is none.
+#' @export
 hint_icon <- function(title, hint = NULL) {
   if (is.null(hint)) {
     return(NULL)
@@ -282,24 +290,25 @@ loci_layout <- function(
             class = "loci-allele-header",
             shiny$div(
               class = "loci-allele-actions",
-              shiny$actionButton(
+              # Enabled by the module once a locus with alleles is picked.
+              disabled(shiny$actionButton(
                 ns("copy_seq"),
                 "Sequence",
                 icon = shiny$icon("copy"),
                 class = "btn-sm"
-              ),
-              shiny$actionButton(
+              )),
+              disabled(shiny$actionButton(
                 ns("copy_idx"),
                 index_label,
                 icon = shiny$icon(index_icon),
                 class = "btn-sm"
-              ),
-              shiny$downloadButton(
+              )),
+              disabled(shiny$downloadButton(
                 ns("download_locus"),
                 "Locus",
                 icon = shiny$icon("download"),
                 class = "btn-sm"
-              )
+              ))
             )
           ),
           as_fill_item(
@@ -336,27 +345,43 @@ message_table <- function(text) {
   )
 }
 
+# Converts plain double columns holding only whole numbers (positions, counts
+# summed as doubles) to integer. DT gives a double column a stepless range
+# slider that shows two decimals, an integer one a slider stepping by one.
+# Classed doubles (dates) and values beyond the integer range stay as they are.
+whole_as_integer <- function(df) {
+  whole <- vapply(df, function(x) {
+    is.double(x) && !is.object(x) &&
+      all(is.na(x) | (x == round(x) & abs(x) <= .Machine$integer.max))
+  }, logical(1))
+  df[whole] <- lapply(df[whole], as.integer)
+  df
+}
+
 #' Scrolling Data Table
 #'
 #' @description Rows are drawn as the table scrolls (DataTables' Scroller), so
 #'   only the rows around the visible ones exist in the page, however many
 #'   `df` has. Every row is one line high, as Scroller requires: text cells
-#'   are cut short, their full value shown on hover.
+#'   are cut short, their full value shown on hover. Column headers stay on
+#'   one line; the table scrolls sideways instead.
 #'
-#' @param df Data frame to show.
+#' @param df Data frame to show. Plain numeric columns holding only whole
+#'   numbers are shown as integers.
 #' @param selection DT selection setting.
 #' @param filter DT column filter position.
 #'
 #' @return A DT widget that fills its `table_card()` and scrolls internally.
 #' @export
 data_table <- function(df, selection = "none", filter = "top") {
+  df <- whole_as_integer(df)
   text_cols <- which(vapply(df, function(x) is.character(x) || is.factor(x), logical(1)))
   datatable(
     df,
     rownames = FALSE,
     filter = filter,
     selection = selection,
-    class = "stripe row-border order-column",
+    class = "stripe row-border order-column overview-table",
     extensions = "Scroller",
     options = list(
       dom = "ti",
@@ -431,6 +456,40 @@ key_value_table <- function(keys, values) {
     selection = "none",
     options = list(dom = "t", ordering = FALSE, paging = FALSE)
   )
+}
+
+#' Side Panel Gate
+#'
+#' @description Placeholder inside a side panel that hides the panel while it has
+#' nothing to show. Rendered by [side_gate()]; a rendered rule is replayed when the
+#' app rebuilds its panels, which a one-shot shinyjs toggle is not.
+#'
+#' @param ns Module namespace function.
+#' @param id Character id of the side panel the gate sits in.
+#'
+#' @return A hidden output holding the gate's style rule.
+#' @export
+side_gate_ui <- function(ns, id) {
+  shiny$uiOutput(ns(paste0(id, "_gate")), style = "display: none;")
+}
+
+#' Side Panel Gate Output
+#'
+#' @param output Shiny output object of the module.
+#' @param session Shiny session of the module.
+#' @param id Character id of the side panel, as given to [side_gate_ui()].
+#' @param show Reactive logical; the panel is hidden while it is not `TRUE`.
+#'
+#' @return Called for its side effect of defining the gate's output.
+#' @export
+side_gate <- function(output, session, id, show) {
+  output[[paste0(id, "_gate")]] <- shiny$renderUI({
+    if (!isTRUE(show())) {
+      shiny$tags$style(sprintf("#%s { display: none !important; }", session$ns(id)))
+    }
+  })
+  # The wrapper is itself hidden, which would otherwise suspend the output.
+  shiny$outputOptions(output, paste0(id, "_gate"), suspendWhenHidden = FALSE)
 }
 
 #' Empty-State Hint
@@ -531,6 +590,22 @@ bar_rows <- function(labels, counts, total, tones = NULL, notes = NULL, unit = "
         shiny$span(class = "overview-bar_value", fmt(counts[i])),
         shiny$span(class = "overview-bar_share", note)
       )
+    })
+  )
+}
+
+#' Chip List
+#'
+#' @param labels Character labels; nothing is shown when there are none.
+#' @param tone Character chip tone, `primary` or `secondary`.
+#'
+#' @return A wrapping row of chips, each label shown in full.
+#' @export
+chips <- function(labels, tone = "primary") {
+  shiny$div(
+    class = "overview-chips",
+    lapply(labels, function(label) {
+      shiny$span(class = paste("overview-chip", paste0("is-", tone)), label)
     })
   )
 }
