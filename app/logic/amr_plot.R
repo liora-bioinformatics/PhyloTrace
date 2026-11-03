@@ -3070,7 +3070,13 @@ amr_as_ggplot <- function(
       }
     },
     width = max(width_in, 1),
-    height = max(height_in, 1)
+    height = max(height_in, 1),
+    # Replays the recorded drawing operations instead of rebuilding a viewport
+    # tree from the end state. The default rebuild addresses every grob by an
+    # auto-named viewport path, which grid cannot find again at draw time
+    # ("Viewport 'GRID.VP.n' was not found") once the draw/decorate sequence
+    # has re-pushed or replaced a viewport of the same name.
+    wrap.grobs = TRUE
   )
   as.ggplot(grob) +
     theme(plot.background = element_rect(fill = background, colour = NA))
