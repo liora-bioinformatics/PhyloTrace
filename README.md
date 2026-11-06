@@ -1,6 +1,7 @@
 <img src="app/static/images/PhyloTrace_bw.png#gh-light-mode-only" width="70%"/>
 <img src="app/static/images/PhyloTrace.png#gh-dark-mode-only" width="70%"/>
 
+[![Status](https://img.shields.io/badge/Status-Beta-659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.10996423-659DA3)](https://doi.org/10.5281/zenodo.10996423)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-659DA3)](https://www.gnu.org/licenses/gpl-3.0)
 [![Release](https://img.shields.io/github/v/release/liora-bioinformatics/PhyloTrace?label=Release&color=659DA3)](https://github.com/liora-bioinformatics/PhyloTrace/releases)
