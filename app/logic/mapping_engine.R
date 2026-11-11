@@ -316,7 +316,7 @@ next_palette <- function(family, taken = character(0)) {
 #' Whether a variable is a date, and so can be grouped by a calendar interval.
 #'
 #' @param profile One-row profile frame.
-#' @return TRUE for a declared date or datetime column.
+#' @return TRUE for a declared date, datetime or year column.
 #' @export
 is_date_profile <- function(profile) {
   !is.null(profile) &&

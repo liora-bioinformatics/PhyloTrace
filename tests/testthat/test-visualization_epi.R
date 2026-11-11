@@ -1228,3 +1228,104 @@ test_that("Auto-fit before a curve exists changes nothing", {
     }
   )
 })
+
+# --- the date axis -------------------------------------------------------------
+
+year_meta_fixture <- function(collection = rep(NA_character_, 6)) {
+  meta <- meta_fixture()
+  meta$sample_collection_date <- collection
+  meta$custom_year <- c("2019", "2020", "2020", "2021", NA, "2021")
+  meta
+}
+
+year_profiles_fixture <- function(meta) {
+  field_profile$field_profiles(
+    meta,
+    types = c(
+      isolate = "text",
+      sample_collection_date = "date",
+      organism = "category",
+      geo_loc_name_country = "category",
+      custom_year = "year"
+    ),
+    custom_cols = "custom_year"
+  )
+}
+
+test_that("the curve opens on the first date variable that holds dates", {
+  meta <- year_meta_fixture()
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(year_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      session$flushReact()
+
+      # The collection date is listed first, but holds nothing to plot.
+      expect_identical(date_choices(), c("sample_collection_date", "custom_year"))
+      expect_identical(date_field(), "custom_year")
+      expect_identical(unname(allowed_intervals()), "year")
+      expect_identical(current_interval(), "year")
+      expect_false("custom_year" %in% mappable_fields())
+    }
+  )
+})
+
+test_that("a picked date variable wins, and a stale finer interval falls back", {
+  meta <- year_meta_fixture(meta_fixture()$sample_collection_date)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(year_profiles_fixture(meta))
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "week")
+      expect_identical(date_field(), "sample_collection_date")
+      expect_identical(current_interval(), "week")
+
+      session$setInputs(epi_date_field = "custom_year")
+      expect_identical(date_field(), "custom_year")
+      expect_identical(current_interval(), "year")
+    }
+  )
+})
+
+test_that("a curve refused for an empty date axis draws once a dated one is picked", {
+  meta <- year_meta_fixture()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(year_profiles_fixture(meta)),
+      generate = generate,
+      plot_type = reactive("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(epi_date_field = "sample_collection_date")
+      generate(1L)
+      session$flushReact()
+      expect_false(generated())
+
+      # The tab keeps Generate locked after the press, so the re-pick must draw.
+      session$setInputs(epi_date_field = "custom_year")
+      expect_true(generated())
+      expect_gt(nrow(epi_data()), 0L)
+
+      # Back to the empty axis: withdrawn again, and redrawn on the next re-pick.
+      session$setInputs(epi_date_field = "sample_collection_date")
+      expect_false(generated())
+      session$setInputs(epi_date_field = "custom_year")
+      expect_true(generated())
+    }
+  )
+})

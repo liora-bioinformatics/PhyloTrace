@@ -46,6 +46,7 @@ box::use(
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / database_functions[append_classical_mlst],
+  app / logic / date_bins[date_extent, in_date_range],
   app / logic / db_store,
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[as_date_safe, date_fields],
@@ -269,7 +270,7 @@ server <- function(
       if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
         return(meta)
       }
-      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      keep <- in_date_range(meta[[input$wiz_date_field]], rng)
       meta[keep, , drop = FALSE]
     })
 
@@ -491,13 +492,15 @@ server <- function(
       if (is.null(d) || all(is.na(d))) {
         return()
       }
+      # A bare year runs to 31 December, so the window ends there too.
+      span <- date_extent(settings_meta()[[input$wiz_date_field]])
       updateDateRangeInput(
         session,
         "wiz_date_range",
-        start = min(d, na.rm = TRUE),
-        end = max(d, na.rm = TRUE),
-        min = min(d, na.rm = TRUE),
-        max = max(d, na.rm = TRUE)
+        start = span[[1]],
+        end = span[[2]],
+        min = span[[1]],
+        max = span[[2]]
       )
     })
 

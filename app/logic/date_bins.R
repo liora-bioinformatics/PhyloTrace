@@ -1,8 +1,9 @@
 # app/logic/date_bins.R
 #
-# Shared date parsing and calendar binning. Turns a date column into a coarser
-# categorical grouping (day, week, month or year) so a near-unique date field
-# can drive a legend, a pie or a palette instead of one level per isolate.
+# Shared date parsing (full dates and bare years) and calendar binning. Turns a
+# date column into a coarser categorical grouping (day, week, month or year) so a
+# near-unique date field can drive a legend, a pie or a palette instead of one
+# level per isolate, and never splits a year-only value finer than a year.
 #
 # Deliberately free of app dependencies so every engine — including the pure
 # plotting modules — can import it without pulling in database code.
@@ -22,12 +23,39 @@ DATE_GRANULARITY_NONE <- "none"
 
 #' Types whose columns can be grouped by a calendar interval.
 #' @export
-DATE_TYPES <- c("date", "datetime")
+DATE_TYPES <- c("date", "datetime", "year")
+
+# A full calendar date, optionally followed by a time of day ("2024-03-15",
+# "2024/3/5", "2024-03-15 10:30:00", "2024-03-15T10:30:00Z").
+.DAY_RE <- "^[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}([ T].*)?$"
+
+# A bare four-digit year ("2024"): a date recorded only to the year.
+.YEAR_RE <- "^[0-9]{4}$"
+
+#' Which values are recorded only to the year
+#'
+#' A bare year ("2021") is a date known to the year, not 1 January of it. Every
+#' function that groups or filters dates checks this so such a value is never
+#' placed in a month, week or day it was not recorded at.
+#'
+#' @param x Raw column values.
+#' @return Logical vector, `FALSE` for missing values and for `Date` input.
+#' @export
+year_only <- function(x) {
+  if (inherits(x, c("Date", "POSIXt"))) {
+    return(rep(FALSE, length(x)))
+  }
+  v <- trimws(as.character(x))
+  !is.na(v) & grepl(.YEAR_RE, v)
+}
 
 #' Safely Parse Input to Date Vector
 #'
-#' Converts character or raw metadata vectors into `Date` objects. Returns an
-#' all-NA Date vector if parsing fails completely, avoiding execution errors.
+#' Parses each value on its own, so one unreadable entry never blanks the rest
+#' (`as.Date()` on a character vector errors, or returns all NA, when its first
+#' value fits no format). Accepts ISO dates (`-` or `/` separated; a time of
+#' day is dropped) and bare years, which are anchored at 1 January — see
+#' `date_period_end()` for where such a year ends.
 #'
 #' @param x Vector of date strings, timestamps, or raw input.
 #' @return Vector of `Date` values with unparseable entries set to NA.
@@ -36,10 +64,98 @@ parse_dates <- function(x) {
   if (inherits(x, "Date")) {
     return(x)
   }
-  tryCatch(
-    suppressWarnings(as.Date(as.character(x))),
-    error = function(e) rep(as.Date(NA), length(x))
-  )
+  if (inherits(x, "POSIXt")) {
+    return(as.Date(format(x, "%Y-%m-%d")))
+  }
+  v <- trimws(as.character(x))
+  out <- rep(as.Date(NA), length(v))
+  day <- !is.na(v) & grepl(.DAY_RE, v)
+  if (any(day)) {
+    ymd <- chartr("/", "-", sub("[ T].*$", "", v[day]))
+    out[day] <- as.Date(ymd, format = "%Y-%m-%d")
+  }
+  year <- year_only(v)
+  if (any(year)) {
+    out[year] <- as.Date(paste0(v[year], "-01-01"), format = "%Y-%m-%d")
+  }
+  out
+}
+
+#' Last Day Each Date Value Covers
+#'
+#' A full date covers itself; a bare year runs to 31 December. With
+#' `parse_dates()` (the first day) this is the period a value stands for.
+#'
+#' @param x Raw column values.
+#' @return Date vector, NA where the value is missing or unreadable.
+#' @export
+date_period_end <- function(x) {
+  out <- parse_dates(x)
+  year <- year_only(x) & !is.na(out)
+  if (any(year)) {
+    out[year] <- as.Date(paste0(format(out[year], "%Y"), "-12-31"), format = "%Y-%m-%d")
+  }
+  out
+}
+
+#' Which Values Fall Inside a Date Window
+#'
+#' A value is kept when the period it stands for overlaps the window, so a bare
+#' year "2021" filtered to March 2021 is kept: it may have been collected then,
+#' and dropping it would hide it from every window but a whole-year one.
+#' Missing and unreadable values are never kept.
+#'
+#' @param x Raw column values.
+#' @param rng Length-2 vector of the window's first and last day.
+#' @return Logical vector.
+#' @export
+in_date_range <- function(x, rng) {
+  rng <- as.Date(rng)
+  start <- parse_dates(x)
+  !is.na(start) & start <= rng[[2]] & date_period_end(x) >= rng[[1]]
+}
+
+#' First and Last Day a Date Column Covers
+#'
+#' @param x Raw column values.
+#' @return Length-2 Date vector, or NULL when nothing parses.
+#' @export
+date_extent <- function(x) {
+  start <- parse_dates(x)
+  if (all(is.na(start))) {
+    return(NULL)
+  }
+  c(min(start, na.rm = TRUE), max(date_period_end(x), na.rm = TRUE))
+}
+
+#' Precision a Date Column Is Recorded At
+#'
+#' "year" when every readable value is a bare year, otherwise "day". A column
+#' mixing both is "day"; its year-only values drop out of finer groupings (see
+#' `floor_date_bin()`) rather than being pinned to 1 January.
+#'
+#' @param x Raw column values.
+#' @return "day" or "year".
+#' @export
+date_precision <- function(x) {
+  readable <- !is.na(parse_dates(x))
+  if (any(readable) && all(year_only(x)[readable])) "year" else "day"
+}
+
+#' Granularities a Date Column Can Be Grouped By
+#'
+#' Nothing finer than the column's own precision: a year cannot be split into
+#' months.
+#'
+#' @param x Raw column values.
+#' @return Named subset of `DATE_GRANULARITIES`.
+#' @export
+available_granularities <- function(x) {
+  if (identical(date_precision(x), "year")) {
+    DATE_GRANULARITIES["Year"]
+  } else {
+    DATE_GRANULARITIES
+  }
 }
 
 #' Whether a granularity actually asks for binning.
@@ -62,7 +178,9 @@ is_binned <- function(granularity) {
 #' Floor Collection Dates to Interval Starts
 #'
 #' Truncates input dates to the start of the specified temporal interval.
-#' ISO-8601 week starts on Monday. Unparseable dates return NA.
+#' ISO-8601 week starts on Monday. Unparseable dates return NA, and so does a
+#' bare year floored to anything finer than a year: which month or week it
+#' fell in is unknown, and 1 January would be a fabricated answer.
 #'
 #' @param dates Vector of dates or date-like character strings.
 #' @param interval String; target bin width ("day", "week", "month", "year").
@@ -70,14 +188,19 @@ is_binned <- function(granularity) {
 #' @export
 floor_date_bin <- function(dates, interval = "day") {
   d <- parse_dates(dates)
-  switch(
-    tolower(interval),
+  interval <- tolower(interval)
+  out <- switch(
+    interval,
     day = d,
     week = d - (as.numeric(format(d, "%u")) - 1),
     month = as.Date(format(d, "%Y-%m-01")),
     year = as.Date(format(d, "%Y-01-01")),
     stop("Unknown interval: ", interval, call. = FALSE)
   )
+  if (!identical(interval, "year")) {
+    out[year_only(dates)] <- NA
+  }
+  out
 }
 
 #' Display label for each floored date, at the interval's own resolution.
@@ -114,16 +237,21 @@ bin_labels <- function(floored, interval) {
 #' chronologically — every engine's discrete path (legend, pie, palette) then
 #' treats it as the category it now is.
 #'
+#' A column recorded only to the year is always grouped by year, whatever finer
+#' interval is asked for (a layer saved before the column held bare years).
+#'
 #' @param x Raw column values, typically character out of SQLite.
 #' @param granularity One of `DATE_GRANULARITIES`, or NULL/"none" for no binning.
 #' @return A `Date` vector, or an ordered factor of interval labels.
 #' @export
 bin_date_values <- function(x, granularity = NULL) {
-  parsed <- parse_dates(x)
   if (!is_binned(granularity)) {
-    return(parsed)
+    return(parse_dates(x))
   }
-  floored <- floor_date_bin(parsed, granularity)
+  if (identical(date_precision(x), "year")) {
+    granularity <- "year"
+  }
+  floored <- floor_date_bin(x, granularity)
   present <- sort(unique(floored[!is.na(floored)]))
   factor(
     bin_labels(floored, granularity),
@@ -168,7 +296,7 @@ DATE_MAX_GROUPS <- 12L
 #' @return A granularity slug.
 #' @export
 default_granularity <- function(x, max_groups = DATE_MAX_GROUPS) {
-  for (g in DATE_GRANULARITIES) {
+  for (g in available_granularities(x)) {
     if (binned_levels(x, g) <= max_groups) {
       return(unname(g))
     }
@@ -220,4 +348,44 @@ granularity_label <- function(granularity) {
     DATE_GRANULARITIES == as.character(granularity)
   ]
   if (length(hit)) hit[[1]] else NULL
+}
+
+#' Types a Timeline Can Be Drawn Along
+#'
+#' Calendar dates and years. A timestamp (`called_at`, when an isolate was
+#' typed) is left out: it records the lab's work, not the sample, and offering
+#' it would quietly stand in for a missing collection date.
+#' @export
+TIMELINE_TYPES <- c("date", "year")
+
+#' Date Variables a Timeline Can Be Drawn Along
+#'
+#' Standard metadata before custom variables (the profile frame's own group
+#' order), with `preferred` — the collection date — always first.
+#'
+#' @param profiles Field profile frame with `field` and `type` columns.
+#' @param preferred Column to list first when present.
+#' @return Character vector of column names.
+#' @export
+timeline_fields <- function(profiles, preferred = "sample_collection_date") {
+  if (!is.data.frame(profiles) || !nrow(profiles)) {
+    return(character(0))
+  }
+  fields <- profiles$field[profiles$type %in% TIMELINE_TYPES]
+  c(intersect(preferred, fields), setdiff(fields, preferred))
+}
+
+#' First Date Variable That Holds Any Readable Date
+#'
+#' @param meta Data frame of isolate metadata.
+#' @param fields Candidate columns, in order of preference.
+#' @return A column name, or NULL when none holds a readable date.
+#' @export
+first_dated_field <- function(meta, fields) {
+  for (f in fields) {
+    if (f %in% names(meta) && any(!is.na(parse_dates(meta[[f]])))) {
+      return(f)
+    }
+  }
+  NULL
 }

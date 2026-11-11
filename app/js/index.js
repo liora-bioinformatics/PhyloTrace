@@ -9,6 +9,7 @@ import "./dt-visibility-resync";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";
 import "./viz-scale-swatch";
+import "./viz-tab-strip";
 
 export { attachGridWindow, createAllRows } from "./dt-grid-window";
 export { attachRowDrag } from "./dt-row-drag";

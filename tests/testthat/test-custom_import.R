@@ -146,6 +146,12 @@ test_that("guess_type prefers yes/no words, numbers, dates, then categories", {
   expect_identical(g(c("0", "1", "1")), "integer")
   expect_identical(g(c("1.5", "2")), "numeric")
   expect_identical(g(c("2024-01-01")), "date")
+  # Four-digit numbers: years when plausible as such or when the header says so.
+  expect_identical(g(c("2019", "2021")), "year")
+  expect_identical(g(c("2019.0", "2021")), "year")
+  expect_identical(g(c("1200", "3400")), "integer")
+  expect_identical(g(c("1200", "1850"), name = "isolation_year"), "year")
+  expect_identical(g(c("1200", "1850"), name = "yearly_count"), "integer")
   expect_identical(g(c("blood", "urine", "blood", "blood")), "category")
   expect_identical(g(c("x1", "x2")), "text")
   expect_identical(g(character(0)), "text")
@@ -388,4 +394,50 @@ test_that("validate_plan refuses two columns writing into the same field", {
   problems <- custom_import$validate_plan(path, rows, plan)
   expect_length(problems, 2L)
   expect_match(problems[["b"]], "Another column")
+})
+
+test_that("importing into the country field stores canonical names and rejects unknowns", {
+  path <- fixture()
+  rows <- data.frame(
+    isolate = c("A", "B"),
+    country = c("Deutschland", "USA"),
+    stringsAsFactors = FALSE
+  )
+  plan <- data.frame(
+    header = "country",
+    action = "overwrite",
+    name = "geo_loc_name_country",
+    type = NA_character_,
+    stringsAsFactors = FALSE
+  )
+  custom_import$apply_import(path, rows, plan)
+  meta <- qdf(path, "SELECT * FROM metadata ORDER BY isolate")
+  expect_identical(meta$geo_loc_name_country, c("Germany", "United States of America"))
+
+  rows$country <- c("Atlantis", "France")
+  problems <- custom_import$validate_plan(path, rows, plan)
+  expect_match(
+    paste(unlist(problems), collapse = " "),
+    "1 value\\(s\\) do not fit the existing country type"
+  )
+})
+
+test_that("importing coordinates stores them as decimal degrees", {
+  path <- fixture()
+  con <- dbConnect(SQLite(), path)
+  dbExecute(con, "ALTER TABLE metadata ADD COLUMN geo_loc_coordinates TEXT")
+  dbDisconnect(con)
+  rows <- data.frame(isolate = "A", where = "52°31'12\"N 13°24'E", stringsAsFactors = FALSE)
+  plan <- data.frame(
+    header = "where",
+    action = "overwrite",
+    name = "geo_loc_coordinates",
+    type = NA_character_,
+    stringsAsFactors = FALSE
+  )
+  custom_import$apply_import(path, rows, plan)
+  expect_identical(
+    q1(path, "SELECT geo_loc_coordinates FROM metadata WHERE isolate = 'A'"),
+    "52.52, 13.4"
+  )
 })

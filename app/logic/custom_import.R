@@ -35,7 +35,7 @@ box::use(
     field_labels_for,
     MLST_COL_PREFIX
   ],
-  app / logic / field_types[FIXED_FIELD_TYPES],
+  app / logic / field_types[FIXED_FIELD_TYPES, TYPE_LABELS],
   app / logic / logging[log_event],
   app / logic / pymlst[existing_strains],
 )
@@ -66,13 +66,23 @@ MISSING_TOKENS <- c("", "na", "n/a", "nan", "null", "#n/a", "-", ".")
 CATEGORY_MAX_LEVELS <- 100L
 
 # Order in which types are offered, most specific first.
-.TYPE_ORDER <- c("boolean", "integer", "numeric", "date", "category", "text")
+.TYPE_ORDER <- c("boolean", "year", "integer", "numeric", "date", "category", "text")
 
 # Word forms that make a column read as yes/no rather than as 0/1 numbers.
 .BOOL_WORDS <- c("yes", "no", "y", "n", "true", "false", "t", "f")
 
 # Strict YYYY-MM-DD: as.Date() alone accepts trailing junk ("2024-01-01x").
 .DATE_RE <- "^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$"
+
+# Four digits, also as a spreadsheet's number form ("2021.0").
+.YEAR_RE <- "^[0-9]{4}([.]0+)?$"
+
+# Header words that mark a column of four-digit numbers as years.
+.YEAR_NAME_RE <- "(^|[^a-z])(year|yr|jahr)s?([^a-z]|$)"
+
+# Plausible span for a column of four-digit numbers to be read as years with
+# no help from its header; anything outside reads as a whole number.
+.YEAR_MIN <- 1900L
 
 # Plain decimal notation: as.numeric() also takes "Inf" and hex ("0x1A").
 .NUMBER_RE <- "^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$"
@@ -354,6 +364,9 @@ feasible_types <- function(v) {
   if (all(grepl(.DATE_RE, v)) && fits("date")) {
     out <- c(out, "date")
   }
+  if (all(grepl(.YEAR_RE, v)) && fits("year")) {
+    out <- c(out, "year")
+  }
   if (all(grepl(.NUMBER_RE, v)) && !any(grepl(.LEADING_ZERO_RE, v))) {
     if (fits("numeric")) {
       out <- c(out, "numeric")
@@ -372,18 +385,29 @@ feasible_types <- function(v) {
 #'
 #' Yes/no words beat numbers (a 0/1 column stays a whole number), numbers beat
 #' dates, and a column of few distinct repeating values reads as a category.
+#' Four-digit numbers read as years when the header says so ("year",
+#' "isolation_year") or when every value lies between 1900 and next year.
 #'
 #' @param v Character vector of non-missing values.
 #' @param feasible Output of `feasible_types(v)`.
+#' @param name Optional column header, a hint for years.
 #' @return A single type slug.
 #' @export
-guess_type <- function(v, feasible = feasible_types(v)) {
+guess_type <- function(v, feasible = feasible_types(v), name = NULL) {
   v <- v[!is.na(v)]
   if (!length(v)) {
     return("text")
   }
   if ("boolean" %in% feasible && any(tolower(v) %in% .BOOL_WORDS)) {
     return("boolean")
+  }
+  if ("year" %in% feasible) {
+    years <- as.integer(sub("[.]0+$", "", v))
+    named <- length(name) == 1L && !is.na(name) && grepl(.YEAR_NAME_RE, tolower(name))
+    this_year <- as.integer(format(Sys.Date(), "%Y"))
+    if (named || all(years >= .YEAR_MIN & years <= this_year + 1L)) {
+      return("year")
+    }
   }
   for (type in c("integer", "numeric", "date")) {
     if (type %in% feasible) {
@@ -521,7 +545,7 @@ assess_import <- function(db_path, df, key = NULL) {
       n_missing = sum(is.na(v)),
       n_distinct = length(.levels_of(present)),
       feasible = paste(feasible, collapse = ","),
-      guess = guess_type(present, feasible),
+      guess = guess_type(present, feasible, headers[[i]]),
       suggested = suggested[[i]],
       clash = target$kind,
       clash_target = target$name,
@@ -631,7 +655,7 @@ validate_plan <- function(db_path, rows, plan) {
         add(p$header, sprintf(
           "%d value(s) do not fit the existing %s type.",
           failures,
-          tolower(custom_fields$CUSTOM_TYPES[[target_type(target$kind, target$name, defs)$type]])
+          tolower(TYPE_LABELS[[target_type(target$kind, target$name, defs)$type]])
         ))
       }
     } else {

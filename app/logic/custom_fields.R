@@ -24,6 +24,7 @@ box::use(
   app /
     logic /
     field_labels[AMR_COL_PREFIX, CUSTOM_COL_PREFIX, field_labels_for, MLST_COL_PREFIX],
+  app / logic / geo[coerce_coordinates, coerce_country],
   app / logic / logging[log_event],
 )
 
@@ -36,6 +37,7 @@ CUSTOM_TYPES <- c(
   integer = "Whole number",
   numeric = "Decimal number",
   date = "Date",
+  year = "Year",
   boolean = "Yes / No",
   category = "Category"
 )
@@ -43,6 +45,13 @@ CUSTOM_TYPES <- c(
 #' Custom Field Types Requiring Numeric Inputs
 #' @export
 NUMERIC_TYPES <- c("integer", "numeric")
+
+#' Custom Field Types Edited With a Number Input
+#'
+#' A year is stored as text but typed as a number, so the grids give it the
+#' same native editor as the numeric types.
+#' @export
+NUMBER_INPUT_TYPES <- c(NUMERIC_TYPES, "year")
 
 #' Custom Field Types Using Selection Lists
 #' @export
@@ -597,11 +606,26 @@ coerce_custom_value <- function(value, type, levels = NULL) {
       }
     },
     date = {
-      parsed <- suppressWarnings(as.Date(v, format = "%Y-%m-%d"))
+      # as.Date() alone accepts trailing junk ("2024-01-01x") and would store
+      # its prefix, so the shape is checked first.
+      parsed <- if (grepl("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$", v)) {
+        suppressWarnings(as.Date(v, format = "%Y-%m-%d"))
+      } else {
+        as.Date(NA)
+      }
       if (is.na(parsed)) {
         bad("Dates must be written as YYYY-MM-DD.")
       } else {
         ok(format(parsed, "%Y-%m-%d"))
+      }
+    },
+    year = {
+      # A spreadsheet hands a year column over as a number ("2021.0").
+      v <- sub("[.]0+$", "", v)
+      if (!grepl("^[0-9]{4}$", v)) {
+        bad("Years must be written as four digits, e.g. 2024.")
+      } else {
+        ok(v)
       }
     },
     boolean = {
@@ -627,6 +651,10 @@ coerce_custom_value <- function(value, type, levels = NULL) {
         ok(hit[[1]])
       }
     },
+    # The fixed schema's geographic columns (see field_types.R); not offered
+    # as custom variable types.
+    country = coerce_country(v),
+    coordinates = coerce_coordinates(v),
     bad("Unknown variable type.")
   )
 }

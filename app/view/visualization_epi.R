@@ -33,6 +33,7 @@ box::use(
     nav_panel,
     navset_tab,
     sidebar,
+    tooltip,
   ],
   shiny,
   shinyWidgets[
@@ -44,7 +45,14 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
-  app / logic / date_bins[bin_date_values],
+  app /
+    logic /
+    date_bins[
+      available_granularities,
+      bin_date_values,
+      first_dated_field,
+      timeline_fields
+    ],
   app / logic / db_events,
   app / logic / epi_plot,
   app / logic / field_labels[field_label],
@@ -248,6 +256,9 @@ epi_controls <- function(ns) {
       nav_panel(
         "Layout",
         icon = shiny$icon("sliders"),
+        # The x axis: any Date or Year variable, rendered server-side so it is
+        # created carrying this data's choices (see interval_ui).
+        shiny$uiOutput(ns("date_field_ui")),
         accordion(
           open = "Plot Mode",
           # Plot Mode ----------------------------------------------------------
@@ -646,6 +657,19 @@ ui <- function(id, generate_id, options_ui = NULL) {
   )
 }
 
+#' Epi Status for the Setup Sidebar
+#'
+#' How many isolates the curve could not place, mounted by
+#' app/view/visualization_plot.R at the bottom of the plot tab's left sidebar.
+#' Rendered by this module's `output$epi_status_ui`.
+#'
+#' @param id The engine's namespaced id, the same one passed to `ui()`.
+#' @return A `uiOutput`.
+#' @export
+setup_ui <- function(id) {
+  shiny$uiOutput(shiny$NS(id, "epi_status_ui"), class = "map-geocode-status")
+}
+
 #' @export
 server <- function(
   id,
@@ -732,7 +756,7 @@ server <- function(
     # update leaves the value untouched, so it can't feed back on the slider it
     # depends on. Falls back to the fitted interval before the buttons render.
     shiny$observe({
-      iv <- input$epi_interval %||% fitted_interval()
+      iv <- current_interval()
       n <- input$epi_moving_avg_window %||%
         epi_plot$EPI_MOVING_AVG_WINDOW_DEFAULT
       shiny$updateSliderInput(
@@ -812,6 +836,12 @@ server <- function(
     # Bumped to rebuild the server-rendered interval picker (Reset settings).
     interval_rebuild <- shiny$reactiveVal(0L)
 
+    # Bumped to rebuild the server-rendered date-axis picker; the value it is
+    # rebuilt with, when not the current one, is parked in restore_date_field
+    # (consumed on read, for the reason given on restore_interval).
+    date_field_rebuild <- shiny$reactiveVal(0L)
+    restore_date_field <- shiny$reactiveVal(NULL)
+
     # The variables mapped onto the curve. At most one — a curve's bars are
     # already a stack, so the mapped variable *is* the stack (see MEDIUM) — but
     # held as a list, because that is the shape every engine's mapping state,
@@ -855,21 +885,146 @@ server <- function(
 
     # --- controls fitted to the data ----------------------------------------
 
+    # Date variables the curve can run along: standard metadata first with the
+    # collection date on top, then custom Date and Year variables.
+    date_choices <- shiny$reactive(
+      timeline_fields(profiles(), epi_plot$EPI_DATE_FIELD)
+    )
+
+    # The date variable on the x axis: the picked one while this data still has
+    # it, otherwise the first holding any readable date, so a database whose
+    # collection dates were never filled in opens on one that has dates.
+    date_field <- shiny$reactive({
+      fields <- date_choices()
+      picked <- input$epi_date_field
+      if (isTRUE(picked %in% fields)) {
+        return(picked)
+      }
+      first_dated_field(viz_metadata(), fields) %||%
+        (if (length(fields)) fields[[1]]) %||%
+        epi_plot$EPI_DATE_FIELD
+    })
+
+    # The plotted date column's raw values, NULL when this data lacks it.
+    date_values <- shiny$reactive({
+      meta <- viz_metadata()
+      f <- date_field()
+      if (is.null(meta) || !nrow(meta) || !f %in% names(meta)) {
+        return(NULL)
+      }
+      meta[[f]]
+    })
+
+    # Intervals the plotted date supports: a Year variable offers only "Year".
+    allowed_intervals <- shiny$reactive({
+      allowed <- available_granularities(date_values())
+      epi_plot$EPI_INTERVALS[epi_plot$EPI_INTERVALS %in% allowed]
+    })
+
+    # The interval to bin by: the picked one if the plotted date supports it.
+    # Switching to a Year variable reaches here before the rebuilt buttons do,
+    # and a stale "Week" would bin every bare year away.
+    current_interval <- function() {
+      iv <- input$epi_interval
+      if (isTRUE(iv %in% allowed_intervals())) iv else fitted_interval()
+    }
+
     # The interval that suits this dataset: the finest one that keeps the curve
     # under EPI_MAX_BARS bars. A fixed default can't serve both a month-long
     # outbreak and a decade of surveillance — the same "Week" that reads well on
     # one draws 500 hairlines on the other.
     fitted_interval <- shiny$reactive({
-      meta <- viz_metadata()
-      if (
-        is.null(meta) ||
-          !nrow(meta) ||
-          !epi_plot$EPI_DATE_FIELD %in% names(meta)
-      ) {
+      values <- date_values()
+      if (is.null(values)) {
         return(INTERVAL_DEFAULT)
       }
-      epi_plot$epi_default_interval(meta[[epi_plot$EPI_DATE_FIELD]])
+      epi_plot$epi_default_interval(values)
     })
+
+    # The x-axis picker. Rendered rather than updated: the panel enters the DOM
+    # only once a database has loaded, and an update sent before then is lost.
+    output$date_field_ui <- shiny$renderUI({
+      render_info("visualization_epi date_field_ui")
+      date_field_rebuild()
+      fields <- date_choices()
+      pending <- shiny$isolate(restore_date_field())
+      if (!is.null(pending)) {
+        restore_date_field(NULL)
+      }
+      if (!length(fields)) {
+        return(shiny$div(
+          class = "timeline-field timeline-field-empty",
+          "No date variable in this database. Fill in collection dates under",
+          "Database › Browse, or create a Date or Year variable under",
+          "Custom Variables."
+        ))
+      }
+      prof <- profiles()
+      shiny$div(
+        class = "timeline-field",
+        field_select(
+          ns,
+          "epi_date_field",
+          "Date axis",
+          profiles = prof[match(fields, prof$field), , drop = FALSE],
+          selected = if (isTRUE(pending %in% fields)) {
+            pending
+          } else {
+            shiny$isolate(date_field())
+          }
+        )
+      )
+    })
+
+    # A different date axis is a different curve: re-fit its interval and show
+    # all of it, and say so at once if the new variable holds no dates. Only on
+    # an actual change: date_field() re-evaluates with every metadata refresh.
+    shown_date_field <- NULL
+    # TRUE while a requested curve is withheld because its axis holds no dates.
+    # The tab locks Generate once pressed, so only this lets a re-pick draw.
+    awaiting_dates <- FALSE
+    shiny$observeEvent(date_field(), {
+      f <- date_field()
+      if (is.null(shown_date_field) || identical(f, shown_date_field)) {
+        shown_date_field <<- f
+        return()
+      }
+      shown_date_field <<- f
+      refit_interval()
+      no_dates <- is.null(first_dated_field(shiny$isolate(viz_metadata()), f))
+      if (isTRUE(shiny$isolate(generated())) && no_dates) {
+        notify_no_dates()
+        shinyjs::show(id = "viz_prompt")
+        awaiting_dates <<- TRUE
+        generated(FALSE)
+      } else if (awaiting_dates && !no_dates) {
+        draw_curve()
+      }
+    })
+
+    # Why there is no curve: no date variable at all, or none of this one.
+    notify_no_dates <- function() {
+      fields <- shiny$isolate(date_choices())
+      detail <- if (!length(fields)) {
+        paste(
+          "This database has no date variable. Fill in collection dates under",
+          "Database › Browse, or create a Date or Year variable under",
+          "Custom Variables."
+        )
+      } else {
+        paste0(
+          "No isolate has a readable \"",
+          field_label(shiny$isolate(date_field())),
+          "\". Pick another date axis under Layout, or add dates under",
+          " Database › Browse."
+        )
+      }
+      shiny$showNotification(
+        shiny$tagList(shiny$tags$b("Nothing to plot."), shiny$br(), detail),
+        duration = 10,
+        type = "warning"
+      )
+    }
 
     # Rebuilt only when the fitted answer itself changes (a new database, a
     # different isolate selection) or on reset, so a deliberate choice of
@@ -896,11 +1051,12 @@ server <- function(
       if (!is.null(pending)) {
         restore_interval(NULL)
       }
+      choices <- allowed_intervals()
       radioGroupButtons(
         ns("epi_interval"),
         "Interval",
-        choices = epi_plot$EPI_INTERVALS,
-        selected = if (isTRUE(pending %in% epi_plot$EPI_INTERVALS)) {
+        choices = choices,
+        selected = if (isTRUE(pending %in% choices)) {
           pending
         } else {
           fitted_interval()
@@ -917,7 +1073,7 @@ server <- function(
       if (is.null(meta) || !length(names(meta))) {
         return(character())
       }
-      setdiff(names(meta), c("isolate", epi_plot$EPI_DATE_FIELD))
+      setdiff(names(meta), c("isolate", date_field()))
     })
 
     # Every column's profile, for the variable picker and the mapping engine.
@@ -1190,6 +1346,12 @@ server <- function(
       shiny$updateDateInput(session, "epi_anno_start", value = d$start)
       shiny$updateDateInput(session, "epi_anno_end", value = d$end)
       text_size_mirror(TEXT_SIZE_DEFAULT)
+      # Back to the axis the data opens on.
+      restore_date_field(first_dated_field(
+        shiny$isolate(viz_metadata()),
+        shiny$isolate(date_choices())
+      ))
+      date_field_rebuild(shiny$isolate(date_field_rebuild()) + 1L)
       refit_interval()
       # For the aspect ratio the default *is* the fit: ASPECT_DEFAULT is only
       # what the slider holds before a curve exists.
@@ -1401,9 +1563,45 @@ server <- function(
       shiny$req(!is.null(meta), nrow(meta) > 0)
       epi_plot$build_epi_data(
         stratified_meta(meta),
-        epi_plot$EPI_DATE_FIELD,
+        date_field(),
         stratify_selected(),
-        input$epi_interval %||% fitted_interval()
+        current_interval()
+      )
+    })
+
+    # How many isolates the curve leaves out for want of a readable date at the
+    # current interval, pinned to the bottom of the left sidebar (setup_ui()).
+    # Live with the interval, so it never describes a curve no longer drawn.
+    output$epi_status_ui <- shiny$renderUI({
+      if (!isTRUE(generated())) {
+        return(NULL)
+      }
+      dropped <- attr(epi_data(), "dropped") %||% 0L
+      if (dropped == 0L) {
+        return(shiny$div(
+          class = "mt-2 small text-success",
+          shiny$icon("circle-check"),
+          " All isolates plotted"
+        ))
+      }
+      tooltip(
+        shiny$div(
+          class = "mt-2 small text-warning",
+          shiny$icon("triangle-exclamation"),
+          sprintf(
+            " %d isolate%s not plotted",
+            dropped,
+            if (dropped == 1L) "" else "s"
+          )
+        ),
+        sprintf(
+          paste(
+            "No \"%s\" readable at this interval",
+            "(a date known only to the year shows by year)."
+          ),
+          field_label(date_field())
+        ),
+        placement = "top"
       )
     })
 
@@ -1441,10 +1639,19 @@ server <- function(
       shiny$updateDateInput(session, "epi_anno_end", value = d$end)
     })
 
+    # Generate for this engine; a curve withheld for want of dates is kept
+    # asked for, so picking a dated axis afterwards draws it (see the date-axis
+    # observer) rather than leaving the reader on a Generate the tab has locked.
     shiny$observeEvent(generate(), {
       if (!identical(plot_type(), "Epi")) {
         return()
       }
+      draw_curve()
+    })
+
+    # Bin the curve and publish it, or say why there is nothing to draw. Only
+    # called from observeEvent handlers, which already run isolated.
+    draw_curve <- function() {
       meta <- viz_metadata()
       if (is.null(meta) || !nrow(meta)) {
         shiny$showNotification("No isolate metadata to plot.", type = "warning")
@@ -1455,9 +1662,9 @@ server <- function(
       binned <- tryCatch(
         epi_plot$build_epi_data(
           stratified_meta(meta),
-          epi_plot$EPI_DATE_FIELD,
+          date_field(),
           stratify_selected(),
-          input$epi_interval %||% fitted_interval()
+          current_interval()
         ),
         error = function(e) {
           shiny$showNotification(
@@ -1471,45 +1678,25 @@ server <- function(
       if (is.null(binned) || !nrow(binned)) {
         # An empty collection-date column is the common case for a freshly typed
         # database (the field is only ever filled in by hand), so point at where
-        # it gets filled rather than just reporting the curve is empty.
-        shiny$showNotification(
-          shiny$tagList(
-            shiny$tags$b("Nothing to plot."),
-            shiny$br(),
-            paste0(
-              "No isolate has a readable \"",
-              field_label(epi_plot$EPI_DATE_FIELD),
-              "\". Add dates under Database › Browse."
-            )
-          ),
-          duration = 10,
-          type = "warning"
-        )
+        # dates get filled in, or at another date axis, rather than just
+        # reporting the curve is empty.
+        notify_no_dates()
         # No plot will render, so the overlay's clearing event never fires —
-        # hide it now rather than leaving the spinner up for 45s.
+        # hide it now rather than leaving the spinner up for 45s. The click
+        # also hid the prompt, which generated() staying FALSE never re-shows.
         shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+        shinyjs::show(id = "viz_prompt")
+        awaiting_dates <<- TRUE
         generated(FALSE)
         return()
       }
 
-      # Don't silently under-report the curve: say how many isolates were left
-      # out for want of a readable date.
-      dropped <- attr(binned, "dropped") %||% 0L
-      if (dropped > 0L) {
-        shiny$showNotification(
-          sprintf(
-            "%d isolate%s excluded: no readable collection date.",
-            dropped,
-            if (dropped == 1L) "" else "s"
-          ),
-          type = "message"
-        )
-      }
+      awaiting_dates <<- FALSE
       generated(TRUE)
       # Fitted before the plot is published, so the first draw is already at
       # the aspect this curve calls for rather than the one before it.
       refit_aspect()
-    })
+    }
 
     # --- playback ------------------------------------------------------------
 
@@ -1532,7 +1719,7 @@ server <- function(
     slider_bounds <- function(s, e) {
       bins <- shiny$isolate(epi_bins())
       rng <- shiny$isolate(epi_extent())
-      interval <- shiny$isolate(input$epi_interval %||% fitted_interval())
+      interval <- shiny$isolate(current_interval())
       lo <- bins[s]
       hi <- epi_plot$bin_end_date(bins[e], interval)
       if (!is.na(rng[1])) {
@@ -1599,7 +1786,7 @@ server <- function(
           max = full[2],
           value = win_value,
           step = epi_plot$bin_width_days(
-            input$epi_interval %||% fitted_interval()
+            current_interval()
           ),
           timeFormat = "%Y-%m-%d"
         ),
@@ -1772,7 +1959,11 @@ server <- function(
             CUMULATIVE_COLOR_DEFAULT,
           background = input$epi_background_color %||% BACKGROUND_DEFAULT,
           text_color = input$epi_text_color %||% TEXT_COLOR_DEFAULT,
-          interval = input$epi_interval %||% fitted_interval(),
+          interval = current_interval(),
+          # The default axis keeps its wording; any other names its variable.
+          x_title = if (!identical(date_field(), epi_plot$EPI_DATE_FIELD)) {
+            field_label(date_field())
+          },
           square = square_for(),
           fixed_axis = !isTRUE(input$epi_zoom_axis),
           label_ends = isTRUE(input$epi_label_ends),
@@ -2060,6 +2251,11 @@ server <- function(
       if (!is.null(vals$epi_interval)) {
         restore_interval(vals$epi_interval)
         interval_rebuild(shiny$isolate(interval_rebuild()) + 1L)
+      }
+      # The date axis likewise: its picker is renderUI output.
+      if (is.character(vals$epi_date_field) && nzchar(vals$epi_date_field)) {
+        restore_date_field(vals$epi_date_field)
+        date_field_rebuild(shiny$isolate(date_field_rebuild()) + 1L)
       }
 
       # The mapping is written straight into its reactiveVal — no rebuild

@@ -4,10 +4,11 @@
 # sidebar, the map output and all map-specific reactive state. Mounted by
 # app/view/visualization.R inside a navset_hidden panel; the shared Generate
 # button, plot type, session reset and per-isolate metadata are forwarded in as
-# reactives — the same contract the MST and Tree engines use. Isolate
-# coordinates are derived from the metadata's spatial fields
-# (geo_loc_name_city + geo_loc_name_state_province + geo_loc_name_country),
-# geocoded once per distinct place via OSM/Nominatim on Generate.
+# reactives — the same contract the MST and Tree engines use. Isolates are
+# placed by geo_loc_coordinates where readable (app/logic/geo.R), otherwise by
+# their postcode + city + state/province + country, geocoded once per distinct
+# place via OSM/Nominatim on Generate. Countries resolve locally against the
+# Natural Earth vocabulary, so the choropleth needs no geocoding at all.
 #
 # Four map modes share one builder (`build_map`): Markers (styled points),
 # Choropleth (countries shaded by isolate count, from Natural Earth polygons),
@@ -18,84 +19,52 @@
 # Generate, so the base tiles and the coordinates always appear together.
 
 box::use(
-  shiny,
-  bslib[
-    as_fill_carrier,
-    input_switch,
-    layout_sidebar,
-    nav_panel,
-    navset_tab,
-    sidebar,
-    accordion,
-    accordion_panel,
-    card,
-    card_body,
-    tooltip,
-  ],
-  shinyWidgets[
-    radioGroupButtons,
-    updateRadioGroupButtons,
-    pickerInput,
-    updatePickerInput,
-    updateVirtualSelect,
-  ],
-  leaflet[
-    leaflet,
-    leafletOptions,
-    leafletOutput,
-    renderLeaflet,
-    leafletProxy,
-    addTiles,
-    addProviderTiles,
-    tileOptions,
-    addMapPane,
-    addCircleMarkers,
-    addPolygons,
-    highlightOptions,
-    addLegend,
-    addScaleBar,
-    addMiniMap,
-    addControl,
-    addSimpleGraticule,
-    markerClusterOptions,
-    labelOptions,
-    labelFormat,
-    pathOptions,
-    colorFactor,
-    colorNumeric,
-    fitBounds,
-    flyToBounds,
-    flyTo,
-    setView,
-  ],
-  htmlwidgets[onRender],
+  bslib,
+  curl[nslookup],
+  htmltools[HTML],
+  htmlwidgets[onRender, saveWidget],
+  leaflet,
   leaflet.extras[addFullscreenControl, addHeatmap],
   leaflet.minicharts[addMinicharts, clearMinicharts],
   rlang[`%||%`],
+  shiny,
+  shinyWidgets[
+    pickerInput,
+    radioGroupButtons,
+    updatePickerInput,
+    updateRadioGroupButtons,
+    updateVirtualSelect,
+  ],
+  shinyjs[runjs, toggle, toggleClass, toggleState, useShinyjs],
+  stats[aggregate],
   tidygeocoder[geocode],
-  shinyjs[runjs],
-  utils[read.csv, write.csv],
+  utils[read.csv, tail, write.csv],
+  waiter[Waiter, spin_flower, useWaiter],
 )
 box::use(
   app /
     logic /
-    viz_helpers[
-      apply_controls,
-      collect_input_snapshot,
-      control_families,
-      field_select,
-      granularity_select,
-      on_confirmed_reset,
-      resolve_gradient_palette,
-      resolve_qualitative_palette,
-      scale_select,
-      suitable_scale_categories,
-      update_field_select,
-      viz_color,
+    date_bins[
+      bin_date_values,
+      date_extent,
+      date_precision,
+      first_dated_field,
+      in_date_range,
+      is_binned,
+      parse_dates,
+      timeline_fields
     ],
-  app / logic / date_bins[bin_date_values, is_binned],
   app / logic / db_events,
+  app / logic / field_labels[field_label],
+  app /
+    logic /
+    field_profile[
+      field_profiles_of = field_profiles,
+      profile_for,
+      scale_categories_for,
+    ],
   app / logic / functions[render_info],
+  app / logic / geo[country_code, parse_coordinates],
   app /
     logic /
     mapping_engine[
@@ -108,14 +77,7 @@ box::use(
       set_layer_granularity,
     ],
   app / logic / paths[app_local_share_path],
-  app / logic / field_labels[field_label],
-  app /
-    logic /
-    field_profile[
-      field_profiles_of = field_profiles,
-      profile_for,
-      scale_categories_for,
-    ],
+  app / logic / viz_helpers,
   app /
     logic /
     viz_layers[
@@ -197,7 +159,7 @@ HOVER_DEFAULT <- "isolate"
 # viz_helpers.R). Absent on purpose: `map_layer_add` clears itself the moment
 # it is picked from, and `map_daterange` is fitted to the loaded data rather
 # than declared, so it is refitted after the catalogue rather than reset by it.
-MAP_CONTROLS <- control_families(
+MAP_CONTROLS <- viz_helpers$control_families(
   switches = c(
     "map_scalebar",
     "map_minimap",
@@ -281,9 +243,14 @@ map_control_defaults <- function() {
 
 # Natural Earth country polygons are fetched once and cached for the choropleth.
 .world_env <- new.env(parent = emptyenv())
+# sf and rnaturalearth are imported here rather than at the top so they load on
+# the first map generation, not at app startup.
 get_world <- function() {
   if (is.null(.world_env$sf)) {
-    .world_env$sf <- rnaturalearth::ne_countries(
+    box::use(
+      rnaturalearth[ne_countries],
+    )
+    .world_env$sf <- ne_countries(
       scale = 50,
       returnclass = "sf"
     )
@@ -303,9 +270,29 @@ empty_geocode_status <- function() {
     n_cached = 0L,
     n_new = 0L,
     n_failed_places = 0L,
-    failed_preview = ""
+    failed_preview = "",
+    # Every fresh lookup failed and Nominatim's host does not resolve.
+    offline = FALSE,
+    # The geocoder's own error, when it aborted rather than missing places.
+    geocode_error = "",
+    # Coordinates that could not be read, so the row fell back to geocoding.
+    n_bad_coords = 0L,
+    bad_coords_preview = "",
+    # Country spellings outside the vocabulary (no choropleth region).
+    n_unknown_country = 0L,
+    unknown_country_preview = "",
+    # Coordinates off their isolate's stated country (see country_fit()).
+    n_outside = 0L,
+    outside_preview = "",
+    n_swapped = 0L,
+    swapped_preview = ""
   )
 }
+
+# How far (metres) a point may lie outside its country's 1:50m outline and
+# still count as inside it: coastal and island sites routinely fall just off a
+# generalised coastline.
+COUNTRY_TOLERANCE_M <- 25000
 
 # Up to this many failed place strings are named in the sidebar feedback;
 # beyond that it just adds a "+N more" tail rather than growing unbounded.
@@ -329,64 +316,152 @@ format_failed_preview <- function(failed_places) {
   txt
 }
 
-# Join city/state/country (most specific first) into one place string per
-# isolate row, so Nominatim resolves each to the finest available point. Shared
-# by build_map_coords() (the geocoder itself) and geocode_pending_count() (the
-# pre-flight count shown in the waiter), so the two can never disagree about
-# exactly which strings get geocoded.
-build_place_strings <- function(meta) {
+# Advisory lines for the sidebar status: data problems a Generate found that
+# do not stop the map but make it less true than it looks. Each names what was
+# affected in its tooltip and how to fix it. NULL when there is nothing to say.
+geo_advisories <- function(s) {
+  line <- function(n, text, tip) {
+    if (!isTRUE(n > 0)) {
+      return(NULL)
+    }
+    bslib$tooltip(
+      shiny$div(
+        class = "small text-warning mb-1",
+        shiny$icon("triangle-exclamation"),
+        sprintf(text, n)
+      ),
+      tip
+    )
+  }
+  lines <- list(
+    line(
+      s$n_unknown_country,
+      " %d isolate(s) name an unrecognised country",
+      paste(
+        "Not counted on the choropleth. Pick the country from the list in the",
+        "Database browser or use its ISO code:",
+        s$unknown_country_preview
+      )
+    ),
+    line(
+      s$n_bad_coords,
+      " %d coordinate value(s) unreadable",
+      paste(
+        "Placed by their place names instead. Write latitude, longitude,",
+        "e.g. 52.52, 13.40:",
+        s$bad_coords_preview
+      )
+    ),
+    line(
+      s$n_swapped,
+      " %d isolate(s) with latitude and longitude swapped",
+      paste(
+        "Their coordinates only fall inside the stated country with the two",
+        "values exchanged. Shown as entered:",
+        s$swapped_preview
+      )
+    ),
+    line(
+      s$n_outside,
+      " %d isolate(s) placed outside their country",
+      paste(
+        sprintf(
+          "Their coordinates lie more than %g km outside the stated country.",
+          COUNTRY_TOLERANCE_M / 1000
+        ),
+        "Shown as entered:",
+        s$outside_preview
+      )
+    )
+  )
+  lines <- Filter(Negate(is.null), lines)
+  if (length(lines)) shiny$tagList(lines)
+}
+
+# Join postcode/city/state/country (most specific first) into one place string
+# per isolate row, so Nominatim resolves each to the finest available point;
+# the postcode leads its city ("10115 Berlin, Berlin, Germany"), as addresses
+# write it. `postcode = FALSE` gives the coarser string build_map_coords()
+# retries with. Shared with geocode_pending_count() (the pre-flight count shown
+# in the waiter), so the two can never disagree about which strings get
+# geocoded.
+build_place_strings <- function(meta, postcode = TRUE) {
   col <- function(name) {
-    if (name %in% names(meta)) meta[[name]] else rep(NA_character_, nrow(meta))
+    v <- if (name %in% names(meta)) {
+      meta[[name]]
+    } else {
+      rep(NA_character_, nrow(meta))
+    }
+    v <- trimws(as.character(v))
+    v[is.na(v)] <- ""
+    v
   }
   city <- col("geo_loc_name_city")
+  if (postcode) {
+    city <- trimws(paste(col("geo_loc_name_postal_code"), city))
+  }
   state <- col("geo_loc_name_state_province")
   country <- col("geo_loc_name_country")
   vapply(
     seq_len(nrow(meta)),
     function(i) {
-      parts <- trimws(c(city[i], state[i], country[i]))
-      parts <- parts[!is.na(parts) & nzchar(parts)]
-      paste(parts, collapse = ", ")
+      parts <- c(city[i], state[i], country[i])
+      paste(parts[nzchar(parts)], collapse = ", ")
     },
     character(1)
   )
 }
 
-# Parse the free-text `geo_loc_coordinates` field into numeric lat/long. Accepts
-# "latitude, longitude" in decimal degrees (comma-, semicolon- or
-# whitespace-separated); anything that isn't exactly two in-range numbers
-# (|lat| <= 90, |lon| <= 180) yields NA, so a blank or malformed entry simply
-# falls back to geocoding the place string. Vectorised: returns a data.frame
-# with `latitude` and `longitude`, one row per input.
-parse_coordinates <- function(x) {
-  n <- length(x)
-  out <- data.frame(
-    latitude = rep(NA_real_, n),
-    longitude = rep(NA_real_, n),
-    stringsAsFactors = FALSE
+# Which explicit coordinates fall more than COUNTRY_TOLERANCE_M outside the
+# Natural Earth outline of the country their isolate names, and which of those
+# would land inside with latitude and longitude swapped, the commonest entry
+# slip. Tested one country at a time against its own polygon only. Purely
+# advisory: a geometry failure reports nothing rather than blocking the map.
+country_fit <- function(lat, lon, code) {
+  box::use(
+    sf[st_as_sf, st_is_within_distance],
   )
-  if (!n) {
+  n <- length(lat)
+  out <- list(outside = rep(FALSE, n), swapped = rep(FALSE, n))
+  world <- get_world()
+  check <- which(!is.na(lat) & !is.na(lon) & code %in% world$adm0_a3)
+  if (!length(check)) {
     return(out)
   }
-  raw <- trimws(as.character(x))
-  for (i in seq_len(n)) {
-    s <- raw[i]
-    if (is.na(s) || !nzchar(s)) {
-      next
+  # Whether each point lies within reach of its country's polygon.
+  near <- function(la, lo, cc) {
+    hit <- rep(FALSE, length(la))
+    for (country in unique(cc)) {
+      sel <- which(cc == country)
+      pts <- st_as_sf(
+        data.frame(lon = lo[sel], lat = la[sel]),
+        coords = c("lon", "lat"),
+        crs = 4326
+      )
+      reach <- st_is_within_distance(
+        pts,
+        world[world$adm0_a3 == country, ],
+        dist = COUNTRY_TOLERANCE_M
+      )
+      hit[sel] <- lengths(reach) > 0
     }
-    parts <- suppressWarnings(as.numeric(trimws(strsplit(s, "[,;[:space:]]+")[[
-      1
-    ]])))
-    parts <- parts[!is.na(parts)]
-    if (length(parts) != 2L) {
-      next
-    }
-    if (abs(parts[1]) <= 90 && abs(parts[2]) <= 180) {
-      out$latitude[i] <- parts[1]
-      out$longitude[i] <- parts[2]
-    }
+    hit
   }
-  out
+  tryCatch(
+    {
+      away <- check[!near(lat[check], lon[check], code[check])]
+      flippable <- away[abs(lon[away]) <= 90]
+      swapped <- flippable[near(
+        lon[flippable],
+        lat[flippable],
+        code[flippable]
+      )]
+      out$swapped[swapped] <- TRUE
+      out$outside[setdiff(away, swapped)] <- TRUE
+      out
+    },
+    error = function(e) out
+  )
 }
 
 # --- persistent geocode cache -----------------------------------------------
@@ -457,21 +532,31 @@ write_geocode_cache <- function(df, path = geocode_cache_path()) {
 # to Nominatim. Newly resolved places are appended to the cache. Returns a list
 # with `located` (one row per distinct place — place, latitude, longitude, with
 # NA coords where a lookup failed), `n_cached` (distinct places served from the
-# cache) and `n_new` (distinct places freshly geocoded this call), for the
-# geocode-status feedback.
+# cache), `n_new` (distinct places freshly geocoded this call), `offline` and
+# `error` (see empty_geocode_status()), for the geocode-status feedback. A
+# geocoder failure leaves its places unresolved instead of aborting, so
+# isolates with explicit coordinates and cached places still reach the map.
 geocode_places_cached <- function(
   place_vec,
   cache_path = geocode_cache_path()
 ) {
   places <- unique(place_vec[!is.na(place_vec) & nzchar(place_vec)])
+  # rep() rather than a scalar NA: with no places (every isolate carries its
+  # own coordinates) a scalar makes data.frame() fail on 0 vs 1 rows.
   located <- data.frame(
     place = places,
-    latitude = NA_real_,
-    longitude = NA_real_,
+    latitude = rep(NA_real_, length(places)),
+    longitude = rep(NA_real_, length(places)),
     stringsAsFactors = FALSE
   )
   if (!length(places)) {
-    return(list(located = located, n_cached = 0L, n_new = 0L))
+    return(list(
+      located = located,
+      n_cached = 0L,
+      n_new = 0L,
+      offline = FALSE,
+      error = ""
+    ))
   }
 
   cache <- read_geocode_cache(cache_path)
@@ -482,14 +567,33 @@ geocode_places_cached <- function(
 
   todo <- located$place[is.na(hit)]
   n_new <- 0L
+  offline <- FALSE
+  error <- ""
   if (length(todo)) {
-    fresh <- geocode(
-      data.frame(place = todo, stringsAsFactors = FALSE),
-      place,
-      method = "osm",
-      lat = "latitude",
-      long = "longitude"
+    fresh <- tryCatch(
+      geocode(
+        data.frame(place = todo, stringsAsFactors = FALSE),
+        place,
+        method = "osm",
+        lat = "latitude",
+        long = "longitude"
+      ),
+      error = function(e) {
+        error <<- conditionMessage(e)
+        data.frame(
+          place = todo,
+          latitude = NA_real_,
+          longitude = NA_real_,
+          stringsAsFactors = FALSE
+        )
+      }
     )
+    # Every lookup failing at once is usually the network, not the data. The
+    # service's host name not resolving confirms it, so the sidebar can say
+    # "offline" instead of blaming each place string.
+    if (all(is.na(fresh$latitude))) {
+      offline <- is.null(nslookup("nominatim.openstreetmap.org", error = FALSE))
+    }
     fill <- match(located$place, fresh$place)
     got <- !is.na(fill)
     located$latitude[got] <- fresh$latitude[fill[got]]
@@ -508,7 +612,13 @@ geocode_places_cached <- function(
       )
     }
   }
-  list(located = located, n_cached = n_cached, n_new = n_new)
+  list(
+    located = located,
+    n_cached = n_cached,
+    n_new = n_new,
+    offline = offline,
+    error = error
+  )
 }
 
 # How many DISTINCT, non-empty places from this metadata are NOT already in the
@@ -579,102 +689,165 @@ geocode_waiter_html <- function(n_places) {
   shiny$tagList(
     shiny$div(
       class = "viz-spinner-dark",
-      waiter::spin_flower(),
+      spin_flower(),
       shiny$div(style = "margin-top:1rem;", message),
       countdown
     )
   )
 }
 
-# Build a geocoded coordinate table from the isolate metadata. City, state and
-# country are joined into one place string (most specific first) so Nominatim
-# resolves to the finest available point; the distinct places are resolved once
-# (cache-first — see geocode_places_cached()) and merged back onto every
-# isolate. All metadata columns are retained. Rows with no spatial fields, or
-# that fail to geocode, are dropped. Returns a list with `coords` (the metadata
-# columns plus place, longitude and latitude, ordered by collection date, or
-# NULL when nothing is mappable) and `status` (geocoding success + cache counts,
-# for the sidebar feedback — see empty_geocode_status()'s fields).
+# Build a geocoded coordinate table from the isolate metadata. Postcode, city,
+# state and country are joined into one place string (most specific first) so
+# Nominatim resolves to the finest available point; the distinct places are
+# resolved once (cache-first, see geocode_places_cached()) and merged back onto
+# every isolate. All metadata columns are retained. Rows with no spatial
+# fields, or that fail to geocode, are dropped from `coords`.
+#
+# Returns a list with `coords` (the metadata columns plus place, country_code,
+# longitude and latitude, ordered by collection date, or NULL when nothing is
+# mappable), `regions` (every isolate naming a recognised country, with its
+# country_code, whether or not it got a point: the choropleth counts these, so
+# a failed or offline geocode never drops an isolate from its country) and
+# `status` (see empty_geocode_status()'s fields).
 build_map_coords <- function(meta) {
+  status <- empty_geocode_status()
   if (is.null(meta) || !nrow(meta)) {
-    return(list(coords = NULL, status = empty_geocode_status()))
+    return(list(coords = NULL, regions = NULL, status = status))
+  }
+  col_or_na <- function(name) {
+    if (name %in% names(meta)) {
+      as.character(meta[[name]])
+    } else {
+      rep(NA_character_, nrow(meta))
+    }
   }
 
   df <- meta
   df$place <- build_place_strings(meta)
+  fallback <- build_place_strings(meta, postcode = FALSE)
+
+  country <- trimws(col_or_na("geo_loc_name_country"))
+  df$country_code <- country_code(country)
+  unknown <- !is.na(country) & nzchar(country) & is.na(df$country_code)
+  status$n_unknown_country <- sum(unknown)
+  status$unknown_country_preview <- format_failed_preview(unique(country[
+    unknown
+  ]))
+  regions <- df[!is.na(df$country_code), , drop = FALSE]
+  if (!nrow(regions)) {
+    regions <- NULL
+  }
 
   # Explicit per-isolate coordinates (geo_loc_coordinates) win over geocoding:
   # they are already point-precise, so those rows are used as-is and never sent
-  # to Nominatim.
-  explicit <- parse_coordinates(
-    if ("geo_loc_coordinates" %in% names(df)) {
-      df$geo_loc_coordinates
-    } else {
-      rep(NA_character_, nrow(df))
-    }
-  )
+  # to Nominatim. An unreadable value falls back to the place string and is
+  # reported, rather than silently ignored.
+  raw_coords <- trimws(col_or_na("geo_loc_coordinates"))
+  explicit <- parse_coordinates(raw_coords)
   df$latitude <- explicit$latitude
   df$longitude <- explicit$longitude
+  bad <- nzchar(explicit$problem)
+  status$n_bad_coords <- sum(bad)
+  status$bad_coords_preview <- format_failed_preview(unique(raw_coords[bad]))
 
   # Mappable = has explicit coordinates, or has a place string to geocode.
   has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
-  df <- df[has_explicit | nzchar(df$place), , drop = FALSE]
+  keep <- has_explicit | nzchar(df$place)
+  df <- df[keep, , drop = FALSE]
+  fallback <- fallback[keep]
+  has_explicit <- has_explicit[keep]
+  status$n_isolates <- nrow(df)
   if (!nrow(df)) {
-    return(list(coords = NULL, status = empty_geocode_status()))
+    return(list(coords = NULL, regions = regions, status = status))
   }
-  has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
+
+  fit <- country_fit(df$latitude, df$longitude, df$country_code)
+  status$n_outside <- sum(fit$outside)
+  status$n_swapped <- sum(fit$swapped)
+  status$outside_preview <- format_failed_preview(df$isolate[fit$outside])
+  status$swapped_preview <- format_failed_preview(df$isolate[fit$swapped])
 
   # Geocode only the rows lacking explicit coordinates (and carrying a place).
-  geo <- geocode_places_cached(df$place[!has_explicit & nzchar(df$place)])
-  located <- geo$located
-  failed_places <- located$place[
-    is.na(located$latitude) | is.na(located$longitude)
-  ]
+  need <- !has_explicit & nzchar(df$place)
+  geo <- geocode_places_cached(df$place[need])
+  hit <- match(df$place, geo$located$place)
+  fill <- need & !is.na(hit)
+  df$latitude[fill] <- geo$located$latitude[hit[fill]]
+  df$longitude[fill] <- geo$located$longitude[hit[fill]]
+  n_cached <- geo$n_cached
+  n_new <- geo$n_new
+  offline <- geo$offline
+  error <- geo$error
 
-  if (nrow(located)) {
-    hit <- match(df$place, located$place)
-    fill <- !has_explicit & !is.na(hit)
-    df$latitude[fill] <- located$latitude[hit[fill]]
-    df$longitude[fill] <- located$longitude[hit[fill]]
+  # A postcode Nominatim does not know sinks the whole query, so places that
+  # failed with one are retried without it, which places them at city level.
+  retry <- need & is.na(df$latitude) & nzchar(fallback) & fallback != df$place
+  if (any(retry) && !offline) {
+    geo2 <- geocode_places_cached(fallback[retry])
+    hit2 <- match(fallback, geo2$located$place)
+    got <- retry & !is.na(hit2) & !is.na(geo2$located$latitude[hit2])
+    df$latitude[got] <- geo2$located$latitude[hit2[got]]
+    df$longitude[got] <- geo2$located$longitude[hit2[got]]
+    df$place[got] <- fallback[got]
+    n_cached <- n_cached + geo2$n_cached
+    n_new <- n_new + geo2$n_new
+    offline <- geo2$offline
+    if (!nzchar(error)) {
+      error <- geo2$error
+    }
   }
 
-  out <- df
-  n_isolates <- nrow(out)
-  out <- out[!is.na(out$longitude) & !is.na(out$latitude), , drop = FALSE]
-  status <- list(
-    n_isolates = n_isolates,
-    n_mapped = nrow(out),
-    # Distinct places actually resolved to coordinates (each backs one or more
-    # mapped isolates), split into those served from the persistent cache vs.
-    # freshly fetched from Nominatim this Generate.
-    n_locations = nrow(located) - length(failed_places),
-    n_cached = geo$n_cached,
-    n_new = geo$n_new,
-    n_failed_places = length(failed_places),
-    failed_preview = format_failed_preview(failed_places)
-  )
+  mapped <- !is.na(df$longitude) & !is.na(df$latitude)
+  failed_places <- unique(df$place[need & !mapped])
+  status$n_mapped <- sum(mapped)
+  # Distinct places actually resolved to coordinates (each backs one or more
+  # mapped isolates), split into those served from the persistent cache vs.
+  # freshly fetched from Nominatim this Generate.
+  status$n_locations <- length(unique(df$place[need & mapped]))
+  status$n_cached <- n_cached
+  status$n_new <- n_new
+  status$n_failed_places <- length(failed_places)
+  status$failed_preview <- format_failed_preview(failed_places)
+  status$offline <- offline
+  status$geocode_error <- error
+
+  out <- df[mapped, , drop = FALSE]
   if (!nrow(out)) {
-    return(list(coords = NULL, status = status))
+    return(list(coords = NULL, regions = regions, status = status))
   }
   if ("sample_collection_date" %in% names(out)) {
     out <- out[order(out$sample_collection_date), , drop = FALSE]
   }
-  list(coords = out, status = status)
+  list(coords = out, regions = regions, status = status)
 }
 
-# Subset the coordinates to the selected collection-date range. A no-op once
-# the range covers the full data span (the default after Generate), so there
-# is no separate on/off switch — narrowing the slider is the filter.
+# Subset the coordinates to the selected range of the Time tab's date variable.
+# A no-op once the range covers the full data span (the default after
+# Generate), so there is no separate on/off switch — narrowing the slider is
+# the filter.
 filter_coords <- function(coords, o) {
   if (is.null(coords) || !nrow(coords)) {
     return(coords)
   }
-  if (is.null(o$daterange) || !"sample_collection_date" %in% names(coords)) {
+  field <- o$date_field
+  if (
+    is.null(o$daterange) ||
+      length(field) != 1L ||
+      !nzchar(field) ||
+      !field %in% names(coords)
+  ) {
     return(coords)
   }
-  d <- suppressWarnings(as.Date(coords$sample_collection_date))
   rng <- as.Date(o$daterange)
-  keep <- !is.na(d) & d >= rng[1] & d <= rng[2]
+  # A window over the whole span filters nothing, so isolates without a date
+  # stay on the map until the window is actually narrowed.
+  bounds <- o$date_bounds
+  if (
+    length(bounds) == 2L && rng[[1]] <= bounds[[1]] && rng[[2]] >= bounds[[2]]
+  ) {
+    return(coords)
+  }
+  keep <- in_date_range(coords[[field]], rng)
   coords[keep, , drop = FALSE]
 }
 
@@ -722,20 +895,8 @@ hex_alpha <- function(color) {
 }
 
 # A date column as days since the epoch, NA wherever a value does not parse.
-# Parsed one value at a time: as.Date() on a vector throws outright when its
-# first entry is not a date, rather than returning NA for it.
 date_days <- function(vals) {
-  vapply(
-    blank_to_na(vals),
-    function(v) {
-      if (is.na(v)) {
-        return(NA_real_)
-      }
-      as.numeric(tryCatch(as.Date(v), error = function(e) NA))
-    },
-    numeric(1),
-    USE.NAMES = FALSE
-  )
+  as.numeric(parse_dates(blank_to_na(vals)))
 }
 
 # The colour scale a mapping layer draws with, built over `vals`. A continuous
@@ -744,7 +905,7 @@ date_days <- function(vals) {
 # into the space the scale was built in, so a frame filtered from the same data
 # is coloured consistently. Missing values are always NA_COLOR.
 layer_palette <- function(layer, vals) {
-  palette <- resolve_gradient_palette(layer$palette %||% "viridis")
+  palette <- viz_helpers$resolve_gradient_palette(layer$palette %||% "viridis")
   is_date <- identical(layer$transform, "as_date")
   if (isTRUE(layer$continuous)) {
     convert <- if (is_date) {
@@ -755,7 +916,7 @@ layer_palette <- function(layer, vals) {
     num <- convert(vals)
     if (any(!is.na(num))) {
       return(list(
-        pal = colorNumeric(palette, domain = num, na.color = NA_COLOR),
+        pal = leaflet$colorNumeric(palette, domain = num, na.color = NA_COLOR),
         values = num,
         type = if (is_date) "Date" else "Numeric",
         convert = convert
@@ -769,8 +930,8 @@ layer_palette <- function(layer, vals) {
   # palette function it returns is actually invoked to colour real values.
   n <- length(unique(vals[!is.na(vals)]))
   list(
-    pal = colorFactor(
-      resolve_qualitative_palette(palette, n),
+    pal = leaflet$colorFactor(
+      viz_helpers$resolve_qualitative_palette(palette, n),
       domain = vals,
       na.color = NA_COLOR
     ),
@@ -803,6 +964,10 @@ drawn_layer <- function(o, coords) {
   layer
 }
 
+# Screen distance, in pixels, under which markers count as stacked on one spot
+# when clustering is off (see build_markers()).
+COINCIDENT_PX <- 1
+
 # Map pane the point markers are drawn into, so their opacity can be applied
 # to the layer as a whole (see build_markers()).
 MARKER_PANE <- "mapMarkers"
@@ -810,29 +975,29 @@ MARKER_PANE <- "mapMarkers"
 # Styled point markers. layerId = isolate keeps each marker individually
 # addressable (e.g. for a future click-driven cross-filter).
 build_markers <- function(m, coords, o, full_coords = NULL) {
-  cluster_opts <- if (o$cluster) {
-    # Spiderfying is always on: without it, isolates sharing one geocoded
-    # place stay a cluster at every zoom and can never be told apart. Coverage
-    # and zoom-to-bounds-on-click are likewise always on -- both are one-way
-    # conveniences (a hover outline, a click that zooms in) with no real reason
-    # to disable, so they no longer cost the user a decision.
-    markerClusterOptions(
-      showCoverageOnHover = TRUE,
-      spiderfyOnMaxZoom = TRUE,
-      zoomToBoundsOnClick = TRUE,
-      maxClusterRadius = o$cluster_radius
-    )
-  } else {
-    NULL
-  }
+  # Spiderfying is always on: without it, isolates sharing one geocoded place
+  # stay a cluster at every zoom and can never be told apart. Coverage and
+  # zoom-to-bounds-on-click are likewise always on -- both are one-way
+  # conveniences (a hover outline, a click that zooms in) with no real reason to
+  # disable, so they no longer cost the user a decision.
+  # With clustering off, markers that would sit on the same pixel (typically
+  # isolates sharing one city) are still grouped: stacked circles would show
+  # only the topmost isolate on hover and click. Such a group spiderfies on the
+  # first click, since its bounds are a single point.
+  cluster_opts <- leaflet$markerClusterOptions(
+    showCoverageOnHover = o$cluster,
+    spiderfyOnMaxZoom = TRUE,
+    zoomToBoundsOnClick = TRUE,
+    maxClusterRadius = if (o$cluster) o$cluster_radius else COINCIDENT_PX
+  )
   popup <- build_popup(coords, o$popup_fields)
   label <- if (length(o$hover_field)) {
     txt <- build_popup(coords, o$hover_field)
-    if (!is.null(txt)) lapply(txt, htmltools::HTML)
+    if (!is.null(txt)) lapply(txt, HTML)
   } else {
     NULL
   }
-  lopts <- labelOptions(
+  lopts <- leaflet$labelOptions(
     permanent = o$permanent,
     textsize = paste0(o$label_size, "px")
   )
@@ -866,8 +1031,8 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
   # top of one another, and ~40 stacked circles at 50% alpha composite to a
   # solid one, so a per-circle alpha only became visible near zero. Group
   # opacity renders such a stack like a single circle at the chosen alpha.
-  m <- addMapPane(m, MARKER_PANE, zIndex = 410)
-  m <- addCircleMarkers(
+  m <- leaflet$addMapPane(m, MARKER_PANE, zIndex = 410)
+  m <- leaflet$addCircleMarkers(
     m,
     data = coords,
     lng = ~longitude,
@@ -883,7 +1048,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     popup = popup,
     label = label,
     labelOptions = lopts,
-    options = pathOptions(pane = MARKER_PANE),
+    options = leaflet$pathOptions(pane = MARKER_PANE),
     clusterOptions = cluster_opts
   )
   # createPane() adds a fresh pane element on every render, so every copy is
@@ -902,7 +1067,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
   )
 
   if (!is.null(layer) && o$legend) {
-    m <- addLegend(
+    m <- leaflet$addLegend(
       m,
       position = o$legend_pos,
       pal = pal_info$pal,
@@ -913,26 +1078,46 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
       # controls) is applied to the whole box in build_map() below.
       opacity = 1,
       labFormat = if (identical(pal_info$type, "Date")) {
-        labelFormat(transform = function(x) as.Date(x, origin = "1970-01-01"))
+        leaflet$labelFormat(transform = function(x) {
+          as.Date(x, origin = "1970-01-01")
+        })
       } else {
-        labelFormat(digits = o$legend_digits)
+        leaflet$labelFormat(digits = o$legend_digits)
       }
     )
   }
   m
 }
 
+# Isolates per Natural Earth unit, aligned with `world`'s rows (NA for none).
+# Joined on the unit code, so any spelling app/logic/geo.R recognises counts
+# ("USA", "Deutschland", "DE"), not only Natural Earth's own name.
+country_counts <- function(rows, world) {
+  codes <- if ("country_code" %in% names(rows)) {
+    rows$country_code
+  } else {
+    country_code(rows$geo_loc_name_country)
+  }
+  counts <- table(codes)
+  as.integer(counts[world$adm0_a3])
+}
+
+# Color-scale domain for country counts. A single counted value (every isolate
+# in one country, or one count shared by all) would give a zero-width domain,
+# which leaflet's numeric legend draws as an empty bar; the scale then starts at
+# zero instead.
+count_domain <- function(n) {
+  r <- range(n, na.rm = TRUE)
+  if (r[1] == r[2]) c(0, max(r[2], 1)) else r
+}
+
 # Choropleth: shade Natural Earth countries by the number of isolates whose
-# geo_loc_name_country matches, using the Region tab's palette (the mapping
+# geo_loc_name_country names them, using the Region tab's palette (the mapping
 # layers don't apply here — the mapped variable is always the isolate count).
+# `coords` here are build_map_coords()'s `regions`, which build_map() passes.
 build_choropleth <- function(m, coords, o, full_coords = NULL) {
   world <- get_world()
-  counts <- table(coords$geo_loc_name_country)
-
-  n <- as.integer(counts[world$name])
-  by_admin <- as.integer(counts[world$admin])
-  n[is.na(n)] <- by_admin[is.na(n)]
-  world$n <- n
+  world$n <- country_counts(coords, world)
 
   # Off (default): the domain is the currently-shown (possibly date-filtered)
   # counts, so the color scale rescales to whatever subset is visible — the
@@ -941,24 +1126,21 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
   # range renders lighter until the count actually approaches the final
   # total — useful for watching the animation "fill in" over time.
   domain_n <- if (isTRUE(o$region_fixed_scale) && !is.null(full_coords)) {
-    full_counts <- table(full_coords$geo_loc_name_country)
-    dn <- as.integer(full_counts[world$name])
-    dn_by_admin <- as.integer(full_counts[world$admin])
-    dn[is.na(dn)] <- dn_by_admin[is.na(dn)]
-    dn
+    country_counts(full_coords, world)
   } else {
     world$n
   }
 
   vals <- if (identical(o$region_transform, "Log")) log1p(world$n) else world$n
+  domain_range <- count_domain(domain_n)
   domain_vals <- if (identical(o$region_transform, "Log")) {
-    log1p(domain_n)
+    log1p(domain_range)
   } else {
-    domain_n
+    domain_range
   }
-  pal <- suppressWarnings(colorNumeric(
-    resolve_gradient_palette(o$region_scale),
-    domain = range(domain_vals, na.rm = TRUE),
+  pal <- suppressWarnings(leaflet$colorNumeric(
+    viz_helpers$resolve_gradient_palette(o$region_scale),
+    domain = domain_vals,
     na.color = "#f0f0f0"
   ))
   fill <- pal(vals)
@@ -980,10 +1162,10 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
   # is what lets `permanent` vary polygon by polygon here.
   has_isolates <- !is.na(world$n) & world$n > 0
   region_label_opts <- lapply(has_isolates, function(shown) {
-    labelOptions(permanent = isTRUE(o$region_permanent) && shown)
+    leaflet$labelOptions(permanent = isTRUE(o$region_permanent) && shown)
   })
 
-  m <- addPolygons(
+  m <- leaflet$addPolygons(
     m,
     data = world,
     fillColor = fill,
@@ -993,7 +1175,7 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
     smoothFactor = 0.3,
     label = region_label,
     labelOptions = region_label_opts,
-    highlightOptions = highlightOptions(
+    highlightOptions = leaflet$highlightOptions(
       weight = 2,
       color = "#000000",
       fillOpacity = 0.9,
@@ -1002,19 +1184,19 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
   )
 
   if (o$legend && any(!is.na(domain_n))) {
-    lpal <- suppressWarnings(colorNumeric(
-      resolve_gradient_palette(o$region_scale),
-      domain = range(domain_n, na.rm = TRUE),
+    lpal <- suppressWarnings(leaflet$colorNumeric(
+      viz_helpers$resolve_gradient_palette(o$region_scale),
+      domain = domain_range,
       na.color = "#f0f0f0"
     ))
-    m <- addLegend(
+    m <- leaflet$addLegend(
       m,
       position = o$legend_pos,
       pal = lpal,
-      values = domain_n[!is.na(domain_n)],
+      values = domain_range,
       title = "Isolate count",
       opacity = 1,
-      labFormat = labelFormat(digits = 0)
+      labFormat = leaflet$labelFormat(digits = 0)
     )
   }
   m
@@ -1031,7 +1213,7 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # isolates already saturates the color scale for any max in a normal range.
   # Explicit counts make `max` a meaningful, explainable knob ("isolate count
   # needed to reach full color") — see build_map_coords()'s auto-fitted slider.
-  agg <- stats::aggregate(
+  agg <- aggregate(
     isolate ~ place + longitude + latitude,
     data = coords,
     FUN = length
@@ -1060,8 +1242,8 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # addHeatmap() do its own resampling. Colors below 0.2 are forced
   # transparent to preserve leaflet.heat's usual "fades out at low density"
   # look instead of solid-coloring even single-isolate points.
-  gradient_pal <- colorNumeric(
-    resolve_gradient_palette(o$heat_scale %||% "viridis"),
+  gradient_pal <- leaflet$colorNumeric(
+    viz_helpers$resolve_gradient_palette(o$heat_scale %||% "viridis"),
     domain = c(0, 1)
   )
   gradient <- function(x) ifelse(x < 0.2, "rgba(0,0,0,0)", gradient_pal(x))
@@ -1097,18 +1279,18 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # (0 to the effective max), so the color a place shows on the map reads
   # back to an isolate count the same way Choropleth's fill does.
   if (o$legend) {
-    lpal <- colorNumeric(
-      resolve_gradient_palette(o$heat_scale %||% "viridis"),
+    lpal <- leaflet$colorNumeric(
+      viz_helpers$resolve_gradient_palette(o$heat_scale %||% "viridis"),
       domain = c(0, effective_max)
     )
-    m <- addLegend(
+    m <- leaflet$addLegend(
       m,
       position = o$legend_pos,
       pal = lpal,
       values = c(0, effective_max),
       title = if (nzchar(o$legend_title)) o$legend_title else "Isolate count",
       opacity = 1,
-      labFormat = labelFormat(digits = 0)
+      labFormat = leaflet$labelFormat(digits = 0)
     )
   }
   m
@@ -1255,7 +1437,7 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # the column order set above. Colours come from `colors`, so the keys, their
   # order and their colours are the Markers legend's for the same variable.
   if (isTRUE(o$legend)) {
-    m <- addLegend(
+    m <- leaflet$addLegend(
       m,
       position = o$legend_pos,
       colors = unname(colors),
@@ -1282,8 +1464,15 @@ format_daterange_label <- function(rng) {
 
 # Assemble the full leaflet widget (no view/zoom — the caller sets that): base
 # tiles, decorations, plugins, then the layer for the active mode. Shared by the
-# live renderer and the HTML export.
-build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
+# live renderer and the HTML export. `regions` is build_map_coords()'s
+# unfiltered country table; NULL makes the choropleth count `coords` instead.
+build_map <- function(
+  coords,
+  o,
+  full_coords = NULL,
+  zoom = NULL,
+  regions = NULL
+) {
   # The native zoom control has no `position` argument of its own -- it always
   # lands at Leaflet's hardcoded top-left, which is also where a "Top left"
   # legend/anything else the Legend tab picks would go. Turning it off here
@@ -1296,8 +1485,8 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # levels; wheelPxPerZoomLevel raises the scroll distance per zoom level so
   # each wheel notch moves less. zoomDelta keeps the +/- buttons and keyboard
   # in step with the finer snap.
-  m <- leaflet(
-    options = leafletOptions(
+  m <- leaflet$leaflet(
+    options = leaflet$leafletOptions(
       zoomControl = FALSE,
       zoomSnap = 0.25,
       zoomDelta = 0.25,
@@ -1314,22 +1503,22 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # context against an otherwise blank background.
   choropleth <- identical(o$mode, "Choropleth")
   if (choropleth) {
-    m <- addMapPane(m, "choroplethLabels", zIndex = 450)
+    m <- leaflet$addMapPane(m, "choroplethLabels", zIndex = 450)
   } else {
     m <- if (identical(o$tiles, "OpenStreetMap")) {
-      addTiles(m)
+      leaflet$addTiles(m)
     } else {
-      addProviderTiles(m, o$tiles)
+      leaflet$addProviderTiles(m, o$tiles)
     }
   }
   if (o$scalebar) {
-    m <- addScaleBar(m, position = "bottomleft")
+    m <- leaflet$addScaleBar(m, position = "bottomleft")
   }
   if (o$minimap) {
-    m <- addMiniMap(m, toggleDisplay = TRUE, minimized = FALSE)
+    m <- leaflet$addMiniMap(m, toggleDisplay = TRUE, minimized = FALSE)
   }
   if (o$graticule) {
-    m <- addSimpleGraticule(m)
+    m <- leaflet$addSimpleGraticule(m)
   }
   if (o$show_controls) {
     m <- addFullscreenControl(m, position = "bottomleft")
@@ -1339,6 +1528,14 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
       m,
       "function(el, x) { L.control.zoom({ position: 'bottomleft' }).addTo(this); }"
     )
+  }
+
+  # The choropleth counts build_map_coords()'s `regions` (every isolate naming
+  # a recognised country) rather than the geocoded points, under the same time
+  # filter, so an isolate whose place failed to geocode still counts.
+  if (choropleth && !is.null(regions)) {
+    full_coords <- regions
+    coords <- filter_coords(regions, o)
   }
 
   if (is.null(coords) || !nrow(coords)) {
@@ -1356,11 +1553,11 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # Second half of the label sandwich set up above: added only now, after the
   # polygons, so it lands in the "choroplethLabels" pane stacked above them.
   if (choropleth) {
-    m <- addTiles(
+    m <- leaflet$addTiles(
       m,
       urlTemplate = choropleth_labels_url,
       attribution = choropleth_labels_attribution,
-      options = tileOptions(pane = "choroplethLabels")
+      options = leaflet$tileOptions(pane = "choroplethLabels")
     )
   }
 
@@ -1371,7 +1568,7 @@ build_map <- function(coords, o, full_coords = NULL, zoom = NULL) {
   # go through o$daterange.
   if (isTRUE(o$show_time_label) && length(o$daterange) == 2) {
     label_text <- format_daterange_label(o$daterange)
-    m <- addControl(
+    m <- leaflet$addControl(
       m,
       html = as.character(shiny$tags$div(class = "map-date-label", label_text)),
       position = "topright",
@@ -1495,14 +1692,24 @@ frame_coords <- function(m, coords, fly = FALSE) {
   lat_rng <- range(coords$latitude)
   if (lng_rng[1] == lng_rng[2] && lat_rng[1] == lat_rng[2]) {
     if (fly) {
-      flyTo(m, lng = lng_rng[1], lat = lat_rng[1], zoom = single_point_zoom)
+      leaflet$flyTo(
+        m,
+        lng = lng_rng[1],
+        lat = lat_rng[1],
+        zoom = single_point_zoom
+      )
     } else {
-      setView(m, lng = lng_rng[1], lat = lat_rng[1], zoom = single_point_zoom)
+      leaflet$setView(
+        m,
+        lng = lng_rng[1],
+        lat = lat_rng[1],
+        zoom = single_point_zoom
+      )
     }
   } else if (fly) {
-    flyToBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
+    leaflet$flyToBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
   } else {
-    fitBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
+    leaflet$fitBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
   }
 }
 
@@ -1762,9 +1969,9 @@ reach_script <- shiny$tags$script(shiny$HTML(
 # and individual rows relevant to the current map mode / marker style.
 map_controls <- function(ns) {
   shiny$tagList(
-    navset_tab(
+    bslib$navset_tab(
       # Basemap + view -------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Basemap",
         value = "basemap",
         icon = shiny$icon("layer-group"),
@@ -1777,19 +1984,19 @@ map_controls <- function(ns) {
             selected = mode_tile_defaults[["Markers"]]
           )
         ),
-        input_switch(ns("map_scalebar"), "Scale bar", TRUE),
-        input_switch(ns("map_minimap"), "Minimap inset", TRUE),
-        input_switch(ns("map_graticule"), "Lat/long grid", FALSE),
-        input_switch(ns("map_show_controls"), "Zoom controls", TRUE)
+        bslib$input_switch(ns("map_scalebar"), "Scale bar", TRUE),
+        bslib$input_switch(ns("map_minimap"), "Minimap inset", TRUE),
+        bslib$input_switch(ns("map_graticule"), "Lat/long grid", FALSE),
+        bslib$input_switch(ns("map_show_controls"), "Zoom controls", TRUE)
       ),
       # Markers --------------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Markers",
         value = "markers",
         icon = shiny$icon("location-dot"),
-        accordion(
+        bslib$accordion(
           open = "Clustering",
-          accordion_panel(
+          bslib$accordion_panel(
             "Clustering",
             icon = shiny$icon("object-group"),
             # A single slider now fully decides clustering: 0 means off, any
@@ -1809,7 +2016,7 @@ map_controls <- function(ns) {
               ring = "cluster"
             )
           ),
-          accordion_panel(
+          bslib$accordion_panel(
             "Marker Style",
             icon = shiny$icon("sliders"),
             shiny$div(
@@ -1826,7 +2033,7 @@ map_controls <- function(ns) {
             # The picker's own alpha slider stands in for a separate opacity
             # control; it sets the whole marker layer's opacity (see
             # build_markers()). The border is a fixed thin black outline.
-            viz_color(
+            viz_helpers$viz_color(
               ns,
               "map_marker_color",
               "Fill color",
@@ -1837,7 +2044,7 @@ map_controls <- function(ns) {
         )
       ),
       # Variable mapping -------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Mapping",
         value = "color",
         icon = shiny$icon("map-pin"),
@@ -1845,11 +2052,11 @@ map_controls <- function(ns) {
         # engines: picking one adds a layer and app/logic/mapping_engine.R
         # decides its palette from the variable's own profile. Markers draw it
         # as the point fill, Charts as the slices. Missing values are grey.
-        field_select(ns, "map_layer_add", "Map a variable"),
+        viz_helpers$field_select(ns, "map_layer_add", "Map a variable"),
         shiny$uiOutput(ns("map_layers_ui"))
       ),
       # Charts (minicharts) -----------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Charts",
         value = "charts",
         icon = shiny$icon("chart-pie"),
@@ -1892,9 +2099,9 @@ map_controls <- function(ns) {
           shape = "square",
           ring = "chart"
         ),
-        accordion(
+        bslib$accordion(
           open = FALSE,
-          accordion_panel(
+          bslib$accordion_panel(
             "Chart Style",
             icon = shiny$icon("sliders"),
             # The variable each chart splits by is the mapping layer (Mapping tab).
@@ -1904,7 +2111,7 @@ map_controls <- function(ns) {
                 ns("map_chart_size"),
                 "Chart size",
                 min = 20,
-                max = 80,
+                max = 120,
                 value = 40,
                 step = 5
               )
@@ -1927,7 +2134,7 @@ map_controls <- function(ns) {
       # Choropleth's only tab of its own, so it sits where Mapping does in the
       # modes that have one. The fill is always the isolate count, so the
       # palette lives here rather than on a mapping layer.
-      nav_panel(
+      bslib$nav_panel(
         "Region",
         value = "region",
         icon = shiny$icon("earth-europe"),
@@ -1940,7 +2147,7 @@ map_controls <- function(ns) {
           size = "sm"
         ),
         # A count is never categorical or diverging, so only ordered palettes.
-        scale_select(
+        viz_helpers$scale_select(
           ns,
           "map_region_scale",
           categories = c("Sequential", "Gradient"),
@@ -1957,15 +2164,20 @@ map_controls <- function(ns) {
             step = 0.05
           )
         ),
-        viz_color(ns, "map_region_border", "Border color", "#000000"),
-        input_switch(
+        viz_helpers$viz_color(
+          ns,
+          "map_region_border",
+          "Border color",
+          "#000000"
+        ),
+        bslib$input_switch(
           ns("map_region_permanent"),
           "Always show labels",
           FALSE
         )
       ),
       # Heatmap (Density) -------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Density",
         value = "density",
         icon = shiny$icon("fire"),
@@ -2000,7 +2212,7 @@ map_controls <- function(ns) {
         # Heat intensity is always a non-negative isolate density, never
         # categorical or meaningfully diverging, so this picker is restricted
         # to ordered palettes, like the Region tab's count scale.
-        scale_select(
+        viz_helpers$scale_select(
           ns,
           "map_heat_scale",
           categories = c("Sequential", "Gradient"),
@@ -2008,11 +2220,11 @@ map_controls <- function(ns) {
         )
       ),
       # Legend -----------------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Legend",
         value = "legend",
         icon = shiny$icon("list"),
-        input_switch(ns("map_legend"), "Show legend", TRUE),
+        bslib$input_switch(ns("map_legend"), "Show legend", TRUE),
         pickerInput(
           ns("map_legend_pos"),
           "Position",
@@ -2061,7 +2273,7 @@ map_controls <- function(ns) {
         )
       ),
       # Popup + hover labels -------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Labels",
         value = "labels",
         icon = shiny$icon("tag"),
@@ -2071,7 +2283,7 @@ map_controls <- function(ns) {
         # clicked through, not on every individual selection -- ticking
         # several boxes in quick succession otherwise raced the dropdown's own
         # open state and could close it mid-click.
-        field_select(
+        viz_helpers$field_select(
           ns,
           "map_popup",
           sprintf("Popup fields (up to %d)", MAX_LABEL_FIELDS),
@@ -2082,7 +2294,7 @@ map_controls <- function(ns) {
           max_values = MAX_LABEL_FIELDS,
           update_on = "close"
         ),
-        field_select(
+        viz_helpers$field_select(
           ns,
           "map_hover_field",
           sprintf("Hover fields (up to %d)", MAX_LABEL_FIELDS),
@@ -2093,7 +2305,7 @@ map_controls <- function(ns) {
           max_values = MAX_LABEL_FIELDS,
           update_on = "close"
         ),
-        input_switch(ns("map_permanent"), "Always show labels", FALSE),
+        bslib$input_switch(ns("map_permanent"), "Always show labels", FALSE),
         shiny$div(
           class = "custom-slider",
           shiny$sliderInput(
@@ -2107,7 +2319,7 @@ map_controls <- function(ns) {
         )
       ),
       # Temporal filter --------------------------------------------------------
-      nav_panel(
+      bslib$nav_panel(
         "Time",
         value = "time",
         icon = shiny$icon("clock"),
@@ -2196,12 +2408,15 @@ map_controls <- function(ns) {
             class = "map-anim-label"
           )
         ),
-        input_switch(
+        # Which Date or Year variable the slider filters by, rendered
+        # server-side so it is created carrying this data's choices.
+        shiny$uiOutput(ns("date_field_ui")),
+        bslib$input_switch(
           ns("map_show_time_label"),
           "Annotate date range on map",
           TRUE
         ),
-        input_switch(
+        bslib$input_switch(
           ns("map_region_fixed_scale"),
           "Fix color scale to full date range",
           TRUE
@@ -2209,10 +2424,6 @@ map_controls <- function(ns) {
       )
     ),
     reach_script,
-    # Geocoding feedback: how many isolates the last Generate was able to
-    # place on the map, with a warning + a few example place names when some
-    # couldn't be resolved. See output$map_geocode_status_ui in the server.
-    shiny$uiOutput(ns("map_geocode_status_ui"), class = "map-geocode-status"),
     shiny$div(
       class = "viz-mode-dropup",
       pickerInput(
@@ -2238,7 +2449,7 @@ map_controls <- function(ns) {
     ),
     # Show only the control tabs — and, within them, the individual control
     # rows — relevant to the current map mode. Done in the browser (not via
-    # server nav_show/nav_hide / shinyjs::toggle on many small ids) so it can
+    # server nav_show/nav_hide / toggle on many small ids) so it can
     # never throw "Node cannot be found" and interfere with Shiny's render
     # batch.
     shiny$tags$script(shiny$HTML(local({
@@ -2286,25 +2497,38 @@ map_controls <- function(ns) {
   )
 }
 
+#' Map Status for the Setup Sidebar
+#'
+#' The last Generate's mapping summary and data advisories, mounted by
+#' app/view/visualization_plot.R at the bottom of the plot tab's left sidebar.
+#' Rendered by this module's `output$map_geocode_status_ui`.
+#'
+#' @param id The engine's namespaced id, the same one passed to `ui()`.
+#' @return A `uiOutput`.
 #' @export
+setup_ui <- function(id) {
+  shiny$uiOutput(shiny$NS(id, "map_geocode_status_ui"), class = "map-geocode-status")
+}
+
 # `options_ui` is accepted for one signature across all engines; this one has no
 # distance-computation controls, so the tab never passes any.
+#' @export
 ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
-  layout_sidebar(
+  bslib$layout_sidebar(
     # See visualization_mst.R: `padding` replaces the old non-unique
     # `id = "plot-sidebar"`, which layout_sidebar has no formal for.
     padding = 0,
     border = FALSE,
-    sidebar = sidebar(
+    sidebar = bslib$sidebar(
       id = ns("controls_sidebar"),
       class = "viz-controls-sidebar",
       position = "right",
       width = 380,
       open = TRUE,
       fillable = TRUE,
-      as_fill_carrier(
+      bslib$as_fill_carrier(
         shiny$div(
           id = ns("controls_wrap"),
           class = "viz-nav-wrap",
@@ -2312,8 +2536,8 @@ ui <- function(id, generate_id, options_ui = NULL) {
         )
       )
     ),
-    shinyjs::useShinyjs(),
-    waiter::useWaiter(),
+    useShinyjs(),
+    useWaiter(),
     # Hide the "press Generate" prompt the instant Generate is clicked —
     # mirrors the MST/Tree engines' loading-overlay script — rather than
     # waiting for `generated()` to flip server-side, which for Map only
@@ -2387,10 +2611,10 @@ ui <- function(id, generate_id, options_ui = NULL) {
          })();"
       )
     ),
-    card(
+    bslib$card(
       full_screen = TRUE,
       class = "plot-card map-plot-card",
-      card_body(shiny$uiOutput(ns("plot_area")))
+      bslib$card_body(shiny$uiOutput(ns("plot_area")))
     )
   )
 }
@@ -2434,6 +2658,10 @@ server <- function(
     # also ticks the shared generate() — leaves this engine's result untouched.
     map_coords <- shiny$reactiveVal(NULL)
 
+    # Every isolate naming a recognised country, geocoded or not (see
+    # build_map_coords()'s `regions`): what Choropleth mode counts.
+    map_regions <- shiny$reactiveVal(NULL)
+
     # The variable mapped onto the markers or charts. At most one (see MEDIUM),
     # but held as a list, because that is the shape every engine's mapping
     # state, snapshot and restore path share.
@@ -2447,20 +2675,23 @@ server <- function(
 
     # Geocoding success/failure summary for the currently generated map (see
     # build_map_coords()'s status list) — drives output$map_geocode_status_ui
-    # below, shown under the "Map mode" picker in this engine's own sidebar.
+    # below, shown at the bottom of the plot tab's left sidebar (setup_ui()).
     map_geocode_status <- shiny$reactiveVal(NULL)
 
     # How many isolates the last Generate was able to place on the map, with a
-    # warning + a few example place names when some couldn't be resolved. NULL
-    # (the "Not available" placeholder) until a Generate has produced a status.
+    # warning + a few example place names when some couldn't be resolved, then
+    # one advisory line per data problem found on the way (see geo_advisories()).
+    # NULL (the "Not available" placeholder) until a Generate has produced a
+    # status.
     output$map_geocode_status_ui <- shiny$renderUI({
-      not_available <- shiny$tagList(
-        shiny$div(class = "text-muted small", "No isolates mapped"),
-        shiny$div(class = "text-muted small mb-2", "No location geocoded")
-      )
       s <- map_geocode_status()
+      advisories <- if (!is.null(s)) geo_advisories(s)
       if (is.null(s) || s$n_isolates == 0) {
-        return(not_available)
+        return(shiny$tagList(
+          shiny$div(class = "text-muted small", "No isolates mapped"),
+          shiny$div(class = "text-muted small mb-2", "No location geocoded"),
+          advisories
+        ))
       }
       # Distinct places resolved (each backs one or more of the mapped isolates)
       # — shown under the isolate summary so it's clear how many geocode lookups
@@ -2485,28 +2716,39 @@ server <- function(
           cache_note
         )
       )
-      if (s$n_failed_places == 0) {
-        shiny$tagList(
-          shiny$div(
-            class = "mt-2 small text-success",
-            shiny$icon("circle-check"),
-            sprintf(" All %d isolates mapped", s$n_mapped)
-          ),
-          locations_line
+      headline <- if (s$n_failed_places == 0) {
+        shiny$div(
+          class = "mt-2 small text-success",
+          shiny$icon("circle-check"),
+          sprintf(" All %d isolates mapped", s$n_mapped)
         )
       } else {
-        shiny$tagList(
-          tooltip(
-            shiny$div(
-              class = "mt-2 small text-warning",
-              shiny$icon("triangle-exclamation"),
-              sprintf(" %d of %d isolates mapped", s$n_mapped, s$n_isolates)
-            ),
-            paste("Could not geocode:", s$failed_preview)
+        why <- if (isTRUE(s$offline)) {
+          paste(
+            "Nominatim (nominatim.openstreetmap.org) could not be reached, so",
+            "no new places were geocoded. Isolates with coordinates or with",
+            "places geocoded before are still shown. Not found:"
+          )
+        } else if (nzchar(s$geocode_error %||% "")) {
+          paste0("The geocoder failed (", s$geocode_error, "). Not found:")
+        } else {
+          "Could not geocode:"
+        }
+        bslib$tooltip(
+          shiny$div(
+            class = "mt-2 small text-warning",
+            shiny$icon("triangle-exclamation"),
+            sprintf(
+              " %d of %d isolates mapped%s",
+              s$n_mapped,
+              s$n_isolates,
+              if (isTRUE(s$offline)) " (offline)" else ""
+            )
           ),
-          locations_line
+          paste(why, s$failed_preview)
         )
       }
+      shiny$tagList(headline, locations_line, advisories)
     })
 
     # --- Time animation -------------------------------------------------------
@@ -2577,7 +2819,7 @@ server <- function(
       hi <- as.Date(rng[2])
       shiny$req(lo <= hi)
       bins <- seq(lo, hi, by = interval_unit())
-      if (!length(bins) || utils::tail(bins, 1) < hi) {
+      if (!length(bins) || tail(bins, 1) < hi) {
         bins <- c(bins, hi)
       }
       unique(bins)
@@ -2624,12 +2866,12 @@ server <- function(
         # are NOT touched here — they are owned solely by the enable/disable
         # observe further down (which already keys off anim_playing()), so no
         # control is written by two observers in the same flush.
-        shinyjs::toggleState("map_daterange", condition = !playing)
-        shinyjs::toggleState("map_interval", condition = !playing)
-        shinyjs::toggleState("map_show_time_label", condition = !playing)
-        shinyjs::toggleState("map_region_fixed_scale", condition = !playing)
+        toggleState("map_daterange", condition = !playing)
+        toggleState("map_interval", condition = !playing)
+        toggleState("map_show_time_label", condition = !playing)
+        toggleState("map_region_fixed_scale", condition = !playing)
         # Hide the flickering slider behind its cover (see the Time nav_panel).
-        shinyjs::toggleClass(
+        toggleClass(
           id = "daterange_slider_wrap",
           class = "date-slider--playing",
           condition = playing
@@ -2753,7 +2995,7 @@ server <- function(
     shiny$observe({
       playing <- isTRUE(anim_playing())
       preview <- tryCatch(anim_bins_preview(), error = function(e) NULL)
-      shinyjs::toggleState(
+      toggleState(
         "map_play",
         condition = playing || length(preview) >= 2
       )
@@ -2764,19 +3006,19 @@ server <- function(
       lo <- if (can_step) as.Date(rng[1]) else NA
       hi <- if (can_step) as.Date(rng[2]) else NA
 
-      shinyjs::toggleState(
+      toggleState(
         "map_step_start_prev",
         condition = can_step && lo > bounds[1]
       )
-      shinyjs::toggleState(
+      toggleState(
         "map_step_start_next",
         condition = can_step && lo < hi
       )
-      shinyjs::toggleState(
+      toggleState(
         "map_step_end_prev",
         condition = can_step && hi > lo
       )
-      shinyjs::toggleState(
+      toggleState(
         "map_step_end_next",
         condition = can_step && hi < bounds[2]
       )
@@ -2789,7 +3031,7 @@ server <- function(
     # placeholder here and swapped for the location-count/estimate version (see
     # geocode_waiter_html()) at show time in the Generate observer, once the
     # metadata — and therefore the distinct-place count — is known.
-    waiter <- waiter::Waiter$new(
+    waiter <- Waiter$new(
       id = ns("plot_stage"),
       html = geocode_waiter_html(0L),
       # A faint white veil (rather than fully transparent) so the overlay reads
@@ -2830,6 +3072,8 @@ server <- function(
           permanent = isTRUE(input$map_permanent),
           label_size = input$map_label_size %||% 12,
           daterange = input$map_daterange,
+          date_field = time_field(),
+          date_bounds = daterange_bounds(),
           show_time_label = isTRUE(input$map_show_time_label),
           cluster = (input$map_cluster_radius %||% 0) > 0,
           cluster_radius = input$map_cluster_radius %||% 0,
@@ -2861,7 +3105,7 @@ server <- function(
     #
     # Both the prompt's and the map wrapper's *initial* visibility are baked
     # in here via `shiny$isolate(generated())` rather than left to the `generated`
-    # observer below: that observer's shinyjs::toggle() calls are reactive and
+    # observer below: that observer's toggle() calls are reactive and
     # would race the very first client-side paint (the toggle message can
     # arrive before the DOM node it targets exists, and get silently
     # dropped — leaving the map wrapper visible by default). Embedding the
@@ -2901,7 +3145,7 @@ server <- function(
           # neutral #ddd backing off, so it keeps working for every plot tab's
           # own map instance. See the .viz-map-canvas rule for why it exists.
           shiny$tagAppendAttributes(
-            leafletOutput(ns("map"), height = "100%")
+            leaflet$leafletOutput(ns("map"), height = "100%")
             # class = "viz-map-canvas"
           )
         )
@@ -2926,7 +3170,7 @@ server <- function(
     # While hidden (not yet generated — see the `generated` toggle below),
     # Shiny suspends this output entirely, so no tiles are ever built or shown
     # before the user's first Generate.
-    output$map <- renderLeaflet({
+    output$map <- leaflet$renderLeaflet({
       o <- map_opts()
       base <- map_coords()
       coords <- filter_coords(base, o)
@@ -2943,16 +3187,22 @@ server <- function(
       # re-render, or every user pan — which clears it — would rebuild the map.
       refit <- shiny$isolate(pending_fit())
 
-      m <- build_map(coords, o, full_coords = base, zoom = z)
+      m <- build_map(
+        coords,
+        o,
+        full_coords = base,
+        zoom = z,
+        regions = map_regions()
+      )
 
       # Refit to the data on a fresh Generate; otherwise keep the user's current
       # view (zoom/center inputs are populated by Leaflet after interaction).
       if (has_data && (refit || is.null(z) || is.null(ctr))) {
         m <- frame_coords(m, coords)
       } else if (!is.null(z) && !is.null(ctr)) {
-        m <- setView(m, lng = ctr$lng, lat = ctr$lat, zoom = z)
+        m <- leaflet$setView(m, lng = ctr$lng, lat = ctr$lat, zoom = z)
       } else {
-        m <- setView(m, lng = 10, lat = 50, zoom = 4)
+        m <- leaflet$setView(m, lng = 10, lat = 50, zoom = 4)
       }
       m
     })
@@ -2996,7 +3246,7 @@ server <- function(
         if (is.null(coords) || !nrow(coords)) {
           return()
         }
-        proxy <- leafletProxy("map")
+        proxy <- leaflet$leafletProxy("map")
         clearMinicharts(proxy)
         # Pass the full (unfiltered) coords so a re-cluster on zoom keeps the
         # same fixed full-range category set/palette/legend the full render uses.
@@ -3076,7 +3326,7 @@ server <- function(
         return(invisible(NULL))
       }
       prof <- prof[prof$field %in% fields, , drop = FALSE]
-      update_field_select(session, "map_layer_add", prof)
+      viz_helpers$update_field_select(session, "map_layer_add", prof)
 
       # The first fill always starts from the defaults: before it, the pickers
       # held only their sentinels, so the browser has already dropped the
@@ -3095,7 +3345,7 @@ server <- function(
         if (!length(sel)) {
           sel <- intersect(default, offered)
         }
-        update_field_select(
+        viz_helpers$update_field_select(
           session,
           id,
           prof,
@@ -3215,7 +3465,7 @@ server <- function(
       }
       cats <- scale_categories_for(
         if (isTRUE(binned$continuous)) shown else as.character(shown),
-        suitable_scale_categories(
+        viz_helpers$suitable_scale_categories(
           if (isTRUE(binned$continuous)) "Numeric" else "Factor",
           shown
         )
@@ -3226,7 +3476,7 @@ server <- function(
         size = "s",
         easyClose = TRUE,
         if (is_date_profile(prof)) {
-          granularity_select(
+          viz_helpers$granularity_select(
             ns,
             "map_layer_granularity",
             l$granularity,
@@ -3234,7 +3484,7 @@ server <- function(
             values = values
           )
         },
-        scale_select(
+        viz_helpers$scale_select(
           ns,
           "map_layer_palette",
           categories = cats,
@@ -3284,12 +3534,136 @@ server <- function(
     # build_markers()), which the flat "Fill opacity" slider it replaced was.
     shiny$observe({
       layer <- mapped_layer()
-      shinyjs::toggle(
+      toggle(
         id = "wrap_map_legend_digits",
         condition = identical(input$map_mode, "Markers") &&
           isTRUE(layer$continuous) &&
           !identical(layer$transform, "as_date")
       )
+    })
+
+    # Date variables the Time tab can filter by: standard metadata first with
+    # the collection date on top, then custom Date and Year variables.
+    date_choices <- shiny$reactive(timeline_fields(profiles()))
+
+    # The Time tab's date variable: the picked one while this data still has
+    # it, otherwise the first holding any readable date.
+    date_field <- shiny$reactive({
+      fields <- date_choices()
+      picked <- input$map_date_field
+      if (isTRUE(picked %in% fields)) {
+        return(picked)
+      }
+      first_dated_field(viz_metadata(), fields) %||%
+        (if (length(fields)) fields[[1]])
+    })
+
+    # The date variable the slider is currently fitted to; NULL while it holds
+    # no readable date, which switches the time filter off (filter_coords()).
+    time_field <- shiny$reactiveVal(NULL)
+
+    # Bumped to rebuild the date-variable picker; the value to rebuild with,
+    # when not the current one, is parked in restore_date_field (consumed on
+    # read). Rendered rather than updated, like the epi curve's own picker.
+    date_field_rebuild <- shiny$reactiveVal(0L)
+    restore_date_field <- shiny$reactiveVal(NULL)
+
+    # The Time tab's date-variable picker.
+    output$date_field_ui <- shiny$renderUI({
+      render_info("visualization_map date_field_ui")
+      date_field_rebuild()
+      fields <- date_choices()
+      pending <- shiny$isolate(restore_date_field())
+      if (!is.null(pending)) {
+        restore_date_field(NULL)
+      }
+      if (!length(fields)) {
+        return(shiny$div(
+          class = "timeline-field timeline-field-empty",
+          "No date variable in this database, so the map cannot be filtered",
+          "by time. Fill in collection dates under Database › Browse, or",
+          "create a Date or Year variable under Custom Variables."
+        ))
+      }
+      prof <- profiles()
+      shiny$div(
+        class = "timeline-field",
+        viz_helpers$field_select(
+          ns,
+          "map_date_field",
+          "Date variable",
+          profiles = prof[match(fields, prof$field), , drop = FALSE],
+          selected = if (isTRUE(pending %in% fields)) {
+            pending
+          } else {
+            shiny$isolate(date_field())
+          }
+        )
+      )
+    })
+
+    # Fit the date slider and the interval buttons to the chosen date variable:
+    # the slider spans its dates (a bare year to 31 December), and the
+    # intervals stop at its precision.
+    fit_time_controls <- function(coords) {
+      field <- shiny$isolate(date_field())
+      values <- if (length(field) && field %in% names(coords)) coords[[field]]
+      span <- date_extent(values)
+      if (is.null(span)) {
+        time_field(NULL)
+        return(invisible(NULL))
+      }
+      time_field(field)
+      daterange_bounds(span)
+      shiny$updateSliderInput(
+        session,
+        "map_daterange",
+        min = span[[1]],
+        max = span[[2]],
+        value = span
+      )
+      # "Hour" only makes sense when the values carry a time of day —
+      # filter_coords() works in whole days, so an Hour animation over
+      # date-only data would silently collapse back to Day. as.POSIXct's
+      # format guessing throws (not just warns) when no one format fits every
+      # value, so that reads as "no time component" rather than a crash.
+      ts <- tryCatch(
+        suppressWarnings(as.POSIXct(values, tz = "UTC")),
+        error = function(e) as.POSIXct(character(0), tz = "UTC")
+      )
+      has_time <- any(!is.na(ts) & format(ts, "%H:%M:%S") != "00:00:00")
+      interval_choices <- if (identical(date_precision(values), "year")) {
+        "Year"
+      } else if (has_time) {
+        c("Hour", "Day", "Week", "Month", "Year")
+      } else {
+        c("Day", "Week", "Month", "Year")
+      }
+      current <- shiny$isolate(input$map_interval)
+      updateRadioGroupButtons(
+        session,
+        "map_interval",
+        choices = interval_choices,
+        selected = if (isTRUE(current %in% interval_choices)) {
+          current
+        } else {
+          interval_choices[[1]]
+        }
+      )
+    }
+
+    # A different date variable re-fits the slider to its span. Only on an
+    # actual change: date_field() re-evaluates with every metadata refresh.
+    shown_date_field <- NULL
+    shiny$observeEvent(date_field(), {
+      f <- date_field()
+      changed <- !is.null(shown_date_field) && !identical(f, shown_date_field)
+      shown_date_field <<- f
+      coords <- map_coords()
+      if (changed && !is.null(coords) && nrow(coords)) {
+        anim_playing(FALSE)
+        fit_time_controls(coords)
+      }
     })
 
     # Refit the controls solved from the generated coordinates rather than
@@ -3300,19 +3674,7 @@ server <- function(
       if (is.null(coords) || !nrow(coords)) {
         return(invisible(NULL))
       }
-      dts <- suppressWarnings(as.Date(coords$sample_collection_date))
-      if (any(!is.na(dts))) {
-        lo <- min(dts, na.rm = TRUE)
-        hi <- max(dts, na.rm = TRUE)
-        daterange_bounds(c(lo, hi))
-        shiny$updateSliderInput(
-          session,
-          "map_daterange",
-          min = lo,
-          max = hi,
-          value = c(lo, hi)
-        )
-      }
+      fit_time_controls(coords)
       max_per_place <- max(table(coords$place))
       shiny$updateSliderInput(
         session,
@@ -3352,54 +3714,39 @@ server <- function(
             paste("Could not geocode isolate locations:", conditionMessage(e)),
             type = "error"
           )
-          list(coords = NULL, status = empty_geocode_status())
+          list(coords = NULL, regions = NULL, status = empty_geocode_status())
         }
       )
       coords <- built$coords
       map_geocode_status(built$status)
 
       if (is.null(coords) || !nrow(coords)) {
+        # Recognised countries still draw a choropleth without any point.
+        choropleth_note <- if (!is.null(built$regions)) {
+          " Countries can still be shown in Choropleth mode."
+        } else {
+          ""
+        }
         shiny$showNotification(
-          "No mappable locations found in the metadata (country / state fields).",
-          type = "warning"
+          paste0(
+            if (isTRUE(built$status$offline)) {
+              "Nominatim could not be reached, so no isolate place could be geocoded."
+            } else {
+              paste(
+                "No mappable locations found. Fill in coordinates, or a city,",
+                "postcode, state/province or country."
+              )
+            },
+            choropleth_note
+          ),
+          type = "warning",
+          duration = 8
         )
       } else {
         fit_data_controls(coords)
-        # "Hour" only makes sense to offer when the data actually carries a
-        # time-of-day component — filter_coords() floors to whole days, so an
-        # Hour animation over date-only data would silently collapse back to
-        # Day granularity and look broken rather than just under-precise.
-        # `sample_collection_date` is free text (see field_types.R), so
-        # as.POSIXct's format guessing can throw a hard error (not just a
-        # warning) when it can't find one format that fits every value —
-        # suppressWarnings() doesn't catch that. Fall back to "no time
-        # component" rather than crashing this observer.
-        ts <- tryCatch(
-          suppressWarnings(as.POSIXct(
-            coords$sample_collection_date,
-            tz = "UTC"
-          )),
-          error = function(e) as.POSIXct(character(0), tz = "UTC")
-        )
-        has_time <- any(!is.na(ts) & format(ts, "%H:%M:%S") != "00:00:00")
-        day_choices <- c("Day", "Week", "Month", "Year")
-        interval_choices <- if (has_time) {
-          c("Hour", day_choices)
-        } else {
-          day_choices
-        }
-        updateRadioGroupButtons(
-          session,
-          "map_interval",
-          choices = interval_choices,
-          selected = if (isTRUE(input$map_interval %in% interval_choices)) {
-            input$map_interval
-          } else {
-            "Day"
-          }
-        )
       }
       map_coords(coords)
+      map_regions(built$regions)
       generated(TRUE)
       # Frame the view on this Generate's data, refitting even if the previous
       # map was left zoomed in on an earlier (e.g. single-isolate) selection.
@@ -3415,8 +3762,8 @@ server <- function(
     shiny$observeEvent(
       generated(),
       {
-        shinyjs::toggle(id = "viz_prompt", condition = !isTRUE(generated()))
-        shinyjs::toggle(id = "map_wrap", condition = isTRUE(generated()))
+        toggle(id = "viz_prompt", condition = !isTRUE(generated()))
+        toggle(id = "map_wrap", condition = isTRUE(generated()))
       },
       ignoreNULL = FALSE
     )
@@ -3425,7 +3772,7 @@ server <- function(
     shiny$observeEvent(input$map_reset, {
       coords <- filter_coords(map_coords(), map_opts())
       shiny$req(!is.null(coords) && nrow(coords) > 0)
-      frame_coords(leafletProxy("map"), coords, fly = TRUE)
+      frame_coords(leaflet$leafletProxy("map"), coords, fly = TRUE)
     })
 
     # ---- Export contract ----------------------------------------------------
@@ -3448,12 +3795,13 @@ server <- function(
           coords,
           o,
           full_coords = base,
-          zoom = shiny$isolate(input$map_zoom)
+          zoom = shiny$isolate(input$map_zoom),
+          regions = map_regions()
         )
         if (!is.null(coords) && nrow(coords) > 0) {
           m <- frame_coords(m, coords)
         }
-        htmlwidgets::saveWidget(m, file, selfcontained = TRUE)
+        saveWidget(m, file, selfcontained = TRUE)
       },
       # html2canvas re-rasterises the DOM at a multiple, so the overlays that
       # carry the data — markers, labels, legend, choropleth polygons — are
@@ -3486,7 +3834,7 @@ server <- function(
     # rather than a control.
     #
     # The catalogue (MAP_CONTROLS / map_control_defaults()) is what makes that
-    # complete: this used to be shinyjs::reset(), which silently skips every
+    # complete: this used to be reset(), which silently skips every
     # pickerInput, virtualSelectInput, colour swatch and radioGroupButtons in
     # this panel (see the reference at the top of viz_helpers.R). The
     # data-fitted controls are sent after it, unconditionally, so the fit is
@@ -3499,12 +3847,18 @@ server <- function(
       map_layers(list())
       map_layer_seq(0L)
 
-      apply_controls(session, map_control_defaults(), MAP_CONTROLS)
+      viz_helpers$apply_controls(session, map_control_defaults(), MAP_CONTROLS)
       populate_metadata_selects(force_default = TRUE)
+      # Back to the date variable the data opens on.
+      restore_date_field(first_dated_field(
+        shiny$isolate(viz_metadata()),
+        shiny$isolate(date_choices())
+      ))
+      date_field_rebuild(shiny$isolate(date_field_rebuild()) + 1L)
       fit_data_controls(map_coords())
     }
 
-    on_confirmed_reset(
+    viz_helpers$on_confirmed_reset(
       input,
       session,
       reset_map_settings,
@@ -3523,7 +3877,7 @@ server <- function(
     # Snapshot the map_* controls plus the mapping layers, which are
     # reactiveVal state rather than inputs.
     snapshot <- shiny$reactive(c(
-      collect_input_snapshot(input, "map_"),
+      viz_helpers$collect_input_snapshot(input, "map_"),
       list(.layers = map_layers())
     ))
 
@@ -3589,7 +3943,7 @@ server <- function(
 
       # Same catalogue a reset applies, holding saved values instead of the
       # coded ones.
-      apply_controls(session, vals, MAP_CONTROLS)
+      viz_helpers$apply_controls(session, vals, MAP_CONTROLS)
       # The popup and hover selections only stick once their choices exist, so
       # they are sent again together with the database's columns.
       populate_metadata_selects(
@@ -3610,6 +3964,12 @@ server <- function(
       if (!is.null(layers)) {
         map_layers(layers)
         map_layer_seq(length(layers))
+      }
+
+      # The Time tab's date variable: its picker is renderUI output.
+      if (is.character(vals$map_date_field) && nzchar(vals$map_date_field)) {
+        restore_date_field(vals$map_date_field)
+        date_field_rebuild(shiny$isolate(date_field_rebuild()) + 1L)
       }
 
       # Date-range slider: restore as Dates.

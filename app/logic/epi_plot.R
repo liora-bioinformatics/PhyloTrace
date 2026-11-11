@@ -47,7 +47,15 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
-  app / logic / date_bins[bin_date_values, floor_date_bin, parse_dates],
+  app /
+    logic /
+    date_bins[
+      bin_date_values,
+      date_period_end,
+      date_precision,
+      floor_date_bin,
+      parse_dates
+    ],
   app / logic / viz_fit,
   app / logic / viz_helpers[color_scales],
 )
@@ -64,9 +72,13 @@ EPI_UNKNOWN_LABEL <- "(unknown)"
 #' @export
 EPI_STRATUM_SEP <- " | "
 
-#' Expected metadata date column name across all isolate records.
+#' Date column an epi curve is drawn along unless another is picked.
 #' @export
 EPI_DATE_FIELD <- "sample_collection_date"
+
+#' X-axis title of a curve drawn along the default date column.
+#' @export
+EPI_X_TITLE <- "Date of collection"
 
 # --- Date Binning Configuration ----------------------------------------------
 
@@ -140,6 +152,10 @@ exact_bin_widths <- function(dates, interval) {
 #' @return String representing selected interval name.
 #' @export
 epi_default_interval <- function(dates, max_bars = EPI_MAX_BARS) {
+  # Bare years cannot be split finer, however few bars that would make.
+  if (identical(date_precision(dates), "year")) {
+    return("year")
+  }
   d <- parse_dates(dates)
   d <- d[!is.na(d)]
   if (!length(d)) {
@@ -227,20 +243,22 @@ build_epi_data <- function(
     return(.empty_epi_data())
   }
 
-  # Filter out rows with unparseable dates
-  parsed <- parse_dates(meta[[date_field]])
-  keep <- !is.na(parsed)
+  # Filter out rows with unparseable dates, and bare years when the interval is
+  # finer than a year (their month or week is unknown, see floor_date_bin()).
+  raw <- meta[[date_field]]
+  bins <- floor_date_bin(raw, interval)
+  keep <- !is.na(bins)
   dropped <- sum(!keep)
   if (!any(keep)) {
     return(.empty_epi_data(dropped))
   }
   meta <- meta[keep, , drop = FALSE]
-  parsed <- parsed[keep]
+  raw <- raw[keep]
 
   stratify_by <- intersect(stratify_by, names(meta))
 
   binned <- data.frame(
-    date_bin = floor_date_bin(parsed, interval),
+    date_bin = bins[keep],
     stratum = epi_stratum(meta, stratify_by),
     stringsAsFactors = FALSE
   )
@@ -255,7 +273,10 @@ build_epi_data <- function(
   # The observed extent, NOT the bin extent: a bin is named by its first day,
   # so range(date_bin) understates the last bin by up to an interval. Anything
   # showing the user a date span (the window slider) wants this instead.
-  attr(out, "date_range") <- range(parsed)
+  attr(out, "date_range") <- c(
+    min(parse_dates(raw)),
+    max(date_period_end(raw))
+  )
   out
 }
 
@@ -1133,7 +1154,8 @@ epi_layout <- function(binned, opts = list()) {
   title_room <- function(label, length_in) {
     72 * length_in / max(viz_fit$string_em(label), 1)
   }
-  x_title_pt <- viz_fit$fit_type(title_want, title_room("Date of collection", panel_w))
+  x_title <- opts$x_title %||% EPI_X_TITLE
+  x_title_pt <- viz_fit$fit_type(title_want, title_room(x_title, panel_w))
   y_title_pt <- viz_fit$fit_type(title_want, title_room(y_title, panel_h))
   sec_title_pt <- viz_fit$fit_type(title_want, title_room("Cumulative cases", panel_h))
   x_title_drawn <- x_title_on && viz_fit$type_drawn(x_title_pt)
@@ -1679,7 +1701,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
     do.call(scale_y_continuous, y_scale_args) +
     do.call(scale_x_date, x_scale_args) +
     labs(
-      x = if (is.null(lay$x_title_pt)) NULL else "Date of collection",
+      x = if (is.null(lay$x_title_pt)) NULL else opts$x_title %||% EPI_X_TITLE,
       y = if (is.null(lay$y_title_pt)) {
         NULL
       } else if (identical(mode, "cumulative")) {

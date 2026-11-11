@@ -47,6 +47,7 @@ box::use(
   app /
     logic /
     custom_fields[
+      NUMBER_INPUT_TYPES,
       NUMERIC_TYPES,
       append_custom,
       custom_col,
@@ -71,8 +72,9 @@ box::use(
     grouped_field_choices,
     MLST_COL_PREFIX
   ],
-  app / logic / field_types[date_fields],
+  app / logic / field_types[date_fields, FIXED_FIELD_TYPES],
   app / logic / functions[table_loading],
+  app / logic / geo[country_names, GEO_TYPE_LABELS],
   app / logic / db_sources[SOURCE_COL, SOURCE_LOCAL],
   app / logic / sheet_grid,
 )
@@ -92,6 +94,10 @@ AMR_GROUP_TOKEN_PREFIX <- ".amr_group:"
 # Located by name, not position — an imported peer database can carry extra
 # metadata columns in any order.
 READONLY_COLS <- c("isolate", "organism", "called_at", SOURCE_COL)
+
+# Standard columns checked against app/logic/geo.R on every edit: the country
+# against the controlled vocabulary, coordinates as readable lat/lon.
+GEO_COL_TYPES <- FIXED_FIELD_TYPES[FIXED_FIELD_TYPES %in% names(GEO_TYPE_LABELS)]
 
 # 0-based DT column indices for `cols` within `all_cols`; NAs dropped.
 .dt_idx <- function(all_cols, cols) {
@@ -1073,7 +1079,7 @@ server <- function(
       edit_date_idx <- .dt_editable_idx(cols, date_cols())
       edit_numeric_idx <- .dt_editable_idx(
         cols,
-        custom_cols_of_type(NUMERIC_TYPES)
+        custom_cols_of_type(NUMBER_INPUT_TYPES)
       )
 
       # AMR gene columns hold a call-state factor, NA where the gene was not
@@ -1324,7 +1330,11 @@ server <- function(
         sheet_grid$sheet_attach_js(
           ns("metadata_table_sheet"),
           readonly_idx,
-          sheet_grid$sheet_lists(cols, custom_defs()),
+          sheet_grid$sheet_lists(
+            cols,
+            custom_defs(),
+            fixed = list(geo_loc_name_country = country_names())
+          ),
           active = "function() { return !selOn(); }"
         ),
         jsonlite::toJSON(ns("metadata_table_row_drag"), auto_unbox = TRUE),
@@ -1741,6 +1751,7 @@ server <- function(
         types = c(
           setNames(defs$type, defs$column),
           setNames(rep("date", length(dates)), dates),
+          GEO_COL_TYPES,
           setNames(rep("numeric", length(numeric_cols)), numeric_cols)
         ),
         levels = setNames(defs$levels, defs$column),

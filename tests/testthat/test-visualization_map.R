@@ -378,3 +378,162 @@ test_that("a plot saved before the map had layers restores its mapping", {
     }
   )
 })
+
+# --- filter_coords --------------------------------------------------------------
+
+test_that("filter_coords filters by the chosen date variable, by period overlap", {
+  coords <- data.frame(
+    isolate = c("a", "b", "c", "d"),
+    custom_year = c("2020", "2021", NA, "2022"),
+    stringsAsFactors = FALSE
+  )
+  bounds <- as.Date(c("2020-01-01", "2022-12-31"))
+  o <- list(
+    daterange = as.Date(c("2021-03-01", "2021-03-31")),
+    date_field = "custom_year",
+    date_bounds = bounds
+  )
+  expect_identical(impl$filter_coords(coords, o)$isolate, "b")
+
+  # The whole span is no filter: the undated isolate stays.
+  o$daterange <- bounds
+  expect_identical(impl$filter_coords(coords, o)$isolate, coords$isolate)
+
+  # Nothing to filter by (no variable holds dates).
+  o$daterange <- as.Date(c("2021-03-01", "2021-03-31"))
+  o$date_field <- NULL
+  expect_identical(nrow(impl$filter_coords(coords, o)), 4L)
+})
+
+# --- Geography ------------------------------------------------------------------
+
+test_that("place strings lead with the postcode and drop it for the fallback", {
+  meta <- data.frame(
+    geo_loc_name_postal_code = c("10115", NA, "75001"),
+    geo_loc_name_city = c("Berlin", "Lyon", NA),
+    geo_loc_name_state_province = c("Berlin", NA, NA),
+    geo_loc_name_country = c("Germany", "France", "France"),
+    stringsAsFactors = FALSE
+  )
+  expect_identical(
+    impl$build_place_strings(meta),
+    c("10115 Berlin, Berlin, Germany", "Lyon, France", "75001, France")
+  )
+  expect_identical(
+    impl$build_place_strings(meta, postcode = FALSE),
+    c("Berlin, Berlin, Germany", "Lyon, France", "France")
+  )
+})
+
+test_that("the choropleth counts any recognised spelling of a country", {
+  o <- list(
+    mode = "Choropleth",
+    region_transform = "Raw",
+    region_fixed_scale = FALSE,
+    region_scale = "Oranges",
+    region_opacity = 0.7,
+    region_border = "#000000",
+    region_permanent = FALSE,
+    legend = FALSE
+  )
+  coords <- coords_fixture()
+  coords$geo_loc_name_country <- rep(c("Deutschland", "FR"), 3)
+  m <- impl$build_choropleth(leaflet(), coords, o)
+  text <- widget_text(m)
+  expect_match(text, "Germany: 3 isolates", fixed = TRUE)
+  expect_match(text, "France: 3 isolates", fixed = TRUE)
+})
+
+test_that("country_fit() flags swapped and out-of-country coordinates", {
+  fit <- impl$country_fit(
+    lat = c(52.52, 13.40, -33.9, 52.52),
+    lon = c(13.40, 52.52, 18.4, 13.40),
+    code = c("DEU", "DEU", "DEU", NA)
+  )
+  expect_identical(fit$swapped, c(FALSE, TRUE, FALSE, FALSE))
+  expect_identical(fit$outside, c(FALSE, FALSE, TRUE, FALSE))
+})
+
+test_that("build_map_coords() keeps every recognised country as a region", {
+  meta <- data.frame(
+    isolate = c("A", "B", "C", "D"),
+    geo_loc_name_country = c("Germany", "DE", "Atlantis", NA),
+    # Every row carries coordinates or nothing to geocode: no network here.
+    geo_loc_coordinates = c("52.52, 13.40", "13.40, 52.52", "0, 0", "garbage"),
+    sample_collection_date = c("2026-01-01", "2026-01-02", NA, NA),
+    stringsAsFactors = FALSE
+  )
+  built <- impl$build_map_coords(meta)
+  expect_identical(built$coords$isolate, c("A", "B", "C"))
+  expect_identical(built$regions$isolate, c("A", "B"))
+  expect_identical(built$regions$country_code, c("DEU", "DEU"))
+  s <- built$status
+  expect_identical(s$n_unknown_country, 1L)
+  expect_identical(s$unknown_country_preview, "Atlantis")
+  expect_identical(s$n_bad_coords, 1L)
+  expect_identical(s$n_swapped, 1L)
+  expect_identical(s$swapped_preview, "B")
+})
+
+test_that("build_map() draws the choropleth from regions, not geocoded points", {
+  o <- list(
+    mode = "Choropleth",
+    tiles = "OpenStreetMap",
+    scalebar = FALSE,
+    minimap = FALSE,
+    graticule = FALSE,
+    show_controls = FALSE,
+    region_transform = "Raw",
+    region_fixed_scale = FALSE,
+    region_scale = "Oranges",
+    region_opacity = 0.7,
+    region_border = "#000000",
+    region_permanent = FALSE,
+    legend = FALSE
+  )
+  regions <- meta_fixture()
+  regions$country_code <- ifelse(regions$geo_loc_name_country == "Germany", "DEU", "FRA")
+  m <- impl$build_map(NULL, o, regions = regions)
+  expect_match(widget_text(m), "Germany: 3 isolates", fixed = TRUE)
+})
+
+test_that("a choropleth with all isolates in one country still draws a legend scale", {
+  expect_identical(impl$count_domain(c(NA, 94, NA)), c(0, 94))
+  expect_identical(impl$count_domain(c(NA, 3, 10)), c(3, 10))
+  o <- list(
+    mode = "Choropleth",
+    region_transform = "Raw",
+    region_fixed_scale = FALSE,
+    region_scale = "Oranges",
+    region_opacity = 0.7,
+    region_border = "#000000",
+    region_permanent = FALSE,
+    legend = TRUE,
+    legend_pos = "topleft"
+  )
+  rows <- data.frame(isolate = paste0("i", 1:5), geo_loc_name_country = "Switzerland")
+  m <- impl$build_choropleth(leaflet(), rows, o)
+  legend <- Filter(function(x) x$method == "addLegend", m$x$calls)[[1]]$args[[1]]
+  expect_identical(legend$type, "numeric")
+  expect_identical(as.character(legend$labels[c(1, length(legend$labels))]), c("0", "5"))
+})
+
+test_that("isolates sharing one spot are grouped even with clustering off", {
+  o <- list(
+    cluster = FALSE,
+    cluster_radius = 0,
+    popup_fields = NULL,
+    hover_field = NULL,
+    permanent = FALSE,
+    label_size = 12,
+    marker_color = "#2c7fb8",
+    radius = 10,
+    region_fixed_scale = FALSE,
+    legend = FALSE
+  )
+  m <- impl$build_markers(leaflet(), coords_fixture(), o)
+  call <- Filter(function(x) x$method == "addCircleMarkers", m$x$calls)[[1]]
+  opts <- Filter(function(a) is.list(a) && "maxClusterRadius" %in% names(a), call$args)[[1]]
+  expect_identical(opts$maxClusterRadius, impl$COINCIDENT_PX)
+  expect_true(opts$spiderfyOnMaxZoom)
+})

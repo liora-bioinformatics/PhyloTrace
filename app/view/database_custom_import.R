@@ -22,6 +22,7 @@ box::use(
   app / logic / custom_import,
   app / logic / db_guard[db_failed, guard_db],
   app / logic / field_labels[field_labels_for],
+  app / logic / field_types[TYPE_LABELS],
   app / logic / functions[stat_tile],
 )
 
@@ -545,7 +546,7 @@ server <- function(
                   class = "text-muted",
                   sprintf(
                     " · %s",
-                    tolower(CUSTOM_TYPES[[custom_import$target_type(
+                    tolower(TYPE_LABELS[[custom_import$target_type(
                       col$clash,
                       col$clash_target,
                       defs

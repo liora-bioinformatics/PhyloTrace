@@ -105,15 +105,16 @@ test_that("every column is profiled, including the one that cannot group", {
   expect_true(field_profile$profile_for(p, "purpose")$groupable)
 })
 
-test_that("the usable columns lead their group", {
-  p <- profiled()
-  base <- p[p$group == GROUP_ORDER[[1]], ]
-
-  # Ordering the picker is the recommendation, so the columns that group come
-  # before the ones that cannot.
-  expect_identical(base$field[[1]], "purpose")
-  expect_lt(match("country", base$field), match("source", base$field))
-  expect_gt(match("organism", base$field), match("source", base$field))
+test_that("outside AMR, columns keep the order they arrive in", {
+  md <- data.frame(
+    isolate = c("A", "B", "C"),
+    zeta = c("x", "y", "x"),
+    alpha = c("1", "2", "3"),
+    mid = c("p", "p", "q"),
+    stringsAsFactors = FALSE
+  )
+  p <- field_profile$field_profiles(md)
+  expect_identical(p$field, c("isolate", "zeta", "alpha", "mid"))
 })
 
 test_that("shape eligibility follows the level count, not the column's name", {

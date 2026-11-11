@@ -10,7 +10,8 @@ box::use(
 
 box::use(
   app / logic / custom_fields[custom_col, CUSTOM_TYPES, list_custom_fields],
-  app / logic / date_bins[parse_dates],
+  app / logic / date_bins[DATE_TYPES, parse_dates],
+  app / logic / geo[GEO_TYPE_LABELS],
 )
 
 #' Map of fixed schema column names to their declared type slugs.
@@ -18,7 +19,11 @@ box::use(
 #' @export
 FIXED_FIELD_TYPES <- c(
   sample_collection_date = "date",
-  called_at = "datetime"
+  called_at = "datetime",
+  # Validated against app/logic/geo.R wherever they are written (grid edits,
+  # table import); read everywhere else as plain categorical text.
+  geo_loc_name_country = "country",
+  geo_loc_coordinates = "coordinates"
 )
 
 #' Default type mappings assigned to derived columns based on name prefix.
@@ -30,7 +35,7 @@ PREFIX_FIELD_TYPES <- c(
 
 #' Human-readable labels for variable type slugs.
 #' @export
-TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time")
+TYPE_LABELS <- c(CUSTOM_TYPES, datetime = "Date & time", GEO_TYPE_LABELS)
 
 # Determine column type derived from prefix naming conventions
 .prefix_type <- function(cols) {
@@ -82,7 +87,7 @@ field_types <- function(db_path, cols = NULL) {
 #' @param types Character vector of acceptable date-like type slugs.
 #' @return Character vector of matching date column names in input order.
 #' @export
-date_fields <- function(db_path, cols, types = c("date", "datetime")) {
+date_fields <- function(db_path, cols, types = DATE_TYPES) {
   if (is.null(cols) || !length(cols)) {
     return(character(0))
   }

@@ -122,6 +122,12 @@ test_that("coerce_custom_value canonicalises per type and rejects the rest", {
   expect_identical(value("2026-07-21", "date"), "2026-07-21")
   expect_false(ok("21.07.2026", "date"))
   expect_false(ok("2026-13-01", "date"))
+  expect_false(ok("2026-07-21x", "date"))
+
+  expect_identical(value("2024", "year"), "2024")
+  expect_identical(value("2024.0", "year"), "2024")
+  expect_false(ok("24", "year"))
+  expect_false(ok("2024-01-01", "year"))
 
   expect_identical(value("Yes", "boolean"), "yes")
   expect_identical(value("0", "boolean"), "no")
@@ -283,4 +289,17 @@ test_that("validate_custom_name rejects names that read like an existing field",
 
   custom_fields$create_custom_field(path, "sampling_site", "text")
   expect_match(custom_fields$validate_custom_name(path, "Sampling-Site"), "custom variable")
+})
+
+test_that("coerce_custom_value() validates the fixed geographic types", {
+  ok <- custom_fields$coerce_custom_value("DE", "country")
+  expect_true(ok$ok)
+  expect_identical(ok$value, "Germany")
+  expect_false(custom_fields$coerce_custom_value("Atlantis", "country")$ok)
+
+  coords <- custom_fields$coerce_custom_value("52,52; 13,40", "coordinates")
+  expect_identical(coords$value, "52.52, 13.4")
+  expect_false(custom_fields$coerce_custom_value("152.5, 13", "coordinates")$ok)
+  # Blank stays blank, as for every other type.
+  expect_identical(custom_fields$coerce_custom_value("", "country")$value, NA_character_)
 })

@@ -15,6 +15,8 @@ box::use(
     database_functions[
       load_allele,
       load_classical_mlst,
+      METADATA_COLS,
+      metadata_columns,
       migrate_species_name,
       read_metadata_table,
       remove_isolates,
@@ -391,6 +393,75 @@ test_that("read_metadata_table does not backfill isolates mlst already has", {
 })
 
 # ---------------------------------------------------------------------------
+# Canonical metadata column order
+# ---------------------------------------------------------------------------
+
+# A metadata table laid out the way an older database has it: the original
+# columns, an unrelated extra column, then the later geo columns appended at the
+# end by migration.
+legacy_meta <- function(isolates) {
+  meta_df(
+    isolates,
+    extra = list(
+      primary_laboratory_sample_id = NA_character_,
+      specimen_source_id = NA_character_,
+      geo_loc_name_state_province = NA_character_,
+      sample_collected_by = "Lab X",
+      sequence_submitted_by = NA_character_,
+      purpose_of_sampling = NA_character_,
+      purpose_of_sequencing = NA_character_,
+      extra_note = "kept",
+      geo_loc_name_city = "Berlin",
+      geo_loc_name_postal_code = "10115"
+    )
+  )
+}
+
+test_that("read_metadata_table returns built-in columns in canonical order", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = legacy_meta("A"))
+
+  md <- read_metadata_table(path)
+  builtin <- intersect(METADATA_COLS, names(md))
+  expect_identical(names(md), c(builtin, "extra_note"))
+  expect_identical(md$geo_loc_name_city, "Berlin")
+})
+
+test_that("metadata_columns lists columns in canonical order", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = legacy_meta("A"))
+
+  cols <- metadata_columns(path)
+  expect_identical(cols, names(read_metadata_table(path)))
+})
+
+test_that("sync_metadata_table creates a new table in canonical order", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = NULL)
+  sync_metadata_table(path)
+
+  physical <- names(qdf(path, "SELECT * FROM metadata LIMIT 0"))
+  expect_identical(physical, METADATA_COLS)
+})
+
+test_that("sync_metadata_table appends rows to a legacy-ordered table by name", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(path, default_local(), metadata = legacy_meta("A"))
+
+  md <- sync_metadata_table(path)
+  expect_identical(names(md)[seq_along(METADATA_COLS)], METADATA_COLS)
+  b <- md[md$isolate == "B", ]
+  expect_identical(b$organism, "Testus organismus")
+  expect_identical(b$source, "local")
+  expect_true(is.na(b$geo_loc_name_city))
+  expect_identical(md$geo_loc_name_city[md$isolate == "A"], "Berlin")
+})
+
+# ---------------------------------------------------------------------------
 # save_metadata_table(): a tidy isolate/column/value diff, one UPDATE per
 # cell - not a whole-table read-diff-overwrite.
 # ---------------------------------------------------------------------------
@@ -636,4 +707,18 @@ test_that("load_allele returns an allele's sequence with its hash", {
   DBI::dbDisconnect(con)
   expect_identical(load_allele(path, 1L), list(sequence = "ACGT", hash = "h1"))
   expect_null(load_allele(path, 3L))
+})
+
+test_that("sync_metadata_table normalises country spellings and coordinates", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  meta <- meta_df(c("A", "B"))
+  meta$geo_loc_name_country <- c("Deutschland", "Atlantis")
+  meta$geo_loc_coordinates <- c("52,52; 13,40", "not a place")
+  build_db(path, default_local(), metadata = meta)
+
+  md <- sync_metadata_table(path)
+  md <- md[order(md$isolate), ]
+  expect_identical(md$geo_loc_name_country, c("Germany", "Atlantis"))
+  expect_identical(md$geo_loc_coordinates, c("52.52, 13.4", "not a place"))
 })

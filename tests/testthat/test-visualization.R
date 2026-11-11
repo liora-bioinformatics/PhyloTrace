@@ -1,11 +1,13 @@
 box::use(
   shiny[isolate, reactive, testServer],
-  testthat[expect_identical, expect_null, expect_true, test_that],
+  testthat[expect_false, expect_identical, expect_null, expect_true, test_that],
 )
 box::use(
   app / logic / db_events,
   app / view / visualization,
 )
+
+impl <- attr(visualization, "namespace")
 
 meta_for <- function(isolates) {
   data.frame(
@@ -95,4 +97,33 @@ test_that("an open tab with no generated plot is not counted as unsaved", {
   with_open_tab(quote({
     expect_identical(isolate(unsaved_plots()), 0L)
   }))
+})
+
+test_that("no more than .MAX_TABS plot tabs can be open at once", {
+  # The tab strip scrolls rather than wraps, and every tab keeps a live engine
+  # server; create_tab() itself enforces the cap so the creator form and the
+  # dashboard's reopen path cannot get past it.
+  testServer(
+    visualization$server,
+    args = list(db_path = reactive(NULL), db_rev = db_events$new_bus()),
+    {
+      session$flushReact()
+      for (i in seq_len(impl$.MAX_TABS)) {
+        create_tab("AMR", sprintf("Plot %d", i))
+      }
+      session$flushReact()
+      expect_true(isolate(at_capacity()))
+      seq_before <- isolate(tab_seq())
+
+      expect_null(create_tab("AMR", "One too many"))
+      expect_identical(length(isolate(tabs())), impl$.MAX_TABS)
+      # A refused tab mints no id, so nothing is left registered under it.
+      expect_identical(isolate(tab_seq()), seq_before)
+
+      close_tab(names(isolate(tabs()))[1])
+      session$flushReact()
+      expect_false(isolate(at_capacity()))
+      expect_true(is.character(create_tab("AMR", "Fits again")))
+    }
+  )
 })

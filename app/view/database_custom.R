@@ -392,7 +392,7 @@ server <- function(
       }
       isolate_idx <- .dt_idx(cols, "isolate")
       date_idx <- of_type("date")
-      numeric_idx <- of_type(custom_fields$NUMERIC_TYPES)
+      numeric_idx <- of_type(custom_fields$NUMBER_INPUT_TYPES)
       # DT's own DT:::makeEditableField() silently subtracts 1 from
       # `editable$numeric`/`editable$date` (but *not* from `disable$columns` or
       # `columnDefs` targets) whenever `rownames = FALSE`, to compensate for a

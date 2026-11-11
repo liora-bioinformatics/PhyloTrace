@@ -23,7 +23,10 @@ box::use(
   primary_laboratory_sample_id = "Your laboratory's sample ID",
   specimen_source_id = "Material the sample came from, e.g. blood",
   sample_collection_date = "Date as YYYY-MM-DD, e.g. 2024-03-15",
-  geo_loc_name_country = "Country, e.g. Germany",
+  geo_loc_name_country = paste(
+    "Country name in English or another major language, or its ISO code,",
+    "e.g. Germany, Deutschland, DE or DEU; stored under one name per country"
+  ),
   geo_loc_name_state_province = "State or province",
   sample_collected_by = "Person or institution",
   sequence_submitted_by = "Person or institution",
@@ -31,7 +34,10 @@ box::use(
   purpose_of_sequencing = "Free text",
   geo_loc_name_city = "City",
   geo_loc_name_postal_code = "Postal code, kept exactly as written",
-  geo_loc_coordinates = "Latitude, longitude in decimal degrees, e.g. 52.52, 13.40"
+  geo_loc_coordinates = paste(
+    "Latitude, longitude, e.g. 52.52, 13.40, 52,52; 13,40 or 52°31'N 13°24'E;",
+    "stored in decimal degrees"
+  )
 )
 
 # What each variable type accepts, in the order of CUSTOM_TYPES.
@@ -40,6 +46,7 @@ box::use(
   integer = "42, -3",
   numeric = "12.5 — with a point, no thousands separators",
   date = "YYYY-MM-DD, e.g. 2024-03-15",
+  year = "Four digits, e.g. 2024 — for dates only known to the year",
   boolean = "yes or no (y/n, true/false and 1/0 are read as well)",
   category = "One of a list of allowed values you define"
 )
@@ -199,7 +206,9 @@ box::use(
       paste0(
         paste(field_labels_for(READONLY_METADATA_COLS), collapse = ", "),
         " are set by PhyloTrace and cannot be imported. Country, state, city,",
-        " postal code and coordinates are what the Map uses to place isolates."
+        " postal code and coordinates are what the Map uses to place isolates.",
+        " A country PhyloTrace does not recognise, or coordinates it cannot",
+        " read, count as values that do not fit the field."
       )
     )
   )

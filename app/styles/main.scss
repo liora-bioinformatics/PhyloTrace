@@ -3697,6 +3697,16 @@ table.dataTable thead>tr>th.sorting {
     position: relative;
 }
 
+// The date-axis picker heading the Epi Layout tab and the Map Time tab.
+.timeline-field {
+    margin-bottom: 0.75rem;
+}
+
+.timeline-field-empty {
+    font-size: 0.85em;
+    color: var(--bs-secondary-color);
+}
+
 .date-slider_cover {
     display: none;
 }
@@ -4395,6 +4405,53 @@ label {
     margin-right: 1ch;
 }
 
+// Plot tab strip: one row that scrolls sideways instead of wrapping. The card
+// header is a fixed 49px, so a wrapped second row pushed the first one (and
+// with it the "New" tab) out of sight. The scrollbar is hidden because it would
+// sit between the active tab and its pane; app/js/viz-tab-strip.js maps the
+// mouse wheel to horizontal scrolling, keeps the active tab in view and sets
+// the overflow classes used below.
+#app-visualization-plot_set {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
+
+    >li {
+        flex: 0 0 auto;
+    }
+
+    .nav-link {
+        white-space: nowrap;
+    }
+
+    // "New" stays pinned at the left edge while plot tabs scroll beneath it.
+    >li:first-child {
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        background-color: #fafafa;
+        transition: box-shadow 0.15s ease;
+    }
+
+    &.viz-strip-more-left>li:first-child {
+        box-shadow: 6px 0 6px -4px rgba(0, 0, 0, 0.2);
+    }
+
+    // Fade the right edge while more tabs lie beyond it.
+    &.viz-strip-more-right {
+        mask-image: linear-gradient(to left, transparent 0, #000 2.5rem);
+    }
+}
+
+[data-bs-theme="dark"] #app-visualization-plot_set>li:first-child {
+    background-color: #2b3035;
+}
+
 #app-visualization-plot_set>li:first-child>.nav-link {
     top: 1px;
     position: relative
@@ -4586,6 +4643,20 @@ label {
         .form-control {
             min-width: 0;
         }
+    }
+}
+
+// The time-axis picker's menu opens upward from the footer and hangs off a
+// button only as wide as the selected label, so bootstrap-select pins the menu
+// to that width and wraps "Collection Date" mid-word. Let it grow to its
+// longest option instead (the viewport cap on .dropdown-menu still applies).
+.selection-modal-filter .bootstrap-select .dropdown-menu {
+    min-width: 100%;
+    width: max-content;
+
+    .dropdown-item,
+    .dropdown-item .text {
+        white-space: nowrap;
     }
 }
 
@@ -4895,6 +4966,20 @@ table.dataTable thead>tr>th.sorting {
 // Geocoding feedback shown directly under the "Map mode" picker.
 .map-geocode-status {
     margin-top: 0.5rem;
+}
+
+// Engine status pinned to the bottom of the plot tab's left sidebar. bslib's
+// .sidebar-content is a flex column but only as tall as its content, so it is
+// stretched to the aside's height first (min-height, so a taller-than-screen
+// sidebar still scrolls); the footer's auto top margin then takes the slack.
+.plot-setup>.sidebar-content {
+    min-height: 100%;
+}
+
+.plot-setup-footer {
+    margin-top: auto;
+    padding: 0.5rem 0.75rem 0.75rem;
+    border-top: 1px solid var(--bs-border-color);
 }
 
 // virtualSelectInput (Browse Entries' column picker) ---------------------------

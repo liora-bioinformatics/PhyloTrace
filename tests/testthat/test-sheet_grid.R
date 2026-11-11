@@ -310,3 +310,25 @@ test_that("replace_rows() sends every column as an array, a single row too", {
   json <- toJSON(data, auto_unbox = TRUE, na = "null")
   expect_identical(as.character(json), '[["A"],["cow"],[1.5],[null]]')
 })
+
+test_that("sheet_lists() adds fixed vocabularies for standard columns", {
+  defs <- data.frame(name = character(0), type = character(0), levels = character(0))
+  got <- sheet_grid$sheet_lists(
+    c("isolate", "geo_loc_name_country"),
+    defs,
+    fixed = list(geo_loc_name_country = c("France", "Germany"), absent = "x")
+  )
+  expect_identical(got, list(`1` = c("France", "Germany")))
+})
+
+test_that("apply_edits() canonicalises countries and rejects unknown ones with a label", {
+  df <- data.frame(isolate = c("A", "B"), geo_loc_name_country = c("", ""))
+  res <- sheet_grid$apply_edits(
+    df,
+    .edits(c(1L, 2L), "geo_loc_name_country", c("deutschland", "Atlantis")),
+    types = c(geo_loc_name_country = "country")
+  )
+  expect_identical(res$data$geo_loc_name_country, c("Germany", ""))
+  expect_identical(res$rejected$value, "Atlantis")
+  expect_match(as.character(sheet_grid$edit_report(res$rejected)), "valid country value")
+})

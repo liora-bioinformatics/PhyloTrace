@@ -67,6 +67,7 @@ box::use(
   rlang[`%||%`],
 )
 box::use(
+  app / logic / date_bins[date_extent, in_date_range],
   app / logic / db_events,
   app / logic / db_guard[db_failed, guard_db, guard_db_read],
   app / logic / db_staging[imported_metadata_wide],
@@ -111,6 +112,8 @@ box::use(
 # from: the distance-based views (MST, Tree) need at least three isolates to form
 # a network worth reading, the rest need at least one. The creator form enforces
 # it before a tab is opened.
+# `setup_ui`, where present, is a function of the engine's namespaced id whose
+# result is pinned to the bottom of the left sidebar (the Map's mapping status).
 .ENGINES <- list(
   MST = list(
     mod = visualization_mst,
@@ -128,13 +131,15 @@ box::use(
     mod = visualization_map,
     distance = FALSE,
     export_kind = "widget",
-    min_isolates = 1L
+    min_isolates = 1L,
+    setup_ui = visualization_map$setup_ui
   ),
   Epi = list(
     mod = visualization_epi,
     distance = FALSE,
     export_kind = "ggplot",
-    min_isolates = 1L
+    min_isolates = 1L,
+    setup_ui = visualization_epi$setup_ui
   ),
   AMR = list(
     mod = visualization_amr,
@@ -558,7 +563,10 @@ ui <- function(id, plot_type) {
               ),
               uiOutput(ns("save_status"))
             )
-          )
+          ),
+          if (is.function(spec$setup_ui)) {
+            div(class = "plot-setup-footer", spec$setup_ui(ns("engine")))
+          }
         ),
         shinyjs::useShinyjs(),
         # The engine's whole inner layout. `as_fill_carrier` used to come from the
@@ -1013,7 +1021,7 @@ server <- function(
       if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
         return(meta)
       }
-      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      keep <- in_date_range(meta[[input$sel_date_field]], rng)
       meta[keep, , drop = FALSE]
     })
 
@@ -1042,13 +1050,15 @@ server <- function(
       if (is.null(d) || all(is.na(d))) {
         return()
       }
+      # A bare year runs to 31 December, so the window ends there too.
+      span <- date_extent(viz_metadata_all()[[input$sel_date_field]])
       updateDateRangeInput(
         session,
         "sel_date_range",
-        start = min(d, na.rm = TRUE),
-        end = max(d, na.rm = TRUE),
-        min = min(d, na.rm = TRUE),
-        max = max(d, na.rm = TRUE)
+        start = span[[1]],
+        end = span[[2]],
+        min = span[[1]],
+        max = span[[2]]
       )
     }))
 

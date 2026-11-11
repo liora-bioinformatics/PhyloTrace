@@ -27,8 +27,9 @@ box::use(
   app /
     logic /
     date_bins[
-      DATE_GRANULARITIES,
+      available_granularities,
       DATE_GRANULARITY_NONE,
+      date_precision,
       mapped_granularity,
     ],
   app / logic / field_profile[profile_description],
@@ -549,14 +550,18 @@ update_scale_select <- function(session, id, choices, selected = NULL) {
 #' @param selected Character. Granularity to preselect, or NULL to start at
 #'   whatever `values` warrants.
 #' @param label Character. Control label.
+#' Only intervals at or above the column's own precision are offered: a column
+#' of bare years groups by year and nothing else, and has no "Exact date" — a
+#' continuous scale would place every year on its 1 January.
+#'
 #' @param allow_none Logical. Offer the ungrouped option (a continuous scale).
 #' @param values The column's own values, for that starting interval.
 #' @return Shiny UI tag.
 #' @export
 granularity_select <- function(ns, id, selected = NULL, label = "Group dates by",
                                allow_none = TRUE, values = NULL) {
-  choices <- as.list(DATE_GRANULARITIES)
-  if (allow_none) {
+  choices <- as.list(available_granularities(values))
+  if (allow_none && !identical(date_precision(values), "year")) {
     choices <- c(setNames(list(DATE_GRANULARITY_NONE), "Exact date"), choices)
   }
   # Nothing chosen yet: start at the interval the dates themselves warrant
@@ -565,7 +570,11 @@ granularity_select <- function(ns, id, selected = NULL, label = "Group dates by"
   # legible for a fortnight of sampling and useless for anything longer. The
   # rule is `date_bins$mapped_granularity()`, shared with the mapping engine so
   # a date opens the same way whichever engine is asking.
-  if (is.null(selected) || !nzchar(selected %||% "")) {
+  if (
+    is.null(selected) ||
+      !nzchar(selected %||% "") ||
+      !selected %in% unlist(choices, use.names = FALSE)
+  ) {
     selected <- mapped_granularity(values) %||% DATE_GRANULARITY_NONE
   }
   shiny$div(

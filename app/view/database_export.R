@@ -22,6 +22,7 @@ box::use(
 box::use(
   app / logic / custom_fields[append_custom, custom_col],
   app / logic / database_functions[metadata_columns],
+  app / logic / date_bins[date_extent, in_date_range],
   app /
     logic /
     db_export[
@@ -528,7 +529,7 @@ server <- function(
       if (is.null(d) || is.null(rng) || length(rng) != 2 || anyNA(rng)) {
         return(meta)
       }
-      keep <- !is.na(d) & d >= as.Date(rng[1]) & d <= as.Date(rng[2])
+      keep <- in_date_range(meta[[input$export_date_field]], rng)
       meta[keep, , drop = FALSE]
     })
 
@@ -658,13 +659,15 @@ server <- function(
       if (is.null(d) || all(is.na(d))) {
         return()
       }
+      # A bare year runs to 31 December, so the window ends there too.
+      span <- date_extent(export_meta()[[input$export_date_field]])
       shiny$updateDateRangeInput(
         session,
         "export_date_range",
-        start = min(d, na.rm = TRUE),
-        end = max(d, na.rm = TRUE),
-        min = min(d, na.rm = TRUE),
-        max = max(d, na.rm = TRUE)
+        start = span[[1]],
+        end = span[[2]],
+        min = span[[1]],
+        max = span[[2]]
       )
     })
 

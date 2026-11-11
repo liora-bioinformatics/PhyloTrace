@@ -191,3 +191,79 @@ test_that("a mapped date starts at the interval its own spread warrants", {
   century <- as.character(as.Date("1925-06-01") + seq(0, 36500, by = 365))
   expect_identical(date_bins$mapped_granularity(century), "year")
 })
+
+# --- year precision -----------------------------------------------------------
+
+test_that("parse_dates reads each value on its own, whatever comes first", {
+  out <- date_bins$parse_dates(c("junk", "2026-01-14", "2026/3/5", "2026-02-01 10:30:00"))
+  expect_true(is.na(out[[1]]))
+  expect_identical(out[-1], as.Date(c("2026-01-14", "2026-03-05", "2026-02-01")))
+})
+
+test_that("parse_dates anchors a bare year at 1 January, and its period ends 31 December", {
+  x <- c("2021", "2026-01-14", NA)
+  expect_identical(date_bins$parse_dates(x), as.Date(c("2021-01-01", "2026-01-14", NA)))
+  expect_identical(date_bins$date_period_end(x), as.Date(c("2021-12-31", "2026-01-14", NA)))
+  expect_identical(date_bins$year_only(x), c(TRUE, FALSE, FALSE))
+})
+
+test_that("date_precision is year only when every readable value is a bare year", {
+  expect_identical(date_bins$date_precision(c("2020", "2021", NA, "junk")), "year")
+  expect_identical(date_bins$date_precision(c("2020", "2021-03-01")), "day")
+  expect_identical(date_bins$date_precision(character(0)), "day")
+  expect_identical(
+    unname(date_bins$available_granularities(c("2020", "2021"))),
+    "year"
+  )
+  expect_length(date_bins$available_granularities(c("2020-01-01")), 4L)
+})
+
+test_that("a bare year is never placed in a finer interval than a year", {
+  floored <- date_bins$floor_date_bin(c("2021", "2021-03-15"), "month")
+  expect_identical(floored, as.Date(c(NA, "2021-03-01")))
+  expect_identical(
+    date_bins$floor_date_bin(c("2021", "2021-03-15"), "year"),
+    as.Date(c("2021-01-01", "2021-01-01"))
+  )
+})
+
+test_that("a year column groups by year whatever granularity is asked for", {
+  out <- date_bins$bin_date_values(c("2021", "2019", "2021"), "month")
+  expect_identical(levels(out), c("2019", "2021"))
+  expect_identical(as.character(out), c("2021", "2019", "2021"))
+  expect_identical(date_bins$mapped_granularity(c("2021", "2019")), "year")
+  expect_identical(date_bins$default_granularity(as.character(1990:2020)), "year")
+})
+
+test_that("in_date_range keeps a bare year whose year overlaps the window", {
+  x <- c("2021", "2021-06-15", "2022", NA)
+  keep <- date_bins$in_date_range(x, as.Date(c("2021-03-01", "2021-03-31")))
+  expect_identical(keep, c(TRUE, FALSE, FALSE, FALSE))
+  expect_identical(
+    date_bins$date_extent(x),
+    as.Date(c("2021-01-01", "2022-12-31"))
+  )
+  expect_null(date_bins$date_extent(c(NA, "junk")))
+})
+
+# --- timeline fields --------------------------------------------------------
+
+test_that("timeline_fields lists date and year variables, collection date first", {
+  profiles <- data.frame(
+    field = c("custom_visit", "sample_collection_date", "called_at", "country"),
+    type = c("year", "date", "datetime", "category"),
+    stringsAsFactors = FALSE
+  )
+  expect_identical(
+    date_bins$timeline_fields(profiles),
+    c("sample_collection_date", "custom_visit")
+  )
+  expect_identical(date_bins$timeline_fields(NULL), character(0))
+})
+
+test_that("first_dated_field skips variables holding no readable date", {
+  meta <- data.frame(a = c(NA, "junk"), b = c("2021", NA), stringsAsFactors = FALSE)
+  expect_identical(date_bins$first_dated_field(meta, c("a", "b")), "b")
+  expect_null(date_bins$first_dated_field(meta, "a"))
+  expect_null(date_bins$first_dated_field(meta, character(0)))
+})

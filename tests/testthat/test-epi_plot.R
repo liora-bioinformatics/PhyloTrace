@@ -1561,3 +1561,20 @@ test_that("square blocks size the canvas to the squares", {
     tolerance = 1e-6
   )
 })
+
+test_that("a column of bare years plots by year and spans whole years", {
+  meta <- data.frame(
+    isolate = c("a", "b", "c"),
+    year = c("2020", "2021", "2021"),
+    stringsAsFactors = FALSE
+  )
+  expect_identical(epi_plot$epi_default_interval(meta$year), "year")
+
+  out <- epi_plot$build_epi_data(meta, "year", character(), "year")
+  expect_identical(out$count, c(1L, 2L))
+  expect_identical(attr(out, "date_range"), as.Date(c("2020-01-01", "2021-12-31")))
+
+  # Their month is unknown, so a monthly curve leaves them out and says so.
+  monthly <- epi_plot$build_epi_data(meta, "year", character(), "month")
+  expect_identical(attr(monthly, "dropped"), 3L)
+})

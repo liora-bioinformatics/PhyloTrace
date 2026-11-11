@@ -149,7 +149,7 @@ scale_categories_for <- function(values, numeric_categories) {
 
 # --- Profile Data Frame Assembly ---------------------------------------------
 
-CONTINUOUS_TYPES <- c("integer", "numeric", "date", "datetime")
+CONTINUOUS_TYPES <- c("integer", "numeric", "date", "datetime", "year")
 
 #' Profile Metadata Column Properties
 #'
@@ -242,16 +242,20 @@ field_profiles <- function(
   )
   out$type_label[is.na(out$type_label)] <- "Text"
 
-  # Sort by category group order, then — inside the AMR group only, where
-  # `subgroup` is set — by drug class with the class column ahead of its own
-  # genes, then by groupability status, quality rank, and field name. The two
-  # AMR terms are constant outside that group, so they change nothing there.
+  # Sort by category group order. Outside AMR, columns keep the order they
+  # arrive in - metadata in its canonical order, MLST with ST ahead of its loci,
+  # custom variables as created - which is the order the Browse Entries column
+  # picker shows. Inside AMR (where `subgroup` is set) they go by drug class,
+  # class column ahead of its own genes, then groupability, quality rank and name.
+  is_amr <- nzchar(out$subgroup)
+  pos <- seq_len(nrow(out))
   ord <- order(
     match(out$group, GROUP_ORDER),
     out$subgroup,
     out$role != "class",
-    !out$groupable,
-    out$rank,
+    ifelse(is_amr, !out$groupable, 0),
+    ifelse(is_amr, out$rank, 0),
+    ifelse(is_amr, 0, pos),
     out$field
   )
   out <- out[ord, , drop = FALSE]

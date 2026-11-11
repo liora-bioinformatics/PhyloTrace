@@ -15,8 +15,9 @@ box::use(
 box::use(
   app /
     logic /
-    custom_fields[coerce_custom_value, custom_col, CUSTOM_TYPES, listed_levels],
+    custom_fields[coerce_custom_value, custom_col, listed_levels],
   app / logic / field_labels[field_labels_for],
+  app / logic / field_types[TYPE_LABELS],
 )
 
 # Undo steps kept per grid; the oldest are dropped beyond this.
@@ -330,7 +331,7 @@ edit_report <- function(rejected, skipped = 0L, max_shown = 3L) {
       if (is.na(rejected$type)) {
         "is too long. "
       } else {
-        paste0("is not a valid ", tolower(CUSTOM_TYPES[[rejected$type]]), " value. ")
+        paste0("is not a valid ", tolower(TYPE_LABELS[[rejected$type]]), " value. ")
       },
       rejected$reason
     )
@@ -425,11 +426,19 @@ clear_history <- function(h) {
 #'
 #' @param cols Column names of the grid, in order.
 #' @param defs Custom variable definitions (`name`, `type`, `levels`).
+#' @param fixed Named list, column name -> allowed values, for standard
+#'   columns drawn from a fixed vocabulary (the country list).
 #' @return Named list, 0-based column index -> allowed values, for every
-#'   boolean/category column present.
+#'   boolean/category column and every `fixed` column present.
 #' @export
-sheet_lists <- function(cols, defs) {
+sheet_lists <- function(cols, defs, fixed = list()) {
   out <- list()
+  for (col in names(fixed)) {
+    idx <- match(col, cols) - 1L
+    if (length(fixed[[col]]) && !is.na(idx)) {
+      out[[as.character(idx)]] <- as.character(fixed[[col]])
+    }
+  }
   for (i in seq_len(nrow(defs))) {
     lv <- listed_levels(defs$type[[i]], defs$levels[[i]])
     idx <- match(custom_col(defs$name[[i]]), cols) - 1L

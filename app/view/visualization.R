@@ -80,6 +80,11 @@ box::use(
 # the first plot tab lands directly after it.
 .NEW_TAB <- "new_plot"
 
+# Most plot tabs open at once (the creator tab not counted). Every tab keeps a
+# live engine server and its outputs resident, and the tab strip only scrolls,
+# so past this the session gets heavy and the strip hard to navigate.
+.MAX_TABS <- 16L
+
 # One plot type's tile, used as a radio button's label. The preview sits in its
 # own layer rather than on the button itself: the caption then keeps a solid
 # background and stays legible without a scrim washing out the image. Preview
@@ -157,11 +162,16 @@ box::use(
             )
           ),
           uiOutput(ns("preset_info")),
-          actionButton(
-            ns("initiate"),
-            "Initiate plot",
-            icon = icon("plus"),
-            class = "btn-primary btn-lg w-100"
+          # A disabled button swallows pointer events, so the hover text lives
+          # on this wrapper (set by the observer on `initiate`'s state).
+          div(
+            id = ns("initiate_wrap"),
+            actionButton(
+              ns("initiate"),
+              "Initiate plot",
+              icon = icon("plus"),
+              class = "btn-primary btn-lg w-100"
+            )
           ),
           uiOutput(ns("min_isolates_hint"))
         )
@@ -562,6 +572,21 @@ server <- function(
     # Tab awaiting the outcome of an unsaved-close confirmation.
     closing_tab <- reactiveVal(NULL)
 
+    # TRUE once .MAX_TABS plot tabs are open; gates every way of opening one.
+    at_capacity <- reactive(length(tabs()) >= .MAX_TABS)
+
+    # Tells the user why no tab was opened and how to make room.
+    notify_tab_limit <- function() {
+      showNotification(
+        sprintf(
+          "At most %d plots can be open at once. Close a plot tab to open another.",
+          .MAX_TABS
+        ),
+        type = "warning",
+        duration = 8
+      )
+    }
+
     # A small type glyph, prepended to the tab label so the plot type is
     # readable at a glance in the nav strip. Keyed by the fixed plot-type value
     # (see visualization_plot$plot_types); an unknown type simply gets no icon.
@@ -605,7 +630,14 @@ server <- function(
       )
     }
 
+    # Opens a plot tab and starts its server; returns its id, or NULL when the
+    # tab limit is reached. The limit is enforced here, not only at the callers,
+    # so no entry point (creator form, dashboard reopen) can exceed it.
     create_tab <- function(plot_type, name, preset = NULL) {
+      if (isolate(at_capacity())) {
+        notify_tab_limit()
+        return(invisible(NULL))
+      }
       n <- isolate(tab_seq()) + 1L
       tab_seq(n)
       tid <- sprintf("tab_%d", n)
@@ -773,17 +805,43 @@ server <- function(
     })
 
     # Grey out "Initiate plot" while the loaded database is too small for the
-    # picked type, and explain the requirement beneath it.
+    # picked type or the tab limit is reached, and explain why beneath it.
     observeEvent(
-      list(input$plot_type, viz_isolate_n()),
+      list(input$plot_type, viz_isolate_n(), at_capacity()),
       {
         need <- min_isolates_for(input$plot_type)
-        shinyjs::toggleState("initiate", condition = viz_isolate_n() >= need)
+        shinyjs::toggleState(
+          "initiate",
+          condition = viz_isolate_n() >= need && !at_capacity()
+        )
+        # Hover explanation only while the limit is what disables the button.
+        shinyjs::runjs(sprintf(
+          "document.getElementById('%s').title = '%s';",
+          ns("initiate_wrap"),
+          if (at_capacity()) {
+            sprintf(
+              "Limit reached: %d plots are open. Close a plot tab to create another.",
+              .MAX_TABS
+            )
+          } else {
+            ""
+          }
+        ))
       },
       ignoreNULL = FALSE
     )
 
     output$min_isolates_hint <- renderUI({
+      if (at_capacity()) {
+        return(div(
+          class = "small text-warning mt-2",
+          icon("triangle-exclamation"),
+          sprintf(
+            " %d plots are open, the maximum. Close a plot tab to create another.",
+            .MAX_TABS
+          )
+        ))
+      }
       need <- min_isolates_for(input$plot_type)
       have <- viz_isolate_n()
       if (have >= need) {
@@ -939,6 +997,11 @@ server <- function(
           }
         ))
         nav_select("plot_set", selected = .NEW_TAB)
+        # The preset is kept, so the plot can be created once a tab is closed;
+        # the creator form itself shows the limit and keeps Initiate disabled.
+        if (isolate(at_capacity())) {
+          notify_tab_limit()
+        }
       },
       ignoreInit = TRUE
     )
@@ -961,6 +1024,12 @@ server <- function(
         existing <- find_tab_by_plot(ctx$plot_id)
         if (!is.null(existing)) {
           nav_select("plot_set", selected = existing)
+          return()
+        }
+        # Checked before the snapshot is read so a refused reopen does not also
+        # raise the selection-changed warning below.
+        if (isolate(at_capacity())) {
+          notify_tab_limit()
           return()
         }
 

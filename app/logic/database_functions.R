@@ -31,6 +31,7 @@ box::use(
       AMR_SECTIONS,
       MLST_COL_PREFIX,
     ],
+  app / logic / geo[format_coordinates, match_country, parse_coordinates],
   app / logic / logging[log_event],
   app / logic / mlst_repo[canonical_species],
   rlang[`%||%`],
@@ -49,6 +50,55 @@ ISOLATE_KEYED_TABLES <- c(
   "genome_hashes",
   "typing_provenance"
 )
+
+#' Canonical Metadata Column Order
+#'
+#' The order in which the built-in `metadata` columns are created and presented:
+#' identifiers, then when, where, who, why and finally bookkeeping. Databases
+#' created before some of these columns existed have them appended at the end of
+#' the physical table, so readers reorder with `order_metadata_cols()` instead of
+#' trusting the stored layout.
+#' @export
+METADATA_COLS <- c(
+  "isolate",
+  "primary_laboratory_sample_id",
+  "specimen_source_id",
+  "organism",
+  "sample_collection_date",
+  "geo_loc_name_country",
+  "geo_loc_name_state_province",
+  "geo_loc_name_city",
+  "geo_loc_name_postal_code",
+  "geo_loc_coordinates",
+  "sample_collected_by",
+  "sequence_submitted_by",
+  "purpose_of_sampling",
+  "purpose_of_sequencing",
+  "called_at",
+  SOURCE_COL
+)
+
+#' Order Metadata Column Names Canonically
+#'
+#' @param cols Character vector of `metadata` column names.
+#' @return `cols` with the built-in columns in `METADATA_COLS` order first,
+#'   followed by any other columns in their original order.
+#' @export
+order_metadata_cols <- function(cols) {
+  c(intersect(METADATA_COLS, cols), setdiff(cols, METADATA_COLS))
+}
+
+# Blank metadata rows for newly typed isolates, in canonical column order.
+.blank_metadata_rows <- function(isolates, organism, called_at) {
+  rows <- data.frame(isolate = isolates, stringsAsFactors = FALSE)
+  for (col in setdiff(METADATA_COLS, "isolate")) {
+    rows[[col]] <- NA_character_
+  }
+  rows$organism <- organism
+  rows$called_at <- called_at
+  rows[[SOURCE_COL]] <- SOURCE_LOCAL
+  rows
+}
 
 #' Repair the Scheme Species Name
 #'
@@ -202,7 +252,67 @@ read_metadata_table <- function(db_path) {
     return(NULL)
   }
 
-  dbReadTable(con, "metadata")
+  metadata <- dbReadTable(con, "metadata")
+  metadata[order_metadata_cols(names(metadata))]
+}
+
+# Rewrites recognised country spellings ("USA", "Deutschland", "DE") to their
+# canonical name, the one the grid offers and the choropleth joins on, and
+# readable coordinates to "lat, lon" decimal degrees. Unrecognised values are
+# kept exactly as typed, never blanked: the grid still shows them and the Map
+# reports them. Idempotent, so it runs on every sync and is a no-op once a
+# database holds only canonical values.
+.normalize_geo_values <- function(con) {
+  fields <- dbListFields(con, "metadata")
+  distinct <- function(col) {
+    dbGetQuery(
+      con,
+      sprintf('SELECT DISTINCT "%s" AS v FROM metadata WHERE "%s" IS NOT NULL', col, col)
+    )$v
+  }
+  rewrites <- list()
+  if ("geo_loc_name_country" %in% fields) {
+    v <- distinct("geo_loc_name_country")
+    canon <- match_country(trimws(v))
+    change <- !is.na(canon) & canon != v
+    rewrites$geo_loc_name_country <- data.frame(old = v[change], new = canon[change])
+  }
+  if ("geo_loc_coordinates" %in% fields) {
+    v <- distinct("geo_loc_coordinates")
+    p <- parse_coordinates(v)
+    readable <- !is.na(p$latitude) & !is.na(p$longitude)
+    canon <- rep(NA_character_, length(v))
+    canon[readable] <- format_coordinates(p$latitude[readable], p$longitude[readable])
+    change <- readable & canon != v
+    rewrites$geo_loc_coordinates <- data.frame(old = v[change], new = canon[change])
+  }
+  n <- sum(vapply(rewrites, nrow, integer(1)))
+  if (!n) {
+    return(invisible(0L))
+  }
+
+  dbBegin(con)
+  tryCatch(
+    {
+      for (col in names(rewrites)) {
+        r <- rewrites[[col]]
+        if (nrow(r)) {
+          dbExecute(
+            con,
+            sprintf('UPDATE metadata SET "%s" = ? WHERE "%s" = ?', col, col),
+            params = list(r$new, r$old)
+          )
+        }
+      }
+      dbCommit(con)
+    },
+    error = function(e) {
+      dbRollback(con)
+      stop(e)
+    }
+  )
+  log_event("DB", "metadata", sprintf("%d geographic spelling(s) normalised", n))
+  invisible(n)
 }
 
 #' Construct or Synchronize Metadata Table
@@ -264,8 +374,9 @@ sync_metadata_table <- function(db_path) {
 
   # Append new isolates or migrate missing columns if table exists
   if ("metadata" %in% tables) {
-    # Migrate metadata tables created before newer columns were added: SQLite
-    # appends new columns at the end, matching the build-path column order.
+    # Migrate metadata tables created before newer columns were added. SQLite
+    # appends them at the end of the physical table; readers restore the
+    # canonical order with order_metadata_cols().
     added_cols <- c(
       "geo_loc_name_city",
       "geo_loc_name_postal_code",
@@ -276,30 +387,17 @@ sync_metadata_table <- function(db_path) {
     for (col in setdiff(added_cols, dbListFields(con, "metadata"))) {
       dbExecute(con, sprintf('ALTER TABLE metadata ADD COLUMN "%s" TEXT', col))
     }
+    .normalize_geo_values(con)
 
     existing <- dbReadTable(con, "metadata")
     new_isolates <- setdiff(isolates, existing$isolate)
 
     if (length(new_isolates)) {
-      new_rows <- data.frame(
-        isolate = new_isolates,
-        primary_laboratory_sample_id = NA_character_,
-        specimen_source_id = NA_character_,
-        sample_collection_date = NA_character_,
-        geo_loc_name_country = NA_character_,
-        geo_loc_name_state_province = NA_character_,
-        sample_collected_by = NA_character_,
-        sequence_submitted_by = NA_character_,
-        organism = organism,
-        purpose_of_sampling = NA_character_,
-        purpose_of_sequencing = NA_character_,
-        geo_loc_name_city = NA_character_,
-        geo_loc_name_postal_code = NA_character_,
-        called_at = called_at_for(new_isolates),
-        geo_loc_coordinates = NA_character_,
-        stringsAsFactors = FALSE
+      new_rows <- .blank_metadata_rows(
+        new_isolates,
+        organism,
+        called_at_for(new_isolates)
       )
-      new_rows[[SOURCE_COL]] <- SOURCE_LOCAL
       dbWriteTable(con, "metadata", new_rows, append = TRUE)
       log_event(
         "DB",
@@ -308,29 +406,11 @@ sync_metadata_table <- function(db_path) {
       )
     }
 
-    return(dbReadTable(con, "metadata"))
+    metadata <- dbReadTable(con, "metadata")
+    return(metadata[order_metadata_cols(names(metadata))])
   }
 
-  # Initialize new metadata structure
-  metadata <- data.frame(
-    isolate = isolates,
-    primary_laboratory_sample_id = NA_character_,
-    specimen_source_id = NA_character_,
-    sample_collection_date = NA_character_,
-    geo_loc_name_country = NA_character_,
-    geo_loc_name_state_province = NA_character_,
-    sample_collected_by = NA_character_,
-    sequence_submitted_by = NA_character_,
-    organism = organism,
-    purpose_of_sampling = NA_character_,
-    purpose_of_sequencing = NA_character_,
-    geo_loc_name_city = NA_character_,
-    geo_loc_name_postal_code = NA_character_,
-    called_at = called_at_for(isolates),
-    geo_loc_coordinates = NA_character_,
-    stringsAsFactors = FALSE
-  )
-  metadata[[SOURCE_COL]] <- SOURCE_LOCAL
+  metadata <- .blank_metadata_rows(isolates, organism, called_at_for(isolates))
 
   dbWriteTable(con, "metadata", metadata)
   log_event(
@@ -347,7 +427,8 @@ sync_metadata_table <- function(db_path) {
 #' Retrieves list of column names present in the database `metadata` table.
 #'
 #' @param db_path Character path to the SQLite database file.
-#' @return Character vector of field names, or `character(0)` if table missing/invalid.
+#' @return Character vector of field names in `order_metadata_cols()` order, or
+#'   `character(0)` if table missing/invalid.
 #' @export
 metadata_columns <- function(db_path) {
   if (
@@ -366,7 +447,7 @@ metadata_columns <- function(db_path) {
     return(character(0))
   }
 
-  dbListFields(con, "metadata")
+  order_metadata_cols(dbListFields(con, "metadata"))
 }
 
 # Helper: extracts the first non-null/non-empty string from a character vector.
