@@ -73,7 +73,8 @@ var mutationObserver = new MutationObserver(function () {
   if (observed) updateOverflow(observed);
 });
 
-// The strip is re-rendered on every database load, so attach to each new copy.
+// The strip is re-rendered on every database load, so attach to each new copy. The bundle runs
+// in <head> before <body> exists, so observe the document element rather than document.body.
 new MutationObserver(function () {
   var strip = getStrip();
   if (strip === observed) return;
@@ -84,4 +85,4 @@ new MutationObserver(function () {
   resizeObserver.observe(strip);
   mutationObserver.observe(strip, { childList: true });
   updateOverflow(strip);
-}).observe(document.body, { childList: true, subtree: true });
+}).observe(document.documentElement, { childList: true, subtree: true });
