@@ -720,6 +720,16 @@ $viz-tile-row-gap: 0.85rem;
     pointer-events: none;
 }
 
+// While the right controls sidebar collapses or expands, bslib's transition
+// briefly pushes the sidebar and its toggle a few px past the layout's right
+// edge, and #plot-setup's main column flashes a horizontal scrollbar for it.
+// Overflow on the left never scrolls, which is why the left sidebar is immune.
+// The layout's main column and sidebar scroll internally, so nothing needs to
+// spill out of it.
+.bslib-sidebar-layout:has(> .viz-controls-sidebar) {
+    overflow: hidden;
+}
+
 // Right controls sidebar: fill the full available height at any display ratio,
 // so the tab panel scrolls internally and open dropdowns are not clipped.
 .viz-controls-sidebar,
@@ -4880,20 +4890,6 @@ table.dataTable thead>tr>th.sorting {
 // also beats bslib's `.bslib-sidebar-layout>.main` padding without a fight.
 .plot-card .card-body {
     padding: 0;
-    // The stages size themselves (and scroll themselves in zoom mode). While the
-    // right sidebar animates, the main column is briefly narrower than the content
-    // still laid out for the old width; bslib's default overflow:auto would flash a
-    // scrollbar on the card body for those frames.
-    overflow: hidden;
-}
-
-// Same clipping for every other scroll container between the sidebar layout and
-// the stage: the layout's `.main`, the card itself and the `plot_area` output
-// div. Any of them can be the one that flashes a scrollbar mid-transition.
-.bslib-sidebar-layout:has(> .main > .plot-card)>.main,
-.plot-card.bslib-card,
-.plot-card .card-body>.shiny-html-output {
-    overflow: hidden;
 }
 
 .plot-card {
