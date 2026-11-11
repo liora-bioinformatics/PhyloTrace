@@ -22,6 +22,7 @@ box::use(
     phylo[
       compute_dist_matrix,
       compute_mst,
+      distance_summary,
       hamming_dist,
       hamming_dist_category,
       hamming_dist_ignore,
@@ -195,4 +196,30 @@ test_that("a clean database is untouched by the ambiguity check", {
 
   expect_false(any(is.na(mat)))
   expect_equal(dim(mat), c(2L, 3L))
+})
+
+test_that("distance_summary reports isolates without a profile and the mean distance", {
+  d <- matrix(
+    c(0L, 2L, 4L, 2L, 0L, 6L, 4L, 6L, 0L),
+    3,
+    dimnames = list(c("A", "B", "C"), c("A", "B", "C"))
+  )
+
+  out <- distance_summary(d, expected = c("A", "B", "C", "D"))
+
+  expect_identical(out$n, 3L)
+  expect_identical(out$missing, "D")
+  expect_equal(out$mean, 4)
+  expect_false(out$all_identical)
+  expect_null(distance_summary(NULL))
+})
+
+test_that("distance_summary flags a matrix in which nothing differs", {
+  d <- matrix(0L, 3, 3, dimnames = list(c("A", "B", "C"), c("A", "B", "C")))
+
+  expect_true(distance_summary(d)$all_identical)
+  # A single isolate has no pairs, which is not the same thing as identical ones.
+  one <- distance_summary(d[1, 1, drop = FALSE])
+  expect_false(one$all_identical)
+  expect_true(is.na(one$mean))
 })

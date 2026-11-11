@@ -11,6 +11,7 @@ box::use(
     expect_lt,
     expect_lte,
     expect_named,
+    expect_null,
     expect_true,
     test_that,
   ],
@@ -907,6 +908,15 @@ test_that("frames carry a laid-out, crossing-free drawing", {
   expect_identical(real$edges$dashes, c(FALSE, FALSE, TRUE, FALSE))
   # Nothing is mapped, so the cheap native shapes are used.
   expect_false(fr$custom)
+})
+
+test_that("frames report the clusters at the threshold even with the regions hidden", {
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), base_opts(show_clusters = FALSE))
+  expect_null(fr$clusters)
+  expect_identical(nrow(fr$cluster_table), 1L)
+  # Four nodes, five isolates: the far branch (400 alleles) stays outside.
+  expect_identical(fr$cluster_table$nodes, 4L)
+  expect_identical(fr$cluster_table$isolates, 5L)
 })
 
 test_that("no branch is drawn exactly level, where vis-network loses its label", {

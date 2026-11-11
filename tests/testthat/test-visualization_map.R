@@ -5,12 +5,15 @@ box::use(
     expect_false,
     expect_identical,
     expect_match,
+    expect_null,
     expect_setequal,
     expect_true,
     test_that
   ],
+  withr[local_tempdir],
 )
 box::use(
+  app / logic / geocode_cache[write_geocodes],
   app / logic / viz_helpers[control_ids],
   app / view / visualization_map,
 )
@@ -469,10 +472,35 @@ test_that("build_map_coords() keeps every recognised country as a region", {
   expect_identical(built$regions$country_code, c("DEU", "DEU"))
   s <- built$status
   expect_identical(s$n_unknown_country, 1L)
-  expect_identical(s$unknown_country_preview, "Atlantis")
   expect_identical(s$n_bad_coords, 1L)
   expect_identical(s$n_swapped, 1L)
-  expect_identical(s$swapped_preview, "B")
+  expect_identical(
+    s$problems[, c("kind", "isolate", "value")],
+    data.frame(
+      kind = c("unknown_country", "bad_coords", "swapped"),
+      isolate = c("C", "D", "B"),
+      value = c("Atlantis", "garbage", "13.40, 52.52"),
+      stringsAsFactors = FALSE
+    )
+  )
+})
+
+test_that("advisories stay short however many isolates are affected", {
+  n <- 300L
+  s <- impl$empty_geocode_status()
+  s$problems <- impl$geo_problems(
+    "bad_coords", sprintf("isolate_%03d", seq_len(n)), "Coordinates", "N/A?"
+  )
+  html <- as.character(impl$geo_advisories(s, "show_all"))
+  expect_identical(lengths(regmatches(html, gregexpr("geo-tip-item", html))), 5L)
+  expect_match(html, "and 295 more", fixed = TRUE)
+  expect_match(html, "Show all 300 affected isolates", fixed = TRUE)
+  table <- as.character(impl$geo_problem_table(s$problems))
+  expect_identical(lengths(regmatches(table, gregexpr("<tr>", table))), n + 1L)
+})
+
+test_that("no advisories without problems", {
+  expect_null(impl$geo_advisories(impl$empty_geocode_status(), "show_all"))
 })
 
 test_that("build_map() draws the choropleth from regions, not geocoded points", {
@@ -536,4 +564,52 @@ test_that("isolates sharing one spot are grouped even with clustering off", {
   opts <- Filter(function(a) is.list(a) && "maxClusterRadius" %in% names(a), call$args)[[1]]
   expect_identical(opts$maxClusterRadius, impl$COINCIDENT_PX)
   expect_true(opts$spiderfyOnMaxZoom)
+})
+
+test_that("pending geocodes count only places missing from the database cache", {
+  db <- file.path(local_tempdir(), "t.db")
+  build_db(db, default_local(), metadata = meta_df(c("A", "B")))
+  meta <- data.frame(
+    isolate = c("A", "B", "C"),
+    geo_loc_name_city = c("Berlin", "Munich", "Paris"),
+    geo_loc_name_country = c("Germany", "Germany", "France"),
+    geo_loc_coordinates = c(NA, NA, "48.857, 2.352")
+  )
+  expect_identical(impl$geocode_pending_count(meta, db), 2L)
+  write_geocodes(db, data.frame(place = "Berlin, Germany", latitude = 52.52, longitude = 13.4))
+  expect_identical(impl$geocode_pending_count(meta, db), 1L)
+})
+
+test_that("isolates placed at city level get an info line naming them", {
+  s <- impl$empty_geocode_status()
+  s$problems <- impl$geo_problems(
+    "postcode_fallback", c("iso_1", "iso_2"), "Postal code",
+    c("99999, placed at Berlin, Germany", "00000, placed at Munich, Germany")
+  )
+  html <- as.character(impl$geo_advisories(s, "show_all"))
+  expect_match(html, "2 isolate(s) placed at city level", fixed = TRUE)
+  expect_match(html, "circle-info", fixed = TRUE)
+  expect_match(html, "99999, placed at Berlin, Germany", fixed = TRUE)
+  table <- as.character(impl$geo_problem_table(s$problems))
+  expect_match(table, "Postcode not found, placed at city level", fixed = TRUE)
+})
+
+test_that("the geocoding estimate follows the measured pace", {
+  first <- as.character(impl$geocode_waiter_html(52))
+  expect_match(first, "Geocoding 52 locations", fixed = TRUE)
+  expect_match(first, "data-total=\"78\"", fixed = TRUE)
+
+  # 10 places took 30 s: 3 s each, so 42 left take 126 s, 156 s overall.
+  later <- as.character(impl$geocode_waiter_html(52, 10L, 30))
+  expect_match(later, "Geocoding location 11 of 52", fixed = TRUE)
+  expect_match(later, "data-total=\"126\"", fixed = TRUE)
+  expect_match(later, "Remaining time 2:06 / 2:36", fixed = TRUE)
+
+  expect_match(as.character(impl$geocode_waiter_html(0)), "Preparing map", fixed = TRUE)
+})
+
+test_that("a fitted view keeps a margin around the outermost isolates", {
+  coords <- data.frame(longitude = c(-120, 170), latitude = c(-40, 60))
+  call <- impl$frame_coords(leaflet(), coords)$x$fitBounds
+  expect_identical(call[[5]]$padding, c(impl$FIT_PADDING_PX, impl$FIT_PADDING_PX))
 })

@@ -3793,6 +3793,9 @@ mst_frames <- function(graph, metadata, opts) {
     extent = extent,
     counts = counts,
     clusters = clusters,
+    # The assignment at the threshold, whether or not the regions are drawn, so
+    # the sidebar status can report clusters the canvas is hiding.
+    cluster_table = found$table,
     loose = loose,
     cluster_colors = cluster_colors,
     blobs = blobs,

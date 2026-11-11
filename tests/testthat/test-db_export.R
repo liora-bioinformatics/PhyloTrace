@@ -16,6 +16,7 @@ box::use(
     db_export[export_preview, export_database, exportable_custom_fields],
   app / logic / provenance[store_provenance],
   app / logic / db_compat[check_import_compatibility],
+  app / logic / geocode_cache[read_geocodes, write_geocodes],
 )
 
 fixture <- function(dir, ...) {
@@ -319,4 +320,18 @@ test_that("an export carries the provenance of the isolates it contains", {
   # Only the exported isolate's row travels, exactly like its results.
   expect_identical(rows$isolate, "A")
   expect_identical(rows$genome_digest, "digestA")
+})
+
+test_that("geocoded places travel with exported metadata only", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  write_geocodes(src, data.frame(place = "Berlin, Germany", latitude = 52.52, longitude = 13.4))
+
+  with_meta <- file.path(dir, "with.db")
+  export_database(src, with_meta, "A", "sample_collection_date")
+  expect_identical(read_geocodes(with_meta)$place, "Berlin, Germany")
+
+  without <- file.path(dir, "without.db")
+  export_database(src, without, "A", include_metadata = FALSE)
+  expect_identical(nrow(read_geocodes(without)), 0L)
 })

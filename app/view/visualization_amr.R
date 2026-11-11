@@ -89,6 +89,7 @@ box::use(
     viz_helpers[
       apply_controls,
       collect_input_snapshot,
+      count_label,
       field_select,
       granularity_select,
       control_families,
@@ -98,6 +99,7 @@ box::use(
       reset_button_row,
       scale_select,
       settled_inputs,
+      status_line,
       suitable_scale_categories,
       text_size_slider,
       update_field_select,
@@ -776,6 +778,46 @@ amr_controls <- function(ns) {
   )
 }
 
+#' AMR Status for the Setup Sidebar
+#'
+#' What the screen plotted and the isolates it has nothing to show for, mounted
+#' by app/view/visualization_plot.R at the bottom of the plot tab's left
+#' sidebar. Rendered by this module's `output$amr_status_ui`.
+#'
+#' @param id The engine's namespaced id, the same one passed to `ui()`.
+#' @return A `uiOutput`.
+#' @export
+setup_ui <- function(id) {
+  shiny$uiOutput(shiny$NS(id, "amr_status_ui"), class = "map-geocode-status")
+}
+
+# The status lines for a drawn screen: isolates with no hit passing the filters
+# first, since an empty heatmap row or a missing share of a bar reads as a bug
+# unless it is explained, then what was plotted. `noun` is c(singular, plural);
+# `n_classes` is NA where the view does not split into drug classes.
+amr_status <- function(n_items, noun, n_classes, no_hit) {
+  shiny$tagList(
+    if (length(no_hit)) {
+      status_line(
+        sprintf("%s with no AMR hit", count_label(length(no_hit), "isolate")),
+        tip = paste(
+          "No hit passes the current filters for these isolates. They were not",
+          "screened, nothing was found, or the identity, coverage and element-type",
+          "filters removed it."
+        ),
+        items = no_hit,
+        warn = TRUE
+      )
+    },
+    status_line(paste0(
+      count_label(n_items, noun[[1]], noun[[2]]),
+      if (!is.na(n_classes) && n_classes > 0L) {
+        paste0(" in ", count_label(n_classes, "drug class", "drug classes"))
+      }
+    ))
+  )
+}
+
 #' @export
 # `options_ui` is accepted for one signature across all engines; this one has no
 # distance-computation controls, so the tab never passes any.
@@ -1091,6 +1133,37 @@ server <- function(
     selected_genes <- shiny$reactive({
       g <- input$amr_genes
       if (!length(g)) NULL else g
+    })
+
+    # Status pinned to the bottom of the left sidebar (setup_ui()). Counts off
+    # the same reactives the plot is drawn from, so it follows the filters.
+    output$amr_status_ui <- shiny$renderUI({
+      shiny$req(generated())
+      no_hit <- setdiff(isolates(), filtered_hits()$isolate)
+      if (identical(mode(), "prevalence")) {
+        df <- prevalence_df()
+        shiny$req(nrow(df) > 0)
+        by_class <- identical(input$amr_level %||% LEVEL_DEFAULT, "class")
+        return(amr_status(
+          nrow(df),
+          if (by_class) c("drug class", "drug classes") else c("gene", "genes"),
+          NA_integer_,
+          no_hit
+        ))
+      }
+      mat <- presence_mat()
+      shiny$req(ncol(mat) > 0)
+      genes <- attr(mat, "genes")
+      resistance <- genes$group[genes$element_type == amr_plot$AMR_ELEMENT_TYPES[["Resistance"]]]
+      amr_status(
+        ncol(mat),
+        c("gene", "genes"),
+        length(setdiff(
+          unique(resistance),
+          c(names(amr_plot$AMR_ELEMENT_TYPES)[[1]], amr_plot$AMR_UNCLASSIFIED)
+        )),
+        no_hit
+      )
     })
 
     # The expensive reactive. Everything cosmetic reads the built plot below,

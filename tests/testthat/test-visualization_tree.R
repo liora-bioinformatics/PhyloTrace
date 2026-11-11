@@ -6,6 +6,7 @@ box::use(
     expect_identical,
     expect_length,
     expect_lt,
+    expect_match,
     expect_setequal,
     expect_true,
     test_that
@@ -1978,6 +1979,44 @@ test_that("a saved Analysis restores its highlights, however it stored them", {
       expect_true(all(
         vapply(nj_clades(), function(cl) cl$color, "") == "#D0F221"
       ))
+    }
+  )
+})
+
+test_that("the status names the tips and algorithm, and warns on a flat matrix", {
+  dist <- list(n = 4L, missing = character(0), mean = 0, all_identical = TRUE)
+
+  html <- as.character(impl$tree_status(4L, dist, "UPGMA", "omit"))
+
+  expect_match(html, "4 tips, UPGMA", fixed = TRUE)
+  expect_match(html, "All pairwise distances are 0", fixed = TRUE)
+  expect_match(html, "Mean pairwise distance 0 alleles", fixed = TRUE)
+})
+
+test_that("the rendered status names the tips and the isolate left out", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D", "ghost")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      settle(session)
+
+      html <- output$tree_status_ui$html
+      expect_match(html, "1 isolate left out", fixed = TRUE)
+      expect_match(html, "4 tips, Neighbour-Joining", fixed = TRUE)
+      expect_match(html, "Mean pairwise distance", fixed = TRUE)
     }
   )
 })

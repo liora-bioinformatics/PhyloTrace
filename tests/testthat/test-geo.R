@@ -21,7 +21,7 @@ test_that("country spellings, codes and languages resolve to one canonical name"
     rep("Germany", 6),
     rep("United States of America", 4),
     rep("United Kingdom", 2),
-    "Czechia", "Netherlands", "Netherlands", "Ivory Coast", "Ivory Coast",
+    "Czechia", "Netherlands", "Netherlands", "Côte d'Ivoire", "Côte d'Ivoire",
     "Russia"
   ))
 })
@@ -105,4 +105,12 @@ test_that("the lookup key folds case, accents, periods and a leading article", {
     impl$.country_key(c("U.S.A.", "Côte d'Ivoire", "The  Gambia")),
     c("usa", "cote divoire", "gambia")
   )
+})
+
+test_that("Natural Earth's own names stay accepted beside the display names", {
+  expect_identical(
+    geo$match_country(c("Ivory Coast", "Republic of Serbia", "eSwatini", "Hong Kong S.A.R.")),
+    c("Côte d'Ivoire", "Serbia", "Eswatini", "Hong Kong")
+  )
+  expect_true(is.na(geo$match_country("Siachen Glacier")))
 })

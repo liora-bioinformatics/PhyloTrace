@@ -23,7 +23,13 @@
 # Reusable:  source("dev/enrich_metadata.R"); enrich_metadata("path/to.db")
 #            enrich_metadata("path/to.db", continent = "Europe")
 # One-shot:  Rscript dev/enrich_metadata.R path/to.db \
-#              [--overwrite] [--seed 42] [--continent Europe]
+#              [--overwrite] [--seed 42] [--continent Europe] \
+#              [--coordinates] [--bad-geo 8]
+#
+# --coordinates also fills geo_loc_coordinates with a point near each city
+# centre (about 10% of rows are left empty, so geocoding still gets used);
+# --bad-geo N additionally breaks N of those rows on purpose (swapped, in
+# another country, unreadable, unknown country) to show the map's advisories.
 
 library(DBI)
 library(RSQLite)
@@ -395,6 +401,236 @@ location_table$continent <- unname(
   country_continent[location_table$geo_loc_name_country]
 )
 
+# City centres (WGS84 decimal degrees) for `coordinates = TRUE`, one per city in
+# location_table. City names are unique there, so the city alone is the key;
+# every centre was checked to lie inside its country's Natural Earth outline,
+# which the map's out-of-country advisory tests against.
+city_centres <- read.csv(
+  text = "city,lat,lon
+Berlin,52.520,13.405
+Munich,48.137,11.575
+Nuremberg,49.452,11.077
+Hamburg,53.551,9.994
+Cologne,50.938,6.960
+Dusseldorf,51.227,6.774
+Frankfurt,50.110,8.682
+Dresden,51.050,13.738
+Leipzig,51.340,12.375
+Stuttgart,48.776,9.183
+Hanover,52.375,9.732
+London,51.507,-0.128
+Manchester,53.481,-2.243
+Birmingham,52.486,-1.890
+Leeds,53.801,-1.549
+Liverpool,53.408,-2.992
+Bristol,51.455,-2.588
+Newcastle upon Tyne,54.978,-1.618
+Sheffield,53.381,-1.470
+Edinburgh,55.953,-3.188
+Glasgow,55.864,-4.252
+Aberdeen,57.150,-2.094
+Cardiff,51.482,-3.179
+Swansea,51.621,-3.944
+Belfast,54.597,-5.930
+Paris,48.857,2.352
+Lyon,45.764,4.836
+Marseille,43.297,5.370
+Nice,43.710,7.262
+Toulouse,43.605,1.444
+Bordeaux,44.838,-0.579
+Lille,50.629,3.057
+Nantes,47.218,-1.554
+Strasbourg,48.573,7.752
+Madrid,40.417,-3.704
+Barcelona,41.385,2.173
+Valencia,39.470,-0.376
+Seville,37.389,-5.984
+Malaga,36.721,-4.421
+Bilbao,43.263,-2.935
+Zaragoza,41.649,-0.889
+Rome,41.903,12.496
+Milan,45.464,9.190
+Naples,40.852,14.268
+Turin,45.070,7.687
+Bologna,44.494,11.343
+Florence,43.770,11.256
+Palermo,38.116,13.361
+Genoa,44.405,8.946
+Amsterdam,52.368,4.904
+Utrecht,52.091,5.122
+Rotterdam,51.924,4.478
+The Hague,52.070,4.300
+Eindhoven,51.441,5.470
+Groningen,53.219,6.567
+Brussels,50.850,4.352
+Antwerp,51.219,4.402
+Ghent,51.054,3.725
+Bruges,51.209,3.225
+Liege,50.633,5.567
+Zurich,47.377,8.541
+Geneva,46.204,6.143
+Basel,47.560,7.589
+Bern,46.948,7.447
+Lausanne,46.520,6.633
+Lucerne,47.050,8.309
+Vienna,48.208,16.373
+Graz,47.071,15.440
+Salzburg,47.810,13.055
+Innsbruck,47.269,11.404
+Linz,48.306,14.286
+Stockholm,59.329,18.069
+Gothenburg,57.709,11.975
+Malmo,55.605,13.004
+Uppsala,59.859,17.639
+Copenhagen,55.676,12.568
+Aarhus,56.163,10.204
+Odense,55.404,10.402
+Oslo,59.914,10.752
+Bergen,60.391,5.322
+Trondheim,63.431,10.395
+Helsinki,60.170,24.938
+Tampere,61.498,23.761
+Turku,60.452,22.267
+Warsaw,52.230,21.012
+Krakow,50.065,19.945
+Wroclaw,51.108,17.039
+Gdansk,54.352,18.646
+Poznan,52.406,16.925
+Lisbon,38.722,-9.139
+Porto,41.158,-8.629
+Coimbra,40.203,-8.410
+Braga,41.545,-8.427
+Dublin,53.350,-6.260
+Cork,51.898,-8.471
+Galway,53.271,-9.057
+Limerick,52.664,-8.623
+Athens,37.984,23.728
+Thessaloniki,40.640,22.944
+Patras,38.246,21.735
+Prague,50.076,14.438
+Brno,49.195,16.608
+Ostrava,49.820,18.262
+Istanbul,41.008,28.978
+Ankara,39.934,32.860
+Izmir,38.424,27.143
+Antalya,36.897,30.713
+New York,40.713,-74.006
+Los Angeles,34.052,-118.244
+San Francisco,37.775,-122.419
+San Diego,32.716,-117.161
+Chicago,41.878,-87.630
+Houston,29.760,-95.370
+Boston,42.360,-71.059
+Seattle,47.606,-122.332
+Atlanta,33.749,-84.388
+Miami,25.762,-80.192
+Denver,39.739,-104.990
+Philadelphia,39.953,-75.165
+Minneapolis,44.978,-93.265
+Phoenix,33.448,-112.074
+Nashville,36.163,-86.781
+Toronto,43.653,-79.383
+Ottawa,45.421,-75.697
+Montreal,45.502,-73.567
+Quebec City,46.813,-71.208
+Vancouver,49.283,-123.121
+Calgary,51.045,-114.072
+Edmonton,53.546,-113.494
+Mexico City,19.433,-99.133
+Guadalajara,20.660,-103.350
+Monterrey,25.686,-100.316
+Puebla,19.041,-98.206
+Sao Paulo,-23.551,-46.633
+Rio de Janeiro,-22.907,-43.173
+Brasilia,-15.794,-47.882
+Salvador,-12.978,-38.501
+Belo Horizonte,-19.917,-43.935
+Porto Alegre,-30.035,-51.218
+Recife,-8.048,-34.877
+Curitiba,-25.429,-49.271
+Buenos Aires,-34.604,-58.382
+Cordoba,-31.420,-64.189
+Rosario,-32.947,-60.639
+Mendoza,-32.890,-68.845
+Santiago,-33.449,-70.669
+Valparaiso,-33.047,-71.613
+Concepcion,-36.827,-73.050
+Bogota,4.711,-74.072
+Medellin,6.244,-75.581
+Cali,3.452,-76.532
+Tokyo,35.676,139.650
+Osaka,34.694,135.502
+Yokohama,35.444,139.638
+Nagoya,35.181,136.906
+Sapporo,43.062,141.354
+Fukuoka,33.590,130.402
+Kyoto,35.012,135.768
+Shanghai,31.230,121.474
+Beijing,39.904,116.407
+Guangzhou,23.129,113.264
+Shenzhen,22.543,114.058
+Chengdu,30.573,104.066
+Wuhan,30.593,114.305
+Xian,34.341,108.940
+Mumbai,19.076,72.878
+New Delhi,28.614,77.209
+Bengaluru,12.972,77.595
+Chennai,13.083,80.271
+Kolkata,22.573,88.364
+Hyderabad,17.385,78.487
+Pune,18.520,73.857
+Ahmedabad,23.023,72.571
+Seoul,37.567,126.978
+Busan,35.180,129.076
+Incheon,37.456,126.705
+Bangkok,13.756,100.502
+Chiang Mai,18.788,98.985
+Phuket,7.880,98.392
+Jakarta,-6.208,106.846
+Surabaya,-7.250,112.769
+Bandung,-6.917,107.619
+Singapore,1.352,103.820
+Jerusalem,31.769,35.216
+Tel Aviv,32.085,34.782
+Haifa,32.794,34.990
+Riyadh,24.713,46.675
+Jeddah,21.485,39.193
+Dammam,26.392,49.978
+Sydney,-33.869,151.209
+Melbourne,-37.814,144.963
+Brisbane,-27.470,153.026
+Perth,-31.950,115.860
+Adelaide,-34.929,138.601
+Canberra,-35.281,149.130
+Hobart,-42.882,147.327
+Auckland,-36.849,174.763
+Wellington,-41.287,174.776
+Christchurch,-43.532,172.637
+Johannesburg,-26.204,28.047
+Pretoria,-25.747,28.229
+Cape Town,-33.925,18.424
+Durban,-29.858,31.022
+Port Elizabeth,-33.962,25.602
+Bloemfontein,-29.085,26.160
+Cairo,30.044,31.236
+Alexandria,31.200,29.919
+Giza,30.013,31.209
+Lagos,6.524,3.379
+Abuja,9.077,7.399
+Kano,12.002,8.592
+Nairobi,-1.286,36.817
+Mombasa,-4.043,39.668
+Kisumu,-0.092,34.768",
+  stringsAsFactors = FALSE
+)
+
+# Spellings the app may have rewritten a country to on load (app/logic/geo.R),
+# mapped back to this table's names, so a re-run still finds the city.
+country_aliases <- c(
+  "czechia" = "czech republic",
+  "united states of america" = "united states"
+)
+
 # Clinical / environmental specimen types, weighted towards the body sites most
 # associated with Pseudomonas (respiratory, wound, urinary) while keeping a long
 # diverse tail. `prob` is relative; sample() normalises it.
@@ -467,6 +703,40 @@ collector_templates <- c(
   "National Reference Laboratory, {country}"
 )
 
+# Centre of each row's city, or NA where the city is not in location_table or
+# the row's country disagrees with the table's country for that city.
+city_centre <- function(country, city) {
+  key <- function(x) {
+    x <- tolower(trimws(as.character(x)))
+    ifelse(x %in% names(country_aliases), country_aliases[x], x)
+  }
+  table_country <- location_table$geo_loc_name_country[
+    match(city_centres$city, location_table$geo_loc_name_city)
+  ]
+  i <- match(tolower(trimws(as.character(city))), tolower(city_centres$city))
+  ok <- !is.na(i) & key(country) == key(table_country[i])
+  i[!ok] <- NA_integer_
+  data.frame(lat = city_centres$lat[i], lon = city_centres$lon[i])
+}
+
+# A uniformly random point within `km` of each centre, so isolates of one city
+# spread over it instead of stacking on a single spot.
+jitter_points <- function(lat, lon, km = 3) {
+  d <- km * sqrt(runif(length(lat)))
+  theta <- runif(length(lat), 0, 2 * pi)
+  data.frame(
+    lat = lat + d / 111.32 * cos(theta),
+    lon = lon + d / (111.32 * cos(lat * pi / 180)) * sin(theta)
+  )
+}
+
+# "lat, lon" at 5 decimals (~1 m) without trailing zeros, the form the app
+# stores coordinates in.
+format_coords <- function(lat, lon) {
+  num <- function(x) sub("\\.?0+$", "", sprintf("%.5f", x))
+  paste0(num(lat), ", ", num(lon))
+}
+
 # --- main entry point ------------------------------------------------------
 
 #' Enrich a database's metadata table with artificial example data.
@@ -483,6 +753,15 @@ collector_templates <- c(
 #' @param date_range  Length-2 character vector (YYYY-MM-DD) bounding the
 #'                    randomly drawn collection dates.
 #' @param preserve    Columns never touched (default isolate + organism).
+#' @param coordinates If TRUE, also fill geo_loc_coordinates with a point within
+#'                    3 km of each isolate's city centre. Only rows whose city is
+#'                    in location_table get one.
+#' @param coord_missing Share of those rows left without coordinates, so the
+#'                    map's geocoding still has places to look up.
+#' @param bad_geo     Number of rows (among those given coordinates) to corrupt
+#'                    on purpose, to exercise the map's data advisories. Cycles
+#'                    through swapped coordinates, coordinates in another
+#'                    country, unreadable coordinates and an unknown country.
 #' @return The updated metadata data.frame, invisibly.
 #' @export
 enrich_metadata <- function(
@@ -491,8 +770,14 @@ enrich_metadata <- function(
   seed = NULL,
   continent = NULL,
   date_range = c("2015-01-01", "2024-12-31"),
-  preserve = c("isolate", "organism")
+  preserve = c("isolate", "organism"),
+  coordinates = FALSE,
+  coord_missing = 0.1,
+  bad_geo = 0L
 ) {
+  if (bad_geo > 0 && !coordinates) {
+    stop("`bad_geo` needs `coordinates = TRUE`.")
+  }
   if (!file.exists(db_path)) {
     stop("Database not found: ", db_path)
   }
@@ -579,6 +864,9 @@ enrich_metadata <- function(
 
   # --- spatial block (assigned as a unit to stay congruent) ----------------
   present_geo <- setdiff(intersect(geo_cols, names(meta)), preserve)
+  # Rows whose location this run generated; only these may get an invented
+  # country below, so an existing value is never replaced by a broken one.
+  relocated <- rep(overwrite, n)
   if (length(present_geo)) {
     # A row is (re)located only when ALL its geo cells are empty, or when
     # overwrite = TRUE — never merge a fresh city into a row that already holds
@@ -588,6 +876,7 @@ enrich_metadata <- function(
     } else {
       Reduce(`&`, lapply(present_geo, function(c) is_empty(meta[[c]])))
     }
+    relocated <- geo_empty
     idx <- sample(nrow(locations), n, replace = TRUE)
     for (c in present_geo) {
       meta[[c]][geo_empty] <- locations[[c]][idx][geo_empty]
@@ -702,6 +991,62 @@ enrich_metadata <- function(
     sample(purpose_of_sequencing, n, replace = TRUE)
   )
 
+  # --- coordinates (last, so the draws above match runs without them) ------
+  coord_col <- "geo_loc_coordinates"
+  bad_report <- character(0)
+  if (coordinates && !coord_col %in% preserve) {
+    if (!coord_col %in% names(meta)) {
+      meta[[coord_col]] <- NA_character_
+    }
+    meta[[coord_col]] <- as.character(meta[[coord_col]])
+    country_col <- if ("geo_loc_name_country" %in% names(meta)) {
+      meta[["geo_loc_name_country"]]
+    } else {
+      rep(NA_character_, n)
+    }
+    city_col <- if ("geo_loc_name_city" %in% names(meta)) {
+      meta[["geo_loc_name_city"]]
+    } else {
+      rep(NA_character_, n)
+    }
+    centre <- city_centre(country_col, city_col)
+    open_cell <- if (overwrite) rep(TRUE, n) else is_empty(meta[[coord_col]])
+    target <- open_cell & !is.na(centre$lat)
+    skip <- target & runif(n) < coord_missing
+    meta[[coord_col]][skip & overwrite] <- NA_character_
+    target <- target & !skip
+    pts <- jitter_points(centre$lat[target], centre$lon[target])
+    meta[[coord_col]][target] <- format_coords(pts$lat, pts$lon)
+
+    # Deliberately broken rows, one kind after the other.
+    kinds <- c("swapped", "other country", "unreadable", "unknown country")
+    pool <- which(target)
+    picked <- pool[sample.int(length(pool), min(bad_geo, length(pool)))]
+    for (k in seq_along(picked)) {
+      i <- picked[k]
+      kind <- kinds[(k - 1L) %% length(kinds) + 1L]
+      if (kind == "unknown country" && !relocated[i]) {
+        kind <- "unreadable"
+      }
+      if (kind == "swapped") {
+        meta[[coord_col]][i] <- format_coords(pts$lon[pool == i], pts$lat[pool == i])
+      } else if (kind == "other country") {
+        far <- city_centres[
+          location_table$geo_loc_name_country[
+            match(city_centres$city, location_table$geo_loc_name_city)
+          ] != country_col[i],
+        ]
+        far <- far[sample.int(nrow(far), 1), ]
+        meta[[coord_col]][i] <- format_coords(far$lat, far$lon)
+      } else if (kind == "unreadable") {
+        meta[[coord_col]][i] <- sample(c("next to the hospital", "52.5", "N/A?"), 1)
+      } else {
+        meta[["geo_loc_name_country"]][i] <- sample(c("Atlantis", "Narnia", "Wakanda"), 1)
+      }
+      bad_report <- c(bad_report, sprintf("  %-16s %s", kind, meta[["isolate"]][i]))
+    }
+  }
+
   # --- write back ----------------------------------------------------------
   # Mirrors the app's own metadata update (app/logic/database_functions.R):
   # rewrite the whole table. metadata carries no indexes/constraints, so an
@@ -717,6 +1062,16 @@ enrich_metadata <- function(
     n_countries,
     n_cities
   ))
+  if (coordinates && coord_col %in% names(meta)) {
+    message(sprintf(
+      "%d of %d rows now carry coordinates.",
+      sum(!is_empty(meta[[coord_col]])),
+      n
+    ))
+  }
+  if (length(bad_report)) {
+    message("Deliberately broken rows:\n", paste(bad_report, collapse = "\n"))
+  }
   invisible(meta)
 }
 
@@ -726,7 +1081,10 @@ main <- function() {
   args <- commandArgs(trailingOnly = TRUE)
   if (!length(args)) {
     stop(
-      "Usage: Rscript dev/enrich_metadata.R <database.db> [--overwrite] [--seed N]"
+      paste(
+        "Usage: Rscript dev/enrich_metadata.R <database.db> [--overwrite]",
+        "[--seed N] [--continent NAME] [--coordinates] [--bad-geo N]"
+      )
     )
   }
   db_path <- args[[1]]
@@ -739,11 +1097,17 @@ main <- function() {
   if ("--continent" %in% args) {
     continent <- args[[which(args == "--continent") + 1L]]
   }
+  bad_geo <- 0L
+  if ("--bad-geo" %in% args) {
+    bad_geo <- as.integer(args[[which(args == "--bad-geo") + 1L]])
+  }
   enrich_metadata(
     db_path,
     overwrite = overwrite,
     seed = seed,
-    continent = continent
+    continent = continent,
+    coordinates = "--coordinates" %in% args || bad_geo > 0,
+    bad_geo = bad_geo
   )
 }
 

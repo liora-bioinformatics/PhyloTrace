@@ -6,7 +6,7 @@
 #
 # Output: app/logic/data/countries.csv with one row per Natural Earth unit:
 #   code     adm0_a3, unique per row (the choropleth join key)
-#   name     canonical display name (Natural Earth `admin`)
+#   name     canonical display name (Natural Earth `admin`, or `display_names`)
 #   iso2     ISO 3166-1 alpha-2, empty where Natural Earth has none
 #   iso3     ISO 3166-1 alpha-3, empty where Natural Earth has none
 #   aliases  every other spelling the app accepts, "|"-separated, raw (the app
@@ -21,6 +21,33 @@ out_path <- "app/logic/data/countries.csv"
 
 world <- st_drop_geometry(countries50)
 
+# Disputed or uninhabited zones Natural Earth draws as their own unit but no
+# isolate is sampled from. Left out of the vocabulary (and so the picker); the
+# choropleth still draws their polygon, uncounted.
+drop_codes <- c(
+  KAS = "Siachen Glacier",
+  ATC = "Ashmore and Cartier Islands"
+)
+world <- world[!world$adm0_a3 %in% names(drop_codes), , drop = FALSE]
+
+# Display names where Natural Earth's `admin` reads oddly or is not the short
+# name in common use. The Natural Earth name stays an accepted alias, so stored
+# values written under it are rewritten to these on the next database load.
+display_names <- c(
+  ALD = "Åland Islands",
+  BHS = "Bahamas",
+  BLM = "Saint Barthélemy",
+  CIV = "Côte d'Ivoire",
+  HKG = "Hong Kong",
+  MAC = "Macao",
+  SGS = "South Georgia and the South Sandwich Islands",
+  SRB = "Serbia",
+  STP = "São Tomé and Príncipe",
+  SWZ = "Eswatini",
+  TLS = "Timor-Leste",
+  TZA = "Tanzania"
+)
+
 # English spellings in common use that Natural Earth does not carry, by code.
 # Constituent countries of the UK are deliberately absent: mapping "England"
 # onto "United Kingdom" would silently drop information the user typed.
@@ -29,7 +56,7 @@ extra_aliases <- list(
   GBR = c("UK", "U.K.", "Great Britain", "Britain"),
   ARE = c("UAE", "Emirates"),
   CZE = c("Czech Republic"),
-  CIV = c("Cote d'Ivoire", "Côte d'Ivoire"),
+  CIV = c("Cote d'Ivoire", "Ivory Coast"),
   COD = c("DR Congo", "DRC", "Congo-Kinshasa", "Congo (Kinshasa)"),
   COG = c("Congo-Brazzaville", "Congo (Brazzaville)"),
   KOR = c("Korea", "Korea, Republic of", "Republic of Korea"),
@@ -45,7 +72,7 @@ extra_aliases <- list(
   SWZ = c("Swaziland"),
   MMR = c("Burma"),
   CPV = c("Cape Verde"),
-  TLS = c("East Timor"),
+  TLS = c("East Timor", "Timor Leste"),
   BOL = c("Bolivia, Plurinational State of"),
   VEN = c("Venezuela, Bolivarian Republic of"),
   TZA = c("Tanzania, United Republic of"),
@@ -66,6 +93,7 @@ alias_cols <- intersect(alias_cols, names(world))
 rows <- lapply(seq_len(nrow(world)), function(i) {
   r <- world[i, ]
   code <- r$adm0_a3
+  name <- if (code %in% names(display_names)) display_names[[code]] else r$admin
   vals <- c(
     unlist(r[alias_cols], use.names = FALSE),
     code_or_empty(r$iso_a2_eh), code_or_empty(r$iso_a3_eh), code,
@@ -74,10 +102,10 @@ rows <- lapply(seq_len(nrow(world)), function(i) {
   vals <- unique(trimws(vals[!is.na(vals) & nzchar(trimws(vals))]))
   data.frame(
     code = code,
-    name = r$admin,
+    name = name,
     iso2 = code_or_empty(r$iso_a2_eh),
     iso3 = code_or_empty(r$iso_a3_eh),
-    aliases = paste(setdiff(vals, r$admin), collapse = "|"),
+    aliases = paste(setdiff(vals, name), collapse = "|"),
     stringsAsFactors = FALSE
   )
 })

@@ -23,6 +23,7 @@ box::use(
   curl[nslookup],
   htmltools[HTML],
   htmlwidgets[onRender, saveWidget],
+  httr[timeout, with_config],
   leaflet,
   leaflet.extras[addFullscreenControl, addHeatmap],
   leaflet.minicharts[addMinicharts, clearMinicharts],
@@ -38,7 +39,7 @@ box::use(
   shinyjs[runjs, toggle, toggleClass, toggleState, useShinyjs],
   stats[aggregate],
   tidygeocoder[geocode],
-  utils[read.csv, tail, write.csv],
+  utils[head, tail],
   waiter[Waiter, spin_flower, useWaiter],
 )
 box::use(
@@ -65,6 +66,7 @@ box::use(
     ],
   app / logic / functions[render_info],
   app / logic / geo[country_code, parse_coordinates],
+  app / logic / geocode_cache[clear_geocodes, read_geocodes, write_geocodes],
   app /
     logic /
     mapping_engine[
@@ -76,7 +78,6 @@ box::use(
       rebalance_layers,
       set_layer_granularity,
     ],
-  app / logic / paths[app_local_share_path],
   app / logic / viz_helpers,
   app /
     logic /
@@ -241,6 +242,10 @@ map_control_defaults <- function() {
   )
 }
 
+# Margin, in pixels, kept between the outermost isolates and the map's edge
+# when the view is fitted to them, so edge markers and clusters stay whole.
+FIT_PADDING_PX <- 50
+
 # Natural Earth country polygons are fetched once and cached for the choropleth.
 .world_env <- new.env(parent = emptyenv())
 # sf and rnaturalearth are imported here rather than at the top so they load on
@@ -277,15 +282,35 @@ empty_geocode_status <- function() {
     geocode_error = "",
     # Coordinates that could not be read, so the row fell back to geocoding.
     n_bad_coords = 0L,
-    bad_coords_preview = "",
     # Country spellings outside the vocabulary (no choropleth region).
     n_unknown_country = 0L,
-    unknown_country_preview = "",
     # Coordinates off their isolate's stated country (see country_fit()).
     n_outside = 0L,
-    outside_preview = "",
     n_swapped = 0L,
-    swapped_preview = ""
+    # Isolates placed at city level because their postcode was not found.
+    n_postcode_fallback = 0L,
+    # One row per affected isolate and problem, behind the advisories' tooltips
+    # and the full list in the "Show all" dialog (see geo_problem_table()).
+    problems = geo_problems()
+  )
+}
+
+# Kinds of geographic data note, in the order the "Show all" table sorts them.
+# Unmapped isolates have no advisory line of their own (the headline counts
+# them) but are listed in the table too.
+GEO_PROBLEM_KINDS <- c(
+  "not_found", "postcode_fallback", "unknown_country", "bad_coords", "swapped", "outside"
+)
+
+# Problem rows for one kind: the isolate, the field and the value as entered.
+geo_problems <- function(kind = character(0), isolate = character(0),
+                         field = character(0), value = character(0)) {
+  data.frame(
+    kind = rep(kind, length.out = length(isolate)),
+    isolate = as.character(isolate),
+    field = rep(field, length.out = length(isolate)),
+    value = as.character(value),
+    stringsAsFactors = FALSE
   )
 }
 
@@ -293,6 +318,11 @@ empty_geocode_status <- function() {
 # still count as inside it: coastal and island sites routinely fall just off a
 # generalised coastline.
 COUNTRY_TOLERANCE_M <- 25000
+
+# Longest a single geocoding request may take, in seconds. tidygeocoder sets no
+# timeout of its own on single lookups, so a stalled connection would otherwise
+# hold the (blocking) Generate indefinitely.
+GEOCODE_TIMEOUT_S <- 15
 
 # Up to this many failed place strings are named in the sidebar feedback;
 # beyond that it just adds a "+N more" tail rather than growing unbounded.
@@ -318,64 +348,132 @@ format_failed_preview <- function(failed_places) {
 
 # Advisory lines for the sidebar status: data problems a Generate found that
 # do not stop the map but make it less true than it looks. Each names what was
-# affected in its tooltip and how to fix it. NULL when there is nothing to say.
-geo_advisories <- function(s) {
-  line <- function(n, text, tip) {
-    if (!isTRUE(n > 0)) {
+# affected in its tooltip and how to fix it, and `details_id` adds a link to
+# the full list. NULL when there is nothing to say.
+geo_advisories <- function(s, details_id = NULL) {
+  probs <- s$problems
+  if (is.null(probs) || !nrow(probs)) {
+    return(NULL)
+  }
+  # One line per kind; its tooltip explains the problem and names the first
+  # few isolates with the value as entered, one per line. `info` lines report
+  # something worth knowing that is not a data error.
+  line <- function(kind, text, tip, info = FALSE) {
+    rows <- probs[probs$kind == kind, , drop = FALSE]
+    if (!nrow(rows)) {
       return(NULL)
     }
+    shown <- head(rows, max_failed_preview)
+    items <- lapply(seq_len(nrow(shown)), function(i) {
+      shiny$div(
+        class = "geo-tip-item",
+        shiny$tags$b(shown$isolate[i]),
+        shiny$tags$br(),
+        if (nzchar(shown$value[i])) shown$value[i] else "(empty)"
+      )
+    })
+    more <- nrow(rows) - nrow(shown)
     bslib$tooltip(
       shiny$div(
-        class = "small text-warning mb-1",
-        shiny$icon("triangle-exclamation"),
-        sprintf(text, n)
+        class = if (info) "small text-muted mb-1" else "small text-warning mb-1",
+        shiny$icon(if (info) "circle-info" else "triangle-exclamation"),
+        sprintf(text, nrow(rows))
       ),
-      tip
+      shiny$div(tip),
+      items,
+      if (more > 0) shiny$div(class = "geo-tip-more", sprintf("and %d more", more)),
+      options = list(customClass = "geo-advisory-tip")
     )
   }
-  lines <- list(
+  lines <- Filter(Negate(is.null), list(
     line(
-      s$n_unknown_country,
+      "postcode_fallback",
+      " %d isolate(s) placed at city level",
+      paste(
+        "The geocoder did not know their postcode, so they were placed by",
+        "city, state and country instead."
+      ),
+      info = TRUE
+    ),
+    line(
+      "unknown_country",
       " %d isolate(s) name an unrecognised country",
       paste(
         "Not counted on the choropleth. Pick the country from the list in the",
-        "Database browser or use its ISO code:",
-        s$unknown_country_preview
+        "Database browser or use its ISO code."
       )
     ),
     line(
-      s$n_bad_coords,
+      "bad_coords",
       " %d coordinate value(s) unreadable",
       paste(
         "Placed by their place names instead. Write latitude, longitude,",
-        "e.g. 52.52, 13.40:",
-        s$bad_coords_preview
+        "e.g. 52.52, 13.40."
       )
     ),
     line(
-      s$n_swapped,
+      "swapped",
       " %d isolate(s) with latitude and longitude swapped",
       paste(
         "Their coordinates only fall inside the stated country with the two",
-        "values exchanged. Shown as entered:",
-        s$swapped_preview
+        "values exchanged."
       )
     ),
     line(
-      s$n_outside,
+      "outside",
       " %d isolate(s) placed outside their country",
-      paste(
-        sprintf(
-          "Their coordinates lie more than %g km outside the stated country.",
-          COUNTRY_TOLERANCE_M / 1000
-        ),
-        "Shown as entered:",
-        s$outside_preview
+      sprintf(
+        "Their coordinates lie more than %g km outside the stated country.",
+        COUNTRY_TOLERANCE_M / 1000
       )
     )
+  ))
+  n_isolates <- length(unique(probs$isolate))
+  shiny$tagList(
+    lines,
+    if (!is.null(details_id)) {
+      shiny$actionLink(
+        details_id,
+        sprintf("Show all %d affected isolate%s", n_isolates, if (n_isolates == 1) "" else "s"),
+        class = "small geo-problems-link"
+      )
+    }
   )
-  lines <- Filter(Negate(is.null), lines)
-  if (length(lines)) shiny$tagList(lines)
+}
+
+# Short label of each problem kind, for the "Show all" dialog's table.
+GEO_PROBLEM_LABELS <- c(
+  not_found = "Place not found, not mapped",
+  postcode_fallback = "Postcode not found, placed at city level",
+  unknown_country = "Unrecognised country",
+  bad_coords = "Unreadable coordinates",
+  swapped = "Latitude and longitude swapped",
+  outside = "Outside the stated country"
+)
+
+# Every affected isolate as a table, sorted by problem kind then isolate.
+geo_problem_table <- function(probs) {
+  probs <- probs[order(match(probs$kind, GEO_PROBLEM_KINDS), probs$isolate), , drop = FALSE]
+  shiny$div(
+    class = "geo-problem-table",
+    shiny$tags$table(
+      class = "table table-sm table-striped",
+      shiny$tags$thead(shiny$tags$tr(
+        shiny$tags$th("Isolate"),
+        shiny$tags$th("Problem"),
+        shiny$tags$th("Field"),
+        shiny$tags$th("Value as entered")
+      )),
+      shiny$tags$tbody(lapply(seq_len(nrow(probs)), function(i) {
+        shiny$tags$tr(
+          shiny$tags$td(probs$isolate[i]),
+          shiny$tags$td(GEO_PROBLEM_LABELS[[probs$kind[i]]]),
+          shiny$tags$td(probs$field[i]),
+          shiny$tags$td(probs$value[i])
+        )
+      }))
+    )
+  )
 }
 
 # Join postcode/city/state/country (most specific first) into one place string
@@ -464,71 +562,16 @@ country_fit <- function(lat, lon, code) {
   )
 }
 
-# --- persistent geocode cache -----------------------------------------------
+# --- geocode cache -----------------------------------------------------------
 
-# Cross-session cache of resolved place → coordinates, stored as a CSV alongside
-# the app's other local state (app_local_share_path, next to state.json /
-# event_list.rds). A place string's coordinates never change, so entries never
-# expire. Only SUCCESSFUL lookups are stored — a place that failed to resolve
-# (often a transient network issue) is retried on the next Generate rather than
-# remembered as unmappable. Reusing resolved coordinates like this is also what
-# the OSM/Nominatim usage policy asks for (cache results; don't re-query them).
-geocode_cache_path <- function() {
-  file.path(app_local_share_path, "geocode_cache.csv")
-}
-
-# Load the cache as a data.frame (place, latitude, longitude), or an empty frame
-# with those columns when there is no cache file yet. Defensive against a
-# missing/older/corrupt file: anything unreadable or lacking the expected
-# columns, and any row without usable coordinates, is treated as "not cached".
-read_geocode_cache <- function(path = geocode_cache_path()) {
-  empty <- data.frame(
-    place = character(0),
-    latitude = numeric(0),
-    longitude = numeric(0),
-    stringsAsFactors = FALSE
-  )
-  if (!file.exists(path)) {
-    return(empty)
-  }
-  cached <- tryCatch(
-    read.csv(
-      path,
-      stringsAsFactors = FALSE,
-      colClasses = c(place = "character")
-    ),
-    error = function(e) empty
-  )
-  if (!all(c("place", "latitude", "longitude") %in% names(cached))) {
-    return(empty)
-  }
-  cached <- cached[, c("place", "latitude", "longitude"), drop = FALSE]
-  cached$latitude <- suppressWarnings(as.numeric(cached$latitude))
-  cached$longitude <- suppressWarnings(as.numeric(cached$longitude))
-  cached[
-    !is.na(cached$place) &
-      nzchar(cached$place) &
-      !is.na(cached$latitude) &
-      !is.na(cached$longitude),
-    ,
-    drop = FALSE
-  ]
-}
-
-# Persist the cache, overwriting the file. Best-effort: a write failure (e.g. a
-# read-only home dir) must never break map generation — the coordinates for
-# this session are already in hand, only the cross-session speedup is lost — so
-# it is wrapped and silently ignored.
-write_geocode_cache <- function(df, path = geocode_cache_path()) {
-  df <- df[!duplicated(df$place), , drop = FALSE]
-  tryCatch(
-    write.csv(df, path, row.names = FALSE),
-    error = function(e) NULL
-  )
-}
+# Resolved places are kept in the loaded database (app/logic/geocode_cache.R),
+# so they travel with it. A place string's coordinates do not change, so entries
+# never expire. Only SUCCESSFUL lookups are stored: a place that failed (often a
+# passing network issue) is retried on the next Generate. Reusing resolved
+# coordinates is also what the OSM/Nominatim usage policy asks for.
 
 # Resolve a set of distinct place strings to coordinates, cache-first: places
-# already in the persistent cache are served from it, and only the rest are sent
+# already in the database's cache are served from it, and only the rest are sent
 # to Nominatim. Newly resolved places are appended to the cache. Returns a list
 # with `located` (one row per distinct place — place, latitude, longitude, with
 # NA coords where a lookup failed), `n_cached` (distinct places served from the
@@ -536,10 +579,9 @@ write_geocode_cache <- function(df, path = geocode_cache_path()) {
 # `error` (see empty_geocode_status()), for the geocode-status feedback. A
 # geocoder failure leaves its places unresolved instead of aborting, so
 # isolates with explicit coordinates and cached places still reach the map.
-geocode_places_cached <- function(
-  place_vec,
-  cache_path = geocode_cache_path()
-) {
+# `progress`, when given, is called before each lookup with the number done,
+# the number to do and the seconds spent so far.
+geocode_places_cached <- function(place_vec, db_path = NULL, progress = NULL) {
   places <- unique(place_vec[!is.na(place_vec) & nzchar(place_vec)])
   # rep() rather than a scalar NA: with no places (every isolate carries its
   # own coordinates) a scalar makes data.frame() fail on 0 vs 1 rows.
@@ -559,7 +601,7 @@ geocode_places_cached <- function(
     ))
   }
 
-  cache <- read_geocode_cache(cache_path)
+  cache <- read_geocodes(db_path)
   hit <- match(located$place, cache$place)
   located$latitude <- cache$latitude[hit]
   located$longitude <- cache$longitude[hit]
@@ -570,29 +612,54 @@ geocode_places_cached <- function(
   offline <- FALSE
   error <- ""
   if (length(todo)) {
-    fresh <- tryCatch(
-      geocode(
-        data.frame(place = todo, stringsAsFactors = FALSE),
-        place,
-        method = "osm",
-        lat = "latitude",
-        long = "longitude"
-      ),
-      error = function(e) {
-        error <<- conditionMessage(e)
-        data.frame(
-          place = todo,
-          latitude = NA_real_,
-          longitude = NA_real_,
-          stringsAsFactors = FALSE
-        )
-      }
+    fresh <- data.frame(
+      place = todo,
+      latitude = rep(NA_real_, length(todo)),
+      longitude = rep(NA_real_, length(todo)),
+      stringsAsFactors = FALSE
     )
-    # Every lookup failing at once is usually the network, not the data. The
-    # service's host name not resolving confirms it, so the sidebar can say
-    # "offline" instead of blaming each place string.
-    if (all(is.na(fresh$latitude))) {
-      offline <- is.null(nslookup("nominatim.openstreetmap.org", error = FALSE))
+    # One place per request, so a slow or stalled one costs at most
+    # GEOCODE_TIMEOUT_S and progress can be reported between them. tidygeocoder
+    # keeps Nominatim's one-request-per-second limit across calls.
+    started <- Sys.time()
+    checked_network <- FALSE
+    for (i in seq_along(todo)) {
+      if (is.function(progress)) {
+        progress(i - 1L, length(todo), as.numeric(difftime(Sys.time(), started, units = "secs")))
+      }
+      res <- tryCatch(
+        with_config(
+          timeout(GEOCODE_TIMEOUT_S),
+          geocode(
+            fresh[i, "place", drop = FALSE],
+            place,
+            method = "osm",
+            lat = "latitude",
+            long = "longitude",
+            quiet = TRUE,
+            progress_bar = FALSE
+          )
+        ),
+        error = function(e) {
+          error <<- conditionMessage(e)
+          NULL
+        }
+      )
+      if (!is.null(res) && nrow(res)) {
+        fresh$latitude[i] <- res$latitude[1]
+        fresh$longitude[i] <- res$longitude[1]
+      }
+      # A failure is usually the data, but the first one checks whether the
+      # service is reachable at all: offline, the remaining lookups would each
+      # only wait for their timeout, so they are skipped and the sidebar says
+      # "offline" instead of blaming every place string.
+      if (is.na(fresh$latitude[i]) && !checked_network) {
+        checked_network <- TRUE
+        offline <- is.null(nslookup("nominatim.openstreetmap.org", error = FALSE))
+        if (offline) {
+          break
+        }
+      }
     }
     fill <- match(located$place, fresh$place)
     got <- !is.na(fill)
@@ -603,13 +670,7 @@ geocode_places_cached <- function(
     ok <- !is.na(fresh$latitude) & !is.na(fresh$longitude)
     n_new <- sum(ok)
     if (n_new > 0) {
-      write_geocode_cache(
-        rbind(
-          cache,
-          fresh[ok, c("place", "latitude", "longitude"), drop = FALSE]
-        ),
-        cache_path
-      )
+      write_geocodes(db_path, fresh[ok, c("place", "latitude", "longitude"), drop = FALSE])
     }
   }
   list(
@@ -626,7 +687,7 @@ geocode_places_cached <- function(
 # Generate. This is what drives the wait, so it (not the full place count) is
 # what the waiter countdown is seeded from. Computed up front, cheaply, before
 # the blocking call.
-geocode_pending_count <- function(meta, cache_path = geocode_cache_path()) {
+geocode_pending_count <- function(meta, db_path = NULL) {
   if (is.null(meta) || !nrow(meta)) {
     return(0L)
   }
@@ -642,8 +703,7 @@ geocode_pending_count <- function(meta, cache_path = geocode_cache_path()) {
   has_explicit <- !is.na(explicit$latitude) & !is.na(explicit$longitude)
   places <- unique(build_place_strings(meta)[!has_explicit])
   places <- places[nzchar(places)]
-  cache <- read_geocode_cache(cache_path)
-  length(setdiff(places, cache$place))
+  length(setdiff(places, read_geocodes(db_path)$place))
 }
 
 # Format a whole-second duration as M:SS, for the geocoding countdown. The
@@ -655,35 +715,37 @@ format_mmss <- function(secs) {
   sprintf("%d:%02d", secs %/% 60L, secs %% 60L)
 }
 
+# Seconds one Nominatim lookup is assumed to take before any has been timed:
+# the service allows one request per second and answers in about 0.5-2 s.
+GEOCODE_SECONDS_PER_PLACE <- 1.5
+
 # Waiter contents shown while geocoding: the flower spinner, how many locations
-# are being resolved, and a live "Remaining time M:SS / M:SS" countdown. The
-# geocode call blocks the R session, so the tick can't come from the server —
-# the browser counts the estimate down on its own; the `.viz-countdown` element
-# (carrying the total, in seconds, in data-total) is driven by the observer
-# script installed once in ui(). `n_places` is the number of UNCACHED places
-# actually being fetched (see geocode_pending_count()); when it's zero — every
-# location already cached — there's nothing to wait on, so the countdown is
-# dropped and the message just reflects the quick cache read + map build.
-geocode_waiter_html <- function(n_places) {
+# are being resolved, and a "Remaining time M:SS / M:SS" countdown (time left /
+# expected total). The server re-sends this before every lookup with an
+# estimate from the measured pace (`elapsed` seconds for `done` places); in
+# between, the browser counts it down on its own (the `.viz-countdown` element,
+# driven by the observer script installed once in ui()), into negative time if
+# a lookup runs long. `n_places` is the number of UNCACHED places being fetched
+# (see geocode_pending_count()); with none there is nothing to wait on, so the
+# countdown is dropped and the message just covers the map build.
+geocode_waiter_html <- function(n_places, done = 0L, elapsed = 0, label = "Geocoding") {
   total <- max(as.integer(n_places), 0L)
   message <- if (total == 0L) {
     "Preparing map…"
+  } else if (done == 0L) {
+    sprintf("%s %d location%s…", label, total, if (total == 1L) "" else "s")
   } else {
-    sprintf(
-      "Geocoding %d location%s…",
-      total,
-      if (total == 1L) "" else "s"
-    )
+    sprintf("%s location %d of %d…", label, done + 1L, total)
   }
+  per_place <- if (done > 0L) elapsed / done else GEOCODE_SECONDS_PER_PLACE
+  left <- round(per_place * (total - done))
+  overall <- round(elapsed + left)
   countdown <- if (total > 0L) {
     shiny$div(
       class = "viz-waiter-estimate viz-countdown",
-      `data-total` = total,
-      sprintf(
-        "Remaining time %s / %s",
-        format_mmss(total),
-        format_mmss(total)
-      )
+      `data-total` = left,
+      `data-overall` = overall,
+      sprintf("Remaining time %s / %s", format_mmss(left), format_mmss(overall))
     )
   }
   shiny$tagList(
@@ -708,8 +770,10 @@ geocode_waiter_html <- function(n_places) {
 # mappable), `regions` (every isolate naming a recognised country, with its
 # country_code, whether or not it got a point: the choropleth counts these, so
 # a failed or offline geocode never drops an isolate from its country) and
-# `status` (see empty_geocode_status()'s fields).
-build_map_coords <- function(meta) {
+# `status` (see empty_geocode_status()'s fields). `db_path` is the database
+# whose geocode cache is read and extended; NULL looks everything up.
+# `progress(label, done, total, seconds)` is called before each fresh lookup.
+build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
   status <- empty_geocode_status()
   if (is.null(meta) || !nrow(meta)) {
     return(list(coords = NULL, regions = NULL, status = status))
@@ -730,9 +794,6 @@ build_map_coords <- function(meta) {
   df$country_code <- country_code(country)
   unknown <- !is.na(country) & nzchar(country) & is.na(df$country_code)
   status$n_unknown_country <- sum(unknown)
-  status$unknown_country_preview <- format_failed_preview(unique(country[
-    unknown
-  ]))
   regions <- df[!is.na(df$country_code), , drop = FALSE]
   if (!nrow(regions)) {
     regions <- NULL
@@ -748,7 +809,11 @@ build_map_coords <- function(meta) {
   df$longitude <- explicit$longitude
   bad <- nzchar(explicit$problem)
   status$n_bad_coords <- sum(bad)
-  status$bad_coords_preview <- format_failed_preview(unique(raw_coords[bad]))
+  status$problems <- rbind(
+    geo_problems("unknown_country", df$isolate[unknown], "Country", country[unknown]),
+    geo_problems("bad_coords", df$isolate[bad], "Coordinates", raw_coords[bad])
+  )
+  df$raw_coords <- raw_coords
 
   # Mappable = has explicit coordinates, or has a place string to geocode.
   has_explicit <- !is.na(df$latitude) & !is.na(df$longitude)
@@ -764,12 +829,25 @@ build_map_coords <- function(meta) {
   fit <- country_fit(df$latitude, df$longitude, df$country_code)
   status$n_outside <- sum(fit$outside)
   status$n_swapped <- sum(fit$swapped)
-  status$outside_preview <- format_failed_preview(df$isolate[fit$outside])
-  status$swapped_preview <- format_failed_preview(df$isolate[fit$swapped])
+  status$problems <- rbind(
+    status$problems,
+    geo_problems("swapped", df$isolate[fit$swapped], "Coordinates", df$raw_coords[fit$swapped]),
+    geo_problems(
+      "outside",
+      df$isolate[fit$outside],
+      "Coordinates",
+      sprintf("%s (%s)", df$raw_coords[fit$outside], country[keep][fit$outside])
+    )
+  )
+  df$raw_coords <- NULL
 
   # Geocode only the rows lacking explicit coordinates (and carrying a place).
   need <- !has_explicit & nzchar(df$place)
-  geo <- geocode_places_cached(df$place[need])
+  geo <- geocode_places_cached(
+    df$place[need],
+    db_path,
+    if (is.function(progress)) function(...) progress("Geocoding", ...)
+  )
   hit <- match(df$place, geo$located$place)
   fill <- need & !is.na(hit)
   df$latitude[fill] <- geo$located$latitude[hit[fill]]
@@ -783,11 +861,25 @@ build_map_coords <- function(meta) {
   # failed with one are retried without it, which places them at city level.
   retry <- need & is.na(df$latitude) & nzchar(fallback) & fallback != df$place
   if (any(retry) && !offline) {
-    geo2 <- geocode_places_cached(fallback[retry])
+    geo2 <- geocode_places_cached(
+      fallback[retry],
+      db_path,
+      if (is.function(progress)) function(...) progress("Retrying without postcode", ...)
+    )
     hit2 <- match(fallback, geo2$located$place)
     got <- retry & !is.na(hit2) & !is.na(geo2$located$latitude[hit2])
     df$latitude[got] <- geo2$located$latitude[hit2[got]]
     df$longitude[got] <- geo2$located$longitude[hit2[got]]
+    status$n_postcode_fallback <- sum(got)
+    status$problems <- rbind(
+      status$problems,
+      geo_problems(
+        "postcode_fallback",
+        df$isolate[got],
+        "Postal code",
+        sprintf("%s, placed at %s", df$geo_loc_name_postal_code[got], fallback[got])
+      )
+    )
     df$place[got] <- fallback[got]
     n_cached <- n_cached + geo2$n_cached
     n_new <- n_new + geo2$n_new
@@ -799,6 +891,10 @@ build_map_coords <- function(meta) {
 
   mapped <- !is.na(df$longitude) & !is.na(df$latitude)
   failed_places <- unique(df$place[need & !mapped])
+  status$problems <- rbind(
+    status$problems,
+    geo_problems("not_found", df$isolate[need & !mapped], "Place", df$place[need & !mapped])
+  )
   status$n_mapped <- sum(mapped)
   # Distinct places actually resolved to coordinates (each backs one or more
   # mapped isolates), split into those served from the persistent cache vs.
@@ -1688,6 +1784,7 @@ build_map <- function(
 # one-isolate map frames correctly the first time.
 single_point_zoom <- 6
 frame_coords <- function(m, coords, fly = FALSE) {
+  fit <- list(padding = c(FIT_PADDING_PX, FIT_PADDING_PX))
   lng_rng <- range(coords$longitude)
   lat_rng <- range(coords$latitude)
   if (lng_rng[1] == lng_rng[2] && lat_rng[1] == lat_rng[2]) {
@@ -1707,9 +1804,9 @@ frame_coords <- function(m, coords, fly = FALSE) {
       )
     }
   } else if (fly) {
-    leaflet$flyToBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
+    leaflet$flyToBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2], options = fit)
   } else {
-    leaflet$fitBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2])
+    leaflet$fitBounds(m, lng_rng[1], lat_rng[1], lng_rng[2], lat_rng[2], options = fit)
   }
 }
 
@@ -2237,8 +2334,8 @@ map_controls <- function(ns) {
           )
         ),
         # allow-free-text: a legend title is display text, so it takes spaces
-        # and punctuation — it opts out of the identifier charset restriction in
-        # app/js/index.js.
+        # and punctuation, and opts out of the identifier charset restriction
+        # that index.js applies to text inputs.
         shiny$div(
           class = "allow-free-text",
           shiny$textInput(
@@ -2480,17 +2577,20 @@ map_controls <- function(ns) {
         "var vis=(tabsByMode[m]||allTabs).slice();",
         "allTabs.forEach(function(v){",
         "var link=wrap.querySelector('.nav-link[data-value='+JSON.stringify(v)+']');",
-        "if(link){var li=link.closest('.nav-item');if(li){li.style.display=(vis.indexOf(v)>=0)?'':'none';}}",
+        "if(link){var li=link.closest('.nav-item');",
+        "if(li){li.style.display=(vis.indexOf(v)>=0)?'':'none';}}",
         "});",
         "var active=wrap.querySelector('.nav-link.active');",
         "if(active&&vis.indexOf(active.getAttribute('data-value'))<0){",
-        "var f=wrap.querySelector('.nav-link[data-value='+JSON.stringify(vis[0])+']');if(f){f.click();}",
+        "var f=wrap.querySelector('.nav-link[data-value='+JSON.stringify(vis[0])+']');",
+        "if(f){f.click();}",
         "}",
         "var tiles=document.getElementById(tilesWrapId);",
         "if(tiles)tiles.style.display=(m==='Choropleth')?'none':'';",
         "}",
         "$(document).on('change',modeSel,apply);",
-        "var n=0,t=setInterval(function(){n++;if(document.querySelector(modeSel)){apply();}if(n>40){clearInterval(t);}},300);",
+        "var n=0,t=setInterval(function(){n++;",
+        "if(document.querySelector(modeSel)){apply();}if(n>40){clearInterval(t);}},300);",
         "})();"
       )
     })))
@@ -2568,29 +2668,33 @@ ui <- function(id, generate_id, options_ui = NULL) {
     # Geocoding blocks the R session, so the tick can't be pushed from the
     # server; instead this runs once on page load and watches for the
     # `.viz-countdown` element the waiter injects (see geocode_waiter_html()),
-    # counting its data-total seconds down to zero in the browser. It stops at
-    # 0:00 if the estimate runs out before geocoding actually returns (the
-    # waiter is torn down the moment it does). One observer covers every show.
+    # counting its data-total seconds down in the browser. When geocoding takes
+    # longer than estimated it keeps counting into negative time (-0:05), and
+    # stops once the waiter, and with it the element, is torn down. One
+    # observer covers every show.
     shiny$tags$script(
       shiny$HTML(
         "(function(){
            function fmt(s){
-             s=Math.max(0,Math.round(s));
+             s=Math.round(s);
+             var sign=s<0?'-':'';
+             s=Math.abs(s);
              var m=Math.floor(s/60),sec=s%60;
-             return m+':'+(sec<10?'0':'')+sec;
+             return sign+m+':'+(sec<10?'0':'')+sec;
            }
            function start(el){
              if(el._countdownStarted)return;
              el._countdownStarted=true;
              var total=parseInt(el.getAttribute('data-total'),10)||0;
+             var overall=parseInt(el.getAttribute('data-overall'),10)||total;
              var remaining=total;
              function render(){
-               el.textContent='Remaining time '+fmt(remaining)+' / '+fmt(total);
+               el.textContent='Remaining time '+fmt(remaining)+' / '+fmt(overall);
              }
              render();
              var timer=setInterval(function(){
+               if(!document.body.contains(el)){clearInterval(timer);return;}
                remaining-=1;
-               if(remaining<=0){remaining=0;render();clearInterval(timer);return;}
                render();
              },1000);
            }
@@ -2683,20 +2787,33 @@ server <- function(
     # one advisory line per data problem found on the way (see geo_advisories()).
     # NULL (the "Not available" placeholder) until a Generate has produced a
     # status.
+    # Bumped when the geocode cache is cleared, so the status re-reads its size.
+    cache_rev <- shiny$reactiveVal(0L)
+
     output$map_geocode_status_ui <- shiny$renderUI({
+      cache_rev()
       s <- map_geocode_status()
-      advisories <- if (!is.null(s)) geo_advisories(s)
+      n_cache <- nrow(read_geocodes(db_path()))
+      clear_link <- if (n_cache > 0) {
+        shiny$actionLink(
+          session$ns("map_clear_cache"),
+          sprintf("Clear geocode cache (%d place%s)", n_cache, if (n_cache == 1) "" else "s"),
+          class = "small geo-cache-link"
+        )
+      }
+      advisories <- if (!is.null(s)) geo_advisories(s, session$ns("map_geo_problems"))
       if (is.null(s) || s$n_isolates == 0) {
         return(shiny$tagList(
           shiny$div(class = "text-muted small", "No isolates mapped"),
           shiny$div(class = "text-muted small mb-2", "No location geocoded"),
-          advisories
+          advisories,
+          clear_link
         ))
       }
       # Distinct places resolved (each backs one or more of the mapped isolates)
       # — shown under the isolate summary so it's clear how many geocode lookups
       # the mapped isolates collapsed to, plus how many of those came from the
-      # persistent cross-session cache vs. were freshly fetched this Generate
+      # database's geocode cache vs. were freshly fetched this Generate
       # (see build_map_coords()'s status / geocode_places_cached()). The cache
       # breakdown is only appended when there's actually something cached to
       # report, so a first-ever run stays a plain count.
@@ -2748,7 +2865,67 @@ server <- function(
           paste(why, s$failed_preview)
         )
       }
-      shiny$tagList(headline, locations_line, advisories)
+      shiny$tagList(headline, locations_line, advisories, clear_link)
+    })
+
+    # Ask before clearing the geocode cache: refilling it costs about a second
+    # per place and needs an internet connection.
+    shiny$observeEvent(input$map_clear_cache, {
+      n_cache <- nrow(read_geocodes(db_path()))
+      shiny$showModal(shiny$modalDialog(
+        title = "Clear geocode cache?",
+        easyClose = TRUE,
+        shiny$p(sprintf(
+          paste(
+            "This database keeps the coordinates of %d place%s looked up for",
+            "its isolates. Clearing them makes the next",
+            "Generate look each place up again, which needs an internet",
+            "connection and takes about a second per place. Use this when a",
+            "place was put in the wrong spot. The current map does not change."
+          ),
+          n_cache,
+          if (n_cache == 1) "" else "s"
+        )),
+        footer = shiny$tagList(
+          shiny$modalButton("Cancel"),
+          shiny$actionButton(
+            session$ns("map_clear_cache_confirm"),
+            "Clear cache",
+            class = "btn-danger"
+          )
+        )
+      ))
+    })
+
+    # Delete the cache once confirmed and refresh the count shown.
+    shiny$observeEvent(input$map_clear_cache_confirm, {
+      ok <- clear_geocodes(db_path())
+      shiny$removeModal()
+      cache_rev(cache_rev() + 1L)
+      shiny$showNotification(
+        if (ok) "Geocode cache cleared." else "The geocode cache could not be deleted.",
+        type = if (ok) "message" else "error"
+      )
+    })
+
+    # Every isolate behind the advisories, for when there are more than the
+    # tooltips name.
+    shiny$observeEvent(input$map_geo_problems, {
+      probs <- map_geocode_status()$problems
+      shiny$req(!is.null(probs), nrow(probs) > 0)
+      shiny$showModal(shiny$div(
+        class = "modal-wide",
+        shiny$modalDialog(
+          title = "Geographic data to check",
+          easyClose = TRUE,
+          shiny$p(
+            class = "small text-muted",
+            "Correct these in the Database browser. Values are shown as entered."
+          ),
+          geo_problem_table(probs),
+          footer = shiny$modalButton("Close")
+        )
+      ))
     })
 
     # --- Time animation -------------------------------------------------------
@@ -3156,8 +3333,8 @@ server <- function(
     # new data, and held TRUE across the several re-renders one Generate can
     # trigger — the generate observer also reprograms the date / interval / heat
     # controls, each of which invalidates the debounced map_opts() ~250ms later
-    # and fires a second render pass. It's cleared only once the client reports
-    # the settled view back (see the map_center observer below). Tracking a mere
+    # and fires a second render pass. It's cleared only once the user moves the
+    # map themselves (see the map_user_view observer below). Tracking a mere
     # "did the coords change" flag inside the render instead raced that second
     # pass: the coords were already recorded, so the pass fell back to
     # setView(current zoom/center) — but Leaflet reports a freshly fitted view
@@ -3195,30 +3372,39 @@ server <- function(
         regions = map_regions()
       )
 
-      # Refit to the data on a fresh Generate; otherwise keep the user's current
-      # view (zoom/center inputs are populated by Leaflet after interaction).
+      # Fit every mapped isolate after a Generate, and keep doing so on each
+      # re-render until the user moves the map; otherwise keep their view
+      # (zoom/center inputs are populated by Leaflet). Framed on all isolates
+      # rather than the date window, so an animation does not jump around.
       if (has_data && (refit || is.null(z) || is.null(ctr))) {
-        m <- frame_coords(m, coords)
+        m <- frame_coords(m, if (!is.null(base) && nrow(base)) base else coords)
       } else if (!is.null(z) && !is.null(ctr)) {
         m <- leaflet$setView(m, lng = ctr$lng, lat = ctr$lat, zoom = z)
       } else {
         m <- leaflet$setView(m, lng = 10, lat = 50, zoom = 4)
       }
-      m
+      # Reports the user's own pan, zoom or click on the map (not programmatic
+      # moves), which ends the refitting above. Hooked once per output element.
+      onRender(
+        m,
+        "function(el) {
+           if (el._userViewHooked) return;
+           el._userViewHooked = true;
+           var id = el.id + '_user_view';
+           ['mousedown', 'wheel', 'touchstart', 'keydown', 'dblclick'].forEach(function(ev) {
+             el.addEventListener(ev, function() {
+               if (window.Shiny) Shiny.setInputValue(id, Date.now());
+             }, {passive: true});
+           });
+         }"
+      )
     })
 
-    # The client reports a center after the fit lands (or after any user
-    # pan/zoom); either way the view is now settled, so stop forcing a refit.
-    # This keeps later restyles and animation frames on the user's view rather
-    # than re-framing every time, and — because it fires once the fitted view
-    # has actually been reported — leaves input$map_zoom/center consistent with
-    # a cleared flag, so the race described above resolves to the fitted frame
-    # whichever pass wins.
-    shiny$observeEvent(
-      input$map_center,
-      pending_fit(FALSE),
-      ignoreInit = TRUE
-    )
+    # Stop refitting once the user moves the map themselves. Clearing on the
+    # first reported center instead raced the several re-renders one Generate
+    # triggers: a pass could read a view reported before the fit landed and put
+    # the map back on the previous data's frame.
+    shiny$observeEvent(input$map_user_view, pending_fit(FALSE), ignoreInit = TRUE)
 
     # Charts-mode clustering: re-bin and redraw the minichart layer as the map
     # is zoomed, so overlapping charts merge and split like marker clusters. A
@@ -3705,10 +3891,15 @@ server <- function(
       # countdown (see geocode_waiter_html()).
       waiter$show()
       on.exit(waiter$hide(), add = TRUE)
-      waiter$update(html = geocode_waiter_html(geocode_pending_count(meta)))
+      waiter$update(html = geocode_waiter_html(geocode_pending_count(meta, db_path())))
 
+      # Re-sent before every lookup: the count done and an estimate from the
+      # pace measured so far, so a slow geocoder lengthens it as it goes.
+      progress <- function(label, done, total, elapsed) {
+        waiter$update(html = geocode_waiter_html(total, done, elapsed, label))
+      }
       built <- tryCatch(
-        build_map_coords(meta),
+        build_map_coords(meta, db_path(), progress),
         error = function(e) {
           shiny$showNotification(
             paste("Could not geocode isolate locations:", conditionMessage(e)),

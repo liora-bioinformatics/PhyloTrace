@@ -84,18 +84,21 @@ box::use(
       mst_threshold_default,
       save_mst_html,
     ],
-  app / logic / phylo[mst_from_distance],
+  app / logic / phylo[distance_summary, mst_from_distance],
   app /
     logic /
     viz_helpers[
       apply_controls,
       collect_input_snapshot,
       control_families,
+      count_label,
+      distance_issue_lines,
       field_select,
       granularity_select,
       on_confirmed_reset,
       reset_button_row,
       scale_select,
+      status_line,
       suitable_scale_categories,
       update_field_select,
       viz_color,
@@ -538,6 +541,48 @@ mst_controls <- function(ns, options_ui = NULL) {
         "kept."
       )
     )
+  )
+}
+
+#' MST Status for the Setup Sidebar
+#'
+#' The network's summary and any data problems, mounted by
+#' app/view/visualization_plot.R at the bottom of the plot tab's left sidebar.
+#' Rendered by this module's `output$mst_status_ui`.
+#'
+#' @param id The engine's namespaced id, the same one passed to `ui()`.
+#' @return A `uiOutput`.
+#' @export
+setup_ui <- function(id) {
+  shiny$uiOutput(shiny$NS(id, "mst_status_ui"), class = "map-geocode-status")
+}
+
+# The status lines for a drawn network: the distance matrix's problems first,
+# then how the isolates came out as nodes, the mean pairwise distance and how
+# many clusters the threshold finds. The cluster line counts what the threshold
+# finds, not what is painted, so it stays true with the regions switched off.
+mst_status <- function(fr, dist, threshold, na_handling) {
+  isolates <- sum(fr$counts)
+  n_clusters <- nrow(fr$cluster_table)
+  shiny$tagList(
+    distance_issue_lines(dist, na_handling),
+    status_line(sprintf(
+      "%s in %s",
+      count_label(isolates, "isolate"),
+      count_label(length(fr$counts), "node")
+    )),
+    if (!is.null(dist) && is.finite(dist$mean)) {
+      status_line(sprintf("Mean pairwise distance %s alleles", format(round(dist$mean, 1))))
+    },
+    if (is.finite(threshold %||% NA_real_)) {
+      status_line(
+        if (n_clusters == 0L) {
+          sprintf("No clusters at \u2264 %s alleles", format(threshold))
+        } else {
+          sprintf("%s at \u2264 %s alleles", count_label(n_clusters, "cluster"), format(threshold))
+        }
+      )
+    }
   )
 }
 
@@ -1191,6 +1236,10 @@ server <- function(
     # the guarded Generate observer below when MST is the active engine.
     mst_obj <- shiny$reactiveVal(NULL)
 
+    # What the last Generate's distance matrix looked like (see
+    # phylo$distance_summary()), for output$mst_status_ui.
+    distance_status <- shiny$reactiveVal(NULL)
+
     # Fit the controls the data can decide: the length transform (a scheme whose
     # distances span three orders of magnitude cannot be drawn proportionally),
     # the node and font sizes (which follow from the shortest edge), and whether
@@ -1277,15 +1326,18 @@ server <- function(
 
         populate_metadata_selects()
 
+        distance_status(NULL)
         graph <- tryCatch(
-          mst_from_distance(
-            dist_cache$get(
+          {
+            dist_mat <- dist_cache$get(
               db_path(),
               na_handling(),
               selected_isolates(),
               imported_sets()
             )
-          ),
+            distance_status(distance_summary(dist_mat, selected_isolates()))
+            mst_from_distance(dist_mat)
+          },
           error = function(e) {
             shiny$showNotification(
               paste("MST computation failed:", conditionMessage(e)),
@@ -1409,6 +1461,13 @@ server <- function(
           ""
         }
       )
+    })
+
+    # Status pinned to the bottom of the left sidebar (setup_ui()). Reads the
+    # frames, so it follows the cluster threshold and collapse threshold live.
+    output$mst_status_ui <- shiny$renderUI({
+      shiny$req(generated(), mst_obj())
+      mst_status(frames(), distance_status(), fitted$mst_cluster_threshold, na_handling())
     })
 
     # What the widget's *shell* is built from: the parts that live in the

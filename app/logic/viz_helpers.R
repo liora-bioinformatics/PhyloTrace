@@ -809,6 +809,97 @@ reset_button_row <- function(ns, auto_fit_tip = NULL) {
   )
 }
 
+#' "3 isolates" / "1 isolate"
+#'
+#' @param n Integer count.
+#' @param singular Noun for exactly one.
+#' @param plural Noun otherwise.
+#' @return A character string.
+#' @export
+count_label <- function(n, singular, plural = paste0(singular, "s")) {
+  sprintf("%d %s", as.integer(n), if (as.integer(n) == 1L) singular else plural)
+}
+
+#' One Line of an Engine's Setup-Sidebar Status
+#'
+#' The shared shape of the status pinned under a plot tab's left sidebar (the
+#' Map's geocoding summary, the Epi curve's dropped dates, and the lines the
+#' other engines add): a plain muted line for a fact about the plot, or an amber
+#' line with a warning icon for something the reader should check. Both carry an
+#' optional tooltip, whose list of isolates is cut to `max_items` so a long
+#' unbroken id list cannot outgrow the screen.
+#'
+#' @param text The line itself.
+#' @param tip Explanation shown on hover; NULL for none.
+#' @param items Isolate ids (or other names) listed in the tooltip.
+#' @param warn TRUE for the warning style.
+#' @param max_items Most `items` listed before "and N more".
+#' @return A `<div>`, wrapped in a tooltip when there is one.
+#' @export
+status_line <- function(text, tip = NULL, items = NULL, warn = FALSE, max_items = 5L) {
+  line <- shiny$div(
+    class = if (warn) "small text-warning mb-1" else "small text-muted mb-1",
+    if (warn) shiny$icon("triangle-exclamation"),
+    if (warn) paste0(" ", text) else text
+  )
+  if (is.null(tip)) {
+    return(line)
+  }
+  shown <- items[seq_len(min(length(items), max_items))]
+  more <- length(items) - length(shown)
+  tooltip(
+    line,
+    shiny$div(tip),
+    lapply(shown, function(item) shiny$div(class = "geo-tip-item", item)),
+    if (more > 0L) shiny$div(class = "geo-tip-more", sprintf("and %d more", more)),
+    options = list(customClass = "geo-advisory-tip")
+  )
+}
+
+#' Status Lines for the Problems a Distance Matrix Can Have
+#'
+#' The warnings the Tree and MST engines share, read off `phylo$distance_summary()`:
+#' selected isolates that have no allele profile and so are not drawn, and a
+#' matrix in which every distance is 0.
+#'
+#' @param d A `distance_summary()` result; NULL gives no lines.
+#' @param na_handling The missing-value policy the matrix was built under.
+#' @return A list of `status_line()`s, possibly empty.
+#' @export
+distance_issue_lines <- function(d, na_handling = "ignore_na") {
+  if (is.null(d)) {
+    return(list())
+  }
+  Filter(Negate(is.null), list(
+    if (length(d$missing)) {
+      status_line(
+        sprintf("%s left out: no allele profile", count_label(length(d$missing), "isolate")),
+        tip = paste(
+          "These selected isolates have no allele calls in the database, so",
+          "there are no distances to draw them from."
+        ),
+        items = d$missing,
+        warn = TRUE
+      )
+    },
+    if (isTRUE(d$all_identical)) {
+      status_line(
+        "All pairwise distances are 0",
+        tip = paste(
+          "The isolates share every compared allele, so there is no structure to draw.",
+          if (identical(na_handling, "omit")) {
+            paste(
+              "Omitting loci with missing values keeps only loci called in every",
+              "isolate, which can leave few or none; try another missing-value handling."
+            )
+          }
+        ),
+        warn = TRUE
+      )
+    }
+  ))
+}
+
 #' The Full / Zoomed Display Toggle
 #'
 #' How a fixed-canvas image is presented in its stage: scaled to fit, or at its

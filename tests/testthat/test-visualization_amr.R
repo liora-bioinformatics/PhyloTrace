@@ -4,6 +4,7 @@ box::use(
     expect_equal,
     expect_false,
     expect_identical,
+    expect_match,
     expect_null,
     expect_s3_class,
     expect_true,
@@ -1349,6 +1350,62 @@ test_that("Generate names the isolates of a screen with room for them", {
         export$aspect(),
         plot_canvas()$height_in / plot_canvas()$width_in
       )
+    }
+  )
+})
+
+test_that("the status counts what is plotted and warns about isolates with no hit", {
+  html <- as.character(
+    impl$amr_status(12L, c("gene", "genes"), 4L, c("ISO-3", "ISO-9"))
+  )
+
+  expect_match(html, "2 isolates with no AMR hit", fixed = TRUE)
+  expect_match(html, "ISO-9", fixed = TRUE)
+  expect_match(html, "12 genes in 4 drug classes", fixed = TRUE)
+  expect_false(grepl("Most common", html))
+})
+
+test_that("the status leaves out the drug-class split where there is none", {
+  one <- as.character(
+    impl$amr_status(1L, c("drug class", "drug classes"), NA_integer_, character(0))
+  )
+  many <- as.character(
+    impl$amr_status(11L, c("drug class", "drug classes"), NA_integer_, character(0))
+  )
+  html <- one
+
+  expect_match(one, "1 drug class<", fixed = TRUE)
+  expect_match(many, "11 drug classes<", fixed = TRUE)
+  expect_false(grepl("text-warning", html))
+})
+
+test_that("the rendered status follows the screen and the unscreened isolate", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      session$flushReact()
+
+      html <- output$amr_status_ui$html
+      # ISO-4 was never screened; three genes, two of them resistance genes
+      # filed under two drug classes (gyrA's QUINOLONE and blaTEST's own).
+      expect_match(html, "1 isolate with no AMR hit", fixed = TRUE)
+      expect_match(html, "ISO-4", fixed = TRUE)
+      expect_match(html, "3 genes", fixed = TRUE)
+
+      session$setInputs(amr_mode = "prevalence")
+      session$flushReact()
+      expect_match(output$amr_status_ui$html, "3 genes<", fixed = TRUE)
     }
   )
 })

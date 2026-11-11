@@ -4,6 +4,7 @@ box::use(
     expect_equal,
     expect_false,
     expect_identical,
+    expect_length,
     expect_match,
     expect_named,
     expect_no_error,
@@ -312,4 +313,45 @@ test_that("resolve_qualitative_palette only expands names past their tabulated c
   expect_identical(length(expanded), 20L)
   expect_identical(length(unique(expanded)), 20L)
   expect_true(all(grepl("^#[0-9A-Fa-f]{6,8}$", expanded)))
+})
+
+test_that("count_label agrees in number", {
+  expect_identical(viz_helpers$count_label(1, "isolate"), "1 isolate")
+  expect_identical(viz_helpers$count_label(0, "isolate"), "0 isolates")
+  expect_identical(viz_helpers$count_label(2, "drug class", "drug classes"), "2 drug classes")
+})
+
+test_that("status_line styles a fact and a warning apart and cuts the isolate list", {
+  fact <- as.character(viz_helpers$status_line("12 genes"))
+  expect_match(fact, "text-muted")
+  expect_false(grepl("triangle-exclamation", fact))
+
+  warned <- as.character(viz_helpers$status_line(
+    "3 isolates",
+    tip = "why",
+    items = sprintf("ISO-%d", 1:8),
+    warn = TRUE
+  ))
+  expect_match(warned, "text-warning")
+  expect_match(warned, "triangle-exclamation")
+  expect_match(warned, "ISO-5")
+  expect_false(grepl("ISO-6", warned))
+  expect_match(warned, "and 3 more")
+})
+
+test_that("distance_issue_lines names each problem a distance matrix can have", {
+  expect_length(viz_helpers$distance_issue_lines(NULL), 0L)
+
+  clean <- list(n = 5L, missing = character(0), mean = 3, all_identical = FALSE)
+  expect_length(viz_helpers$distance_issue_lines(clean), 0L)
+
+  both <- list(n = 5L, missing = c("X", "Y"), mean = 0, all_identical = TRUE)
+  html <- vapply(viz_helpers$distance_issue_lines(both, "omit"), as.character, "")
+  expect_length(html, 2L)
+  expect_match(html[[1]], "2 isolates left out")
+  expect_match(html[[2]], "All pairwise distances are 0")
+  expect_match(html[[2]], "Omitting loci")
+  # The omit explanation belongs to that policy only.
+  other <- vapply(viz_helpers$distance_issue_lines(both, "ignore_na"), as.character, "")
+  expect_false(grepl("Omitting loci", other[[2]]))
 })

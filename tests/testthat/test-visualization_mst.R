@@ -5,6 +5,7 @@ box::use(
     expect_false,
     expect_gt,
     expect_identical,
+    expect_match,
     expect_setequal,
     expect_true,
     test_that
@@ -769,5 +770,47 @@ test_that("Auto-fit before a network exists changes nothing", {
     session$setInputs(auto_fit = 1)
     session$flushReact()
     expect_equal(isolate(fitted$mst_node_label_fontsize), 30)
+  })
+})
+
+test_that("the status reports isolates, clusters and the matrix's problems", {
+  fr <- list(counts = c(1L, 2L, 1L, 1L, 1L), cluster_table = data.frame(cluster = "Cluster 1"))
+  dist <- list(n = 6L, missing = "ghost", mean = 7.25, all_identical = FALSE)
+
+  html <- as.character(impl$mst_status(fr, dist, 10, "ignore_na"))
+
+  expect_match(html, "1 isolate left out", fixed = TRUE)
+  expect_match(html, "6 isolates in 5 nodes", fixed = TRUE)
+  expect_match(html, "Mean pairwise distance 7.2 alleles", fixed = TRUE)
+  expect_match(html, "1 cluster at \u2264 10 alleles", fixed = TRUE)
+})
+
+test_that("the status says so when the threshold finds no cluster", {
+  fr <- list(counts = c(1L, 1L), cluster_table = data.frame(cluster = character(0)))
+
+  html <- as.character(impl$mst_status(fr, NULL, 3, "ignore_na"))
+
+  expect_match(html, "No clusters at \u2264 3 alleles", fixed = TRUE)
+  expect_false(grepl("Mean pairwise", html))
+})
+
+test_that("the rendered status reads off the drawn network and the matrix", {
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  args <- args_for(db, generate)
+  # A selected isolate the database holds no profile for.
+  args$selected_isolates <- reactive(c(isolates, "ghost"))
+  testServer(visualization_mst$server, args = args, {
+    set_mst_inputs(session)
+    generate(1L)
+    session$flushReact()
+
+    html <- output$mst_status_ui$html
+    expect_match(html, "1 isolate left out", fixed = TRUE)
+    expect_match(html, "ghost", fixed = TRUE)
+    expect_match(html, "5 isolates in 4 nodes", fixed = TRUE)
+    expect_match(html, "Mean pairwise distance", fixed = TRUE)
+    expect_match(html, "alleles", fixed = TRUE)
   })
 })

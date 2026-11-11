@@ -28,6 +28,7 @@ box::use(
     actionButton,
     showNotification,
     tags,
+    tagAppendAttributes,
     tagList,
     HTML,
     span,
@@ -49,6 +50,7 @@ box::use(
     nav_select,
     card_body,
     layout_columns,
+    tooltip,
     as_fill_carrier,
   ],
   rlang[`%||%`],
@@ -162,17 +164,7 @@ box::use(
             )
           ),
           uiOutput(ns("preset_info")),
-          # A disabled button swallows pointer events, so the hover text lives
-          # on this wrapper (set by the observer on `initiate`'s state).
-          div(
-            id = ns("initiate_wrap"),
-            actionButton(
-              ns("initiate"),
-              "Initiate plot",
-              icon = icon("plus"),
-              class = "btn-primary btn-lg w-100"
-            )
-          ),
+          uiOutput(ns("initiate_button"), class = "viz-initiate-slot"),
           uiOutput(ns("min_isolates_hint"))
         )
       ),
@@ -804,32 +796,32 @@ server <- function(
       )
     })
 
-    # Grey out "Initiate plot" while the loaded database is too small for the
-    # picked type or the tab limit is reached, and explain why beneath it.
-    observeEvent(
-      list(input$plot_type, viz_isolate_n(), at_capacity()),
-      {
-        need <- min_isolates_for(input$plot_type)
-        shinyjs::toggleState(
-          "initiate",
-          condition = viz_isolate_n() >= need && !at_capacity()
-        )
-        # Hover explanation only while the limit is what disables the button.
-        shinyjs::runjs(sprintf(
-          "document.getElementById('%s').title = '%s';",
-          ns("initiate_wrap"),
-          if (at_capacity()) {
-            sprintf(
-              "Limit reached: %d plots are open. Close a plot tab to create another.",
-              .MAX_TABS
-            )
-          } else {
-            ""
-          }
-        ))
-      },
-      ignoreNULL = FALSE
-    )
+    # "Initiate plot", greyed out while the loaded database is too small for the
+    # picked type or the tab limit is reached. At the limit a tooltip says why;
+    # it wraps the button because a disabled button takes no pointer events.
+    output$initiate_button <- renderUI({
+      full <- at_capacity()
+      btn <- actionButton(
+        ns("initiate"),
+        "Initiate plot",
+        icon = icon("plus"),
+        class = "btn-primary btn-lg w-100"
+      )
+      if (full || viz_isolate_n() < min_isolates_for(input$plot_type)) {
+        btn <- tagAppendAttributes(btn, disabled = NA)
+      }
+      if (!full) {
+        return(btn)
+      }
+      tooltip(
+        div(btn),
+        sprintf(
+          "Limit reached: %d plots are open. Close a plot tab to create another.",
+          .MAX_TABS
+        ),
+        placement = "top"
+      )
+    })
 
     output$min_isolates_hint <- renderUI({
       if (at_capacity()) {

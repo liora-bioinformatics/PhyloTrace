@@ -30,6 +30,7 @@ box::use(
 box::use(
   app / logic / db_connect[connect],
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
+  app / logic / geocode_cache[GEOCODE_TABLE],
   app / logic / logging[log_event],
 )
 
@@ -325,6 +326,10 @@ export_database <- function(
   out_custom <- .custom_out_fields(src, src_tables, custom_fields)
   custom_tables <- if (length(out_custom)) CUSTOM_TABLES else character(0)
 
+  # Geocoded places go wherever the metadata they were looked up from goes.
+  # Copied whole: places are not tied to isolates, and the table stays small.
+  geocode_tables <- if (write_meta) intersect(GEOCODE_TABLE, src_tables) else character(0)
+
   # Build target database in a temporary partial file to ensure atomic file generation
   part <- paste0(dest_path, ".part")
   if (file.exists(part)) {
@@ -353,7 +358,8 @@ export_database <- function(
     "sequences",
     intersect("hashes", src_tables),
     result_tables,
-    custom_tables
+    custom_tables,
+    geocode_tables
   )
 
   table_ddl <- .source_ddl(src, "table", copy_tables)
@@ -435,6 +441,10 @@ export_database <- function(
             cols
           )
         )
+      }
+
+      for (nm in geocode_tables) {
+        dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
       }
 
       # Filter and write optional analysis results for selected isolates

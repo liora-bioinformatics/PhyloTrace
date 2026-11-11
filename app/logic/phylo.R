@@ -324,6 +324,34 @@ compute_distance <- function(
   compute_dist_matrix(profile, na_handling %||% "ignore_na")
 }
 
+#' Summarise a Distance Matrix for an Engine's Status Line
+#'
+#' What the Tree and MST status panels say about the matrix they were drawn
+#' from: how many isolates it holds, which of the isolates asked for it has no
+#' row (a selected isolate without an allele profile is left out of the plot
+#' without any other sign), the mean pairwise distance, and whether every
+#' distance is 0 - the case a plot cannot show, and what the "Omit" policy
+#' produces when no locus is called in every isolate.
+#'
+#' @param dist_mat Labelled distance matrix, as from [compute_distance()]; NULL
+#'   is passed through.
+#' @param expected Isolate ids the selection asked for, or NULL.
+#' @return A list of `n`, `missing` (ids in `expected` without a row), `mean`
+#'   (NA below two isolates) and `all_identical`; NULL when `dist_mat` is NULL.
+#' @export
+distance_summary <- function(dist_mat, expected = NULL) {
+  if (is.null(dist_mat)) {
+    return(NULL)
+  }
+  pairs <- dist_mat[upper.tri(dist_mat)]
+  list(
+    n = nrow(dist_mat),
+    missing = setdiff(expected, rownames(dist_mat)),
+    mean = if (length(pairs)) mean(pairs) else NA_real_,
+    all_identical = length(pairs) > 0L && all(pairs == 0)
+  )
+}
+
 # --- 6. Tree Orchestration --------------------------------------------------
 
 #' Build a Phylogenetic Tree From a Distance Matrix

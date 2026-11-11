@@ -76,7 +76,7 @@ box::use(
     ],
   app / logic / functions[render_info],
   app / logic / tree_plot,
-  app / logic / phylo[tree_from_distance],
+  app / logic / phylo[distance_summary, tree_from_distance],
   app / logic / viz_export[canvas_export],
   app /
     logic /
@@ -108,7 +108,10 @@ box::use(
       on_confirmed_reset,
       reset_button_row,
       collect_input_snapshot,
+      count_label,
+      distance_issue_lines,
       PLOT_SETTLE_MS,
+      status_line,
       text_size_slider,
       zoom_view_buttons,
     ],
@@ -1243,6 +1246,31 @@ tree_controls <- function(ns, options_ui = NULL) {
   )
 }
 
+#' Tree Status for the Setup Sidebar
+#'
+#' The tree's summary and any data problems, mounted by
+#' app/view/visualization_plot.R at the bottom of the plot tab's left sidebar.
+#' Rendered by this module's `output$tree_status_ui`.
+#'
+#' @param id The engine's namespaced id, the same one passed to `ui()`.
+#' @return A `uiOutput`.
+#' @export
+setup_ui <- function(id) {
+  shiny$uiOutput(shiny$NS(id, "tree_status_ui"), class = "map-geocode-status")
+}
+
+# The status lines for a drawn tree: the distance matrix's problems first, then
+# the tip count with the algorithm and the mean pairwise distance.
+tree_status <- function(n_tips, dist, algo, na_handling) {
+  shiny$tagList(
+    distance_issue_lines(dist, na_handling),
+    status_line(sprintf("%s, %s", count_label(n_tips, "tip"), algo)),
+    if (!is.null(dist) && is.finite(dist$mean)) {
+      status_line(sprintf("Mean pairwise distance %s alleles", format(round(dist$mean, 1))))
+    }
+  )
+}
+
 #' @export
 ui <- function(id, generate_id, options_ui = NULL) {
   ns <- shiny$NS(id)
@@ -1920,6 +1948,10 @@ server <- function(
     # the guarded Generate observer below when Tree is the active engine.
     tree_obj <- shiny$reactiveVal(NULL)
 
+    # What the last Generate's distance matrix looked like (see
+    # phylo$distance_summary()), for output$tree_status_ui.
+    distance_status <- shiny$reactiveVal(NULL)
+
     # The variable mappings, in draw order. Written only by explicit user
     # actions — never echoed back from the browser the way a picker's value is
     # — which is why they need none of the `fitted` mirroring the rest of the
@@ -2295,16 +2327,18 @@ server <- function(
 
         # Compute the tree (heavy work is covered by the client-side loading
         # overlay, which stays up until this engine's plot fires its value event).
+        distance_status(NULL)
         tree <- tryCatch(
-          tree_from_distance(
-            dist_cache$get(
+          {
+            dist_mat <- dist_cache$get(
               db_path(),
               na_handling(),
               selected_isolates(),
               imported_sets()
-            ),
-            algo()
-          ),
+            )
+            distance_status(distance_summary(dist_mat, selected_isolates()))
+            tree_from_distance(dist_mat, algo())
+          },
           error = function(e) {
             shiny$showNotification(
               paste("Tree computation failed:", conditionMessage(e)),
@@ -2332,6 +2366,12 @@ server <- function(
         generated(TRUE)
       }
     )
+
+    # Status pinned to the bottom of the left sidebar (setup_ui()).
+    output$tree_status_ui <- shiny$renderUI({
+      shiny$req(generated(), tree_obj())
+      tree_status(length(tree_obj()$tip.label), distance_status(), algo(), na_handling())
+    })
 
     # Restrict a variable-mapping color-scale picker's choices to whichever
     # color_scales categories suit the type of the variable currently mapped

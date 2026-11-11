@@ -113,19 +113,22 @@ box::use(
 # a network worth reading, the rest need at least one. The creator form enforces
 # it before a tab is opened.
 # `setup_ui`, where present, is a function of the engine's namespaced id whose
-# result is pinned to the bottom of the left sidebar (the Map's mapping status).
+# result is pinned to the bottom of the left sidebar (the engine's status: the
+# Map's mapping summary, the Tree's tip count, the AMR screen's gene count...).
 .ENGINES <- list(
   MST = list(
     mod = visualization_mst,
     distance = TRUE,
     export_kind = "widget",
-    min_isolates = 3L
+    min_isolates = 3L,
+    setup_ui = visualization_mst$setup_ui
   ),
   Tree = list(
     mod = visualization_tree,
     distance = TRUE,
     export_kind = "ggplot",
-    min_isolates = 3L
+    min_isolates = 3L,
+    setup_ui = visualization_tree$setup_ui
   ),
   Map = list(
     mod = visualization_map,
@@ -145,7 +148,8 @@ box::use(
     mod = visualization_amr,
     distance = FALSE,
     export_kind = "ggplot",
-    min_isolates = 1L
+    min_isolates = 1L,
+    setup_ui = visualization_amr$setup_ui
   )
 )
 
