@@ -5173,6 +5173,32 @@ table.dataTable thead>tr>th.sorting {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
+// Options and group headers that carry a count (the Map's Show filter, see
+// app/js/virtual-select-count-label.js): label on the left, count right-aligned.
+.vscomp-option-text:has(> .pt-vs-count) {
+    display: flex;
+    width: 100%;
+    gap: 0.75rem;
+}
+
+.pt-vs-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pt-vs-count {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--bs-secondary-color);
+    font-variant-numeric: tabular-nums;
+}
+
+.pt-vs-count-zero {
+    opacity: 0.5;
+}
+
 // Only the multi-select popups get a Confirm button beside the close button,
 // which there means Cancel rather than just Close (see
 // app/js/virtual-select-popup-confirm.js, which sets .pt-has-confirm). Shift

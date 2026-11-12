@@ -1,5 +1,6 @@
 box::use(
   leaflet[leaflet],
+  sf[st_intersects, st_point, st_sfc],
   shiny[NS, reactive, testServer],
   testthat[
     expect_false,
@@ -119,6 +120,9 @@ test_that("choropleth labels come from a keyless tile layer", {
     graticule = FALSE,
     show_controls = FALSE,
     show_time_label = FALSE,
+    region_scale = "Oranges",
+    region_opacity = 0.7,
+    region_border = "#000000",
     legend = FALSE
   )
   m <- impl$build_map(NULL, o)
@@ -474,8 +478,10 @@ test_that("build_map_coords() keeps every recognised country as a region", {
   expect_identical(s$n_unknown_country, 1L)
   expect_identical(s$n_bad_coords, 1L)
   expect_identical(s$n_swapped, 1L)
+  # State-level rows are covered by their own test below.
+  probs <- s$problems[s$problems$kind != "admin1_uncounted", , drop = FALSE]
   expect_identical(
-    s$problems[, c("kind", "isolate", "value")],
+    probs[, c("kind", "isolate", "value")],
     data.frame(
       kind = c("unknown_country", "bad_coords", "swapped"),
       isolate = c("C", "D", "B"),
@@ -612,4 +618,362 @@ test_that("a fitted view keeps a margin around the outermost isolates", {
   coords <- data.frame(longitude = c(-120, 170), latitude = c(-40, 60))
   call <- impl$frame_coords(leaflet(), coords)$x$fitBounds
   expect_identical(call[[5]]$padding, c(impl$FIT_PADDING_PX, impl$FIT_PADDING_PX))
+})
+
+# --- State/province choropleth ---------------------------------------------------
+
+# Every string each addPolygons() call carries, one entry per call, in order,
+# leaving out the Show filter's mask.
+polygon_texts <- function(m) {
+  calls <- Filter(function(x) x$method == "addPolygons", m$x$calls)
+  texts <- vapply(calls, function(x) paste(unlist(x$args), collapse = " "), "")
+  texts[!grepl(impl$FOCUS_MASK_PANE, texts, fixed = TRUE)]
+}
+
+# Choropleth options at one region level, as map_opts() bundles them.
+choro_opts <- function(level) {
+  list(
+    mode = "Choropleth",
+    tiles = "OpenStreetMap",
+    scalebar = FALSE,
+    minimap = FALSE,
+    graticule = FALSE,
+    show_controls = FALSE,
+    show_time_label = FALSE,
+    region_level = level,
+    region_transform = "Raw",
+    region_fixed_scale = FALSE,
+    region_scale = "Oranges",
+    region_opacity = 0.7,
+    region_border = "#000000",
+    region_permanent = FALSE,
+    legend = FALSE,
+    legend_pos = "topleft"
+  )
+}
+
+# The bundled admin-1 code of a German state, by its display name.
+german_state <- function(name) {
+  admin1 <- impl$get_admin1()
+  admin1$adm1_code[admin1$adm0_a3 == "DEU" & admin1$name == name]
+}
+
+test_that("points are assigned to the state/province they fall in", {
+  admin1 <- impl$get_admin1()
+  codes <- impl$admin1_of(
+    # Munich; 11 km off Barcelona's coast; 130 km out in the North Sea; no
+    # point; Munich again (tested once, assigned to both).
+    lat = c(48.14, 41.30, 54.5, NA, 48.14),
+    lon = c(11.58, 2.30, 4.5, NA, 11.58)
+  )
+  expect_identical(
+    admin1$name[match(codes, admin1$adm1_code)],
+    c("Bavaria", "Barcelona", NA, NA, "Bavaria")
+  )
+})
+
+test_that("build_map_coords() assigns states and reports the isolates it cannot count", {
+  db <- file.path(local_tempdir(), "t.db")
+  build_db(db, default_local(), metadata = meta_df(c("A", "B", "C")))
+  # Served from the database's geocode cache, so no network is needed.
+  write_geocodes(db, data.frame(place = "Germany", latitude = 51.0, longitude = 10.4))
+  meta <- data.frame(
+    isolate = c("A", "B", "C"),
+    geo_loc_name_country = "Germany",
+    geo_loc_coordinates = c("48.14, 11.58", NA, "54.5, 4.5"),
+    stringsAsFactors = FALSE
+  )
+  built <- impl$build_map_coords(meta, db)
+  expect_identical(built$coords$isolate, c("A", "B", "C"))
+  expect_identical(built$coords$region_admin1, c(german_state("Bavaria"), NA, NA))
+  # A country-only place is mapped at the country's centre but not counted in
+  # whichever state that centre lies in.
+  probs <- built$status$problems
+  probs <- probs[probs$kind == "admin1_uncounted", , drop = FALSE]
+  expect_identical(probs$isolate, c("B", "C"))
+  expect_identical(probs$field, c("Country", "Coordinates"))
+  expect_match(probs$value[1], "Germany (country only)", fixed = TRUE)
+  expect_match(probs$value[2], "no state/province within 25 km", fixed = TRUE)
+  expect_identical(built$status$n_admin1_uncounted, 2L)
+  expect_identical(unique(built$shapes$admin1$adm0_a3), "DEU")
+  # Filed for the Show filter under the country each point lies in: the
+  # country-only centre is in Germany, the North Sea point in no country.
+  expect_identical(built$coords$map_country, c("DEU", "DEU", NA))
+})
+
+test_that("state-level notes only show while the choropleth counts by state", {
+  s <- impl$empty_geocode_status()
+  s$problems <- rbind(
+    impl$geo_problems("admin1_uncounted", "a", "Country", "Germany (country only)"),
+    impl$geo_problems("bad_coords", "b", "Coordinates", "x")
+  )
+  expect_identical(impl$status_for_view(s, "Markers", "admin1")$problems$kind, "bad_coords")
+  expect_identical(impl$status_for_view(s, "Choropleth", "country")$problems$kind, "bad_coords")
+  shown <- impl$status_for_view(s, "Choropleth", "admin1")
+  expect_identical(shown$problems$kind, c("admin1_uncounted", "bad_coords"))
+  html <- as.character(impl$geo_advisories(shown, "show_all"))
+  expect_match(html, "1 isolate(s) not counted by state/province", fixed = TRUE)
+  expect_match(
+    as.character(impl$geo_problem_table(shown$problems)),
+    "Not counted by state/province",
+    fixed = TRUE
+  )
+})
+
+test_that("states are counted over every region of each country with isolates", {
+  rows <- data.frame(
+    isolate = paste0("i", 1:4),
+    region_admin1 = c(german_state("Bavaria"), german_state("Bavaria"), german_state("Berlin"), NA)
+  )
+  shapes <- list(admin1 = impl$admin1_shapes(rows$region_admin1))
+  expect_identical(nrow(shapes$admin1), 16L)
+  expect_identical(unique(shapes$admin1$adm0_a3), "DEU")
+  expect_null(impl$admin1_shapes(NA_character_))
+
+  # Counts from the shown rows, the fixed scale's from all of them; zero-count
+  # states stay drawn, uncounted (NA, drawn grey).
+  units <- impl$choropleth_units("admin1", rows[2:3, ], rows, shapes)
+  at <- match(c("Bavaria", "Berlin"), shapes$admin1$name)
+  expect_identical(units$n[at], c(1L, 1L))
+  expect_identical(units$full_n[at], c(2L, 1L))
+  expect_identical(sum(is.na(units$n)), 14L)
+  expect_identical(units$label[at[1]], "Bavaria, Germany")
+})
+
+test_that("build_map() draws the state level from the shown points, scaled over all", {
+  coords <- data.frame(
+    isolate = c("a", "b", "c"),
+    sample_collection_date = c("2026-01-01", "2026-01-02", "2026-03-01"),
+    latitude = 48.14,
+    longitude = 11.58,
+    region_admin1 = german_state("Bavaria"),
+    stringsAsFactors = FALSE
+  )
+  # Every isolate in one state: the zero-width domain case.
+  o <- choro_opts("admin1")
+  o$legend <- TRUE
+  o$region_fixed_scale <- TRUE
+  o$date_field <- "sample_collection_date"
+  o$date_bounds <- as.Date(c("2026-01-01", "2026-03-01"))
+  o$daterange <- as.Date(c("2026-01-01", "2026-01-31"))
+  regions <- coords
+  regions$country_code <- "DEU"
+  m <- impl$build_map(
+    impl$filter_coords(coords, o),
+    o,
+    full_coords = coords,
+    regions = regions,
+    shapes = list(admin1 = impl$admin1_shapes(coords$region_admin1))
+  )
+  methods <- vapply(m$x$calls, `[[`, "", "method")
+  expect_true(all(c("addPolygons", "addLegend") %in% methods))
+  expect_match(widget_text(m), "Bavaria, Germany: 2 isolates", fixed = TRUE)
+  # Every other country is drawn whole underneath, uncounted.
+  polys <- polygon_texts(m)
+  expect_identical(length(polys), 2L)
+  expect_match(polys[[1]], "France", fixed = TRUE)
+  expect_false(grepl("Germany", polys[[1]], fixed = TRUE))
+  expect_false(grepl("France", polys[[2]], fixed = TRUE))
+  legend <- m$x$calls[[which(methods == "addLegend")]]$args[[1]]
+  expect_identical(as.character(legend$labels[c(1, length(legend$labels))]), c("0", "3"))
+
+  # Nothing counted in the window at all: the scale still has a width.
+  expect_identical(impl$count_domain(c(NA_integer_, NA_integer_)), c(0, 1))
+})
+
+test_that("a plot saved before the state level existed restores counting by country", {
+  meta <- meta_fixture()
+  sent <- new.env()
+  testServer(
+    visualization_map$server,
+    args = list(viz_metadata = reactive(meta)),
+    {
+      root <- .subset2(session, "parent")
+      root$sendInputMessage <- function(id, message) {
+        assign(id, message, envir = sent)
+      }
+      restore(list(map_mode = "Choropleth", map_region_scale = "Blues"))
+      expect_identical(sent$map_region_level$selected, "country")
+      restore(list(map_mode = "Choropleth", map_region_level = "admin1"))
+      expect_identical(sent$map_region_level$selected, "admin1")
+    }
+  )
+})
+
+# --- Show filter ------------------------------------------------------------------
+
+test_that("the Show filter offers every country with its isolate count", {
+  choices <- impl$focus_choices(c(DEU = 2L, FRA = 1L, JPN = 4L))
+  expect_true(inherits(choices, "vs_choices"))
+  groups <- choices$choices
+  continents <- vapply(groups, `[[`, "", "label")
+  europe <- groups[[match("Europe", continents)]]
+  africa <- groups[[match("Africa", continents)]]
+  # Countries without isolates are offered too, counted 0.
+  offered <- unlist(lapply(groups, function(g) g$options$value))
+  expect_identical(length(offered), nrow(impl$get_world()))
+  expect_true(all(c("DZA", "TCD") %in% africa$options$value))
+  expect_identical(africa$customData$count, 0L)
+  expect_identical(europe$customData$count, 3L)
+  at <- match(c("France", "Germany", "Spain"), europe$options$label)
+  expect_identical(europe$options$value[at], c("FRA", "DEU", "ESP"))
+  counts <- vapply(europe$options$customData[at], `[[`, 0L, "count")
+  expect_identical(counts, c(1L, 2L, 0L))
+  expect_false(is.unsorted(europe$options$label))
+})
+
+test_that("each isolate is counted once, under its point's country first", {
+  coords <- data.frame(isolate = c("a", "b"), map_country = c("FRA", NA))
+  regions <- data.frame(isolate = c("a", "c", "d"), country_code = c("DEU", "DEU", "ESP"))
+  expect_identical(impl$focus_counts(coords, regions), c(DEU = 1L, ESP = 1L, FRA = 1L))
+  expect_identical(impl$focus_counts(NULL, regions), c(DEU = 2L, ESP = 1L))
+  expect_identical(impl$focus_counts(coords, NULL), c(FRA = 1L))
+})
+
+test_that("the Show filter keeps the rows of the selected countries", {
+  rows <- data.frame(
+    isolate = c("a", "b", "c"),
+    map_country = c("DEU", "FRA", NA),
+    country_code = c("DEU", "DEU", "FRA")
+  )
+  expect_identical(impl$focus_rows(rows, character(0))$isolate, c("a", "b", "c"))
+  expect_identical(impl$focus_rows(rows, NULL)$isolate, c("a", "b", "c"))
+  expect_identical(impl$focus_rows(rows, "FRA")$isolate, "b")
+  expect_identical(impl$focus_rows(rows, "FRA", "country_code")$isolate, "c")
+})
+
+test_that("a Show selection limits what every choropleth level draws", {
+  regions <- meta_fixture()
+  regions$country_code <- ifelse(regions$geo_loc_name_country == "Germany", "DEU", "FRA")
+  o <- choro_opts("country")
+  o$focus <- "FRA"
+  polys <- polygon_texts(impl$build_map(NULL, o, regions = regions))
+  expect_identical(length(polys), 1L)
+  expect_match(polys[[1]], "France: 3 isolates", fixed = TRUE)
+  expect_false(grepl("Germany", polys[[1]], fixed = TRUE))
+
+  # State level: Germany's states, and only France as an uncounted backdrop.
+  coords <- data.frame(
+    isolate = "a",
+    latitude = 48.14,
+    longitude = 11.58,
+    region_admin1 = german_state("Bavaria"),
+    map_country = "DEU"
+  )
+  o <- choro_opts("admin1")
+  o$focus <- c("DEU", "FRA")
+  shapes <- list(admin1 = impl$admin1_shapes(coords$region_admin1))
+  polys <- polygon_texts(impl$build_map(coords, o, full_coords = coords, shapes = shapes))
+  expect_identical(length(polys), 2L)
+  expect_match(polys[[1]], "France", fixed = TRUE)
+  expect_false(grepl("Spain", polys[[1]], fixed = TRUE))
+  expect_match(polys[[2]], "Bavaria, Germany: 1 isolates", fixed = TRUE)
+
+  # Selecting only France leaves no state polygons, just France's outline.
+  o$focus <- "FRA"
+  polys <- polygon_texts(impl$build_map(coords, o, full_coords = coords, shapes = shapes))
+  expect_identical(length(polys), 1L)
+  expect_false(grepl("Bavaria", polys[[1]], fixed = TRUE))
+})
+
+test_that("a choropleth still draws its regions for an empty date window", {
+  o <- choro_opts("admin1")
+  coords <- data.frame(
+    isolate = "a",
+    latitude = 48.14,
+    longitude = 11.58,
+    region_admin1 = german_state("Bavaria")
+  )
+  shapes <- list(admin1 = impl$admin1_shapes(coords$region_admin1))
+  polys <- polygon_texts(impl$build_map(coords[0, ], o, full_coords = coords, shapes = shapes))
+  expect_identical(length(polys), 2L)
+  expect_match(polys[[2]], "Bavaria, Germany: 0 isolates", fixed = TRUE)
+})
+
+test_that("a plot saved before the Show filter restores showing the world", {
+  meta <- meta_fixture()
+  sent <- new.env()
+  testServer(
+    visualization_map$server,
+    args = list(viz_metadata = reactive(meta)),
+    {
+      root <- .subset2(session, "parent")
+      root$sendInputMessage <- function(id, message) {
+        assign(id, message, envir = sent)
+      }
+      restore(list(map_mode = "Markers"))
+      expect_identical(sent$map_focus$value, character(0))
+      restore(list(map_mode = "Markers", map_focus = list("DEU", "FRA")))
+      expect_identical(sent$map_focus$value, c("DEU", "FRA"))
+    }
+  )
+})
+
+test_that("a Show selection masks every country outside it", {
+  expect_null(impl$focus_mask(character(0)))
+  expect_null(impl$focus_mask("XXX"))
+  # Every country selected is the world: no mask.
+  expect_null(impl$focus_mask(impl$get_world()$adm0_a3))
+  # The window reaches past the coast but not across a land border, and an
+  # unselected enclave stays hidden.
+  inside <- function(focus, lon, lat) {
+    pts <- st_sfc(lapply(seq_along(lon), function(i) st_point(c(lon[i], lat[i]))))
+    lengths(st_intersects(pts, impl$focus_window(focus))) > 0
+  }
+  # Johannesburg; 10 km off Durban; Maseru (Lesotho); Gaborone (Botswana).
+  lon <- c(28.05, 31.15, 27.48, 25.91)
+  lat <- c(-26.20, -29.86, -29.31, -24.65)
+  expect_identical(inside("ZAF", lon, lat), c(TRUE, TRUE, FALSE, FALSE))
+  expect_identical(inside(c("ZAF", "LSO"), lon, lat), c(TRUE, TRUE, TRUE, FALSE))
+
+  o <- choro_opts("country")
+  o$mode <- "Markers"
+  o$focus <- "DEU"
+  # The frame reaches past +-180, which sf warns about on a long/lat layer.
+  expect_no_warning(m <- impl$build_map(NULL, o))
+  expect_identical(length(polygon_texts(m)), 0L)
+  expect_identical(sum(vapply(m$x$calls, `[[`, "", "method") == "addPolygons"), 1L)
+  expect_match(widget_text(m), impl$FOCUS_MASK_PANE, fixed = TRUE)
+  expect_match(widget_text(m), impl$FOCUS_MASK_COLOR, fixed = TRUE)
+  # Its own padded renderer, redrawn while the map pans or flies, so no tiles
+  # show past it mid-gesture.
+  expect_match(widget_text(m), impl$FOCUS_MASK_RENDERER, fixed = TRUE)
+  hooks <- vapply(m$jsHooks$render, `[[`, "", "code")
+  expect_true(impl$FOCUS_MASK_FOLLOW_JS %in% hooks)
+  o$focus <- NULL
+  expect_false(grepl(impl$FOCUS_MASK_PANE, widget_text(impl$build_map(NULL, o)), fixed = TRUE))
+})
+
+test_that("re-clustering charts on zoom keeps the one legend", {
+  # Each zoom redraws the charts through a proxy; drawing the legend there too
+  # stacked a new copy per zoom.
+  meta <- meta_fixture()
+  sent <- new.env()
+  sent$methods <- character(0)
+  testServer(
+    visualization_map$server,
+    args = list(viz_metadata = reactive(meta)),
+    {
+      root <- .subset2(session, "parent")
+      root$sendCustomMessage <- function(type, message) {
+        if (identical(type, "leaflet-calls")) {
+          sent$methods <- c(sent$methods, vapply(message$calls, `[[`, "", "method"))
+        }
+      }
+      session$setInputs(
+        map_layer_add = "specimen",
+        map_mode = "Charts",
+        map_chart_cluster_radius = 100,
+        map_legend = TRUE
+      )
+      map_coords(coords_fixture())
+      session$elapse(300)
+      session$setInputs(map_zoom = 5)
+      session$elapse(300)
+      session$setInputs(map_zoom = 6)
+      session$elapse(300)
+      expect_identical(sum(sent$methods == "addMinicharts"), 2L)
+      expect_false("addLegend" %in% sent$methods)
+    }
+  )
 })

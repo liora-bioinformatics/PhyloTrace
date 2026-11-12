@@ -8,10 +8,12 @@
 # placed by geo_loc_coordinates where readable (app/logic/geo.R), otherwise by
 # their postcode + city + state/province + country, geocoded once per distinct
 # place via OSM/Nominatim on Generate. Countries resolve locally against the
-# Natural Earth vocabulary, so the choropleth needs no geocoding at all.
+# Natural Earth vocabulary, so the country choropleth needs no geocoding at all;
+# the state/province choropleth counts each isolate in the bundled Natural Earth
+# admin-1 region its point falls in (dev/build_admin1.R), assigned on Generate.
 #
 # Four map modes share one builder (`build_map`): Markers (styled points),
-# Choropleth (countries shaded by isolate count, from Natural Earth polygons),
+# Choropleth (countries or states/provinces shaded by isolate count),
 # Heatmap (point density) and Charts (a minichart per location). Rendering is a
 # single renderLeaflet reacting to the geocoded coords and a debounced bundle of
 # all control inputs (`map_opts`); the same builder backs the HTML export. The
@@ -22,7 +24,7 @@ box::use(
   bslib,
   curl[nslookup],
   htmltools[HTML],
-  htmlwidgets[onRender, saveWidget],
+  htmlwidgets[JS, onRender, saveWidget],
   httr[timeout, with_config],
   leaflet,
   leaflet.extras[addFullscreenControl, addHeatmap],
@@ -35,9 +37,10 @@ box::use(
     updatePickerInput,
     updateRadioGroupButtons,
     updateVirtualSelect,
+    virtualSelectInput,
   ],
   shinyjs[runjs, toggle, toggleClass, toggleState, useShinyjs],
-  stats[aggregate],
+  stats[aggregate, setNames],
   tidygeocoder[geocode],
   utils[head, tail],
   waiter[Waiter, spin_flower, useWaiter],
@@ -65,7 +68,7 @@ box::use(
       scale_categories_for,
     ],
   app / logic / functions[render_info],
-  app / logic / geo[country_code, parse_coordinates],
+  app / logic / geo[country_code, format_coordinates, parse_coordinates],
   app / logic / geocode_cache[clear_geocodes, read_geocodes, write_geocodes],
   app /
     logic /
@@ -180,7 +183,7 @@ MAP_CONTROLS <- viz_helpers$control_families(
     "map_heat_scale",
     "map_chart_type"
   ),
-  virtual_selects = c("map_popup", "map_hover_field"),
+  virtual_selects = c("map_focus", "map_popup", "map_hover_field"),
   sliders = c(
     "map_cluster_radius",
     "map_radius",
@@ -196,7 +199,7 @@ MAP_CONTROLS <- viz_helpers$control_families(
   ),
   numerics = "map_legend_digits",
   texts = "map_legend_title",
-  radio_groups = c("map_interval", "map_region_transform"),
+  radio_groups = c("map_interval", "map_region_level", "map_region_transform"),
   colors = c("map_marker_color", "map_region_border")
 )
 
@@ -205,6 +208,8 @@ MAP_CONTROLS <- viz_helpers$control_families(
 map_control_defaults <- function() {
   list(
     map_mode = "Markers",
+    # Nothing ticked: the whole world.
+    map_focus = character(0),
     map_tiles = mode_tile_defaults[["Markers"]],
     map_scalebar = TRUE,
     map_minimap = TRUE,
@@ -225,6 +230,7 @@ map_control_defaults <- function() {
     map_interval = "Day",
     map_show_time_label = TRUE,
     map_region_fixed_scale = TRUE,
+    map_region_level = "country",
     map_region_transform = "Raw",
     map_region_scale = "Oranges",
     map_region_opacity = 0.7,
@@ -246,7 +252,8 @@ map_control_defaults <- function() {
 # when the view is fitted to them, so edge markers and clusters stay whole.
 FIT_PADDING_PX <- 50
 
-# Natural Earth country polygons are fetched once and cached for the choropleth.
+# Natural Earth country and admin-1 polygons, loaded once per process and
+# cached for the choropleth.
 .world_env <- new.env(parent = emptyenv())
 # sf and rnaturalearth are imported here rather than at the top so they load on
 # the first map generation, not at app startup.
@@ -261,6 +268,76 @@ get_world <- function() {
     )
   }
   .world_env$sf
+}
+
+# Levels the choropleth counts at, as offered in the Region tab. "country"
+# joins each isolate's stated country to Natural Earth admin-0; "admin1" counts
+# it in the state/province its point falls in. A finer level (admin-2) would be
+# one more entry here, a column in build_map_coords() and a branch in
+# choropleth_units().
+REGION_LEVELS <- c("Country" = "country", "State / province" = "admin1")
+
+# Natural Earth admin-1 regions (adm1_code, name, adm0_a3, country, geometry),
+# bundled by dev/build_admin1.R. Static reference data, so the process-level
+# cache is safe across session restarts. sf is imported here so it loads on the
+# first Generate, not at app startup; it also registers the sf methods the
+# stored object needs.
+get_admin1 <- function() {
+  if (is.null(.world_env$admin1)) {
+    box::use(
+      sf[st_crs],
+    )
+    shapes <- readRDS(box::file("../logic/data/admin1.rds"))
+    stopifnot(identical(st_crs(shapes)$epsg, 4326L))
+    .world_env$admin1 <- shapes
+  }
+  .world_env$admin1
+}
+
+# The admin-1 region (adm1_code) each point falls in. A point outside every
+# region (just offshore, or in a hairline gap between simplified neighbours) is
+# snapped to the nearest one within COUNTRY_TOLERANCE_M; beyond that it is NA.
+# Distinct points are tested once, as isolates often share a geocoded place.
+admin1_of <- function(lat, lon) {
+  box::use(
+    sf[st_as_sf, st_distance, st_intersects, st_nearest_feature],
+  )
+  out <- rep(NA_character_, length(lat))
+  ok <- which(!is.na(lat) & !is.na(lon))
+  if (!length(ok)) {
+    return(out)
+  }
+  admin1 <- get_admin1()
+  spot <- paste(lat[ok], lon[ok])
+  first <- !duplicated(spot)
+  pts <- st_as_sf(
+    data.frame(lon = lon[ok][first], lat = lat[ok][first]),
+    coords = c("lon", "lat"),
+    crs = 4326
+  )
+  hit <- vapply(st_intersects(pts, admin1), function(i) i[1], integer(1))
+  away <- which(is.na(hit))
+  if (length(away)) {
+    nearest <- st_nearest_feature(pts[away, ], admin1)
+    dist <- as.numeric(st_distance(pts[away, ], admin1[nearest, ], by_element = TRUE))
+    close <- dist <= COUNTRY_TOLERANCE_M
+    hit[away[close]] <- nearest[close]
+  }
+  out[ok] <- admin1$adm1_code[hit][match(spot, spot[first])]
+  out
+}
+
+# The admin-1 regions a state-level choropleth draws for these assigned codes:
+# every region of each country holding at least one of them, so a country is
+# shown whole, zero-count regions included. NULL when nothing was assigned.
+admin1_shapes <- function(codes) {
+  codes <- unique(codes[!is.na(codes)])
+  if (!length(codes)) {
+    return(NULL)
+  }
+  admin1 <- get_admin1()
+  countries <- unique(admin1$adm0_a3[admin1$adm1_code %in% codes])
+  admin1[admin1$adm0_a3 %in% countries, ]
 }
 
 # --- coordinate resolution ---------------------------------------------------
@@ -289,6 +366,9 @@ empty_geocode_status <- function() {
     n_swapped = 0L,
     # Isolates placed at city level because their postcode was not found.
     n_postcode_fallback = 0L,
+    # Isolates with a location but no admin-1 region (no point, a point naming
+    # only the country, or a point at sea): not counted at state level.
+    n_admin1_uncounted = 0L,
     # One row per affected isolate and problem, behind the advisories' tooltips
     # and the full list in the "Show all" dialog (see geo_problem_table()).
     problems = geo_problems()
@@ -299,7 +379,8 @@ empty_geocode_status <- function() {
 # Unmapped isolates have no advisory line of their own (the headline counts
 # them) but are listed in the table too.
 GEO_PROBLEM_KINDS <- c(
-  "not_found", "postcode_fallback", "unknown_country", "bad_coords", "swapped", "outside"
+  "not_found", "postcode_fallback", "unknown_country", "bad_coords", "swapped", "outside",
+  "admin1_uncounted"
 )
 
 # Problem rows for one kind: the isolate, the field and the value as entered.
@@ -426,6 +507,15 @@ geo_advisories <- function(s, details_id = NULL) {
         "Their coordinates lie more than %g km outside the stated country.",
         COUNTRY_TOLERANCE_M / 1000
       )
+    ),
+    line(
+      "admin1_uncounted",
+      " %d isolate(s) not counted by state/province",
+      paste(
+        "They have no point inside a state or province: their place could not",
+        "be geocoded, names only the country, or lies at sea. Add coordinates",
+        "or a city, postcode or state/province."
+      )
     )
   ))
   n_isolates <- length(unique(probs$isolate))
@@ -448,7 +538,8 @@ GEO_PROBLEM_LABELS <- c(
   unknown_country = "Unrecognised country",
   bad_coords = "Unreadable coordinates",
   swapped = "Latitude and longitude swapped",
-  outside = "Outside the stated country"
+  outside = "Outside the stated country",
+  admin1_uncounted = "Not counted by state/province"
 )
 
 # Every affected isolate as a table, sorted by problem kind then isolate.
@@ -474,6 +565,18 @@ geo_problem_table <- function(probs) {
       }))
     )
   )
+}
+
+# The status as the current view needs it. State-level rows only matter while
+# the choropleth counts by state/province; elsewhere they would flag every
+# isolate that names just its country, so they are left out of the advisories
+# and the "Show all" dialog.
+status_for_view <- function(s, mode, level) {
+  if (is.null(s$problems) || (identical(mode, "Choropleth") && identical(level, "admin1"))) {
+    return(s)
+  }
+  s$problems <- s$problems[s$problems$kind != "admin1_uncounted", , drop = FALSE]
+  s
 }
 
 # Join postcode/city/state/country (most specific first) into one place string
@@ -766,11 +869,14 @@ geocode_waiter_html <- function(n_places, done = 0L, elapsed = 0, label = "Geoco
 # fields, or that fail to geocode, are dropped from `coords`.
 #
 # Returns a list with `coords` (the metadata columns plus place, country_code,
-# longitude and latitude, ordered by collection date, or NULL when nothing is
-# mappable), `regions` (every isolate naming a recognised country, with its
-# country_code, whether or not it got a point: the choropleth counts these, so
-# a failed or offline geocode never drops an isolate from its country) and
-# `status` (see empty_geocode_status()'s fields). `db_path` is the database
+# longitude, latitude, region_admin1 and map_country (see the Show filter's
+# focus_rows()), ordered by collection date, or NULL
+# when nothing is mappable), `regions` (every isolate naming a recognised
+# country, with its country_code, whether or not it got a point: the country
+# choropleth counts these, so a failed or offline geocode never drops an
+# isolate from its country), `shapes` (per finer choropleth level, the polygons
+# it draws: `admin1` from admin1_shapes(), NULL when no isolate was assigned)
+# and `status` (see empty_geocode_status()'s fields). `db_path` is the database
 # whose geocode cache is read and extended; NULL looks everything up.
 # `progress(label, done, total, seconds)` is called before each fresh lookup.
 build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
@@ -907,14 +1013,67 @@ build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
   status$offline <- offline
   status$geocode_error <- error
 
+  # The state/province each point falls in, assigned here once per Generate
+  # rather than per frame. A place naming only the country geocodes to the
+  # country's centre, which would count every such isolate in one arbitrary
+  # state, so only explicit coordinates and finer places are assigned.
+  country_only <- !has_explicit & df$place == ifelse(is.na(country[keep]), "", country[keep])
+  # Every point is located once; the Show filter below uses where it lies
+  # whatever its place says.
+  spot <- rep(NA_character_, nrow(df))
+  spot[mapped] <- admin1_of(df$latitude[mapped], df$longitude[mapped])
+  df$region_admin1 <- ifelse(country_only, NA_character_, spot)
+  uncounted <- is.na(df$region_admin1)
+  status$n_admin1_uncounted <- sum(uncounted)
+  status$problems <- rbind(
+    status$problems,
+    geo_problems(
+      "admin1_uncounted",
+      df$isolate[uncounted],
+      ifelse(
+        has_explicit[uncounted],
+        "Coordinates",
+        ifelse(country_only[uncounted], "Country", "Place")
+      ),
+      ifelse(
+        !mapped[uncounted],
+        sprintf("%s (not geocoded)", df$place[uncounted]),
+        ifelse(
+          country_only[uncounted],
+          sprintf("%s (country only)", df$place[uncounted]),
+          sprintf(
+            "%s (no state/province within %g km)",
+            format_coordinates(df$latitude[uncounted], df$longitude[uncounted]),
+            COUNTRY_TOLERANCE_M / 1000
+          )
+        )
+      )
+    )
+  )
+  shapes <- list(admin1 = admin1_shapes(df$region_admin1))
+
+  # The country the Show filter files each isolate under: the one its point
+  # lies in, so a selection never keeps a point drawn outside it. A point at
+  # sea (often swapped coordinates) belongs to no country and shows only with
+  # the whole world. A point in a unit the 1:50m countries lack (Gibraltar,
+  # Guantanamo...) falls back to the country the isolate names.
+  parent <- if (any(!is.na(spot))) {
+    admin1 <- get_admin1()
+    admin1$adm0_a3[match(spot, admin1$adm1_code)]
+  } else {
+    rep(NA_character_, nrow(df))
+  }
+  outside_50m <- !is.na(parent) & !parent %in% get_world()$adm0_a3
+  df$map_country <- ifelse(outside_50m, df$country_code, parent)
+
   out <- df[mapped, , drop = FALSE]
   if (!nrow(out)) {
-    return(list(coords = NULL, regions = regions, status = status))
+    return(list(coords = NULL, regions = regions, shapes = shapes, status = status))
   }
   if ("sample_collection_date" %in% names(out)) {
     out <- out[order(out$sample_collection_date), , drop = FALSE]
   }
-  list(coords = out, regions = regions, status = status)
+  list(coords = out, regions = regions, shapes = shapes, status = status)
 }
 
 # Subset the coordinates to the selected range of the Time tab's date variable.
@@ -945,6 +1104,178 @@ filter_coords <- function(coords, o) {
   }
   keep <- in_date_range(coords[[field]], rng)
   coords[keep, , drop = FALSE]
+}
+
+# Subset rows to the countries the Show filter selects (`focus`, adm0_a3
+# codes; empty is the whole world). `col` holds each row's country: the
+# geocoded coords carry map_country, build_map_coords()'s `regions` only the
+# stated country_code, which is what the country choropleth counts by.
+focus_rows <- function(rows, focus, col = "map_country") {
+  if (is.null(rows) || !length(focus) || !col %in% names(rows)) {
+    return(rows)
+  }
+  rows[rows[[col]] %in% focus, , drop = FALSE]
+}
+
+# Map pane of the Show filter's mask and its stacking. Always above the base
+# tiles (200). In Choropleth mode also above the polygons and their labels
+# layer (450), whose labels would otherwise print over masked countries; in the
+# other modes below the overlay pane (400) and the marker pane (410), so a
+# point, heat spot or chart on a border is never cut in half.
+FOCUS_MASK_PANE <- "focusMask"
+FOCUS_MASK_Z <- c(choropleth = 455, other = 350)
+
+# Fill of the mask, the map canvas's own #ddd (see .viz-map-canvas), so what
+# lies outside the selection reads as no map at all.
+FOCUS_MASK_COLOR <- "#dddddd"
+
+# The mask gets its own SVG renderer. Leaflet draws vector layers into an SVG
+# only 10% larger than the view and redraws it only once a pan or zoom ends, so
+# mid-gesture the shrunken or shifted SVG left the tiles beyond it unmasked for
+# a moment. A margin of one view on every side covers a whole-level zoom-out
+# animation and any drag, and the hook below redraws the mask on every frame of
+# a pan or fly, which a margin alone cannot cover (a fly can zoom out many
+# levels). `_reset` and `_update` are Leaflet's own redraw steps for a
+# renderer; its own guard skips them during a zoom animation, where the margin
+# applies.
+FOCUS_MASK_RENDERER <- sprintf("L.svg({padding: 1, pane: '%s'})", FOCUS_MASK_PANE)
+FOCUS_MASK_FOLLOW_JS <- sprintf(
+  "function(el) {
+     var map = this;
+     map.eachLayer(function(layer) {
+       var r = layer._renderer;
+       if (!r || r.options.pane !== '%s' || r._ptFollows) return;
+       r._ptFollows = true;
+       var zoom = map.getZoom();
+       map.on('move', function() {
+         if (map._animatingZoom) return;
+         if (map.getZoom() !== zoom) {
+           zoom = map.getZoom();
+           r._reset();
+         } else {
+           r._update();
+         }
+       });
+     });
+   }",
+  FOCUS_MASK_PANE
+)
+
+# How far (degrees, about 125 km) the Show filter's window reaches past the
+# selected countries' coasts. The 1:50m outlines are generalised, so at
+# regional zoom their coastline sits kilometres off the tiles' own; cut exactly
+# there, the mask clipped coastal cities and their labels. Kept generous on
+# purpose: offshore islands and the nearby sea read as part of the selection.
+FOCUS_COAST_MARGIN_DEG <- 1.25
+
+# The area the Show filter leaves visible: the selected countries grown by
+# FOCUS_COAST_MARGIN_DEG, less every other country, so the margin reaches into
+# the sea but never across a land border (an enclave such as Lesotho stays
+# hidden unless selected too). Worked in plane degrees with the CRS dropped:
+# GEOS is fast and exact enough at this scale, and the growth past +-180 that
+# sf would flag on long/lat data is harmless. Rounded corners are coarse and
+# the result simplified, as the mask is redrawn on every frame of a pan.
+# Cached for the last selection only; it is static reference data.
+focus_window <- function(focus) {
+  key <- paste(sort(unique(focus)), collapse = ",")
+  if (identical(.world_env$window_key, key)) {
+    return(.world_env$window)
+  }
+  box::use(
+    sf,
+  )
+  world <- get_world()
+  outlines <- sf$st_set_crs(sf$st_geometry(world), NA)
+  chosen <- world$adm0_a3 %in% focus
+  window <- NULL
+  if (any(chosen)) {
+    window <- sf$st_buffer(
+      sf$st_union(sf$st_make_valid(outlines[chosen])),
+      FOCUS_COAST_MARGIN_DEG,
+      nQuadSegs = 2
+    )
+    others <- outlines[!chosen]
+    near <- others[lengths(sf$st_intersects(others, window)) > 0]
+    if (length(near)) {
+      window <- sf$st_difference(window, sf$st_union(sf$st_make_valid(near)))
+    }
+    window <- sf$st_simplify(window, dTolerance = 0.01)
+    if (any(sf$st_geometry_type(window) == "GEOMETRYCOLLECTION")) {
+      window <- sf$st_collection_extract(window, "POLYGON")
+    }
+    window <- sf$st_cast(window, "MULTIPOLYGON")
+  }
+  .world_env$window_key <- key
+  .world_env$window <- window
+  window
+}
+
+# The Show filter's mask: one opaque polygon spanning the world (and the copies
+# either side of it) with every ring of focus_window() cut out. Leaflet fills
+# paths even-odd, so the rings need no further geometry to become holes, and a
+# hole inside the window (an unselected enclave) is filled again. NULL when
+# nothing, or every country, is selected.
+focus_mask <- function(focus) {
+  if (!length(focus) || all(get_world()$adm0_a3 %in% focus)) {
+    return(NULL)
+  }
+  window <- focus_window(focus)
+  if (is.null(window)) {
+    return(NULL)
+  }
+  box::use(
+    sf[st_coordinates, st_polygon, st_sfc],
+  )
+  xy <- st_coordinates(window)
+  ring_id <- do.call(paste, as.data.frame(xy[, grepl("^L", colnames(xy)), drop = FALSE]))
+  rings <- split.data.frame(xy[, c("X", "Y")], ring_id)
+  frame <- rbind(c(-540, -90), c(540, -90), c(540, 90), c(-540, 90), c(-540, -90))
+  # No CRS on purpose: the frame reaches past +-180 to cover the world copies
+  # either side, which sf flags as invalid long/lat when leaflet checks one.
+  # Leaflet reads the coordinates as long/lat either way.
+  st_sfc(st_polygon(c(list(frame), unname(rings))))
+}
+
+# Isolates per country for the Show filter's counts, named by adm0_a3 code:
+# each isolate once, under the country its point lies in where it has a point
+# (map_country; a point at sea counts nowhere), else under the country it names.
+focus_counts <- function(coords, regions) {
+  unplaced <- regions[!regions$isolate %in% coords$isolate, , drop = FALSE]
+  codes <- c(coords$map_country, unplaced$country_code)
+  counts <- table(codes[!is.na(codes)])
+  setNames(as.integer(counts), names(counts))
+}
+
+# Choices of the Show filter: every Natural Earth country, grouped by
+# continent, both sorted by name, each country and continent carrying its
+# isolate count (from focus_counts()) for the list to print right-aligned (see
+# app/js/virtual-select-count-label.js). Ticking a continent's group header
+# selects all of its countries. Built in shinyWidgets' own processed form, as
+# its plain named-list form has no room for the counts.
+focus_choices <- function(counts = integer(0)) {
+  world <- get_world()
+  n <- unname(counts[world$adm0_a3])
+  n[is.na(n)] <- 0L
+  ord <- order(world$continent, world$name)
+  groups <- split(ord, world$continent[ord])
+  structure(
+    list(
+      type = "transpose_group",
+      choices = unname(lapply(names(groups), function(continent) {
+        rows <- groups[[continent]]
+        list(
+          label = continent,
+          customData = list(count = sum(n[rows])),
+          options = list(
+            label = world$name[rows],
+            value = world$adm0_a3[rows],
+            customData = lapply(n[rows], function(k) list(count = k))
+          )
+        )
+      }))
+    ),
+    class = c("list", "vs_choices")
+  )
 }
 
 # Build a per-marker HTML popup from the selected metadata fields.
@@ -1185,49 +1516,131 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
   m
 }
 
+# Isolates per region, aligned with `keys` (one per drawn polygon; NA for
+# none). `assigned` holds each isolate's region key.
+region_counts <- function(assigned, keys) {
+  as.integer(table(as.character(assigned))[keys])
+}
+
 # Isolates per Natural Earth unit, aligned with `world`'s rows (NA for none).
 # Joined on the unit code, so any spelling app/logic/geo.R recognises counts
 # ("USA", "Deutschland", "DE"), not only Natural Earth's own name.
 country_counts <- function(rows, world) {
+  if (is.null(rows) || !nrow(rows)) {
+    return(rep(NA_integer_, nrow(world)))
+  }
   codes <- if ("country_code" %in% names(rows)) {
     rows$country_code
   } else {
     country_code(rows$geo_loc_name_country)
   }
-  counts <- table(codes)
-  as.integer(counts[world$adm0_a3])
+  region_counts(codes, world$adm0_a3)
 }
 
-# Color-scale domain for country counts. A single counted value (every isolate
-# in one country, or one count shared by all) would give a zero-width domain,
+# What one choropleth level draws: the polygons, a display label for each, and
+# the isolates counted in each from the shown rows (`n`) and from all of them
+# (`full_n`, for the fixed colour scale; NULL without `full_rows`). Country
+# level counts by the stated country over every Natural Earth unit; state level
+# counts by region_admin1 over the regions build_map_coords() picked (`shapes`),
+# with every other country drawn whole as an uncounted `backdrop`, so the map
+# never shows holes where a country has no state-level isolates. `focus` (the
+# Show filter's codes; empty is the world) limits both to those countries.
+choropleth_units <- function(level, rows, full_rows = NULL, shapes = NULL, focus = NULL) {
+  world <- get_world()
+  if (length(focus)) {
+    world <- world[world$adm0_a3 %in% focus, ]
+  }
+  if (identical(level, "admin1")) {
+    polys <- shapes$admin1
+    if (!is.null(polys) && length(focus)) {
+      polys <- polys[polys$adm0_a3 %in% focus, ]
+    }
+    if (!is.null(polys) && !nrow(polys)) {
+      polys <- NULL
+    }
+    return(list(
+      polys = polys,
+      label = if (!is.null(polys)) paste0(polys$name, ", ", polys$country),
+      n = if (!is.null(polys)) region_counts(rows$region_admin1, polys$adm1_code),
+      full_n = if (!is.null(polys) && !is.null(full_rows)) {
+        region_counts(full_rows$region_admin1, polys$adm1_code)
+      },
+      backdrop = world[!world$adm0_a3 %in% polys$adm0_a3, ]
+    ))
+  }
+  list(
+    polys = world,
+    label = world$name,
+    n = country_counts(rows, world),
+    full_n = if (!is.null(full_rows)) country_counts(full_rows, world)
+  )
+}
+
+# Color-scale domain for region counts. A single counted value (every isolate
+# in one region, or one count shared by all) would give a zero-width domain,
 # which leaflet's numeric legend draws as an empty bar; the scale then starts at
-# zero instead.
+# zero instead. With nothing counted at all (a date window holding only
+# isolates no state-level region took) the scale is 0 to 1.
 count_domain <- function(n) {
+  if (all(is.na(n))) {
+    return(c(0, 1))
+  }
   r <- range(n, na.rm = TRUE)
   if (r[1] == r[2]) c(0, max(r[2], 1)) else r
 }
 
-# Choropleth: shade Natural Earth countries by the number of isolates whose
-# geo_loc_name_country names them, using the Region tab's palette (the mapping
-# layers don't apply here — the mapped variable is always the isolate count).
-# `coords` here are build_map_coords()'s `regions`, which build_map() passes.
-build_choropleth <- function(m, coords, o, full_coords = NULL) {
-  world <- get_world()
-  world$n <- country_counts(coords, world)
+# Choropleth: shade regions by isolate count, using the Region tab's palette
+# (the mapping layers don't apply here — the mapped variable is always the
+# isolate count). The level (o$region_level) decides the regions, see
+# choropleth_units(); everything from the palette on is shared. At country
+# level `coords` are build_map_coords()'s `regions`, at state level its
+# `coords`, as build_map() passes them; `shapes` is its `shapes`.
+build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
+  units <- choropleth_units(
+    o$region_level %||% "country",
+    coords,
+    full_coords,
+    shapes,
+    o$focus
+  )
+  # Countries counted at no finer level go underneath, grey and labelled by
+  # name only: a count there would read as zero isolates, though some may
+  # name just the country.
+  if (!is.null(units$backdrop) && nrow(units$backdrop)) {
+    m <- leaflet$addPolygons(
+      m,
+      data = units$backdrop,
+      fillColor = "#f0f0f0",
+      fillOpacity = o$region_opacity,
+      color = o$region_border,
+      weight = 1,
+      smoothFactor = 0.3,
+      label = units$backdrop$name,
+      highlightOptions = leaflet$highlightOptions(
+        weight = 2,
+        color = "#000000",
+        bringToFront = TRUE
+      )
+    )
+  }
+  if (is.null(units$polys)) {
+    return(m)
+  }
+  n <- units$n
 
   # Off (default): the domain is the currently-shown (possibly date-filtered)
   # counts, so the color scale rescales to whatever subset is visible — the
-  # darkest country always looks "full" regardless of its absolute count. On:
+  # darkest region always looks "full" regardless of its absolute count. On:
   # the domain comes from the full, unfiltered counts instead, so a partial
   # range renders lighter until the count actually approaches the final
   # total — useful for watching the animation "fill in" over time.
-  domain_n <- if (isTRUE(o$region_fixed_scale) && !is.null(full_coords)) {
-    country_counts(full_coords, world)
+  domain_n <- if (isTRUE(o$region_fixed_scale) && !is.null(units$full_n)) {
+    units$full_n
   } else {
-    world$n
+    n
   }
 
-  vals <- if (identical(o$region_transform, "Log")) log1p(world$n) else world$n
+  vals <- if (identical(o$region_transform, "Log")) log1p(n) else n
   domain_range <- count_domain(domain_n)
   domain_vals <- if (identical(o$region_transform, "Log")) {
     log1p(domain_range)
@@ -1242,28 +1655,28 @@ build_choropleth <- function(m, coords, o, full_coords = NULL) {
   fill <- pal(vals)
   fill[is.na(vals)] <- "#f0f0f0"
 
-  # Every country is labelled, those without isolates included: "0 isolates"
-  # is an answer, where no label at all reads as a country the map forgot.
+  # Every region is labelled, those without isolates included: "0 isolates"
+  # is an answer, where no label at all reads as a region the map forgot.
   region_label <- paste0(
-    world$name,
+    units$label,
     ": ",
-    ifelse(is.na(world$n), 0L, world$n),
+    ifelse(is.na(n), 0L, n),
     " isolates"
   )
 
   # "Always show labels" only pins the ones actually saying something: a
-  # country with zero isolates permanently printing "0 isolates" all over an
+  # region with zero isolates permanently printing "0 isolates" all over an
   # otherwise empty map just adds noise. One labelOptions() per row (rather
   # than the single shared object every other addPolygons() argument takes)
   # is what lets `permanent` vary polygon by polygon here.
-  has_isolates <- !is.na(world$n) & world$n > 0
+  has_isolates <- !is.na(n) & n > 0
   region_label_opts <- lapply(has_isolates, function(shown) {
     leaflet$labelOptions(permanent = isTRUE(o$region_permanent) && shown)
   })
 
   m <- leaflet$addPolygons(
     m,
-    data = world,
+    data = units$polys,
     fillColor = fill,
     fillOpacity = o$region_opacity,
     color = o$region_border,
@@ -1561,13 +1974,15 @@ format_daterange_label <- function(rng) {
 # Assemble the full leaflet widget (no view/zoom — the caller sets that): base
 # tiles, decorations, plugins, then the layer for the active mode. Shared by the
 # live renderer and the HTML export. `regions` is build_map_coords()'s
-# unfiltered country table; NULL makes the choropleth count `coords` instead.
+# unfiltered country table; NULL makes the country choropleth count `coords`
+# instead. `shapes` is its `shapes`, the polygons of the finer levels.
 build_map <- function(
   coords,
   o,
   full_coords = NULL,
   zoom = NULL,
-  regions = NULL
+  regions = NULL,
+  shapes = NULL
 ) {
   # The native zoom control has no `position` argument of its own -- it always
   # lands at Leaflet's hardcoded top-left, which is also where a "Top left"
@@ -1626,21 +2041,52 @@ build_map <- function(
     )
   }
 
-  # The choropleth counts build_map_coords()'s `regions` (every isolate naming
-  # a recognised country) rather than the geocoded points, under the same time
-  # filter, so an isolate whose place failed to geocode still counts.
-  if (choropleth && !is.null(regions)) {
+  # The country choropleth counts build_map_coords()'s `regions` (every isolate
+  # naming a recognised country) rather than the geocoded points, under the same
+  # time filter, so an isolate whose place failed to geocode still counts. The
+  # state level needs a point, so it counts the (filtered) geocoded `coords`.
+  # The Show filter blanks every country outside the selection, base tiles
+  # and choropleth labels included, and applies to every mode alike before
+  # anything is counted.
+  mask <- focus_mask(o$focus)
+  if (!is.null(mask)) {
+    m <- leaflet$addMapPane(
+      m,
+      FOCUS_MASK_PANE,
+      zIndex = FOCUS_MASK_Z[[if (choropleth) "choropleth" else "other"]]
+    )
+    m <- leaflet$addPolygons(
+      m,
+      data = mask,
+      stroke = FALSE,
+      fillColor = FOCUS_MASK_COLOR,
+      fillOpacity = 1,
+      smoothFactor = 0.3,
+      options = leaflet$pathOptions(
+        pane = FOCUS_MASK_PANE,
+        interactive = FALSE,
+        renderer = JS(FOCUS_MASK_RENDERER)
+      )
+    )
+    m <- onRender(m, FOCUS_MASK_FOLLOW_JS)
+  }
+  coords <- focus_rows(coords, o$focus)
+  full_coords <- focus_rows(full_coords, o$focus)
+  regions <- focus_rows(regions, o$focus, "country_code")
+  country_level <- identical(o$region_level %||% "country", "country")
+  if (choropleth && country_level && !is.null(regions)) {
     full_coords <- regions
     coords <- filter_coords(regions, o)
   }
 
-  if (is.null(coords) || !nrow(coords)) {
+  # A choropleth still draws its regions, uncounted, for an empty date window.
+  if (!choropleth && (is.null(coords) || !nrow(coords))) {
     return(m)
   }
 
   m <- switch(
     o$mode,
-    Choropleth = build_choropleth(m, coords, o, full_coords),
+    Choropleth = build_choropleth(m, coords, o, full_coords, shapes),
     Heatmap = build_heatmap(m, coords, o, full_coords),
     Charts = build_charts(m, coords, o, full_coords, zoom),
     build_markers(m, coords, o, full_coords)
@@ -2072,6 +2518,31 @@ map_controls <- function(ns) {
         "Basemap",
         value = "basemap",
         icon = shiny$icon("layer-group"),
+        # Countries to show, every mode alike; filled on Generate with every
+        # country and its isolate count (see focus_choices()). Nothing ticked
+        # is the whole world. A popup like every multi-select in the app, so
+        # edits are staged until Confirm (virtual-select-popup-confirm.js) and
+        # "close" reports the confirmed selection once.
+        virtualSelectInput(
+          ns("map_focus"),
+          "Show",
+          choices = NULL,
+          selected = character(0),
+          multiple = TRUE,
+          search = TRUE,
+          # The group checkbox ticks only the countries the search matches.
+          selectAllOnlyVisible = TRUE,
+          searchPlaceholderText = "Search countries ...",
+          labelRenderer = "ptCountLabel",
+          placeholder = "World (all countries)",
+          optionsCount = 8,
+          noOfDisplayValues = 2,
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
+          updateOn = "close",
+          width = "100%"
+        ),
         shiny$div(
           id = ns("wrap_map_tiles"),
           pickerInput(
@@ -2235,6 +2706,16 @@ map_controls <- function(ns) {
         "Region",
         value = "region",
         icon = shiny$icon("earth-europe"),
+        # What a region is. State level counts each isolate in the admin-1
+        # region its point falls in (see build_map_coords()).
+        radioGroupButtons(
+          ns("map_region_level"),
+          "Regions",
+          choices = REGION_LEVELS,
+          selected = "country",
+          justified = TRUE,
+          size = "sm"
+        ),
         radioGroupButtons(
           ns("map_region_transform"),
           "Count scale",
@@ -2766,6 +3247,11 @@ server <- function(
     # build_map_coords()'s `regions`): what Choropleth mode counts.
     map_regions <- shiny$reactiveVal(NULL)
 
+    # The polygons each finer choropleth level draws (build_map_coords()'s
+    # `shapes`), picked on Generate. Set together with map_coords(), whose
+    # region_admin1 column they belong to, so the two never disagree.
+    map_shapes <- shiny$reactiveVal(NULL)
+
     # The variable mapped onto the markers or charts. At most one (see MEDIUM),
     # but held as a list, because that is the shape every engine's mapping
     # state, snapshot and restore path share.
@@ -2792,7 +3278,7 @@ server <- function(
 
     output$map_geocode_status_ui <- shiny$renderUI({
       cache_rev()
-      s <- map_geocode_status()
+      s <- status_for_view(map_geocode_status(), input$map_mode, input$map_region_level)
       n_cache <- nrow(read_geocodes(db_path()))
       clear_link <- if (n_cache > 0) {
         shiny$actionLink(
@@ -2911,7 +3397,8 @@ server <- function(
     # Every isolate behind the advisories, for when there are more than the
     # tooltips name.
     shiny$observeEvent(input$map_geo_problems, {
-      probs <- map_geocode_status()$problems
+      shown <- status_for_view(map_geocode_status(), input$map_mode, input$map_region_level)
+      probs <- shown$problems
       shiny$req(!is.null(probs), nrow(probs) > 0)
       shiny$showModal(shiny$div(
         class = "modal-wide",
@@ -3225,6 +3712,7 @@ server <- function(
       shiny$reactive({
         list(
           mode = input$map_mode %||% "Markers",
+          focus = input$map_focus,
           # A basemap no longer offered (a saved plot on a CARTO one) draws
           # the default rather than a watermarked tile.
           tiles = if (isTRUE(input$map_tiles %in% map_providers)) {
@@ -3254,6 +3742,7 @@ server <- function(
           show_time_label = isTRUE(input$map_show_time_label),
           cluster = (input$map_cluster_radius %||% 0) > 0,
           cluster_radius = input$map_cluster_radius %||% 0,
+          region_level = input$map_region_level %||% "country",
           region_transform = input$map_region_transform %||% "Raw",
           region_fixed_scale = isTRUE(input$map_region_fixed_scale),
           region_scale = input$map_region_scale %||% "Oranges",
@@ -3351,13 +3840,15 @@ server <- function(
       o <- map_opts()
       base <- map_coords()
       coords <- filter_coords(base, o)
+      # What the view is framed on: build_map() applies the Show filter itself.
+      shown <- focus_rows(base, o$focus)
 
       # Read the current view first so Charts-mode clustering can bin at the
       # live zoom (the client reports it after the first interaction); on the
       # very first render z is NULL and build_charts falls back to per-place,
       # which the debounced zoom observer below then re-clusters once fitBounds
       # settles a zoom.
-      has_data <- !is.null(coords) && nrow(coords) > 0
+      has_data <- !is.null(shown) && nrow(shown) > 0
       z <- shiny$isolate(input$map_zoom)
       ctr <- shiny$isolate(input$map_center)
       # Read (not depend on) the fit flag: clearing it must not itself trigger a
@@ -3369,7 +3860,8 @@ server <- function(
         o,
         full_coords = base,
         zoom = z,
-        regions = map_regions()
+        regions = map_regions(),
+        shapes = map_shapes()
       )
 
       # Fit every mapped isolate after a Generate, and keep doing so on each
@@ -3377,7 +3869,7 @@ server <- function(
       # (zoom/center inputs are populated by Leaflet). Framed on all isolates
       # rather than the date window, so an animation does not jump around.
       if (has_data && (refit || is.null(z) || is.null(ctr))) {
-        m <- frame_coords(m, if (!is.null(base) && nrow(base)) base else coords)
+        m <- frame_coords(m, shown)
       } else if (!is.null(z) && !is.null(ctr)) {
         m <- leaflet$setView(m, lng = ctr$lng, lat = ctr$lat, zoom = z)
       } else {
@@ -3406,6 +3898,14 @@ server <- function(
     # the map back on the previous data's frame.
     shiny$observeEvent(input$map_user_view, pending_fit(FALSE), ignoreInit = TRUE)
 
+    # A new Show selection frames its isolates, as a Generate does.
+    shiny$observeEvent(
+      input$map_focus,
+      pending_fit(TRUE),
+      ignoreInit = TRUE,
+      ignoreNULL = FALSE
+    )
+
     # Charts-mode clustering: re-bin and redraw the minichart layer as the map
     # is zoomed, so overlapping charts merge and split like marker clusters. A
     # single scroll-zoom emits several zoom events and each redraw rebuilds the
@@ -3427,7 +3927,7 @@ server <- function(
         if (is.null(z)) {
           return()
         }
-        base <- map_coords()
+        base <- focus_rows(map_coords(), o$focus)
         coords <- filter_coords(base, o)
         if (is.null(coords) || !nrow(coords)) {
           return()
@@ -3435,7 +3935,11 @@ server <- function(
         proxy <- leaflet$leafletProxy("map")
         clearMinicharts(proxy)
         # Pass the full (unfiltered) coords so a re-cluster on zoom keeps the
-        # same fixed full-range category set/palette/legend the full render uses.
+        # same fixed full-range category set and palette the full render uses.
+        # The legend lists those same categories at every zoom, so the one the
+        # full render drew stays: drawn again here, each zoom stacked another
+        # copy, without the sizing and opacity that render applied to it.
+        o$legend <- FALSE
         build_charts(proxy, coords, o, full_coords = base, zoom = z)
       },
       ignoreInit = TRUE
@@ -3870,6 +4374,30 @@ server <- function(
       )
     }
 
+    # Countries the Show filter offers since the last Generate (NULL before
+    # any; filled then rather than at startup, so the country table loads with
+    # the map and the counts can be shown), and a restored selection waiting
+    # for them: a plot restored before its first Generate has nothing to
+    # select from yet. Plain state:
+    # nothing should re-run because either changed.
+    focus_offered <- NULL
+    focus_pending <- NULL
+
+    # Offer every country with this Generate's isolate counts, keeping the
+    # current (or restored) selection.
+    fill_focus_choices <- function(built) {
+      choices <- focus_choices(focus_counts(built$coords, built$regions))
+      focus_offered <<- unlist(lapply(choices$choices, function(g) g$options$value))
+      wanted <- focus_pending %||% shiny$isolate(input$map_focus)
+      focus_pending <<- NULL
+      updateVirtualSelect(
+        inputId = "map_focus",
+        session = session,
+        choices = choices,
+        selected = as.character(intersect(unlist(wanted), focus_offered))
+      )
+    }
+
     # Geocode + populate the metadata-backed selects and the date slider, only
     # when Map is the active engine and Generate is clicked (mirrors the MST/Tree
     # guard). The heavy geocoding is covered by the waiter spinner.
@@ -3905,7 +4433,7 @@ server <- function(
             paste("Could not geocode isolate locations:", conditionMessage(e)),
             type = "error"
           )
-          list(coords = NULL, regions = NULL, status = empty_geocode_status())
+          list(coords = NULL, regions = NULL, shapes = NULL, status = empty_geocode_status())
         }
       )
       coords <- built$coords
@@ -3938,6 +4466,8 @@ server <- function(
       }
       map_coords(coords)
       map_regions(built$regions)
+      map_shapes(built$shapes)
+      fill_focus_choices(built)
       generated(TRUE)
       # Frame the view on this Generate's data, refitting even if the previous
       # map was left zoomed in on an earlier (e.g. single-isolate) selection.
@@ -3961,7 +4491,8 @@ server <- function(
 
     # Reset-view button: refit to the (date-filtered) data with a fly animation.
     shiny$observeEvent(input$map_reset, {
-      coords <- filter_coords(map_coords(), map_opts())
+      o <- map_opts()
+      coords <- filter_coords(focus_rows(map_coords(), o$focus), o)
       shiny$req(!is.null(coords) && nrow(coords) > 0)
       frame_coords(leaflet$leafletProxy("map"), coords, fly = TRUE)
     })
@@ -3987,10 +4518,12 @@ server <- function(
           o,
           full_coords = base,
           zoom = shiny$isolate(input$map_zoom),
-          regions = map_regions()
+          regions = map_regions(),
+          shapes = map_shapes()
         )
-        if (!is.null(coords) && nrow(coords) > 0) {
-          m <- frame_coords(m, coords)
+        shown <- focus_rows(coords, o$focus)
+        if (!is.null(shown) && nrow(shown) > 0) {
+          m <- frame_coords(m, shown)
         }
         saveWidget(m, file, selfcontained = TRUE)
       },
@@ -4130,6 +4663,13 @@ server <- function(
       # palette could be flipped, is simply dropped -- it isn't any more).
       if (identical(vals$map_mode, "Choropleth")) {
         vals$map_region_scale <- vals$map_region_scale %||% vals$map_col_scale
+      }
+      # A plot saved before the state level existed counted by country.
+      vals$map_region_level <- vals$map_region_level %||% "country"
+      # Saved before the Show filter, or with nothing ticked: the whole world.
+      vals$map_focus <- unlist(vals$map_focus) %||% character(0)
+      if (is.null(focus_offered)) {
+        focus_pending <<- vals$map_focus
       }
 
       # Same catalogue a reset applies, holding saved values instead of the
