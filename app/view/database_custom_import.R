@@ -752,6 +752,7 @@ server <- function(
             return(.badge("fail", "unreadable"))
           }
           overwrite <- identical(choice$action, "overwrite")
+          added <- if (overwrite) pv$added_overwrite else pv$added_fill
           shiny$tagList(
             .badge(if (overwrite && pv$differ > 0L) "warn" else "pass", "merge"),
             sprintf(" %d empty cell(s) filled", pv$fill),
@@ -762,6 +763,14 @@ server <- function(
               } else {
                 sprintf(", %d different value(s) kept", pv$differ)
               }
+            },
+            if (length(added)) {
+              sprintf(
+                " \u00b7 adds %d new categor%s: %s",
+                length(added),
+                if (length(added) == 1L) "y" else "ies",
+                .preview_list(added)
+              )
             }
           )
         }
@@ -846,6 +855,9 @@ server <- function(
               counts$filled,
               counts$overwritten
             )
+          },
+          if (counts$levels_added > 0L) {
+            sprintf("; %d new categor(ies) added", counts$levels_added)
           },
           "."
         ),

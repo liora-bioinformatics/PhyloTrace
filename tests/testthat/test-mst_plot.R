@@ -1034,10 +1034,13 @@ test_that("the region is one path at the fixed opacity", {
   ))
   expect_equal(impl$MST_CLUSTER_OPACITY, 0.77)
   # One beginPath and one fill per region: a fill per disc and capsule is what
-  # made a translucent region composite into a patchwork. The second fill is the
-  # cut around the nodes in no cluster, which runs once for all of them.
-  fills <- lengths(regmatches(hook, gregexpr("ctx.fill()", hook, fixed = TRUE)))
-  expect_identical(fills, 2L)
+  # made a translucent region composite into a patchwork. The cut around the
+  # nodes in no cluster is a single fill of its own, run once for all of them.
+  count <- function(js, what) {
+    lengths(regmatches(js, gregexpr(what, js, fixed = TRUE)))
+  }
+  expect_identical(count(hook, "c.fillStyle=b.c;c.fill()"), 1L)
+  expect_identical(count(hook, "ctx.fill()"), 1L)
   bare <- mst_plot$build_mst_visnetwork(
     demo_graph(),
     demo_meta(),
@@ -1049,10 +1052,55 @@ test_that("the region is one path at the fixed opacity", {
     )
   )$x$events$beforeDrawing
   # Nothing outside the cluster, nothing to cut.
-  expect_identical(
-    lengths(regmatches(bare, gregexpr("ctx.fill()", bare, fixed = TRUE))),
-    1L
+  expect_identical(count(bare, "ctx.fill()"), 0L)
+})
+
+test_that("an outlined cluster is stroked in the edge colour, not filled", {
+  opts <- base_opts(
+    show_clusters = TRUE, cluster_threshold = 5, cluster_style = "outline",
+    edge_color = "#123456"
   )
+  fr <- mst_plot$mst_frames(demo_graph(), demo_meta(), opts)
+  expect_true(length(fr$blobs) > 0L)
+  expect_true(all(fr$cluster_colors == "#123456"))
+  keys <- Filter(function(i) identical(i$kind, "key"), fr$legend)
+  expect_true(all(vapply(keys, function(k) k$shape, "") == "outline"))
+  hook <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), opts, fr
+  )$x$events$beforeDrawing
+  expect_true(grepl(
+    paste0("var OW=", impl$MST_CLUSTER_OUTLINE_WIDTH, ";"),
+    hook,
+    fixed = TRUE
+  ))
+  expect_true(grepl('"c":"#123456"', hook, fixed = TRUE))
+  filled <- mst_plot$build_mst_visnetwork(
+    demo_graph(), demo_meta(), base_opts(show_clusters = TRUE, cluster_threshold = 5)
+  )$x$events$beforeDrawing
+  expect_true(grepl("var OW=0;", filled, fixed = TRUE))
+})
+
+test_that("the legend lists only the sections it is asked to", {
+  layer <- list(
+    field = "country", title = "Country", aesthetic = "node_fill",
+    palette = "viridis"
+  )
+  headers <- function(...) {
+    fr <- mst_plot$mst_frames(
+      demo_graph(),
+      demo_meta(),
+      base_opts(
+        show_clusters = TRUE, cluster_threshold = 5, layers = list(layer), ...
+      )
+    )
+    vapply(Filter(function(i) identical(i$kind, "header"), fr$legend), function(i) i$label, "")
+  }
+  both <- headers()
+  expect_true("Country" %in% both)
+  expect_true(any(startsWith(both, "Clusters")))
+  expect_false(any(startsWith(headers(legend_clusters = FALSE), "Clusters")))
+  expect_false("Country" %in% headers(legend_layers = FALSE))
+  expect_length(headers(legend_clusters = FALSE, legend_layers = FALSE), 0L)
 })
 
 test_that("a cluster's name is drawn over the graph, not under it", {
@@ -1318,7 +1366,7 @@ test_that("the caption states what the drawing is made of", {
   # both are named rather than one summary.
   expect_match(
     mst_plot$mst_stats_caption(c(1, 2, 1, 1, 1), c(1, 3, 400, 2)),
-    "allelic distance median 2.5, mean 101.5, range 1.400"
+    "branch length median 2.5, mean 101.5, range 1.400 alleles"
   )
   # A tree of one node has no branches to summarise, and no plural either.
   expect_identical(mst_plot$mst_stats_caption(1, numeric(0)), "1 isolate in 1 node.")

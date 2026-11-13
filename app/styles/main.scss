@@ -1191,6 +1191,13 @@ $viz-tile-row-gap: 0.85rem;
     }
 }
 
+// The MST cluster colour scale while clusters are drawn as outlines, which take
+// the edge colour instead. Inert rather than hidden, like .viz-color-row above.
+.mst-cluster-scale.is-disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
 // A sliderInput whose control is disabled from the server: shinyjs dims the
 // ionRangeSlider track and handle on its own, but not the label above it.
 .viz-slider-row.is-disabled .control-label {
@@ -3052,6 +3059,22 @@ td {
         max-height: none !important;
         height: auto !important;
         border-left: 0 !important;
+    }
+}
+
+// Windowed grids pin their column widths (app/js/dt-column-widths.js): a
+// <colgroup> sized from every row heads the header and body tables, and fixed
+// layout makes those widths binding, so the rows in view cannot re-fit them.
+// The width DataTables writes inline is overridden with the colgroup's total;
+// with any other width the two tables would share the difference out unlike.
+.edit-table .dataTables_scroll table.dataTable.dt-pinned-cols {
+    table-layout: fixed;
+    width: var(--dt-pinned-width) !important;
+
+    // A value wider than its column until the next draw widens it.
+    tbody td {
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 }
 

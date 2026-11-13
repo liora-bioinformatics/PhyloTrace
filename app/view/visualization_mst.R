@@ -75,6 +75,7 @@ box::use(
     logic /
     mst_plot[
       MST_CLUSTER_FIELD,
+      MST_CLUSTER_STYLES,
       MST_FIT_DEFAULTS,
       MST_LENGTH_MODES,
       MST_MAX_EDGE_MULT,
@@ -186,9 +187,12 @@ MST_CONTROLS <- control_families(
     "mst_show_edge_label",
     "mst_background_transparent",
     "mst_show_legend",
+    "mst_legend_clusters",
+    "mst_legend_layers",
     "mst_show_scale_caption"
   ),
   pickers = c(
+    "mst_cluster_style",
     "mst_cluster_col_scale",
     "mst_length_mode",
     "mst_legend_ori"
@@ -219,6 +223,7 @@ MST_CONTROL_DEFAULTS <- c(
   FITTED_DEFAULTS,
   list(
     mst_show_clusters = TRUE,
+    mst_cluster_style = "fill",
     mst_cluster_threshold = THRESHOLD_PLACEHOLDER,
     mst_cluster_col_scale = "turbo",
     mst_collapse_threshold = 0,
@@ -228,6 +233,8 @@ MST_CONTROL_DEFAULTS <- c(
     mst_cap_mult = MST_MAX_EDGE_MULT,
     mst_background_transparent = TRUE,
     mst_show_legend = TRUE,
+    mst_legend_clusters = TRUE,
+    mst_legend_layers = TRUE,
     mst_legend_ori = "left",
     mst_show_scale_caption = TRUE,
     mst_text_color = "#000000",
@@ -272,7 +279,14 @@ mst_controls <- function(ns, options_ui = NULL) {
                 # tip would sit over the field.
                 options = list(trigger = "hover")
               ),
-              scale_select(ns, "mst_cluster_col_scale", selected = "turbo"),
+              pickerInput(ns("mst_cluster_style"), "Style", MST_CLUSTER_STYLES),
+              # Greyed out under "Outline", which draws every boundary in the
+              # edge colour.
+              shiny$div(
+                id = ns("mst_cluster_scale_wrap"),
+                class = "mst-cluster-scale",
+                scale_select(ns, "mst_cluster_col_scale", selected = "turbo")
+              ),
             ),
             accordion_panel(
               "Cluster Options",
@@ -515,6 +529,11 @@ mst_controls <- function(ns, options_ui = NULL) {
             "Legend",
             icon = shiny$icon("list"),
             input_switch(ns("mst_show_legend"), "Show legend", TRUE),
+            # Which sections the legend lists; the regions and the mapping are
+            # drawn whether or not they are named here.
+            shiny$tags$label(class = "control-label", "Include"),
+            input_switch(ns("mst_legend_clusters"), "Clusters", TRUE),
+            input_switch(ns("mst_legend_layers"), "Mapped variables", TRUE),
             pickerInput(
               ns("mst_legend_ori"),
               "Position",
@@ -975,6 +994,19 @@ server <- function(
     # the DOM already in place.
     shinyjs::delay(400, shiny$isolate(apply_capping_state()))
 
+    # Grey out the cluster colour scale while clusters are outlined: every
+    # boundary is drawn in the edge colour, so the scale has nothing to colour.
+    apply_cluster_style_state <- function() {
+      shinyjs::toggleClass(
+        id = "mst_cluster_scale_wrap",
+        class = "is-disabled",
+        condition = identical(input$mst_cluster_style, "outline")
+      )
+    }
+    shiny$observe(apply_cluster_style_state())
+    # Same mount race as apply_capping_state() above.
+    shinyjs::delay(400, shiny$isolate(apply_cluster_style_state()))
+
     # Grey out the node colour swatch while a mapping layer owns the fill: a
     # fixed colour loses to the per-node one, so the swatch is genuinely dead.
     shiny$observe({
@@ -1422,12 +1454,15 @@ server <- function(
         layers = mst_layers(),
         # Clustering.
         show_clusters = input$mst_show_clusters,
+        cluster_style = input$mst_cluster_style,
         cluster_threshold = fitted$mst_cluster_threshold,
         cluster_col_scale = input$mst_cluster_col_scale,
         cluster_width = fitted$mst_cluster_width,
         cluster_label_size = fitted$mst_cluster_label_size,
         # Legend.
         show_legend = input$mst_show_legend,
+        legend_clusters = input$mst_legend_clusters,
+        legend_layers = input$mst_legend_layers,
         legend_ori = input$mst_legend_ori,
         show_caption = input$mst_show_scale_caption,
         canvas_px = canvas_px()
@@ -1497,6 +1532,8 @@ server <- function(
         background = input$mst_background_color,
         shadow = input$mst_shadow,
         legend = input$mst_show_legend,
+        legend_clusters = input$mst_legend_clusters,
+        legend_layers = input$mst_legend_layers,
         legend_ori = input$mst_legend_ori,
         show_caption = input$mst_show_scale_caption,
         # Both the legend's type and an untinted cluster caption are painted by
@@ -1510,6 +1547,7 @@ server <- function(
         # belongs here — a beforeDrawing handler is baked into the widget and
         # cannot be pushed through the proxy.
         clusters = input$mst_show_clusters,
+        cluster_style = input$mst_cluster_style,
         cluster_threshold = fitted$mst_cluster_threshold,
         cluster_col_scale = input$mst_cluster_col_scale,
         cluster_width = fitted$mst_cluster_width,

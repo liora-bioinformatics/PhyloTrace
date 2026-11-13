@@ -477,13 +477,39 @@ target_type <- function(kind, name, defs) {
   list(type = if (is.na(type) || identical(type, "datetime")) "text" else type, levels = NA)
 }
 
+# Merge target type and levels widened for the upload `v`: a category target
+# takes the upload's values it does not list yet as new levels (case-only
+# variants fold into the existing spelling), unless that would push it past
+# CATEGORY_MAX_LEVELS - then its levels stay as they are and those values fail.
+# `added` holds the new levels; empty for every other target.
+.merge_target_type <- function(v, kind, name, defs) {
+  tt <- target_type(kind, name, defs)
+  tt$added <- character(0)
+  if (!identical(tt$type, "category")) {
+    return(tt)
+  }
+  current <- custom_fields$field_levels(tt$levels)
+  added <- trimws(.levels_of(v))
+  added <- .levels_of(added[nzchar(added) & !tolower(added) %in% tolower(current)])
+  if (length(added) && length(current) + length(added) <= CATEGORY_MAX_LEVELS) {
+    tt$levels <- custom_fields$encode_levels(c(current, added))
+    tt$added <- added
+  }
+  tt
+}
+
+# New levels of a widened category that `values` (canonical, as written) use.
+.used_levels <- function(added, values) {
+  added[added %in% values]
+}
+
 # Count of values that would fail the target's type, or NA when the column can
 # not be merged into it at all.
 .merge_failures <- function(v, kind, name, defs) {
   if (!kind %in% c("custom", "metadata")) {
     return(NA_integer_)
   }
-  tt <- target_type(kind, name, defs)
+  tt <- .merge_target_type(v, kind, name, defs)
   sum(!vapply(
     v,
     function(x) {
@@ -590,7 +616,8 @@ assess_import <- function(db_path, df, key = NULL) {
 #' Checks every planned column against the current database. New variables must
 #' have a valid, unique name and a type every value fits; merges must target an
 #' existing custom variable or editable metadata field whose type every value
-#' fits. Nothing here writes.
+#' fits (a category target counts as fitting values it can take on as new
+#' levels, see `.merge_target_type()`). Nothing here writes.
 #'
 #' @param db_path Character path to the SQLite database file.
 #' @param rows Matched rows (`assess_import()$rows`).
@@ -652,11 +679,24 @@ validate_plan <- function(db_path, rows, plan) {
       }
       failures <- .merge_failures(v, target$kind, target$name, defs)
       if (failures > 0L) {
-        add(p$header, sprintf(
-          "%d value(s) do not fit the existing %s type.",
-          failures,
-          tolower(TYPE_LABELS[[target_type(target$kind, target$name, defs)$type]])
-        ))
+        type <- target_type(target$kind, target$name, defs)$type
+        add(p$header, if (identical(type, "category")) {
+          sprintf(
+            paste(
+              "%d value(s) are not allowed in \u201c%s\u201d, and adding them",
+              "would exceed %d categories."
+            ),
+            failures,
+            target$name,
+            CATEGORY_MAX_LEVELS
+          )
+        } else {
+          sprintf(
+            "%d value(s) do not fit the existing %s type.",
+            failures,
+            tolower(TYPE_LABELS[[type]])
+          )
+        })
       }
     } else {
       add(p$header, "Unknown action.")
@@ -689,20 +729,25 @@ validate_plan <- function(db_path, rows, plan) {
 #' @param header Upload column.
 #' @param kind `"custom"` or `"metadata"`.
 #' @param name Target name.
-#' @return List of counts: `fill` (database empty), `same` (identical value) and
-#'   `differ` (database holds a different value).
+#' @return List: counts `fill` (database empty), `same` (identical value) and
+#'   `differ` (database holds a different value), and for a category target the
+#'   levels it would gain, `added_fill` when filling empty cells and
+#'   `added_overwrite` when overwriting (empty character vectors otherwise).
 #' @export
 merge_preview <- function(db_path, rows, header, kind, name) {
   defs <- custom_fields$list_custom_fields(db_path)
-  tt <- target_type(kind, name, defs)
+  tt <- .merge_target_type(rows[[header]], kind, name, defs)
   new <- .canonical(rows[[header]], tt$type, tt$levels)
   keep <- !is.na(new)
+  new <- new[keep]
   current <- .current_values(db_path, kind, name, defs, rows$isolate[keep])
   empty <- is.na(current) | !nzchar(current)
   list(
     fill = sum(empty),
-    same = sum(!empty & current == new[keep]),
-    differ = sum(!empty & current != new[keep])
+    same = sum(!empty & current == new),
+    differ = sum(!empty & current != new),
+    added_fill = .used_levels(tt$added, new[empty]),
+    added_overwrite = .used_levels(tt$added, new[empty | current != new])
   )
 }
 
@@ -729,7 +774,8 @@ merge_preview <- function(db_path, rows, header, kind, name) {
 #'
 #' Validates `plan` against the current database, then writes it in one
 #' transaction: creates each new custom variable with its values, and fills or
-#' overwrites merge targets. Missing upload cells are never written, so an
+#' overwrites merge targets, adding to a category the new levels its written
+#' values need. Missing upload cells are never written, so an
 #' import can add or replace values but never clear one. Any failure rolls the
 #' whole import back.
 #'
@@ -737,7 +783,8 @@ merge_preview <- function(db_path, rows, header, kind, name) {
 #' @param rows Matched rows (`assess_import()$rows`).
 #' @param plan See `validate_plan()`.
 #' @return List of counts: `created` (variables), `values` (cells written to new
-#'   variables), `filled` and `overwritten` (cells of existing targets), and
+#'   variables), `filled` and `overwritten` (cells of existing targets),
+#'   `levels_added` (new allowed values of existing category variables), and
 #'   `metadata` (`TRUE` if the metadata table was written).
 #' @export
 apply_import <- function(db_path, rows, plan) {
@@ -757,7 +804,14 @@ apply_import <- function(db_path, rows, plan) {
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
-  counts <- list(created = 0L, values = 0L, filled = 0L, overwritten = 0L, metadata = FALSE)
+  counts <- list(
+    created = 0L,
+    values = 0L,
+    filled = 0L,
+    overwritten = 0L,
+    levels_added = 0L,
+    metadata = FALSE
+  )
   stamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 
   dbBegin(con)
@@ -818,7 +872,7 @@ apply_import <- function(db_path, rows, plan) {
         }
 
         target <- .name_target(p$name, defs$name, meta_cols)
-        tt <- target_type(target$kind, target$name, defs)
+        tt <- .merge_target_type(v, target$kind, target$name, defs)
         stored <- .canonical(v, tt$type, tt$levels)
         keep <- !is.na(stored)
         if (identical(target$kind, "metadata")) {
@@ -847,6 +901,18 @@ apply_import <- function(db_path, rows, plan) {
               "UPDATE phylotrace_custom_fields SET modified = ? WHERE id = ?",
               params = list(stamp, as.integer(id))
             )
+            # Only levels a written cell uses join the category; a value that
+            # fill mode leaves out does not widen it.
+            used <- .used_levels(tt$added, new[write])
+            if (length(used)) {
+              old <- custom_fields$field_levels(target_type(target$kind, target$name, defs)$levels)
+              dbExecute(
+                con,
+                "UPDATE phylotrace_custom_fields SET levels = ? WHERE id = ?",
+                params = list(custom_fields$encode_levels(c(old, used)), as.integer(id))
+              )
+              counts$levels_added <- counts$levels_added + length(used)
+            }
           } else {
             dbExecute(
               con,

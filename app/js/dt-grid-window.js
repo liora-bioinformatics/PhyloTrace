@@ -17,6 +17,8 @@
  * (app/js/dt-row-drag.js) address rows outside the window the same way.
  */
 
+import { attachColumnWidths } from "./dt-column-widths";
+
 // The window covers up to this many view heights...
 var SCREENS = 3;
 // ...as long as it stays within this many cells: a grid showing hundreds of
@@ -43,6 +45,7 @@ export function attachGridWindow(api) {
   var scroll = wrapper.querySelector(".dataTables_scroll");
   var body = wrapper.querySelector(".dataTables_scrollBody");
   if (!scroll || !body || !settings.oFeatures.bPaginate) return;
+  attachColumnWidths(api);
   // Height of a drawn row, the unit the padding stands in for; 0 until
   // measured, and again once the columns or the view change.
   var rowHeight = 0;

@@ -262,7 +262,11 @@ test_that("apply_import fills only empty cells unless asked to overwrite", {
     stringsAsFactors = FALSE
   )
   preview <- custom_import$merge_preview(path, rows, "country", "metadata", "geo_loc_name_country")
-  expect_identical(unlist(preview), c(fill = 1L, same = 0L, differ = 1L))
+  expect_identical(
+    unlist(preview[c("fill", "same", "differ")]),
+    c(fill = 1L, same = 0L, differ = 1L)
+  )
+  expect_length(preview$added_fill, 0L)
 
   counts <- custom_import$apply_import(path, rows, fill)
   expect_equal(counts$filled, 1L)
@@ -294,6 +298,49 @@ test_that("apply_import merges into an existing custom variable", {
   expect_equal(counts$filled, 1L)
   wide <- custom_fields$load_custom_values(path)
   expect_identical(wide$custom_ward[order(wide$isolate)], c("icu", "er"))
+})
+
+test_that("a merge into a category takes on the upload's new values as levels", {
+  path <- fixture()
+  id <- custom_fields$create_custom_field(path, "ward", "category", levels = c("icu", "er"))
+  custom_fields$save_custom_values(
+    path,
+    data.frame(field_id = id, isolate = "A", value = "icu")
+  )
+  rows <- data.frame(isolate = c("A", "B"), ward = c("Surgery", "ER"), stringsAsFactors = FALSE)
+  plan <- data.frame(header = "ward", action = "fill", name = "ward", type = NA)
+
+  a <- custom_import$assess_import(path, data.frame(isolate = rows$isolate, ward = rows$ward))
+  expect_equal(a$columns$merge_failures, 0L)
+  expect_length(custom_import$validate_plan(path, rows, plan), 0L)
+
+  preview <- custom_import$merge_preview(path, rows, "ward", "custom", "ward")
+  # Filling leaves A's "icu", so "Surgery" is only needed when overwriting.
+  expect_length(preview$added_fill, 0L)
+  expect_identical(preview$added_overwrite, "Surgery")
+
+  counts <- custom_import$apply_import(path, rows, plan)
+  expect_equal(counts$levels_added, 0L)
+  levels <- function() custom_fields$field_levels(custom_fields$list_custom_fields(path)$levels)
+  expect_identical(levels(), c("er", "icu"))
+
+  plan$action <- "overwrite"
+  counts <- custom_import$apply_import(path, rows, plan)
+  expect_equal(counts$levels_added, 1L)
+  expect_identical(levels(), c("er", "icu", "Surgery"))
+  wide <- custom_fields$load_custom_values(path)
+  expect_identical(wide$custom_ward[order(wide$isolate)], c("Surgery", "er"))
+})
+
+test_that("a category merge fails when the new levels would exceed the cap", {
+  path <- fixture()
+  max <- custom_import$CATEGORY_MAX_LEVELS
+  custom_fields$create_custom_field(
+    path, "ward", "category", levels = paste0("w", seq_len(max))
+  )
+  rows <- data.frame(isolate = c("A", "B"), ward = c("w1", "new"), stringsAsFactors = FALSE)
+  plan <- data.frame(header = "ward", action = "fill", name = "ward", type = NA)
+  expect_match(custom_import$validate_plan(path, rows, plan)[["ward"]], "exceed")
 })
 
 test_that("apply_import writes nothing when any part of the plan is invalid", {

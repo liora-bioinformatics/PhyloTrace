@@ -1519,7 +1519,11 @@ mst_fit_drawing <- function(graph, metadata, opts, label_chars = 12) {
   legend <- if (!isFALSE(opts$show_legend)) {
     .legend_box_px(
       mst_legend_items(
-        clusters = if (isTRUE(opts$show_clusters) && nrow(found$table)) {
+        clusters = if (
+          isTRUE(opts$show_clusters) &&
+            !isFALSE(opts$legend_clusters) &&
+            nrow(found$table)
+        ) {
           found$table
         },
         threshold = opts$cluster_threshold,
@@ -1850,6 +1854,15 @@ MST_BLOB_MIN_BAND <- 1
 # this share the region reads as a colour behind the nodes without drowning
 # the branches and outlines drawn over it.
 MST_CLUSTER_OPACITY <- 0.77
+
+# Stroke width, in graph units, of a cluster drawn as an outline only. A little
+# heavier than a branch (1.6) so the boundary does not read as one more edge.
+MST_CLUSTER_OUTLINE_WIDTH <- 2.5
+
+#' How a cluster region can be drawn: a translucent fill in the cluster's own
+#' colour, or only its boundary, stroked in the edge colour.
+#' @export
+MST_CLUSTER_STYLES <- c(Filled = "fill", Outline = "outline")
 
 # Distance from a point to a line *segment* (not the infinite line): the
 # perpendicular where the foot falls inside the segment, the nearer endpoint
@@ -2428,6 +2441,8 @@ MST_LEGEND_LABEL_CHARS <- 36L
 #' @param threshold Cluster threshold, for the section header.
 #' @param scaled Logical. Node size encodes the isolate count.
 #' @param unclustered Isolates in no cluster, or NULL to leave it unsaid.
+#' @param cluster_shape Key shape for a cluster: `"square"` for a filled region,
+#'   `"outline"` for one drawn as its boundary only.
 #' @return List of entries.
 #' @export
 mst_legend_items <- function(
@@ -2436,7 +2451,8 @@ mst_legend_items <- function(
   cluster_colors = character(0),
   threshold = NULL,
   scaled = FALSE,
-  unclustered = NULL
+  unclustered = NULL,
+  cluster_shape = "square"
 ) {
   # Sections share the key budget: the clusters count as one section when there
   # are any, so a plot with two mappings and clusters gives each of the three a
@@ -2475,7 +2491,7 @@ mst_legend_items <- function(
             .count_label(clusters$isolates[[i]], "isolate")
           ),
           color = .lookup(cluster_colors, clusters$cluster[[i]], MISSING_COLOR),
-          shape = "square"
+          shape = cluster_shape
         )
       })
     )
@@ -2807,7 +2823,8 @@ MST_NODE_RENDERER <- JS(
   blobs,
   colors,
   opacity = MST_CLUSTER_OPACITY,
-  loose = NULL
+  loose = NULL,
+  outline = 0
 ) {
   # Nodes in no cluster, as a ring erased from the finished regions. Erased
   # rather than painted: the canvas may be transparent over the panel's own
@@ -2832,14 +2849,29 @@ MST_NODE_RENDERER <- JS(
       "ctx.fill();ctx.restore();"
     )
   }
+  # Outline mode strokes the region's path twice the wanted width and then
+  # erases the path's interior, which leaves only the part of the stroke outside
+  # the union of discs and capsules — the boundary, without the seams where the
+  # subpaths overlap. That erase must not touch what is already on the canvas
+  # (another cluster's outline), so each region is drawn on a scratch canvas
+  # cached on the visible one, under the same transform, and copied across.
   JS(paste0(
     "function(ctx){var B=[",
     paste(.blob_spec(blobs, colors), collapse = ","),
     "];var A=",
     round(.clamp(as.numeric(opacity %||% MST_CLUSTER_OPACITY), 0, 1), 3),
-    ";",
-    "B.forEach(function(b){if(!b.x.length)return;",
-    "ctx.save();ctx.globalAlpha=A;ctx.fillStyle=b.c;ctx.beginPath();",
+    ";var OW=",
+    round(max(as.numeric(outline %||% 0), 0), 2),
+    ";var O,OC;if(OW>0){",
+    "O=ctx.canvas.__mstOutline||(ctx.canvas.__mstOutline=",
+    "document.createElement('canvas'));",
+    "if(O.width!==ctx.canvas.width)O.width=ctx.canvas.width;",
+    "if(O.height!==ctx.canvas.height)O.height=ctx.canvas.height;",
+    "OC=O.getContext('2d');}",
+    "B.forEach(function(b){if(!b.x.length)return;var c=ctx;",
+    "if(OW>0){c=OC;c.setTransform(1,0,0,1,0,0);",
+    "c.clearRect(0,0,O.width,O.height);c.setTransform(ctx.getTransform());}",
+    "c.save();c.beginPath();",
     # A capsule per intra-cluster edge, as a quad of half-width b.rs[k] about
     # the segment; its round ends are the member discs added straight after.
     # The half-widths are per shape, not per cluster: each one is as wide as its
@@ -2849,13 +2881,17 @@ MST_NODE_RENDERER <- JS(
     "var ra=b.rs[k],rb=b.rs[k+1];",
     "var dx=bx-ax,dy=by-ay,L=Math.sqrt(dx*dx+dy*dy);if(!L)continue;",
     "var ux=-dy/L,uy=dx/L;",
-    "ctx.moveTo(ax-ux*ra,ay-uy*ra);ctx.lineTo(bx-ux*rb,by-uy*rb);",
-    "ctx.lineTo(bx+ux*rb,by+uy*rb);ctx.lineTo(ax+ux*ra,ay+uy*ra);",
-    "ctx.closePath();}",
+    "c.moveTo(ax-ux*ra,ay-uy*ra);c.lineTo(bx-ux*rb,by-uy*rb);",
+    "c.lineTo(bx+ux*rb,by+uy*rb);c.lineTo(ax+ux*ra,ay+uy*ra);",
+    "c.closePath();}",
     "for(var j=0;j<b.x.length;j++){var pr=b.rp[j];",
-    "ctx.moveTo(b.x[j]+pr,b.y[j]);",
-    "ctx.arc(b.x[j],b.y[j],pr,0,2*Math.PI);}",
-    "ctx.fill();ctx.restore();});",
+    "c.moveTo(b.x[j]+pr,b.y[j]);",
+    "c.arc(b.x[j],b.y[j],pr,0,2*Math.PI);}",
+    "if(OW>0){c.lineJoin='round';c.lineWidth=2*OW;c.strokeStyle=b.c;",
+    "c.stroke();c.globalCompositeOperation='destination-out';c.fill();",
+    "c.restore();ctx.save();ctx.setTransform(1,0,0,1,0,0);",
+    "ctx.drawImage(O,0,0);ctx.restore();}",
+    "else{c.globalAlpha=A;c.fillStyle=b.c;c.fill();c.restore();}});",
     cut,
     "}"
   ))
@@ -3064,7 +3100,11 @@ mst_stats_caption <- function(counts, weights) {
     out <- paste0(
       out,
       sprintf(
-        "; allelic distance median %s, mean %s, range %s–%s",
+        # Branch lengths, named as such: these summarise the tree's edges, which
+        # are the shortest links in the data, and read as "allelic distance"
+        # they were taken for the mean over all isolate pairs that the sidebar
+        # status reports — a much larger number for the same collection.
+        "; branch length median %s, mean %s, range %s–%s alleles",
         .stat_label(median(w)),
         .stat_label(mean(w)),
         .stat_label(min(w)),
@@ -3179,7 +3219,7 @@ mst_stats_caption <- function(counts, weights) {
       "var cx=x0+8+col*colW,cy=y0+7+row*L.stepY+L.stepY/2;",
       "if(it.k==='key'){var r=L.sym/2;",
       "ctx.beginPath();",
-      "if(it.s==='square'){ctx.rect(cx+r-r,cy-r,2*r,2*r);}",
+      "if(it.s==='square'||it.s==='outline'){ctx.rect(cx,cy-r,2*r,2*r);}",
       "else if(it.s==='dot'){ctx.arc(cx+r,cy,r,0,2*Math.PI);}",
       "else{var k=it.s==='diamond'?4:(it.s==='hexagon'?6:3);",
       "var off=it.s==='triangleDown'?Math.PI/2:-Math.PI/2;",
@@ -3187,8 +3227,9 @@ mst_stats_caption <- function(counts, weights) {
       "var px=cx+r+r*Math.cos(a),py=cy+r*Math.sin(a);",
       "if(j===0){ctx.moveTo(px,py);}else{ctx.lineTo(px,py);}}",
       "ctx.closePath();}",
-      "ctx.fillStyle=it.c;ctx.fill();",
-      "ctx.strokeStyle='rgba(0,0,0,0.45)';ctx.stroke();",
+      "if(it.s==='outline'){ctx.lineWidth=2;ctx.strokeStyle=it.c;ctx.stroke();",
+      "ctx.lineWidth=1;}else{ctx.fillStyle=it.c;ctx.fill();",
+      "ctx.strokeStyle='rgba(0,0,0,0.45)';ctx.stroke();}",
       "ctx.font=L.font+'px sans-serif';ctx.fillStyle=L.fg;",
       "ctx.textAlign='left';",
       "ctx.fillText(fit(it.l,colW-gut-6),cx+gut,cy);",
@@ -3617,10 +3658,19 @@ mst_frames <- function(graph, metadata, opts) {
   blobs <- list()
   if (isTRUE(opts$show_clusters) && !is.null(found) && nrow(found$table)) {
     clusters <- found
-    cluster_colors <- tree_level_colors(
-      clusters$table$cluster,
-      opts$cluster_col_scale %||% "viridis"
-    )
+    # An outlined cluster is told apart by its name, not its colour: every
+    # boundary is drawn in the edge colour, as part of the graph's linework.
+    cluster_colors <- if (identical(opts$cluster_style, "outline")) {
+      setNames(
+        rep(opts$edge_color %||% "#000000", nrow(clusters$table)),
+        clusters$table$cluster
+      )
+    } else {
+      tree_level_colors(
+        clusters$table$cluster,
+        opts$cluster_col_scale %||% "viridis"
+      )
+    }
     blobs <- mst_cluster_blobs(
       coords,
       clusters$node,
@@ -3799,15 +3849,26 @@ mst_frames <- function(graph, metadata, opts) {
     loose = loose,
     cluster_colors = cluster_colors,
     blobs = blobs,
+    # Which sections the legend carries is the reader's choice; the regions and
+    # the mapping are drawn either way.
     legend = mst_legend_items(
-      legend_layers,
-      if (is.null(clusters)) NULL else clusters$table,
+      if (isFALSE(opts$legend_layers)) list() else legend_layers,
+      if (is.null(clusters) || isFALSE(opts$legend_clusters)) {
+        NULL
+      } else {
+        clusters$table
+      },
       cluster_colors,
       opts$cluster_threshold,
       isTRUE(opts$scale_nodes) && max(counts) > 1L,
       # Isolates, not nodes: a node the threshold left out of every cluster may
       # still carry several zero-distance isolates.
-      if (is.null(clusters)) NULL else sum(counts[is.na(clusters$node)])
+      if (is.null(clusters)) NULL else sum(counts[is.na(clusters$node)]),
+      cluster_shape = if (identical(opts$cluster_style, "outline")) {
+        "outline"
+      } else {
+        "square"
+      }
     ),
     custom = custom,
     length_mode = mode,
@@ -3931,7 +3992,12 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
       fr$blobs,
       fr$cluster_colors,
       MST_CLUSTER_OPACITY,
-      fr$loose
+      fr$loose,
+      outline = if (identical(opts$cluster_style, "outline")) {
+        MST_CLUSTER_OUTLINE_WIDTH
+      } else {
+        0
+      }
     )
   }
   do.call(visNetwork$visEvents, c(list(graph = vis), events))
