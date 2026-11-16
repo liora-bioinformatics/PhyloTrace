@@ -1,10 +1,13 @@
 box::use(
+  jsonlite[toJSON],
   shiny[moduleServer, observe, reactive, testServer],
   testthat[expect_false, expect_identical, expect_match, expect_true, test_that],
 )
 box::use(
   app / logic / overview_ui,
 )
+
+impl <- attr(overview_ui, "namespace")
 
 test_that("fold_top keeps the top rows and folds the rest into one", {
   bars <- overview_ui$fold_top(c("a", "b", "c", "d"), c(5, 3, 2, 1), 2, "%d others")
@@ -62,6 +65,28 @@ test_that("data_table draws rows on demand and truncates only text columns", {
   expect_true("dt-ext-scroller" %in% vapply(widget$dependencies, `[[`, "", "name"))
   expect_false(isFALSE(widget$x$options$paging))
   expect_identical(defs[[2]]$targets, c(0L, 2L))
+})
+
+test_that("data_table sends each column's longest values as width hints", {
+  widget <- overview_ui$data_table(data.frame(
+    id = c("GCA_1.1", "GCA_2.1_ASM2v1_genomic", NA, "GCA_3.1"),
+    n = c(1L, 100L, 7L, 7L),
+    one = "x"
+  ))
+  hints <- widget$x$options$widthHints
+
+  expect_identical(length(hints), 3L)
+  expect_identical(as.character(hints[[1]][1]), "GCA_2.1_ASM2v1_genomic")
+  expect_false(anyNA(hints[[1]]))
+  expect_identical(as.character(hints[[2]]), c("100", "1", "7"))
+  # A single value must still serialise as an array for the JavaScript side.
+  expect_match(as.character(toJSON(hints[[3]], auto_unbox = TRUE)), "^\\[")
+})
+
+test_that("width_hints keeps at most n values per column", {
+  hints <- impl$width_hints(data.frame(x = letters), n = 3L)
+
+  expect_identical(length(hints[[1]]), 3L)
 })
 
 test_that("data_table shows whole-number doubles as integers", {

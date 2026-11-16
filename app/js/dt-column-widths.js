@@ -1,15 +1,16 @@
 /**
- * Pins the column widths of a windowed grid (app/js/dt-grid-window.js) so they
- * hold while the drawn window moves.
+ * Pins the column widths of a table that draws only some of its rows - a
+ * windowed grid (app/js/dt-grid-window.js) or a Scroller table (the overview
+ * tables, app/logic/overview_ui.R) - so they hold while the drawn rows change.
  *
- * Left to itself the browser lays a table out from the rows it holds, and a
- * windowed grid holds only the rows in view: each move of the window would
- * re-fit every column to that window's values. Instead each column is sized
- * once from its widest value across all rows, drawn or not, and from its
- * header, and the widths are written as a <colgroup> into the header and body
- * tables, which lay out with `table-layout: fixed` (main.scss,
- * `.dt-pinned-cols`). The two tables then share one set of widths, and drawn
- * content can no longer resize a column.
+ * Left to itself the browser lays a table out from the rows it holds, which
+ * here are only the rows in view: each scroll would re-fit every column to
+ * the values then drawn. Instead each column is sized once from its widest
+ * value across all rows, drawn or not, and from its header, and the widths
+ * are written as a <colgroup> into the header and body tables, which lay out
+ * with `table-layout: fixed` (main.scss, `.dt-pinned-cols`). The two tables
+ * then share one set of widths, and drawn content can no longer resize a
+ * column.
  *
  * A column only ever grows after that: a draw that brings in a value wider
  * than its column (an edit, a pushed value) widens it to fit.
@@ -51,6 +52,14 @@ function box(cs) {
   return { extra: extra, floor: parseFloat(cs.minWidth) || 0 };
 }
 
+// Widest the text of `cell` is ever shown: the max-width of a wrapper that
+// cuts it short (the overview tables' `.overview-truncate`), else no limit.
+function textCap(cell) {
+  // Only a length caps it: `none`, or a percentage of the column itself.
+  var max = cell.firstElementChild ? getComputedStyle(cell.firstElementChild).maxWidth : "";
+  return /px$/.test(max) ? parseFloat(max) : Infinity;
+}
+
 // Raw values of column `col` for the rows at `rows` (indexes into aoData),
 // reduced to the CANDIDATES longest ones.
 function longest(settings, rows, col) {
@@ -69,7 +78,7 @@ function longest(settings, rows, col) {
 }
 
 /**
- * Attaches pinned column widths to a windowed grid.
+ * Attaches pinned column widths to a table that draws only some of its rows.
  *
  * @param {object} api DataTables API of the table.
  * @returns {object} `refit()`, to size every column afresh from all rows.
@@ -80,7 +89,7 @@ export function attachColumnWidths(api) {
   var wrapper = api.table().container();
   // Pixel width per column index, for the visible columns.
   var widths = {};
-  // Body cell style per column index, read from a drawn cell.
+  // Body cell style and text cap per column index, read from a drawn cell.
   var styles = {};
 
   function tables() {
@@ -88,26 +97,30 @@ export function attachColumnWidths(api) {
   }
 
   // Style of the body cells of `col`: from a drawn cell, as the font (italic
-  // read-only columns) and floor (date columns) differ per column.
+  // read-only columns), floor (date columns) and text cap differ per column.
   function cellStyle(col) {
     var row = api.table().body().rows[0];
     var vis = api.column(col).index("visible");
     var cell = row && !row.querySelector(".dataTables_empty") ? row.cells[vis] : null;
-    if (cell) styles[col] = getComputedStyle(cell);
+    if (cell) styles[col] = { cs: getComputedStyle(cell), cap: textCap(cell) };
     return styles[col];
   }
 
-  // Width the widest of `rows`' values in `col` needs.
-  function bodyWidth(col, rows) {
-    var cs = cellStyle(col);
-    if (!cs) return 0;
-    var b = box(cs);
+  // Width the widest of `rows`' values in `col` needs, and of the column's
+  // `hints` (plain text) when given.
+  function bodyWidth(col, rows, hints) {
+    var style = cellStyle(col);
+    if (!style) return 0;
+    var b = box(style.cs);
     var max = 0;
     longest(settings, rows, col).forEach(function (c) {
       var text = plainText(getCell(settings, c.row, col, "display"));
-      max = Math.max(max, textWidth(text, cs));
+      max = Math.max(max, textWidth(text, style.cs));
     });
-    return Math.max(b.floor, max + b.extra);
+    (hints || []).forEach(function (text) {
+      max = Math.max(max, textWidth(String(text), style.cs));
+    });
+    return Math.max(b.floor, Math.min(max, style.cap) + b.extra);
   }
 
   // Width a header cell's label needs, as laid out (text-transform, letter
@@ -174,9 +187,12 @@ export function attachColumnWidths(api) {
     if (!cols.length || !wrapper.offsetWidth) return;
     var all = [];
     for (var i = 0; i < settings.aoData.length; i++) all.push(i);
+    // A server-side table holds only the rows fetched so far; its longest
+    // values per column come along as the `widthHints` option instead.
+    var hints = settings.oInit.widthHints || [];
     widths = {};
     cols.forEach(function (col) {
-      widths[col] = bodyWidth(col, all);
+      widths[col] = bodyWidth(col, all, hints[col]);
     });
     // Single-column header cells first, then any label spanning several
     // columns widens the last of them by what it lacks.
@@ -214,10 +230,17 @@ export function attachColumnWidths(api) {
   }
 
   api.on("draw.dt", grow);
+  // columns.adjust() re-clones the body's header in front of the colgroup.
+  api.on("column-sizing.dt", apply);
   api.on("column-visibility.dt", function () {
     // After DataTables has rebuilt the header for the new set of columns.
     setTimeout(refit, 0);
   });
+  // A table rendered in a hidden pane has no layout to measure; it is sized
+  // once it is first shown.
+  new ResizeObserver(function () {
+    if (wrapper.offsetWidth && !Object.keys(widths).length) refit();
+  }).observe(wrapper);
   // Text measured before the web font loaded is measured in its fallback.
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
   refit();

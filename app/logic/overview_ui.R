@@ -20,6 +20,7 @@ box::use(
   shiny,
   shinyWidgets[virtualSelectInput],
   shinyjs[disabled, runjs],
+  utils[head],
 )
 box::use(
   app / logic / functions[color_sequence, table_loading],
@@ -30,6 +31,17 @@ DRAW_SIGNAL <- JS(
   "function(settings) {",
   "  $(this.api().table().node())",
   "    .closest('.loci-table-body').addClass('is-loaded');",
+  "}"
+)
+
+# DRAW_SIGNAL for a Scroller table, which also pins its column widths
+# (app/js/dt-column-widths.js): Scroller draws only the rows around the view,
+# and the columns would otherwise re-fit to them on every scroll.
+SCROLL_INIT <- JS(
+  "function(settings) {",
+  "  var api = this.api();",
+  "  $(api.table().node()).closest('.loci-table-body').addClass('is-loaded');",
+  "  App.attachColumnWidths(api);",
   "}"
 )
 
@@ -358,13 +370,26 @@ whole_as_integer <- function(df) {
   df
 }
 
+# Longest values of each column, for app/js/dt-column-widths.js to size the
+# columns from: a server-side table only ever holds the rows fetched so far.
+# The few longest by characters, as the widest in pixels is not always the
+# longest. Wrapped in I() so a single value still reaches JavaScript as an array.
+width_hints <- function(df, n = 8L) {
+  lapply(unname(df), function(x) {
+    values <- unique(as.character(x[!is.na(x)]))
+    I(values[head(order(nchar(values), decreasing = TRUE), n)])
+  })
+}
+
 #' Scrolling Data Table
 #'
 #' @description Rows are drawn as the table scrolls (DataTables' Scroller), so
 #'   only the rows around the visible ones exist in the page, however many
 #'   `df` has. Every row is one line high, as Scroller requires: text cells
 #'   are cut short, their full value shown on hover. Column headers stay on
-#'   one line; the table scrolls sideways instead.
+#'   one line; the table scrolls sideways instead. Column widths are sized
+#'   from every row (its longest values sent along as `widthHints`) and held
+#'   while scrolling.
 #'
 #' @param df Data frame to show. Plain numeric columns holding only whole
 #'   numbers are shown as integers.
@@ -394,7 +419,8 @@ data_table <- function(df, selection = "none", filter = "top") {
         list(className = "dt-left", targets = "_all"),
         list(render = TRUNCATE_CELL, targets = unname(text_cols) - 1L)
       ),
-      initComplete = DRAW_SIGNAL
+      widthHints = width_hints(df),
+      initComplete = SCROLL_INIT
     )
   )
 }

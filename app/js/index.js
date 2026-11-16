@@ -11,6 +11,7 @@ import "./virtual-select-popup-refresh";
 import "./viz-scale-swatch";
 import "./viz-tab-strip";
 
+export { attachColumnWidths } from "./dt-column-widths";
 export { attachGridWindow, createAllRows } from "./dt-grid-window";
 export { attachRowDrag } from "./dt-row-drag";
 export { attachSheet } from "./dt-sheet";
