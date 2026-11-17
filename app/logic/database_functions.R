@@ -33,7 +33,7 @@ box::use(
     ],
   app / logic / geo[format_coordinates, match_country, parse_coordinates],
   app / logic / logging[log_event],
-  app / logic / mlst_repo[canonical_species],
+  app / logic / species[canonical_species],
   rlang[`%||%`],
 )
 

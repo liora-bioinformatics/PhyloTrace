@@ -1,0 +1,95 @@
+source,source_id,status,listed,provider,species,type,scheme,loci,url,note,first_seen
+cgmlst_org,Abaumannii,include,yes,cgmlst_org,Acinetobacter baumannii,cgMLST,Acinetobacter baumannii cgMLST,2390,https://www.cgmlst.org/ncs/schema/Abaumannii/,,2026-11-17
+cgmlst_org,Banthracis,include,yes,cgmlst_org,Bacillus anthracis,cgMLST,Bacillus anthracis cgMLST,3803,https://www.cgmlst.org/ncs/schema/Banthracis/,,2026-11-17
+cgmlst_org,Bmallei_fli,include,yes,cgmlst_org,Burkholderia mallei,cgMLST,Burkholderia mallei (FLI) cgMLST,2838,https://www.cgmlst.org/ncs/schema/Bmallei_fli/,,2026-11-17
+cgmlst_org,Bmallei_rki,include,yes,cgmlst_org,Burkholderia mallei,cgMLST,Burkholderia mallei (RKI) cgMLST,3328,https://www.cgmlst.org/ncs/schema/Bmallei_rki/,,2026-11-17
+cgmlst_org,Bmelitensis,include,yes,cgmlst_org,Brucella melitensis,cgMLST,Brucella melitensis cgMLST,2704,https://www.cgmlst.org/ncs/schema/Bmelitensis/,,2026-11-17
+cgmlst_org,Bpertussis,include,yes,cgmlst_org,Bordetella pertussis,cgMLST,Bordetella pertussis cgMLST,2983,https://www.cgmlst.org/ncs/schema/Bpertussis/,,2026-11-17
+cgmlst_org,Bpseudomallei,include,yes,cgmlst_org,Burkholderia pseudomallei,cgMLST,Burkholderia pseudomallei cgMLST,4221,https://www.cgmlst.org/ncs/schema/Bpseudomallei/,,2026-11-17
+cgmlst_org,Brucella,include,yes,cgmlst_org,Brucella spp,cgMLST,Brucella spp. cgMLST,1764,https://www.cgmlst.org/ncs/schema/Brucella/,,2026-11-17
+cgmlst_org,Cauris,include,yes,cgmlst_org,Candidozyma auris,cgMLST,Candidozyma auris cgMLST,4231,https://www.cgmlst.org/ncs/schema/Cauris/,,2026-11-17
+cgmlst_org,Cdifficile,include,yes,cgmlst_org,Clostridioides difficile,cgMLST,Clostridioides difficile cgMLST,2147,https://www.cgmlst.org/ncs/schema/Cdifficile/,,2026-11-17
+cgmlst_org,Cdiphtheriae,include,yes,cgmlst_org,Corynebacterium diphtheriae,cgMLST,Corynebacterium diphtheriae cgMLST,1553,https://www.cgmlst.org/ncs/schema/Cdiphtheriae/,,2026-11-17
+cgmlst_org,Cfreundii,include,yes,cgmlst_org,Citrobacter freundii,cgMLST,Citrobacter freundii cgMLST,3250,https://www.cgmlst.org/ncs/schema/Cfreundii/,,2026-11-17
+cgmlst_org,Cfreundii_complex,include,yes,cgmlst_org,Citrobacter freundii/portucalensis/braakii/europaeus,cgMLST,Citrobacter freundii/portucalensis/braakii/europaeus cgMLST,2307,https://www.cgmlst.org/ncs/schema/Cfreundii_complex/,,2026-11-17
+cgmlst_org,Cjejuni_complex,include,yes,cgmlst_org,Campylobacter jejuni/coli,cgMLST,Campylobacter jejuni/coli cgMLST,637,https://www.cgmlst.org/ncs/schema/Cjejuni_complex/,,2026-11-17
+cgmlst_org,Cperfringens,include,yes,cgmlst_org,Clostridium perfringens,cgMLST,Clostridium perfringens cgMLST,1431,https://www.cgmlst.org/ncs/schema/Cperfringens/,,2026-11-17
+cgmlst_org,Cpseudotuberculosis,include,yes,cgmlst_org,Corynebacterium pseudotuberculosis,cgMLST,Corynebacterium pseudotuberculosis cgMLST,1577,https://www.cgmlst.org/ncs/schema/Cpseudotuberculosis/,,2026-11-17
+cgmlst_org,Csakazakii_complex,include,yes,cgmlst_org,Cronobacter sakazakii/malonaticus,cgMLST,Cronobacter sakazakii/malonaticus cgMLST,2831,https://www.cgmlst.org/ncs/schema/Csakazakii_complex/,,2026-11-17
+cgmlst_org,Dcongolensis,include,yes,cgmlst_org,Dermatophilus congolensis,cgMLST,Dermatophilus congolensis cgMLST,1628,https://www.cgmlst.org/ncs/schema/Dcongolensis/,,2026-11-17
+cgmlst_org,Ecoli,include,yes,cgmlst_org,Escherichia coli,cgMLST,Escherichia coli cgMLST,2513,https://www.cgmlst.org/ncs/schema/Ecoli/,,2026-11-17
+cgmlst_org,Efaecalis,include,yes,cgmlst_org,Enterococcus faecalis,cgMLST,Enterococcus faecalis cgMLST,1972,https://www.cgmlst.org/ncs/schema/Efaecalis/,,2026-11-17
+cgmlst_org,Efaecium,include,yes,cgmlst_org,Enterococcus faecium,cgMLST,Enterococcus faecium cgMLST,1423,https://www.cgmlst.org/ncs/schema/Efaecium/,,2026-11-17
+cgmlst_org,Ehormaechei,include,yes,cgmlst_org,Enterobacter hormaechei,cgMLST,Enterobacter hormaechei cgMLST,2178,https://www.cgmlst.org/ncs/schema/Ehormaechei/,,2026-11-17
+cgmlst_org,Ftularensis,include,yes,cgmlst_org,Francisella tularensis,cgMLST,Francisella tularensis cgMLST,1147,https://www.cgmlst.org/ncs/schema/Ftularensis/,,2026-11-17
+cgmlst_org,Koxytoca_complex,include,yes,cgmlst_org,Klebsiella oxytoca/grimontii/michiganensis/pasteurii,cgMLST,Klebsiella oxytoca/grimontii/michiganensis/pasteurii cgMLST,2536,https://www.cgmlst.org/ncs/schema/Koxytoca_complex/,,2026-11-17
+cgmlst_org,Kpneumoniae_complex,include,yes,cgmlst_org,Klebsiella pneumoniae/variicola/quasipneumoniae,cgMLST,Klebsiella pneumoniae/variicola/quasipneumoniae cgMLST,2358,https://www.cgmlst.org/ncs/schema/Kpneumoniae_complex/,,2026-11-17
+cgmlst_org,Lmonocytogenes,include,yes,cgmlst_org,Listeria monocytogenes,cgMLST,Listeria monocytogenes cgMLST,1701,https://www.cgmlst.org/ncs/schema/Lmonocytogenes/,,2026-11-17
+cgmlst_org,Lpneumophila,include,yes,cgmlst_org,Legionella pneumophila,cgMLST,Legionella pneumophila cgMLST,1521,https://www.cgmlst.org/ncs/schema/Lpneumophila/,,2026-11-17
+cgmlst_org,Mabscessus,include,yes,cgmlst_org,Mycobacteroides abscessus,cgMLST,Mycobacteroides abscessus cgMLST,2904,https://www.cgmlst.org/ncs/schema/Mabscessus/,,2026-11-17
+cgmlst_org,Mgallisepticum,include,yes,cgmlst_org,Mycoplasma gallisepticum,cgMLST,Mycoplasma gallisepticum cgMLST,425,https://www.cgmlst.org/ncs/schema/Mgallisepticum/,,2026-11-17
+cgmlst_org,Mmorganii,include,yes,cgmlst_org,Morganella morganii,cgMLST,Morganella morganii cgMLST,2462,https://www.cgmlst.org/ncs/schema/Mmorganii/,,2026-11-17
+cgmlst_org,Mtuberculosis_complex,include,yes,cgmlst_org,Mycobacterium tuberculosis/bovis/africanum/canettii,cgMLST,Mycobacterium tuberculosis/bovis/africanum/canettii cgMLST,2891,https://www.cgmlst.org/ncs/schema/Mtuberculosis_complex/,,2026-11-17
+cgmlst_org,Paeruginosa,include,yes,cgmlst_org,Pseudomonas aeruginosa,cgMLST,Pseudomonas aeruginosa cgMLST,3867,https://www.cgmlst.org/ncs/schema/Paeruginosa/,,2026-11-17
+cgmlst_org,Plarvae,include,yes,cgmlst_org,Paenibacillus larvae,cgMLST,Paenibacillus larvae cgMLST,2419,https://www.cgmlst.org/ncs/schema/Plarvae/,,2026-11-17
+cgmlst_org,Pmirabilis,include,yes,cgmlst_org,Proteus mirabilis,cgMLST,Proteus mirabilis cgMLST,2574,https://www.cgmlst.org/ncs/schema/Pmirabilis/,,2026-11-17
+cgmlst_org,Pstuartii,include,yes,cgmlst_org,Providencia stuartii,cgMLST,Providencia stuartii cgMLST,3079,https://www.cgmlst.org/ncs/schema/Pstuartii/,,2026-11-17
+cgmlst_org,Sargenteus,include,yes,cgmlst_org,Staphylococcus argenteus,cgMLST,Staphylococcus argenteus cgMLST,2168,https://www.cgmlst.org/ncs/schema/Sargenteus/,,2026-11-17
+cgmlst_org,Saureus,include,yes,cgmlst_org,Staphylococcus aureus,cgMLST,Staphylococcus aureus cgMLST,1861,https://www.cgmlst.org/ncs/schema/Saureus/,,2026-11-17
+cgmlst_org,Scapitis,include,yes,cgmlst_org,Staphylococcus capitis,cgMLST,Staphylococcus capitis cgMLST,1492,https://www.cgmlst.org/ncs/schema/Scapitis/,,2026-11-17
+cgmlst_org,Senterica,include,yes,cgmlst_org,Salmonella enterica,cgMLST,Salmonella enterica cgMLST,3002,https://www.cgmlst.org/ncs/schema/Senterica/,,2026-11-17
+cgmlst_org,Smarcescens,include,yes,cgmlst_org,Serratia marcescens,cgMLST,Serratia marcescens cgMLST,2692,https://www.cgmlst.org/ncs/schema/Smarcescens/,,2026-11-17
+cgmlst_org,Spyogenes,include,yes,cgmlst_org,Streptococcus pyogenes,cgMLST,Streptococcus pyogenes cgMLST,1095,https://www.cgmlst.org/ncs/schema/Spyogenes/,,2026-11-17
+cgmlst_org,Yenterocolitica,include,yes,cgmlst_org,Yersinia enterocolitica,cgMLST,Yersinia enterocolitica cgMLST,2582,https://www.cgmlst.org/ncs/schema/Yenterocolitica/,,2026-11-17
+chewie_ns,1/1,include,yes,chewie_ns,Streptococcus pyogenes,wgMLST,Streptococcus pyogenes wgMLST,3044,https://chewbbaca.online/species/1/schemas/1,,2026-11-17
+chewie_ns,2/1,exclude,yes,chewie_ns,Acinetobacter baumannii,cgMLST,Acinetobacter baumannii cgMLST,2390,https://chewbbaca.online/species/2/schemas/1,"Same species and locus count as the cgMLST.org scheme - most likely an adaptation of it, so Ridom's terms apply; users are pointed to cgMLST.org instead.",2026-11-17
+chewie_ns,3/1,include,yes,chewie_ns,Aliarcobacter butzleri,wgMLST,Aliarcobacter butzleri wgMLST,7474,https://chewbbaca.online/species/3/schemas/1,,2026-11-17
+chewie_ns,4/1,exclude,yes,chewie_ns,Bacillus anthracis,cgMLST,Bacillus anthracis cgMLST,3803,https://chewbbaca.online/species/4/schemas/1,"Same species and locus count as the cgMLST.org scheme - most likely an adaptation of it, so Ridom's terms apply; users are pointed to cgMLST.org instead.",2026-11-17
+chewie_ns,5/1,exclude,yes,chewie_ns,Brucella,cgMLST,Brucella cgMLST,1764,https://chewbbaca.online/species/5/schemas/1,"Same species and locus count as the cgMLST.org scheme - most likely an adaptation of it, so Ridom's terms apply; users are pointed to cgMLST.org instead.",2026-11-17
+chewie_ns,6/1,include,yes,chewie_ns,Campylobacter jejuni,wgMLST,Campylobacter jejuni wgMLST,2794,https://chewbbaca.online/species/6/schemas/1,,2026-11-17
+chewie_ns,7/1,include,yes,chewie_ns,Clostridium chauvoei,cgMLST,Clostridium chauvoei cgMLST,2223,https://chewbbaca.online/species/7/schemas/1,,2026-11-17
+chewie_ns,8/1,include,yes,chewie_ns,Clostridium neonatale,cgMLST,Clostridium neonatale cgMLST,2350,https://chewbbaca.online/species/8/schemas/1,,2026-11-17
+chewie_ns,9/1,exclude,yes,chewie_ns,Clostridium perfringens,cgMLST,Clostridium perfringens cgMLST,1431,https://chewbbaca.online/species/9/schemas/1,"Same species and locus count as the cgMLST.org scheme - most likely an adaptation of it, so Ridom's terms apply; users are pointed to cgMLST.org instead.",2026-11-17
+chewie_ns,10/1,include,yes,chewie_ns,Escherichia coli,wgMLST,Escherichia coli wgMLST,7601,https://chewbbaca.online/species/10/schemas/1,,2026-11-17
+chewie_ns,11/1,include,yes,chewie_ns,Klebsiella oxytoca,cgMLST,Klebsiella oxytoca cgMLST,4201,https://chewbbaca.online/species/11/schemas/1,,2026-11-17
+chewie_ns,12/1,include,yes,chewie_ns,Legionella longbeachae,cgMLST,Legionella longbeachae cgMLST,2608,https://chewbbaca.online/species/12/schemas/1,,2026-11-17
+chewie_ns,13/1,include,yes,chewie_ns,Neisseria meningitidis,cgMLST,Neisseria meningitidis cgMLST,917,https://chewbbaca.online/species/13/schemas/1,Chewie-NS's own schema; PubMLST hosts a different N. meningitidis cgMLST.,2026-11-17
+chewie_ns,14/1,include,yes,chewie_ns,Salmonella enterica,wgMLST,Salmonella enterica wgMLST,8558,https://chewbbaca.online/species/14/schemas/1,,2026-11-17
+chewie_ns,15/1,include,yes,chewie_ns,Shewanella spp,wgMLST,Shewanella wgMLST,21046,https://chewbbaca.online/species/15/schemas/1,Genus-wide wgMLST schema.,2026-11-17
+chewie_ns,16/1,include,yes,chewie_ns,Yersinia enterocolitica,wgMLST,Yersinia enterocolitica wgMLST,6344,https://chewbbaca.online/species/16/schemas/1,,2026-11-17
+chewie_ns,17/1,include,yes,chewie_ns,Chlamydia trachomatis,cgMLST,Chlamydia trachomatis cgMLST,846,https://chewbbaca.online/species/17/schemas/1,,2026-11-17
+chewie_ns,18/1,pending,yes,chewie_ns,Listeria monocytogenes,cgMLST,Listeria monocytogenes cgMLST,1748,https://chewbbaca.online/species/18/schemas/1,"1,748 loci = Institut Pasteur's L. monocytogenes cgMLST (Moura et al. 2016); check whether Pasteur's terms apply before including.",2026-11-17
+chewie_ns,19/1,include,yes,chewie_ns,Legionella pneumophila,wgMLST,Legionella pneumophila wgMLST,4707,https://chewbbaca.online/species/19/schemas/1,,2026-11-17
+chewie_ns,20/1,include,yes,chewie_ns,Yersinia pestis,cgMLST,Yersinia pestis cgMLST,3139,https://chewbbaca.online/species/20/schemas/1,,2026-11-17
+chewie_ns,21/1,include,yes,chewie_ns,Enterobacter cloacae,cgMLST,Enterobacter cloacae complex cgMLST,1812,https://chewbbaca.online/species/21/schemas/1,Covers the E. cloacae complex.,2026-11-17
+chewie_ns,22/1,include,yes,chewie_ns,Streptococcus pneumoniae,wgMLST,Streptococcus pneumoniae wgMLST,3197,https://chewbbaca.online/species/22/schemas/1,,2026-11-17
+manual,pasteur:Bordetella_spp:Bordetella_MLST,include,yes,pasteur,Bordetella spp,MLST,Bordetella MLST,,https://bigsdb.pasteur.fr/bordetella/,,2026-11-17
+manual,pasteur:Corynebacterium_diphtheriae:MLST,include,yes,pasteur,Corynebacterium diphtheriae,MLST,MLST,,https://bigsdb.pasteur.fr/diphtheria/,,2026-11-17
+manual,pasteur:Escherichia_coli:MLST_(Pasteur),include,yes,pasteur,Escherichia coli,MLST,MLST (Pasteur),,https://bigsdb.pasteur.fr/ecoli/,,2026-11-17
+manual,pasteur:Klebsiella_pneumoniae/variicola/quasipneumoniae:MLST,include,yes,pasteur,Klebsiella pneumoniae/variicola/quasipneumoniae,MLST,MLST,,https://bigsdb.pasteur.fr/klebsiella/,,2026-11-17
+manual,pasteur:Listeria_monocytogenes:MLST,include,yes,pasteur,Listeria monocytogenes,MLST,MLST,,https://bigsdb.pasteur.fr/listeria/,,2026-11-17
+manual,pubmlst:Acinetobacter_baumannii:MLST_(Oxford),include,yes,pubmlst,Acinetobacter baumannii,MLST,MLST (Oxford),,https://pubmlst.org/organisms/acinetobacter-baumannii,,2026-11-17
+manual,pubmlst:Acinetobacter_baumannii:MLST_(Pasteur),include,yes,pubmlst,Acinetobacter baumannii,MLST,MLST (Pasteur),,https://pubmlst.org/organisms/acinetobacter-baumannii,,2026-11-17
+manual,pubmlst:Bacillus_anthracis:B._cereus_group_MLST,include,yes,pubmlst,Bacillus anthracis,MLST,B. cereus group MLST,,https://pubmlst.org/organisms/bacillus-cereus,Hosted in the B. cereus database.,2026-11-17
+manual,pubmlst:Bacillus_cereus:B._cereus_group_MLST,include,yes,pubmlst,Bacillus cereus,MLST,B. cereus group MLST,,https://pubmlst.org/organisms/bacillus-cereus,Covers B. anthracis.,2026-11-17
+manual,pubmlst:Brucella_spp:MLST_(9_locus),include,yes,pubmlst,Brucella spp,MLST,MLST (9 locus),9,https://pubmlst.org/organisms/brucella-spp,,2026-11-17
+manual,pubmlst:Burkholderia_mallei:MLST,include,yes,pubmlst,Burkholderia mallei,MLST,MLST,,https://pubmlst.org/organisms/burkholderia-mallei,,2026-11-17
+manual,pubmlst:Burkholderia_pseudomallei:MLST,include,yes,pubmlst,Burkholderia pseudomallei,MLST,MLST,,https://pubmlst.org/organisms/burkholderia-pseudomallei,,2026-11-17
+manual,pubmlst:Campylobacter_jejuni/coli:MLST,include,yes,pubmlst,Campylobacter jejuni/coli,MLST,MLST,,https://pubmlst.org/organisms/campylobacter-jejunicoli,,2026-11-17
+manual,pubmlst:Citrobacter_spp:MLST,include,yes,pubmlst,Citrobacter spp,MLST,MLST,,https://pubmlst.org/organisms/citrobacter-spp,,2026-11-17
+manual,pubmlst:Clostridioides_difficile:MLST,include,yes,pubmlst,Clostridioides difficile,MLST,MLST,,https://pubmlst.org/organisms/clostridioides-difficile,,2026-11-17
+manual,pubmlst:Clostridium_perfringens:MLST,include,yes,pubmlst,Clostridium perfringens,MLST,MLST,,https://pubmlst.org/organisms/clostridium-perfringens,,2026-11-17
+manual,pubmlst:Cronobacter_spp:MLST,include,yes,pubmlst,Cronobacter spp,MLST,MLST,,https://pubmlst.org/organisms/cronobacter-spp,,2026-11-17
+manual,pubmlst:Enterobacter_spp:MLST,include,yes,pubmlst,Enterobacter spp,MLST,MLST,,https://pubmlst.org/organisms/enterobacter-spp,,2026-11-17
+manual,pubmlst:Enterococcus_faecalis:MLST,include,yes,pubmlst,Enterococcus faecalis,MLST,MLST,,https://pubmlst.org/organisms/enterococcus-faecalis,,2026-11-17
+manual,pubmlst:Enterococcus_faecium:MLST,include,yes,pubmlst,Enterococcus faecium,MLST,MLST,,https://pubmlst.org/organisms/enterococcus-faecium,,2026-11-17
+manual,pubmlst:Escherichia_spp:MLST_(Achtman),include,yes,pubmlst,Escherichia spp,MLST,MLST (Achtman),,https://pubmlst.org/organisms/escherichia-spp,,2026-11-17
+manual,pubmlst:Klebsiella_oxytoca:MLST,include,yes,pubmlst,Klebsiella oxytoca,MLST,MLST,,https://pubmlst.org/organisms/klebsiella-oxytoca,,2026-11-17
+manual,pubmlst:Mycoplasma_gallisepticum:MLST#1_(Ghanem),include,yes,pubmlst,Mycoplasma gallisepticum,MLST,MLST#1 (Ghanem),,https://pubmlst.org/organisms/mycoplasma-gallisepticum,,2026-11-17
+manual,pubmlst:Paenibacillus_larvae:MLST,include,yes,pubmlst,Paenibacillus larvae,MLST,MLST,,https://pubmlst.org/organisms/paenibacillus-larvae,,2026-11-17
+manual,pubmlst:Proteus_spp:MLST,include,yes,pubmlst,Proteus spp,MLST,MLST,,https://pubmlst.org/organisms/proteus-spp,,2026-11-17
+manual,pubmlst:Pseudomonas_aeruginosa:MLST,include,yes,pubmlst,Pseudomonas aeruginosa,MLST,MLST,,https://pubmlst.org/organisms/pseudomonas-aeruginosa,,2026-11-17
+manual,pubmlst:Salmonella_spp:MLST,include,yes,pubmlst,Salmonella spp,MLST,MLST,,https://pubmlst.org/organisms/salmonella-spp,,2026-11-17
+manual,pubmlst:Serratia_spp:MLST,include,yes,pubmlst,Serratia spp,MLST,MLST,,https://pubmlst.org/organisms/serratia-spp,,2026-11-17
+manual,pubmlst:Staphylococcus_aureus:MLST,include,yes,pubmlst,Staphylococcus aureus,MLST,MLST,,https://pubmlst.org/organisms/staphylococcus-aureus,,2026-11-17
+manual,pubmlst:Streptococcus_pyogenes:MLST,include,yes,pubmlst,Streptococcus pyogenes,MLST,MLST,,https://pubmlst.org/organisms/streptococcus-pyogenes,,2026-11-17

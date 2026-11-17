@@ -26,7 +26,6 @@ box::use(
     icon,
     actionButton,
     numericInput,
-    radioButtons,
     checkboxInput,
     showNotification,
     showModal,
@@ -86,10 +85,10 @@ box::use(
   app / logic / provenance[scheme_provenance, store_provenance],
   app /
     logic /
-    mlst_repo[
-      REPO_URLS,
+    mlst_scheme[
       describe_resolution,
-      resolve_mlst_scheme,
+      materialize_mlst_scheme,
+      mlst_scheme_info,
       write_scheme_spec,
     ],
   app /
@@ -115,7 +114,7 @@ box::use(
   app /
     logic /
     amr[
-      amr_species,
+      db_amr_organism,
       parse_amr_meta,
       store_amr_results,
     ],
@@ -639,13 +638,7 @@ ui <- function(id) {
           3,
           "Classical MLST",
           ns("info_mlst"),
-          radioButtons(
-            ns("cla_repo"),
-            "Scheme source",
-            choices = c("PubMLST" = "pubmlst", "Pasteur" = "pasteur"),
-            selected = "pubmlst",
-            inline = TRUE
-          ),
+          uiOutput(ns("cla_scheme_status")),
           # Thresholds of their own rather than the cgMLST pair: the searches
           # differ in kind, and pyMLST itself defaults `claMLST search` to a
           # looser identity (0.9) than `wgMLST add` (0.95). The seven classical
@@ -905,11 +898,13 @@ server <- function(
     }
     reset_persisted()
 
-    # Delete an interim claMLST reference DB (SQLite side files and the scheme's
-    # profile table included). Safe to call with NULL / NA / a non-existent path.
+    # Delete an interim claMLST reference DB (SQLite side files, the scheme's
+    # profile table and the scheme files it was built from included). Safe to
+    # call with NULL / NA / a non-existent path.
     cleanup_cla_db <- function(path) {
       if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
-        unlink(c(path, paste0(path, c("-wal", "-shm", ".profiles.tsv"))))
+        unlink(c(path, paste0(path, c("-wal", "-shm", ".profiles.tsv", ".spec"))))
+        unlink(paste0(path, ".scheme"), recursive = TRUE)
       }
     }
 
@@ -1414,6 +1409,42 @@ server <- function(
       guard_db_read("Loading the isolate list", existing_strains(db_path()))
     })
 
+    # The classical MLST scheme stored in the loaded database, NULL without one.
+    cla_scheme_stored <- reactive({
+      req(valid_db())
+      db_events$depend(db_rev, "schema")
+      guard_db_read("Loading the MLST scheme", mlst_scheme_info(db_path()))
+    })
+
+    # Names the stored scheme, or says where one can be added.
+    output$cla_scheme_status <- renderUI({
+      info <- cla_scheme_stored()
+      if (is.null(info)) {
+        return(div(
+          class = "typing-scheme-status is-missing",
+          icon("circle-info"),
+          span(
+            "This database has no classical MLST scheme, so sequence types are",
+            " not determined. Add one under Database > MLST Overview > Scheme",
+            " Setup."
+          )
+        ))
+      }
+      div(
+        class = "typing-scheme-status",
+        icon("circle-check"),
+        span(
+          tags$strong(info$name),
+          sprintf(
+            " (%s) - %d loci, %s sequence types",
+            if (is.null(info$source_label)) "user-supplied" else info$source_label,
+            length(info$loci),
+            format(as.integer(info$profiles), big.mark = ",")
+          )
+        )
+      )
+    })
+
     # Total loci in the loaded scheme (denominator of the completeness metric).
     scheme_total <- reactive({
       guard_db_read("Loading the scheme", scheme_size(db_path()))
@@ -1513,15 +1544,11 @@ server <- function(
           "records a locus as absent (allele 0, e.g. pstS in Enterococcus",
           "faecium), the ST is read from its profile table and shown starred."
         ),
-        tags$dt("Scheme source"),
+        tags$dt("Scheme"),
         tags$dd(
-          "Repository the 7-gene scheme is fetched from. The species is",
-          "resolved to exactly one database and one scheme; if the chosen",
-          "repository cannot do that, the other is tried, and if neither can,",
-          "classical MLST is skipped for the run. Where one database holds two",
-          "equally classical schemes (Acinetobacter baumannii's Oxford and",
-          "Pasteur schemes are both on PubMLST), this choice also picks between",
-          "them by name."
+          "The classical MLST scheme stored in this database: its profile",
+          "table and allele sequences, imported from files when the database",
+          "was created or later under Database > MLST Overview > Scheme Setup."
         ),
         tags$dt("Min. identity / Min. coverage"),
         tags$dd(
@@ -1537,7 +1564,8 @@ server <- function(
         ),
         tags$dt("When it's skipped"),
         tags$dd(
-          "No classical MLST is attempted when the scheme has no resolvable species."
+          "No classical MLST is attempted while the database carries no",
+          "classical MLST scheme."
         )
       )
     })
@@ -1553,8 +1581,8 @@ server <- function(
         tags$dt("Detected elements"),
         tags$dd(
           "Acquired resistance genes, virulence factors and stress/metal",
-          "elements. Resistance point mutations are added when the scheme's",
-          "species is supported."
+          "elements. Resistance point mutations are added for the organism",
+          "chosen when the database was set up."
         ),
         tags$dt("Reference database"),
         tags$dd(
@@ -1808,7 +1836,6 @@ server <- function(
         addClass("genome_dir", "custom-disable")
         disable("identity")
         disable("coverage")
-        disable("cla_repo")
         disable("cla_identity")
         disable("cla_coverage")
         disable("run_amr")
@@ -1819,7 +1846,6 @@ server <- function(
         removeClass("genome_dir", "custom-disable")
         enable("identity")
         enable("coverage")
-        enable("cla_repo")
         enable("cla_identity")
         enable("cla_coverage")
         enable("run_amr")
@@ -2800,32 +2826,33 @@ server <- function(
       # Seed an all-Pending table so the queue is visible immediately.
       Typing$results <- parse_typing_log(character(0), Typing$queued_strains)
 
-      # Classical MLST rides along in the same run: the scheme's species (from
-      # the mother DB) is resolved to exactly one repository scheme here, the
-      # script downloads and builds it at this temp path, and the ST is derived
-      # per genome. The reference DB is read back on finalize (for reference
-      # sequences / metadata), then deleted. No species or no scheme resolvable
-      # => classical MLST is skipped for the whole run.
+      # Classical MLST rides along in the same run, against the scheme stored
+      # in the mother DB: its profile table and allele files are written to a
+      # private folder here, the script builds the claMLST reference from them
+      # at this temp path, and the ST is derived per genome. The reference DB
+      # is read back on finalize (for reference sequences / metadata), then
+      # deleted together with the scheme files. A database without a stored
+      # scheme or without a species skips classical MLST for the whole run.
       species <- preflight$species
+      cla_db <- tempfile(fileext = ".clamlst.db")
       cla_scheme <- if (!is.na(species)) {
-        # Blocks on the repository APIs for a moment - logged so a slow or
-        # unreachable repository is visible as such rather than as a stall.
-        log_typing("Resolving classical MLST scheme", species)
-        resolve_mlst_scheme(
-          species,
-          repos = union(or_default(input$cla_repo, "pubmlst"), names(REPO_URLS))
+        scheme_dir <- paste0(cla_db, ".scheme")
+        dir.create(scheme_dir)
+        tryCatch(
+          materialize_mlst_scheme(db_path(), scheme_dir),
+          error = function(e) {
+            log_typing("Classical MLST scheme unreadable", conditionMessage(e))
+            list(resolved = FALSE)
+          }
         )
       } else {
-        list(resolved = FALSE, species = NA_character_, attempts = character(0))
+        list(resolved = FALSE)
       }
-      Typing$cla_db <- if (isTRUE(cla_scheme$resolved)) {
-        tempfile(fileext = ".clamlst.db")
-      } else {
-        NULL
-      }
+      Typing$cla_db <- if (isTRUE(cla_scheme$resolved)) cla_db else NULL
       Typing$cla_spec <- if (isTRUE(cla_scheme$resolved)) {
-        write_scheme_spec(cla_scheme, tempfile(fileext = ".clamlst.spec"))
+        write_scheme_spec(cla_scheme, paste0(cla_db, ".spec"))
       } else {
+        cleanup_cla_db(cla_db)
         NULL
       }
       live_cla_db <<- Typing$cla_db
@@ -2850,11 +2877,11 @@ server <- function(
 
       # AMR screening rides along too (opt-out via the sidebar checkbox). Each
       # genome is screened into a per-strain subdir of this run's temp AMR dir,
-      # read back on finalize. The scheme's species is mapped to an abritamr
-      # `--species` token when supported (enabling point mutations); an
-      # unsupported / unknown species falls back to acquired-genes-only.
+      # read back on finalize. The organism for point mutations is the one
+      # chosen when the database was set up (an older database maps its
+      # species instead); none means acquired genes only.
       run_amr <- isTRUE(input$run_amr)
-      amr_sp <- if (run_amr) amr_species(species) else NA_character_
+      amr_sp <- if (run_amr) db_amr_organism(db_path(), species) else NA_character_
       Typing$amr_out <- if (run_amr) {
         d <- tempfile("amr_")
         dir.create(d, recursive = TRUE, showWarnings = FALSE)

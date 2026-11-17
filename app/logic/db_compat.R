@@ -3,8 +3,9 @@
 # Compatibility gate for importing peer PhyloTrace database files.
 #
 # A PhyloTrace SQLite database (.db) can only be merged into another instance
-# when both share an identical typing scheme: identical organism, scheme identity,
-# locus definitions, and reference alleles.
+# when both share an identical typing scheme: identical organism, locus
+# definitions, and reference alleles. The scheme's labels (source, version) are
+# compared too, but only as an advisory.
 #
 # The synthetic "ref" strain (souche) in the `mlst` table contains one entry per
 # locus derived from the scheme's seed genome. Evaluating the set of
@@ -401,7 +402,11 @@ check_import_compatibility <- function(local_path, ext_path) {
     )
   )
 
-  # 3. Scheme identity ------------------------------------------------------
+  # 3. Scheme identity (advisory) -------------------------------------------
+  # Name, source and version are labels - typed in by whoever set the database
+  # up - so two databases built from the very same scheme files can spell them
+  # differently. What makes profiles comparable is checked exactly below (locus
+  # set and reference alleles); a label difference alone only warns.
   ident <- c("scheme_name", "scheme_source", "scheme_version")
   diff_ident <- ident[vapply(
     ident,
@@ -412,11 +417,12 @@ check_import_compatibility <- function(local_path, ext_path) {
     checks,
     .row(
       "Scheme identity",
-      if (length(diff_ident)) "fail" else "pass",
+      if (length(diff_ident)) "warn" else "pass",
       if (length(diff_ident)) {
         paste0(
-          "Differs: ",
-          paste(sub("^scheme_", "", diff_ident), collapse = ", ")
+          "Labelled differently: ",
+          paste(sub("^scheme_", "", diff_ident), collapse = ", "),
+          " (advisory)"
         )
       } else {
         parts <- c(ext$scheme_name, ext$scheme_source, ext$scheme_version)

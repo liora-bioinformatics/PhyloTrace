@@ -1,5 +1,6 @@
 /**
- * Makes a virtual-select popup show its options the moment it opens.
+ * Makes a virtual-select popup show its options the moment it opens, with the
+ * cursor in its search field.
  *
  * virtual-select is a windowing list: it renders a slice of the options and
  * translates that slice to wherever the scroll position says it belongs. The
@@ -28,6 +29,18 @@ function refresh(instance) {
   if (instance.setVisibleOptions) instance.setVisibleOptions();
 }
 
+/**
+ * Puts the cursor in the popup's search field, so typing searches at once
+ * without a click into the field first. preventScroll keeps the page behind
+ * the popup where it is.
+ */
+function focusSearch(instance) {
+  var search = instance && instance.$searchInput;
+  if (search && typeof search.focus === "function") {
+    search.focus({ preventScroll: true });
+  }
+}
+
 function bind(container) {
   if (bound.has(container)) return;
   var instance = container.virtualSelect;
@@ -38,7 +51,10 @@ function bind(container) {
   container.addEventListener("afterOpen", function () {
     // After the frame the popup is laid out in — measuring it before that
     // reads the closed box's height.
-    requestAnimationFrame(function () { refresh(instance); });
+    requestAnimationFrame(function () {
+      refresh(instance);
+      focusSearch(instance);
+    });
   });
 }
 

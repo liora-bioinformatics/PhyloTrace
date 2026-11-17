@@ -32,8 +32,11 @@ University of Graz (MUG). Featured on ShinyConf 2024 and R/Medicine 2024.</sup><
 
 ### Core-Genome Multilocus Sequence Typing (cgMLST and MLST)
 
-High-resolution strain typing using standardized cgMLST and classical MLST schemes. 42 bacterial
-schemes are currently available via [cgMLST.org](https://www.cgmlst.org). Support for custom schemes will be added soon.
+High-resolution strain typing using standardized cgMLST and classical MLST schemes. Bring the
+scheme files you downloaded from your provider (cgMLST.org, PubMLST, Institut Pasteur BIGSdb,
+Chewie-NS or your own scheme): PhyloTrace validates them and stores the scheme inside the
+database. It never downloads schemes itself, so each provider's terms of use apply to the files
+you import.
 
 <img src="docs/readme/typing-run.png" width="100%"/>
 

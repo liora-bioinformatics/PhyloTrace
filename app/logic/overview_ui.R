@@ -459,6 +459,32 @@ selected_row <- function(input, table_id, rows) {
   shiny$reactive(shiny$req(current()))
 }
 
+#' Render Stored Scheme Details Safely
+#'
+#' @description Scheme details are text a user typed or a peer database
+#'   brought in, so they are escaped before display. A web address becomes a
+#'   link; the HTML link older databases stored for the scheme URL is reduced
+#'   to its address first.
+#'
+#' @param values Character vector of stored values.
+#'
+#' @return Character vector of HTML, `NA` kept.
+#' @export
+scheme_value_html <- function(values) {
+  values <- as.character(values)
+  legacy <- grepl("^\\s*<a\\s[^>]*href=\"https?://[^\"]+\"", values)
+  values[legacy] <- sub("^\\s*<a\\s[^>]*href=\"(https?://[^\"]+)\".*$", "\\1", values[legacy])
+  is_url <- !is.na(values) & grepl("^https?://[^[:space:]<>\"'`]+$", values)
+  out <- htmlEscape(values)
+  out[is_url] <- sprintf(
+    "<a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>",
+    htmlEscape(values[is_url], attribute = TRUE),
+    htmlEscape(values[is_url])
+  )
+  out[is.na(values)] <- NA_character_
+  out
+}
+
 #' Key/Value Table
 #'
 #' @param keys Character vector of row labels.

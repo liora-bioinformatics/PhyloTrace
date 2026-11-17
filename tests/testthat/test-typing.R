@@ -592,16 +592,13 @@ test_that("confirming the gate hashes only the typeable files", {
   })
 })
 
-test_that("an unresolvable scheme is announced in the run's own transcript", {
-  # This is the actual failure mode reported against a real database
-  # (Acinetobacter baumannii, whose PubMLST database hosts two equally
-  # classical 7-locus schemes with nothing to break the tie): before this,
-  # resolve_mlst_scheme() failing left no trace anywhere in the log a user
-  # inspects, only in the app's internal event log. No species is configured
-  # here, which is the same code path with no network dependency.
+test_that("a database without an MLST scheme says so in the run's own transcript", {
+  # Classical MLST is typed against the scheme stored in the database; without
+  # one it is skipped, and the transcript a user inspects has to say why rather
+  # than leaving an empty ST column unexplained.
   dir <- local_tempdir()
   path <- file.path(dir, "db.db")
-  build_db(path, default_local(), species = NA_character_)
+  build_db(path, default_local())
   repo_root <- normalizePath(file.path(getwd(), "..", ".."))
 
   testServer(typing$server, args = list(db_path = reactive(path)), {
@@ -615,18 +612,14 @@ test_that("an unresolvable scheme is announced in the run's own transcript", {
     )
 
     expect_false(is.null(Typing$log_file))
+    expect_null(Typing$cla_db)
     lines <- readLines(Typing$log_file)
-    expect_true(any(grepl(
-      "no resolvable species for this scheme",
-      lines,
-      fixed = TRUE
-    )))
     # It leads the transcript, ahead of anything the subprocess itself writes -
     # append mode preserves it rather than racing the child's own first write.
     expect_identical(
       lines[2],
       paste(
-        "Classical MLST: no resolvable species for this scheme",
+        "Classical MLST: this database carries no classical MLST scheme",
         "(skipping ST calls for this run)."
       )
     )

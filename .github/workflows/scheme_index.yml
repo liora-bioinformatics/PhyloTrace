@@ -1,0 +1,68 @@
+name: Scheme Index Update
+
+# Weekly check of the providers' public scheme listings. Changes arrive as a
+# pull request against dev/scheme_index/curation.csv and the app's index; new
+# schemes stay "pending" until a maintainer reviews them, so nothing reaches
+# the app unreviewed. Which providers are read, and why, is in
+# dev/scheme_index/config.json.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: scheme-index
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test the index tooling
+        run: python -m unittest discover -s dev/scheme_index -p 'test_*.py' -v
+
+      - name: Read the provider listings and rebuild the index
+        id: update
+        run: |
+          set +e
+          python dev/scheme_index/scheme_index.py update --report "$RUNNER_TEMP/scheme-index-report.md"
+          status=$?
+          set -e
+          # Exit code 1 means curation rows need fixing; the pull request is
+          # still opened, with the problems listed, so a maintainer sees them.
+          echo "problems=$([ "$status" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          cat "$RUNNER_TEMP/scheme-index-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show what changed
+        run: git status --short && git diff --stat
+
+      - name: Open a pull request with the changes
+        # Skipped when run locally with `act`, which cannot open pull requests.
+        if: ${{ !env.ACT }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/scheme-index
+          delete-branch: true
+          add-paths: |
+            dev/scheme_index/curation.csv
+            app/logic/data/scheme_index.csv
+          commit-message: Update scheme index from provider listings
+          title: 'Scheme index: provider listing changes'
+          body-path: ${{ runner.temp }}/scheme-index-report.md
+          labels: scheme-index

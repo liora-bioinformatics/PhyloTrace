@@ -15,6 +15,7 @@ fresh_state <- function() {
   state$active <- 0L
   state$pending <- FALSE
   state$notice <- NULL
+  state$tab <- NULL
 }
 
 # A stand-in for later::later() that records instead of scheduling.
@@ -97,6 +98,13 @@ test_that("the notice left by a restart reaches the next session only", {
   state$notice <- "notice"
   expect_identical(session_restart$begin_session(), "notice")
   expect_null(session_restart$begin_session())
+})
+
+test_that("the tab a restart asks for is handed to the next session only", {
+  fresh_state()
+  state$tab <- "db_wizard_panel"
+  expect_identical(session_restart$take_start_tab(), "db_wizard_panel")
+  expect_null(session_restart$take_start_tab())
 })
 
 test_that("purging empties the MST layout cache", {

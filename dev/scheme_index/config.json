@@ -1,0 +1,28 @@
+{
+  "user_agent": "PhyloTrace scheme index (+https://github.com/liora-bioinformatics/PhyloTrace; info@liora-bioinformatics.com)",
+  "delay_seconds": 2,
+  "sources": {
+    "cgmlst_org": {
+      "enabled": true,
+      "url": "https://www.cgmlst.org/ncs/",
+      "reason": "The scheme list page /ncs/ is open to automated access (robots.txt blocks only /ncs/schema/ and /ncs/strain/)."
+    },
+    "chewie_ns": {
+      "enabled": true,
+      "api": "https://chewbbaca.online/api/NS/api",
+      "reason": "The Chewie-NS API invites programmatic use, asking for a pause between requests."
+    },
+    "pubmlst": {
+      "enabled": false,
+      "api": "https://rest.pubmlst.org/db",
+      "page": "https://pubmlst.org/bigsdb?db={db}",
+      "reason": "rest.pubmlst.org/robots.txt disallows all automated clients; switch on only with written permission from the University of Oxford."
+    },
+    "pasteur": {
+      "enabled": false,
+      "api": "https://bigsdb.pasteur.fr/api/db",
+      "page": "https://bigsdb.pasteur.fr/cgi-bin/bigsdb/bigsdb.pl?db={db}",
+      "reason": "Institut Pasteur's policy covers software tools; switch on only with written permission (bigsdb-policy@pasteur.fr)."
+    }
+  }
+}

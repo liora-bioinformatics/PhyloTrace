@@ -28,20 +28,25 @@ box::use(
 )
 
 box::use(
+  app / logic / amr[AMR_ORGANISM_KEY],
   app / logic / db_connect[connect],
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
   app / logic / geocode_cache[GEOCODE_TABLE],
   app / logic / logging[log_event],
+  app / logic / mlst_scheme[MLST_SCHEME_TABLES],
+  app / logic / species[TAXID_KEY],
 )
 
 # Core scheme tables copied verbatim when present. Carrying `alembic_version`
-# maintains pyMLST schema tracking, while `targets` and `scheme_overview`
-# support summary views in client applications.
+# maintains pyMLST schema tracking, `targets` and `scheme_overview` support
+# summary views in client applications, and the classical MLST scheme tables
+# let the receiving database keep typing sequence types.
 SCHEME_TABLES <- c(
   "mlst_type",
   "alembic_version",
   "targets",
-  "scheme_overview"
+  "scheme_overview",
+  MLST_SCHEME_TABLES
 )
 
 # Optional analysis result tables linked by isolate ID.
@@ -403,6 +408,20 @@ export_database <- function(
       progress(0.15, "Copying scheme tables …")
       for (nm in intersect(SCHEME_TABLES, src_tables)) {
         dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
+      }
+      # Scheme-level settings travel with the scheme. The database identity
+      # (`uuid`) does not: an export is a database of its own.
+      if ("phylotrace_meta" %in% src_tables) {
+        dbExecute(
+          con,
+          "CREATE TABLE IF NOT EXISTS phylotrace_meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        dbExecute(
+          con,
+          "INSERT OR REPLACE INTO phylotrace_meta
+             SELECT key, value FROM src.phylotrace_meta WHERE key IN (?, ?)",
+          params = list(AMR_ORGANISM_KEY, TAXID_KEY)
+        )
       }
 
       progress(0.35, "Copying allele calls …")

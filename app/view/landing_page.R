@@ -46,7 +46,6 @@ ui <- function(id) {
             ns("create_new_db"),
             "Create New",
             icon = shiny$icon("plus"),
-            title = "Choose location for new database",
             buttonType = "default",
             root = path_home()
           )
@@ -109,13 +108,15 @@ server <- function(
       # client - and the overlay it triggers actually paints - before
       # load_trigger changes db_path() and everything that cascades from it.
       later::later(function() {
-        shiny$withReactiveDomain(session, shiny$isolate({
-          n <- load_trigger()
-          load_trigger(if (is.null(n)) 1L else n + 1L)
-        }))
+        shiny$withReactiveDomain(
+          session,
+          shiny$isolate({
+            n <- load_trigger()
+            load_trigger(if (is.null(n)) 1L else n + 1L)
+          })
+        )
       })
     }
-
 
     # Observe a database location
     shiny$observeEvent(external_db(), {

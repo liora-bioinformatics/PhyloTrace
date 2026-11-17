@@ -19,10 +19,12 @@
 
 box::use(
   DBI[
-    dbDisconnect,
-    dbExecute,
     dbBegin,
     dbCommit,
+    dbDisconnect,
+    dbExecute,
+    dbGetQuery,
+    dbListTables,
     dbRollback,
   ],
   utils[read.delim],
@@ -94,6 +96,56 @@ amr_species <- function(db_species) {
   )
   hit <- candidates[candidates %in% SUPPORTED_AMR_SPECIES]
   if (length(hit)) hit[1] else NA_character_
+}
+
+#' Settings Key of the AMR Organism
+#'
+#' @description Key of `phylotrace_meta` holding the abritamr `--species` token
+#'   chosen when the database was set up; empty for acquired genes only.
+#' @export
+AMR_ORGANISM_KEY <- "amr_organism"
+
+#' Organisms With Point-Mutation Screening
+#'
+#' @return Character vector of abritamr `--species` tokens.
+#' @export
+amr_organisms <- function() {
+  SUPPORTED_AMR_SPECIES
+}
+
+#' AMR Organism of a Database
+#'
+#' @description The organism AMRFinderPlus screens point mutations for. A
+#'   database set up by PhyloTrace states it explicitly (possibly as "none");
+#'   an older database has no such setting and falls back to mapping its
+#'   species.
+#'
+#' @param db_path Character path to the database.
+#' @param species Character species of the database, for the fallback.
+#'
+#' @return An abritamr `--species` token, or `NA` for acquired genes only.
+#' @export
+db_amr_organism <- function(db_path, species = NA_character_) {
+  stored <- tryCatch(
+    {
+      con <- connect(db_path, synchronous = NULL)
+      on.exit(dbDisconnect(con))
+      if ("phylotrace_meta" %in% dbListTables(con)) {
+        dbGetQuery(
+          con,
+          "SELECT value FROM phylotrace_meta WHERE key = ?",
+          params = list(AMR_ORGANISM_KEY)
+        )$value
+      } else {
+        character(0)
+      }
+    },
+    error = function(e) character(0)
+  )
+  if (!length(stored)) {
+    return(amr_species(species))
+  }
+  if (!is.na(stored[1]) && stored[1] %in% SUPPORTED_AMR_SPECIES) stored[1] else NA_character_
 }
 
 # Pull abritamr / AMRFinder / DB versions from typing-log sentinel lines.

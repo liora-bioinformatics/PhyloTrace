@@ -279,3 +279,13 @@ test_that("group_carriers counts overlapping groups' isolates once", {
   )
   expect_identical(amr_overview$group_carriers(ov$hits, "Stress", "Mercury"), 0L)
 })
+
+test_that("a database without any screening builds an empty overview for every source", {
+  # A freshly created database has no amr_summary rows; the abritamr view used
+  # to fail on it instead of saying nothing was screened yet.
+  for (source in amr_overview$AMR_SOURCES) {
+    ov <- amr_overview$build_amr_overview(isolates = character(0), source = source)
+    expect_identical(ov$state, "none")
+    expect_identical(nrow(ov$hits), 0L)
+  }
+})

@@ -1532,10 +1532,13 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # treatment, same position control — over the columns actually charted, in
   # the column order set above. Colours come from `colors`, so the keys, their
   # order and their colours are the Markers legend's for the same variable.
+  # The fixed layerId makes the zoom re-cluster (a leafletProxy redraw) replace
+  # this legend instead of stacking another copy on every zoom step.
   if (isTRUE(o$legend)) {
     m <- leaflet$addLegend(
       m,
       position = o$legend_pos,
+      layerId = "charts_legend",
       colors = unname(colors),
       labels = names(cd),
       title = if (nzchar(o$legend_title)) o$legend_title else layer$title,

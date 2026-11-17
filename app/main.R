@@ -63,11 +63,12 @@ box::use(
       begin_session,
       end_session,
       restart_session,
+      take_start_tab,
       theme_restore_script
     ],
   app / view / landing_page,
-  app / view / scheme_browser,
   app / view / database,
+  app / view / db_wizard,
   app / view / typing,
   app / view / analysis_dashboard,
   app / view / visualization,
@@ -142,9 +143,9 @@ ui <- function(id) {
         landing_page$ui(ns("landing_page"))
       ),
       nav_panel(
-        title = "Scheme Browser",
-        value = "scheme_browser_panel",
-        scheme_browser$ui(ns("scheme_browser"))
+        title = "Create Database",
+        value = "db_wizard_panel",
+        db_wizard$ui(ns("db_wizard"))
       ),
       nav_spacer(),
       # Empty (renders nothing) whenever no typing run is active - see
@@ -196,6 +197,12 @@ server <- function(id) {
     if (!is.null(restart_notice)) {
       showModal(restart_notice)
     }
+    # A restart can ask to open on a tab other than the landing page (starting
+    # a new database setup reopens the setup itself).
+    start_tab <- take_start_tab()
+    if (!is.null(start_tab)) {
+      nav_select(id = "tabs", selected = start_tab)
+    }
 
     # Light/dark mode toggle
     observeEvent(input$toggle_dark, {
@@ -236,7 +243,7 @@ server <- function(id) {
     # argument. Returning to the start screen does not use it - that restarts
     # the session (see return_to_start()).
     #
-    # Deliberately NOT given to Landing Page/Scheme Browser - if it were,
+    # Deliberately NOT given to Landing Page/Create Database - if it were,
     # "Reload Database" would null out Landing Page's load_trigger (hence
     # db_path) without ever re-firing it, since that lightweight reload never
     # sends the user back to the landing screen to press Load again.
@@ -273,16 +280,18 @@ server <- function(id) {
     # staleness marker rather than a cue to reload over the user's work.
     db_rev <- new_bus()
 
-    SCHEME_BROWSER_vals <- scheme_browser$server("scheme_browser")
+    DB_WIZARD_vals <- db_wizard$server("db_wizard")
 
-    scheme_browser_db <- reactive({
-      SCHEME_BROWSER_vals$load_db()
-      isolate(SCHEME_BROWSER_vals$db_location())
+    # The database the setup just created, handed over when its "Load
+    # Database" button is clicked.
+    created_db <- reactive({
+      DB_WIZARD_vals$load_db()
+      isolate(DB_WIZARD_vals$db_location())
     })
 
     LANDING_PAGE_vals <- landing_page$server(
       "landing_page",
-      external_db = scheme_browser_db
+      external_db = created_db
     )
 
     # TRUE once the loaded database file has been found missing (see the watcher
@@ -452,7 +461,7 @@ server <- function(id) {
     })
 
     observeEvent(LANDING_PAGE_vals$create_scheme(), {
-      nav_select(id = "tabs", selected = "scheme_browser_panel")
+      nav_select(id = "tabs", selected = "db_wizard_panel")
     })
 
     # Clear the two navbar items the load handler inserts (the reset button and
@@ -656,7 +665,7 @@ server <- function(id) {
           )
 
           targets <- c(
-            "scheme_browser_panel",
+            "db_wizard_panel",
             "database_panel",
             "analysis_dashboard_panel",
             "visualization_panel",
@@ -712,7 +721,7 @@ server <- function(id) {
           )
 
           nav_hide(id = "tabs", target = "landing_page_panel")
-          nav_hide(id = "tabs", target = "scheme_browser_panel")
+          nav_hide(id = "tabs", target = "db_wizard_panel")
 
           if (!is.null(stat_json$last_db) && file.exists(stat_json$last_db)) {
             stat_json$last_db <- db_path
@@ -799,8 +808,7 @@ server <- function(id) {
     # file locking that network filesystems do not implement reliably, and a
     # typing run has two writers (this session and the pyMLST process), so such
     # a database risks corruption long before anyone notices a stall. The
-    # Scheme Browser's "Initiate New Database" card says so at the point the
-    # location is chosen.
+    # Create Database setup says so at the point the location is chosen.
     db_gone_handled <- reactiveVal(FALSE)
     observe({
       loaded <- LANDING_PAGE_vals$db_path()

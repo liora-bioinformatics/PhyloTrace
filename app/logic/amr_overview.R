@@ -284,6 +284,9 @@ summary_hits <- function(summary) {
   class <- trimws(blank_na(summary$drug_class))
   virulence_file <- section %in% "virulence"
   is_virulence <- virulence_file & class %in% ABRITAMR_VIRULENCE
+  # Constant columns are sized to the rows, so a database without any abritamr
+  # rows yet (a freshly created one) yields an empty table instead of an error.
+  n <- length(genes)
   hits <- data.frame(
     isolate = as.character(summary$isolate),
     gene_symbol = sub("[*^]+$", "", genes),
@@ -295,15 +298,15 @@ summary_hits <- function(summary) {
     ),
     subtype = ifelse(virulence_file, class, NA_character_),
     class = ifelse(is_virulence, NA_character_, class),
-    subclass = NA_character_,
+    subclass = rep(NA_character_, n),
     tier = ifelse(
       section %in% "partials",
       "Partial",
       ifelse(grepl("[*^]$", genes), "Inexact", "Match")
     ),
-    pct_identity = NA_real_,
-    pct_coverage = NA_real_,
-    ref_name = NA_character_,
+    pct_identity = rep(NA_real_, n),
+    pct_coverage = rep(NA_real_, n),
+    ref_name = rep(NA_character_, n),
     stringsAsFactors = FALSE
   )
   hits$group <- group_of(hits)

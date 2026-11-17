@@ -19,7 +19,6 @@ box::use(
   utils[read.delim],
 )
 box::use(
-  app / logic / database_functions[migrate_species_name],
   app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
@@ -83,165 +82,12 @@ bash_exe <- function() {
   "bash"
 }
 
-# Log line scheme-download.sh prints once the fallback has built the scheme.
-SCHEME_CREATED_MARKER <- "Scheme download: done (wgMLST create)"
-
-#' Launch Background cgMLST Scheme Download
-#'
-#' @description Runs `scheme-download.sh` as a detached, non-blocking
-#'   process, appending its output to a log file for live polling. The script
-#'   runs `wgMLST import` and, when that fails with an ambiguous match or a
-#'   timeout, builds the scheme from its exact cgmlst.org URL with
-#'   `wgMLST create` instead.
-#'
-#' @details
-#' `wgMLST import` resolves the scheme by case-insensitive substring match on
-#' the scheme names listed on cgmlst.org and, with `--no-prompt`, fails when more
-#' than one matches. A scheme whose name is a prefix of another's can therefore
-#' never be imported: "Citrobacter freundii" also matches
-#' "Citrobacter freundii/portucalensis/braakii/europaeus".
-#'
-#' pyMLST also downloads the allele archive itself under a hardcoded 600 s
-#' wall-clock timeout (not a stall detector), with no way to raise it, so a
-#' large scheme on a slower connection can fail even while data is still
-#' arriving. The fallback's own curl call uses a stall-based timeout instead,
-#' so it succeeds in that case too.
-#'
-#' A large scheme can take many minutes, so the download must not block the R
-#' process: every session would freeze and it could not be cancelled. Poll
-#' the process, then call `finish_scheme_download()`, or `stop_scheme_download()`
-#' to cancel it.
-#'
-#' @param scheme Character string. Scheme name as selected in the UI.
-#' @param db_path Character string. Output path for the SQLite database file.
-#' @param log_file Character string. Log file the output is appended to.
-#' @param env_name Character string. Conda environment name. Defaults to `conda_env`.
-#' @param overwrite Logical. If `TRUE`, overwrites an existing database file.
-#' @param scheme_url Character string (optional). Exact cgmlst.org scheme URL
-#'   from `scheme_url()`; without it there is no fallback.
-#' @param script_path Character string. Path to `scheme-download.sh`.
-#'   Defaults to `"app/logic/scheme-download.sh"`.
-#'
-#' @return A `processx::process` instance.
-#' @export
-start_scheme_download <- function(
-  scheme,
-  db_path,
-  log_file,
-  env_name = conda_env,
-  overwrite = FALSE,
-  scheme_url = NULL,
-  script_path = "app/logic/scheme-download.sh"
-) {
-  has_url <- length(scheme_url) == 1 && !is.na(scheme_url) && nzchar(scheme_url)
-
-  # Same append-through-bash as start_typing(): processx cannot append to a log.
-  # The script is run by bash rather than exec'd itself, so it needs no execute bit.
-  process$new(
-    command = bash_exe(),
-    args = c(
-      "-c",
-      paste(
-        "exec",
-        shQuote(bash_exe()),
-        "\"$0\" \"$@\" >>",
-        shQuote(log_file),
-        "2>&1"
-      ),
-      normalizePath(script_path, mustWork = TRUE),
-      "-d",
-      basename(db_path),
-      "-n",
-      scheme,
-      "-e",
-      env_name,
-      if (has_url) c("-u", scheme_url),
-      if (overwrite) "-f"
-    ),
-    wd = dirname(db_path),
-    # Kills conda, pyMLST and curl along with the script on cancel.
-    cleanup_tree = TRUE
-  )
-}
-
-#' Finalise a Completed cgMLST Scheme Download
-#'
-#' @description Brings a freshly downloaded database's `mlst_type` record in
-#'   line with what `wgMLST import` writes, whichever route built it.
-#'
-#' @param db_path Character string. Path to the downloaded SQLite database.
-#' @param log_lines Character vector. The download's log output.
-#'
-#' @return Invisible `TRUE` when the database exists, else `FALSE`.
-#' @export
-finish_scheme_download <- function(db_path, log_lines) {
-  if (!file.exists(db_path)) {
-    return(invisible(FALSE))
-  }
-
-  # `wgMLST create` records the source as "custom"; the scheme came from
-  # cgmlst.org exactly as an import would have fetched it, and the database
-  # compatibility check compares the source, so it is recorded as an import's.
-  if (any(grepl(SCHEME_CREATED_MARKER, log_lines, fixed = TRUE))) {
-    con <- connect(db_path)
-    on.exit(dbDisconnect(con))
-    dbExecute(
-      con,
-      "UPDATE mlst_type SET source = 'cgmlst.org' WHERE name = 'wg'"
-    )
-    log_event("DB", "mlst_type", "source set to cgmlst.org (wgMLST create)")
-  }
-
-  # pyMLST mangles the species it scrapes off the scheme page before writing it
-  # to `mlst_type`; repair it here so every later reader (classical MLST lookup,
-  # AMR species, organism display) sees the real name.
-  migrate_species_name(db_path)
-
-  invisible(TRUE)
-}
-
-#' Cancel a Running cgMLST Scheme Download
-#'
-#' @description Kills the download's process tree and removes the partial
-#'   database it was writing, which would otherwise block a retry under the
-#'   same name.
-#'
-#' @param proc A `processx::process` from `start_scheme_download()`, or `NULL`.
-#' @param db_path Character string. The database path the download was writing.
-#'   Must be a file the download itself created.
-#'
-#' @return Invisible `NULL`.
-#' @export
-stop_scheme_download <- function(proc, db_path) {
-  if (!is.null(proc) && proc$is_alive()) {
-    tryCatch(proc$kill_tree(), error = function(e) NULL)
-  }
-  unlink(c(db_path, paste0(db_path, "-journal")))
-  invisible(NULL)
-}
-
-#' Summarise a Failed cgMLST Scheme Download
-#'
-#' @description Picks the reason for a failed download out of its log.
-#'
-#' @param log_lines Character vector. The download's log output.
-#'
-#' @return Character string: the last `Error:` message, or `NA_character_`.
-#' @export
-scheme_download_error <- function(log_lines) {
-  errors <- grep("^\\s*Error:", log_lines, value = TRUE)
-  if (!length(errors)) {
-    return(NA_character_)
-  }
-  trimws(sub("^\\s*Error:\\s*", "", errors[length(errors)]))
-}
-
 # Constructs command-line arguments for loop-pymlst.sh.
 # Explicit genome file paths are passed after a `--` separator to prevent file names
 # from being parsed as CLI options. Optional parameters (species, classical MLST,
 # AMR screening) are appended only when non-empty strings are provided.
 # Classical MLST additionally needs the scheme spec written by
-# mlst_repo$write_scheme_spec() - without it the script has nothing to build.
+# mlst_scheme$write_scheme_spec() - without it the script has nothing to build.
 typing_args <- function(
   db_path,
   genome_files,
@@ -962,9 +808,9 @@ parse_tool_meta <- function(log_lines) {
 #' Query Target Species from Database
 #'
 #' @description Reads the species associated with the database's schema from the
-#'   `mlst_type` table. The name is repaired once, by `migrate_species_name()`
-#'   on database open and straight after a scheme download, so what is stored is
-#'   already the canonical cgmlst.org spelling.
+#'   `mlst_type` table. A database set up by PhyloTrace stores the name as the
+#'   user entered it; an older one is repaired once, by `migrate_species_name()`
+#'   on database open.
 #'
 #' @param db_path Character string. File path to SQLite database.
 #'

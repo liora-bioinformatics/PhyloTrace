@@ -148,19 +148,15 @@ fi
 # ==============================================================================
 
 # --- Build Classical MLST Reference Database ---
-# The scheme is resolved beforehand in R (app/logic/mlst_repo.R) and handed over
-# as a spec file, so this step only downloads the exact profile table and allele
-# files it names and builds the reference locally with `claMLST create`.
-# pyMLST's own `claMLST import` re-searches the repositories by fuzzy substring
-# match and refuses to choose whenever more than one hit comes back, which loses
-# the ST for every species holding more than one scheme (Enterococcus faecium)
-# and can settle on a scheme from an entirely different genus.
+# The scheme is the one stored in the PhyloTrace database: R writes its profile
+# table and allele files into a private folder (app/logic/mlst_scheme.R) and
+# names that folder in a spec file, so this step only builds the reference with
+# `claMLST create`. Nothing is downloaded.
 if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
     CLA_REPO=""
-    CLA_DATABASE=""
     CLA_SCHEME=""
     CLA_VERSION=""
-    CLA_PROFILES=""
+    CLA_DIR=""
     CLA_LOCI=()
     while IFS= read -r line; do
         key=${line%%=*}
@@ -168,59 +164,45 @@ if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
         case "$key" in
             repository) CLA_REPO="$value" ;;
             species)    [[ -n "$value" ]] && SPECIES="$value" ;;
-            database)   CLA_DATABASE="$value" ;;
             scheme)     CLA_SCHEME="$value" ;;
             version)    CLA_VERSION="$value" ;;
-            profiles)   CLA_PROFILES="$value" ;;
+            local_dir)  CLA_DIR="$value" ;;
             locus)      CLA_LOCI+=("$value") ;;
         esac
     done < "$CLA_SPEC"
 
     echo "------------------------------------------------"
     echo "Building classical MLST scheme for: $SPECIES"
-    echo "Scheme: $CLA_REPO / $CLA_DATABASE / $CLA_SCHEME (${#CLA_LOCI[@]} loci)"
+    echo "Scheme: $CLA_SCHEME from $CLA_REPO (${#CLA_LOCI[@]} loci)"
 
+    # claMLST create matches allele files to profile columns by file name, so
+    # each locus file carries the name the profile table gives it.
     built=0
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "Classical MLST: curl not found, cannot download the scheme."
-    elif [[ -z "$CLA_PROFILES" || ${#CLA_LOCI[@]} -eq 0 ]]; then
-        echo "Classical MLST: incomplete scheme specification."
-    else
-        CLA_TMP=$(mktemp -d)
-        mkdir -p "$CLA_TMP/locus"
-        downloaded=1
-        if ! curl -fsSL --retry 3 --retry-delay 2 -o "$CLA_TMP/profiles.csv" "$CLA_PROFILES"; then
-            echo "Classical MLST: download failed for the profile table."
-            downloaded=0
-        fi
-        # claMLST create matches allele files to profile columns by file name, so
-        # each locus keeps the name the repository gives it.
-        if [[ "$downloaded" -eq 1 ]]; then
-            for locus_url in "${CLA_LOCI[@]}"; do
-                locus_name=${locus_url##*/}
-                if ! curl -fsSL --retry 3 --retry-delay 2 \
-                        -o "$CLA_TMP/locus/$locus_name.fasta" "$locus_url/alleles_fasta"; then
-                    echo "Classical MLST: download failed for locus $locus_name."
-                    downloaded=0
-                    break
-                fi
-            done
-        fi
-        if [[ "$downloaded" -eq 1 ]] && "$CONDA" run -n "$env" claMLST create -f \
-                -s "$SPECIES" -V "$CLA_VERSION" \
-                "$CLA_DB" "$CLA_TMP/profiles.csv" "$CLA_TMP"/locus/*.fasta; then
-            built=1
-            # Kept for the ST lookup on finalize: claMLST create drops profile
-            # rows whose locus is recorded as absent (allele 0), so the table
-            # itself is the only place those STs can still be reached.
-            cp "$CLA_TMP/profiles.csv" "$CLA_DB.profiles.tsv"
-        fi
-        rm -rf "$CLA_TMP"
+    allele_files=()
+    for locus in "${CLA_LOCI[@]}"; do
+        allele_files+=("$CLA_DIR/locus/$locus.fasta")
+    done
+    complete=1
+    [[ -f "$CLA_DIR/profiles.tsv" && ${#allele_files[@]} -gt 0 ]] || complete=0
+    for allele_file in "${allele_files[@]}"; do
+        [[ -f "$allele_file" ]] || complete=0
+    done
+
+    if [[ "$complete" -ne 1 ]]; then
+        echo "Classical MLST: incomplete scheme files."
+    elif "$CONDA" run -n "$env" claMLST create -f \
+            -s "$SPECIES" ${CLA_VERSION:+-V "$CLA_VERSION"} \
+            "$CLA_DB" "$CLA_DIR/profiles.tsv" "${allele_files[@]}"; then
+        built=1
+        # Kept for the ST lookup on finalize: claMLST create drops profile
+        # rows whose locus is recorded as absent (allele 0), so the table
+        # itself is the only place those STs can still be reached.
+        cp "$CLA_DIR/profiles.tsv" "$CLA_DB.profiles.tsv"
     fi
 
     if [[ "$built" -eq 1 && -f "$CLA_DB" ]]; then
         echo "Classical MLST repository: $CLA_REPO"
-        echo "Classical MLST scheme: $CLA_DATABASE ($CLA_SCHEME)"
+        echo "Classical MLST scheme: $CLA_SCHEME"
         echo "Classical MLST scheme version: $CLA_VERSION"
         echo "Classical MLST thresholds: identity $CLA_IDENTITY, coverage $CLA_COVERAGE"
     else

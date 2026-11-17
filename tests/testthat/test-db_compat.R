@@ -206,7 +206,7 @@ test_that("same loci but a different reference build blocks the import", {
   expect_identical(status_of(checks, "Reference alleles"), "fail")
 })
 
-test_that("a differing scheme identity blocks the import", {
+test_that("a differing scheme label only warns", {
   dir <- local_tempdir()
   local <- file.path(dir, "local.db")
   peer <- file.path(dir, "peer.db")
@@ -215,8 +215,11 @@ test_that("a differing scheme identity blocks the import", {
 
   checks <- check_import_compatibility(local, peer)
 
-  expect_true(attr(checks, "blocked"))
-  expect_identical(status_of(checks, "Scheme identity"), "fail")
+  # Source and version are labels a user typed in at setup; the locus set and
+  # the reference alleles, checked exactly, are what make profiles comparable.
+  expect_false(attr(checks, "blocked"))
+  expect_identical(status_of(checks, "Scheme identity"), "warn")
+  expect_identical(status_of(checks, "Reference alleles"), "pass")
 })
 
 test_that("a differing alembic revision only warns", {

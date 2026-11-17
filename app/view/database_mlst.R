@@ -8,6 +8,7 @@ box::use(
   DT[DTOutput, renderDT],
   bslib[nav_panel, navset_card_tab],
   htmltools[htmlEscape],
+  rlang[`%||%`],
   shiny,
   shinyjs[toggleState],
   shinyWidgets[show_toast, updateVirtualSelect],
@@ -32,7 +33,10 @@ box::use(
       locus_alleles,
       simpson_diversity,
     ],
+  app / logic / mlst_scheme[mlst_scheme_info, store_mlst_scheme],
   app / logic / overview_ui,
+  app / logic / setup_ui[setup_note, setup_section, stat_row],
+  app / view / mlst_import,
 )
 
 REPO_NAMES <- c(pubmlst = "PubMLST", pasteur = "Institut Pasteur (BIGSdb)")
@@ -66,9 +70,9 @@ empty_reason <- function(ov, species) {
   if (identical(ov$state, "skipped")) {
     return(sprintf(
       paste(
-        "No classical MLST scheme is available for %s: neither PubMLST nor",
-        "Institut Pasteur hosts a scheme that resolves to it unambiguously, so",
-        "classical MLST was skipped for %s isolate(s)."
+        "No classical MLST scheme was available for %s when its isolates were",
+        "typed, so classical MLST was skipped for %s isolate(s). Add a scheme",
+        "under <strong>Scheme Setup</strong> and retype them to obtain STs."
       ),
       species,
       fmt(skipped)
@@ -84,9 +88,9 @@ empty_reason <- function(ov, species) {
     ))
   }
   paste(
-    "No classical MLST results in this database. Isolates typed in PhyloTrace",
-    "receive a classical MLST call whenever PubMLST or Institut Pasteur hosts a",
-    "scheme for", species, "."
+    "No classical MLST results in this database. Isolates of", species,
+    "typed in PhyloTrace receive a classical MLST call once the database",
+    "carries a scheme - see <strong>Scheme Setup</strong>."
   )
 }
 
@@ -191,6 +195,32 @@ ui <- function(id) {
               "but unresolved calls on an older one may resolve on retyping; a",
               "second scheme makes STs incomparable."
             )
+          )
+        )
+      )
+    ),
+    nav_panel(
+      "Scheme Setup",
+      shiny$div(
+        class = "setup-embedded",
+        shiny$uiOutput(ns("stored_scheme")),
+        # The import form is only shown while there is no scheme yet, or once
+        # the user asks to replace the stored one.
+        overview_ui$side_gate_ui(ns, "scheme_form"),
+        shiny$div(
+          id = ns("scheme_form"),
+          class = "setup-embedded_form",
+          mlst_import$ui(ns("scheme_import")),
+          shiny$div(
+            class = "setup-actions",
+            shiny$actionButton(
+              ns("store_scheme"),
+              "Save scheme to database",
+              icon = shiny$icon("floppy-disk"),
+              class = "btn-primary"
+            ),
+            shiny$uiOutput(ns("cancel_replace"), inline = TRUE),
+            shiny$uiOutput(ns("store_hint"), inline = TRUE)
           )
         )
       )
@@ -724,6 +754,137 @@ server <- function(
 
     # Why there are no classical calls to show, shared by every tab.
     reason <- shiny$reactive(empty_reason(overview(), species()))
+
+    # The classical MLST scheme the database carries for typing, NULL without.
+    stored_scheme <- shiny$reactive({
+      shiny$req(db_path())
+      db_events$depend(db_rev, "schema")
+      guard_db_read("Loading the MLST scheme", mlst_scheme_info(db_path()))
+    })
+
+    scheme_import <- mlst_import$server("scheme_import", species = species)
+
+    # TRUE while the user is replacing the stored scheme.
+    replacing <- shiny$reactiveVal(FALSE)
+
+    # The import form is open without a stored scheme, or while replacing it.
+    overview_ui$side_gate(output, session, "scheme_form", shiny$reactive({
+      is.null(stored_scheme()) || replacing()
+    }))
+
+    shiny$observeEvent(input$replace_scheme, replacing(TRUE))
+    shiny$observeEvent(input$cancel_replace_scheme, replacing(FALSE))
+    shiny$observeEvent(db_path(), replacing(FALSE))
+
+    # Cancel is offered only when there is a stored scheme to go back to.
+    output$cancel_replace <- shiny$renderUI({
+      if (!is.null(stored_scheme()) && replacing()) {
+        shiny$actionButton(
+          session$ns("cancel_replace_scheme"),
+          "Cancel",
+          icon = shiny$icon("xmark")
+        )
+      }
+    })
+
+    # The stored scheme in full, or what it means that there is none.
+    output$stored_scheme <- shiny$renderUI({
+      render_info("output$stored_scheme")
+      info <- stored_scheme()
+      if (is.null(info)) {
+        return(setup_note(paste(
+          "This database carries no classical MLST scheme, so typing does not",
+          "determine sequence types. Import one below from files you downloaded",
+          "from its provider."
+        )))
+      }
+      details <- c(
+        "Provider" = info$source_label %||% "user-supplied",
+        "Version" = info$version %||% "not recorded",
+        "Species" = info$species %||% NA,
+        "Imported" = info$imported_at %||% NA,
+        "From files" = info$files %||% NA
+      )
+      details <- details[!is.na(details)]
+      shiny$tagList(
+        setup_section(
+          "Classical MLST scheme of this database",
+          setup_note(
+            shiny$tagList(
+              "Typing determines sequence types with ",
+              shiny$tags$strong(info$name),
+              "."
+            ),
+            "good"
+          ),
+          stat_row(
+            c(
+              "Loci" = length(info$loci),
+              "Sequence types" = as.integer(info$profiles),
+              "Alleles" = as.integer(info$alleles)
+            ),
+            tones = "good"
+          ),
+          shiny$div(class = "setup-loci", paste(info$loci, collapse = "  ·  ")),
+          shiny$div(
+            class = "setup-summary",
+            lapply(names(details), function(key) {
+              shiny$div(
+                class = "setup-summary_row",
+                shiny$span(class = "setup-summary_label", key),
+                shiny$span(class = "setup-summary_value", details[[key]])
+              )
+            })
+          ),
+          if (!replacing()) {
+            shiny$div(
+              class = "setup-actions",
+              shiny$actionButton(
+                session$ns("replace_scheme"),
+                "Replace scheme ...",
+                icon = shiny$icon("arrows-rotate")
+              ),
+              shiny$span(
+                class = "setup-help",
+                "A new scheme applies to isolates typed from then on; existing",
+                " calls keep the scheme they were made with."
+              )
+            )
+          }
+        )
+      )
+    })
+
+    # What the import still needs before it can be saved.
+    output$store_hint <- shiny$renderUI({
+      imp <- scheme_import()
+      if (!isTRUE(imp$ready)) shiny$span(class = "setup-footer_hint", imp$problem)
+    })
+
+    # Save is only offered for a complete, validated import.
+    shiny$observe(toggleState("store_scheme", isTRUE(scheme_import()$ready)))
+
+    # Stores the imported scheme in the database, replacing an earlier one.
+    shiny$observeEvent(input$store_scheme, {
+      imp <- scheme_import()
+      shiny$req(isTRUE(imp$ready), db_path())
+      saved <- guard_db(
+        "Saving the MLST scheme",
+        store_mlst_scheme(db_path(), imp$scheme, imp$info)
+      )
+      if (db_failed(saved)) {
+        return()
+      }
+      db_events$bump(db_rev, "schema")
+      replacing(FALSE)
+      show_toast(
+        title = "MLST scheme saved",
+        text = "Isolates typed from now on receive sequence types.",
+        type = "success",
+        position = "bottom-end",
+        timer = 4000
+      )
+    })
 
     scheme_info_server(input, output, overview, species, reason)
     loci_info_server(input, output, session, db_path, overview, reason, session_reset)

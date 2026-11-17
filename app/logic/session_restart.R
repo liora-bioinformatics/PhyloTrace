@@ -36,6 +36,7 @@ RESTART_TIMEOUT_S <- 30
 .state$active <- 0L
 .state$pending <- FALSE
 .state$notice <- NULL
+.state$tab <- NULL
 
 #' Restart the Shiny Session
 #'
@@ -47,11 +48,14 @@ RESTART_TIMEOUT_S <- 30
 #' in [theme_restore_script()] reads back before the new page paints.
 #'
 #' @param notice A `modalDialog()` to show in the new session, or NULL.
+#' @param tab Character value of the navbar tab the new session opens on, or
+#'   NULL for the landing page.
 #' @return Called for its side effect.
 #' @export
-restart_session <- function(notice = NULL) {
+restart_session <- function(notice = NULL, tab = NULL) {
   .state$pending <- TRUE
   .state$notice <- notice
+  .state$tab <- tab
   runjs(
     "try {
        sessionStorage.setItem(
@@ -76,6 +80,18 @@ begin_session <- function() {
   notice <- .state$notice
   .state$notice <- NULL
   notice
+}
+
+#' Take the Tab a Restart Asked For
+#'
+#' Called once at the start of a session, after `begin_session()`.
+#'
+#' @return The navbar tab value the restart named, or NULL; cleared on read.
+#' @export
+take_start_tab <- function() {
+  tab <- .state$tab
+  .state$tab <- NULL
+  tab
 }
 
 #' Deregister a Session

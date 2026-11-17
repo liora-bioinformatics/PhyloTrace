@@ -47,7 +47,7 @@ ui <- function(id) {
         overview_ui$fill_card(
           "Scheme Metadata",
           DTOutput(ns("scheme_table"), fill = TRUE),
-          hint = "The cgMLST scheme as downloaded from cgmlst.org when the database was built."
+          hint = "The cgMLST scheme as described when the database was created."
         ),
         overview_ui$fill_card(
           "Typing Summary",
@@ -148,15 +148,14 @@ scheme_info_server <- function(input, output, overview) {
     render_info("output$scheme_table")
     scheme <- overview()$scheme
     if (!is.data.frame(scheme) || !nrow(scheme)) {
-      return(overview_ui$message_table(paste(
-        "No 'Scheme Overview' table found. <br> Try rebuilding",
-        "the schema in the <strong>Create Scheme</strong> module"
-      )))
+      return(overview_ui$message_table(
+        "This database carries no description of its cgMLST scheme."
+      ))
     }
-    # Values are kept as stored: the scheme URL arrives as a link.
+    # Stored values are user-supplied text: escaped, web addresses linked.
     overview_ui$key_value_table(
       as.character(scheme$key),
-      as.character(scheme$value)
+      overview_ui$scheme_value_html(scheme$value)
     )
   })
 
@@ -210,7 +209,7 @@ loci_info_server <- function(input, output, session, db_path, overview) {
     li <- overview()$loci
     if (!nrow(li)) {
       return(overview_ui$message_table(
-        "No loci found. Re-download the scheme to populate loci info."
+        "No loci found in this database's scheme."
       ))
     }
     overview_ui$data_table(
