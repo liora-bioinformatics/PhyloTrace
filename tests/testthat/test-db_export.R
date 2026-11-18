@@ -51,6 +51,25 @@ test_that("export_preview counts the subset without writing anything", {
   expect_identical(list.files(dir), before)
 })
 
+test_that("export refuses to replace its own source or write into a folder", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  size <- file.size(src)
+
+  expect_error(export_database(src, src, "A"), "cannot replace the database")
+  expect_error(
+    export_database(src, file.path(dir, ".", "source.db"), "A"),
+    "cannot replace the database"
+  )
+  link <- file.path(dir, "link.db")
+  file.symlink(src, link)
+  expect_error(export_database(src, link, "A"), "cannot replace the database")
+  folder <- file.path(dir, "folder.db")
+  dir.create(folder)
+  expect_error(export_database(src, folder, "A"), "is a folder")
+  expect_identical(file.size(src), size)
+})
+
 test_that("export carries the scheme reference and prunes to used alleles", {
   dir <- local_tempdir()
   src <- fixture(dir)

@@ -118,14 +118,31 @@ test_that("the locus table is matched by content and keeps every scheme locus", 
   )
   table <- scheme_files$read_scheme_table(path)
   mapping <- scheme_files$guess_locus_columns(table, c("LOC-1", "LOC_2"))
-  built <- scheme_files$build_targets(c("LOC_1", "LOC_2"), table, mapping)
+  built <- scheme_files$build_targets(
+    c("LOC_1", "LOC_2"),
+    table,
+    mapping$locus,
+    setdiff(names(table), "Product")
+  )
 
   expect_identical(mapping$locus, "Locus")
-  expect_identical(mapping$gene, "Gene")
   expect_identical(built$annotated, 1L)
   expect_identical(built$targets$Locus, c("LOC_1", "LOC_2"))
   expect_identical(built$targets$Gene, c("abcA", NA))
-  expect_identical(built$targets$Product, c("some protein", NA))
+  expect_false("Product" %in% names(built$targets))
+})
+
+test_that("any annotation column is imported, renamed where the overview uses the name", {
+  table <- data.frame(
+    id = c("A", "B"),
+    Missing = c("x", "y"),
+    `Essential?` = c("yes", "no"),
+    check.names = FALSE
+  )
+  built <- scheme_files$build_targets(c("A", "B", "C"), table, "id", c("Missing", "Essential?"))
+  expect_identical(names(built$targets), c("Locus", "Missing annotation", "Essential?"))
+  expect_identical(built$targets[["Essential?"]], c("yes", "no", NA))
+  expect_identical(built$annotated, 2L)
 })
 
 test_that("an MLST scheme is assembled from a profile table and one FASTA", {
@@ -182,6 +199,135 @@ test_that("an MLST locus without alleles or without allele 1 is refused", {
     ),
     "Allele 1 is missing for locus 'fumC'"
   )
+})
+
+test_that("one locus file picked instead of the cgMLST scheme is refused", {
+  dir <- local_tempdir()
+  numbered <- file.path(dir, "BP0001.fasta")
+  writeLines(c(">1", cds(4), ">2", cds(5), ">3", cds(6)), numbered)
+  expect_error(scheme_files$read_cg_scheme(numbered), "alleles of a single locus")
+  prefixed <- file.path(dir, "abcA.fasta")
+  writeLines(c(">abcA_1", cds(4), ">abcA_2", cds(5)), prefixed)
+  expect_error(scheme_files$read_cg_scheme(prefixed), "alleles of a single locus")
+})
+
+test_that("an unusable locus file is reported by reason, never by its sequence", {
+  dir <- write_loci(local_tempdir(), list(A = cds(20)))
+  writeLines(c(">1", "ATG-AAA"), file.path(dir, "B.fasta"))
+  writeLines(">1", file.path(dir, "C.fasta"))
+  res <- scheme_files$read_cg_scheme(dir)
+  expect_identical(res$loci$locus, "A")
+  expect_true(all(nchar(res$issues$problem) < 100L))
+  expect_true(all(nzchar(res$issues$problem)))
+})
+
+test_that("tables read robustly whatever their quoting and encoding", {
+  dir <- local_tempdir()
+  tsv <- file.path(dir, "a.tsv")
+  writeLines(c("Locus\tProduct", "a1\t5\" end", "a2\tplain"), tsv)
+  expect_identical(scheme_files$read_scheme_table(tsv)$Product, c("5\" end", "plain"))
+
+  quoted <- file.path(dir, "b.csv")
+  writeLines(c("\"Locus\",\"Gene, name\"", "a1,\"g, 1\""), quoted)
+  expect_identical(scheme_files$read_scheme_table(quoted)[["Gene, name"]], "g, 1")
+
+  open_quote <- file.path(dir, "c.csv")
+  writeLines(c("Locus,Product", "a1,\"5 end", "a2,plain"), open_quote)
+  expect_error(scheme_files$read_scheme_table(open_quote), "unmatched quote")
+
+  latin1 <- file.path(dir, "d.csv")
+  writeBin(c(charToRaw("Locus,Product\na1,Prot"), as.raw(0xe9), charToRaw("ine\n")), latin1)
+  expect_identical(scheme_files$read_scheme_table(latin1)$Product, "Prot\u00e9ine")
+})
+
+test_that("size limits apply to decompressed content", {
+  path <- file.path(local_tempdir(), "big.fasta")
+  con <- gzfile(path, "w")
+  writeLines(c(">a", strrep("A", 3 * 1024^2)), con)
+  close(con)
+  expect_true(file.size(path) < 1024^2)
+  expect_error(scheme_files$read_fasta(path, max_bytes = 1024^2), "more than the 1 MB")
+  expect_error(impl$read_first_record(path), "longer than allowed")
+})
+
+test_that("ZIP members under ./ are read, and an empty archive says so", {
+  dir <- write_loci(local_tempdir(), list(A = cds(20), B = cds(21, c("CTG"))))
+  archive <- file.path(local_tempdir(), "dot.zip")
+  # The zip tool strips a leading "./"; Python's zipfile keeps it as given.
+  run("python3", c(
+    "-I", "-c",
+    paste(
+      "import sys, zipfile",
+      "z = zipfile.ZipFile(sys.argv[1], 'w')",
+      "[z.write(f, './' + f.split('/')[-1]) for f in sys.argv[2:]]",
+      "z.close()",
+      sep = "; "
+    ),
+    archive, file.path(dir, c("A.fasta", "B.fasta"))
+  ))
+  expect_identical(scheme_files$read_cg_scheme(archive)$loci$locus, c("A", "B"))
+
+  empty_dir <- local_tempdir()
+  dir.create(file.path(empty_dir, "sub"))
+  empty <- file.path(local_tempdir(), "empty.zip")
+  run("zip", c("-q", "-r", empty, "sub"), wd = empty_dir)
+  expect_error(scheme_files$read_cg_scheme(empty), "contains no files")
+})
+
+test_that("a locus file with a damaged first header is rejected, not shifted", {
+  dir <- write_loci(local_tempdir(), list(A = cds(20), B = cds(21, c("CTG"))))
+  writeLines(c("asd>1", "ATG00AAATAA", ">2", cds(22)), file.path(dir, "C.fasta"))
+  res <- scheme_files$read_cg_scheme(dir)
+  expect_identical(res$loci$locus, c("A", "B"))
+  expect_match(res$issues$problem[res$issues$locus == "C"], "does not start with a FASTA header")
+
+  single <- file.path(local_tempdir(), "alleles.fasta")
+  writeLines(c("junk", ">adk_1", cds(4)), single)
+  expect_error(scheme_files$read_fasta(single), "alleles.fasta.*does not start with a FASTA header")
+
+  # Blank lines before the first header are harmless.
+  blank <- file.path(local_tempdir(), "blank.fasta")
+  writeLines(c("", "  ", ">1", cds(4)), blank)
+  expect_identical(nrow(scheme_files$read_fasta(blank)), 1L)
+})
+
+test_that("MLST locus names that are no safe gene id or would merge are refused", {
+  dir <- local_tempdir()
+  profile <- function(header) {
+    path <- file.path(dir, "profiles.tsv")
+    writeLines(c(header, "1\t1\t1"), path)
+    path
+  }
+  expect_error(scheme_files$read_mlst_profiles(profile("ST\tgene one\tadk")), "'gene one'")
+  expect_error(scheme_files$read_mlst_profiles(profile("ST\t../x\tadk")), "'../x'")
+  expect_error(scheme_files$read_mlst_profiles(profile("ST\ta_b\ta-b")), "'a-b' collides")
+  expect_error(scheme_files$read_mlst_profiles(profile("ST\tadk\tADK")), "'ADK' collides")
+  expect_error(scheme_files$read_mlst_profiles(profile("adk\tfumC\tgyrB")), "no ST column")
+
+  # A row-number column without a header is no locus.
+  rownum <- file.path(dir, "rownum.csv")
+  writeLines(c('"","ST","adk"', '"1",1,1'), rownum)
+  expect_identical(scheme_files$read_mlst_profiles(rownum)$candidates, "adk")
+})
+
+test_that("MLST alleles and STs follow claMLST's uniqueness rules", {
+  dir <- local_tempdir()
+  profiles <- file.path(dir, "profiles.tsv")
+  writeLines(c("ST\tadk", "1\t1", "01\t2", "9999999999\t1"), profiles)
+  alleles <- file.path(dir, "alleles.fasta")
+  writeLines(
+    c(">adk_1", cds(4), ">adk_2", cds(4), ">adk_3", cds(5), ">adk_99999999999", cds(6)),
+    alleles
+  )
+  prof <- scheme_files$read_mlst_profiles(profiles)
+  read <- scheme_files$read_mlst_alleles(alleles, prof$candidates)
+  scheme <- scheme_files$assemble_mlst_scheme(prof, read)
+
+  expect_identical(read$alleles$allele, c(1L, 3L))
+  expect_match(read$issues$problem, "same sequence", all = FALSE)
+  expect_match(read$issues$problem, "too large", all = FALSE)
+  expect_identical(unique(scheme$profiles$st), 1L)
+  expect_match(scheme$issues$problem, "2 profile row", all = FALSE)
 })
 
 test_that("files are recognised by content when a download lost its extension", {

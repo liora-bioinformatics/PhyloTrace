@@ -4,7 +4,9 @@ box::use(
   DT[DTOutput, datatable, renderDT],
   bslib[page_fillable],
   fs[path_home],
+  htmltools[htmlEscape],
   jsonlite[fromJSON],
+  rlang[`%||%`],
   shiny,
   shinyFiles[parseFilePaths, shinyFileChoose, shinyFilesButton],
   shinyjs[disabled, useShinyjs],
@@ -126,7 +128,17 @@ server <- function(
       loc <- resolve_selection("Currently selected:", db_path)
       db_location(loc)
 
-      if (!is.na(loc[2])) fire_load()
+      # The request comes from another tab (the setup's "Load Database"), where
+      # the reason recorded on this one would never be seen.
+      if (!is.na(loc[2])) {
+        fire_load()
+      } else {
+        shiny$showNotification(
+          paste("The database cannot be loaded:", db_invalid_reason() %||% basename(db_path)),
+          type = "error",
+          duration = 10
+        )
+      }
     })
 
     shiny$observeEvent(input$load_database, {
@@ -291,8 +303,11 @@ server <- function(
       datatable(
         data.frame(
           Property = c("Name", "Location", "Size", "Last Changed"),
+          # Rendered with escape = FALSE for the path's tooltip span, so the
+          # file name - any name a received database was saved under - is
+          # escaped here.
           Value = c(
-            db_name,
+            htmlEscape(db_name),
             truncate_path(db_path),
             db_size,
             db_time

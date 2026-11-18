@@ -138,6 +138,9 @@ check_db_loadable <- function(db_path) {
     utils::URLencode,
     character(1),
     reserved = TRUE,
+    # A name such as "partner%20lab.db" holds a literal "%"; without
+    # `repeated` it would be taken as already encoded and open another file.
+    repeated = TRUE,
     USE.NAMES = FALSE
   )
   paste0("file:", paste(encoded, collapse = "/"))

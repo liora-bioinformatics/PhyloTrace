@@ -10,7 +10,7 @@ box::use(
 )
 
 box::use(
-  app / logic / scheme_sources[scheme_source],
+  app / logic / scheme_sources[safe_url, scheme_source],
 )
 
 # Issues listed in full; the rest is summarised in one closing line.
@@ -48,9 +48,15 @@ stat_row <- function(values, tones = "") {
   shiny$div(
     class = "setup-stats",
     lapply(seq_along(values), function(i) {
+      value <- format(values[[i]], big.mark = ",")
       shiny$div(
-        class = paste("setup-stat", if (nzchar(tones[i])) paste0("is-", tones[i])),
-        shiny$div(class = "setup-stat_value", format(values[[i]], big.mark = ",")),
+        class = paste(
+          "setup-stat",
+          if (nzchar(tones[i])) paste0("is-", tones[i]),
+          # A word ("None") instead of a figure is set smaller, so it fits.
+          if (!grepl("^[0-9,.-]+$", value)) "is-text"
+        ),
+        shiny$div(class = "setup-stat_value", value),
         shiny$div(class = "setup-stat_label", names(values)[i])
       )
     })
@@ -172,15 +178,17 @@ scheme_links <- function(rows, use_input = NULL) {
         ),
         shiny$div(
           class = "setup-scheme_actions",
-          shiny$a(
-            href = rows$url[i],
-            target = "_blank",
-            rel = "noopener",
-            class = "btn btn-sm btn-outline-secondary",
-            title = "Open the provider's download page in your browser",
-            shiny$icon("arrow-up-right-from-square"),
-            " Download page"
-          ),
+          if (safe_url(rows$url[i])) {
+            shiny$a(
+              href = rows$url[i],
+              target = "_blank",
+              rel = "noopener",
+              class = "btn btn-sm btn-outline-secondary",
+              title = "Open the provider's download page in your browser",
+              shiny$icon("arrow-up-right-from-square"),
+              " Download page"
+            )
+          },
           if (!is.null(use_input)) {
             shiny$tags$button(
               type = "button",
@@ -278,6 +286,8 @@ TASK_STATE_CSS <- c(
 task_states <- function(states) {
   shiny$renderUI({
     st <- states()
+    # "open" has no rules; formatting its empty template would warn.
+    st <- st[nzchar(TASK_STATE_CSS[st])]
     rules <- vapply(
       names(st),
       function(id) sprintf(TASK_STATE_CSS[[st[[id]]]], id),
@@ -299,4 +309,30 @@ task_status <- function(text, tone = "") {
     return(NULL)
   }
   shiny$span(class = paste("setup-task_status-text", if (nzchar(tone)) paste0("is-", tone)), text)
+}
+
+#' Coverage List
+#'
+#' @description What an analysis covers, one line per category, marked as
+#'   covered or not, with an optional detail under the label.
+#'
+#' @param items List of lists with `label`, `on` (logical) and optionally
+#'   `detail`.
+#'
+#' @return A tag.
+#' @export
+coverage_list <- function(items) {
+  shiny$div(
+    class = "setup-coverage",
+    lapply(items, function(it) {
+      shiny$div(
+        class = paste("setup-coverage_item", if (isTRUE(it$on)) "is-on" else "is-off"),
+        shiny$icon(if (isTRUE(it$on)) "circle-check" else "circle-minus"),
+        shiny$div(
+          shiny$div(class = "setup-coverage_label", it$label),
+          if (!is.null(it$detail)) shiny$div(class = "setup-coverage_detail", it$detail)
+        )
+      )
+    })
+  )
 }

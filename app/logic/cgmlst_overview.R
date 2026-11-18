@@ -260,15 +260,20 @@ isolate_table <- function(isolates, per_isolate, prov, hashes, locus_count, sche
 locus_table <- function(targets, locus_counts, ref_present, n_typed) {
   genes <- locus_counts$gene
   if (!is.null(targets) && nrow(targets) && "Locus" %in% names(targets)) {
-    keep <- intersect(c("Locus", "Gene", "Start", "Length", "Product"), names(targets))
-    out <- targets[, keep, drop = FALSE]
+    # Every annotation column the setup imported, as the table named it.
+    out <- targets[, c("Locus", setdiff(names(targets), "Locus")), drop = FALSE]
     at <- match(norm_locus(out$Locus), norm_locus(genes))
   } else {
     out <- data.frame(Locus = genes, stringsAsFactors = FALSE)
     at <- seq_along(genes)
   }
-  for (col in intersect(c("Start", "Length"), names(out))) {
-    out[[col]] <- suppressWarnings(as.numeric(out[[col]]))
+  # A column of plain numbers (positions, lengths) sorts as numbers.
+  for (col in setdiff(names(out), "Locus")) {
+    value <- out[[col]]
+    filled <- !is.na(value) & nzchar(trimws(value))
+    if (any(filled) && all(grepl("^-?[0-9]+(\\.[0-9]+)?$", trimws(value[filled])))) {
+      out[[col]] <- suppressWarnings(as.numeric(value))
+    }
   }
   # The reference's own row is a scheme allele but not a call.
   calls <- locus_counts$calls[at] - as.integer(ref_present)

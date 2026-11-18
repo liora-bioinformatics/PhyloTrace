@@ -2,30 +2,8 @@ box::use(
   testthat[expect_false, expect_identical, expect_null, expect_true, test_that],
 )
 box::use(
-  app / logic / schemes[cgmlst_org_schemes],
   app / logic / species,
 )
-
-test_that("canonical_species repairs what pyMLST's lstrip ate", {
-  expect_identical(
-    species$canonical_species("Klebsiella neumoniae/variicola/quasipneumoniae"),
-    "Klebsiella pneumoniae/variicola/quasipneumoniae"
-  )
-  expect_identical(species$canonical_species("Staphylococcus aureus"), "Staphylococcus aureus")
-})
-
-test_that("canonical_species leaves unknown names and blanks alone", {
-  expect_identical(species$canonical_species("Foo barus"), "Foo barus")
-  expect_identical(species$canonical_species(""), NA_character_)
-  expect_identical(species$canonical_species(NA), NA_character_)
-})
-
-test_that("every scheme name survives a round trip through pyMLST's damage", {
-  for (name in gsub("_", " ", cgmlst_org_schemes$species)) {
-    repaired <- species$canonical_species(species$mangle_species(name))
-    expect_true(repaired == name || species$mangle_species(repaired) == species$mangle_species(name))
-  }
-})
 
 test_that("a species group is split into genus and epithets and composed back", {
   parts <- species$species_parts("Klebsiella pneumoniae/variicola")

@@ -61,6 +61,20 @@ test_that("attach_ro keeps a peer database read-only, even when its name has a '
   expect_setequal(list.files(dir), "odd?name.db")
 })
 
+test_that("attach_ro opens a file whose name holds a literal percent sequence", {
+  dir <- local_tempdir()
+  db <- file.path(dir, "partner%20lab #1.db")
+  build_db(db, default_local())
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  attach_ro(con, db, "ext")
+  expect_equal(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM ext.mlst")$n, 9L)
+  DBI::dbExecute(con, "DETACH DATABASE ext")
+  expect_setequal(list.files(dir), "partner%20lab #1.db")
+})
+
 test_that("check_db_loadable accepts a real database and rejects the rest", {
   dir <- local_tempdir()
   good <- file.path(dir, "good.db")

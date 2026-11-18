@@ -48,7 +48,7 @@ box::use(
 )
 box::use(
   app / logic / app_meta[APP_VERSION],
-  app / logic / database_functions[migrate_species_name, sync_metadata_table],
+  app / logic / database_functions[sync_metadata_table],
   app / logic / db_compat[check_db_loadable],
   app / logic / db_events[bump_all, new_bus],
   app / logic / db_guard[db_failed, guard_db, report_db_failure],
@@ -583,9 +583,7 @@ server <- function(id) {
       # supplies the reactive context bump_all()/ui_mounted() need.
       later::later(function() {
         shiny::withReactiveDomain(session, shiny::isolate({
-          # Bring the scheme species up to the current spelling before
-          # anything reads the database, then fill in any missing allele
-          # hashes, then sync the metadata table - creating it and
+          # Fill in any missing allele hashes, then sync the metadata table - creating it and
           # backfilling a row for every isolate `mlst` already has (this is
           # only a no-op past the first load; a database opened before ever
           # having a metadata table gets one here).
@@ -599,18 +597,12 @@ server <- function(id) {
           # The overlay title is updated ahead of each step so a long wait
           # reads as visible progress instead of one static message.
           #
-          # All three write, so a lock held by another writer (another
+          # Both write, so a lock held by another writer (another
           # PhyloTrace session on the same file, or a typing run's pyMLST
           # subprocess) past BUSY_TIMEOUT_MS fails them. The load is then
           # abandoned and the session sent back to the start screen, where
           # loading can simply be retried.
           synced <- guard_db("Loading the database", {
-            w$update(html = loading_stage_html(
-              "Checking scheme compatibility ...",
-              db_path
-            ))
-            migrate_species_name(db_path)
-
             w$update(html = loading_stage_html(
               "Computing allele hashes ...",
               db_path
@@ -633,7 +625,7 @@ server <- function(id) {
 
           w$update(html = loading_stage_html("Preparing workspace ...", db_path))
 
-          # All three of the above write. Readers keyed on db_path() invalidate
+          # Both of the above write. Readers keyed on db_path() invalidate
           # anyway when it changes, but a reload of the *same* path (the landing
           # page can re-fire load for the database already open) leaves db_path()
           # untouched, so the revisions are what makes those reads re-run.
@@ -983,6 +975,9 @@ server <- function(id) {
         },
         if (isTRUE(TYPING_vals$typing_active())) {
           "A typing run in progress, which will be cancelled"
+        },
+        if (isTRUE(DB_WIZARD_vals$building())) {
+          "A database being created, which will be cancelled"
         }
       )
     }

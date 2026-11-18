@@ -1,18 +1,13 @@
 # app/logic/species.R
 #
 # The species a database is defined for: the built-in catalog (taxonomy,
-# description and image of common typing targets), parsing and validating a
-# custom species or species group, and repairing species names older databases
-# received from pyMLST.
+# description and image of common typing targets) and parsing and validating a
+# custom species or species group.
 
 box::use(
   jsonlite[fromJSON],
   rlang[`%||%`],
   utils[head],
-)
-
-box::use(
-  app / logic / schemes[cgmlst_org_schemes],
 )
 
 #' Settings Key of the Species' NCBI Taxonomy Id
@@ -188,74 +183,4 @@ default_db_name <- function(species) {
   name <- paste(words[!is.na(words)], collapse = "_")
   name <- gsub("[^A-Za-z0-9_-]", "", name)
   if (nzchar(name)) name else "PhyloTrace_database"
-}
-
-# Python's str.lstrip(chars): strips a leading run of any characters in `chars`.
-lstrip_set <- function(x, chars) {
-  set <- strsplit(chars, "")[[1]]
-  letters_x <- strsplit(x, "")[[1]]
-  keep <- which(!(letters_x %in% set))
-  if (!length(keep)) "" else paste(letters_x[keep[1]:length(letters_x)], collapse = "")
-}
-
-#' Reproduce pyMLST's Damage to a Scheme Name
-#'
-#' @description pyMLST's cgmlst.org importer reads the scheme page with
-#'   `line.lstrip("Genus")` / `line.lstrip("Species")`, which strips a character
-#'   *set*, so "pneumoniae" reached older databases as "neumoniae". This returns
-#'   the damaged form so a stored name can be matched back.
-#'
-#' @param species Character string. Scheme species, spelled with spaces.
-#'
-#' @return The mangled species string, or `""` for an empty name.
-#' @export
-mangle_species <- function(species) {
-  parts <- strsplit(trimws(species), " ", fixed = TRUE)[[1]]
-  if (!length(parts)) {
-    return("")
-  }
-  genus <- lstrip_set(parts[1], "Genus")
-  epithet <- if (length(parts) > 1) {
-    lstrip_set(paste(parts[-1], collapse = " "), "Species")
-  } else {
-    ""
-  }
-  trimws(paste(genus, epithet))
-}
-
-#' Repair a Scheme Species Name
-#'
-#' @description Maps the species stored in an older database's `mlst_type`
-#'   back to the scheme name it was imported under, undoing pyMLST's letter
-#'   loss (`Klebsiella neumoniae/...`). Databases created by PhyloTrace's own
-#'   setup store the name as entered and are left alone.
-#'
-#' @param species Character string. Species as stored in the database.
-#'
-#' @return The repaired species (spaces, not underscores), the trimmed input
-#'   when nothing matches unambiguously, or `NA_character_`.
-#' @export
-canonical_species <- function(species) {
-  if (
-    is.null(species) ||
-      length(species) != 1 ||
-      is.na(species) ||
-      !nzchar(trimws(species))
-  ) {
-    return(NA_character_)
-  }
-  given <- gsub("[[:space:]]+", " ", trimws(gsub("_", " ", species)))
-  known <- gsub("_", " ", cgmlst_org_schemes$species)
-
-  exact <- which(tolower(known) == tolower(given))
-  if (length(exact)) {
-    return(known[exact[1]])
-  }
-  # Only an unambiguous repair is applied: two schemes damaged into the same
-  # string would make the choice a guess.
-  damaged <- which(tolower(vapply(known, mangle_species, character(1))) == tolower(given))
-  if (length(damaged) == 1) {
-    return(known[damaged])
-  }
-  given
 }

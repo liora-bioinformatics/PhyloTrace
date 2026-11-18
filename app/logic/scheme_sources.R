@@ -6,24 +6,20 @@
 # the database records where they came from.
 
 box::use(
+  rlang[`%||%`],
   stats[setNames],
 )
 
 # One provider per row. `offers` lists the scheme types it publishes, so a
-# picker only names providers that can supply the scheme asked for. `terms`
-# paraphrases the provider's own policy (reviewed November 2026) and always
-# points to the policy itself, which governs.
+# picker only names providers that can supply the scheme asked for;
+# `terms_url` is the provider's own policy, which governs its data (reviewed
+# November 2026). Acknowledgement and citation are recorded in the database.
 SOURCES <- list(
   cgmlst_org = list(
     offers = c("cgMLST"),
     label = "cgMLST.org Nomenclature Server (Ridom GmbH)",
     url = "https://www.cgmlst.org/ncs",
     terms_url = "https://www.cgmlst.org/serverpolicy.html",
-    terms = paste(
-      "Ridom GmbH permits downloads of the nomenclature for non-commercial",
-      "purposes only. Commercial use, and use of copies in any product or",
-      "service, requires Ridom's permission."
-    ),
     acknowledgement = paste(
       "This publication made use of the cgMLST.org website",
       "(http://www.cgMLST.org/) that is developed and maintained by Ridom GmbH."
@@ -38,13 +34,6 @@ SOURCES <- list(
     label = "PubMLST (University of Oxford)",
     url = "https://pubmlst.org",
     terms_url = "https://pubmlst.org/terms-conditions",
-    terms = paste(
-      "Data submitted up to 31 December 2024 may be used and redistributed with",
-      "citation. Data submitted from 1 January 2025 is restricted to",
-      "non-commercial academic research and public-health surveillance unless",
-      "licensed by the University of Oxford. rMLST is licensed for academic,",
-      "non-commercial use only."
-    ),
     acknowledgement = paste(
       "This publication made use of the PubMLST website (https://pubmlst.org/)",
       "sited at the University of Oxford. The development of that website was",
@@ -61,11 +50,6 @@ SOURCES <- list(
     label = "Institut Pasteur BIGSdb",
     url = "https://bigsdb.pasteur.fr",
     terms_url = "https://bigsdb.pasteur.fr/policy/",
-    terms = paste(
-      "Data is available for academic, non-commercial use only and may not be",
-      "redistributed. Any other use requires a licence from Institut Pasteur",
-      "(bigsdb-policy@pasteur.fr)."
-    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Jolley KA, Maiden MCJ. BIGSdb: Scalable analysis of bacterial genome",
@@ -77,11 +61,6 @@ SOURCES <- list(
     label = "Chewie-NS (chewBBACA)",
     url = "https://chewbbaca.online",
     terms_url = "https://chewbbaca.online",
-    terms = paste(
-      "No data licence is published for hosted schemas. Check with the schema",
-      "authors before commercial use; schemas adapted from other providers",
-      "can carry those providers' terms."
-    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Mamede R, Vila-Cerqueira P, Silva M, Carriço JA, Ramirez M. Chewie",
@@ -95,10 +74,6 @@ SOURCES <- list(
     label = "EnteroBase (University of Warwick)",
     url = "https://enterobase.warwick.ac.uk",
     terms_url = "https://enterobase.warwick.ac.uk/terms",
-    terms = paste(
-      "Provided for academic use only. Commercial use requires a licence from",
-      "the University of Warwick (enterobase@warwick.ac.uk)."
-    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Zhou Z, Alikhan NF, Mohamed K, Fan Y, Achtman M. The EnteroBase user's",
@@ -112,7 +87,6 @@ SOURCES <- list(
     label = "Own / in-house scheme",
     url = NA_character_,
     terms_url = NA_character_,
-    terms = NA_character_,
     acknowledgement = NA_character_,
     citation = NA_character_
   ),
@@ -121,7 +95,6 @@ SOURCES <- list(
     label = "Other provider",
     url = NA_character_,
     terms_url = NA_character_,
-    terms = "Check the provider's terms of use before importing its files.",
     acknowledgement = NA_character_,
     citation = NA_character_
   )
@@ -144,7 +117,7 @@ source_choices <- function(types = NULL) {
 #'
 #' @param id Character provider id, as in `source_choices()`.
 #'
-#' @return List with `id`, `label`, `url`, `terms_url`, `terms`,
+#' @return List with `id`, `offers`, `label`, `url`, `terms_url`,
 #'   `acknowledgement` and `citation`; `NULL` for an unknown id.
 #' @export
 scheme_source <- function(id) {
@@ -166,4 +139,20 @@ safe_url <- function(url) {
     !is.na(url) &&
     nchar(url) <= 500L &&
     grepl("^https?://[^[:space:]<>\"'`]+$", url)
+}
+
+#' Check a Scheme Version
+#'
+#' @description Versions are handed to pyMLST on its command line, so only
+#'   plain characters are accepted.
+#'
+#' @param version Character scalar, possibly empty.
+#'
+#' @return `NULL` when acceptable, otherwise the reason it is refused.
+#' @export
+version_problem <- function(version) {
+  version <- trimws(version %||% "")
+  if (nzchar(version) && !grepl("^[[:alnum:] ._:/+-]{1,100}$", version)) {
+    "The version may only contain letters, digits, spaces and . _ - + : /"
+  }
 }

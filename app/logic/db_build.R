@@ -105,9 +105,10 @@ overview_rows <- function(plan, locus_count) {
 #'   returned process, then call `finish_db_build()`, or `cancel_db_build()`.
 #'
 #' @details
-#' `-r` lets pyMLST drop a locus whose reference duplicates another's instead
-#' of aborting. The setup already removes those; this only covers a duplicate
-#' it could not see.
+#' The setup applies pyMLST's own checks to the references beforehand (coding
+#' sequence, gene id collisions, duplicate sequences), so pyMLST runs without
+#' `-r`: a duplicate the setup missed fails the build with pyMLST's message
+#' rather than silently dropping both loci involved.
 #'
 #' @param plan Setup plan: `species`, `taxid`, `target`, `amr_organism`, `cg`
 #'   (`loci`, `targets`, `info`) and optionally `mlst` (`scheme`, `info`).
@@ -126,19 +127,25 @@ start_db_build <- function(plan, env = conda_env) {
   log <- tempfile("db_build_", fileext = ".log")
 
   version <- plan$cg$info$version
-  proc <- process$new(
-    command = conda_exe(),
-    args = c(
-      "run", "--no-capture-output", "-n", env,
-      "wgMLST", "create", "-r",
-      "-s", plan$species,
-      if (has_text(version)) c("-V", trimws(version)),
-      partial,
-      coregene
+  proc <- tryCatch(
+    process$new(
+      command = conda_exe(),
+      args = c(
+        "run", "--no-capture-output", "-n", env,
+        "wgMLST", "create",
+        "-s", plan$species,
+        if (has_text(version)) c("-V", trimws(version)),
+        partial,
+        coregene
+      ),
+      stdout = log,
+      stderr = "2>&1",
+      cleanup_tree = TRUE
     ),
-    stdout = log,
-    stderr = "2>&1",
-    cleanup_tree = TRUE
+    error = function(e) {
+      unlink(c(coregene, log))
+      stop("pyMLST could not be started: ", conditionMessage(e), call. = FALSE)
+    }
   )
   log_event(
     "DB",
@@ -163,6 +170,8 @@ cancel_db_build <- function(build) {
   }
   if (!is.null(build$proc) && build$proc$is_alive()) {
     tryCatch(build$proc$kill_tree(), error = function(e) NULL)
+    # Windows refuses to delete a file a dying process still holds open.
+    tryCatch(build$proc$wait(3000), error = function(e) NULL)
   }
   unlink(c(build$partial, paste0(build$partial, "-journal"), build$coregene, build$log))
   invisible(NULL)

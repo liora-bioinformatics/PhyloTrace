@@ -8,7 +8,10 @@ box::use(
 
 test_that("name_problem refuses names one of the platforms cannot hold", {
   expect_identical(file_browser$name_problem("My_database-1"), NA_character_)
-  for (bad in c("", " ", "a/b", "a\\b", "a:b", "a*b", "a?b", "con", "NUL.db", "name.", "..")) {
+  bad_names <- c(
+    "", " ", "a/b", "a\\b", "a:b", "a*b", "a?b", "con", "NUL.db", "name.", "..", "a$b", "a`b"
+  )
+  for (bad in bad_names) {
     expect_false(is.na(file_browser$name_problem(bad)), info = bad)
   }
 })

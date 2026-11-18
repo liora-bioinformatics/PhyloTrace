@@ -1,7 +1,15 @@
 box::use(
-  DBI[dbConnect, dbDisconnect, dbGetQuery, dbListTables],
+  DBI[dbConnect, dbDisconnect, dbExecute, dbGetQuery, dbListTables],
   RSQLite[SQLite],
-  testthat[expect_false, expect_identical, expect_match, expect_null, expect_true, test_that],
+  testthat[
+    expect_error,
+    expect_false,
+    expect_identical,
+    expect_match,
+    expect_null,
+    expect_true,
+    test_that,
+  ],
   withr[local_tempdir],
 )
 box::use(
@@ -105,4 +113,19 @@ test_that("spec values cannot smuggle extra keys in through line breaks", {
   )
   lines <- readLines(path)
   expect_identical(grep("^local_dir=", lines, value = TRUE), "local_dir=/tmp/ok")
+})
+
+test_that("a stored scheme with unusable locus names is not written out", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+  mlst_scheme$store_mlst_scheme(path, toy_scheme(), toy_info())
+  con <- dbConnect(SQLite(), path)
+  dbExecute(con, "UPDATE cla_scheme_loci SET locus = '../../escaped' WHERE locus = 'adk'")
+  dbDisconnect(con)
+
+  out <- file.path(dir, "scheme")
+  dir.create(out)
+  expect_error(mlst_scheme$materialize_mlst_scheme(path, out), "unusable locus names")
+  expect_false(file.exists(file.path(dir, "escaped.fasta")))
 })

@@ -7,6 +7,7 @@ box::use(
   withr[local_tempdir],
 )
 box::use(
+  app / logic / mlst_scheme[describe_resolution],
   app / logic / pymlst,
 )
 
@@ -413,4 +414,21 @@ test_that("storing one isolate at a time matches storing them in one batch", {
 
   expect_identical(rows(incremental), rows(batch))
   expect_identical(nrow(rows(incremental)), 14L)
+})
+
+test_that("parse_clamlst_meta reads the script's lines, not the app's run note", {
+  log <- c(
+    describe_resolution(list(
+      resolved = TRUE,
+      scheme = "Bordetella pertussis MLST",
+      repository = "Institut Pasteur BIGSdb",
+      loci = paste0("l", 1:7)
+    )),
+    "Classical MLST repository: Institut Pasteur BIGSdb",
+    "Classical MLST scheme: Bordetella pertussis MLST",
+    "Classical MLST scheme version: 2026-11-16"
+  )
+  meta <- pymlst$parse_clamlst_meta(log)
+  expect_identical(meta$scheme, "Bordetella pertussis MLST")
+  expect_identical(meta$scheme_version, "2026-11-16")
 })

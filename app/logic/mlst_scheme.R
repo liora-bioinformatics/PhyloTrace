@@ -19,12 +19,13 @@ box::use(
   ],
   rlang[`%||%`],
   stats[complete.cases],
-  utils[write.table],
+  utils[head, write.table],
 )
 
 box::use(
   app / logic / db_connect[connect],
   app / logic / logging[log_event],
+  app / logic / scheme_files[pymlst_gene_id, valid_locus_name],
 )
 
 #' Classical MLST Scheme Tables
@@ -192,6 +193,18 @@ materialize_mlst_scheme <- function(db_path, dir) {
   if (is.null(info)) {
     return(list(resolved = FALSE))
   }
+  # Loci become file names below; a database from elsewhere is not trusted to
+  # hold only names the import would have accepted.
+  bad <- !valid_locus_name(info$loci) | duplicated(tolower(pymlst_gene_id(info$loci)))
+  if (any(bad)) {
+    stop(sprintf(
+      paste(
+        "The stored MLST scheme has unusable locus names (%s).",
+        "Replace the scheme in MLST Overview > Scheme Setup."
+      ),
+      paste0("'", head(info$loci[bad], 5L), "'", collapse = ", ")
+    ))
+  }
   con <- connect(db_path, synchronous = NULL)
   on.exit(dbDisconnect(con))
   profiles <- dbGetQuery(con, "SELECT st, locus, allele FROM cla_scheme_profiles")
@@ -240,13 +253,16 @@ materialize_mlst_scheme <- function(db_path, dir) {
 #' @export
 write_scheme_spec <- function(spec, path) {
   one_line <- function(x) gsub("[\r\n]+", " ", if (is.null(x) || is.na(x)) "" else x)
+  # Species and version reach `conda run`'s command line; a database from
+  # elsewhere may hold anything there.
+  plain <- function(x) gsub("[$`\\\\\"']", "", one_line(x))
   lines <- c(
     paste0("repository=", one_line(spec$repository)),
-    paste0("species=", one_line(spec$species)),
+    paste0("species=", plain(spec$species)),
     paste0("scheme=", one_line(spec$scheme)),
-    paste0("version=", one_line(spec$version)),
+    paste0("version=", plain(spec$version)),
     paste0("local_dir=", one_line(spec$local_dir)),
-    paste0("locus=", spec$loci)
+    paste0("locus=", vapply(spec$loci, one_line, character(1), USE.NAMES = FALSE))
   )
   writeLines(lines, path)
   invisible(path)
@@ -264,7 +280,7 @@ write_scheme_spec <- function(spec, path) {
 describe_resolution <- function(spec) {
   if (isTRUE(spec$resolved)) {
     return(sprintf(
-      "Classical MLST scheme: %s (%s), %d loci",
+      "Classical MLST for this run: %s from %s, %d loci",
       spec$scheme,
       spec$repository,
       length(spec$loci)

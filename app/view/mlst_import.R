@@ -14,6 +14,7 @@ box::use(
 box::use(
   app / logic / scheme_files,
   app / logic / scheme_index[schemes_for_species],
+  app / logic / scheme_sources[version_problem],
   app / logic / setup_ui,
   app / logic / species[default_db_name],
   app / view / file_dialog,
@@ -23,8 +24,9 @@ box::use(
 #' @export
 ui <- function(id) {
   ns <- shiny$NS(id)
-  # Three numbered tasks: the source on the left, the files with their check
-  # and the scheme's details on the right.
+  # Three numbered tasks: the source and the scheme's details on the left (a
+  # published scheme's "Use details" fills both), the files and their check on
+  # the right.
   shiny$tagList(
     shiny$uiOutput(ns("task_states")),
     shiny$div(
@@ -37,15 +39,31 @@ ui <- function(id) {
           "Scheme source",
           shiny$uiOutput(ns("published")),
           scheme_source$ui(ns("source"), types = "MLST")
+        ),
+        setup_ui$setup_task(
+          ns("t2"),
+          2,
+          "Scheme details",
+          locked_hint = "Select and confirm the scheme source first.",
+          shiny$div(
+            class = "setup-grid allow-free-text",
+            shiny$textInput(ns("name"), "Scheme name", width = "100%"),
+            shiny$textInput(
+              ns("version"),
+              "Version or download date",
+              placeholder = "e.g. 2026-11-16",
+              width = "100%"
+            )
+          )
         )
       ),
       shiny$div(
         class = "setup-form",
         setup_ui$setup_task(
-          ns("t2"),
-          2,
+          ns("t3"),
+          3,
           "Scheme files",
-          locked_hint = "Select and confirm the scheme source first.",
+          locked_hint = "Complete the scheme details first.",
           shiny$div(
             class = "setup-pick",
             file_dialog$ui(ns("profiles"), "Profile table", "table"),
@@ -68,22 +86,6 @@ ui <- function(id) {
             " >adk_1."
           ),
           shiny$uiOutput(ns("report"))
-        ),
-        setup_ui$setup_task(
-          ns("t3"),
-          3,
-          "Scheme details",
-          locked_hint = "Available once the scheme files have been read.",
-          shiny$div(
-            class = "setup-grid allow-free-text",
-            shiny$textInput(ns("name"), "Scheme name", width = "100%"),
-            shiny$textInput(
-              ns("version"),
-              "Version or download date",
-              placeholder = "e.g. 2026-11-16",
-              width = "100%"
-            )
-          )
         )
       )
     )
@@ -103,18 +105,26 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
       rows <- published()
       if (nrow(rows)) {
         shiny$tagList(
-          shiny$div(class = "setup-subtitle", "Available for this species"),
           setup_ui$scheme_links(rows, use_input = session$ns("use"))
         )
       }
     })
 
+    # Scheme name last proposed, from the species or a published scheme.
+    proposed_name <- shiny$reactiveVal("")
+
     # Fills the provider and name of a published scheme into the form.
     shiny$observeEvent(input$use, {
       row <- published()[input$use$i, , drop = FALSE]
       shiny$req(nrow(row) == 1L)
-      shiny$updateSelectInput(session, "source-provider", selected = row$provider)
-      shiny$updateTextInput(session, "name", value = paste(row$species, row$scheme))
+      shiny$updateSelectInput(
+        session,
+        "source-provider",
+        selected = row$provider
+      )
+      # A filled-in name counts as a proposal, so it follows a change of species.
+      proposed_name(paste(row$species, row$scheme))
+      shiny$updateTextInput(session, "name", value = proposed_name())
     })
 
     profile_path <- file_dialog$server(
@@ -141,10 +151,12 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
 
     # Proposes a scheme name from the species. A name the user typed is kept;
     # an earlier proposal follows a change of species.
-    proposed_name <- shiny$reactiveVal("")
     shiny$observeEvent(species(), {
       current <- trimws(input$name %||% "")
-      if (!is.na(species()) && (!nzchar(current) || identical(current, proposed_name()))) {
+      if (
+        !is.na(species()) &&
+          (!nzchar(current) || identical(current, proposed_name()))
+      ) {
         proposed_name(paste(gsub("_", " ", default_db_name(species())), "MLST"))
         shiny$updateTextInput(session, "name", value = proposed_name())
       }
@@ -177,7 +189,8 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
       })
     })
 
-    # What is still missing before the scheme can be stored, NULL when ready.
+    # What is still missing before the scheme can be stored, NULL when ready;
+    # in task order.
     problem <- shiny$reactive({
       src <- source()
       sch <- scheme()
@@ -185,6 +198,10 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
         "Select the scheme provider."
       } else if (!isTRUE(src$confirmed)) {
         "Confirm the provider's terms of use."
+      } else if (!nzchar(trimws(input$name %||% ""))) {
+        "Enter a scheme name."
+      } else if (!is.null(version_problem(input$version))) {
+        version_problem(input$version)
       } else if (is.null(profile_path())) {
         "Select the profile table."
       } else if (inherits(profiles(), "error")) {
@@ -193,8 +210,6 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
         "Select the allele files."
       } else if (inherits(sch, "error")) {
         conditionMessage(sch)
-      } else if (!nzchar(trimws(input$name %||% ""))) {
-        "Enter a scheme name."
       }
     })
 
@@ -233,7 +248,10 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
         ),
         shiny$div(class = "setup-loci", paste(sch$loci, collapse = "  ·  ")),
         if (nrow(sch$issues)) {
-          setup_ui$setup_section("Skipped during import", setup_ui$issue_list(sch$issues))
+          setup_ui$setup_section(
+            "Skipped during import",
+            setup_ui$issue_list(sch$issues)
+          )
         } else {
           setup_ui$setup_note("Profiles and alleles are consistent.", "good")
         }
@@ -249,12 +267,26 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
     # State of the three tasks; each unlocks once the one before is complete.
     output$task_states <- setup_ui$task_states(function() {
       source_done <- isTRUE(source()$confirmed)
-      files_done <- source_done && files_ready()
+      details_done <- source_done &&
+        nzchar(trimws(input$name %||% "")) &&
+        is.null(version_problem(input$version))
       setNames(
         c(
           if (source_done) "done" else "current",
-          if (!source_done) "locked" else if (files_done) "done" else "current",
-          if (!files_done) "locked" else if (is.null(problem())) "done" else "current"
+          if (!source_done) {
+            "locked"
+          } else if (details_done) {
+            "done"
+          } else {
+            "current"
+          },
+          if (!details_done) {
+            "locked"
+          } else if (files_ready()) {
+            "done"
+          } else {
+            "current"
+          }
         ),
         session$ns(c("t1", "t2", "t3"))
       )
@@ -265,6 +297,11 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
       if (isTRUE(src$confirmed)) setup_ui$task_status(src$label)
     })
     output$t2_status <- shiny$renderUI({
+      if (isTRUE(source()$confirmed)) {
+        setup_ui$task_status(trimws(input$name %||% ""))
+      }
+    })
+    output$t3_status <- shiny$renderUI({
       if (files_ready()) {
         sch <- scheme()
         setup_ui$task_status(sprintf(
@@ -297,7 +334,10 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
           terms_url = src$terms_url,
           acknowledgement = src$acknowledgement,
           citation = src$citation,
-          files = paste(basename(c(profile_path(), allele_paths()[1])), collapse = ", ")
+          files = paste(
+            basename(c(profile_path(), allele_paths()[1])),
+            collapse = ", "
+          )
         )
       )
     })

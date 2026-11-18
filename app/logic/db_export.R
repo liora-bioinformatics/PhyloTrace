@@ -24,6 +24,7 @@ box::use(
     dbCommit,
     dbRollback
   ],
+  fs[file_info],
   rlang[`%||%`],
 )
 
@@ -271,6 +272,22 @@ export_preview <- function(
   have[have %in% keep]
 }
 
+# TRUE when two paths name the same file, also through a link or a different
+# spelling of the path.
+.same_file <- function(a, b) {
+  if (identical(
+    normalizePath(a, winslash = "/", mustWork = FALSE),
+    normalizePath(b, winslash = "/", mustWork = FALSE)
+  )) {
+    return(TRUE)
+  }
+  if (!file.exists(a) || !file.exists(b)) {
+    return(FALSE)
+  }
+  info <- file_info(c(a, b))
+  isTRUE(info$inode[1] == info$inode[2] && info$device_id[1] == info$device_id[2])
+}
+
 #' Export Database Subset
 #'
 #' Generates a new SQLite database file containing selected isolates, metadata, custom fields, and analysis tables.
@@ -298,6 +315,13 @@ export_database <- function(
   progress = NULL
 ) {
   progress <- progress %||% .noop_progress
+
+  if (dir.exists(dest_path)) {
+    stop("The export target is a folder. Choose a file name.")
+  }
+  if (.same_file(src_path, dest_path)) {
+    stop("The export cannot replace the database it is exported from. Choose another file.")
+  }
 
   isolates <- setdiff(unique(isolates), REF_SOUCHE)
   if (!length(isolates)) {

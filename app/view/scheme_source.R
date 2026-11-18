@@ -1,8 +1,8 @@
 # app/view/scheme_source.R
 #
-# Provider picker for an imported typing scheme. Shows the provider's terms of
-# use and the acknowledgement it asks for, and collects the user's confirmation
-# that they obtained the files themselves and may use them.
+# Provider picker for an imported typing scheme. Links the provider's terms of
+# use and collects the user's confirmation that they obtained the files
+# themselves and may use them.
 
 box::use(
   rlang[`%||%`],
@@ -35,10 +35,11 @@ server <- function(id) {
     # Details of the selected provider, NULL until one is picked.
     provider <- shiny$reactive(scheme_source(input$provider))
 
-    # Terms, acknowledgement and the confirmation the import depends on.
+    # The confirmation the import depends on, next to the provider's terms.
     output$notice <- shiny$renderUI({
       src <- provider()
       shiny$req(src)
+      own <- identical(src$id, "own")
       shiny$tagList(
         if (identical(src$id, "other")) {
           shiny$div(
@@ -48,52 +49,26 @@ server <- function(id) {
         },
         shiny$div(
           class = "scheme-terms",
-          if (!is.na(src$terms)) {
-            shiny$div(
-              class = "scheme-terms_text",
-              shiny$icon("scale-balanced"),
-              shiny$span(src$terms),
-              if (!is.na(src$terms_url)) {
-                shiny$a(
-                  href = src$terms_url,
-                  target = "_blank",
-                  rel = "noopener",
-                  "Read the full terms"
-                )
-              }
-            )
-          },
-          # Acknowledgement and citation matter when publishing, not while
-          # importing, so they are folded away behind one line.
-          if (!is.na(src$acknowledgement) || !is.na(src$citation)) {
-            shiny$tags$details(
-              class = "scheme-terms_more",
-              shiny$tags$summary("Acknowledgement & citation for publications"),
-              if (!is.na(src$acknowledgement)) {
-                shiny$div(
-                  class = "scheme-terms_ack",
-                  shiny$tags$strong("Required acknowledgement: "),
-                  src$acknowledgement
-                )
-              },
-              if (!is.na(src$citation)) {
-                shiny$div(class = "scheme-terms_ack", shiny$tags$strong("Cite: "), src$citation)
-              }
-            )
-          },
           shiny$checkboxInput(
             ns("confirmed"),
-            if (identical(src$id, "own")) {
-              "This scheme is my own or I hold the rights to use it."
+            if (own) {
+              "This scheme is my own, or I hold the rights to use it."
             } else {
-              paste(
-                "I obtained these files from the provider and my use of them",
-                "complies with its terms."
-              )
+              "I obtained these files from the provider and use them under its terms."
             },
-            value = FALSE,
-            width = "100%"
-          )
+            value = FALSE
+          ),
+          # Outside the checkbox label, so following the link does not tick it.
+          if (!is.na(src$terms_url)) {
+            shiny$a(
+              href = src$terms_url,
+              target = "_blank",
+              rel = "noopener",
+              class = "scheme-terms_link",
+              shiny$icon("scale-balanced"),
+              " Terms of use"
+            )
+          }
         )
       )
     })

@@ -344,6 +344,7 @@ loci_layout <- function(
 message_table <- function(text) {
   datatable(
     data.frame(" " = text, check.names = FALSE),
+    class = "display message-table",
     rownames = FALSE,
     colnames = "",
     escape = FALSE,

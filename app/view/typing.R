@@ -1436,7 +1436,7 @@ server <- function(
         span(
           tags$strong(info$name),
           sprintf(
-            " (%s) - %d loci, %s sequence types",
+            " \u00b7 %s \u00b7 %d loci, %s sequence types",
             if (is.null(info$source_label)) "user-supplied" else info$source_label,
             length(info$loci),
             format(as.integer(info$profiles), big.mark = ",")
@@ -2832,21 +2832,31 @@ server <- function(
       # at this temp path, and the ST is derived per genome. The reference DB
       # is read back on finalize (for reference sequences / metadata), then
       # deleted together with the scheme files. A database without a stored
-      # scheme or without a species skips classical MLST for the whole run.
+      # scheme skips classical MLST for the whole run. A stored scheme that
+      # cannot be written out stops the run instead: typing it without STs would
+      # look like a database that has no scheme.
       species <- preflight$species
       cla_db <- tempfile(fileext = ".clamlst.db")
-      cla_scheme <- if (!is.na(species)) {
-        scheme_dir <- paste0(cla_db, ".scheme")
-        dir.create(scheme_dir)
-        tryCatch(
-          materialize_mlst_scheme(db_path(), scheme_dir),
-          error = function(e) {
-            log_typing("Classical MLST scheme unreadable", conditionMessage(e))
-            list(resolved = FALSE)
-          }
+      scheme_dir <- paste0(cla_db, ".scheme")
+      dir.create(scheme_dir)
+      cla_scheme <- tryCatch(
+        materialize_mlst_scheme(db_path(), scheme_dir),
+        error = function(e) e
+      )
+      if (inherits(cla_scheme, "error")) {
+        log_typing(
+          "Classical MLST scheme unreadable, run not started",
+          conditionMessage(cla_scheme)
         )
-      } else {
-        list(resolved = FALSE)
+        cleanup_cla_db(cla_db)
+        reset_to_idle()
+        Typing$status <- "failed"
+        showNotification(
+          paste("Could not prepare the classical MLST scheme:", conditionMessage(cla_scheme)),
+          type = "error",
+          duration = 10
+        )
+        return()
       }
       Typing$cla_db <- if (isTRUE(cla_scheme$resolved)) cla_db else NULL
       Typing$cla_spec <- if (isTRUE(cla_scheme$resolved)) {
@@ -2947,6 +2957,12 @@ server <- function(
 
       if (inherits(proc, "error")) {
         log_typing("Typing failed to start", conditionMessage(proc))
+        cleanup_cla_db(Typing$cla_db)
+        cleanup_amr_out(Typing$amr_out)
+        Typing$cla_db <- NULL
+        Typing$amr_out <- NULL
+        live_cla_db <<- NULL
+        live_amr_out <<- NULL
         Typing$status <- "failed"
         # The bar has been animating since the checking phase - stop it and
         # empty it so a failed start does not leave a striped bar running.

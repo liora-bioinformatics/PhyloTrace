@@ -760,8 +760,11 @@ cg_outcome <- function(results) {
 #' @export
 parse_clamlst_meta <- function(log_lines) {
   log_text <- paste(log_lines, collapse = "\n")
+  # Anchored to line starts: only the typing script's own sentinel lines count,
+  # not notes the app writes into the same transcript.
   grab <- function(pattern) {
-    match <- regmatches(log_text, regexec(pattern, log_text))[[1]]
+    pattern <- paste0("(?m)^", pattern)
+    match <- regmatches(log_text, regexec(pattern, log_text, perl = TRUE))[[1]]
     if (length(match) > 1) {
       value <- trimws(match[2])
       if (nzchar(value)) value else NA_character_
@@ -808,9 +811,7 @@ parse_tool_meta <- function(log_lines) {
 #' Query Target Species from Database
 #'
 #' @description Reads the species associated with the database's schema from the
-#'   `mlst_type` table. A database set up by PhyloTrace stores the name as the
-#'   user entered it; an older one is repaired once, by `migrate_species_name()`
-#'   on database open.
+#'   `mlst_type` table, as the user entered it when the database was created.
 #'
 #' @param db_path Character string. File path to SQLite database.
 #'

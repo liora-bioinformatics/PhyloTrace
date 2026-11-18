@@ -1,15 +1,16 @@
 # app/view/db_wizard.R
 #
 # Guided setup of a new PhyloTrace database: species, cgMLST scheme, optional
-# classical MLST scheme, then review, AMR screening and where to save it. All
-# scheme data comes from files the user supplies.
+# classical MLST scheme and AMR screening, then review and where to save it.
+# All scheme data comes from files the user supplies.
 
 box::use(
   bslib,
+  later[later],
   rlang[`%||%`],
   shiny,
   shinyWidgets[virtualSelectInput],
-  shinyjs[hide, html, toggleState, useShinyjs],
+  shinyjs[hide, html, runjs, toggleState, useShinyjs],
   stats[setNames],
   waiter[Waiter, spin_flower],
 )
@@ -20,7 +21,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / scheme_files,
   app / logic / scheme_index[CORE_TYPES, schemes_for_species],
-  app / logic / scheme_sources[safe_url],
+  app / logic / scheme_sources[safe_url, version_problem],
   app / logic / session_restart[restart_session],
   app / logic / setup_ui,
   app / logic / species,
@@ -34,20 +35,12 @@ STEPS <- c(
   species = "Species",
   cgmlst = "cgMLST scheme",
   mlst = "MLST scheme",
+  amr = "AMR screening",
   save = "Review & create"
 )
 
 # Navbar tab of the setup, reopened when a new setup is started.
 WIZARD_TAB <- "db_wizard_panel"
-
-# Columns of a locus annotation table the cgMLST overview can show.
-MAPPING_FIELDS <- c(
-  locus = "Locus ID",
-  gene = "Gene",
-  product = "Product",
-  start = "Start",
-  length = "Length"
-)
 
 # Shown on a task until the allele files have been read.
 NEEDS_ALLELES <- "Available once the allele files have been read."
@@ -126,7 +119,12 @@ species_step <- function(ns) {
           ns = ns,
           shiny$div(
             class = "setup-grid allow-free-text",
-            shiny$textInput(ns("genus"), "Genus", placeholder = "Klebsiella", width = "100%"),
+            shiny$textInput(
+              ns("genus"),
+              "Genus",
+              placeholder = "Klebsiella",
+              width = "100%"
+            ),
             shiny$textInput(
               ns("epithets"),
               "Species",
@@ -150,8 +148,9 @@ species_step <- function(ns) {
   )
 }
 
-# Step 2: the cgMLST scheme as four numbered tasks - source and files on the
-# left, the optional annotation and the scheme's details on the right.
+# Step 2: the cgMLST scheme as four numbered tasks - source and details on the
+# left (a published scheme's "Use details" fills both), the allele files and
+# the optional annotation on the right.
 cgmlst_step <- function(ns) {
   shiny$tagList(
     shiny$uiOutput(ns("cg_task_states")),
@@ -169,58 +168,28 @@ cgmlst_step <- function(ns) {
         setup_ui$setup_task(
           ns("cg_t2"),
           2,
-          "Allele files",
-          shiny$div(
-            class = "setup-pick",
-            file_dialog$ui(ns("cg_alleles"), "Select allele files", "dna"),
-            shiny$uiOutput(ns("cg_alleles_label"), inline = TRUE)
-          ),
-          shiny$div(
-            class = "setup-help",
-            "One FASTA file per locus (ZIP archive, folder or individual files), or",
-            " one FASTA file with one sequence per locus. The first allele of each",
-            " locus becomes its reference."
-          ),
-          shiny$uiOutput(ns("cg_report")),
-          locked_hint = "Select and confirm the scheme source first."
-        )
-      ),
-      shiny$div(
-        class = "setup-form",
-        setup_ui$setup_task(
-          ns("cg_t3"),
-          3,
-          "Locus annotation",
-          optional = TRUE,
-          locked_hint = NEEDS_ALLELES,
-          shiny$div(
-            class = "setup-pick",
-            file_dialog$ui(ns("cg_table"), "Select locus table", "table"),
-            shiny$uiOutput(ns("cg_table_label"), inline = TRUE)
-          ),
-          shiny$div(
-            class = "setup-help",
-            "Gene names, products and positions shown in the cgMLST overview (CSV,",
-            " TSV or Excel). Loci without a row remain unannotated."
-          ),
-          shiny$uiOutput(ns("cg_mapping"))
-        ),
-        setup_ui$setup_task(
-          ns("cg_t4"),
-          4,
           "Scheme details",
-          locked_hint = NEEDS_ALLELES,
+          locked_hint = "Select and confirm the scheme source first.",
           shiny$div(
             class = "setup-grid allow-free-text",
             shiny$textInput(ns("cg_name"), "Scheme name", width = "100%"),
-            shiny$textInput(ns("cg_version"), "Version", placeholder = "e.g. 1.0", width = "100%"),
+            shiny$textInput(
+              ns("cg_version"),
+              "Version",
+              placeholder = "e.g. 1.0",
+              width = "100%"
+            ),
             shiny$textInput(
               ns("cg_url"),
               "Scheme web page (optional)",
               placeholder = "https://",
               width = "100%"
             ),
-            shiny$textInput(ns("cg_seed"), "Seed genome (optional)", width = "100%"),
+            shiny$textInput(
+              ns("cg_seed"),
+              "Seed genome (optional)",
+              width = "100%"
+            ),
             shiny$numericInput(
               ns("cg_distance"),
               "Cluster threshold (optional)",
@@ -237,6 +206,45 @@ cgmlst_step <- function(ns) {
             )
           )
         )
+      ),
+      shiny$div(
+        class = "setup-form",
+        setup_ui$setup_task(
+          ns("cg_t3"),
+          3,
+          "Allele files",
+          shiny$div(
+            class = "setup-pick",
+            file_dialog$ui(ns("cg_alleles"), "Select allele files", "dna"),
+            shiny$uiOutput(ns("cg_alleles_label"), inline = TRUE)
+          ),
+          shiny$div(
+            class = "setup-help",
+            "One FASTA file per locus (ZIP archive, folder or individual files), or",
+            " one FASTA file with one sequence per locus. The first allele of each",
+            " locus becomes its reference."
+          ),
+          shiny$uiOutput(ns("cg_report")),
+          locked_hint = "Complete the scheme details first."
+        ),
+        setup_ui$setup_task(
+          ns("cg_t4"),
+          4,
+          "Locus annotation",
+          optional = TRUE,
+          locked_hint = NEEDS_ALLELES,
+          shiny$div(
+            class = "setup-pick",
+            file_dialog$ui(ns("cg_table"), "Select locus table", "table"),
+            shiny$uiOutput(ns("cg_table_label"), inline = TRUE)
+          ),
+          shiny$div(
+            class = "setup-help",
+            "Gene names, products and positions shown in the cgMLST overview (CSV,",
+            " TSV or Excel). Loci without a row remain unannotated."
+          ),
+          shiny$uiOutput(ns("cg_mapping"))
+        )
       )
     )
   )
@@ -247,7 +255,11 @@ mlst_step <- function(ns) {
   shiny$tagList(
     shiny$div(
       class = "setup-toggle",
-      bslib$input_switch(ns("mlst_on"), "Add a classical MLST scheme", value = FALSE),
+      bslib$input_switch(
+        ns("mlst_on"),
+        "Add a classical MLST scheme",
+        value = FALSE
+      ),
       shiny$div(
         class = "setup-help",
         "Optional. With a scheme, every typed isolate is also assigned its",
@@ -258,15 +270,21 @@ mlst_step <- function(ns) {
   )
 }
 
-# Step 4: summary, AMR screening, storage location and the build itself.
-save_step <- function(ns) {
+# Step 4: what AMR screening reports for the species. The catalogue follows
+# from the species, so the step informs rather than asks; the override is
+# folded away for the rare case the automatic choice does not fit.
+amr_step <- function(ns) {
   shiny$div(
     class = "setup-columns",
     shiny$div(
       class = "setup-form",
-      setup_ui$setup_section("Summary", shiny$uiOutput(ns("summary"))),
       setup_ui$setup_section(
         "AMR screening",
+        shiny$div(
+          class = "setup-help",
+          "Every typed isolate is screened for antimicrobial resistance with",
+          " AMRFinderPlus. What is screened follows from the species."
+        ),
         shiny$uiOutput(ns("amr_report")),
         shiny$tags$details(
           class = "setup-advanced",
@@ -278,12 +296,28 @@ save_step <- function(ns) {
             width = "100%"
           )
         )
-      ),
+      )
+    ),
+    shiny$div(class = "setup-report", shiny$uiOutput(ns("amr_coverage")))
+  )
+}
+
+# Step 5: summary, storage location and the build itself.
+save_step <- function(ns) {
+  shiny$div(
+    class = "setup-columns",
+    shiny$div(
+      class = "setup-form",
+      setup_ui$setup_section("Summary", shiny$uiOutput(ns("summary"))),
       setup_ui$setup_section(
         "Storage location",
         shiny$div(
           class = "setup-pick",
-          file_dialog$ui(ns("target"), "Choose location and name", "floppy-disk"),
+          file_dialog$ui(
+            ns("target"),
+            "Choose location and name",
+            "floppy-disk"
+          ),
           shiny$uiOutput(ns("target_label"), inline = TRUE)
         ),
         shiny$div(
@@ -342,13 +376,17 @@ ui <- function(id) {
       class = "setup-wizard",
       bslib$card(
         fill = TRUE,
-        bslib$card_header(class = "setup-header", shiny$uiOutput(ns("stepper"))),
+        bslib$card_header(
+          class = "setup-header",
+          shiny$uiOutput(ns("stepper"))
+        ),
         bslib$card_body(
           bslib$navset_hidden(
             id = ns("steps"),
             bslib$nav_panel_hidden("species", species_step(ns)),
             bslib$nav_panel_hidden("cgmlst", cgmlst_step(ns)),
             bslib$nav_panel_hidden("mlst", mlst_step(ns)),
+            bslib$nav_panel_hidden("amr", amr_step(ns)),
             bslib$nav_panel_hidden("save", save_step(ns)),
             bslib$nav_panel_hidden("done", done_step(ns))
           )
@@ -356,7 +394,11 @@ ui <- function(id) {
         bslib$card_footer(
           id = ns("footer"),
           class = "setup-footer",
-          shiny$actionButton(ns("back"), "Back", icon = shiny$icon("arrow-left")),
+          shiny$actionButton(
+            ns("back"),
+            "Back",
+            icon = shiny$icon("arrow-left")
+          ),
           shiny$uiOutput(ns("step_hint"), class = "setup-footer_hint"),
           shiny$actionButton(
             ns("next_step"),
@@ -386,6 +428,8 @@ server <- function(id) {
       # Scheme name last proposed from the species, so a name the user typed
       # is never overwritten but a stale proposal is.
       proposed_name = "",
+      # Scheme web page last filled in from a published scheme.
+      proposed_url = "",
       # The running build: process handle, plan and start time.
       build = NULL,
       # Error of the last failed build, shown on the review step.
@@ -400,7 +444,10 @@ server <- function(id) {
     session$onSessionEnded(function() cancel_db_build(live_build))
 
     cg_source <- scheme_source$server("cg_source")
-    mlst <- mlst_import$server("mlst", species = shiny$reactive(chosen_species()$name))
+    mlst <- mlst_import$server(
+      "mlst",
+      species = shiny$reactive(chosen_species()$name)
+    )
 
     cg_paths <- file_dialog$server(
       "cg_alleles",
@@ -424,7 +471,9 @@ server <- function(id) {
       "target",
       mode = "save",
       title = "Save the new database",
-      default_name = function() species$default_db_name(shiny$isolate(chosen_species()$name)),
+      default_name = function() {
+        species$default_db_name(shiny$isolate(chosen_species()$name))
+      },
       extension = "db",
       hint = paste(
         "Choose a folder on this computer's own disk. Network and cloud-synced",
@@ -442,7 +491,11 @@ server <- function(id) {
         epithets <- epithets[nzchar(epithets)]
         problem <- species$species_problem(input$genus, epithets)
         return(list(
-          name = if (is.na(problem)) species$compose_species(input$genus, epithets) else NA,
+          name = if (is.na(problem)) {
+            species$compose_species(input$genus, epithets)
+          } else {
+            NA
+          },
           taxid = NA_integer_,
           record = NULL,
           problem = if (is.na(problem)) NULL else problem
@@ -450,7 +503,12 @@ server <- function(id) {
       }
       label <- input$species_pick
       if (is.null(label) || !nzchar(label)) {
-        return(list(name = NA, taxid = NA_integer_, record = NULL, problem = "Select a species."))
+        return(list(
+          name = NA,
+          taxid = NA_integer_,
+          record = NULL,
+          problem = "Select a species."
+        ))
       }
       record <- species$species_record(label)
       list(
@@ -478,14 +536,19 @@ server <- function(id) {
       shiny$div(
         class = "species-card_article",
         if (!is.na(image)) {
-          shiny$div(class = "species-card_media", shiny$tags$img(src = image, alt = sp$name))
+          shiny$div(
+            class = "species-card_media",
+            shiny$tags$img(src = image, alt = sp$name)
+          )
         },
         shiny$div(
           class = "species-details",
           shiny$div(
             class = "species-details_header",
             shiny$span(shiny$em(sp$name), class = "species-details_name"),
-            if (!is.null(record$rank)) shiny$span(record$rank, class = "species-details_rank"),
+            if (!is.null(record$rank)) {
+              shiny$span(record$rank, class = "species-details_rank")
+            },
             if (!is.na(sp$taxid)) {
               shiny$a(
                 href = paste0(
@@ -507,7 +570,10 @@ server <- function(id) {
                 if (!is.null(value)) {
                   shiny$div(
                     class = "species-details_chip",
-                    shiny$span(toupper(rank), class = "species-details_chip-rank"),
+                    shiny$span(
+                      toupper(rank),
+                      class = "species-details_chip-rank"
+                    ),
                     shiny$span(value, class = "species-details_chip-value")
                   )
                 }
@@ -515,7 +581,9 @@ server <- function(id) {
             )
           }
         ),
-        if (!is.null(record$summary)) shiny$p(record$summary, class = "species-details_summary")
+        if (!is.null(record$summary)) {
+          shiny$p(record$summary, class = "species-details_summary")
+        }
       )
     })
 
@@ -560,7 +628,6 @@ server <- function(id) {
       rows <- core_published()
       if (nrow(rows)) {
         shiny$tagList(
-          shiny$div(class = "setup-subtitle", "Available for this species"),
           setup_ui$scheme_links(rows, use_input = ns("cg_use"))
         )
       }
@@ -570,7 +637,15 @@ server <- function(id) {
     shiny$observeEvent(input$cg_use, {
       row <- core_published()[input$cg_use$i, , drop = FALSE]
       shiny$req(nrow(row) == 1L)
-      shiny$updateSelectInput(session, "cg_source-provider", selected = row$provider)
+      shiny$updateSelectInput(
+        session,
+        "cg_source-provider",
+        selected = row$provider
+      )
+      # Filled-in details count as proposals: they follow a change of species
+      # unless the user edits them.
+      state$proposed_name <- row$scheme
+      state$proposed_url <- row$url
       shiny$updateTextInput(session, "cg_name", value = row$scheme)
       shiny$updateTextInput(session, "cg_url", value = row$url)
     })
@@ -581,8 +656,19 @@ server <- function(id) {
       shiny$req(!is.na(name))
       current <- trimws(input$cg_name %||% "")
       if (!nzchar(current) || identical(current, state$proposed_name)) {
-        state$proposed_name <- paste(gsub("_", " ", species$default_db_name(name)), "cgMLST")
+        state$proposed_name <- paste(
+          gsub("_", " ", species$default_db_name(name)),
+          "cgMLST"
+        )
         shiny$updateTextInput(session, "cg_name", value = state$proposed_name)
+      }
+      url_unchanged <- identical(
+        trimws(input$cg_url %||% ""),
+        state$proposed_url
+      )
+      if (nzchar(state$proposed_url) && url_unchanged) {
+        state$proposed_url <- ""
+        shiny$updateTextInput(session, "cg_url", value = "")
       }
       organism <- amr_species(name)
       shiny$updateSelectInput(
@@ -594,18 +680,41 @@ server <- function(id) {
 
     # cgMLST scheme -----------------------------------------------------------
 
+    # Runs `fun` with the whole UI held (wait cursor, no clicks): a hold
+    # switched on now, the work deferred to the next tick, so the hold - and
+    # the closing file dialog - reach the browser before the session is busy.
+    # The hold ends however `fun` ends; the browser drops it on its own after
+    # ten minutes or a lost connection (busy-shield.js).
+    run_held <- function(fun) {
+      runjs("window.__ptHoldShield && window.__ptHoldShield();")
+      later(function() {
+        shiny$withReactiveDomain(session, {
+          tryCatch(
+            shiny$isolate(fun()),
+            finally = runjs("window.__ptReleaseShieldHold && window.__ptReleaseShieldHold();")
+          )
+        })
+      })
+    }
+
     # Reads the picked allele files into the scheme's reference set.
     shiny$observeEvent(cg_paths(), {
-      shiny$withProgress(message = "Reading the scheme ...", value = 0, {
-        state$cg <- tryCatch(
-          scheme_files$read_cg_scheme(
-            cg_paths(),
-            progress = function(done, total) {
-              shiny$setProgress(done / total, detail = sprintf("%d of %d loci", done, total))
-            }
-          ),
-          error = function(e) e
-        )
+      paths <- cg_paths()
+      run_held(function() {
+        shiny$withProgress(message = "Reading the scheme ...", value = 0, {
+          state$cg <- tryCatch(
+            scheme_files$read_cg_scheme(
+              paths,
+              progress = function(done, total) {
+                shiny$setProgress(
+                  done / total,
+                  detail = sprintf("%d of %d loci", done, total)
+                )
+              }
+            ),
+            error = function(e) e
+          )
+        })
       })
     })
 
@@ -629,24 +738,32 @@ server <- function(id) {
       } else {
         shiny$tagList(
           setup_ui$picked_label(cg_table_path()),
-          shiny$actionLink(ns("cg_table_clear"), "Remove", icon = shiny$icon("xmark"))
+          shiny$actionLink(
+            ns("cg_table_clear"),
+            "Remove",
+            icon = shiny$icon("xmark")
+          )
         )
       }
     })
 
     # TRUE once the allele files have been read into a usable scheme.
-    cg_ready <- shiny$reactive(is.list(state$cg) && !inherits(state$cg, "error"))
+    cg_ready <- shiny$reactive(
+      is.list(state$cg) && !inherits(state$cg, "error")
+    )
 
     # TRUE once the scheme and the annotation table are both readable.
     has_table <- shiny$reactive(is.data.frame(state$cg_table) && cg_ready())
 
-    # The annotation columns as guessed from the table and the scheme's loci.
-    guessed_mapping <- shiny$reactive({
+    # The table's locus column: the one naming the most of the scheme's loci.
+    # Locus IDs have to match to annotate anything, so it is found, not asked.
+    locus_column <- shiny$reactive({
       shiny$req(has_table())
       scheme_files$guess_locus_columns(state$cg_table, state$cg$loci$locus)
     })
 
-    # Column pickers of the annotation table, preset to the guess.
+    # Which column matched the loci, and the columns to import - every one by
+    # default: an annotation sheet can carry any information about the loci.
     output$cg_mapping <- shiny$renderUI({
       if (inherits(state$cg_table, "error")) {
         return(setup_ui$setup_note(conditionMessage(state$cg_table), "bad"))
@@ -654,48 +771,60 @@ server <- function(id) {
       if (!has_table()) {
         return(NULL)
       }
-      guess <- guessed_mapping()
-      headers <- names(state$cg_table)
-      columns <- c("(not in the table)" = "", setNames(headers, headers))
-      shiny$div(
-        class = "setup-grid setup-mapping",
-        lapply(names(MAPPING_FIELDS), function(field) {
-          shiny$selectInput(
-            ns(paste0("map_", field)),
-            MAPPING_FIELDS[[field]],
-            choices = columns,
-            selected = guess[[field]] %||% "",
+      match <- locus_column()
+      if (is.na(match$locus)) {
+        return(setup_ui$setup_note(
+          "No column of this table names the scheme's loci, so it cannot annotate them.",
+          "warn"
+        ))
+      }
+      others <- setdiff(names(state$cg_table), match$locus)
+      shiny$tagList(
+        shiny$div(
+          class = "setup-help",
+          sprintf(
+            "Loci are matched by the column '%s' (%s of %s loci).",
+            match$locus,
+            format(match$matched, big.mark = ","),
+            format(nrow(state$cg$loci), big.mark = ",")
+          )
+        ),
+        if (length(others)) {
+          virtualSelectInput(
+            ns("map_columns"),
+            "Columns to import",
+            choices = others,
+            selected = others,
+            multiple = TRUE,
+            search = TRUE,
+            showValueAsTags = FALSE,
+            placeholder = "No columns",
+            searchPlaceholderText = "Search columns ...",
+            dropboxWrapper = "body",
+            showDropboxAsPopup = TRUE,
+            popupDropboxBreakpoint = "10000px",
             width = "100%"
           )
-        })
-      )
-    })
-
-    # The annotation columns in effect: the user's pick, else the guess.
-    mapping <- shiny$reactive({
-      guess <- guessed_mapping()
-      picks <- lapply(names(MAPPING_FIELDS), function(field) {
-        pick <- input[[paste0("map_", field)]]
-        if (is.null(pick)) {
-          guess[[field]]
-        } else if (pick %in% names(state$cg_table)) {
-          pick
-        } else {
-          NA_character_
         }
-      })
-      setNames(picks, names(MAPPING_FIELDS))
+      )
     })
 
     # The `targets` table: every locus, annotated where the table has a row.
     cg_targets <- shiny$reactive({
       shiny$req(cg_ready())
       loci <- state$cg$loci$locus
-      if (has_table()) {
-        scheme_files$build_targets(loci, state$cg_table, mapping())
-      } else {
-        scheme_files$build_targets(loci)
+      if (!has_table()) {
+        return(scheme_files$build_targets(loci))
       }
+      locus <- locus_column()$locus
+      # Until the picker has reported, every column; afterwards an empty
+      # choice means no columns, not all of them.
+      columns <- if ("map_columns" %in% names(input)) {
+        input$map_columns %||% character(0)
+      } else {
+        names(state$cg_table)
+      }
+      scheme_files$build_targets(loci, state$cg_table, locus, setdiff(columns, locus))
     })
 
     # Check of the allele files, right under the picker: figures and rejects.
@@ -713,7 +842,11 @@ server <- function(id) {
       shiny$div(
         class = "setup-check",
         setup_ui$stat_row(
-          c("Loci ready" = nrow(cg$loci), "Files read" = cg$n_files, "Rejected" = rejected),
+          c(
+            "Loci ready" = nrow(cg$loci),
+            "Files read" = cg$n_files,
+            "Rejected" = rejected
+          ),
           tones = c("good", "", if (rejected) "warn" else "")
         ),
         if (nrow(cg$loci) < 50L) {
@@ -732,30 +865,24 @@ server <- function(id) {
           ))
         },
         if (rejected) {
-          setup_ui$setup_section("Rejected loci", setup_ui$issue_list(cg$issues))
+          setup_ui$setup_section(
+            "Rejected loci",
+            setup_ui$issue_list(cg$issues)
+          )
         } else {
           setup_ui$setup_note("All loci passed the checks.", "good")
         }
       )
     })
 
-    # What the cgMLST step still needs, NULL when complete.
-    cg_problem <- shiny$reactive({
-      src <- cg_source()
+    # What the scheme details still need, NULL when complete.
+    cg_details_problem <- shiny$reactive({
       url <- trimws(input$cg_url %||% "")
       distance <- input$cg_distance
-      if (is.null(src)) {
-        "Select the scheme provider."
-      } else if (!isTRUE(src$confirmed)) {
-        "Confirm the provider's terms of use."
-      } else if (is.null(state$cg)) {
-        "Select the allele files."
-      } else if (inherits(state$cg, "error")) {
-        "The allele files could not be read."
-      } else if (inherits(state$cg_table, "error")) {
-        "The locus table could not be read. Select another one or remove it."
-      } else if (!nzchar(trimws(input$cg_name %||% ""))) {
+      if (!nzchar(trimws(input$cg_name %||% ""))) {
         "Enter a scheme name."
+      } else if (!is.null(version_problem(input$cg_version))) {
+        version_problem(input$cg_version)
       } else if (nzchar(url) && !safe_url(url)) {
         "The scheme web page must be an http(s) address."
       } else if (length(distance) == 1L && !is.na(distance) && distance < 0) {
@@ -763,18 +890,55 @@ server <- function(id) {
       }
     })
 
+    # What the cgMLST step still needs, NULL when complete; in task order.
+    cg_problem <- shiny$reactive({
+      src <- cg_source()
+      if (is.null(src)) {
+        "Select the scheme provider."
+      } else if (!isTRUE(src$confirmed)) {
+        "Confirm the provider's terms of use."
+      } else if (!is.null(cg_details_problem())) {
+        cg_details_problem()
+      } else if (is.null(state$cg)) {
+        "Select the allele files."
+      } else if (inherits(state$cg, "error")) {
+        "The allele files could not be read."
+      } else if (inherits(state$cg_table, "error")) {
+        "The locus table could not be read. Select another one or remove it."
+      }
+    })
+
     # State of the four cgMLST tasks: each unlocks once the one it builds on is
     # complete, so the order of work is visible at a glance.
     output$cg_task_states <- setup_ui$task_states(function() {
       source_done <- isTRUE(cg_source()$confirmed)
-      files_done <- source_done && cg_ready()
+      details_done <- source_done && is.null(cg_details_problem())
+      files_done <- details_done && cg_ready()
       annotated <- if (has_table()) cg_targets()$annotated else 0L
       setNames(
         c(
           if (source_done) "done" else "current",
-          if (!source_done) "locked" else if (files_done) "done" else "current",
-          if (!files_done) "locked" else if (annotated > 0L) "done" else "open",
-          if (!files_done) "locked" else if (is.null(cg_problem())) "done" else "current"
+          if (!source_done) {
+            "locked"
+          } else if (details_done) {
+            "done"
+          } else {
+            "current"
+          },
+          if (!details_done) {
+            "locked"
+          } else if (files_done) {
+            "done"
+          } else {
+            "current"
+          },
+          if (!files_done) {
+            "locked"
+          } else if (annotated > 0L) {
+            "done"
+          } else {
+            "open"
+          }
         ),
         ns(c("cg_t1", "cg_t2", "cg_t3", "cg_t4"))
       )
@@ -785,13 +949,21 @@ server <- function(id) {
       if (isTRUE(src$confirmed)) setup_ui$task_status(src$label)
     })
     output$cg_t2_status <- shiny$renderUI({
+      if (isTRUE(cg_source()$confirmed) && is.null(cg_details_problem())) {
+        setup_ui$task_status(trimws(input$cg_name))
+      }
+    })
+    output$cg_t3_status <- shiny$renderUI({
       if (cg_ready()) {
-        setup_ui$task_status(sprintf("%s loci", format(nrow(state$cg$loci), big.mark = ",")))
+        setup_ui$task_status(sprintf(
+          "%s loci",
+          format(nrow(state$cg$loci), big.mark = ",")
+        ))
       } else if (inherits(state$cg, "error")) {
         setup_ui$task_status("Not readable", "bad")
       }
     })
-    output$cg_t3_status <- shiny$renderUI({
+    output$cg_t4_status <- shiny$renderUI({
       if (has_table()) {
         targets <- cg_targets()
         setup_ui$task_status(
@@ -840,7 +1012,9 @@ server <- function(id) {
             name
           ))
         } else {
-          setup_ui$setup_note("Acquired resistance, virulence and stress genes only.")
+          setup_ui$setup_note(
+            "Acquired resistance, virulence and stress genes only."
+          )
         },
         if (!is.na(suggested) && !identical(suggested, organism)) {
           setup_ui$setup_note(
@@ -854,6 +1028,25 @@ server <- function(id) {
       )
     })
 
+    # What screening reports, category by category, for the chosen catalogue.
+    output$amr_coverage <- shiny$renderUI({
+      name <- chosen_species()$name
+      organism <- amr_organism()
+      suggested <- if (is.na(name)) NA_character_ else amr_species(name)
+      mutations <- if (nzchar(organism)) {
+        paste("Catalogue:", names(organism_choices())[match(organism, organism_choices())])
+      } else if (!is.na(name) && is.na(suggested)) {
+        paste("No catalogue for", name)
+      } else {
+        "No catalogue selected"
+      }
+      setup_ui$coverage_list(list(
+        list(label = "Acquired resistance genes", on = TRUE),
+        list(label = "Virulence and stress genes", on = TRUE),
+        list(label = "Resistance point mutations", on = nzchar(organism), detail = mutations)
+      ))
+    })
+
     # Navigation --------------------------------------------------------------
 
     # What the given step still needs before the setup can move past it.
@@ -862,14 +1055,24 @@ server <- function(id) {
         names(STEPS)[step],
         species = chosen_species()$problem,
         cgmlst = cg_problem(),
-        mlst = if (isTRUE(input$mlst_on) && !isTRUE(mlst()$ready)) mlst()$problem,
+        mlst = if (isTRUE(input$mlst_on) && !isTRUE(mlst()$ready)) {
+          mlst()$problem
+        },
+        # Nothing to choose, but the step is part of the setup and is seen once.
+        amr = if (state$reached < step) "Review the AMR screening.",
         save = if (is.null(state$target)) "Choose the storage location."
       )
     }
 
     # First step that is still incomplete, NA when the whole setup is ready.
     first_open_step <- shiny$reactive({
-      open <- which(!vapply(seq_along(STEPS), function(i) is.null(step_problem(i)), logical(1)))
+      open <- which(
+        !vapply(
+          seq_along(STEPS),
+          function(i) is.null(step_problem(i)),
+          logical(1)
+        )
+      )
       if (length(open)) open[1] else NA_integer_
     })
 
@@ -884,7 +1087,11 @@ server <- function(id) {
       step <- min(max(step, 1L), length(STEPS))
       state$step <- step
       state$reached <- max(state$reached, step)
-      bslib$nav_select("steps", selected = names(STEPS)[step], session = session)
+      bslib$nav_select(
+        "steps",
+        selected = names(STEPS)[step],
+        session = session
+      )
     }
 
     shiny$observeEvent(input$next_step, {
@@ -917,7 +1124,10 @@ server <- function(id) {
             shiny$actionLink(
               ns(paste0("goto_", i)),
               shiny$tagList(
-                shiny$span(class = "setup-step_number", if (done) shiny$icon("check") else i),
+                shiny$span(
+                  class = "setup-step_number",
+                  if (done) shiny$icon("check") else i
+                ),
                 shiny$span(class = "setup-step_label", STEPS[[i]])
               )
             )
@@ -987,7 +1197,9 @@ server <- function(id) {
       )
     })
 
-    # Summary rows of the setup, with what is still missing spelled out.
+    # Summary rows of the setup, with what is still missing spelled out. Names
+    # and providers are joined with " · ": provider names carry parentheses
+    # of their own.
     summary_rows <- shiny$reactive({
       sp <- chosen_species()
       cg_ok <- is.null(cg_problem())
@@ -1002,13 +1214,7 @@ server <- function(id) {
         list(
           label = "cgMLST scheme",
           value = if (cg_ok) {
-            sprintf(
-              "%s - %s loci, %s annotated (%s)",
-              trimws(input$cg_name),
-              format(nrow(state$cg$loci), big.mark = ","),
-              format(cg_targets()$annotated, big.mark = ","),
-              cg_source()$label
-            )
+            paste(trimws(input$cg_name), cg_source()$label, sep = " \u00b7 ")
           } else {
             cg_problem()
           },
@@ -1017,14 +1223,9 @@ server <- function(id) {
         list(
           label = "Classical MLST",
           value = if (!mlst_on) {
-            "None (sequence types are not determined)"
+            "None, sequence types are not determined"
           } else if (isTRUE(mlst()$ready)) {
-            sprintf(
-              "%s - %d loci, %s sequence types",
-              mlst()$info$name,
-              length(mlst()$scheme$loci),
-              format(mlst()$scheme$summary[["profiles"]], big.mark = ",")
-            )
+            paste(mlst()$info$name, mlst()$info$source_label, sep = " \u00b7 ")
           } else {
             mlst()$problem
           },
@@ -1041,11 +1242,41 @@ server <- function(id) {
       )
     })
 
-    # The review's summary; AMR screening has its own section right below it.
+    # Headline figures of the setup, one tile per part of the database.
+    summary_stats <- shiny$reactive({
+      cg_ok <- cg_ready()
+      mlst_ready <- isTRUE(input$mlst_on) && isTRUE(mlst()$ready)
+      organism <- amr_organism()
+      n <- function(x) format(x, big.mark = ",")
+      annotated <- if (cg_ok) cg_targets()$annotated else 0L
+      list(
+        values = c(
+          "cgMLST loci" = if (cg_ok) n(nrow(state$cg$loci)) else "-",
+          "Annotated loci" = if (cg_ok) n(annotated) else "-",
+          "MLST sequence types" = if (mlst_ready) {
+            n(mlst()$scheme$summary[["profiles"]])
+          } else {
+            "None"
+          },
+          "AMR point mutations" = if (nzchar(organism)) "Screened" else "Not screened"
+        ),
+        tones = c(
+          if (cg_ok) "good" else "",
+          if (annotated > 0L) "good" else "",
+          if (mlst_ready) "good" else "",
+          if (nzchar(organism)) "good" else ""
+        )
+      )
+    })
+
+    # The review's figures and summary.
     output$summary <- shiny$renderUI({
       render_info("output$summary")
-      rows <- summary_rows()
-      summary_table(Filter(function(r) r$label != "AMR screening", rows))
+      stats <- summary_stats()
+      shiny$tagList(
+        setup_ui$stat_row(stats$values, tones = stats$tones),
+        summary_table(summary_rows())
+      )
     })
 
     # Names the step that still blocks the build.
@@ -1081,6 +1312,7 @@ server <- function(id) {
           class = "spinner-custom",
           spin_flower(),
           shiny$div(
+            class = "setup-build",
             shiny$h5("Creating database ..."),
             shiny$div(id = "scheme-load", basename(build_plan$target)),
             shiny$div(id = ns("build_elapsed"), "0:00 elapsed"),
@@ -1106,6 +1338,7 @@ server <- function(id) {
         # What the review showed, kept with the build: the finished screen
         # describes the database that was created, not later inputs.
         summary = summary_rows(),
+        stats = summary_stats(),
         waiter = waiter,
         started = Sys.time(),
         cancelled = FALSE
@@ -1128,7 +1361,10 @@ server <- function(id) {
       }
       if (job$build$proc$is_alive()) {
         secs <- as.integer(difftime(Sys.time(), job$started, units = "secs"))
-        html("build_elapsed", sprintf("%d:%02d elapsed", secs %/% 60, secs %% 60))
+        html(
+          "build_elapsed",
+          sprintf("%d:%02d elapsed", secs %/% 60, secs %% 60)
+        )
         shiny$invalidateLater(1000, session)
         return(NULL)
       }
@@ -1139,15 +1375,25 @@ server <- function(id) {
 
       if (isTRUE(job$cancelled)) {
         cancel_db_build(job$build)
-        shiny$showNotification("Database creation cancelled.", type = "warning", duration = 5)
+        shiny$showNotification(
+          "Database creation cancelled.",
+          type = "warning",
+          duration = 5
+        )
         return(NULL)
       }
 
-      finished_build <- tryCatch(finish_db_build(job$build, job$plan), error = function(e) e)
+      finished_build <- tryCatch(
+        finish_db_build(job$build, job$plan),
+        error = function(e) e
+      )
       if (inherits(finished_build, "error")) {
         state$error <- conditionMessage(finished_build)
         shiny$showNotification(
-          paste("Creating the database failed:", conditionMessage(finished_build)),
+          paste(
+            "Creating the database failed:",
+            conditionMessage(finished_build)
+          ),
           type = "error",
           duration = 10
         )
@@ -1156,9 +1402,15 @@ server <- function(id) {
 
       # From here on the setup is closed: the inputs no longer describe a
       # database that can be created, only the one that was.
-      state$result <- c(finished_build, list(summary = job$summary))
+      state$result <- c(finished_build, list(summary = job$summary, stats = job$stats))
       bslib$nav_select("steps", selected = "done", session = session)
       hide("footer")
+      # The user may be on another tab, or have loaded a database meanwhile.
+      shiny$showNotification(
+        paste("Database created:", basename(finished_build$path)),
+        type = "message",
+        duration = 8
+      )
     })
 
     # Review notes, or why the last attempt failed.
@@ -1188,21 +1440,30 @@ server <- function(id) {
           )
         ),
         setup_ui$stat_row(
-          c("Loci in the reference" = res$loci, "Skipped by pyMLST" = length(res$skipped)),
-          tones = c("good", if (length(res$skipped)) "warn" else "")
+          replace(res$stats$values, "cgMLST loci", format(res$loci, big.mark = ",")),
+          tones = res$stats$tones
         ),
         summary_table(res$summary),
+        # The import checks mirror pyMLST's own, so this only shows when the
+        # two disagree about a locus.
         if (length(res$skipped)) {
-          setup_ui$setup_section(
-            "Skipped loci",
-            shiny$div(class = "setup-issue_loci", paste(res$skipped, collapse = ", "))
+          setup_ui$setup_note(
+            shiny$tagList(
+              sprintf(
+                paste(
+                  "%s loci passed the import checks but were not added when the",
+                  "database was built:"
+                ),
+                format(length(res$skipped), big.mark = ",")
+              ),
+              shiny$div(
+                class = "setup-issue_loci",
+                paste(res$skipped, collapse = ", ")
+              )
+            ),
+            "warn"
           )
-        },
-        shiny$div(
-          class = "setup-help",
-          "The setup of a created database cannot be changed. Load it to add",
-          " isolates, or start a new setup for another database."
-        )
+        }
       )
     })
 
@@ -1213,7 +1474,8 @@ server <- function(id) {
     # Server return values
     shiny$reactiveValues(
       load_db = shiny$reactive(input$load_db),
-      db_location = shiny$reactive(state$result$path)
+      db_location = shiny$reactive(state$result$path),
+      building = shiny$reactive(!is.null(state$build))
     )
   })
 }

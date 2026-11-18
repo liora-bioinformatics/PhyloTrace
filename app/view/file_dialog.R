@@ -5,7 +5,9 @@
 # same on Linux, macOS, Windows and WSL (see app/logic/file_browser.R).
 
 box::use(
+  fs[is_absolute_path],
   htmltools[HTML, htmlEscape],
+  rlang[`%||%`],
   shiny,
 )
 
@@ -86,19 +88,37 @@ server <- function(
     ns <- session$ns
 
     current <- shiny$reactiveVal(file_browser$home_dir())
-    chosen <- shiny$reactiveVal(NULL)
+    # The confirmed choice, with a counter so that picking the same path again
+    # still counts as a new pick (a file fixed on disk is read again).
+    chosen <- shiny$reactiveVal(list(paths = NULL, n = 0L))
     problem <- shiny$reactiveVal(NULL)
     refresh <- shiny$reactiveVal(0L)
+    # Numbers every listing; selections and double-clicks carry the number of
+    # the listing they were made in, so one from a folder already left is
+    # never applied to the folder now on screen.
+    listing_no <- 0L
 
-    # Entries of the open folder; re-read on navigation and refresh.
+    # Entries of the open folder; re-read on navigation and refresh. A folder
+    # that cannot be listed yields no entries and a problem, never an error.
     listing <- shiny$reactive({
       refresh()
-      file_browser$list_dir(
-        current(),
-        files = mode != "dir",
-        pattern = pattern,
-        hidden = isTRUE(input$hidden)
+      listing_no <<- listing_no + 1L
+      rows <- tryCatch(
+        # Hidden entries are never listed; a hidden folder can still be
+        # opened by typing its path.
+        file_browser$list_dir(
+          current(),
+          files = mode != "dir",
+          pattern = pattern
+        ),
+        error = function(e) {
+          structure(
+            file_browser$list_dir(tempfile(), files = FALSE),
+            problem = "This folder cannot be listed."
+          )
+        }
       )
+      structure(rows, no = listing_no)
     })
 
     # Places in the sidebar, read when the dialog opens (drives can come and go).
@@ -106,6 +126,12 @@ server <- function(
 
     # Moves the dialog to a folder, reporting a path that is not one.
     navigate <- function(path) {
+      # A relative path is taken from the folder on screen, not from the
+      # folder the app runs in.
+      path <- trimws(path %||% "")
+      if (nzchar(path) && !startsWith(path, "~") && !is_absolute_path(path)) {
+        path <- file.path(current(), path)
+      }
       dir <- file_browser$normalize_dir(path)
       if (is.na(dir)) {
         problem(sprintf("'%s' is not an existing folder.", path))
@@ -169,6 +195,7 @@ server <- function(
               if (mode != "file") {
                 shiny$div(
                   class = "fb-newfolder",
+                  `data-enter-click` = ns("new_folder"),
                   shiny$textInput(ns("folder_name"), NULL, placeholder = "New folder"),
                   shiny$actionButton(
                     ns("new_folder"),
@@ -177,8 +204,7 @@ server <- function(
                     title = "Create folder"
                   )
                 )
-              },
-              shiny$checkboxInput(ns("hidden"), "Hidden files", value = FALSE)
+              }
             ),
             shiny$uiOutput(ns("crumbs"), class = "fb-crumbs"),
             shiny$div(
@@ -191,6 +217,7 @@ server <- function(
             if (mode == "save") {
               shiny$div(
                 class = "fb-save",
+                `data-enter-click` = ns("confirm"),
                 shiny$textInput(
                   ns("name"),
                   "File name",
@@ -200,10 +227,12 @@ server <- function(
                 shiny$span(class = "fb-ext", paste0(".", extension))
               )
             },
-            if (!is.null(hint)) shiny$div(class = "fb-hint", shiny$icon("circle-info"), " ", hint),
-            shiny$uiOutput(ns("status"))
+            if (!is.null(hint)) shiny$div(class = "fb-hint", shiny$icon("circle-info"), " ", hint)
           ),
+          # Problems are shown in the footer, beside the buttons, so a message
+          # appearing never changes the height of the dialog.
           footer = shiny$tagList(
+            shiny$uiOutput(ns("status"), class = "fb-status-slot"),
             shiny$modalButton("Cancel"),
             if (mode == "file" && allow_dir) {
               shiny$actionButton(ns("use_dir"), "Use this folder", icon = shiny$icon("folder-open"))
@@ -254,7 +283,7 @@ server <- function(
     output$listing <- shiny$renderUI({
       rows <- listing()
       if (!nrow(rows)) {
-        return(shiny$div(class = "fb-empty", "This folder is empty."))
+        return(shiny$div(class = "fb-empty", attr(rows, "problem") %||% "This folder is empty."))
       }
       modified <- format(rows$modified, "%Y-%m-%d %H:%M")
       modified[is.na(modified)] <- ""
@@ -277,6 +306,7 @@ server <- function(
       shiny$div(
         class = "fb-list pt-no-lock",
         `data-input` = ns("list"),
+        `data-no` = attr(rows, "no"),
         `data-multiple` = tolower(as.character(multiple && mode == "file")),
         HTML(paste(html, collapse = ""))
       )
@@ -286,6 +316,7 @@ server <- function(
     output$status <- shiny$renderUI({
       notes <- c(
         problem(),
+        attr(listing(), "problem"),
         if (isTRUE(attr(listing(), "truncated"))) {
           "Only the first 5,000 entries are shown; type a path to go deeper."
         },
@@ -301,18 +332,25 @@ server <- function(
       }
     })
 
-    # Entries currently selected in the listing.
+    # Entries currently selected in the listing on screen.
     selected <- shiny$reactive({
-      idx <- input$list_selected
+      sel <- input$list_selected
       rows <- listing()
+      idx <- if (identical(as.integer(sel$no), attr(rows, "no"))) as.integer(unlist(sel$i)) else 0L
       idx <- idx[idx >= 1L & idx <= nrow(rows)]
       rows[idx, , drop = FALSE]
     })
 
     shiny$observeEvent(input$up, navigate(file_browser$parent_dir(current())))
     shiny$observeEvent(input$reload, refresh(refresh() + 1L))
+    # A typed path opens a folder; in file mode, a typed file path picks it.
     shiny$observeEvent(input$path, {
-      if (!identical(input$path, current())) navigate(input$path)
+      typed <- absolute(input$path)
+      if (mode == "file" && file.exists(typed) && !dir.exists(typed)) {
+        finish(typed)
+      } else if (!identical(input$path, current())) {
+        navigate(input$path)
+      }
     })
 
     # A click on a place or a breadcrumb.
@@ -330,7 +368,11 @@ server <- function(
     shiny$observeEvent(input$list_open, {
       rows <- listing()
       i <- input$list_open$i
-      shiny$req(i >= 1L, i <= nrow(rows))
+      shiny$req(
+        identical(as.integer(input$list_open$no), attr(rows, "no")),
+        i >= 1L,
+        i <= nrow(rows)
+      )
       if (rows$is_dir[i]) {
         navigate(rows$path[i])
       } else if (mode == "file") {
@@ -338,10 +380,29 @@ server <- function(
       }
     })
 
+    # A path as typed, absolute: relative to the folder on screen, `~`
+    # expanded. Links are not resolved, so a linked file keeps its own name,
+    # which is what locus and isolate names are taken from.
+    absolute <- function(paths) {
+      paths <- path.expand(trimws(paths))
+      relative <- !is_absolute_path(paths)
+      paths[relative] <- file.path(current(), paths[relative])
+      if (file_browser$on_windows()) gsub("\\", "/", paths, fixed = TRUE) else paths
+    }
+
     # Hands a choice back to the caller and closes the dialog.
     finish <- function(paths) {
-      chosen(normalizePath(paths, winslash = "/", mustWork = FALSE))
+      if (!all(validUTF8(paths))) {
+        problem("This name contains characters that cannot be read. Rename the file or folder.")
+        return(invisible(FALSE))
+      }
+      if (!all(file.exists(paths))) {
+        problem("The selection no longer exists. Refresh the folder.")
+        return(invisible(FALSE))
+      }
+      chosen(list(paths = absolute(paths), n = chosen()$n + 1L))
       shiny$removeModal()
+      invisible(TRUE)
     }
 
     # Creates the named folder inside the open folder and opens it.
@@ -387,10 +448,13 @@ server <- function(
       } else if (file.exists(target)) {
         problem("A file with this name already exists here. Choose another name.")
       } else {
-        finish(target)
+        chosen(list(paths = target, n = chosen()$n + 1L))
+        shiny$removeModal()
       }
     })
 
-    chosen
+    # A reactive, unlike the stored value, signals every pick, also of the
+    # same path again.
+    shiny$reactive(chosen()$paths)
   })
 }

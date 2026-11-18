@@ -3897,6 +3897,12 @@ table.dataTable thead>tr>th.sorting {
         white-space: nowrap;
     }
 
+    // A message table holds one sentence and no Scroller rows, so it wraps to
+    // the card instead of overflowing it horizontally.
+    table.dataTable.message-table tbody td {
+        white-space: normal;
+    }
+
     // Scroller stripes the scrolling body as a placeholder for rows still
     // loading; it shows below a short table, so keep the body plain.
     div.dts div.dataTables_scrollBody {
@@ -4386,11 +4392,6 @@ label {
     gap: 0.6rem 1rem;
 }
 
-// The five column pickers of a locus table share one row where they fit.
-.setup-mapping {
-    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
-}
-
 .setup-pick {
     display: flex;
     align-items: center;
@@ -4514,6 +4515,13 @@ label {
     line-height: 1.2;
 }
 
+// A word instead of a figure: smaller, on a line as tall as a figure's, so
+// tiles in one row keep the same height.
+.setup-stat.is-text .setup-stat_value {
+    font-size: 1rem;
+    line-height: 1.68rem;
+}
+
 .setup-stat_label {
     font-size: 0.7rem;
     font-weight: 600;
@@ -4528,7 +4536,9 @@ label {
     padding: 0.6rem 0.8rem;
     border-radius: 8px;
     border-left: 3px solid var(--bs-info);
-    background: var(--bs-body-bg);
+    // A translucent tint of the note's tone rather than a fixed colour: it
+    // stands out from whatever it sits on - card, shaded panel, dark mode.
+    background: rgba(var(--bs-info-rgb), 0.08);
     font-size: 0.9rem;
     line-height: 1.45;
     overflow-wrap: anywhere;
@@ -4540,6 +4550,7 @@ label {
 
     &.is-good {
         border-left-color: var(--bs-success);
+        background: rgba(var(--bs-success-rgb), 0.08);
 
         >i {
             color: var(--bs-success);
@@ -4548,6 +4559,7 @@ label {
 
     &.is-warn {
         border-left-color: var(--bs-warning);
+        background: rgba(var(--bs-warning-rgb), 0.1);
 
         >i {
             color: var(--bs-warning);
@@ -4556,6 +4568,7 @@ label {
 
     &.is-bad {
         border-left-color: var(--bs-danger);
+        background: rgba(var(--bs-danger-rgb), 0.08);
 
         >i {
             color: var(--bs-danger);
@@ -4771,6 +4784,49 @@ label {
     background: var(--bs-tertiary-bg);
 }
 
+// What a screening covers: one line per category, ticked or not.
+.setup-coverage {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: var(--bs-tertiary-bg);
+}
+
+.setup-coverage_item {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    background: var(--bs-body-bg);
+
+    >i {
+        margin-top: 0.2rem;
+    }
+
+    &.is-on>i {
+        color: var(--bs-success);
+    }
+
+    &.is-off {
+        >i,
+        .setup-coverage_label {
+            color: var(--bs-secondary-color);
+        }
+    }
+}
+
+.setup-coverage_label {
+    font-weight: 600;
+}
+
+.setup-coverage_detail {
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+}
+
 // A setting that is decided automatically, with the override folded away.
 .setup-advanced {
     summary {
@@ -4789,7 +4845,7 @@ label {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    max-width: 860px;
+    max-width: 1000px;
     margin: 1rem auto;
     padding: 1.5rem;
     border: 1px solid var(--bs-border-color);
@@ -4820,18 +4876,34 @@ label {
     min-width: 14rem;
 }
 
-// Provider terms shown before a scheme is imported.
+// The finished screen has the width for one-line tile captions; tiles wrap to
+// a new row before a caption would have to.
+.setup-done .setup-stats {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.setup-done .setup-stat_label {
+    white-space: nowrap;
+}
+
+// Confirmation of the provider's terms before a scheme is imported: the
+// checkbox and a link to the terms on one row.
 .scheme-terms {
     display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 1rem;
     margin-top: 0.6rem;
-    padding: 0.7rem 0.9rem;
+    padding: 0.5rem 0.9rem;
     border-radius: 8px;
     border: 1px solid var(--bs-warning-border-subtle);
     background: var(--bs-warning-bg-subtle);
-    font-size: 0.85rem;
-    line-height: 1.45;
+
+    .form-group,
+    .shiny-input-container {
+        flex: 1 1 18rem;
+        margin: 0;
+    }
 
     .checkbox {
         margin: 0;
@@ -4844,30 +4916,9 @@ label {
     }
 }
 
-.scheme-terms_text {
-    >i {
-        margin-right: 0.4rem;
-    }
-
-    a {
-        margin-left: 0.4rem;
-        white-space: nowrap;
-    }
-}
-
-.scheme-terms_ack {
-    color: var(--bs-secondary-color);
-}
-
-.scheme-terms_more {
-    summary {
-        cursor: pointer;
-        color: var(--bs-secondary-color);
-    }
-
-    .scheme-terms_ack {
-        margin-top: 0.35rem;
-    }
+.scheme-terms_link {
+    font-size: 0.85rem;
+    white-space: nowrap;
 }
 
 .species-card_media img {
@@ -4916,14 +4967,9 @@ label {
 // fields line up with the Up / Refresh / Create buttons beside them.
 .fb-toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: stretch;
     gap: 0.5rem;
-
-    .checkbox {
-        align-self: center;
-        margin: 0;
-        white-space: nowrap;
-    }
 
     .shiny-input-container {
         height: 100%;
@@ -4951,6 +4997,34 @@ label {
 
     .shiny-input-container {
         width: 10rem !important;
+    }
+}
+
+// Narrow windows: places above the listing, and only icon and name per row.
+@media (max-width: 640px) {
+    .fb-main {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        height: min(60vh, 520px);
+    }
+
+    .fb-places {
+        flex-direction: row;
+        flex-wrap: wrap;
+        overflow-y: visible;
+    }
+
+    .fb-row {
+        grid-template-columns: 1.6rem minmax(0, 1fr);
+
+        .fb-size,
+        .fb-date {
+            display: none;
+        }
+    }
+
+    .fb-path {
+        min-width: 0;
     }
 }
 
@@ -5113,6 +5187,32 @@ label {
 .fb-status {
     font-size: 0.85rem;
     color: var(--bs-danger);
+}
+
+// In the footer, left of the buttons: it takes the free width and at most two
+// lines, so a message never changes the height of the dialog.
+.modal-footer .fb-status {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-right: auto;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+// The database build overlay: name, elapsed time and Cancel, spaced apart.
+.setup-build {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+
+    .btn {
+        margin-top: 1rem;
+        min-width: 8rem;
+    }
 }
 
 .spinner-custom {
@@ -5910,6 +6010,15 @@ table.dataTable thead>tr>th.sorting {
 // in dark mode.
 .vscomp-dropbox-container {
     background-color: var(--bs-body-bg);
+    // The dropbox is moved to <body> (dropboxWrapper = "body"), out of
+    // `.vscomp-wrapper`, so it does not inherit the themed text colour and
+    // fell back to the library's dark grey - unreadable in dark mode.
+    color: var(--bs-body-color);
+}
+
+.vscomp-option,
+.vscomp-option-text {
+    color: var(--bs-body-color);
 }
 
 .vscomp-dropbox {
@@ -5940,6 +6049,7 @@ table.dataTable thead>tr>th.sorting {
     color: var(--bs-secondary-color);
 
     .vscomp-option-text {
+        color: inherit;
         opacity: 1;
     }
 }

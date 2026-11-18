@@ -8,7 +8,7 @@
 box::use(
   stats[setNames],
   tools[file_ext],
-  utils[head, read.table, unzip],
+  utils[count.fields, head, read.table, unzip],
 )
 
 box::use(
@@ -27,10 +27,11 @@ SCHEME_LIMITS <- list(
   max_mlst_loci = 100L,
   max_locus_name = 100L,
   max_sequence = 100000L,
-  max_entry_bytes = 2 * 1024^3,
-  max_archive_bytes = 64 * 1024^3,
+  max_entry_bytes = 1024^3,
+  max_archive_bytes = 16 * 1024^3,
   max_mlst_file_bytes = 512 * 1024^2,
   max_table_bytes = 256 * 1024^2,
+  max_annotation_cols = 50L,
   batch_size = 250L
 )
 
@@ -91,7 +92,8 @@ is_fasta_path <- function(path) {
 #' @return Character vector of base names with the FASTA extension removed.
 #' @export
 locus_from_path <- function(path) {
-  sub(FASTA_RE, "", basename(path), ignore.case = TRUE)
+  # Archives made on Windows can separate folders with backslashes.
+  sub(FASTA_RE, "", basename(gsub("\\", "/", path, fixed = TRUE)), ignore.case = TRUE)
 }
 
 #' Check Locus Names
@@ -187,6 +189,12 @@ parse_fasta_lines <- function(lines) {
     return(data.frame(id = character(0), sequence = character(0)))
   }
   first <- which(header)[1]
+  # Anything but blank lines before the first header means a damaged file
+  # (a broken header line): skipping it would quietly make the second record
+  # the first, and the first allele of a locus is its reference.
+  if (first > 1L && any(nzchar(trimws(lines[seq_len(first - 1L)])))) {
+    stop("the file does not start with a FASTA header ('>' line)", call. = FALSE)
+  }
   lines <- lines[first:length(lines)]
   header <- header[first:length(header)]
   record <- cumsum(header)
@@ -221,32 +229,90 @@ read_fasta <- function(path, max_bytes = SCHEME_LIMITS$max_mlst_file_bytes) {
       max_bytes %/% 1024^2
     ))
   }
-  parse_fasta_lines(readLines(path, warn = FALSE))
+  lines <- read_lines_capped(path, max_bytes)
+  if (is.null(lines)) {
+    stop(sprintf("'%s' is not a text file.", basename(path)))
+  }
+  if (isTRUE(attr(lines, "truncated"))) {
+    stop(sprintf(
+      "'%s' unpacks to more than the %d MB allowed.",
+      basename(path),
+      max_bytes %/% 1024^2
+    ))
+  }
+  tryCatch(
+    parse_fasta_lines(lines),
+    error = function(e) {
+      stop(sprintf("'%s': %s.", basename(path), conditionMessage(e)), call. = FALSE)
+    }
+  )
 }
 
 # Reads only the first record of a FASTA file, in chunks, so a locus file with
 # thousands of alleles costs no more than its reference. NULL for no record.
-read_first_record <- function(path, chunk = 400L) {
-  con <- file(path, "r")
-  on.exit(close(con))
-  kept <- character(0)
-  repeat {
-    lines <- readLines(con, n = chunk, warn = FALSE)
-    if (!length(lines)) {
-      break
-    }
-    kept <- c(kept, lines)
-    heads <- which(startsWith(kept, ">"))
-    if (length(heads) >= 2L) {
-      kept <- kept[heads[1]:(heads[2] - 1L)]
-      break
-    }
-    if (sum(nchar(kept)) > SCHEME_LIMITS$max_sequence * 2L) {
-      stop("reference sequence is longer than allowed")
-    }
+read_first_record <- function(path) {
+  # The first record plus room for the next header; a file with more but no
+  # second header holds a reference longer than allowed.
+  cap <- SCHEME_LIMITS$max_sequence * 2L + 10000L
+  kept <- read_lines_capped(path, cap)
+  if (is.null(kept)) {
+    stop("file is not a text file")
+  }
+  heads <- which(startsWith(kept, ">"))
+  if (length(heads) >= 2L) {
+    # From the very first line: text before the first header is an error.
+    kept <- kept[seq_len(heads[2] - 1L)]
+  } else if (isTRUE(attr(kept, "truncated"))) {
+    stop("reference sequence is longer than allowed")
   }
   rec <- parse_fasta_lines(kept)
   if (nrow(rec)) rec[1, , drop = FALSE] else NULL
+}
+
+# Text lines as UTF-8: lines that are not valid UTF-8 are taken as Latin-1,
+# the encoding older spreadsheet exports use.
+to_utf8 <- function(lines) {
+  bad <- !validUTF8(lines)
+  lines[bad] <- iconv(lines[bad], "latin1", "UTF-8", sub = "?")
+  Encoding(lines) <- "UTF-8"
+  lines
+}
+
+# Reads at most `max_bytes` of a file as text lines, decompressing gzip on the
+# way: limits apply to what is read, so a small compressed file cannot expand
+# into gigabytes. Returns the lines (CR, BOM and encoding handled) with the
+# attribute "truncated" when the file holds more; NULL for binary content.
+read_lines_capped <- function(path, max_bytes) {
+  con <- gzcon(file(path, "rb"))
+  on.exit(close(con))
+  chunks <- list()
+  total <- 0
+  repeat {
+    chunk <- readBin(con, "raw", min(8 * 1024^2, max_bytes + 1 - total))
+    if (!length(chunk)) {
+      break
+    }
+    chunks[[length(chunks) + 1L]] <- chunk
+    total <- total + length(chunk)
+    if (total > max_bytes) {
+      break
+    }
+  }
+  bytes <- unlist(chunks, use.names = FALSE)
+  truncated <- length(bytes) > max_bytes
+  if (truncated) {
+    bytes <- bytes[seq_len(max_bytes)]
+  }
+  if (any(bytes == as.raw(0L))) {
+    return(NULL)
+  }
+  # Split byte-wise: the text may not be valid UTF-8 until to_utf8() ran.
+  lines <- strsplit(rawToChar(bytes), "\n", fixed = TRUE, useBytes = TRUE)[[1]]
+  lines <- to_utf8(sub("\r$", "", lines, useBytes = TRUE))
+  if (length(lines)) {
+    lines[1] <- sub("^﻿", "", lines[1])
+  }
+  structure(lines, truncated = truncated)
 }
 
 #' Detect a File's Type From Its Content
@@ -267,19 +333,11 @@ sniff_file <- function(path) {
     return("zip")
   }
   # file() decompresses gzip transparently, so a .fasta.gz reads like a FASTA.
-  first <- tryCatch(
-    {
-      con <- file(path, "r")
-      on.exit(close(con))
-      lines <- readLines(con, n = 20L, warn = FALSE)
-      lines[nzchar(trimws(lines))][1]
-    },
-    error = function(e) NULL,
-    warning = function(w) NULL
-  )
-  if (is.null(first)) {
+  lines <- tryCatch(read_lines_capped(path, 65536L), error = function(e) NULL)
+  if (is.null(lines)) {
     return("binary")
   }
+  first <- lines[nzchar(trimws(lines))][1]
   if (!is.na(first) && startsWith(trimws(first), ">")) "fasta" else "text"
 }
 
@@ -296,11 +354,15 @@ zip_fasta_entries <- function(zip_path) {
   if (any(unsafe)) {
     stop("The archive contains entries with unsafe paths and was not opened.")
   }
-  regular <- !grepl("/$", names) & !grepl("(^|/)(__MACOSX|\\.)", names)
+  # Hidden members and macOS resource forks; a leading "./" is no hidden name.
+  regular <- !grepl("/$", names) & !grepl("(^|/)(__MACOSX(/|$)|\\.[^/])", names)
   # FASTA-named members when there are any; otherwise every member, each then
   # checked by content like any other locus file.
   fasta <- regular & is_fasta_path(names)
   entries <- entries[if (any(fasta)) fasta else regular, , drop = FALSE]
+  if (!nrow(entries)) {
+    stop("The ZIP archive contains no files.")
+  }
   if (any(entries$Length > SCHEME_LIMITS$max_entry_bytes)) {
     stop("The archive contains a file larger than allowed.")
   }
@@ -389,12 +451,15 @@ visit_allele_files <- function(files, fun, progress = NULL) {
   n <- nrow(files)
   out <- vector("list", n)
   batches <- split(seq_len(n), ceiling(seq_len(n) / SCHEME_LIMITS$batch_size))
+  # Removed however the visit ends, including when `fun` stops on a file.
+  batch_root <- tempfile("scheme_batches_")
+  on.exit(unlink(batch_root, recursive = TRUE), add = TRUE)
   for (idx in batches) {
     zipped <- idx[!is.na(files$entry[idx])]
     local <- files$path[idx]
     if (length(zipped)) {
-      dir <- tempfile("scheme_batch_")
-      dir.create(dir)
+      dir <- file.path(batch_root, idx[1])
+      dir.create(dir, recursive = TRUE)
       unzip(
         files$path[zipped[1]],
         files = files$entry[zipped],
@@ -438,21 +503,40 @@ read_cg_scheme <- function(paths, progress = NULL) {
   if (src$single) {
     refs <- read_fasta(src$files$path, SCHEME_LIMITS$max_mlst_file_bytes)
     names(refs) <- c("locus", "sequence")
+    # One locus file picked instead of the scheme: its headers are allele
+    # numbers (">1") or the file's locus plus a number (">abcA_1").
+    stem <- sub("[_-]?[0-9]+$", "", refs$locus)
+    if (
+      nrow(refs) > 1L &&
+        (all(grepl("^[0-9]+$", refs$locus)) || all(stem == locus_from_path(src$files$path)))
+    ) {
+      stop(paste(
+        "This file holds the alleles of a single locus, not one reference per locus.",
+        "Select the folder or ZIP archive with one file per locus instead."
+      ))
+    }
   } else {
     read <- visit_allele_files(
       src$files,
       function(locus, file) {
         rec <- tryCatch(read_first_record(file), error = function(e) conditionMessage(e))
-        if (is.character(rec)) rec else if (is.null(rec)) "file holds no sequence" else rec$sequence
+        if (is.character(rec)) {
+          list(sequence = NA_character_, error = rec)
+        } else if (is.null(rec) || !nzchar(rec$sequence)) {
+          list(sequence = NA_character_, error = "file holds no sequence")
+        } else {
+          list(sequence = rec$sequence, error = NA_character_)
+        }
       },
       progress = progress
     )
-    seqs <- unlist(read, use.names = FALSE)
-    is_seq <- grepl("^[A-Z]+$", seqs)
-    issues <- rbind(issues, issue_rows(src$files$locus[!is_seq], seqs[!is_seq]))
+    seqs <- vapply(read, function(r) r$sequence, character(1))
+    errors <- vapply(read, function(r) r$error, character(1))
+    failed <- !is.na(errors)
+    issues <- rbind(issues, issue_rows(src$files$locus[failed], errors[failed]))
     refs <- data.frame(
-      locus = src$files$locus[is_seq],
-      sequence = seqs[is_seq],
+      locus = src$files$locus[!failed],
+      sequence = seqs[!failed],
       stringsAsFactors = FALSE
     )
   }
@@ -469,8 +553,9 @@ read_cg_scheme <- function(paths, progress = NULL) {
     issues <<- rbind(issues, issue_rows(refs$locus[bad], problem))
     refs <<- refs[!bad, , drop = FALSE]
   }
+  # Name collisions are checked last, so a locus is never dropped for
+  # colliding with one that is itself rejected.
   drop(!valid_locus_name(refs$locus), "invalid locus name (letters, digits, . _ - only)")
-  drop(duplicated(pymlst_gene_id(refs$locus)), "locus name collides with an earlier locus")
   drop(!grepl("^[ACGT]+$", refs$sequence), "reference contains characters other than A, C, G, T")
   drop(nchar(refs$sequence) > SCHEME_LIMITS$max_sequence, "reference sequence is too long")
 
@@ -479,6 +564,7 @@ read_cg_scheme <- function(paths, progress = NULL) {
   refs$flipped <- oriented$flipped
   drop(is.na(refs$sequence), "reference is not a complete coding sequence")
   drop(duplicated(refs$sequence), "reference sequence identical to an earlier locus")
+  drop(duplicated(pymlst_gene_id(refs$locus)), "locus name collides with an earlier locus")
 
   if (!nrow(refs)) {
     stop("No usable locus was found in the selected files.")
@@ -545,8 +631,10 @@ read_scheme_table <- function(path) {
     stop(if (kind == "fasta") "This is a FASTA file, not a table." else "The file is not a table.")
   }
 
-  lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
-  lines <- sub("\r$", "", sub("^﻿", "", lines))
+  lines <- read_lines_capped(path, SCHEME_LIMITS$max_table_bytes)
+  if (isTRUE(attr(lines, "truncated"))) {
+    stop("The table is larger than allowed.")
+  }
   lines <- lines[nzchar(trimws(lines))]
   if (length(lines) < 2L) {
     stop("The table has no data rows.")
@@ -557,19 +645,36 @@ read_scheme_table <- function(path) {
     integer(1)
   )
   sep <- if (all(counts == 0L)) "\t" else names(counts)[which.max(counts)]
-  header <- trimws(gsub("^\"|\"$", "", strsplit(lines[1], sep, fixed = TRUE)[[1]]))
-  header <- header[nzchar(header) | seq_along(header) < length(header)]
-  body <- read.table(
-    text = lines[-1],
+  # Tab-separated exports do not quote fields, and a product name such as
+  # 5" end must not open a quote there; comma and semicolon files may quote.
+  quote <- if (sep == "\t") "" else "\""
+  fields <- count.fields(
+    textConnection(lines),
     sep = sep,
-    header = FALSE,
-    quote = "\"",
+    quote = quote,
     comment.char = "",
-    colClasses = "character",
-    na.strings = character(0),
-    fill = TRUE,
-    strip.white = TRUE
+    blank.lines.skip = FALSE
   )
+  if (anyNA(fields)) {
+    stop("The table has an unmatched quote character and cannot be read reliably.")
+  }
+  split <- function(text, ncol) {
+    read.table(
+      text = text,
+      sep = sep,
+      header = FALSE,
+      quote = quote,
+      comment.char = "",
+      colClasses = "character",
+      na.strings = character(0),
+      fill = TRUE,
+      strip.white = TRUE,
+      col.names = paste0("V", seq_len(ncol))
+    )
+  }
+  header <- trimws(unlist(split(lines[1], fields[1]), use.names = FALSE))
+  header <- header[nzchar(header) | seq_along(header) < length(header)]
+  body <- split(lines[-1], max(fields))
   shift <- ncol(body) > length(header) && all(!nzchar(body[[1]]))
   cols <- seq_len(min(ncol(body) - shift, length(header))) + shift
   body <- body[, cols, drop = FALSE]
@@ -591,17 +696,16 @@ match_header <- function(headers, patterns) {
   NA_character_
 }
 
-#' Guess the Columns of a Locus Annotation Table
+#' Guess the Locus Column of an Annotation Table
 #'
-#' @description The locus column is the one sharing the most values with the
-#'   scheme's loci (compared as pyMLST spells them); the descriptive columns are
-#'   matched by their usual header names. Every guess can be overridden.
+#' @description The column naming the most of the scheme's loci, compared the
+#'   way pyMLST stores locus names.
 #'
 #' @param table Data frame from `read_scheme_table()`.
 #' @param loci Character vector of the scheme's locus names.
 #'
-#' @return Named list with `locus`, `gene`, `product`, `start` and `length`
-#'   (column names or `NA`), plus `matched` (loci found under `locus`).
+#' @return A list with `locus` (column name, `NA` when no column names any
+#'   locus) and `matched` (loci that column names).
 #' @export
 guess_locus_columns <- function(table, loci) {
   keys <- unique(pymlst_gene_id(loci))
@@ -610,56 +714,49 @@ guess_locus_columns <- function(table, loci) {
     function(col) sum(unique(pymlst_gene_id(locus_from_path(col))) %in% keys),
     integer(1)
   )
-  locus <- if (length(overlap) && max(overlap) > 0L) names(table)[which.max(overlap)] else NA
-  others <- setdiff(names(table), locus)
+  best <- length(overlap) && max(overlap) > 0L
   list(
-    locus = locus,
-    gene = match_header(others, c("^gene$", "^gene[ _.]?name$", "^name$", "^gene")),
-    product = match_header(others, c("^product$", "^description$", "^annotation$", "product")),
-    start = match_header(others, c("^start$", "^begin$", "start")),
-    length = match_header(others, c("^length$", "^len$", "^size$", "length")),
-    matched = if (is.na(locus)) 0L else unname(max(overlap))
+    locus = if (best) names(table)[which.max(overlap)] else NA_character_,
+    matched = if (best) unname(max(overlap)) else 0L
   )
 }
 
+# Column names the cgMLST overview adds to the locus table itself; an
+# annotation column of the same name is imported under another one.
+OVERVIEW_COLUMNS <- c("Locus", "Allele Count", "Isolates Called", "Missing", ".gene")
+
 #' Build the Locus Annotation Table
 #'
-#' @description Produces the `targets` table the cgMLST overview reads: every
-#'   locus of the scheme, in scheme order, with the mapped annotation where the
-#'   table has one. Loci without annotation keep empty fields, so the overview
-#'   still lists them.
+#' @description Produces the `targets` table the cgMLST overview shows: every
+#'   locus of the scheme, in scheme order, followed by the chosen columns of
+#'   the annotation table where it has a row for the locus. Loci without one
+#'   keep empty fields, so the overview still lists them.
 #'
 #' @param loci Character vector of the scheme's locus names.
 #' @param table Data frame from `read_scheme_table()`, or `NULL`.
-#' @param mapping List as from `guess_locus_columns()`.
+#' @param locus_col Character name of the table's locus column, or `NULL`.
+#' @param columns Character names of the table's columns to import.
 #'
-#' @return A list with `targets` (data frame: `Locus`, `Gene`, `Start`,
-#'   `Length`, `Product`, all character) and `annotated` (loci with a row).
+#' @return A list with `targets` (data frame: `Locus` and one character
+#'   column per imported column) and `annotated` (loci with a row).
 #' @export
-build_targets <- function(loci, table = NULL, mapping = NULL) {
-  out <- data.frame(
-    Locus = loci,
-    Gene = NA_character_,
-    Start = NA_character_,
-    Length = NA_character_,
-    Product = NA_character_,
-    stringsAsFactors = FALSE
-  )
-  has_key <- !is.null(table) && !is.null(mapping) &&
-    !is.na(mapping$locus) && mapping$locus %in% names(table)
-  if (!has_key) {
+build_targets <- function(loci, table = NULL, locus_col = NULL, columns = character(0)) {
+  out <- data.frame(Locus = loci, stringsAsFactors = FALSE)
+  if (is.null(table) || is.null(locus_col) || is.na(locus_col) || !locus_col %in% names(table)) {
     return(list(targets = out, annotated = 0L))
   }
-  key <- pymlst_gene_id(locus_from_path(table[[mapping$locus]]))
+  key <- pymlst_gene_id(locus_from_path(table[[locus_col]]))
   at <- match(pymlst_gene_id(loci), key)
-  fields <- c(Gene = "gene", Start = "start", Length = "length", Product = "product")
-  for (field in names(fields)) {
-    col <- mapping[[fields[[field]]]]
-    if (!is.null(col) && !is.na(col) && col %in% names(table)) {
-      value <- trimws(as.character(table[[col]][at]))
-      value[!is.na(value) & !nzchar(value)] <- NA_character_
-      out[[field]] <- substr(value, 1L, 1000L)
+  columns <- setdiff(intersect(columns, names(table)), locus_col)
+  columns <- head(columns, SCHEME_LIMITS$max_annotation_cols)
+  for (col in columns) {
+    value <- trimws(as.character(table[[col]][at]))
+    value[!is.na(value) & !nzchar(value)] <- NA_character_
+    name <- col
+    while (name %in% c(OVERVIEW_COLUMNS, names(out))) {
+      name <- paste(name, "annotation")
     }
+    out[[name]] <- substr(value, 1L, 1000L)
   }
   list(targets = out, annotated = sum(!is.na(at)))
 }
@@ -677,19 +774,47 @@ build_targets <- function(loci, table = NULL, mapping = NULL) {
 #' @export
 read_mlst_profiles <- function(path) {
   table <- read_scheme_table(path)
+  if (!nrow(table)) {
+    stop("The profile table has no rows.")
+  }
   st <- match_header(names(table), c("^st$", "^sequence[ _]?type$", "^st[ _]?id$"))
   if (is.na(st)) {
-    st <- names(table)[1]
+    stop("The profile table has no ST column (a column named 'ST' holding the sequence types).")
   }
   # A locus column holds allele numbers in most rows; the odd "N" or blank is
-  # tolerated here and its rows are dropped when the scheme is assembled.
+  # tolerated here and its rows are dropped when the scheme is assembled. A
+  # column without a header (a row-number column R or Excel added) is no locus.
   numeric_share <- vapply(table, function(v) mean(grepl("^[0-9]+$", trimws(v))), numeric(1))
+  unnamed <- grepl("^column_[0-9]+$", names(table))
   candidates <- setdiff(
-    names(table)[numeric_share >= 0.5],
+    names(table)[numeric_share >= 0.5 & !unnamed],
     c(st, names(table)[grepl(PROFILE_META_RE, names(table), ignore.case = TRUE)])
   )
   if (!length(candidates)) {
     stop("No locus columns with allele numbers were found in the profile table.")
+  }
+  # Locus names become claMLST gene ids and file names, so a name that is not
+  # one, or two names claMLST or a case-blind file system would merge, stops
+  # the import: leaving a locus out would change which STs can be called.
+  bad <- candidates[!valid_locus_name(candidates)]
+  if (length(bad)) {
+    stop(sprintf(
+      paste(
+        "Locus name %s cannot be used: locus names may only contain letters,",
+        "digits, '.', '_' and '-', and must start with a letter or digit."
+      ),
+      paste0("'", head(bad, 5L), "'", collapse = ", ")
+    ))
+  }
+  clash <- duplicated(tolower(pymlst_gene_id(candidates)))
+  if (any(clash)) {
+    stop(sprintf(
+      paste(
+        "Locus name %s collides with another locus",
+        "('_' and '-' and upper/lower case count as equal)."
+      ),
+      paste0("'", head(candidates[clash], 5L), "'", collapse = ", ")
+    ))
   }
   list(table = table, st = st, candidates = candidates)
 }
@@ -748,6 +873,13 @@ read_mlst_alleles <- function(paths, loci) {
   }
   recs <- recs[has_number, , drop = FALSE]
   recs$allele <- suppressWarnings(as.integer(number))
+  too_big <- is.na(recs$allele)
+  if (any(too_big)) {
+    issues <- rbind(issues, issue_rows(
+      unique(recs$locus[too_big]),
+      "allele number too large, skipped"
+    ))
+  }
 
   bad_seq <- !grepl("^[ACGT]+$", recs$sequence) | nchar(recs$sequence) > SCHEME_LIMITS$max_sequence
   if (any(bad_seq)) {
@@ -762,6 +894,17 @@ read_mlst_alleles <- function(paths, loci) {
     issues <- rbind(issues, issue_rows(unique(recs$locus[dup]), "duplicate allele number skipped"))
   }
   recs <- recs[!dup, c("locus", "allele", "sequence"), drop = FALSE]
+  # claMLST stores every sequence once across all loci and refuses a second
+  # allele with the same sequence, so only the lowest-numbered one is kept.
+  recs <- recs[order(recs$locus, recs$allele, method = "radix"), , drop = FALSE]
+  same_seq <- duplicated(recs$sequence)
+  if (any(same_seq)) {
+    issues <- rbind(issues, issue_rows(
+      unique(recs$locus[same_seq]),
+      "allele with the same sequence as a lower-numbered allele skipped"
+    ))
+  }
+  recs <- recs[!same_seq, , drop = FALSE]
   rownames(recs) <- NULL
   list(alleles = recs, issues = issues)
 }
@@ -813,8 +956,11 @@ assemble_mlst_scheme <- function(profiles, alleles) {
   if (!is.matrix(values)) {
     values <- matrix(values, ncol = length(loci), dimnames = list(NULL, loci))
   }
-  valid <- grepl("^[0-9]+$", st) & apply(values, 1L, function(r) all(grepl("^[0-9]+$", r)))
-  valid <- valid & !duplicated(st)
+  # Up to nine digits fits an integer; "1" and "01" are the same ST.
+  number_re <- "^[0-9]{1,9}$"
+  valid <- grepl(number_re, st) & apply(values, 1L, function(r) all(grepl(number_re, r)))
+  st_number <- suppressWarnings(as.integer(st))
+  valid <- valid & !duplicated(ifelse(valid, st_number, NA), incomparables = NA)
   issues <- alleles$issues
   if (any(!valid)) {
     issues <- rbind(issues, issue_rows(
@@ -830,7 +976,7 @@ assemble_mlst_scheme <- function(profiles, alleles) {
   }
 
   long <- data.frame(
-    st = rep(as.integer(st[valid]), times = length(loci)),
+    st = rep(st_number[valid], times = length(loci)),
     locus = rep(loci, each = sum(valid)),
     allele = as.integer(values[valid, , drop = FALSE]),
     stringsAsFactors = FALSE

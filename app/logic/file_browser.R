@@ -72,23 +72,29 @@ places <- function() {
     stringsAsFactors = FALSE
   )
 
+  # A data frame of no drives cannot take the recycled icon column, so each
+  # group is only added when it has entries.
   if (on_windows()) {
     drives <- paste0(LETTERS, ":/")
     drives <- drives[dir.exists(drives)]
-    rows <- rbind(rows, data.frame(
-      label = paste0("Drive ", substr(drives, 1L, 2L)),
-      path = drives,
-      icon = "hard-drive"
-    ))
+    if (length(drives)) {
+      rows <- rbind(rows, data.frame(
+        label = paste0("Drive ", substr(drives, 1L, 2L)),
+        path = drives,
+        icon = "hard-drive"
+      ))
+    }
   } else {
     if (on_wsl()) {
       mounts <- list.files("/mnt", pattern = "^[a-z]$", full.names = TRUE)
       mounts <- mounts[dir.exists(mounts)]
-      rows <- rbind(rows, data.frame(
-        label = paste0("Windows ", toupper(basename(mounts)), ":"),
-        path = mounts,
-        icon = "hard-drive"
-      ))
+      if (length(mounts)) {
+        rows <- rbind(rows, data.frame(
+          label = paste0("Windows ", toupper(basename(mounts)), ":"),
+          path = mounts,
+          icon = "hard-drive"
+        ))
+      }
     }
     user <- Sys.getenv("USER")
     media <- c(
@@ -179,11 +185,17 @@ path_crumbs <- function(path) {
 #'   downloads without a name or extension, and those must stay pickable.
 #' @param hidden Logical. Include dot-files and dot-folders.
 #'
-#' @return Data frame with `name`, `path`, `is_dir`, `match`, `size` and
-#'   `modified`; the attribute `"truncated"` is `TRUE` when entries were cut
-#'   off.
+#' @return Data frame with `name` (for display, always valid UTF-8), `path`,
+#'   `is_dir`, `match`, `size` and `modified`; the attribute `"truncated"` is
+#'   `TRUE` when entries were cut off, and `"problem"` names a folder that no
+#'   longer exists or cannot be read.
 #' @export
 list_dir <- function(path, files = TRUE, pattern = NULL, hidden = FALSE) {
+  problem <- if (!dir.exists(path)) {
+    "This folder no longer exists."
+  } else if (file.access(path, 4L) != 0L) {
+    "You cannot read this folder."
+  }
   listed <- function(type) {
     tryCatch(
       as.character(dir_ls(path, all = hidden, type = type, fail = FALSE)),
@@ -202,7 +214,9 @@ list_dir <- function(path, files = TRUE, pattern = NULL, hidden = FALSE) {
 
   entries <- c(dirs, plain)
   is_dir <- rep(c(TRUE, FALSE), c(length(dirs), length(plain)))
-  names <- basename(entries)
+  # Linux allows names in any byte encoding; they are shown with "?" for the
+  # bytes that are not UTF-8, while the path itself stays as it is on disk.
+  names <- iconv(basename(entries), "UTF-8", "UTF-8", sub = "?")
   order <- order(!is_dir, tolower(names))
   entries <- entries[order]
   is_dir <- is_dir[order]
@@ -235,7 +249,7 @@ list_dir <- function(path, files = TRUE, pattern = NULL, hidden = FALSE) {
     stringsAsFactors = FALSE
   )
   rownames(out) <- NULL
-  structure(out, truncated = truncated)
+  structure(out, truncated = truncated, problem = problem)
 }
 
 #' Check a File or Folder Name
@@ -254,8 +268,10 @@ name_problem <- function(name) {
   if (nchar(name) > 150L) {
     return("The name is too long.")
   }
-  if (grepl("[<>:\"/\\\\|?*[:cntrl:]]", name)) {
-    return("The name contains characters that are not allowed: < > : \" / \\ | ? *")
+  # $ and ` are legal file name characters, but shells expand them, and the
+  # path is handed to pyMLST through `conda run`.
+  if (grepl("[<>:\"/\\\\|?*$`[:cntrl:]]", name)) {
+    return("The name contains characters that are not allowed: < > : \" / \\ | ? * $ `")
   }
   if (grepl("[ .]$", name) || grepl("^[ ]", name) || name %in% c(".", "..")) {
     return("The name may not start with a space or end with a space or dot.")
@@ -295,7 +311,19 @@ create_folder <- function(parent, name) {
 #' @return Logical scalar.
 #' @export
 dir_writable <- function(path) {
-  !is.na(path) && dir.exists(path) && file.access(path, 2L) == 0L
+  if (is.na(path) || !dir.exists(path)) {
+    return(FALSE)
+  }
+  if (!on_windows()) {
+    return(file.access(path, 2L) == 0L)
+  }
+  # On Windows file.access() only reads the read-only attribute, which says
+  # nothing about folder permissions (Program Files, other users' folders), so
+  # a real file is created and removed.
+  probe <- file.path(path, sprintf(".phylotrace-write-test-%d", Sys.getpid()))
+  ok <- suppressWarnings(file.create(probe, showWarnings = FALSE))
+  if (ok) unlink(probe)
+  isTRUE(ok)
 }
 
 #' Human-Readable File Size

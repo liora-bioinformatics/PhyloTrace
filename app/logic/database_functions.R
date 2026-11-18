@@ -33,7 +33,6 @@ box::use(
     ],
   app / logic / geo[format_coordinates, match_country, parse_coordinates],
   app / logic / logging[log_event],
-  app / logic / species[canonical_species],
   rlang[`%||%`],
 )
 
@@ -98,68 +97,6 @@ order_metadata_cols <- function(cols) {
   rows$called_at <- called_at
   rows[[SOURCE_COL]] <- SOURCE_LOCAL
   rows
-}
-
-#' Repair the Scheme Species Name
-#'
-#' pyMLST writes the cgmlst.org species into `mlst_type` through
-#' `str.lstrip("Species")`, which strips a character *set* rather than a prefix
-#' and so eats the leading letters of every epithet starting with S/p/e/c/i/s
-#' ("Klebsiella pneumoniae/..." arrives as "Klebsiella neumoniae/..."). That
-#' name is what classical MLST scheme lookup, AMR species mapping and the
-#' organism display all read, so it is repaired in place.
-#'
-#' @param db_path Character path to the SQLite database file.
-#' @return Invisibly, the canonical species when it was rewritten, else `NA`.
-#' @export
-migrate_species_name <- function(db_path) {
-  if (
-    is.null(db_path) ||
-      length(db_path) != 1 ||
-      is.na(db_path) ||
-      !file.exists(db_path)
-  ) {
-    return(invisible(NA_character_))
-  }
-
-  con <- connect(db_path)
-  on.exit(dbDisconnect(con))
-
-  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
-  if (!("mlst_type" %in% tables)) {
-    return(invisible(NA_character_))
-  }
-  current <- tryCatch(dbReadTable(con, "mlst_type")$species, error = function(e) NULL)
-  if (is.null(current) || !length(current) || is.na(current[1]) || !nzchar(current[1])) {
-    return(invisible(NA_character_))
-  }
-
-  canonical <- canonical_species(current[1])
-  if (is.na(canonical) || identical(canonical, current[1])) {
-    return(invisible(NA_character_))
-  }
-
-  ok <- tryCatch(
-    {
-      dbExecute(
-        con,
-        "UPDATE mlst_type SET species = ? WHERE species = ?",
-        params = list(canonical, current[1])
-      )
-      TRUE
-    },
-    error = function(e) FALSE
-  )
-  if (!isTRUE(ok)) {
-    return(invisible(NA_character_))
-  }
-
-  log_event(
-    "DB",
-    "migrate species name",
-    sprintf("'%s' -> '%s'", current[1], canonical)
-  )
-  invisible(canonical)
 }
 
 #' Load Scheme Overview Data
