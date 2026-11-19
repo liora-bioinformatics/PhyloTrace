@@ -24,6 +24,8 @@ box::use(
       parse_fasta_headers,
       parse_profile_file,
       read_fasta,
+      read_table_any,
+      replace_ext,
       scheme_loci,
       typing_export_target,
       write_delim_table
@@ -258,21 +260,21 @@ test_that("read_fasta handles multi-line sequences", {
 })
 
 test_that("the export target is a bare table, or a zip when several files are needed", {
-  t <- typing_export_target("/x/out.bin", "xlsx", TRUE, "none")
+  t <- typing_export_target("/x/out.csv", "xlsx", TRUE, "none")
   expect_identical(basename(t$path), "out.xlsx")
   expect_false(t$bundled)
 
   # Sequences cannot live in a workbook, so they force a bundle.
-  t <- typing_export_target("/x/out.bin", "xlsx", TRUE, "fasta")
+  t <- typing_export_target("/x/out.csv", "xlsx", TRUE, "fasta")
   expect_identical(basename(t$path), "out.zip")
   expect_true(t$bundled)
 
   # A delimited export needs one file per table.
-  t <- typing_export_target("/x/out.bin", "tsv", FALSE, "none")
+  t <- typing_export_target("/x/out.csv", "tsv", FALSE, "none")
   expect_identical(basename(t$path), "out.tsv")
   expect_false(t$bundled)
 
-  t <- typing_export_target("/x/out.bin", "tsv", TRUE, "none")
+  t <- typing_export_target("/x/out.csv", "tsv", TRUE, "none")
   expect_identical(basename(t$path), "out.zip")
   expect_true(t$bundled)
 })
@@ -342,4 +344,106 @@ test_that("export refuses an empty isolate selection", {
     export_typing_results(db, file.path(dir, "o.tsv"), character(0)),
     "at least one isolate"
   )
+})
+
+# Drops the `hashes` rows of B's alleles, as typing leaves them until the next
+# load.
+unhash_isolate <- function(db, isolate) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), db)
+  on.exit(DBI::dbDisconnect(con))
+  DBI::dbExecute(
+    con,
+    "DELETE FROM hashes WHERE id IN (SELECT seqid FROM mlst WHERE souche = ?)",
+    params = list(isolate)
+  )
+}
+
+test_that("isolates typed this session export with their hashes", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  full <- build_profile_table(db, c("A", "B"), "hash")
+  fasta <- allele_fasta(db, c("A", "B"))
+  unhash_isolate(db, "B")
+
+  expect_identical(build_profile_table(db, c("A", "B"), "hash"), full)
+  expect_identical(allele_fasta(db, c("A", "B")), fasta)
+})
+
+test_that("a delimited export quotes what needs it and defuses formulas", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  md <- data.frame(
+    isolate = c("A", "B"),
+    note = c("Berlin, Mitte\tward \"3\"\nsecond line", "=HYPERLINK(\"http://x\")"),
+    latitude = c("-12.5", "+3"),
+    contact = c("@lab", "-rf"),
+    stringsAsFactors = FALSE
+  )
+
+  for (format in c("csv", "tsv")) {
+    out <- export_typing_results(
+      db,
+      file.path(dir, paste0("out.", format)),
+      c("A", "B"),
+      metadata = md,
+      format = format
+    )
+    files <- utils::unzip(out$path, exdir = file.path(dir, format))
+    meta_file <- files[grepl("metadata", files)]
+    raw <- paste(readLines(meta_file), collapse = "\n")
+    expect_true(grepl("'=HYPERLINK", raw, fixed = TRUE))
+    expect_true(grepl("'@lab", raw, fixed = TRUE))
+    expect_true(grepl("'-rf", raw, fixed = TRUE))
+
+    back <- read_table_any(meta_file)
+    expect_identical(back$note, md$note, info = format)
+    expect_identical(back$latitude, md$latitude, info = format)
+    expect_identical(back$contact, md$contact, info = format)
+
+    prof <- files[grepl("profile", files)]
+    expect_identical(read_table_any(prof)$isolate, c("A", "B"))
+  }
+})
+
+test_that("a Latin-1 table is read whole, not truncated", {
+  dir <- local_tempdir()
+  f <- file.path(dir, "meta.csv")
+  writeBin(
+    iconv(enc2utf8("isolate,city\nA,München\nB,Köln\n"), "UTF-8", "latin1", toRaw = TRUE)[[1]],
+    f
+  )
+
+  df <- read_table_any(f)
+
+  expect_identical(df$isolate, c("A", "B"))
+  expect_identical(df$city, enc2utf8(c("München", "Köln")))
+})
+
+test_that("replace_ext swaps only known extensions", {
+  expect_identical(replace_ext("/x/run.2026.11", "xlsx"), "/x/run.2026.11.xlsx")
+  expect_identical(replace_ext("/x/run.tsv", "zip"), "/x/run.zip")
+  expect_identical(replace_ext("/x/run.XLSX", "db"), "/x/run.db")
+})
+
+test_that("a folder named like the export target is refused", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  dir.create(file.path(dir, "out.xlsx"))
+
+  expect_error(
+    export_typing_results(db, file.path(dir, "out.xlsx"), "A", format = "xlsx"),
+    "folder"
+  )
+})
+
+test_that("an export replaces an existing file only once it is complete", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  dest <- file.path(dir, "out.tsv")
+  writeLines("old", dest)
+
+  export_typing_results(db, dest, "A", format = "tsv")
+
+  expect_identical(read_table_any(dest)$isolate, "A")
+  expect_false(file.exists(paste0(dest, ".part")))
 })

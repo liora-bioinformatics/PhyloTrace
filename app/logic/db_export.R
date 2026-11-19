@@ -13,25 +13,15 @@
 # indexing structures required for downstream typing.
 
 box::use(
-  DBI[
-    dbDisconnect,
-    dbExecute,
-    dbGetQuery,
-    dbListFields,
-    dbListTables,
-    dbWriteTable,
-    dbBegin,
-    dbCommit,
-    dbRollback
-  ],
+  DBI,
   fs[file_info],
   rlang[`%||%`],
 )
 
 box::use(
   app / logic / amr[AMR_ORGANISM_KEY],
-  app / logic / db_connect[connect],
   app / logic / db_compat[REF_SOUCHE, attach_ro, connect_ro],
+  app / logic / db_connect[connect],
   app / logic / geocode_cache[GEOCODE_TABLE],
   app / logic / logging[log_event],
   app / logic / mlst_scheme[MLST_SCHEME_TABLES],
@@ -97,8 +87,8 @@ available_result_tables <- function(db_path) {
   if (is.null(con)) {
     return(out)
   }
-  on.exit(dbDisconnect(con))
-  tbls <- dbListTables(con)
+  on.exit(DBI$dbDisconnect(con))
+  tbls <- DBI$dbListTables(con)
   out$classical <- all(CLASSICAL_TABLES %in% tbls)
   out$amr <- all(AMR_TABLES %in% tbls)
   out
@@ -124,12 +114,12 @@ exportable_custom_fields <- function(db_path) {
   if (is.null(con)) {
     return(character(0))
   }
-  on.exit(dbDisconnect(con))
+  on.exit(DBI$dbDisconnect(con))
 
-  if (!all(CUSTOM_TABLES %in% dbListTables(con))) {
+  if (!all(CUSTOM_TABLES %in% DBI$dbListTables(con))) {
     return(character(0))
   }
-  dbGetQuery(
+  DBI$dbGetQuery(
     con,
     "SELECT name FROM phylotrace_custom_fields ORDER BY COALESCE(position, id)"
   )$name
@@ -140,7 +130,7 @@ exportable_custom_fields <- function(db_path) {
   if (!length(custom_fields) || !all(CUSTOM_TABLES %in% src_tables)) {
     return(character(0))
   }
-  have <- dbGetQuery(
+  have <- DBI$dbGetQuery(
     con,
     "SELECT name FROM phylotrace_custom_fields ORDER BY COALESCE(position, id)"
   )$name
@@ -162,7 +152,7 @@ METADATA_FIXED_COLS <- c("isolate", "organism")
   if (!length(names)) {
     return(character(0))
   }
-  res <- dbGetQuery(
+  res <- DBI$dbGetQuery(
     con,
     sprintf(
       "SELECT name, sql FROM sqlite_master
@@ -194,7 +184,7 @@ export_preview <- function(
   custom_fields = character(0)
 ) {
   con <- connect_ro(src_path)
-  on.exit(dbDisconnect(con), add = TRUE)
+  on.exit(DBI$dbDisconnect(con), add = TRUE)
 
   # Exclude reference strain key from isolate filter list
   isolates <- setdiff(unique(isolates), REF_SOUCHE)
@@ -208,15 +198,14 @@ export_preview <- function(
       ref_calls = 0L,
       ref_alleles = 0L,
       columns = character(0),
-      custom_fields = character(0),
-      est_bytes = 0
+      custom_fields = character(0)
     ))
   }
 
   .write_selection(con, isolates)
 
   # Compute allele and locus metrics, including the required reference strain
-  counts <- dbGetQuery(
+  counts <- DBI$dbGetQuery(
     con,
     "SELECT COUNT(*) AS calls,
             COUNT(DISTINCT gene) AS loci,
@@ -228,7 +217,7 @@ export_preview <- function(
 
   # The reference strain's own contribution, reported separately so a `.db`
   # export doesn't inflate the isolate-facing tiles.
-  ref_counts <- dbGetQuery(
+  ref_counts <- DBI$dbGetQuery(
     con,
     "SELECT COUNT(*) AS calls, COUNT(DISTINCT seqid) AS alleles
        FROM mlst WHERE souche = ?",
@@ -247,13 +236,34 @@ export_preview <- function(
     } else {
       character(0)
     },
-    custom_fields = .custom_out_fields(con, dbListTables(con), custom_fields)
+    custom_fields = .custom_out_fields(con, DBI$dbListTables(con), custom_fields)
   )
+}
+
+# Clears the provenance claims about results the export leaves out, so a
+# receiving database never reads a classical MLST or AMR status it has no rows
+# for.
+.blank_provenance <- function(con, classical, amr) {
+  cols <- DBI$dbListFields(con, "typing_provenance")
+  drop <- c(
+    if (!classical) grep("^cla_", cols, value = TRUE),
+    if (!amr) grep("^amr_", cols, value = TRUE)
+  )
+  if (!length(drop)) {
+    return(invisible(0L))
+  }
+  invisible(DBI$dbExecute(
+    con,
+    sprintf(
+      "UPDATE main.typing_provenance SET %s",
+      paste(paste(.quote_ident(drop), "= NULL"), collapse = ", ")
+    )
+  ))
 }
 
 # Writes target isolate selections to a temporary SQLite table to optimize query evaluation.
 .write_selection <- function(con, isolates) {
-  dbWriteTable(
+  DBI$dbWriteTable(
     con,
     "sel",
     data.frame(isolate = isolates, stringsAsFactors = FALSE),
@@ -264,10 +274,10 @@ export_preview <- function(
 
 # Determines metadata output columns in source ordering, keeping fixed columns.
 .metadata_out_cols <- function(con, metadata_cols) {
-  if (!"metadata" %in% dbListTables(con)) {
+  if (!"metadata" %in% DBI$dbListTables(con)) {
     return(character(0))
   }
-  have <- dbListFields(con, "metadata")
+  have <- DBI$dbListFields(con, "metadata")
   keep <- union(intersect(METADATA_FIXED_COLS, have), metadata_cols)
   have[have %in% keep]
 }
@@ -329,10 +339,10 @@ export_database <- function(
   }
 
   src <- connect_ro(src_path)
-  on.exit(dbDisconnect(src), add = TRUE)
+  on.exit(DBI$dbDisconnect(src), add = TRUE)
 
-  src_tables <- dbListTables(src)
-  known <- dbGetQuery(src, "SELECT DISTINCT souche FROM mlst")$souche
+  src_tables <- DBI$dbListTables(src)
+  known <- DBI$dbGetQuery(src, "SELECT DISTINCT souche FROM mlst")$souche
   unknown <- setdiff(isolates, known)
   if (length(unknown)) {
     stop(
@@ -369,8 +379,8 @@ export_database <- function(
   ok <- FALSE
   on.exit(
     {
-      if (DBI::dbIsValid(con)) {
-        dbDisconnect(con)
+      if (DBI$dbIsValid(con)) {
+        DBI$dbDisconnect(con)
       }
       if (!ok && file.exists(part)) unlink(part)
     },
@@ -403,7 +413,7 @@ export_database <- function(
   index_ddl <- .source_ddl(
     src,
     "index",
-    dbGetQuery(
+    DBI$dbGetQuery(
       src,
       "SELECT name FROM sqlite_master
         WHERE type = 'index' AND sql IS NOT NULL AND tbl_name = 'mlst'"
@@ -412,10 +422,10 @@ export_database <- function(
 
   # Create tables prior to index build to optimize bulk insertion performance
   for (nm in copy_tables) {
-    dbExecute(con, table_ddl[[nm]])
+    DBI$dbExecute(con, table_ddl[[nm]])
   }
   if (write_meta) {
-    dbExecute(
+    DBI$dbExecute(
       con,
       sprintf(
         "CREATE TABLE metadata (%s)",
@@ -424,23 +434,25 @@ export_database <- function(
     )
   }
 
-  dbBegin(con)
+  DBI$dbBegin(con)
   tryCatch(
     {
       .write_selection(con, isolates)
 
       progress(0.15, "Copying scheme tables …")
       for (nm in intersect(SCHEME_TABLES, src_tables)) {
-        dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
+        DBI$dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
       }
       # Scheme-level settings travel with the scheme. The database identity
       # (`uuid`) does not: an export is a database of its own.
+      # (The test fixtures, unlike a database PhyloTrace builds, have no
+      # settings table.)
       if ("phylotrace_meta" %in% src_tables) {
-        dbExecute(
+        DBI$dbExecute(
           con,
           "CREATE TABLE IF NOT EXISTS phylotrace_meta (key TEXT PRIMARY KEY, value TEXT)"
         )
-        dbExecute(
+        DBI$dbExecute(
           con,
           "INSERT OR REPLACE INTO phylotrace_meta
              SELECT key, value FROM src.phylotrace_meta WHERE key IN (?, ?)",
@@ -450,7 +462,7 @@ export_database <- function(
 
       progress(0.35, "Copying allele calls …")
       # Always carry scheme reference strain to preserve scheme metrics
-      dbExecute(
+      DBI$dbExecute(
         con,
         "INSERT INTO mlst SELECT * FROM src.mlst
           WHERE souche = ? OR souche IN (SELECT isolate FROM sel)",
@@ -459,13 +471,13 @@ export_database <- function(
 
       progress(0.6, "Copying sequences …")
       # Maintain original sequence IDs to ensure consistent cross-referencing
-      dbExecute(
+      DBI$dbExecute(
         con,
         "INSERT INTO sequences SELECT * FROM src.sequences
           WHERE id IN (SELECT DISTINCT seqid FROM mlst)"
       )
       if ("hashes" %in% src_tables) {
-        dbExecute(
+        DBI$dbExecute(
           con,
           "INSERT INTO hashes SELECT * FROM src.hashes
             WHERE id IN (SELECT DISTINCT seqid FROM mlst)"
@@ -475,7 +487,7 @@ export_database <- function(
       if (write_meta) {
         progress(0.8, "Copying metadata …")
         cols <- paste(.quote_ident(meta_cols), collapse = ", ")
-        dbExecute(
+        DBI$dbExecute(
           con,
           sprintf(
             "INSERT INTO metadata (%s) SELECT %s FROM src.metadata
@@ -487,14 +499,14 @@ export_database <- function(
       }
 
       for (nm in geocode_tables) {
-        dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
+        DBI$dbExecute(con, sprintf("INSERT INTO %1$s SELECT * FROM src.%1$s", nm))
       }
 
       # Filter and write optional analysis results for selected isolates
       if (length(result_tables)) {
         progress(0.85, "Copying analysis results …")
         for (nm in result_tables) {
-          dbExecute(
+          DBI$dbExecute(
             con,
             sprintf(
               "INSERT INTO %1$s SELECT * FROM src.%1$s
@@ -503,12 +515,19 @@ export_database <- function(
             )
           )
         }
+        if ("typing_provenance" %in% result_tables) {
+          .blank_provenance(
+            con,
+            classical = "classical_mlst" %in% result_tables,
+            amr = "amr_results" %in% result_tables
+          )
+        }
       }
 
       # Transfer custom field definitions and corresponding isolate values
       if (length(out_custom)) {
         progress(0.87, "Copying custom variables …")
-        dbExecute(
+        DBI$dbExecute(
           con,
           sprintf(
             "INSERT INTO phylotrace_custom_fields
@@ -517,7 +536,7 @@ export_database <- function(
           ),
           params = as.list(out_custom)
         )
-        dbExecute(
+        DBI$dbExecute(
           con,
           "INSERT INTO phylotrace_custom_values
              SELECT * FROM src.phylotrace_custom_values
@@ -526,11 +545,11 @@ export_database <- function(
         )
       }
 
-      dbExecute(con, "DROP TABLE sel")
-      dbCommit(con)
+      DBI$dbExecute(con, "DROP TABLE sel")
+      DBI$dbCommit(con)
     },
     error = function(e) {
-      dbRollback(con)
+      DBI$dbRollback(con)
       stop(e)
     }
   )
@@ -538,10 +557,10 @@ export_database <- function(
   # Construct table indexes after record insertion
   progress(0.9, "Building indexes …")
   for (sql in index_ddl) {
-    dbExecute(con, sql)
+    DBI$dbExecute(con, sql)
   }
 
-  result <- dbGetQuery(
+  result <- DBI$dbGetQuery(
     con,
     "SELECT (SELECT COUNT(DISTINCT souche) FROM mlst WHERE souche != ?) AS isolates,
             (SELECT COUNT(*) FROM sequences) AS alleles,
@@ -549,9 +568,9 @@ export_database <- function(
     params = list(REF_SOUCHE)
   )
 
-  dbExecute(con, "DETACH DATABASE src")
+  DBI$dbExecute(con, "DETACH DATABASE src")
   # Close target connection prior to final file rename operation
-  dbDisconnect(con)
+  DBI$dbDisconnect(con)
   ok <- TRUE
 
   if (!file.rename(part, dest_path)) {

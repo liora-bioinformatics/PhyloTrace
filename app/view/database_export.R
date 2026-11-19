@@ -9,11 +9,9 @@
 box::use(
   bslib[as_fill_carrier, layout_sidebar, sidebar, tooltip],
   DT[datatable, dataTableProxy, DTOutput, JS, renderDT, selectRows],
-  fs[path_home],
   shiny,
-  shinyFiles[parseSavePath, shinyFileSave, shinySaveButton],
   shinyjs[disable, disabled, enable, hidden, toggle, toggleClass, toggleState],
-  shinyWidgets[pickerInput, pickerOptions],
+  shinyWidgets[pickerInput, virtualSelectInput],
   stats[setNames],
   waiter[spin_flower, useWaiter, Waiter],
   rlang[`%||%`],
@@ -47,7 +45,8 @@ box::use(
       typing_export_target,
       typing_preview
     ],
-  app / logic / pymlst[existing_strains]
+  app / logic / pymlst[existing_strains],
+  app / view / file_dialog,
 )
 
 EXPORT_TYPES <- c(
@@ -66,44 +65,6 @@ SEQUENCE_MODES <- c(
   "Single FASTA (>locus|hash)" = "fasta",
   "One FASTA per locus (zip)" = "per_locus"
 )
-
-# One save button per *output extension*, keyed by that extension. Exactly one is
-# shown at a time matching the file the current selection will produce.
-# Separated static buttons are required because shinyFiles binds a file dialog to the
-# element itself, so re-rendering standard UI buttons leaves orphaned dialogs in DOM.
-DEST_BUTTONS <- list(
-  db = list(
-    label = "Choose .db file",
-    title = "Export database as",
-    filetype = list("PhyloTrace database" = "db")
-  ),
-  xlsx = list(
-    label = "Choose .xlsx file",
-    title = "Export typing results as",
-    filetype = list("Excel workbook" = "xlsx")
-  ),
-  tsv = list(
-    label = "Choose .tsv file",
-    title = "Export typing results as",
-    filetype = list("Tab-separated" = "tsv")
-  ),
-  csv = list(
-    label = "Choose .csv file",
-    title = "Export typing results as",
-    filetype = list("Comma-separated" = "csv")
-  ),
-  zip = list(
-    label = "Choose .zip file",
-    title = "Export typing results as a bundle …",
-    filetype = list("Bundle" = "zip")
-  )
-)
-
-# Returns the available root directory choices for shinyFiles dialogs.
-.roots <- function() c(Home = path_home(), Root = "/")
-
-# Collapses leading duplicate slashes produced by shinyFiles relative path parsing.
-.clean_path <- function(p) sub("^/{2,}", "/", as.character(p))
 
 # Renders explanatory tags regarding sha256 allele hash encoding and DNA sequences.
 typing_note <- function(sequences) {
@@ -221,21 +182,7 @@ ui <- function(id) {
               )),
               control_group(
                 "Destination",
-                lapply(names(DEST_BUTTONS), function(btn) {
-                  spec <- DEST_BUTTONS[[btn]]
-                  hidden(shiny$div(
-                    id = ns(paste0("slot_", btn)),
-                    class = "dest-slot",
-                    shinySaveButton(
-                      ns(btn),
-                      spec$label,
-                      title = spec$title,
-                      filetype = spec$filetype,
-                      icon = shiny$icon("folder-open"),
-                      buttonType = "default"
-                    )
-                  ))
-                }),
+                file_dialog$ui(ns("dest"), "Choose file", "folder-open"),
                 shiny$uiOutput(ns("dest_label"), inline = TRUE)
               ),
               control_group(
@@ -290,21 +237,29 @@ server <- function(
 
     typing <- shiny$reactive(identical(input$export_type, "typing"))
 
-    lapply(names(DEST_BUTTONS), function(ext) {
-      shinyFileSave(
-        input,
-        ext,
-        roots = .roots(),
-        filetypes = unlist(DEST_BUTTONS[[ext]]$filetype, use.names = FALSE),
-        session = session
-      )
-      shiny$observeEvent(input[[ext]], {
-        path <- parseSavePath(.roots(), input[[ext]])$datapath
-        if (length(path) && nzchar(path)) {
-          dest_path(.clean_path(path))
+    # Where the export goes: the file dialog in save mode, its extension
+    # following the chosen format, starting next to the loaded database.
+    picked_dest <- file_dialog$server(
+      "dest",
+      mode = "save",
+      title = "Export as",
+      default_name = function() {
+        path <- db_path()
+        if (is.null(path) || is.na(path)) {
+          "export"
+        } else {
+          paste0(sub("\\.db$", "", basename(path)), "_export")
         }
-      })
-    })
+      },
+      extension = function() target_ext(),
+      overwrite = TRUE,
+      start = function() {
+        path <- db_path()
+        if (is.null(path) || is.na(path)) NULL else dirname(path)
+      },
+      reset = session_reset
+    )
+    shiny$observeEvent(picked_dest(), dest_path(picked_dest()))
 
     # Toggle options dependent on export type via shinyjs due to navset injection issues.
     shiny$observeEvent(
@@ -366,19 +321,6 @@ server <- function(
         input$sequences %||% "none"
       )$ext
     })
-
-    shiny$observeEvent(
-      list(target_ext(), ui_mounted()),
-      {
-        for (ext in names(DEST_BUTTONS)) {
-          toggle(
-            paste0("slot_", ext),
-            condition = identical(ext, target_ext())
-          )
-        }
-      },
-      ignoreInit = FALSE
-    )
 
     typing_metadata <- shiny$reactive({
       selected_meta <- input$meta_cols %||% character(0)
@@ -799,21 +741,25 @@ server <- function(
       cols <- custom_choices()
       shiny$req(length(cols) > 0)
 
-      pickerInput(
+      virtualSelectInput(
         ns("custom_fields"),
         label = NULL,
         choices = setNames(cols, field_labels_for(cols)),
         selected = cols,
         multiple = TRUE,
-        options = pickerOptions(
-          actionsBox = TRUE,
-          title = "Select variables …",
-          selectedTextFormat = "count > 3",
-          countSelectedText = paste0("{0} / ", length(cols), " variables"),
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search variables ...",
-          container = "body"
-        )
+        search = TRUE,
+        selectAllOnlyVisible = TRUE,
+        searchPlaceholderText = "Search variables ...",
+        placeholder = "Select variables …",
+        optionsCount = 10,
+        noOfDisplayValues = 2,
+        optionsSelectedText = "variables selected",
+        optionSelectedText = "variable selected",
+        allOptionsSelectedText = "All variables",
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       )
     })
 
@@ -832,21 +778,25 @@ server <- function(
 
     output$meta_picker_ui <- shiny$renderUI({
       cols <- optional_meta()
-      pickerInput(
+      virtualSelectInput(
         ns("meta_cols"),
         label = NULL,
         choices = setNames(cols, field_labels_for(cols)),
         selected = cols,
         multiple = TRUE,
-        options = pickerOptions(
-          actionsBox = TRUE,
-          title = "Select fields …",
-          selectedTextFormat = "count > 3",
-          countSelectedText = paste0("{0} / ", length(cols), " fields"),
-          liveSearch = TRUE,
-          liveSearchPlaceholder = "Search fields ...",
-          container = "body"
-        )
+        search = TRUE,
+        selectAllOnlyVisible = TRUE,
+        searchPlaceholderText = "Search fields ...",
+        placeholder = "Select fields …",
+        optionsCount = 10,
+        noOfDisplayValues = 2,
+        optionsSelectedText = "fields selected",
+        optionSelectedText = "field selected",
+        allOptionsSelectedText = "All fields",
+        dropboxWrapper = "body",
+        showDropboxAsPopup = TRUE,
+        popupDropboxBreakpoint = "10000px",
+        width = "100%"
       )
     })
 
@@ -1033,7 +983,37 @@ server <- function(
       if (ready) enable("export_btn") else disable("export_btn")
     })
 
+    # Export. The file dialog already confirmed replacing the file it was
+    # given; a format chosen afterwards can change the final name, and an
+    # existing file under that name is only replaced after confirmation.
     shiny$observeEvent(input$export_btn, {
+      shiny$req(!is.null(dest_path()))
+      final <- resolved_target()$path
+      confirmed <- identical(
+        normalizePath(final, mustWork = FALSE),
+        normalizePath(dest_path(), mustWork = FALSE)
+      )
+      if (file.exists(final) && !confirmed) {
+        shiny$showModal(shiny$modalDialog(
+          title = "Replace existing file?",
+          sprintf("'%s' already exists in this folder. Replace it?", basename(final)),
+          footer = shiny$tagList(
+            shiny$modalButton("Cancel"),
+            shiny$actionButton(ns("export_replace"), "Replace", class = "btn-danger")
+          )
+        ))
+        return()
+      }
+      run_export()
+    })
+
+    shiny$observeEvent(input$export_replace, {
+      shiny$removeModal()
+      run_export()
+    })
+
+    # Writes the export to the chosen destination.
+    run_export <- function() {
       db_waiter$show()
       on.exit(db_waiter$hide())
 
@@ -1120,7 +1100,7 @@ server <- function(
         type = "message",
         duration = 8
       )
-    })
+    }
 
     shiny$observeEvent(
       session_reset(),

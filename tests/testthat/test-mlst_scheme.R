@@ -69,6 +69,9 @@ test_that("a stored scheme round-trips into the files claMLST builds from", {
   spec <- mlst_scheme$materialize_mlst_scheme(path, out)
   expect_true(spec$resolved)
   expect_identical(spec$repository, "PubMLST (University of Oxford)")
+  expect_identical(spec$version, "2024-12-31")
+  expect_identical(spec$species, "Testus organismus")
+  expect_identical(spec$dir, out)
   expect_identical(
     readLines(file.path(out, "profiles.tsv")),
     c("ST\tadk\tfumC", "1\t1\t1", "2\t1\t2")
@@ -77,12 +80,42 @@ test_that("a stored scheme round-trips into the files claMLST builds from", {
     readLines(file.path(out, "locus", "fumC.fasta")),
     c(">fumC_1", "ATGCCCTAA", ">fumC_2", "ATGCCGTAA")
   )
+  expect_identical(sort(list.files(file.path(out, "locus"))), c("adk.fasta", "fumC.fasta"))
 
-  spec_file <- file.path(dir, "cla.spec")
-  mlst_scheme$write_scheme_spec(spec, spec_file)
-  lines <- readLines(spec_file)
-  expect_true(paste0("local_dir=", out) %in% lines)
-  expect_identical(grep("^locus=", lines, value = TRUE), c("locus=adk", "locus=fumC"))
+  # The same scheme in memory: the profile table the ST lookup reads, as text
+  # like the file, and the sequences the stored calls carry.
+  expect_identical(
+    spec$profiles,
+    data.frame(ST = c("1", "2"), adk = c("1", "1"), fumC = c("1", "2"))
+  )
+  expect_identical(
+    spec$sequences,
+    c("adk\t1" = "ATGAAATAA", "fumC\t1" = "ATGCCCTAA", "fumC\t2" = "ATGCCGTAA")
+  )
+  expect_match(
+    mlst_scheme$describe_resolution(spec),
+    "Toy MLST (version 2024-12-31) from PubMLST (University of Oxford), 2 loci",
+    fixed = TRUE
+  )
+})
+
+test_that("sequences are keyed by the gene id claMLST reports", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+  scheme <- toy_scheme()
+  scheme$loci[2] <- "fum_C"
+  scheme$profiles$locus[scheme$profiles$locus == "fumC"] <- "fum_C"
+  scheme$alleles$locus[scheme$alleles$locus == "fumC"] <- "fum_C"
+  mlst_scheme$store_mlst_scheme(path, scheme, toy_info())
+
+  out <- file.path(dir, "scheme")
+  dir.create(out)
+  spec <- mlst_scheme$materialize_mlst_scheme(path, out)
+  # pyMLST stores fum_C as fum-C; the file keeps the name the profile uses.
+  expect_identical(names(spec$sequences), c("adk\t1", "fum-C\t1", "fum-C\t2"))
+  expect_true(file.exists(file.path(out, "locus", "fum_C.fasta")))
+  expect_identical(names(spec$profiles), c("ST", "adk", "fum_C"))
 })
 
 test_that("storing a scheme again replaces the earlier one", {
@@ -102,17 +135,6 @@ test_that("storing a scheme again replaces the earlier one", {
   on.exit(dbDisconnect(con))
   expect_identical(dbGetQuery(con, "SELECT COUNT(*) AS n FROM cla_scheme_profiles")$n, 2L)
   expect_true(all(mlst_scheme$MLST_SCHEME_TABLES %in% dbListTables(con)))
-})
-
-test_that("spec values cannot smuggle extra keys in through line breaks", {
-  path <- file.path(local_tempdir(), "x.spec")
-  mlst_scheme$write_scheme_spec(
-    list(repository = "A\nlocal_dir=/etc", species = "S", scheme = "X", version = NA,
-      local_dir = "/tmp/ok", loci = "adk"),
-    path
-  )
-  lines <- readLines(path)
-  expect_identical(grep("^local_dir=", lines, value = TRUE), "local_dir=/tmp/ok")
 })
 
 test_that("a stored scheme with unusable locus names is not written out", {

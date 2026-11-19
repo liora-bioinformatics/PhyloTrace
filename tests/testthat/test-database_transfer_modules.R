@@ -3,6 +3,7 @@
 
 box::use(
   shiny[testServer, reactive, reactiveVal],
+  stats[setNames],
   testthat[
     expect_equal,
     expect_false,
@@ -17,19 +18,24 @@ box::use(
   app / view / database_export,
   app / view / database_import,
   app / logic / db_import[isolate_profile_hashes],
+  app / logic / mlst_scheme[mlst_scheme_info, store_mlst_scheme],
 )
 
-# What shinyFiles' JS sends back for a chosen file / save target.
-file_selection <- function(path) {
-  list(root = "Root", files = list(`0` = as.list(strsplit(path, "/")[[1]])))
+# Picks a file in the app's file dialog `id`, as typing its path does.
+pick_file <- function(session, id, path) {
+  do.call(session$setInputs, setNames(list(path), paste0(id, "-path")))
 }
 
-save_selection <- function(path) {
-  list(
-    root = "Root",
-    path = as.list(head(strsplit(path, "/")[[1]], -1L)),
-    name = basename(path)
-  )
+# Saves through the file dialog `id`: opens it, goes to the folder, names the
+# file (the dialog adds the extension) and confirms.
+save_to <- function(session, id, path) {
+  set <- function(name, value) {
+    do.call(session$setInputs, setNames(list(value), paste0(id, "-", name)))
+  }
+  set("open", as.numeric(Sys.time()))
+  set("path", dirname(path))
+  set("name", sub("\\.[^.]+$", "", basename(path)))
+  set("confirm", as.numeric(Sys.time()))
 }
 
 test_that("export module previews and writes the chosen subset", {
@@ -64,8 +70,8 @@ test_that("export module previews and writes the chosen subset", {
       # No destination yet, so nothing can be written.
       expect_true(is.null(dest_path()))
 
-      session$setInputs(db = save_selection(dest))
-      expect_identical(as.character(dest_path()), dest) # picker path is normalised
+      save_to(session, "dest", dest)
+      expect_identical(as.character(dest_path()), dest)
 
       session$setInputs(export_btn = 1)
     }
@@ -84,22 +90,11 @@ test_that("export module previews and writes the chosen subset", {
   )
 })
 
-test_that("one save button per output extension, each mounted exactly once", {
+test_that("the export has one destination dialog and no shinyFiles markup", {
   html <- as.character(database_export$ui("x"))
-
-  # shinyFiles binds a file dialog to the button *element*. A button re-rendered
-  # through renderUI swaps that element out and leaves the old dialog orphaned in
-  # the DOM — an empty window behind the real one. A static button per extension
-  # keeps the tailored dialog without ever rebinding.
-  expect_false(grepl("dest_button_ui", html, fixed = TRUE))
-
-  for (ext in c("db", "xlsx", "tsv", "csv", "zip")) {
-    hits <- gregexpr(paste0('id="x-', ext, '"'), html, fixed = TRUE)[[1]]
-    expect_equal(length(hits[hits > 0]), 1L, info = ext)
-  }
-
-  expect_true(grepl("Export database as", html, fixed = TRUE))
-  expect_true(grepl("Export typing results as", html, fixed = TRUE))
+  hits <- gregexpr('id="x-dest-open"', html, fixed = TRUE)[[1]]
+  expect_equal(length(hits[hits > 0]), 1L)
+  expect_false(grepl("shinyFiles", html, fixed = TRUE))
 })
 
 test_that("the staged controls start hidden and never use conditionalPanel", {
@@ -118,8 +113,7 @@ test_that("the staged controls start hidden and never use conditionalPanel", {
   # the steps that apply.
   for (id in c(
     "content_group",
-    "format_group",
-    paste0("slot_", c("db", "xlsx", "tsv", "csv", "zip"))
+    "format_group"
   )) {
     expect_true(
       grepl(sprintf('shinyjs-hide" id="x-%s"', id), ex, fixed = TRUE),
@@ -193,10 +187,10 @@ test_that("the typing save button drives a profile export", {
         meta_cols = "sample_collection_date",
         file_format = "xlsx",
         value_kind = "hash",
-        sequences = "none",
-        # The workbook button, not the database one.
-        xlsx = save_selection(dest)
+        sequences = "none"
       )
+      # The dialog's extension follows the format: a workbook.
+      save_to(session, "dest", dest)
 
       expect_identical(as.character(dest_path()), dest)
       expect_false(resolved_target()$bundled)
@@ -258,9 +252,9 @@ test_that("export module writes no metadata table when the source has none", {
     {
       session$setInputs(
         isolates = c("A", "B"),
-        meta_cols = character(0),
-        db = save_selection(dest)
+        meta_cols = character(0)
       )
+      save_to(session, "dest", dest)
       expect_identical(preview()$columns, character(0))
       session$setInputs(export_btn = 1)
     }
@@ -288,7 +282,7 @@ test_that("import module gates on compatibility and merges on confirm", {
       # Nothing selected: the panel shows its empty state.
       expect_true(grepl("Select a PhyloTrace database", output$body$html))
 
-      session$setInputs(ext_db = file_selection(peer))
+      pick_file(session, "ext_db", peer)
 
       expect_false(blocked())
       expect_true(all(compat()$status == "pass"))
@@ -336,7 +330,7 @@ test_that("import module blocks an incompatible database", {
     database_import$server,
     args = list(db_path = reactive(local), session_reset = reactive(0L)),
     {
-      session$setInputs(ext_db = file_selection(peer))
+      pick_file(session, "ext_db", peer)
 
       expect_true(blocked())
       expect_true(grepl("cannot be merged", output$body$html))
@@ -358,7 +352,7 @@ test_that("import module surfaces name clashes and honours rename", {
     database_import$server,
     args = list(db_path = reactive(local), session_reset = reactive(0L)),
     {
-      session$setInputs(ext_db = file_selection(peer))
+      pick_file(session, "ext_db", peer)
 
       expect_identical(clashes(), "B")
       # A clash defaults to skip, so only the new isolate C is accepted.
@@ -366,7 +360,7 @@ test_that("import module surfaces name clashes and honours rename", {
 
       # Row order follows classification(); B is row 1, C is row 2.
       idx <- which(classification()$isolate == "B")
-      session$setInputs(ext_db = file_selection(peer))
+      pick_file(session, "ext_db", peer)
       do.call(
         session$setInputs,
         stats::setNames(list("rename"), paste0("action_", idx))
@@ -402,7 +396,7 @@ test_that("import module restores a backup", {
     database_import$server,
     args = list(db_path = reactive(local), session_reset = reactive(0L)),
     {
-      session$setInputs(ext_db = file_selection(peer))
+      pick_file(session, "ext_db", peer)
       session$setInputs(confirm_merge = 1)
       expect_true("C" %in% names(isolate_profile_hashes(local)))
 
@@ -415,4 +409,98 @@ test_that("import module restores a backup", {
   )
 
   expect_identical(isolate_profile_hashes(local), before)
+})
+
+test_that("import module refuses merge and restore while typing runs", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")))
+  build_db(peer, default_peer(), metadata = meta_df(c("B", "C")))
+  busy <- reactiveVal(TRUE)
+
+  testServer(
+    database_import$server,
+    args = list(db_path = reactive(local), session_reset = reactive(0L), typing_active = busy),
+    {
+      pick_file(session, "ext_db", peer)
+      expect_true(grepl("Typing is writing", output$typing_busy_note$html))
+
+      session$setInputs(confirm_merge = 1)
+      expect_equal(session$returned$imported(), 0L)
+      expect_false("C" %in% names(isolate_profile_hashes(local)))
+
+      busy(FALSE)
+      session$setInputs(confirm_merge = 2)
+      expect_equal(session$returned$imported(), 1L)
+
+      busy(TRUE)
+      session$flushReact()
+      expect_true(grepl("Not available while typing", output$restore_ui$html))
+      session$setInputs(backup_pick = backups()[[1]], confirm_restore = 1)
+      expect_equal(session$returned$imported(), 1L)
+    }
+  )
+  expect_true("C" %in% names(isolate_profile_hashes(local)))
+})
+
+test_that("import module offers the peer's classical MLST scheme and adopts it", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")))
+  build_db(peer, default_peer(), metadata = meta_df(c("B", "C")))
+  store_mlst_scheme(
+    peer,
+    list(
+      loci = c("adk", "gyr"),
+      profiles = data.frame(st = 1L, locus = c("adk", "gyr"), allele = 1L),
+      alleles = data.frame(locus = c("adk", "gyr"), allele = 1L, sequence = c("ACGT", "TTGA"))
+    ),
+    list(name = "Testus MLST", version = "1")
+  )
+
+  testServer(
+    database_import$server,
+    args = list(db_path = reactive(local), session_reset = reactive(0L)),
+    {
+      pick_file(session, "ext_db", peer)
+      expect_true(scheme_relation()$adopt_offer)
+      expect_true(grepl("Adopt the imported database", output$results_picker_ui$html))
+
+      session$setInputs(adopt_mlst_scheme = TRUE, confirm_merge = 1)
+      expect_equal(session$returned$imported(), 1L)
+    }
+  )
+  expect_identical(mlst_scheme_info(local)$name, "Testus MLST")
+})
+
+test_that("the loaded database is hashed into a copy once per selection, not per render", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")), with_hashes = FALSE)
+  peer_alleles <- default_peer()
+  peer_alleles$B[["g2"]] <- seqv("DIVERGED")
+  build_db(peer, peer_alleles, metadata = meta_df(c("B", "C")))
+
+  testServer(
+    database_import$server,
+    args = list(db_path = reactive(local), session_reset = reactive(0L)),
+    {
+      pick_file(session, "ext_db", peer)
+      first <- local_prep()$path
+      expect_false(identical(first, local))
+      expect_true(nchar(output$body$html) > 0L)
+
+      idx <- which(classification()$isolate == "B")
+      do.call(session$setInputs, stats::setNames(list("rename"), paste0("action_", idx)))
+      expect_true(nchar(output$body$html) > 0L)
+      expect_identical(local_prep()$path, first)
+
+      # A new selection releases the old copy.
+      pick_file(session, "ext_db", peer)
+      expect_false(file.exists(first))
+    }
+  )
 })

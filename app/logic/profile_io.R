@@ -22,11 +22,22 @@
 #           import (see db_staging.R).
 
 box::use(
-  RSQLite[SQLite],
-  DBI[dbConnect, dbDisconnect, dbGetQuery, dbListTables, dbWriteTable],
-  stats[setNames],
-  utils[read.table, write.table],
+  DBI[dbDisconnect, dbGetQuery, dbListTables, dbWriteTable],
+  openssl[sha256],
+  openxlsx[
+    addWorksheet,
+    createWorkbook,
+    freezePane,
+    getSheetNames,
+    read.xlsx,
+    saveWorkbook,
+    writeData,
+  ],
   rlang[`%||%`],
+  stats[setNames],
+  tools[file_ext, file_path_sans_ext],
+  utils[read.table],
+  zip[zip],
 )
 
 box::use(
@@ -136,12 +147,6 @@ build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   con <- connect_ro(db_path)
   on.exit(dbDisconnect(con), add = TRUE)
 
-  if (identical(value_kind, "hash") && !"hashes" %in% dbListTables(con)) {
-    stop(
-      "This database has no `hashes` table; reload it to hash the sequences."
-    )
-  }
-
   isolates <- setdiff(unique(isolates), REF_SOUCHE)
   loci <- scheme_loci(db_path)
 
@@ -158,18 +163,61 @@ build_profile_table <- function(db_path, isolates, value_kind = "hash") {
   # The isolate list can exceed SQLite's bound-parameter limit, so the selection
   # is joined in as a temp table (the idiom db_export.R already uses). Temp
   # tables work fine on a read-only connection.
-  sql <- if (identical(value_kind, "hash")) {
-    "SELECT m.souche AS isolate, m.gene AS gene, h.hash AS value
-       FROM mlst m
-       JOIN sel ON sel.isolate = m.souche
-       JOIN hashes h ON h.id = m.seqid"
+  if (identical(value_kind, "hash")) {
+    long <- dbGetQuery(
+      con,
+      sprintf(
+        "SELECT m.souche AS isolate, m.gene AS gene, m.seqid AS seqid, %s AS value
+           FROM mlst m
+           JOIN sel ON sel.isolate = m.souche
+           %s",
+        if (.has_hashes(con)) "h.hash" else "NULL",
+        if (.has_hashes(con)) "LEFT JOIN hashes h ON h.id = m.seqid" else ""
+      )
+    )
+    long$value <- fill_missing_hashes(con, long$seqid, long$value)
   } else {
-    "SELECT m.souche AS isolate, m.gene AS gene, CAST(m.seqid AS TEXT) AS value
-       FROM mlst m
-       JOIN sel ON sel.isolate = m.souche"
+    long <- dbGetQuery(
+      con,
+      "SELECT m.souche AS isolate, m.gene AS gene, CAST(m.seqid AS TEXT) AS value
+         FROM mlst m
+         JOIN sel ON sel.isolate = m.souche"
+    )
   }
 
-  long_to_wide(dbGetQuery(con, sql), isolates, loci)
+  long_to_wide(long, isolates, loci)
+}
+
+# TRUE when the database has a `hashes` table.
+.has_hashes <- function(con) "hashes" %in% dbListTables(con)
+
+# Typing adds sequences without hashing them; `hashes` catches up only when the
+# database is next loaded. Computes the missing ones (`NA` in `hash`) from the
+# sequences instead, so an export never comes out with blank calls.
+fill_missing_hashes <- function(con, seqid, hash) {
+  hash <- as.character(hash)
+  missing <- unique(seqid[is.na(hash)])
+  if (!length(missing)) {
+    return(hash)
+  }
+  dbWriteTable(
+    con,
+    "missing_ids",
+    data.frame(id = missing),
+    temporary = TRUE,
+    overwrite = TRUE
+  )
+  seqs <- dbGetQuery(
+    con,
+    "SELECT s.id AS id, s.sequence AS sequence
+       FROM sequences s JOIN missing_ids m ON m.id = s.id
+      WHERE s.sequence IS NOT NULL"
+  )
+  if (nrow(seqs)) {
+    fill <- is.na(hash)
+    hash[fill] <- as.character(sha256(seqs$sequence))[match(seqid[fill], seqs$id)]
+  }
+  hash
 }
 
 # Write isolate list into temporary selection table to prevent SQLite parameter caps
@@ -235,17 +283,24 @@ allele_fasta <- function(db_path, isolates) {
 
   res <- dbGetQuery(
     con,
-    "SELECT DISTINCT m.gene AS gene, h.hash AS hash, s.sequence AS sequence
-       FROM mlst m
-       JOIN sel ON sel.isolate = m.souche
-       JOIN hashes h ON h.id = m.seqid
-       JOIN sequences s ON s.id = m.seqid
-      ORDER BY m.gene, h.hash"
+    sprintf(
+      "SELECT DISTINCT m.gene AS gene, %s AS hash, s.sequence AS sequence
+         FROM mlst m
+         JOIN sel ON sel.isolate = m.souche
+         JOIN sequences s ON s.id = m.seqid
+         %s",
+      if (.has_hashes(con)) "h.hash" else "NULL",
+      if (.has_hashes(con)) "LEFT JOIN hashes h ON h.id = m.seqid" else ""
+    )
   )
 
   if (!nrow(res)) {
     return(character(0))
   }
+  # Hashed straight from the sequence that is already in hand.
+  miss <- is.na(res$hash)
+  res$hash[miss] <- as.character(sha256(res$sequence[miss]))
+  res <- res[order(res$gene, res$hash), , drop = FALSE]
 
   paste0(">", res$gene, "|", res$hash, "\n", res$sequence)
 }
@@ -312,25 +367,68 @@ format_profile <- function(profile, preset = "phylotrace") {
   )
 }
 
+# A cell a spreadsheet would run as a formula (CSV injection), unless it is
+# plainly a number such as "-12.5".
+.FORMULA_RE <- "^[=+@\t\r-]"
+.NUMBER_RE <- "^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][+-]?[0-9]+)?$"
+
+#' Make Cells Safe to Open in a Spreadsheet
+#'
+#' Prefixes a single quote to every cell starting with `=`, `+`, `-`, `@`, a
+#' tab or a carriage return that is not a plain number, so a spreadsheet shows
+#' it as text instead of running it as a formula. `unguard_cells()` undoes it.
+#'
+#' @param x Character vector.
+#' @return `x`, guarded.
+#' @export
+guard_cells <- function(x) {
+  hit <- !is.na(x) & grepl(.FORMULA_RE, x) & !grepl(.NUMBER_RE, x)
+  x[hit] <- paste0("'", x[hit])
+  x
+}
+
+#' Undo `guard_cells()`
+#'
+#' Strips the single quote `guard_cells()` put in front of a cell, so a table
+#' PhyloTrace exported reads back with the values it was written from.
+#'
+#' @param x Character vector.
+#' @return `x` without the guard quote.
+#' @export
+unguard_cells <- function(x) {
+  hit <- !is.na(x) & grepl("^'[=+@\t\r-]", x)
+  x[hit] <- substring(x[hit], 2L)
+  x
+}
+
+# Quotes a field when it holds the separator, a quote or a line break (RFC
+# 4180), doubling embedded quotes; everything else is written bare so tools
+# that do not understand quoting still read a plain profile.
+.quote_field <- function(x, sep) {
+  x[is.na(x)] <- ""
+  needs <- grepl(sep, x, fixed = TRUE) | grepl("[\"\r\n]", x)
+  x[needs] <- paste0('"', gsub('"', '""', x[needs], fixed = TRUE), '"')
+  x
+}
+
 #' Write Delimited Data Frame File
 #'
-#' Writes unquoted data frame to disk with specified delimiter[cite: 12].
+#' Writes a data frame as UTF-8 text. A field is quoted only where it has to
+#' be (it holds the separator, a quote or a line break), and cells a
+#' spreadsheet would run as a formula are guarded with `guard_cells()`.
 #'
-#' @param df Target data frame[cite: 12].
-#' @param path Destination file path[cite: 12].
-#' @param sep Field separator character[cite: 12].
-#' @return Invalidation path invisibly[cite: 12].
+#' @param df Target data frame.
+#' @param path Destination file path.
+#' @param sep Field separator character.
+#' @return `path`, invisibly.
 #' @export
 write_delim_table <- function(df, path, sep = "\t") {
-  write.table(
-    df,
-    path,
-    sep = sep,
-    quote = FALSE,
-    row.names = FALSE,
-    col.names = TRUE,
-    na = ""
-  )
+  cols <- lapply(df, function(x) .quote_field(guard_cells(as.character(x)), sep))
+  header <- paste(.quote_field(guard_cells(names(df)), sep), collapse = sep)
+  body <- if (nrow(df)) do.call(paste, c(unname(cols), sep = sep)) else character(0)
+  con <- file(path, open = "wb")
+  on.exit(close(con))
+  writeLines(enc2utf8(c(header, body)), con, sep = "\n", useBytes = TRUE)
   invisible(path)
 }
 
@@ -357,13 +455,13 @@ write_xlsx_sheets <- function(sheets, path) {
     )
   }
 
-  wb <- openxlsx::createWorkbook()
+  wb <- createWorkbook()
   for (nm in names(sheets)) {
-    openxlsx::addWorksheet(wb, nm)
-    openxlsx::writeData(wb, nm, sheets[[nm]])
-    openxlsx::freezePane(wb, nm, firstRow = TRUE, firstCol = TRUE)
+    addWorksheet(wb, nm)
+    writeData(wb, nm, sheets[[nm]])
+    freezePane(wb, nm, firstRow = TRUE, firstCol = TRUE)
   }
-  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+  saveWorkbook(wb, path, overwrite = TRUE)
   invisible(path)
 }
 
@@ -461,16 +559,22 @@ typing_export_target <- function(
   )
 }
 
+# Extensions replace_ext() swaps out; any other dotted ending is part of the name.
+EXPORT_EXTENSIONS <- c("db", "xlsx", "xls", "tsv", "csv", "tab", "txt", "zip")
+
 #' Replace Extension of Output File Path
 #'
-#' Helper function to swap string file extensions safely[cite: 12].
+#' Swaps a known export extension for `ext`, or appends `ext` when the name
+#' ends in anything else, so a dotted name such as "run.2026.11" keeps its
+#' last part.
 #'
-#' @param path Original path string[cite: 12].
-#' @param ext Replacement extension string[cite: 12].
-#' @return String with modified extension[cite: 12].
+#' @param path Original path string.
+#' @param ext Replacement extension string.
+#' @return String with modified extension.
 #' @export
 replace_ext <- function(path, ext) {
-  paste0(sub("\\.[A-Za-z0-9]{1,5}$", "", path), ".", ext)
+  known <- paste0("\\.(", paste(EXPORT_EXTENSIONS, collapse = "|"), ")$")
+  paste0(sub(known, "", path, ignore.case = TRUE), ".", ext)
 }
 
 #' Execute Typing Profile Export Pipeline
@@ -512,19 +616,22 @@ export_typing_results <- function(
     !is.null(metadata),
     sequences
   )
+  if (dir.exists(target$path)) {
+    stop("The export target is a folder. Choose a file name.")
+  }
 
   progress(0.1, "Building profile table …")
   profile <- build_profile_table(db_path, isolates, value_kind)
   formatted <- format_profile(profile, preset)
 
-  # Assemble into a staging directory, then either move the single file out or
-  # zip the directory. Nothing lands at `dest_path` until it is complete.
-  stage <- file.path(tempdir(), paste0("phylotrace_export_", Sys.getpid()))
-  unlink(stage, recursive = TRUE)
+  # Assemble into a staging directory of this export's own, then either move
+  # the single file out or zip the directory. Nothing lands at `dest_path`
+  # until it is complete.
+  stage <- tempfile("phylotrace_export_")
   dir.create(stage, recursive = TRUE)
   on.exit(unlink(stage, recursive = TRUE), add = TRUE)
 
-  base <- tools::file_path_sans_ext(basename(target$path))
+  base <- file_path_sans_ext(basename(target$path))
   written <- character(0)
 
   if (identical(format, "xlsx")) {
@@ -570,20 +677,26 @@ export_typing_results <- function(
 
   progress(0.9, "Finalising …")
 
+  # Written next to the target as `.part` and renamed over it, so an existing
+  # file is only replaced by a complete one.
+  part <- file.path(
+    normalizePath(dirname(target$path), mustWork = FALSE),
+    paste0(basename(target$path), ".part")
+  )
+  unlink(part)
+  on.exit(unlink(part), add = TRUE)
   if (target$bundled) {
-    zip::zip(
-      zipfile = target$path,
+    zip(
+      zipfile = part,
       files = basename(written),
       root = stage,
       mode = "cherry-pick"
     )
-  } else {
-    if (file.exists(target$path)) {
-      unlink(target$path)
-    }
-    if (!file.copy(written[[1]], target$path)) {
-      stop("Could not write to ", target$path)
-    }
+  } else if (!file.copy(written[[1]], part)) {
+    stop("Could not write to ", target$path)
+  }
+  if (!file.rename(part, target$path)) {
+    stop("Could not write to ", target$path)
   }
 
   progress(1, "Done")
@@ -647,7 +760,8 @@ detect_value_kind <- function(values) {
 #'
 #' @param path Target input profile file path[cite: 12].
 #' @param loci Known scheme locus names for alignment[cite: 12].
-#' @return List describing parsed long data frame, value kinds, and locus stats[cite: 12].
+#' @return List describing parsed long data frame, value kinds, and locus stats[cite: 12];
+#'   `duplicate_isolates` names isolates the table lists more than once.
 #' @export
 parse_profile_file <- function(path, loci) {
   raw <- read_table_any(path)
@@ -704,6 +818,7 @@ parse_profile_file <- function(path, loci) {
   list(
     long = long,
     value_kind = detect_value_kind(long$value),
+    duplicate_isolates = unique(isolates[duplicated(isolates)]),
     loci_as_rows = loci_as_rows,
     isolates = unique(long$isolate),
     loci_seen = loci_seen,
@@ -721,10 +836,10 @@ parse_profile_file <- function(path, loci) {
 #' @return Character data frame of target table[cite: 12].
 #' @export
 read_table_any <- function(path, sheet = NULL) {
-  ext <- tolower(tools::file_ext(path))
+  ext <- tolower(file_ext(path))
 
   if (ext %in% c("xlsx", "xlsm")) {
-    sheets <- openxlsx::getSheetNames(path)
+    sheets <- getSheetNames(path)
     pick <- sheet %||% sheets[[1]]
     if (!pick %in% sheets) {
       stop(
@@ -734,7 +849,7 @@ read_table_any <- function(path, sheet = NULL) {
         paste(sheets, collapse = ", ")
       )
     }
-    df <- openxlsx::read.xlsx(
+    df <- read.xlsx(
       path,
       sheet = pick,
       colNames = TRUE,
@@ -744,7 +859,8 @@ read_table_any <- function(path, sheet = NULL) {
     return(df)
   }
 
-  first <- readLines(path, n = 1L, warn = FALSE)
+  lines <- read_text_lines(path)
+  first <- lines[1]
   sep <- if (
     length(first) &&
       lengths(regmatches(first, gregexpr("\t", first))) >=
@@ -755,16 +871,58 @@ read_table_any <- function(path, sheet = NULL) {
     ","
   }
 
-  read.table(
-    path,
+  df <- read.table(
+    text = lines,
     sep = sep,
     header = TRUE,
     quote = "\"",
     comment.char = "",
     check.names = FALSE,
     colClasses = "character",
-    na.strings = character(0)
+    na.strings = character(0),
+    encoding = "UTF-8"
   )
+  names(df) <- unguard_cells(names(df))
+  df[] <- lapply(df, unguard_cells)
+  df
+}
+
+#' Read a Text File as UTF-8 Lines
+#'
+#' Reads the raw bytes, drops a UTF-8 byte order mark and line-end carriage
+#' returns, and converts every line that is not valid UTF-8 from Windows-1252
+#' (Latin-1 where a byte is undefined there). Nothing is dropped silently: a
+#' file holding binary data is refused.
+#'
+#' @param path Path to the file.
+#' @return Character vector of lines, marked UTF-8.
+#' @export
+read_text_lines <- function(path) {
+  size <- file.size(path)
+  if (is.na(size)) {
+    stop("The file no longer exists.")
+  }
+  bytes <- readBin(path, "raw", n = size)
+  if (length(bytes) >= 3L && identical(bytes[1:3], as.raw(c(0xef, 0xbb, 0xbf)))) {
+    bytes <- bytes[-(1:3)]
+  }
+  if (any(bytes == as.raw(0L))) {
+    stop("This is not a text table: the file contains binary data.")
+  }
+  if (!length(bytes)) {
+    stop("The file is empty.")
+  }
+  lines <- strsplit(rawToChar(bytes), "\n", fixed = TRUE, useBytes = TRUE)[[1]]
+  lines <- sub("\r$", "", lines, useBytes = TRUE)
+  bad <- !validUTF8(lines)
+  if (any(bad)) {
+    converted <- iconv(lines[bad], from = "CP1252", to = "UTF-8")
+    fallback <- is.na(converted)
+    converted[fallback] <- iconv(lines[bad][fallback], from = "latin1", to = "UTF-8")
+    lines[bad] <- converted
+  }
+  Encoding(lines) <- "UTF-8"
+  lines
 }
 
 #' Read Input FASTA File into Data Frame

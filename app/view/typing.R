@@ -43,14 +43,6 @@ box::use(
     accordion_panel_close,
     as_fill_item,
   ],
-  shinyFiles[
-    shinyFilesButton,
-    shinyFileChoose,
-    parseFilePaths,
-    shinyDirButton,
-    shinyDirChoose,
-    parseDirPath,
-  ],
   shinyWidgets[progressBar, updateProgressBar],
   shinyjs[
     runjs,
@@ -72,7 +64,6 @@ box::use(
     JS
   ],
   htmltools[htmlEscape],
-  fs[path_home],
 )
 box::use(
   app / logic / db_connect[LIVE_BUSY_TIMEOUT_MS],
@@ -89,7 +80,6 @@ box::use(
       describe_resolution,
       materialize_mlst_scheme,
       mlst_scheme_info,
-      write_scheme_spec,
     ],
   app /
     logic /
@@ -98,18 +88,16 @@ box::use(
       CG_IDENTITY_DEFAULT,
       CLA_COVERAGE_DEFAULT,
       CLA_IDENTITY_DEFAULT,
-      conda_env,
-      start_typing,
-      parse_typing_log,
-      parse_clamlst_meta,
-      parse_tool_meta,
-      read_st_profiles,
-      clamlst_refs,
       cg_outcome,
+      clamlst_alembic,
+      conda_env,
       db_species,
-      store_clamlst_results,
       existing_strains,
+      parse_tool_meta,
+      parse_typing_log,
       scheme_size,
+      start_typing,
+      store_clamlst_results,
     ],
   app /
     logic /
@@ -128,6 +116,7 @@ box::use(
       resolve_hash_workers,
       store_genome_hash,
     ],
+  app / view / file_dialog,
 )
 
 # Accepted assembly extensions, mirroring the glob in loop-pymlst.sh.
@@ -571,28 +560,11 @@ ui <- function(id) {
             class = "row g-2",
             div(
               class = "col-6",
-              shinyFilesButton(
-                ns("genome_file"),
-                "File",
-                title = "Choose a genome assembly",
-                icon = icon("file-lines"),
-                buttonType = "default",
-                multiple = FALSE,
-                class = "w-100",
-                root = path_home()
-              )
+              file_dialog$ui(ns("genome_file"), "File", "file-lines", width = "100%")
             ),
             div(
               class = "col-6",
-              shinyDirButton(
-                ns("genome_dir"),
-                "Folder",
-                title = "Choose a folder of assemblies",
-                icon = icon("folder-open"),
-                buttonType = "default",
-                class = "w-100",
-                root = path_home()
-              )
+              file_dialog$ui(ns("genome_dir"), "Folder", "folder-open", width = "100%")
             )
           )
         ),
@@ -808,8 +780,8 @@ ui <- function(id) {
 #' @export
 server <- function(
   id,
-  db_path = shiny::reactive(NULL),
-  session_reset = shiny::reactive(0L),
+  db_path = reactive(NULL),
+  session_reset = reactive(0L),
   db_rev = db_events$new_bus()
 ) {
   moduleServer(id, function(input, output, session) {
@@ -839,14 +811,15 @@ server <- function(
       proc = NULL,
       log_file = NULL,
       # Path to this run's interim claMLST reference DB (built by the typing
-      # script, read once for reference sequences / metadata, then deleted).
+      # script from the stored scheme, read once for its schema marker, then
+      # deleted).
       cla_db = NULL,
-      # Path to the resolved scheme's download spec, handed to the script.
-      cla_spec = NULL,
-      # This run's scheme profile table, read back once the build step is over.
-      cla_profiles = NULL,
-      # This run's claMLST reference sequences / schema marker, read once.
-      cla_refs = NULL,
+      # The stored scheme this run types against, as materialize_mlst_scheme()
+      # read it at launch: its name / version / repository for provenance, the
+      # profile table for the ST lookup and the allele sequences to store.
+      cla_scheme = NULL,
+      # The interim reference DB's pyMLST schema marker, read once.
+      cla_alembic = NULL,
       # The database's cgMLST scheme context, stamped onto every isolate typed
       # in this run.
       scheme_context = NULL,
@@ -898,12 +871,12 @@ server <- function(
     }
     reset_persisted()
 
-    # Delete an interim claMLST reference DB (SQLite side files, the scheme's
-    # profile table and the scheme files it was built from included). Safe to
-    # call with NULL / NA / a non-existent path.
+    # Delete an interim claMLST reference DB (SQLite side files and the scheme
+    # files it was built from included). Safe to call with NULL / NA / a
+    # non-existent path.
     cleanup_cla_db <- function(path) {
       if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
-        unlink(c(path, paste0(path, c("-wal", "-shm", ".profiles.tsv", ".spec"))))
+        unlink(c(path, paste0(path, c("-wal", "-shm"))))
         unlink(paste0(path, ".scheme"), recursive = TRUE)
       }
     }
@@ -914,6 +887,18 @@ server <- function(
       if (!is.null(path) && length(path) == 1 && !is.na(path) && nzchar(path)) {
         unlink(path, recursive = TRUE)
       }
+    }
+
+    # One detail of the stored scheme this run types against (scheme,
+    # repository, version, species), NA when the run has none.
+    cla_field <- function(field) {
+      value <- Typing$cla_scheme[[field]]
+      if (length(value) == 1L) as.character(value) else NA_character_
+    }
+
+    # The schema marker of this run's interim claMLST reference, NA until read.
+    cla_alembic <- function() {
+      if (is.null(Typing$cla_alembic)) NA_character_ else Typing$cla_alembic
     }
 
     # Writes the results of this run into the mother database, one isolate and
@@ -979,9 +964,9 @@ server <- function(
       touched <- if (retry) results$strain[ready] else character(0)
 
       # Classical MLST: one row per locus, plus the per-allele reference sequence
-      # and schema marker read from this run's interim reference DB and the
-      # run-level provenance the script logged (repository actually used, scheme,
-      # reference release, pyMLST version, thresholds).
+      # from the stored scheme, the schema marker of this run's interim reference
+      # DB and the run-level provenance (scheme, repository and release as
+      # stored, pyMLST version as logged, thresholds).
       cla_rows <- which(ready & !is.na(results$cla_status))
       cla_rows <- cla_rows[vapply(
         results$strain[cla_rows],
@@ -990,29 +975,26 @@ server <- function(
         step = "cla"
       )]
       if (isTRUE(Typing$cla_enabled) && length(cla_rows)) {
-        meta <- parse_clamlst_meta(lines)
-        # The reference DB holds every allele of the scheme, so it is read once
-        # per run rather than once per isolate.
-        if (is.null(Typing$cla_refs) && !is.null(Typing$cla_db)) {
-          Typing$cla_refs <- clamlst_refs(Typing$cla_db)
+        if (is.null(Typing$cla_alembic) && !is.null(Typing$cla_db)) {
+          Typing$cla_alembic <- clamlst_alembic(Typing$cla_db)
         }
+        refs <- list(
+          sequences = Typing$cla_scheme$sequences,
+          alembic = cla_alembic()
+        )
+        pymlst_version <- parse_tool_meta(lines)$pymlst
         for (i in cla_rows) {
           stored <- tryCatch(
             store_clamlst_results(
               db_path = db_path(),
               results = results[i, , drop = FALSE],
-              cla_db_path = if (is.null(Typing$cla_db)) {
-                NA_character_
-              } else {
-                Typing$cla_db
-              },
               identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
               coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
-              repository = meta$repository,
-              scheme = meta$scheme,
-              scheme_version = meta$scheme_version,
-              pymlst_version = meta$pymlst_version,
-              refs = Typing$cla_refs
+              repository = cla_field("repository"),
+              scheme = cla_field("scheme"),
+              scheme_version = cla_field("version"),
+              pymlst_version = pymlst_version,
+              refs = refs
             ),
             error = function(e) FALSE
           )
@@ -1096,7 +1078,6 @@ server <- function(
       # instead of being assembled once at the end.
       if (length(touched)) {
         tools <- parse_tool_meta(lines)
-        cla_meta <- parse_clamlst_meta(lines)
         amr_meta <- parse_amr_meta(lines)
         amr_organism <- if (isTRUE(Typing$amr_enabled)) {
           Typing$amr_organism
@@ -1176,10 +1157,10 @@ server <- function(
                     results$cla_status[i],
                     "failed"
                   ),
-                  cla_scheme = cla_meta$scheme,
-                  cla_scheme_version = cla_meta$scheme_version,
-                  cla_alembic_version = Typing$cla_refs$alembic,
-                  cla_repository = cla_meta$repository,
+                  cla_scheme = cla_field("scheme"),
+                  cla_scheme_version = cla_field("version"),
+                  cla_alembic_version = cla_alembic(),
+                  cla_repository = cla_field("repository"),
                   cla_identity = or_default(
                     input$cla_identity,
                     CLA_IDENTITY_DEFAULT
@@ -1263,6 +1244,8 @@ server <- function(
         Typing$proc <- NULL
         Typing$log_file <- NULL
         Typing$cla_db <- NULL
+        Typing$cla_scheme <- NULL
+        Typing$cla_alembic <- NULL
         Typing$amr_out <- NULL
         Typing$cla_enabled <- FALSE
         Typing$amr_enabled <- FALSE
@@ -1299,8 +1282,6 @@ server <- function(
       ignoreInit = TRUE
     )
 
-    # Define roots
-    roots <- c(Home = path_home(), Root = "/")
 
     # Condition helper
     or_default <- function(x, default) {
@@ -1369,32 +1350,28 @@ server <- function(
       ))
     }
 
-    # File / folder choosers
-    shinyFileChoose(
-      input,
+    # Genome file and folder choosers.
+    picked_file <- file_dialog$server(
       "genome_file",
-      roots = roots,
-      defaultRoot = "Home",
-      filetypes = c("fasta", "fa", "fna"),
-      session = session
+      mode = "file",
+      title = "Choose a genome assembly",
+      pattern = "\\.(fasta|fa|fna)$"
     )
-    shinyDirChoose(
-      input,
+    picked_dir <- file_dialog$server(
       "genome_dir",
-      roots = roots,
-      defaultRoot = "Home",
-      session = session
+      mode = "dir",
+      title = "Choose a folder of assemblies"
     )
 
-    observeEvent(input$genome_file, {
-      path <- parseFilePaths(roots, input$genome_file)$datapath
-      req(length(path), is.character(path), file.exists(path))
+    observeEvent(picked_file(), {
+      path <- picked_file()
+      req(length(path) == 1L, file.exists(path))
       set_selection(path)
     })
 
-    observeEvent(input$genome_dir, {
-      path <- parseDirPath(roots, input$genome_dir)
-      req(length(path), is.character(path), dir.exists(path))
+    observeEvent(picked_dir(), {
+      path <- picked_dir()
+      req(length(path) == 1L, dir.exists(path))
       set_selection(path)
     })
 
@@ -1815,8 +1792,7 @@ server <- function(
     )
 
     # Enable/disable controls based on current status.
-    # While running: lock file/folder pickers (needs both disable() + CSS class
-    # because shinyFiles buttons are not standard inputs) and parameter inputs.
+    # While running: lock the file/folder pickers and the parameter inputs.
     # Terminate mirrors the running state; Start requires a valid ready state.
     observe({
       # "checking" is the pre-run hashing phase - it owns the queue just like a
@@ -1830,20 +1806,20 @@ server <- function(
       toggleState("terminate", condition = running)
 
       if (running) {
-        disable("genome_file")
-        addClass("genome_file", "custom-disable")
-        disable("genome_dir")
-        addClass("genome_dir", "custom-disable")
+        disable("genome_file-open")
+        addClass("genome_file-open", "custom-disable")
+        disable("genome_dir-open")
+        addClass("genome_dir-open", "custom-disable")
         disable("identity")
         disable("coverage")
         disable("cla_identity")
         disable("cla_coverage")
         disable("run_amr")
       } else {
-        enable("genome_file")
-        removeClass("genome_file", "custom-disable")
-        enable("genome_dir")
-        removeClass("genome_dir", "custom-disable")
+        enable("genome_file-open")
+        removeClass("genome_file-open", "custom-disable")
+        enable("genome_dir-open")
+        removeClass("genome_dir-open", "custom-disable")
         enable("identity")
         enable("coverage")
         enable("cla_identity")
@@ -2089,8 +2065,8 @@ server <- function(
         return("Idle")
       }
       # No phase is live. Either the script has not reached the first genome yet
-      # - it is still building this run's classical MLST reference database,
-      # which downloads the scheme and can take a while - or it is between two
+      # - it is still building this run's classical MLST reference database
+      # from the stored scheme and reading tool versions - or it is between two
       # genomes.
       if (all(results$status == "Pending")) {
         "Preparing run ..."
@@ -2822,15 +2798,16 @@ server <- function(
         return()
       }
       Typing$scheme_context <- preflight$scheme
-      Typing$cla_refs <- NULL
+      Typing$cla_alembic <- NULL
       # Seed an all-Pending table so the queue is visible immediately.
       Typing$results <- parse_typing_log(character(0), Typing$queued_strains)
 
       # Classical MLST rides along in the same run, against the scheme stored
       # in the mother DB: its profile table and allele files are written to a
       # private folder here, the script builds the claMLST reference from them
-      # at this temp path, and the ST is derived per genome. The reference DB
-      # is read back on finalize (for reference sequences / metadata), then
+      # at this temp path, and the ST is derived per genome. The profiles and
+      # allele sequences read for those files are kept for the ST lookup and the
+      # stored calls; the reference DB is only read for its schema marker, then
       # deleted together with the scheme files. A database without a stored
       # scheme skips classical MLST for the whole run. A stored scheme that
       # cannot be written out stops the run instead: typing it without STs would
@@ -2858,22 +2835,25 @@ server <- function(
         )
         return()
       }
-      Typing$cla_db <- if (isTRUE(cla_scheme$resolved)) cla_db else NULL
-      Typing$cla_spec <- if (isTRUE(cla_scheme$resolved)) {
-        write_scheme_spec(cla_scheme, paste0(cla_db, ".spec"))
+      if (isTRUE(cla_scheme$resolved)) {
+        Typing$cla_db <- cla_db
+        Typing$cla_scheme <- cla_scheme
       } else {
         cleanup_cla_db(cla_db)
-        NULL
+        Typing$cla_db <- NULL
+        Typing$cla_scheme <- NULL
       }
       live_cla_db <<- Typing$cla_db
       Typing$cla_enabled <- !is.null(Typing$cla_db)
 
-      # Why classical MLST will or won't run this time, worded for the run's own
-      # transcript rather than the internal session log - the only log a user
-      # inspecting a finished run actually has open. Written straight into the
-      # log file now, before the subprocess launches: start_typing() connects
-      # the subprocess's stdout to this same path in *append* mode precisely so
-      # a note written here survives instead of being raced by the child's own
+      # Why classical MLST will or won't run this time, and against which stored
+      # scheme and version, worded for the run's own transcript rather than the
+      # internal session log - the only log a user inspecting a finished run
+      # actually has open. This note is the run's record of the scheme; the
+      # script itself reports none. Written straight into the log file
+      # now, before the subprocess launches: start_typing() connects the
+      # subprocess's stdout to this same path in *append* mode precisely so a
+      # note written here survives instead of being raced by the child's own
       # first write.
       cat(
         strrep("-", 48),
@@ -2888,10 +2868,9 @@ server <- function(
       # AMR screening rides along too (opt-out via the sidebar checkbox). Each
       # genome is screened into a per-strain subdir of this run's temp AMR dir,
       # read back on finalize. The organism for point mutations is the one
-      # chosen when the database was set up (an older database maps its
-      # species instead); none means acquired genes only.
+      # chosen when the database was set up; none means acquired genes only.
       run_amr <- isTRUE(input$run_amr)
-      amr_sp <- if (run_amr) db_amr_organism(db_path(), species) else NA_character_
+      amr_sp <- if (run_amr) db_amr_organism(db_path()) else NA_character_
       Typing$amr_out <- if (run_amr) {
         d <- tempfile("amr_")
         dir.create(d, recursive = TRUE, showWarnings = FALSE)
@@ -2935,15 +2914,17 @@ server <- function(
           identity = or_default(input$identity, CG_IDENTITY_DEFAULT),
           coverage = or_default(input$coverage, CG_COVERAGE_DEFAULT),
           env = conda_env,
-          species = species,
           cla_identity = or_default(input$cla_identity, CLA_IDENTITY_DEFAULT),
           cla_coverage = or_default(input$cla_coverage, CLA_COVERAGE_DEFAULT),
           cla_db = if (is.null(Typing$cla_db)) NA_character_ else Typing$cla_db,
-          cla_spec = if (is.null(Typing$cla_spec)) {
+          cla_dir = if (is.null(Typing$cla_scheme)) {
             NA_character_
           } else {
-            Typing$cla_spec
+            Typing$cla_scheme$dir
           },
+          # The scheme's own species, the database's where the scheme names none.
+          cla_species = if (is.na(cla_field("species"))) species else cla_field("species"),
+          cla_version = cla_field("version"),
           amr_env = if (run_amr) conda_env else NA_character_,
           amr_species = amr_sp,
           amr_out = if (is.null(Typing$amr_out)) {
@@ -2960,6 +2941,7 @@ server <- function(
         cleanup_cla_db(Typing$cla_db)
         cleanup_amr_out(Typing$amr_out)
         Typing$cla_db <- NULL
+        Typing$cla_scheme <- NULL
         Typing$amr_out <- NULL
         live_cla_db <<- NULL
         live_amr_out <<- NULL
@@ -3060,19 +3042,13 @@ server <- function(
 
       log_text(paste(lines, collapse = "\n"))
 
-      # The scheme's profile table lands next to the reference DB once the build
-      # step is through; read it once per run, then every poll can resolve the
-      # STs claMLST left undetermined.
-      if (is.null(Typing$cla_profiles) && !is.null(Typing$cla_db)) {
-        Typing$cla_profiles <- read_st_profiles(
-          paste0(Typing$cla_db, ".profiles.tsv")
-        )
-      }
-
+      # The stored scheme's profile table, read at launch, resolves the STs
+      # claMLST leaves undetermined - including profiles with a locus recorded
+      # as absent (allele 0), which claMLST create drops from its reference.
       results <- parse_typing_log(
         lines,
         Typing$queued_strains,
-        Typing$cla_profiles
+        Typing$cla_scheme$profiles
       )
       Typing$results <- results
 
@@ -3154,26 +3130,21 @@ server <- function(
         }
       )
 
-      meta <- parse_clamlst_meta(lines)
       if (Typing$cla_enabled) {
         log_typing(
           "Classical MLST results persisted",
           sprintf(
             "%d isolate(s) | repo=%s scheme=%s",
             length(persisted$done$cla),
-            meta$repository,
-            meta$scheme
+            cla_field("repository"),
+            cla_field("scheme")
           )
         )
       }
       cleanup_cla_db(Typing$cla_db)
-      if (!is.null(Typing$cla_spec)) {
-        unlink(Typing$cla_spec)
-      }
       Typing$cla_db <- NULL
-      Typing$cla_spec <- NULL
-      Typing$cla_profiles <- NULL
-      Typing$cla_refs <- NULL
+      Typing$cla_scheme <- NULL
+      Typing$cla_alembic <- NULL
       live_cla_db <<- NULL
 
       added <- sum(results$status == "Added")

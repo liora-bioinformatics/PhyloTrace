@@ -63,7 +63,6 @@ dependencies:
   - r-rvest
   - r-sf
   - r-shiny
-  - r-shinyfiles
   - r-shinyjs
   - r-shinywidgets
   - r-stringi

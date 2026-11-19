@@ -319,6 +319,23 @@ test_that("reopening the modal restores the choices last made", {
   expect_true(grepl("Journal", html, fixed = TRUE))
 })
 
+test_that("a modal reopened on a format without resolution hides the slider", {
+  # The server-side toggle only reacts to a format *change*, so the held format
+  # has to decide the slider's initial visibility in the markup itself.
+  wrap <- function(fmt) {
+    html <- as.character(viz_export$export_modal(
+      identity,
+      "e",
+      "widget",
+      values = list(filetype = fmt)
+    ))
+    regmatches(html, regexpr("<div[^>]*e_quality_wrap[^>]*>", html))
+  }
+  expect_true(grepl("d-none", wrap("html"), fixed = TRUE))
+  expect_false(grepl("d-none", wrap("png"), fixed = TRUE))
+  expect_false(grepl("d-none", wrap("jpeg"), fixed = TRUE))
+})
+
 test_that("the sidebar panel is just a trigger plus the download target", {
   html <- as.character(viz_export$export_panel(identity, "e"))
   expect_true(grepl("e_open", html, fixed = TRUE))

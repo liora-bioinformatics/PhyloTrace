@@ -464,8 +464,7 @@ selected_row <- function(input, table_id, rows) {
 #'
 #' @description Scheme details are text a user typed or a peer database
 #'   brought in, so they are escaped before display. A web address becomes a
-#'   link; the HTML link older databases stored for the scheme URL is reduced
-#'   to its address first.
+#'   link.
 #'
 #' @param values Character vector of stored values.
 #'
@@ -473,8 +472,6 @@ selected_row <- function(input, table_id, rows) {
 #' @export
 scheme_value_html <- function(values) {
   values <- as.character(values)
-  legacy <- grepl("^\\s*<a\\s[^>]*href=\"https?://[^\"]+\"", values)
-  values[legacy] <- sub("^\\s*<a\\s[^>]*href=\"(https?://[^\"]+)\".*$", "\\1", values[legacy])
   is_url <- !is.na(values) & grepl("^https?://[^[:space:]<>\"'`]+$", values)
   out <- htmlEscape(values)
   out[is_url] <- sprintf(

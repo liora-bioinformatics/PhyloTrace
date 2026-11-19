@@ -3,12 +3,10 @@
 box::use(
   DT[DTOutput, datatable, renderDT],
   bslib[page_fillable],
-  fs[path_home],
   htmltools[htmlEscape],
   jsonlite[fromJSON],
   rlang[`%||%`],
   shiny,
-  shinyFiles[parseFilePaths, shinyFileChoose, shinyFilesButton],
   shinyjs[disabled, useShinyjs],
 )
 
@@ -16,6 +14,7 @@ box::use(
   app / logic / db_compat[check_db_loadable],
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
+  app / view / file_dialog,
 )
 
 #' @export
@@ -35,21 +34,11 @@ ui <- function(id) {
         ),
         shiny$div(
           id = "loading-inputs",
-          shinyFilesButton(
-            ns("db_location"),
-            "Select Database",
-            icon = shiny$icon("folder-open"),
-            title = "Choose a database",
-            buttonType = "default",
-            root = path_home(),
-            multiple = FALSE
-          ),
+          file_dialog$ui(ns("db_pick"), "Select Database", "folder-open"),
           shiny$actionButton(
             ns("create_new_db"),
             "Create New",
-            icon = shiny$icon("plus"),
-            buttonType = "default",
-            root = path_home()
+            icon = shiny$icon("plus")
           )
         ),
         shiny$uiOutput(ns("database_selection"))
@@ -174,14 +163,12 @@ server <- function(
       deleteFile = FALSE
     )
 
-    # Present DB location dir choose
-    shinyFileChoose(
-      input,
-      "db_location",
-      roots = c(Home = path_home(), Root = "/"),
-      defaultRoot = "Home",
-      filetypes = c("db"),
-      session = session
+    # The database the user picks in the file dialog.
+    picked_db <- file_dialog$server(
+      "db_pick",
+      mode = "file",
+      title = "Choose a database",
+      pattern = "\\.db$"
     )
 
     # Observe current database path.
@@ -190,10 +177,7 @@ server <- function(
     shiny$observe({
       loc <- NULL
 
-      location_input <- parseFilePaths(
-        roots = c(Home = path_home(), Root = "/"),
-        input$db_location
-      )$datapath
+      location_input <- picked_db()
 
       if (length(location_input)) {
         loc <- resolve_selection("Currently selected:", location_input)

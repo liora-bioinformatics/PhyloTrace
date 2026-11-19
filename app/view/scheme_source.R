@@ -28,9 +28,17 @@ ui <- function(id, types = NULL, label = "Scheme provider") {
 }
 
 #' @export
-server <- function(id) {
+server <- function(id, reset = NULL) {
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
+
+    # Starts over without a provider; the terms confirmation goes with it.
+    if (!is.null(reset)) {
+      shiny$observeEvent(reset(), {
+        shiny$updateSelectInput(session, "provider", selected = "")
+        shiny$updateCheckboxInput(session, "confirmed", value = FALSE)
+      }, ignoreInit = TRUE)
+    }
 
     # Details of the selected provider, NULL until one is picked.
     provider <- shiny$reactive(scheme_source(input$provider))

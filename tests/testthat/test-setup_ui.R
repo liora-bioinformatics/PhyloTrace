@@ -22,7 +22,10 @@ test_that("task state rules are built per state, and 'open' adds none", {
   expect_match(got$css, "#a \\{ border-color")
   expect_match(got$css, "#b .setup-task_check")
   expect_match(got$css, "#c .setup-task_lock")
-  expect_false(grepl("#d", got$css, fixed = TRUE))
+  expect_false(grepl("#d {", got$css, fixed = TRUE))
+  # Locked task bodies are inert, all others are not.
+  expect_match(got$css, "#c > .setup-task_body'); if (b) b.inert = true", fixed = TRUE)
+  expect_match(got$css, "#a > .setup-task_body'); if (b) b.inert = false", fixed = TRUE)
 })
 
 test_that("a task status is dropped when it has no text", {

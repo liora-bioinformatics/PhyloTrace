@@ -1,19 +1,22 @@
 name: Scheme Index Update
 
-# Weekly check of the providers' public scheme listings. Changes arrive as a
+# Monthly check of the providers' public scheme listings. Changes arrive as a
 # pull request against dev/scheme_index/curation.csv and the app's index; new
 # schemes stay "pending" until a maintainer reviews them, so nothing reaches
 # the app unreviewed. Which providers are read, and why, is in
 # dev/scheme_index/config.json.
+#
+# Actions are pinned to release tags; pinning them to full commit SHAs (with
+# the tag in a comment) is recommended to rule out a moved tag.
 
 on:
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '0 6 1 * *'
   workflow_dispatch:
 
+# Read-only by default; only the job that opens the pull request may write.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: scheme-index
@@ -23,6 +26,9 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository

@@ -7,10 +7,8 @@
 
 box::use(
   bslib[tooltip],
-  fs[path_home],
   rlang[`%||%`],
   shiny,
-  shinyFiles[parseFilePaths, shinyFileChoose, shinyFilesButton],
   shinyjs[hidden, html, toggle, toggleState],
   shinyWidgets[pickerInput],
   stats[setNames],
@@ -24,6 +22,7 @@ box::use(
   app / logic / field_labels[field_labels_for],
   app / logic / field_types[TYPE_LABELS],
   app / logic / functions[stat_tile],
+  app / view / file_dialog,
 )
 
 # Where the wizard's dropdown menus are attached: inside the modal, not <body>.
@@ -122,26 +121,16 @@ box::use(
   )
 }
 
-# The file chooser itself, kept out of sight in static UI. A shinyFiles button
-# that is re-rendered (as the panel's renderUI does when the first variable
-# appears) re-opens its dialog on binding, so the visible buttons
-# (`open_button()`) only forward their click to this one.
+# The module has no static UI of its own: the file dialog adds itself to the
+# page when first opened, from any of the visible buttons (`open_button()`).
 #' @export
 ui <- function(id) {
-  ns <- shiny$NS(id)
-
-  shinyFilesButton(
-    ns("file"),
-    "Import from Table",
-    title = "Choose a table with one row per isolate (.csv, .tsv, .txt, .xlsx)",
-    multiple = FALSE,
-    style = "display: none;"
-  )
+  shiny$tagList()
 }
 
 #' Visible "Import from Table" Button
 #'
-#' Opens the file chooser of the import module `id`. May be placed in dynamic
+#' Opens the file dialog of the import module `id`. May be placed in dynamic
 #' UI, as long as only one copy is in the page at a time.
 #'
 #' @param id The import module's id, as passed to `ui()`.
@@ -150,13 +139,7 @@ ui <- function(id) {
 #' @export
 open_button <- function(id, ...) {
   ns <- shiny$NS(id)
-  shiny$actionButton(
-    ns("open"),
-    "Import from Table",
-    icon = shiny$icon("file-import"),
-    onclick = sprintf("document.getElementById('%s').click();", ns("file")),
-    ...
-  )
+  shiny$actionButton(ns("open"), "Import from Table", icon = shiny$icon("file-import"), ...)
 }
 
 #' @export
@@ -169,14 +152,13 @@ server <- function(
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    roots <- c(Home = path_home(), Root = "/")
-    shinyFileChoose(
-      input,
+    # The table the user picks, from the dialog the visible buttons open.
+    picked <- file_dialog$server(
       "file",
-      roots = roots,
-      defaultRoot = "Home",
-      filetypes = custom_import$IMPORT_EXTENSIONS,
-      session = session
+      mode = "file",
+      title = "Choose a table with one row per isolate (.csv, .tsv, .txt, .xlsx)",
+      pattern = sprintf("\\.(%s)$", paste(custom_import$IMPORT_EXTENSIONS, collapse = "|")),
+      open = shiny$reactive(input$open)
     )
 
     # `read` is what came out of the file, `assessment` its comparison with the
@@ -232,8 +214,8 @@ server <- function(
 
     # A picked file opens the assessment. Refused while the Values grid holds
     # unsaved edits: the import reloads the panel, which would discard them.
-    shiny$observeEvent(input$file, {
-      path <- as.character(parseFilePaths(roots, input$file)$datapath)
+    shiny$observeEvent(picked(), {
+      path <- picked()
       shiny$req(length(path) == 1L, file.exists(path))
       if (isTRUE(blocked())) {
         shiny$showNotification(

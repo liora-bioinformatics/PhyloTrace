@@ -15,6 +15,7 @@ box::use(
   app /
     logic /
     db_staging[
+      check_staged_metadata,
       delete_imported_set,
       imported_metadata_wide,
       imported_profile_long,
@@ -335,4 +336,35 @@ test_that("nothing is staged when no set is asked for", {
   expect_equal(nrow(list_imported_sets(db)), 0L)
   expect_equal(nrow(imported_profile_long(db, integer(0))), 0L)
   expect_null(imported_metadata_wide(db, integer(0)))
+})
+
+test_that("an isolate listed twice in the profile table fails the check", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  peer_db <- file.path(dir, "peer.db")
+  build_db(peer_db, peer_alleles())
+  prof <- format_profile(build_profile_table(peer_db, c("C", "D"), "hash"))
+  f <- file.path(dir, "dup.tsv")
+  write_delim_table(rbind(prof, prof[1, ]), f)
+
+  r <- resolve_profile(db, parse_profile_file(f, scheme_loci(db)))
+
+  expect_false(r$linkable)
+  expect_identical(status_of(r$checks, "Isolates"), "fail")
+  expect_true(grepl("more than once", r$checks$detail[r$checks$check == "Isolates"]))
+})
+
+test_that("metadata listing an isolate twice fails its check and is never staged", {
+  dir <- local_tempdir()
+  db <- fixture(dir)
+  md <- data.frame(isolate = c("C", "C", "D"), ward = c("W1", "W2", "W3"))
+
+  check <- check_staged_metadata(md)
+  expect_identical(status_of(check, "Metadata"), "fail")
+  expect_identical(nrow(check_staged_metadata(NULL)), 0L)
+  expect_identical(status_of(check_staged_metadata(md[-1, ]), "Metadata"), "pass")
+
+  r <- resolve_profile(db, peer_profile(dir, db, "hash"))
+  expect_error(stage_profile_set(db, "peer-lab", r, metadata = md), "more than once")
+  expect_identical(nrow(list_imported_sets(db)), 0L)
 })

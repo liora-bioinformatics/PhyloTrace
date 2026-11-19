@@ -1,5 +1,5 @@
 box::use(
-  shiny[reactive, testServer],
+  shiny[reactive, reactiveVal, testServer],
   testthat[expect_false, expect_match, expect_true, test_that],
   withr[local_tempdir],
 )
@@ -54,4 +54,26 @@ test_that("a stored scheme is shown in full and the form opens only on replace",
     session$setInputs(cancel_replace_scheme = 1)
     expect_true(form_hidden(output))
   })
+})
+
+test_that("Reload Database closes a scheme replacement left open", {
+  path <- file.path(local_tempdir(), "db.db")
+  build_db(path, default_local())
+  mlst_scheme$store_mlst_scheme(path, toy_scheme(), list(name = "Toy MLST"))
+  reset <- reactiveVal(0L)
+
+  testServer(
+    database_mlst$server,
+    args = list(db_path = reactive(path), session_reset = reset),
+    {
+      session$flushReact()
+      session$setInputs(replace_scheme = 1)
+      expect_false(form_hidden(output))
+
+      reset(1L)
+      session$flushReact()
+      expect_true(form_hidden(output))
+      expect_match(paste(unlist(output$stored_scheme), collapse = ""), "Replace scheme")
+    }
+  )
 })

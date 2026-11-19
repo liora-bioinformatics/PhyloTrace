@@ -12,16 +12,36 @@ box::use(
     dbRollback,
     dbDisconnect,
   ],
-  processx[run, process],
   openssl[sha256],
-  tidyr[pivot_wider],
-  dplyr[select, left_join],
-  utils[read.delim],
+  processx[process],
 )
 box::use(
   app / logic / db_connect[connect],
   app / logic / logging[log_event],
 )
+
+#' Classical MLST Results Table
+#'
+#' @description Definition of the per-isolate classical MLST results table;
+#'   shared with the database merge, which creates it from this when missing.
+#' @export
+CLASSICAL_MLST_DDL <- "CREATE TABLE IF NOT EXISTS classical_mlst (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT,
+       gene TEXT,
+       allele TEXT,
+       sequence TEXT,
+       st TEXT,
+       status TEXT,
+       scheme TEXT,
+       scheme_version TEXT,
+       alembic_version TEXT,
+       repository TEXT,
+       identity REAL,
+       coverage REAL,
+       pymlst_version TEXT,
+       called_at TEXT
+     )"
 
 # Central Conda environment where all external bioinformatics CLI dependencies
 # (cgMLST, classical MLST, BLAT, MAFFT, abritamr, AMRFinderPlus) reside.
@@ -82,22 +102,28 @@ bash_exe <- function() {
   "bash"
 }
 
+# Strips what `conda run` would read as shell syntax: it rebuilds a command
+# line from its arguments, and a database from elsewhere may hold anything in
+# the scheme species or version.
+conda_safe <- function(x) gsub("[$`\\\\\"'\r\n]", "", x)
+
 # Constructs command-line arguments for loop-pymlst.sh.
 # Explicit genome file paths are passed after a `--` separator to prevent file names
-# from being parsed as CLI options. Optional parameters (species, classical MLST,
-# AMR screening) are appended only when non-empty strings are provided.
-# Classical MLST additionally needs the scheme spec written by
-# mlst_scheme$write_scheme_spec() - without it the script has nothing to build.
+# from being parsed as CLI options. Optional parameters (classical MLST, AMR
+# screening) are appended only when non-empty strings are provided. Classical
+# MLST needs both the reference path to build into and the folder
+# mlst_scheme$materialize_mlst_scheme() wrote the stored scheme to.
 typing_args <- function(
   db_path,
   genome_files,
   identity,
   coverage,
-  species = NA_character_,
   cla_identity = CLA_IDENTITY_DEFAULT,
   cla_coverage = CLA_COVERAGE_DEFAULT,
   cla_db = NA_character_,
-  cla_spec = NA_character_,
+  cla_dir = NA_character_,
+  cla_species = NA_character_,
+  cla_version = NA_character_,
   amr_env = NA_character_,
   amr_species = NA_character_,
   amr_out = NA_character_
@@ -116,18 +142,21 @@ typing_args <- function(
   scalar_num <- function(x) {
     !is.null(x) && length(x) == 1 && !is.na(x) && is.finite(as.numeric(x))
   }
-  if (scalar_chr(species)) {
-    args <- c(args, "-s", species)
-    if (scalar_chr(cla_db) && scalar_chr(cla_spec)) {
-      args <- c(args, "-m", cla_db, "-M", cla_spec)
-      # The classical search has thresholds of its own; the script falls back to
-      # the cgMLST pair only when they are not given.
-      if (scalar_num(cla_identity)) {
-        args <- c(args, "-I", as.character(cla_identity))
-      }
-      if (scalar_num(cla_coverage)) {
-        args <- c(args, "-C", as.character(cla_coverage))
-      }
+  if (scalar_chr(cla_db) && scalar_chr(cla_dir)) {
+    args <- c(args, "-m", cla_db, "-M", cla_dir)
+    if (scalar_chr(cla_species) && nzchar(conda_safe(cla_species))) {
+      args <- c(args, "-s", conda_safe(cla_species))
+    }
+    if (scalar_chr(cla_version) && nzchar(conda_safe(cla_version))) {
+      args <- c(args, "-V", conda_safe(cla_version))
+    }
+    # The classical search has thresholds of its own; the script falls back to
+    # the cgMLST pair only when they are not given.
+    if (scalar_num(cla_identity)) {
+      args <- c(args, "-I", as.character(cla_identity))
+    }
+    if (scalar_num(cla_coverage)) {
+      args <- c(args, "-C", as.character(cla_coverage))
     }
   }
   if (scalar_chr(amr_out) && scalar_chr(amr_env)) {
@@ -137,92 +166,6 @@ typing_args <- function(
     }
   }
   c(args, "--", genome_files)
-}
-
-#' Execute Synchronous Genome Typing Pipeline
-#'
-#' @description Runs the typing shell wrapper in synchronous (blocking) mode, parses
-#'   BLAT gene matches and error conditions from stdout, and reloads the updated database.
-#'
-#' @param database Data object or list representing the in-memory database state.
-#' @param db_path Character string. File path to the target SQLite database.
-#' @param genome_files Character vector. File paths to input assembly FASTA files.
-#' @param script_path Character string. Path to `loop-pymlst.sh`. Defaults to `"app/logic/loop-pymlst.sh"`.
-#' @param identity Numeric. BLAT sequence identity cutoff (0 to 1). Defaults to `0.95`.
-#' @param coverage Numeric. BLAT coverage cutoff (0 to 1). Defaults to `0.9`.
-#' @param env Character string. Conda environment name. Defaults to `conda_env`.
-#'
-#' @return Refreshed database structure loaded from `db_path`.
-#' @export
-type_genomes <- function(
-  database,
-  db_path,
-  genome_files,
-  script_path = "app/logic/loop-pymlst.sh",
-  identity = 0.95,
-  coverage = 0.9,
-  env = conda_env
-) {
-  # Invoking bash explicitly avoids depending on the wrapper script's execute permission bit
-  typing_status <- run(
-    command = bash_exe(),
-    args = c(
-      normalizePath(script_path, mustWork = TRUE),
-      typing_args(db_path, genome_files, identity, coverage)
-    ),
-    wd = dirname(db_path),
-    echo_cmd = TRUE,
-    echo = TRUE,
-    stderr_to_stdout = TRUE,
-    error_on_status = FALSE
-  )
-
-  # Parse logs
-  stdout_text <- typing_status$stdout
-
-  # Extract BLAT gene count
-  gene_match <- regmatches(
-    stdout_text,
-    regexec("found ([0-9]+) genes", stdout_text)
-  )
-  typing_status$genes_found_by_blat <- if (length(gene_match[[1]]) > 1) {
-    as.numeric(gene_match[[1]][2])
-  } else {
-    0
-  }
-
-  # Check for "Already Present" error
-  typing_status$already_present <- grepl(
-    "already present in the base",
-    stdout_text
-  )
-
-  # Check for "Core Genome Path" error (The species mismatch/quality error)
-  typing_status$species_mismatch <- grepl(
-    "No path was found for the core genome",
-    stdout_text
-  )
-
-  # Define success: Exit status 0 AND no "Error:" string in the output
-  typing_status$success <- (typing_status$status == 0 &&
-    !grepl("Error:", stdout_text))
-
-  # Console Feedback
-  if (typing_status$already_present) {
-    message("DUPLICATE: Entry already present. No action taken.")
-  } else if (typing_status$species_mismatch) {
-    warning(
-      "INCOMPATIBLE: ",
-      typing_status$genes_found_by_blat,
-      " hits found, but none passed QC. Verify scheme."
-    )
-  } else if (typing_status$success) {
-    message("OK: New strain added successfully.")
-  }
-
-  # Read database with newly added genomes
-  database <- read_database(db_path)
-  return(database)
 }
 
 #' Launch Background Typing Process
@@ -237,13 +180,16 @@ type_genomes <- function(
 #' @param identity Numeric. cgMLST BLAT identity cutoff (0 to 1). Defaults to `CG_IDENTITY_DEFAULT`.
 #' @param coverage Numeric. cgMLST BLAT coverage cutoff (0 to 1). Defaults to `CG_COVERAGE_DEFAULT`.
 #' @param env Character string. Conda environment name. Defaults to `conda_env`.
-#' @param species Character string (optional). Species name for classical MLST lookup.
 #' @param cla_identity Numeric. Classical MLST BLAT identity cutoff.
 #'   Defaults to `CLA_IDENTITY_DEFAULT`.
 #' @param cla_coverage Numeric. Classical MLST BLAT coverage cutoff.
 #'   Defaults to `CLA_COVERAGE_DEFAULT`.
 #' @param cla_db Character string (optional). File path for intermediate classical MLST database.
-#' @param cla_spec Character string (optional). Scheme spec file from `write_scheme_spec()`.
+#' @param cla_dir Character string (optional). Folder holding the stored scheme
+#'   as written by `materialize_mlst_scheme()` (`profiles.tsv`, `locus/*.fasta`).
+#' @param cla_species Character string (optional). Species recorded in the
+#'   intermediate classical MLST database.
+#' @param cla_version Character string (optional). Scheme version recorded there.
 #' @param amr_env Character string (optional). Conda environment for AMR screening tools.
 #' @param amr_species Character string (optional). Species token for point mutation screening.
 #' @param amr_out Character string (optional). Output directory for AMR results.
@@ -258,11 +204,12 @@ start_typing <- function(
   identity = CG_IDENTITY_DEFAULT,
   coverage = CG_COVERAGE_DEFAULT,
   env = conda_env,
-  species = NA_character_,
   cla_identity = CLA_IDENTITY_DEFAULT,
   cla_coverage = CLA_COVERAGE_DEFAULT,
   cla_db = NA_character_,
-  cla_spec = NA_character_,
+  cla_dir = NA_character_,
+  cla_species = NA_character_,
+  cla_version = NA_character_,
   amr_env = NA_character_,
   amr_species = NA_character_,
   amr_out = NA_character_
@@ -287,11 +234,12 @@ start_typing <- function(
         genome_files,
         identity,
         coverage,
-        species,
         cla_identity,
         cla_coverage,
         cla_db,
-        cla_spec,
+        cla_dir,
+        cla_species,
+        cla_version,
         amr_env,
         amr_species,
         amr_out
@@ -409,40 +357,6 @@ parse_allele_spec <- function(spec) {
 # hyphens), so profile columns and reported loci are compared stripped down.
 norm_locus <- function(x) gsub("[^[:alnum:]]", "", tolower(x))
 
-#' Read a Classical MLST Profile Table
-#'
-#' @description Reads the scheme's profile table (`ST` plus one column per
-#'   locus) kept next to this run's reference database.
-#'
-#' @param path Character string. Path to the tab-separated profile table.
-#'
-#' @return A `data.frame` of character columns, or `NULL` when unreadable.
-#' @export
-read_st_profiles <- function(path) {
-  if (
-    is.null(path) ||
-      length(path) != 1 ||
-      is.na(path) ||
-      !nzchar(path) ||
-      !file.exists(path)
-  ) {
-    return(NULL)
-  }
-  profiles <- tryCatch(
-    read.delim(
-      path,
-      colClasses = "character",
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    ),
-    error = function(e) NULL
-  )
-  if (is.null(profiles) || !nrow(profiles) || !ncol(profiles)) {
-    return(NULL)
-  }
-  profiles
-}
-
 #' Look Up a Sequence Type in the Scheme's Profile Table
 #'
 #' @description Resolves an allele profile against the scheme's own profile
@@ -460,7 +374,8 @@ read_st_profiles <- function(path) {
 #'
 #' @param alleles Character string. Comma-delimited `"gene=allele"` string, empty
 #'   allele for an uncalled locus.
-#' @param profiles Data frame from `read_st_profiles()`.
+#' @param profiles Data frame of the scheme's profiles: `ST` first, one
+#'   character column per locus (`materialize_mlst_scheme()`'s `profiles`).
 #'
 #' @return The Sequence Type as a character string, or `NA_character_`.
 #' @export
@@ -504,7 +419,8 @@ st_from_profile <- function(alleles, profiles) {
 #'
 #' @param st Character string. ST field as printed by `claMLST search`.
 #' @param alleles Character string. Comma-delimited `"gene=allele"` string.
-#' @param profiles Data frame from `read_st_profiles()`, or `NULL`.
+#' @param profiles Data frame of the scheme's profiles (see `st_from_profile()`),
+#'   or `NULL`.
 #'
 #' @return A list with `st` (character or `NA`) and `status`.
 #' @export
@@ -529,7 +445,8 @@ resolve_clamlst_call <- function(st, alleles, profiles = NULL) {
 #'
 #' @param log_lines Character vector or scalar string containing raw log lines.
 #' @param strains Character vector of expected strain identifiers (assembly names without extension).
-#' @param profiles Data frame from `read_st_profiles()` (optional). Resolves the
+#' @param profiles Data frame of the scheme's profiles (optional, see
+#'   `st_from_profile()`). Resolves the
 #'   Sequence Types `claMLST search` leaves undetermined.
 #'
 #' @return A `data.frame` containing metrics, execution timing, classical MLST calls,
@@ -749,37 +666,6 @@ cg_outcome <- function(results) {
   ifelse(results$status == "Running" & cg_done, "Added", results$status)
 }
 
-#' Parse Classical MLST Provenance Metadata
-#'
-#' @description Extracts run-level classical MLST scheme details, repository sources,
-#'   and tool versions from typing output logs.
-#'
-#' @param log_lines Character vector containing log output lines.
-#'
-#' @return A list with elements `repository`, `scheme`, `scheme_version`, and `pymlst_version`.
-#' @export
-parse_clamlst_meta <- function(log_lines) {
-  log_text <- paste(log_lines, collapse = "\n")
-  # Anchored to line starts: only the typing script's own sentinel lines count,
-  # not notes the app writes into the same transcript.
-  grab <- function(pattern) {
-    pattern <- paste0("(?m)^", pattern)
-    match <- regmatches(log_text, regexec(pattern, log_text, perl = TRUE))[[1]]
-    if (length(match) > 1) {
-      value <- trimws(match[2])
-      if (nzchar(value)) value else NA_character_
-    } else {
-      NA_character_
-    }
-  }
-  list(
-    repository = grab("Classical MLST repository:[ \t]*([^\n]+)"),
-    scheme = grab("Classical MLST scheme:[ \t]*([^\n]+)"),
-    scheme_version = grab("Classical MLST scheme version:[ \t]*([^\n]+)"),
-    pymlst_version = grab("pyMLST version:[ \t]*([^\n]+)")
-  )
-}
-
 #' Parse Allele Calling Tool Versions
 #'
 #' @description Extracts the versions of the tools behind allele calling from a
@@ -849,21 +735,16 @@ db_species <- function(db_path) {
   if (nzchar(species)) species else NA_character_
 }
 
-#' Read the Classical MLST Reference Database
+#' Read the Schema Marker of a claMLST Reference Database
 #'
-#' @description Reads the allele reference sequences and the schema migration
-#'   marker out of a run's interim claMLST database.
-#'
-#' @details Read once per run and handed to `store_clamlst_results()`: the
-#'   sequence table holds every allele of the scheme, so re-reading it for each
-#'   isolate would repeat the whole scheme's worth of sequence per call.
+#' @description Reads the alembic migration marker out of a run's interim
+#'   claMLST database: the pyMLST schema the reference was built under.
 #'
 #' @param cla_db_path Character path to the interim claMLST database.
 #'
-#' @return A list with `sequences` (named by `gene\tallele`) and `alembic`.
+#' @return Character string, or `NA_character_` when unreadable.
 #' @export
-clamlst_refs <- function(cla_db_path) {
-  empty <- list(sequences = character(0), alembic = NA_character_)
+clamlst_alembic <- function(cla_db_path) {
   if (
     is.null(cla_db_path) ||
       length(cla_db_path) != 1 ||
@@ -871,7 +752,7 @@ clamlst_refs <- function(cla_db_path) {
       !nzchar(cla_db_path) ||
       !file.exists(cla_db_path)
   ) {
-    return(empty)
+    return(NA_character_)
   }
 
   con <- tryCatch(
@@ -879,34 +760,18 @@ clamlst_refs <- function(cla_db_path) {
     error = function(e) NULL
   )
   if (is.null(con)) {
-    return(empty)
+    return(NA_character_)
   }
   on.exit(dbDisconnect(con))
 
-  tables <- dbListTables(con)
-  sequences <- character(0)
-  if ("sequences" %in% tables) {
-    seqs <- tryCatch(
-      dbGetQuery(con, "SELECT gene, allele, sequence FROM sequences"),
-      error = function(e) NULL
-    )
-    if (!is.null(seqs) && nrow(seqs)) {
-      sequences <- as.character(seqs$sequence)
-      names(sequences) <- paste(seqs$gene, seqs$allele, sep = "\t")
-    }
+  av <- tryCatch(
+    dbGetQuery(con, "SELECT version_num FROM alembic_version LIMIT 1"),
+    error = function(e) NULL
+  )
+  if (is.null(av) || !nrow(av)) {
+    return(NA_character_)
   }
-  alembic <- NA_character_
-  if ("alembic_version" %in% tables) {
-    av <- tryCatch(
-      dbGetQuery(con, "SELECT version_num FROM alembic_version LIMIT 1"),
-      error = function(e) NULL
-    )
-    if (!is.null(av) && nrow(av)) {
-      alembic <- as.character(av$version_num[1])
-    }
-  }
-
-  list(sequences = sequences, alembic = alembic)
+  as.character(av$version_num[1])
 }
 
 #' Store Classical MLST Results in Database
@@ -916,21 +781,22 @@ clamlst_refs <- function(cla_db_path) {
 #'
 #' @param db_path Character string. File path to destination SQLite database.
 #' @param results Data frame of parsed typing outcomes from `parse_typing_log()`.
-#' @param cla_db_path Character string (optional). Path to temporary classical MLST reference database.
 #' @param identity Numeric (optional). Sequence identity threshold used during execution.
 #' @param coverage Numeric (optional). Coverage threshold used during execution.
 #' @param repository Character string (optional). Repository source name.
 #' @param scheme Character string (optional). Classical scheme identifier.
 #' @param scheme_version Character string (optional). Classical scheme version.
 #' @param pymlst_version Character string (optional). Executable tool version string.
-#' @param refs List from `clamlst_refs()` (optional). Read from `cla_db_path` when absent.
+#' @param refs List (optional) with `sequences` - the scheme's allele sequences,
+#'   named `gene<TAB>allele` (`materialize_mlst_scheme()`'s `sequences`) - and
+#'   `alembic`, the reference's schema marker (`clamlst_alembic()`). Without it
+#'   no sequence or marker is stored.
 #'
 #' @return Logical indicating transaction success invisibly.
 #' @export
 store_clamlst_results <- function(
   db_path,
   results,
-  cla_db_path = NA_character_,
   identity = NA_real_,
   coverage = NA_real_,
   repository = NA_character_,
@@ -980,9 +846,6 @@ store_clamlst_results <- function(
     return(invisible(FALSE))
   }
 
-  if (is.null(refs)) {
-    refs <- clamlst_refs(cla_db_path)
-  }
   seq_for <- function(gene, allele) {
     if (is.na(gene) || is.na(allele) || !length(refs$sequences)) {
       return(NA_character_)
@@ -992,7 +855,7 @@ store_clamlst_results <- function(
     # rolled back the isolate's whole call.
     unname(refs$sequences[paste(gene, allele, sep = "\t")])
   }
-  alembic_version <- refs$alembic
+  alembic_version <- if (is.null(refs$alembic)) NA_character_ else refs$alembic
 
   # Only loci that were actually called get a row; an uncalled locus is absent
   # from the table rather than stored as an empty allele.
@@ -1004,26 +867,7 @@ store_clamlst_results <- function(
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
-  dbExecute(
-    con,
-    "CREATE TABLE IF NOT EXISTS classical_mlst (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       isolate TEXT,
-       gene TEXT,
-       allele TEXT,
-       sequence TEXT,
-       st TEXT,
-       status TEXT,
-       scheme TEXT,
-       scheme_version TEXT,
-       alembic_version TEXT,
-       repository TEXT,
-       identity REAL,
-       coverage REAL,
-       pymlst_version TEXT,
-       called_at TEXT
-     )"
-  )
+  dbExecute(con, CLASSICAL_MLST_DDL)
 
   now <- as.character(Sys.time())
   n_iso <- 0L

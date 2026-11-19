@@ -1,7 +1,7 @@
 # app/view/database.R
 
 box::use(
-  shiny[NS, moduleServer, observeEvent],
+  shiny[NS, moduleServer, observeEvent, reactive],
   bslib[page_sidebar, sidebar, navset_hidden, nav_panel, as_fill_carrier],
   shinyjs[useShinyjs, addClass, removeClass],
 )
@@ -100,6 +100,9 @@ server <- function(
   show_browse = shiny::reactive(0L),
   ui_mounted = shiny::reactive(0L),
   db_rev = db_events$new_bus(),
+  # TRUE while a typing run writes to the database; Import blocks merge and
+  # restore meanwhile.
+  typing_active = reactive(FALSE),
   # Defaults to a store wired to whatever db_path/db_rev this call actually
   # received (R evaluates default expressions in the function's own frame, so
   # this sees the bound values, not new_store()'s own defaults) - a plain
@@ -156,7 +159,7 @@ server <- function(
         # Import and Export drive part of their sidebar from the server
         # (shinyjs::toggle on the control groups that only one source/export
         # type needs), so both need to know when their markup was rebuilt.
-        import = list(ui_mounted = ui_mounted),
+        import = list(ui_mounted = ui_mounted, typing_active = typing_active),
         export = list(ui_mounted = ui_mounted, store = store),
         list()
       )

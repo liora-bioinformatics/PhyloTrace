@@ -315,8 +315,46 @@ test_that("each view renders to a ggplot the export path can take", {
 
       for (view in c("heatmap", "prevalence")) {
         session$setInputs(amr_mode = view)
+        settle(session)
         expect_s3_class(amr_ggplot(), "ggplot")
       }
+    }
+  )
+})
+
+test_that("an echo that changes nothing the plot is built from does not redraw it", {
+  path <- amr_db()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      settle(session)
+      drawn <- plot_inputs()
+      expect_false(is.null(drawn))
+
+      # What a Generate sets off: the gene picker mounting with every gene
+      # selected, and controls reporting the defaults the plot already used.
+      session$setInputs(
+        amr_genes = colnames(presence_mat()),
+        amr_background_color = impl$BACKGROUND_DEFAULT,
+        amr_class_vocab = impl$CLASS_VOCABULARY_DEFAULT
+      )
+      settle(session)
+      expect_identical(plot_inputs(), drawn)
+
+      # A real change still draws.
+      session$setInputs(amr_background_color = "#123456")
+      settle(session)
+      expect_false(identical(plot_inputs(), drawn))
     }
   )
 })
@@ -552,6 +590,7 @@ test_that("mapping a variable adds an annotation strip keyed by isolate", {
       expect_identical(length(layers), 1L)
       expect_identical(layers[[1]]$label, "Country")
       expect_identical(layers[[1]]$values[["ISO-1"]], "Germany")
+      settle(session)
       expect_s3_class(amr_ggplot(), "ggplot")
     }
   )
@@ -1345,6 +1384,7 @@ test_that("Generate names the isolates of a screen with room for them", {
       expect_equal(layout_fit()$text_scale, 1)
 
       # The export is the canvas the plot is drawn on.
+      settle(session)
       expect_equal(export$width_cm(), plot_canvas()$width_in * 2.54)
       expect_equal(
         export$aspect(),

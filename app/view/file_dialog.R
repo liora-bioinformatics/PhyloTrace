@@ -1,8 +1,9 @@
 # app/view/file_dialog.R
 #
-# The app's own file dialog: a modal that browses the machine PhyloTrace runs on
-# to pick files, pick a folder or choose where to save a new file. Works the
-# same on Linux, macOS, Windows and WSL (see app/logic/file_browser.R).
+# The app's own file dialog: an overlay that browses the machine PhyloTrace runs
+# on to pick files, pick a folder or choose where to save a file. Works the same
+# on Linux, macOS, Windows and WSL (see app/logic/file_browser.R), and can open
+# over another dialog.
 
 box::use(
   fs[is_absolute_path],
@@ -58,19 +59,28 @@ ui <- function(id, label, icon_name = "folder-open", class = NULL, width = NULL)
 #'
 #' @param id Module id.
 #' @param mode `"file"` to pick files, `"dir"` to pick a folder, `"save"` to
-#'   choose a folder and a new file name.
-#' @param title Character modal title.
+#'   choose a folder and a file name.
+#' @param title Character dialog title.
 #' @param pattern Regular expression of the files the caller expects, or
 #'   `NULL`. Matching files are emphasised; other files stay listed and
 #'   pickable, since browsers save some downloads without an extension.
 #' @param multiple Logical. Allow several files (`"file"` mode).
 #' @param allow_dir Logical. In `"file"` mode, also accept a folder.
 #' @param default_name Function returning the proposed file name (`"save"`).
-#' @param extension Character extension appended to a saved file name.
+#' @param extension Character extension appended to a saved file name, or a
+#'   function returning it (read each time the dialog opens).
 #' @param hint Character help line shown under the listing, or `NULL`.
+#' @param overwrite Logical. In `"save"` mode, allow replacing an existing
+#'   file after a second confirmation; otherwise existing names are refused.
+#' @param start Function returning the folder the dialog first opens in, or
+#'   `NULL` for the home folder. Later openings return to the last folder.
+#' @param open Reactive whose change opens the dialog, for callers that open
+#'   it from code instead of (or besides) its own button.
+#' @param reset Reactive whose change clears the choice (the result becomes
+#'   `NULL`), e.g. the caller's `session_reset`.
 #'
 #' @return A reactive holding the chosen absolute path(s), `NULL` until the
-#'   user confirms a choice.
+#'   user confirms a choice. It signals every pick, also of the same path again.
 #' @export
 server <- function(
   id,
@@ -81,9 +91,14 @@ server <- function(
   allow_dir = FALSE,
   default_name = function() "",
   extension = "db",
-  hint = NULL
+  hint = NULL,
+  overwrite = FALSE,
+  start = NULL,
+  open = NULL,
+  reset = NULL
 ) {
   mode <- match.arg(mode)
+  ext_of <- if (is.function(extension)) extension else function() extension
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -93,10 +108,21 @@ server <- function(
     chosen <- shiny$reactiveVal(list(paths = NULL, n = 0L))
     problem <- shiny$reactiveVal(NULL)
     refresh <- shiny$reactiveVal(0L)
+    # Read when the dialog opens: a caller's extension can follow its inputs.
+    ext <- shiny$reactiveVal("")
     # Numbers every listing; selections and double-clicks carry the number of
     # the listing they were made in, so one from a folder already left is
     # never applied to the folder now on screen.
     listing_no <- 0L
+    # The overlay is added to the page on first use and kept: outside Shiny's
+    # single modal slot it can open over another dialog, and another dialog
+    # opening does not close it.
+    inserted <- FALSE
+    opened_once <- FALSE
+    # A save target that exists and was confirmed once; confirming the same
+    # target again replaces it (another name or folder asks anew).
+    replace_pending <- NULL
+    last_default <- NULL
 
     # Entries of the open folder; re-read on navigation and refresh. A folder
     # that cannot be listed yields no entries and a problem, never an error.
@@ -106,11 +132,7 @@ server <- function(
       rows <- tryCatch(
         # Hidden entries are never listed; a hidden folder can still be
         # opened by typing its path.
-        file_browser$list_dir(
-          current(),
-          files = mode != "dir",
-          pattern = pattern
-        ),
+        file_browser$list_dir(current(), files = mode != "dir", pattern = pattern),
         error = function(e) {
           structure(
             file_browser$list_dir(tempfile(), files = FALSE),
@@ -124,6 +146,132 @@ server <- function(
     # Places in the sidebar, read when the dialog opens (drives can come and go).
     place_rows <- shiny$reactiveVal(NULL)
 
+    # The overlay's markup: header, toolbar, listing, name field and buttons.
+    dialog_ui <- function() {
+      confirm_label <- switch(
+        mode,
+        file = if (multiple) "Select files" else "Select file",
+        dir = "Select folder",
+        save = "Save here"
+      )
+      shiny$div(
+        id = ns("dialog"),
+        # `modal` for Bootstrap's dialog styling variables; shown and hidden by
+        # file-browser.js, not by Bootstrap.
+        class = "modal fb-overlay",
+        role = "dialog",
+        `aria-modal` = "true",
+        `aria-label` = title,
+        shiny$div(
+          class = "modal-dialog modal-xl",
+          shiny$div(
+            class = "modal-content fb-modal",
+            shiny$div(
+              class = "modal-header",
+              shiny$h4(class = "modal-title", title),
+              shiny$tags$button(
+                type = "button",
+                class = "btn-close fb-close",
+                `aria-label` = "Close"
+              )
+            ),
+            shiny$div(
+              class = "modal-body",
+              shiny$div(
+                class = "fb",
+                shiny$div(
+                  class = "fb-toolbar",
+                  shiny$actionButton(
+                    ns("up"),
+                    NULL,
+                    icon = shiny$icon("arrow-up"),
+                    title = "Parent folder"
+                  ),
+                  shiny$div(
+                    class = "fb-path allow-free-text",
+                    shiny$textInput(
+                      ns("path"),
+                      NULL,
+                      value = current(),
+                      width = "100%",
+                      updateOn = "blur"
+                    )
+                  ),
+                  shiny$actionButton(
+                    ns("reload"),
+                    NULL,
+                    icon = shiny$icon("rotate"),
+                    title = "Refresh"
+                  ),
+                  if (mode != "file") {
+                    shiny$div(
+                      class = "fb-newfolder",
+                      `data-enter-click` = ns("new_folder"),
+                      shiny$textInput(ns("folder_name"), NULL, placeholder = "New folder"),
+                      shiny$actionButton(
+                        ns("new_folder"),
+                        NULL,
+                        icon = shiny$icon("folder-plus"),
+                        title = "Create folder"
+                      )
+                    )
+                  }
+                ),
+                shiny$uiOutput(ns("crumbs"), class = "fb-crumbs"),
+                shiny$div(
+                  class = "fb-main",
+                  shiny$uiOutput(ns("places"), class = "fb-places"),
+                  # The scroll box is a wrapper of its own: output containers
+                  # are laid out as `display: contents` app-wide, which cannot
+                  # scroll.
+                  shiny$div(class = "fb-list-wrap", shiny$uiOutput(ns("listing")))
+                ),
+                if (mode == "save") {
+                  shiny$div(
+                    class = "fb-save",
+                    `data-enter-click` = ns("confirm"),
+                    shiny$textInput(
+                      ns("name"),
+                      "File name",
+                      value = "",
+                      placeholder = "Name of the file"
+                    ),
+                    shiny$span(class = "fb-ext", shiny$textOutput(ns("ext"), inline = TRUE))
+                  )
+                },
+                if (!is.null(hint)) {
+                  shiny$div(class = "fb-hint", shiny$icon("circle-info"), " ", hint)
+                }
+              )
+            ),
+            # Problems are shown in the footer, beside the buttons, so a message
+            # appearing never changes the height of the dialog.
+            shiny$div(
+              class = "modal-footer",
+              shiny$uiOutput(ns("status"), class = "fb-status-slot"),
+              shiny$tags$button(type = "button", class = "btn btn-default fb-close", "Cancel"),
+              if (mode == "file" && allow_dir) {
+                shiny$actionButton(
+                  ns("use_dir"),
+                  "Use this folder",
+                  icon = shiny$icon("folder-open")
+                )
+              },
+              shiny$actionButton(ns("confirm"), confirm_label, class = "btn-primary")
+            )
+          )
+        )
+      )
+    }
+
+    # Opens or closes the overlay in the browser (app/js/file-browser.js).
+    set_open <- function(show) {
+      session$sendCustomMessage(
+        "fb-dialog",
+        list(id = ns("dialog"), show = show, focus = ns(if (mode == "save") "name" else "path"))
+      )
+    }
+
     # Moves the dialog to a folder, reporting a path that is not one.
     navigate <- function(path) {
       # A relative path is taken from the folder on screen, not from the
@@ -134,114 +282,66 @@ server <- function(
       }
       dir <- file_browser$normalize_dir(path)
       if (is.na(dir)) {
-        problem(sprintf("'%s' is not an existing folder.", path))
+        problem(sprintf("'%s' is not an existing folder that can be opened here.", path))
         return(invisible(FALSE))
       }
       problem(NULL)
+      replace_pending <<- NULL
       current(dir)
       shiny$updateTextInput(session, "path", value = dir)
       invisible(TRUE)
     }
 
-    # Opens the modal at the last folder used in this session.
-    shiny$observeEvent(input$open, {
-      place_rows(file_browser$places())
+    # Opens the dialog: the start folder the first time, afterwards the last
+    # folder used in this session.
+    show_dialog <- function() {
+      if (!opened_once && is.function(start)) {
+        first <- file_browser$normalize_dir(start() %||% NA_character_)
+        if (!is.na(first)) current(first)
+      }
+      opened_once <<- TRUE
       if (is.na(file_browser$normalize_dir(current()))) {
         current(file_browser$home_dir())
+      }
+      place_rows(file_browser$places())
+      ext(ext_of())
+      if (!inserted) {
+        shiny$insertUI("body", where = "beforeEnd", ui = dialog_ui(), immediate = TRUE)
+        inserted <<- TRUE
       }
       # The folder is re-read on every opening: files can appear between two
       # visits (a download just finished), and the listing would otherwise be
       # cached for as long as the dialog reopens on the same folder.
       refresh(refresh() + 1L)
       problem(NULL)
-      confirm_label <- switch(
-        mode,
-        file = if (multiple) "Select files" else "Select file",
-        dir = "Select folder",
-        save = "Save here"
+      replace_pending <<- NULL
+      shiny$updateTextInput(session, "path", value = current())
+      # A name typed earlier is kept; a proposal follows the caller's default.
+      if (mode == "save") {
+        typed <- shiny$isolate(input$name)
+        proposal <- default_name()
+        if (is.null(typed) || !nzchar(typed) || identical(typed, last_default)) {
+          shiny$updateTextInput(session, "name", value = proposal)
+        }
+        last_default <<- proposal
+      }
+      set_open(TRUE)
+    }
+
+    shiny$observeEvent(input$open, show_dialog())
+    if (!is.null(open)) {
+      shiny$observeEvent(open(), show_dialog(), ignoreInit = TRUE)
+    }
+    # Forgets the choice, so the caller starts over without a picked path.
+    if (!is.null(reset)) {
+      shiny$observeEvent(
+        reset(),
+        chosen(list(paths = NULL, n = chosen()$n + 1L)),
+        ignoreInit = TRUE
       )
-      shiny$showModal(shiny$div(
-        class = "fb-modal",
-        shiny$modalDialog(
-          title = title,
-          size = "xl",
-          easyClose = TRUE,
-          shiny$div(
-            class = "fb",
-            shiny$div(
-              class = "fb-toolbar",
-              shiny$actionButton(
-                ns("up"),
-                NULL,
-                icon = shiny$icon("arrow-up"),
-                title = "Parent folder"
-              ),
-              shiny$div(
-                class = "fb-path allow-free-text",
-                shiny$textInput(
-                  ns("path"),
-                  NULL,
-                  value = current(),
-                  width = "100%",
-                  updateOn = "blur"
-                )
-              ),
-              shiny$actionButton(
-                ns("reload"),
-                NULL,
-                icon = shiny$icon("rotate"),
-                title = "Refresh"
-              ),
-              if (mode != "file") {
-                shiny$div(
-                  class = "fb-newfolder",
-                  `data-enter-click` = ns("new_folder"),
-                  shiny$textInput(ns("folder_name"), NULL, placeholder = "New folder"),
-                  shiny$actionButton(
-                    ns("new_folder"),
-                    NULL,
-                    icon = shiny$icon("folder-plus"),
-                    title = "Create folder"
-                  )
-                )
-              }
-            ),
-            shiny$uiOutput(ns("crumbs"), class = "fb-crumbs"),
-            shiny$div(
-              class = "fb-main",
-              shiny$uiOutput(ns("places"), class = "fb-places"),
-              # The scroll box is a wrapper of its own: output containers are
-              # laid out as `display: contents` app-wide, which cannot scroll.
-              shiny$div(class = "fb-list-wrap", shiny$uiOutput(ns("listing")))
-            ),
-            if (mode == "save") {
-              shiny$div(
-                class = "fb-save",
-                `data-enter-click` = ns("confirm"),
-                shiny$textInput(
-                  ns("name"),
-                  "File name",
-                  value = default_name(),
-                  placeholder = "Name of the new file"
-                ),
-                shiny$span(class = "fb-ext", paste0(".", extension))
-              )
-            },
-            if (!is.null(hint)) shiny$div(class = "fb-hint", shiny$icon("circle-info"), " ", hint)
-          ),
-          # Problems are shown in the footer, beside the buttons, so a message
-          # appearing never changes the height of the dialog.
-          footer = shiny$tagList(
-            shiny$uiOutput(ns("status"), class = "fb-status-slot"),
-            shiny$modalButton("Cancel"),
-            if (mode == "file" && allow_dir) {
-              shiny$actionButton(ns("use_dir"), "Use this folder", icon = shiny$icon("folder-open"))
-            },
-            shiny$actionButton(ns("confirm"), confirm_label, class = "btn-primary")
-          )
-        )
-      ))
-    })
+    }
+
+    output$ext <- shiny$renderText(paste0(".", ext()))
 
     # Sidebar of quick-access places.
     output$places <- shiny$renderUI({
@@ -391,18 +491,28 @@ server <- function(
     }
 
     # Hands a choice back to the caller and closes the dialog.
+    accept <- function(paths) {
+      chosen(list(paths = paths, n = chosen()$n + 1L))
+      set_open(FALSE)
+      invisible(TRUE)
+    }
+
+    # Checks picked files or folders, then hands them back.
     finish <- function(paths) {
       if (!all(validUTF8(paths))) {
         problem("This name contains characters that cannot be read. Rename the file or folder.")
         return(invisible(FALSE))
       }
+      paths <- absolute(paths)
       if (!all(file.exists(paths))) {
         problem("The selection no longer exists. Refresh the folder.")
         return(invisible(FALSE))
       }
-      chosen(list(paths = absolute(paths), n = chosen()$n + 1L))
-      shiny$removeModal()
-      invisible(TRUE)
+      if (!all(file_browser$within_root(paths))) {
+        problem("This location cannot be used here.")
+        return(invisible(FALSE))
+      }
+      accept(paths)
     }
 
     # Creates the named folder inside the open folder and opens it.
@@ -421,36 +531,49 @@ server <- function(
 
     shiny$observeEvent(input$use_dir, finish(current()))
 
+    # Checks a save target: a valid name in a writable folder, and an existing
+    # file only when replacing is allowed and confirmed a second time.
+    save_target <- function() {
+      name <- trimws(input$name %||% "")
+      issue <- file_browser$name_problem(name)
+      target <- file.path(current(), paste0(name, ".", ext()))
+      if (!is.na(issue)) {
+        problem(issue)
+      } else if (!file_browser$dir_writable(current())) {
+        problem("You cannot write to this folder. Choose another one.")
+      } else if (dir.exists(target)) {
+        problem("A folder has this name. Choose another name.")
+      } else if (file.exists(target) && !overwrite) {
+        problem("A file with this name already exists here. Choose another name.")
+      } else if (file.exists(target) && !identical(replace_pending, target)) {
+        replace_pending <<- target
+        problem(sprintf(
+          "'%s' already exists. Click '%s' again to replace it.",
+          basename(target),
+          "Save here"
+        ))
+      } else {
+        accept(target)
+      }
+    }
+
     # Confirms the selection according to the dialog's mode.
     shiny$observeEvent(input$confirm, {
+      if (mode == "save") {
+        return(save_target())
+      }
       sel <- selected()
       if (mode == "dir") {
         dirs <- sel$path[sel$is_dir]
         finish(if (length(dirs)) dirs[1] else current())
         return()
       }
-      if (mode == "file") {
-        picks <- sel$path[!sel$is_dir | allow_dir]
-        if (!length(picks)) {
-          problem("Select a file first (double-click a folder to open it).")
-          return()
-        }
-        finish(if (multiple) picks else picks[1])
+      picks <- sel$path[!sel$is_dir | allow_dir]
+      if (!length(picks)) {
+        problem("Select a file first (double-click a folder to open it).")
         return()
       }
-      name <- trimws(input$name)
-      issue <- file_browser$name_problem(name)
-      target <- file.path(current(), paste0(name, ".", extension))
-      if (!is.na(issue)) {
-        problem(issue)
-      } else if (!file_browser$dir_writable(current())) {
-        problem("You cannot write to this folder. Choose another one.")
-      } else if (file.exists(target)) {
-        problem("A file with this name already exists here. Choose another name.")
-      } else {
-        chosen(list(paths = target, n = chosen()$n + 1L))
-        shiny$removeModal()
-      }
+      finish(if (multiple) picks else picks[1])
     })
 
     # A reactive, unlike the stored value, signals every pick, also of the

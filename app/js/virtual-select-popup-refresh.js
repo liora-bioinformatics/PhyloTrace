@@ -42,16 +42,17 @@ function focusSearch(instance) {
 }
 
 function bind(container) {
-  if (bound.has(container)) return;
-  var instance = container.virtualSelect;
-  if (!instance) return;
+  if (bound.has(container) || !container.virtualSelect) return;
 
   bound.add(container);
   // Custom events do not bubble; attach directly to individual instance containers.
   container.addEventListener("afterOpen", function () {
     // After the frame the popup is laid out in — measuring it before that
-    // reads the closed box's height.
+    // reads the closed box's height. The instance is looked up now, not when
+    // the listener was attached: a picker re-initialised on the same element
+    // has a new one.
     requestAnimationFrame(function () {
+      var instance = container.virtualSelect;
       refresh(instance);
       focusSearch(instance);
     });

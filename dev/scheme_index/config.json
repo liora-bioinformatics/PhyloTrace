@@ -11,18 +11,6 @@
       "enabled": true,
       "api": "https://chewbbaca.online/api/NS/api",
       "reason": "The Chewie-NS API invites programmatic use, asking for a pause between requests."
-    },
-    "pubmlst": {
-      "enabled": false,
-      "api": "https://rest.pubmlst.org/db",
-      "page": "https://pubmlst.org/bigsdb?db={db}",
-      "reason": "rest.pubmlst.org/robots.txt disallows all automated clients; switch on only with written permission from the University of Oxford."
-    },
-    "pasteur": {
-      "enabled": false,
-      "api": "https://bigsdb.pasteur.fr/api/db",
-      "page": "https://bigsdb.pasteur.fr/cgi-bin/bigsdb/bigsdb.pl?db={db}",
-      "reason": "Institut Pasteur's policy covers software tools; switch on only with written permission (bigsdb-policy@pasteur.fr)."
     }
   }
 }

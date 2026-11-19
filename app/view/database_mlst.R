@@ -39,9 +39,6 @@ box::use(
   app / view / mlst_import,
 )
 
-REPO_NAMES <- c(pubmlst = "PubMLST", pasteur = "Institut Pasteur (BIGSdb)")
-REPO_HOMES <- c(pubmlst = "https://pubmlst.org", pasteur = "https://bigsdb.pasteur.fr")
-
 # DataTables shown with a loading overlay until their first draw.
 TABLE_IDS <- c("cla_loci", "cla_sts", "cla_isolates")
 
@@ -50,14 +47,6 @@ TOP_STS <- 12L
 TOP_ALLELES <- 6L
 
 fmt <- overview_ui$fmt
-
-# The repository's display name, or the stored token when it is unknown.
-repo_name <- function(repo) {
-  if (is.na(repo)) {
-    return(NA_character_)
-  }
-  if (repo %in% names(REPO_NAMES)) REPO_NAMES[[repo]] else repo
-}
 
 # Why there are no classical calls to show, as one HTML sentence.
 empty_reason <- function(ov, species) {
@@ -238,16 +227,6 @@ scheme_rows <- function(ov, species) {
     if (!length(x)) NA_character_ else paste(x, collapse = ", ")
   }
 
-  repo <- pr$repository
-  repository <- if (!is.na(repo) && repo %in% names(REPO_HOMES)) {
-    sprintf(
-      "<a href='%s' target='_blank'>%s</a>",
-      htmlEscape(REPO_HOMES[[repo]], attribute = TRUE),
-      htmlEscape(repo_name(repo))
-    )
-  } else {
-    esc(repo_name(repo))
-  }
   release <- if (length(pr$versions) > 1) {
     sprintf("%s (%d releases in use)", esc(pr$latest), length(pr$versions))
   } else {
@@ -263,7 +242,7 @@ scheme_rows <- function(ov, species) {
 
   c(
     "Scheme" = esc(pr$scheme),
-    "Repository" = repository,
+    "Repository" = esc(pr$repository),
     "Species" = esc(species),
     "Latest Release" = release,
     "Loci" = if (length(loci)) {
@@ -630,7 +609,7 @@ isolate_rows <- function(ov) {
     Flags = flags,
     ST = iso$st,
     Scheme = iso$scheme,
-    Repository = vapply(iso$repository, repo_name, character(1), USE.NAMES = FALSE),
+    Repository = iso$repository,
     Release = iso$version,
     # Out of the loci of the scheme the isolate itself was typed against.
     `Loci Called` = ifelse(
@@ -671,7 +650,7 @@ release_list <- function(rel) {
         ),
         shiny$div(
           class = "overview-group_meta",
-          shiny$span(shiny$icon("server"), repo_name(rel$Repository[i])),
+          shiny$span(shiny$icon("server"), rel$Repository[i]),
           shiny$span(
             shiny$icon("calendar"),
             if (is.na(rel$Release[i])) "no release" else rel$Release[i]
@@ -762,7 +741,11 @@ server <- function(
       guard_db_read("Loading the MLST scheme", mlst_scheme_info(db_path()))
     })
 
-    scheme_import <- mlst_import$server("scheme_import", species = species)
+    scheme_import <- mlst_import$server(
+      "scheme_import",
+      species = species,
+      reset = session_reset
+    )
 
     # TRUE while the user is replacing the stored scheme.
     replacing <- shiny$reactiveVal(FALSE)
@@ -774,7 +757,9 @@ server <- function(
 
     shiny$observeEvent(input$replace_scheme, replacing(TRUE))
     shiny$observeEvent(input$cancel_replace_scheme, replacing(FALSE))
-    shiny$observeEvent(db_path(), replacing(FALSE))
+    # A reloaded or newly opened database shows its stored scheme, not a
+    # replacement left half-way.
+    shiny$observeEvent(list(db_path(), session_reset()), replacing(FALSE))
 
     # Cancel is offered only when there is a stored scheme to go back to.
     output$cancel_replace <- shiny$renderUI({

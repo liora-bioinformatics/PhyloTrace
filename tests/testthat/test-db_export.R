@@ -354,3 +354,24 @@ test_that("geocoded places travel with exported metadata only", {
   export_database(src, without, "A", include_metadata = FALSE)
   expect_identical(nrow(read_geocodes(without)), 0L)
 })
+
+test_that("provenance claims about left-out results are cleared in the export", {
+  dir <- local_tempdir()
+  src <- fixture(dir)
+  seed_results(src, "A")
+  store_provenance(src, "A", list(
+    genome_digest = "d",
+    cla_status = "known",
+    amr_status = "done"
+  ))
+  dest <- file.path(dir, "out.db")
+
+  export_database(src, dest, "A", include_classical = FALSE, include_amr = TRUE)
+
+  row <- qdf(dest, "SELECT genome_digest, cla_status, amr_status FROM typing_provenance")
+  expect_identical(row$genome_digest, "d")
+  expect_true(is.na(row$cla_status))
+  expect_identical(row$amr_status, "done")
+  # The source keeps its own record.
+  expect_identical(q1(src, "SELECT cla_status FROM typing_provenance"), "known")
+})

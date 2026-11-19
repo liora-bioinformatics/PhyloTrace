@@ -93,9 +93,18 @@ ui <- function(id) {
 }
 
 #' @export
-server <- function(id, species = shiny$reactive(NA_character_)) {
+server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
   shiny$moduleServer(id, function(input, output, session) {
-    source <- scheme_source$server("source")
+    source <- scheme_source$server("source", reset = reset)
+
+    # Clears the form: name and version here, provider and files in their
+    # own modules (Reload Database drops transient state, see CLAUDE.md).
+    if (!is.null(reset)) {
+      shiny$observeEvent(reset(), {
+        shiny$updateTextInput(session, "name", value = "")
+        shiny$updateTextInput(session, "version", value = "")
+      }, ignoreInit = TRUE)
+    }
 
     # Classical MLST schemes published for the species, from the shipped index.
     published <- shiny$reactive(schemes_for_species(species(), type = "MLST"))
@@ -131,7 +140,8 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
       "profiles",
       mode = "file",
       title = "Select the MLST profile table",
-      pattern = scheme_files$TABLE_FILE_RE
+      pattern = scheme_files$TABLE_FILE_RE,
+      reset = reset
     )
     allele_paths <- file_dialog$server(
       "alleles",
@@ -143,7 +153,8 @@ server <- function(id, species = shiny$reactive(NA_character_)) {
       hint = paste(
         "Select the FASTA files (Ctrl-click for several) or a ZIP archive,",
         "or open the folder that holds them and choose 'Use this folder'."
-      )
+      ),
+      reset = reset
     )
 
     output$profiles_label <- shiny$renderUI(setup_ui$picked_label(profile_path()))

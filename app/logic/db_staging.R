@@ -28,6 +28,7 @@ box::use(
   ],
   openssl[sha256],
   rlang[`%||%`],
+  utils[head],
 )
 
 box::use(
@@ -175,6 +176,16 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
       }
     )
   )
+
+  dups <- parsed$duplicate_isolates %||% character(0)
+  if (length(dups)) {
+    return(.unlinkable(
+      checks,
+      "Isolates",
+      "fail",
+      .duplicate_detail(dups, "profile table")
+    ))
+  }
 
   if (kind %in% c("mixed", "empty")) {
     return(.unlinkable(
@@ -348,6 +359,40 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
   out
 }
 
+# Names the isolates a table lists more than once.
+.duplicate_detail <- function(dups, what) {
+  sprintf(
+    "%d isolate(s) appear more than once in the %s: %s%s. Keep one row each.",
+    length(dups),
+    what,
+    paste(head(dups, 5L), collapse = ", "),
+    if (length(dups) > 5L) ", …" else ""
+  )
+}
+
+#' Check a Metadata Table Supplied With Typing Results
+#'
+#' @param metadata Data frame read from the metadata file, or `NULL`.
+#' @return A check data frame (`check`, `status`, `detail`): no rows when there
+#'   is nothing to check, a failing row when an isolate is listed twice.
+#' @export
+check_staged_metadata <- function(metadata) {
+  if (is.null(metadata) || !"isolate" %in% names(metadata)) {
+    return(.row(character(0), character(0), character(0)))
+  }
+  ids <- trimws(as.character(metadata$isolate))
+  dups <- unique(ids[duplicated(ids)])
+  if (length(dups)) {
+    return(.row("Metadata", "fail", .duplicate_detail(dups, "metadata table")))
+  }
+  .row(
+    "Metadata",
+    "pass",
+    sprintf("%d isolate(s), %d field(s)", length(ids), ncol(metadata) - 1L)
+  )
+}
+
+# Ends resolution with a check that leaves the profile unlinkable.
 .unlinkable <- function(checks, check, status, detail) {
   checks <- rbind(checks, .row(check, status, detail))
   attr(checks, "blocked") <- TRUE
@@ -362,6 +407,7 @@ resolve_profile <- function(db_path, parsed, sequences = NULL) {
   )
 }
 
+# Builds one row (or none) of the check table.
 .row <- function(check, status, detail) {
   data.frame(
     check = check,
@@ -429,6 +475,14 @@ stage_profile_set <- function(
     hit <- match(long$isolate, names(renames))
     long$isolate[!is.na(hit)] <- unname(renames[hit[!is.na(hit)]])
   }
+  dup_calls <- duplicated(long[, c("isolate", "gene")])
+  if (any(dup_calls)) {
+    stop(.duplicate_detail(unique(long$isolate[dup_calls]), "profile table"))
+  }
+  meta_check <- check_staged_metadata(metadata)
+  if (any(meta_check$status == "fail")) {
+    stop(meta_check$detail[1])
+  }
 
   con <- connect(db_path)
   on.exit(if (dbIsValid(con)) dbDisconnect(con), add = TRUE)
@@ -450,7 +504,7 @@ stage_profile_set <- function(
   if (length(clash)) {
     stop(
       "These isolate names are already in use: ",
-      paste(utils::head(clash, 5), collapse = ", ")
+      paste(head(clash, 5), collapse = ", ")
     )
   }
 

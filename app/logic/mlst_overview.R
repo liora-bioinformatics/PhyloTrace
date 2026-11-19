@@ -5,7 +5,7 @@
 # derived on read from `classical_mlst` and `typing_provenance`.
 
 box::use(
-  DBI[dbDisconnect, dbGetQuery, dbListFields, dbListTables],
+  DBI[dbDisconnect, dbGetQuery, dbListTables],
   stats[setNames],
 )
 box::use(
@@ -697,9 +697,6 @@ locus_filter <- "gene = ? AND scheme = ? AND repository IS ? AND sequence IS NOT
 load_cla_allele_sequence <- function(db_path, gene, allele, scheme, repository) {
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
-  if (!("sequence" %in% dbListFields(con, "classical_mlst"))) {
-    return(NULL)
-  }
   res <- dbGetQuery(
     con,
     sprintf("SELECT sequence FROM classical_mlst WHERE %s AND allele = ? LIMIT 1", locus_filter),
@@ -723,9 +720,6 @@ load_cla_allele_sequence <- function(db_path, gene, allele, scheme, repository) 
 cla_locus_fasta <- function(db_path, gene, scheme, repository) {
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
-  if (!("sequence" %in% dbListFields(con, "classical_mlst"))) {
-    return(character(0))
-  }
   res <- dbGetQuery(
     con,
     sprintf(

@@ -42,7 +42,6 @@ box::use(
     tooltip
   ],
   shinyjs[runjs],
-  htmltools[tagQuery],
   waiter[useWaiter, waiterShowOnLoad, Waiter, spin_flower],
   htmltools[attachDependencies, findDependencies],
 )
@@ -93,17 +92,6 @@ load_failed_modal <- function(title, reason) {
       footer = modalButton("OK")
     )
   )
-}
-
-# shinyFiles asset stripping logic
-strip_shinyfiles_assets <- function(ui) {
-  tagQuery(ui)$find("script")$filter(function(node, i) {
-    src <- node$attribs$src
-    !is.null(src) && grepl("^sF/", src)
-  })$remove()$resetSelected()$find("link")$filter(function(node, i) {
-    href <- node$attribs$href
-    !is.null(href) && grepl("^sF/", href)
-  })$remove()$allTags()
 }
 
 #' @export
@@ -358,7 +346,8 @@ server <- function(id) {
       show_browse = show_browse,
       ui_mounted = ui_mounted,
       db_rev = db_rev,
-      store = store
+      store = store,
+      typing_active = TYPING_vals$typing_active
     )
 
     # The database changed underneath the open session, so offer a reload —
@@ -635,24 +624,22 @@ server <- function(id) {
             fillable_panel(
               "Database Browser",
               value = "database_panel",
-              strip_shinyfiles_assets(database$ui(ns("database")))
+              database$ui(ns("database"))
             ),
             fillable_panel(
               "Analysis Dashboard",
               value = "analysis_dashboard_panel",
-              strip_shinyfiles_assets(analysis_dashboard$ui(ns(
-                "analysis_dashboard"
-              )))
+              analysis_dashboard$ui(ns("analysis_dashboard"))
             ),
             fillable_panel(
               "Visualization",
               value = "visualization_panel",
-              strip_shinyfiles_assets(visualization$ui(ns("visualization")))
+              visualization$ui(ns("visualization"))
             ),
             fillable_panel(
               "Add Isolates",
               value = "typing_panel",
-              strip_shinyfiles_assets(typing$ui(ns("typing")))
+              typing$ui(ns("typing"))
             )
           )
 

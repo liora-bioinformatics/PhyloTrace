@@ -4948,6 +4948,29 @@ label {
 }
 
 // File dialog (app/view/file_dialog.R) -------------------------------------------
+// The dialog's own overlay: above Shiny's and Bootstrap's dialogs (z-index
+// 1055), so it can open from inside one.
+.modal.fb-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1070;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.5);
+
+    &.is-open {
+        display: block;
+    }
+
+    .modal-dialog {
+        pointer-events: auto;
+    }
+}
+
+html.fb-open {
+    overflow: hidden;
+}
+
 .fb-modal .modal-body {
     padding: 0.75rem 1rem;
 }
@@ -5336,10 +5359,6 @@ label {
     // border-radius: 8px;
 }
 
-
-.shinyFiles i {
-    margin-right: 1ch;
-}
 
 // Plot tab strip: one row that scrolls sideways instead of wrapping. The card
 // header is a fixed 49px, so a wrapped second row pushed the first one (and

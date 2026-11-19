@@ -1,6 +1,6 @@
 box::use(
   testthat[expect_error, expect_false, expect_identical, expect_true, test_that],
-  withr[local_tempdir],
+  withr[local_envvar, local_options, local_tempdir],
 )
 box::use(
   app / logic / file_browser,
@@ -64,4 +64,26 @@ test_that("places always include an existing home folder", {
   rows <- file_browser$places()
   expect_identical(rows$label[1], "Home")
   expect_true(all(dir.exists(rows$path)))
+})
+
+test_that("a configured root folder confines every dialog to it", {
+  root <- normalizePath(local_tempdir(), winslash = "/")
+  dir.create(file.path(root, "data"))
+  local_options(phylotrace.file_root = root)
+
+  expect_identical(file_browser$file_root(), root)
+  expect_identical(file_browser$home_dir(), root)
+  expect_identical(file_browser$places()$path, root)
+  expect_identical(file_browser$normalize_dir(file.path(root, "data")), file.path(root, "data"))
+  expect_true(is.na(file_browser$normalize_dir(dirname(root))))
+  expect_identical(file_browser$parent_dir(root), root)
+  expect_identical(file_browser$path_crumbs(file.path(root, "data"))$label, c("Files", "data"))
+  expect_identical(file_browser$within_root(c(root, "/etc")), c(TRUE, FALSE))
+})
+
+test_that("without a root folder nothing is confined", {
+  local_options(phylotrace.file_root = "")
+  local_envvar(PHYLOTRACE_FILE_ROOT = "")
+  expect_true(is.na(file_browser$file_root()))
+  expect_true(file_browser$within_root("/"))
 })

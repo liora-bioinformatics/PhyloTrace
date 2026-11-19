@@ -24,7 +24,6 @@ box::use(
     dbDisconnect,
     dbExecute,
     dbGetQuery,
-    dbListTables,
     dbRollback,
   ],
   utils[read.delim],
@@ -67,6 +66,52 @@ SUPPORTED_AMR_SPECIES <- c(
   "Vibrio_vulfinicus",
   "Vibrio_parahaemolyticus"
 )
+
+#' AMR Results Table
+#'
+#' @description Definition of the per-isolate AMRFinderPlus hits table; shared
+#'   with the database merge, which creates it from this when missing.
+#' @export
+AMR_RESULTS_DDL <- "CREATE TABLE IF NOT EXISTS amr_results (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT,
+       gene_symbol TEXT,
+       sequence_name TEXT,
+       element_type TEXT,
+       element_subtype TEXT,
+       class TEXT,
+       subclass TEXT,
+       method TEXT,
+       pct_coverage REAL,
+       pct_identity REAL,
+       contig TEXT,
+       start INTEGER,
+       stop INTEGER,
+       strand TEXT,
+       ref_accession TEXT,
+       ref_name TEXT,
+       organism TEXT,
+       point_mutations INTEGER,
+       identity_threshold REAL,
+       abritamr_version TEXT,
+       amrfinder_version TEXT,
+       amrfinder_db_version TEXT,
+       called_at TEXT
+     )"
+
+#' AMR Summary Table
+#'
+#' @description Definition of the per-isolate abritamr summary table; shared
+#'   with the database merge.
+#' @export
+AMR_SUMMARY_DDL <- "CREATE TABLE IF NOT EXISTS amr_summary (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       isolate TEXT,
+       section TEXT,
+       drug_class TEXT,
+       genes TEXT,
+       called_at TEXT
+     )"
 
 # Map free-text scheme species to an abritamr --species token.
 # Returns the token when supported, otherwise NA (caller omits --species).
@@ -115,41 +160,36 @@ amr_organisms <- function() {
 
 #' AMR Organism of a Database
 #'
-#' @description The organism AMRFinderPlus screens point mutations for. A
-#'   database set up by PhyloTrace states it explicitly (possibly as "none");
-#'   an older database has no such setting and falls back to mapping its
-#'   species.
+#' @description The organism AMRFinderPlus screens point mutations for, as
+#'   chosen when the database was set up. An empty value, or one abritamr does
+#'   not support, means acquired genes only.
 #'
 #' @param db_path Character path to the database.
-#' @param species Character species of the database, for the fallback.
 #'
 #' @return An abritamr `--species` token, or `NA` for acquired genes only.
 #' @export
-db_amr_organism <- function(db_path, species = NA_character_) {
+db_amr_organism <- function(db_path) {
   stored <- tryCatch(
     {
       con <- connect(db_path, synchronous = NULL)
       on.exit(dbDisconnect(con))
-      if ("phylotrace_meta" %in% dbListTables(con)) {
-        dbGetQuery(
-          con,
-          "SELECT value FROM phylotrace_meta WHERE key = ?",
-          params = list(AMR_ORGANISM_KEY)
-        )$value
-      } else {
-        character(0)
-      }
+      dbGetQuery(
+        con,
+        "SELECT value FROM phylotrace_meta WHERE key = ?",
+        params = list(AMR_ORGANISM_KEY)
+      )$value
     },
     error = function(e) character(0)
   )
-  if (!length(stored)) {
-    return(amr_species(species))
+  if (length(stored) && !is.na(stored[1]) && stored[1] %in% SUPPORTED_AMR_SPECIES) {
+    stored[1]
+  } else {
+    NA_character_
   }
-  if (!is.na(stored[1]) && stored[1] %in% SUPPORTED_AMR_SPECIES) stored[1] else NA_character_
 }
 
 # Pull abritamr / AMRFinder / DB versions from typing-log sentinel lines.
-# Missing lines become NA. Mirrors parse_clamlst_meta().
+# Missing lines become NA. Mirrors pymlst$parse_tool_meta().
 #' @export
 parse_amr_meta <- function(log_lines) {
   log_text <- paste(log_lines, collapse = "\n")
@@ -360,46 +400,8 @@ store_amr_results <- function(
   con <- connect(db_path)
   on.exit(dbDisconnect(con))
 
-  dbExecute(
-    con,
-    "CREATE TABLE IF NOT EXISTS amr_results (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       isolate TEXT,
-       gene_symbol TEXT,
-       sequence_name TEXT,
-       element_type TEXT,
-       element_subtype TEXT,
-       class TEXT,
-       subclass TEXT,
-       method TEXT,
-       pct_coverage REAL,
-       pct_identity REAL,
-       contig TEXT,
-       start INTEGER,
-       stop INTEGER,
-       strand TEXT,
-       ref_accession TEXT,
-       ref_name TEXT,
-       organism TEXT,
-       point_mutations INTEGER,
-       identity_threshold REAL,
-       abritamr_version TEXT,
-       amrfinder_version TEXT,
-       amrfinder_db_version TEXT,
-       called_at TEXT
-     )"
-  )
-  dbExecute(
-    con,
-    "CREATE TABLE IF NOT EXISTS amr_summary (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       isolate TEXT,
-       section TEXT,
-       drug_class TEXT,
-       genes TEXT,
-       called_at TEXT
-     )"
-  )
+  dbExecute(con, AMR_RESULTS_DDL)
+  dbExecute(con, AMR_SUMMARY_DDL)
 
   now <- as.character(Sys.time())
   dbBegin(con)

@@ -9,7 +9,10 @@ rebuilds the index:
 * a scheme seen for the first time is added as ``pending`` - it reaches the app
   only once a maintainer has set its species and type and marked it
   ``include``;
-* a listed scheme whose name or locus count changed is updated in place;
+* a listed scheme whose locus count changed is updated in place; a changed
+  name or page address of a scheme already marked ``include`` is written to
+  the row but sends it back to ``pending``, so a maintainer confirms it before
+  the app links to it again;
 * a scheme a provider no longer lists is marked ``listed = no`` and drops out of
   the app's index.
 
@@ -17,7 +20,8 @@ Only scheme metadata is read - names, locus counts and page addresses - never
 alleles, profiles or locus tables. Each source is switched on in config.json
 only where its operator permits automated listing; robots.txt is checked before
 every host and a disallowed path stops that source. Requests are sequential,
-paced and identify the maintainer.
+paced and identify the maintainer. PubMLST and Institut Pasteur are not read
+at all; their rows are curated by hand (``source = manual``).
 
 Usage:
     scheme_index.py update [--report FILE] [--offline]
@@ -50,8 +54,23 @@ CURATION_FIELDS = [
 INDEX_FIELDS = ["species", "type", "provider", "scheme", "loci", "url", "note"]
 STATUSES = {"include", "exclude", "pending"}
 TYPES = {"cgMLST", "wgMLST", "MLST"}
-# Scheme sources whose ids the app knows (app/logic/scheme_sources.R).
-PROVIDERS = {"cgmlst_org", "pubmlst", "pasteur", "chewie_ns", "enterobase", "own", "other"}
+PROVIDERS = HERE / "providers.json"
+
+
+def load_provider_hosts(path=PROVIDERS):
+    """Hosts an index row of each provider may link to, from providers.json.
+
+    The app shows the url as a link, so only these (over https) pass. Provider
+    ids are those of app/logic/scheme_sources.R; "own" and "other" have no
+    public page and so cannot appear in the index.
+    """
+    providers = json.loads(Path(path).read_text(encoding="utf-8"))["providers"]
+    return {pid: set(p["hosts"]) for pid, p in providers.items()}
+
+
+PROVIDER_HOSTS = load_provider_hosts()
+# Fields a listing may change on an included row only after review.
+REVIEWED_FIELDS = ("scheme", "url")
 SPECIES_RE = re.compile(r"^[A-Z][A-Za-z0-9-]* ?([A-Za-z0-9-]+(/[A-Za-z0-9-]+)*)?$")
 
 
@@ -193,52 +212,9 @@ def fetch_chewie_ns(client, settings):
     return rows
 
 
-def parse_bigsdb_schemes(db_description, db_page, schemes, details):
-    """Schemes of one BIGSdb typing database (PubMLST, Institut Pasteur)."""
-    rows = []
-    species = clean_species(re.sub(r"sequence/profile definitions|REST API access to|seqdef database",
-                                   " ", db_description, flags=re.I))
-    for scheme, detail in zip(schemes, details):
-        description = scheme["description"].strip()
-        lowered = description.lower()
-        # rMLST is licensed for academic, non-commercial use only and may not be
-        # used to provide a service; it is never offered.
-        if "rmlst" in lowered or "ribosomal" in lowered:
-            continue
-        kind = guess_type(description)
-        if not kind:
-            continue
-        scheme_id = scheme["scheme"].rstrip("/").rsplit("/", 1)[1]
-        db_name = scheme["scheme"].split("/db/", 1)[1].split("/", 1)[0]
-        rows.append({
-            "source_id": f"{db_name}/{scheme_id}",
-            "scheme": f"{species} {description}".strip(),
-            "species": species,
-            "type": kind,
-            "loci": len(detail.get("loci", [])) or "",
-            "url": db_page,
-        })
-    return rows
-
-
-def fetch_bigsdb(client, settings):
-    rows = []
-    for group in client.json(settings["api"]):
-        for db in group.get("databases", []):
-            if not db["name"].endswith("seqdef"):
-                continue
-            listed = client.json(db["href"] + "/schemes").get("schemes", [])
-            details = [client.json(s["scheme"]) for s in listed]
-            page = settings["page"].format(db=db["name"])
-            rows += parse_bigsdb_schemes(db["description"], page, listed, details)
-    return rows
-
-
 FETCHERS = {
     "cgmlst_org": fetch_cgmlst_org,
     "chewie_ns": fetch_chewie_ns,
-    "pubmlst": fetch_bigsdb,
-    "pasteur": fetch_bigsdb,
 }
 
 
@@ -252,7 +228,7 @@ def read_curation(path=CURATION):
 def row_order(row):
     """Stable position of a curation row: source, then scheme id with numbers
     compared as numbers ("2/1" before "18/1"). Status is deliberately not part
-    of it, so reviewing a row never moves it and the weekly diff stays quiet."""
+    of it, so reviewing a row never moves it and the monthly diff stays quiet."""
     parts = re.split(r"(\d+)", row["source_id"].lower())
     return (row["source"], [int(p) if p.isdigit() else p for p in parts])
 
@@ -270,8 +246,13 @@ def write_curation(rows, path=CURATION):
 
 
 def merge(curation, source, found, today):
-    """Merge one source's listing into the curation rows; returns the changes."""
-    changes = {"new": [], "updated": [], "unlisted": [], "relisted": []}
+    """Merge one source's listing into the curation rows; returns the changes.
+
+    A new name or page address of an included row is never taken over silently:
+    the row goes back to ``pending`` (and out of the app's index) until a
+    maintainer has checked it in the pull request.
+    """
+    changes = {"new": [], "updated": [], "review": [], "unlisted": [], "relisted": []}
     known = {r["source_id"]: r for r in curation if r["source"] == source}
     seen = set()
     for entry in found:
@@ -292,12 +273,17 @@ def merge(curation, source, found, today):
             row["listed"] = "yes"
             changes["relisted"].append(row)
         diffs = []
+        needs_review = False
         for field in ("scheme", "loci", "url"):
             value = str(entry[field])
             if value and row.get(field, "") != value:
-                diffs.append(f"{field}: {row.get(field, '') or '-'} -> {value}")
+                diffs.append((field, row.get(field, ""), value))
                 row[field] = value
-        if diffs:
+                needs_review |= field in REVIEWED_FIELDS
+        if needs_review and row.get("status") == "include":
+            row["status"] = "pending"
+            changes["review"].append((row, diffs))
+        elif diffs:
             changes["updated"].append((row, diffs))
     for sid, row in known.items():
         if sid not in seen and row.get("listed") != "no":
@@ -306,31 +292,59 @@ def merge(curation, source, found, today):
     return changes
 
 
-def validate(rows):
+def url_ok(url, provider):
+    """True for a plain https address on one of the provider's own hosts."""
+    if len(url) > 500 or re.search(r"[\s<>\"'`\\]", url):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "https"
+        and "@" not in parts.netloc
+        and port is None
+        and parts.hostname in PROVIDER_HOSTS.get(provider, set())
+    )
+
+
+def row_problems(r):
     """Problems that would put a broken row into the app's index."""
+    tag = f"{r['source']}:{r['source_id']}"
+    if r["status"] not in STATUSES:
+        return [f"{tag}: unknown status '{r['status']}'"]
+    if r["status"] != "include":
+        return []
     problems = []
-    for r in rows:
-        tag = f"{r['source']}:{r['source_id']}"
-        if r["status"] not in STATUSES:
-            problems.append(f"{tag}: unknown status '{r['status']}'")
-        if r["status"] != "include":
-            continue
-        if r["type"] not in TYPES:
-            problems.append(f"{tag}: type must be one of {sorted(TYPES)}")
-        if r["provider"] not in PROVIDERS:
-            problems.append(f"{tag}: unknown provider '{r['provider']}'")
-        if not SPECIES_RE.match(r["species"]):
-            problems.append(f"{tag}: species '{r['species']}' is not 'Genus epithet[/epithet]'")
-        if not r["url"].startswith("https://") or re.search(r"\s", r["url"]):
-            problems.append(f"{tag}: url must be a plain https address")
-        if r["loci"] and not r["loci"].isdigit():
-            problems.append(f"{tag}: loci must be a whole number")
+    if r["type"] not in TYPES:
+        problems.append(f"{tag}: type must be one of {sorted(TYPES)}")
+    if r["provider"] not in PROVIDER_HOSTS:
+        problems.append(f"{tag}: provider '{r['provider']}' cannot be linked from the index")
+    if not SPECIES_RE.match(r["species"]):
+        problems.append(f"{tag}: species '{r['species']}' is not 'Genus epithet[/epithet]'")
+    if not url_ok(r["url"], r["provider"]):
+        problems.append(f"{tag}: url must be a plain https address on the provider's own host")
+    if r["loci"] and not r["loci"].isdigit():
+        problems.append(f"{tag}: loci must be a whole number")
     return problems
 
 
+def validate(rows):
+    """Problems of all curation rows (see row_problems)."""
+    return [p for r in rows for p in row_problems(r)]
+
+
 def build_index(curation, path=INDEX):
-    """Write the app's index from the included, still listed curation rows."""
-    rows = [r for r in curation if r["status"] == "include" and r.get("listed", "yes") != "no"]
+    """Write the app's index from the included, still listed, valid curation rows.
+
+    A row validate() flags is left out, so a bad address never reaches the app
+    even if the problem report is overlooked.
+    """
+    rows = [
+        r for r in curation
+        if r["status"] == "include" and r.get("listed", "yes") != "no" and not row_problems(r)
+    ]
     rows.sort(key=lambda r: (r["type"] != "cgMLST", r["species"].lower(), r["provider"], r["scheme"].lower()))
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=INDEX_FIELDS, quoting=csv.QUOTE_ALL, lineterminator="\n")
@@ -341,6 +355,23 @@ def build_index(curation, path=INDEX):
 
 # Report ----------------------------------------------------------------------
 
+def md_code(value, limit=200):
+    """Provider-supplied text as an inert Markdown code span.
+
+    Scheme names and addresses come from the providers; inside a code span
+    GitHub renders no links, mentions or markup. Backticks, which would end
+    the span, and line breaks, which would end the list item, are replaced.
+    """
+    text = re.sub(r"[\s\x00-\x1f\x7f]+", " ", str(value)).replace("`", "'").strip()
+    if len(text) > limit:
+        text = text[:limit - 3] + "..."
+    return f"`{text or '-'}`"
+
+
+def md_diffs(diffs):
+    return "; ".join(f"{field}: {md_code(old)} -> {md_code(new)}" for field, old, new in diffs)
+
+
 def report_markdown(results, problems, n_index):
     lines = ["Automated check of the providers' public scheme listings "
              "(dev/scheme_index/scheme_index.py). Only scheme names, locus counts "
@@ -348,7 +379,7 @@ def report_markdown(results, problems, n_index):
     for source, outcome in results.items():
         lines.append(f"### {source}")
         if isinstance(outcome, str):
-            lines += [f"Skipped: {outcome}", ""]
+            lines += [f"Skipped: {md_code(outcome, 500)}", ""]
             continue
         changes = outcome
         if not any(changes.values()):
@@ -356,21 +387,29 @@ def report_markdown(results, problems, n_index):
             continue
         if changes["new"]:
             lines.append("**New - pending review** (set species/type, then status `include` or `exclude`):")
-            lines += [f"- `{r['source_id']}` {r['scheme']} ({r['loci'] or '?'} loci) - {r['url']}"
+            lines += [f"- {md_code(r['source_id'])} {md_code(r['scheme'])} "
+                      f"({md_code(r['loci'] or '?')} loci) - {md_code(r['url'])}"
                       for r in changes["new"]]
+        if changes["review"]:
+            lines.append("**Name or address changed - back to pending review** (removed from the "
+                         "app's index; check the new values, then set status `include` again):")
+            lines += [f"- {md_code(r['source_id'])}: {md_diffs(d)}" for r, d in changes["review"]]
         if changes["updated"]:
             lines.append("**Changed:**")
-            lines += [f"- `{r['source_id']}` {r['scheme']}: " + "; ".join(d) for r, d in changes["updated"]]
+            lines += [f"- {md_code(r['source_id'])} {md_code(r['scheme'])}: {md_diffs(d)}"
+                      for r, d in changes["updated"]]
         if changes["unlisted"]:
             lines.append("**No longer listed** (removed from the app's index):")
-            lines += [f"- `{r['source_id']}` {r['scheme']}" for r in changes["unlisted"]]
+            lines += [f"- {md_code(r['source_id'])} {md_code(r['scheme'])}"
+                      for r in changes["unlisted"]]
         if changes["relisted"]:
             lines.append("**Listed again:**")
-            lines += [f"- `{r['source_id']}` {r['scheme']}" for r in changes["relisted"]]
+            lines += [f"- {md_code(r['source_id'])} {md_code(r['scheme'])}"
+                      for r in changes["relisted"]]
         lines.append("")
     if problems:
-        lines.append("### Problems to fix before merging")
-        lines += [f"- {p}" for p in problems]
+        lines.append("### Problems to fix before merging (these rows are left out of the index)")
+        lines += [f"- {md_code(p, 500)}" for p in problems]
         lines.append("")
     lines.append(f"The app's index now lists {n_index} schemes.")
     return "\n".join(lines) + "\n"
@@ -388,6 +427,9 @@ def update(report_path=None, offline=False):
             continue
         if offline:
             results[source] = "offline run"
+            continue
+        if source not in FETCHERS:
+            results[source] = "no fetcher for this source"
             continue
         try:
             found = FETCHERS[source](client, settings)

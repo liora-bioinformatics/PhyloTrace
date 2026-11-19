@@ -1303,15 +1303,15 @@ test_that("the legend is planned against the height it is drawn into", {
   )
   many <- amr_plot$amr_auto_layout(
     100, 40,
-    block_titles = paste0("Class-", 1:80)
+    block_titles = paste0("Class-", 1:300)
   )
   expect_equal(unname(few$legend_keys[["class:blocks"]]), 2L)
-  expect_lt(unname(many$legend_keys[["class:blocks"]]), 80L)
+  expect_lt(unname(many$legend_keys[["class:blocks"]]), 300L)
   expect_gte(many$fontsize_legend, impl$AMR_LEGEND_MIN_PT)
 
   tall <- amr_plot$amr_auto_layout(
     100, 40,
-    block_titles = paste0("Class-", 1:80),
+    block_titles = paste0("Class-", 1:300),
     aspect = 6
   )
   expect_gte(
@@ -1454,6 +1454,9 @@ test_that("a mapped strip is drawn as wide as the body the fit took it from", {
     as.numeric(convertWidth(anno$anno@width, "in")),
     impl$AMR_STRIP_IN
   )
+  # The fit's own width, where it hands one in.
+  wide <- impl$.row_annotation(mat, layers, "#000000", legend_gp, list(strip_in = 0.3))
+  expect_equal(as.numeric(convertWidth(wide$anno@width, "in")), 0.3)
 
   # And its name is set to that width rather than to the legend's size, and
   # goes off entirely where the width will not carry the floor - the legend it
@@ -1811,7 +1814,9 @@ test_that("the canvas grows sideways for gene names it can set legibly", {
   )
 })
 
-test_that("a bigger text size widens the columns the gene names are set in", {
+test_that("the text size does not grow the canvas, so it shows in a fitted preview", {
+  # The preview is scaled to its frame: a page that doubled with the text
+  # would draw every label at the same share of the figure as before.
   fit_at <- function(k) {
     w <- amr_plot$amr_canvas_width_in(96, text_scale = k)
     list(w = w, fit = amr_plot$amr_auto_layout(990, 96, width_in = w, text_scale = k))
@@ -1819,17 +1824,70 @@ test_that("a bigger text size widens the columns the gene names are set in", {
   small <- fit_at(0.6)
   base <- fit_at(1)
   big <- fit_at(2)
-  expect_gt(big$w, amr_plot$AMR_CANVAS_IN * viz_fit$CANVAS_MAX_FACTOR)
-  expect_gt(big$fit$fontsize_col, base$fit$fontsize_col * 1.8)
-  expect_lt(small$w, base$w)
-  # Smaller text narrows the page, but not past names legible at the floor.
+  expect_equal(small$w, base$w)
+  expect_equal(big$w, base$w)
+  # A gene name is capped by its column, so a bigger size cannot pass it, and
+  # never comes out smaller for asking for bigger text.
+  expect_gte(big$fit$fontsize_col, base$fit$fontsize_col)
   expect_true(small$fit$cols_legible)
   expect_gte(small$fit$fontsize_col, viz_fit$MIN_PRINT_PT)
-  # Names switched off are not text, so the size does not widen for them.
-  expect_equal(
-    amr_plot$amr_canvas_width_in(96, show_col_names = FALSE, text_scale = 2),
-    amr_plot$amr_canvas_width_in(96, show_col_names = FALSE)
+})
+
+test_that("mapped strips widen with the text size, and the canvas only by that", {
+  base_w <- amr_plot$amr_canvas_width_in(45, n_strips = 3L)
+  big_w <- amr_plot$amr_canvas_width_in(45, n_strips = 3L, text_scale = 2)
+  expect_equal(big_w - base_w, 3 * impl$AMR_STRIP_IN, tolerance = 0.02)
+  base <- amr_plot$amr_auto_layout(1000, 45, width_in = base_w, n_strips = 3L, aspect = 2)
+  big <- amr_plot$amr_auto_layout(
+    1000, 45,
+    width_in = big_w, n_strips = 3L, aspect = 2, text_scale = 2
   )
+  expect_equal(big$strip_in, 2 * base$strip_in)
+  expect_gt(big$fontsize_anno, base$fontsize_anno * 1.8)
+  # The strips' gain is the canvas's, not the gene columns'.
+  expect_equal(big$cell_width_in, base$cell_width_in, tolerance = 1e-3)
+})
+
+test_that("a legend longer than the page wraps into columns before it shrinks", {
+  tiers <- c("Absent", "Partial", "Strong", "Perfect")
+  guide <- function(kind, title, keys) {
+    list(
+      id = paste0(kind, ":", title), kind = kind, title = title,
+      cols = setNames(rep("#000000", length(keys)), keys), n = length(keys)
+    )
+  }
+  guides <- c(
+    lapply(c("Resistance", "Virulence", "Stress"), function(t) {
+      guide("fill", paste(t, "gene call"), tiers)
+    }),
+    list(
+      guide("strip", "Year", as.character(2002:2020)),
+      guide("strip", "Country", c("AT", "CZ", "DK", "FR", "IT", "SE")),
+      guide("strip", "Source", c("dairy", "fish", "meat", "vegetable"))
+    )
+  )
+  args <- list(
+    1000, 45,
+    width_in = amr_plot$amr_canvas_width_in(45, n_strips = 3L),
+    n_strips = 3L, aspect = 0.8, legend_guides = guides
+  )
+  fit <- do.call(amr_plot$amr_auto_layout, args)
+  one_col <- impl$.legend_width_in(guides, list(ncol = fit$legend_ncol), fit$fontsize_legend)
+  expect_gt(fit$fontsize_legend, impl$AMR_LEGEND_MIN_PT + 2)
+  expect_gt(fit$legend_width_in, one_col)
+  # Every key, up to the cap a mapped variable is held to anyway.
+  want <- pmin(vapply(guides, function(g) g$n, integer(1)), viz_legend$LEGEND_FULL_MAX)
+  expect_true(all(fit$legend_keys >= want))
+  args$aspect <- 3
+  tall <- do.call(amr_plot$amr_auto_layout, args)
+  big <- do.call(amr_plot$amr_auto_layout, c(args, list(text_scale = 1.5)))
+  expect_gt(big$fontsize_legend, tall$fontsize_legend)
+})
+
+test_that(".wrap_columns starts a column where the next guide does not fit", {
+  expect_equal(impl$.wrap_columns(c(5, 5, 5), 10), 2L)
+  expect_equal(impl$.wrap_columns(c(5, 5), 10), 1L)
+  expect_equal(impl$.wrap_columns(c(12), 10), 1L)
 })
 
 test_that("text size moves every label's ceiling and none past its room", {

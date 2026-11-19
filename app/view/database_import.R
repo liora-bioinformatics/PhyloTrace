@@ -11,7 +11,6 @@
 
 box::use(
   bslib[as_fill_carrier, layout_sidebar, sidebar, tooltip],
-  fs[path_home],
   openxlsx[getSheetNames],
   shiny[
     actionButton,
@@ -40,8 +39,7 @@ box::use(
     uiOutput,
     withProgress
   ],
-  shinyFiles[parseFilePaths, shinyFileChoose, shinyFilesButton],
-  shinyjs[disable, disabled, enable, hidden, runjs, toggle],
+  shinyjs[disable, disabled, enable, hidden, toggle],
   shinyWidgets[pickerInput, pickerOptions],
   stats[setNames],
   utils[head],
@@ -74,6 +72,7 @@ box::use(
   app /
     logic /
     db_staging[
+      check_staged_metadata,
       delete_imported_set,
       list_imported_sets,
       resolve_profile,
@@ -92,6 +91,7 @@ box::use(
       scheme_loci
     ],
   app / logic / pymlst[existing_strains],
+  app / view / file_dialog,
 )
 
 # A `.db` carries real sequences and can be merged into the typing database. A
@@ -101,12 +101,6 @@ SOURCE_TYPES <- c(
   "PhyloTrace database (.db)" = "database",
   "Typing results (table)" = "typing"
 )
-
-# Helper function to define root directories for file choosers
-.roots <- function() c(Home = path_home(), Root = "/")
-
-# Clean leading slashes from file paths outputted by shinyFiles
-.clean_path <- function(p) sub("^/{2,}", "/", as.character(p))
 
 .ACTION_CHOICES <- c(
   "Skip" = "skip",
@@ -193,15 +187,7 @@ ui <- function(id) {
                 id = ns("db_group"),
                 class = "io-control-group",
                 div(class = "control-group-label", "External database"),
-                shinyFilesButton(
-                  ns("ext_db"),
-                  "Select database …",
-                  title = "Choose a PhyloTrace database to import",
-                  icon = icon("file-import"),
-                  buttonType = "default",
-                  multiple = FALSE,
-                  root = path_home()
-                ),
+                file_dialog$ui(ns("ext_db"), "Select database …", "file-import"),
                 uiOutput(ns("ext_db_label"), inline = TRUE)
               ),
               # --- stage a profile table ------------------------------------------
@@ -209,33 +195,9 @@ ui <- function(id) {
                 id = ns("typing_group"),
                 class = "io-control-group",
                 div(class = "control-group-label", "Typing results"),
-                shinyFilesButton(
-                  ns("profile_file"),
-                  "Profile table …",
-                  title = "Choose a profile table (.tsv / .csv / .xlsx)",
-                  icon = icon("table"),
-                  buttonType = "default",
-                  multiple = FALSE,
-                  root = path_home()
-                ),
-                shinyFilesButton(
-                  ns("seq_file"),
-                  "Sequences …",
-                  title = "Optional: the matching allele FASTA",
-                  icon = icon("dna"),
-                  buttonType = "default",
-                  multiple = FALSE,
-                  root = path_home()
-                ),
-                shinyFilesButton(
-                  ns("meta_file"),
-                  "Metadata …",
-                  title = "Optional: a metadata table for these isolates",
-                  icon = icon("table-list"),
-                  buttonType = "default",
-                  multiple = FALSE,
-                  root = path_home()
-                )
+                file_dialog$ui(ns("profile_file"), "Profile table …", "table"),
+                file_dialog$ui(ns("seq_file"), "Sequences …", "dna"),
+                file_dialog$ui(ns("meta_file"), "Metadata …", "table-list")
               )),
               hidden(div(
                 id = ns("set_name_group"),
@@ -265,7 +227,8 @@ ui <- function(id) {
               div(
                 class = "io-control-group",
                 div(class = "control-group-label", "Import"),
-                uiOutput(ns("action_button_ui"), inline = TRUE)
+                uiOutput(ns("action_button_ui"), inline = TRUE),
+                uiOutput(ns("typing_busy_note"))
               ),
               div(
                 id = ns("rollback_group"),
@@ -298,7 +261,10 @@ server <- function(
   # Database panel is rebuilt on every database load while this server keeps
   # running, and DOM state applied from here does not survive that rebuild —
   # see main.R's ui_mounted.
-  ui_mounted = reactive(0L)
+  ui_mounted = reactive(0L),
+  # TRUE while a typing run writes to the loaded database; merge and restore
+  # replace the file and would lose what the run writes.
+  typing_active = reactive(FALSE)
 ) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -308,6 +274,10 @@ server <- function(
     # never outlives its selection.
     selected <- reactiveVal(NULL)
     prep <- reactiveVal(NULL)
+    # Plain mirrors of the staged copies, released when the session ends
+    # (outside any reactive context).
+    ext_prep_handle <- NULL
+    local_prep_handle <- NULL
     # Bumped after a successful merge / restore so the local-side reactives
     # (backup list, metadata columns, compatibility) recompute.
     local_token <- reactiveVal(0L)
@@ -315,7 +285,10 @@ server <- function(
 
     # Updates source file selection and prepares staged database copy
     set_source <- function(path) {
-      release_source(prep())
+      release_source(ext_prep_handle)
+      ext_prep_handle <<- NULL
+      release_source(local_prep_handle)
+      local_prep_handle <<- NULL
       prep(NULL)
       selected(path)
       if (!is.null(path)) {
@@ -327,28 +300,38 @@ server <- function(
             duration = 6
           )
         }
+        ext_prep_handle <<- staged
         prep(staged)
       }
     }
 
     # Drop the chosen external database: release its staged copy and put the
-    # panel back into its "no source chosen" state.
-    #
-    # The client-side value has to go too. shinyFiles reports a selection with
-    # Shiny.onInputChange, and Shiny drops an input update whose value equals
-    # the last one it sent - so with the button still holding the old file,
-    # re-choosing that same file would not register as a change and the panel
-    # would sit empty. Setting the input to NULL makes the next selection
-    # differ; the observer above ignores the NULL itself (ignoreNULL).
+    # panel back into its "no source chosen" state. Picking the same file again
+    # afterwards still registers: the file dialog reports every pick.
     clear_ext_db <- function() {
       set_source(NULL)
-      runjs(sprintf(
-        "if (window.Shiny) Shiny.setInputValue('%s', null);",
-        ns("ext_db")
-      ))
     }
 
-    session$onSessionEnded(function() release_source(shiny::isolate(prep())))
+    session$onSessionEnded(function() {
+      release_source(ext_prep_handle)
+      release_source(local_prep_handle)
+    })
+
+    # The loaded database with complete hashes, for the collision check and
+    # the summary. When typing left hashes missing this is a hashed temp copy,
+    # so it is made once per selection (and again only when the database
+    # changes), never on every re-render; the previous copy is released first.
+    local_prep <- reactive({
+      local_token()
+      db_events$depend(db_rev, "isolates", "schema")
+      local <- db_path()
+      req(!is.null(local), !is.na(local), !is.null(prep()))
+      release_source(local_prep_handle)
+      local_prep_handle <<- NULL
+      staged <- guard_db_read("Checking the database to import", prepare_source(local))
+      local_prep_handle <<- staged
+      staged
+    })
 
     # Define spinner
     db_waiter <- Waiter$new(
@@ -360,24 +343,19 @@ server <- function(
       )
     )
 
-    shinyFileChoose(
-      input,
+    # The external database the user picks.
+    picked_db <- file_dialog$server(
       "ext_db",
-      roots = .roots(),
-      defaultRoot = "Home",
-      filetypes = c("db"),
-      session = session
+      mode = "file",
+      title = "Choose a PhyloTrace database to import",
+      pattern = "\\.db$"
     )
 
-    # Handle selection of external database file
-    observeEvent(input$ext_db, {
-      path <- parseFilePaths(.roots(), input$ext_db)$datapath
-      req(length(path), is.character(path), file.exists(path))
-
-      path <- .clean_path(path)
-
-      db_waiter$show() # Show spinner
-
+    # Reads the picked database as the import source.
+    observeEvent(picked_db(), {
+      path <- picked_db()
+      req(length(path) == 1L, file.exists(path))
+      db_waiter$show()
       set_source(path)
     })
 
@@ -424,30 +402,28 @@ server <- function(
     seq_path <- reactiveVal(NULL)
     meta_path <- reactiveVal(NULL)
 
-    for (nm in c("profile_file", "seq_file", "meta_file")) {
-      shinyFileChoose(
-        input,
-        nm,
-        roots = .roots(),
-        defaultRoot = "Home",
-        filetypes = if (identical(nm, "seq_file")) {
-          c("fasta", "fa", "fna", "fas", "txt")
-        } else {
-          c("tsv", "csv", "txt", "xlsx")
-        },
-        session = session
-      )
-    }
-
-    # Helper function to assign selected file paths to target reactive values
-    pick <- function(input_value, target) {
-      path <- parseFilePaths(.roots(), input_value)$datapath
-      req(length(path), is.character(path), file.exists(path))
-      target(.clean_path(path))
-    }
-    observeEvent(input$profile_file, pick(input$profile_file, profile_path))
-    observeEvent(input$seq_file, pick(input$seq_file, seq_path))
-    observeEvent(input$meta_file, pick(input$meta_file, meta_path))
+    table_files <- "\\.(tsv|csv|txt|xlsx)$"
+    picked_profile <- file_dialog$server(
+      "profile_file",
+      mode = "file",
+      title = "Choose a profile table (.tsv / .csv / .xlsx)",
+      pattern = table_files
+    )
+    picked_seq <- file_dialog$server(
+      "seq_file",
+      mode = "file",
+      title = "Optional: the matching allele FASTA",
+      pattern = "\\.(fasta|fa|fna|fas|txt)$"
+    )
+    picked_meta <- file_dialog$server(
+      "meta_file",
+      mode = "file",
+      title = "Optional: a metadata table for these isolates",
+      pattern = table_files
+    )
+    observeEvent(picked_profile(), profile_path(picked_profile()))
+    observeEvent(picked_seq(), seq_path(picked_seq()))
+    observeEvent(picked_meta(), meta_path(picked_meta()))
 
     # Parse selected profile file using current database scheme
     parsed <- reactive({
@@ -514,9 +490,24 @@ server <- function(
       )
     })
 
+    # The profile checks plus the check of a supplied metadata table; a
+    # metadata file that cannot be read fails here instead of at staging.
+    typing_checks <- reactive({
+      checks <- resolved()$checks
+      meta <- tryCatch(
+        check_staged_metadata(supplied_metadata()),
+        error = function(e) {
+          data.frame(check = "Metadata", status = "fail", detail = conditionMessage(e))
+        }
+      )
+      out <- rbind(checks, meta)
+      attr(out, "blocked") <- isTRUE(attr(checks, "blocked")) || any(meta$status == "fail")
+      out
+    })
+
     # Checks whether staging typing results is blocked
     typing_blocked <- reactive({
-      isTRUE(attr(resolved()$checks, "blocked"))
+      isTRUE(attr(typing_checks(), "blocked"))
     })
 
     # Staged isolates must not collide with a local isolate or another set.
@@ -577,9 +568,10 @@ server <- function(
     classification <- reactive({
       req(!blocked())
       ext <- prep()$path
+      local <- local_prep()$path
       guard_db_read(
         "Checking the database to import",
-        classify_isolate_collisions(db_path(), ext)
+        classify_isolate_collisions(local, ext)
       )
     })
 
@@ -708,9 +700,14 @@ server <- function(
       )
     })
 
+    # How the two classical MLST schemes relate (see mlst_scheme_relation()).
+    scheme_relation <- reactive(attr(compat(), "mlst_scheme"))
+
     # Optional analysis-result tables, offered only for a `.db` merge and only
-    # for the tables the external database actually carries. When a checkbox is
-    # not rendered, its input is NULL, so the merge simply does not carry it.
+    # for the tables the external database actually carries, plus adopting the
+    # external classical MLST scheme where the compatibility check offers it.
+    # When a checkbox is not rendered, its input is NULL, so the merge simply
+    # does not carry it.
     output$results_picker_ui <- renderUI({
       staged <- prep()
       if (typing() || is.null(staged)) {
@@ -720,23 +717,49 @@ server <- function(
         available_result_tables(staged$path),
         error = function(e) list(classical = FALSE, amr = FALSE)
       )
-      if (!present$classical && !present$amr) {
+      scheme <- tryCatch(scheme_relation(), error = function(e) NULL)
+      adopt <- isTRUE(scheme$adopt_offer)
+      classical_default <- !isFALSE(scheme$classical_default)
+      if (!present$classical && !present$amr && !adopt) {
         return(div(
           class = "dest-label is-empty",
           "No analysis results to import"
         ))
       }
+      note <- scheme$note %||% NA_character_
+      show_note <- !is.na(note) && (adopt || (present$classical && !classical_default))
       tagList(
         if (present$classical) {
           checkboxInput(
             ns("include_classical"),
             "Classical MLST results",
-            value = TRUE
+            value = classical_default
           )
         },
         if (present$amr) {
           checkboxInput(ns("include_amr"), "AMR results", value = TRUE)
-        }
+        },
+        if (adopt) {
+          checkboxInput(
+            ns("adopt_mlst_scheme"),
+            "Adopt the imported database's classical MLST scheme",
+            value = isTRUE(scheme$adopt_default)
+          )
+        },
+        if (show_note) div(class = "dest-label is-empty", note)
+      )
+    })
+
+    # Why Merge and Restore are unavailable while typing runs.
+    output$typing_busy_note <- renderUI({
+      if (typing() || !isTRUE(typing_active())) {
+        return(NULL)
+      }
+      div(
+        class = "dest-label is-empty",
+        icon("circle-info"),
+        " Typing is writing to this database. Merge and restore are available",
+        " again once the run has finished."
       )
     })
 
@@ -879,10 +902,11 @@ server <- function(
       # it would re-hash every isolate profile on both sides each time a
       # resolution dropdown moves — seconds of lag on a real database.
       ext <- prep()$path
+      local <- local_prep()$path
       res <- resolutions()
       p <- guard_db_read(
         "Preparing the import summary",
-        import_preview(db_path(), ext, res, cl)
+        import_preview(local, ext, res, cl)
       )
 
       transfer_cards(
@@ -990,20 +1014,31 @@ server <- function(
 
       r <- resolved()
       p <- parsed()
+      checks <- typing_checks()
 
       if (typing_blocked()) {
         return(transfer_cards(
           transfer_row(
-            r$checks,
+            checks,
             "Staging summary",
-            div(
-              class = "alert alert-danger mb-0",
-              icon("triangle-exclamation"),
-              " ",
-              strong("These results cannot be linked to this database."),
-              " Without a link from each call to a real allele, any distance we",
-              " computed would be meaningless."
-            )
+            if (isTRUE(r$linkable)) {
+              div(
+                class = "alert alert-danger mb-0",
+                icon("triangle-exclamation"),
+                " ",
+                strong("The metadata table cannot be used."),
+                " Correct it, or choose a different file."
+              )
+            } else {
+              div(
+                class = "alert alert-danger mb-0",
+                icon("triangle-exclamation"),
+                " ",
+                strong("These results cannot be linked to this database."),
+                " Without a link from each call to a real allele, any distance we",
+                " computed would be meaningless."
+              )
+            }
           ),
           staged_ui()
         ))
@@ -1013,7 +1048,7 @@ server <- function(
 
       transfer_cards(
         transfer_row(
-          r$checks,
+          checks,
           "Staging summary",
           div(
             class = "export-stats",
@@ -1100,7 +1135,7 @@ server <- function(
       }
 
       ok <- tryCatch(
-        !is.null(selected()) && !blocked() && accepted() > 0,
+        !isTRUE(typing_active()) && !is.null(selected()) && !blocked() && accepted() > 0,
         error = function(e) FALSE
       )
       if (isTRUE(ok)) enable("merge_btn") else disable("merge_btn")
@@ -1211,11 +1246,26 @@ server <- function(
 
     # -- Merge ---------------------------------------------------------------
 
+    # Tells the user that a typing run blocks merge / restore right now.
+    notify_typing_busy <- function(what) {
+      showNotification(
+        sprintf("%s is not possible while typing writes to this database.", what),
+        type = "warning",
+        duration = 6
+      )
+    }
+
     # Displays merge confirmation modal popup
     observeEvent(input$merge_btn, {
       req(accepted() > 0)
+      if (isTRUE(typing_active())) {
+        notify_typing_busy("Merging")
+        return()
+      }
       res <- resolutions()
       acc <- res[res$action != "skip", , drop = FALSE]
+      adopt <- isTRUE(input$adopt_mlst_scheme) &&
+        isTRUE(tryCatch(scheme_relation()$adopt_offer, error = function(e) FALSE))
 
       showModal(modalDialog(
         title = "Merge database",
@@ -1236,6 +1286,11 @@ server <- function(
               )
             )
           },
+          if (adopt) {
+            tags$p(
+              "The local classical MLST scheme is replaced by the imported database's scheme."
+            )
+          },
           tags$p(
             class = "dest-label is-empty",
             "The current database is saved as a timestamped backup first, so this can be rolled back."
@@ -1252,6 +1307,11 @@ server <- function(
     # Executes database merge operation on confirmation
     observeEvent(input$confirm_merge, {
       removeModal()
+      # Typing may have started while the dialog was open.
+      if (isTRUE(typing_active())) {
+        notify_typing_busy("Merging")
+        return()
+      }
       local <- db_path()
       staged <- prep()
       req(!is.null(local), !is.null(staged))
@@ -1281,6 +1341,8 @@ server <- function(
           include_classical = isTRUE(input$include_classical),
           include_amr = isTRUE(input$include_amr),
           custom_fields = input$custom_fields %||% character(0),
+          adopt_mlst_scheme = isTRUE(input$adopt_mlst_scheme) &&
+            isTRUE(tryCatch(scheme_relation()$adopt_offer, error = function(e) FALSE)),
           backup = TRUE,
           progress = step,
           # `staged$path` can be a temp copy; the label written into
@@ -1356,24 +1418,36 @@ server <- function(
       if (!length(files)) {
         return(div(class = "dest-label is-empty", "No backups yet"))
       }
+      busy <- isTRUE(typing_active())
+      button <- actionButton(
+        ns("restore_btn"),
+        "Restore",
+        class = "btn-outline-danger",
+        icon = icon("rotate-left")
+      )
       tagList(
         pickerInput(
           ns("backup_pick"),
           label = NULL,
           choices = setNames(files, basename(files))
         ),
-        actionButton(
-          ns("restore_btn"),
-          "Restore",
-          class = "btn-outline-danger",
-          icon = icon("rotate-left")
-        )
+        if (busy) disabled(button) else button,
+        if (busy) {
+          div(
+            class = "dest-label is-empty",
+            "Not available while typing writes to this database."
+          )
+        }
       )
     })
 
     # Displays rollback backup confirmation modal popup
     observeEvent(input$restore_btn, {
       req(input$backup_pick)
+      if (isTRUE(typing_active())) {
+        notify_typing_busy("Restoring a backup")
+        return()
+      }
       showModal(modalDialog(
         title = "Restore backup",
         tags$p(tagList(
@@ -1396,6 +1470,10 @@ server <- function(
     # Executes database backup restoration operation on confirmation
     observeEvent(input$confirm_restore, {
       removeModal()
+      if (isTRUE(typing_active())) {
+        notify_typing_busy("Restoring a backup")
+        return()
+      }
 
       # restore_backup() is a couple of filesystem ops with nothing to report
       # progress against, so the spinner just names the work rather than

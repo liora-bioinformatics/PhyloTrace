@@ -244,8 +244,12 @@ export_modal <- function(
           width = "100%"
         )
       },
+      # Rendered hidden when the remembered format has no resolution: the
+      # caller's toggle observer only fires when the format *changes*, so a
+      # modal reopened on HTML would otherwise show the slider.
       div(
         id = id("quality_wrap"),
+        class = if (!held("filetype", "png") %in% raster_formats) "d-none",
         if (identical(kind, "ggplot")) {
           sliderTextInput(
             id("quality"),

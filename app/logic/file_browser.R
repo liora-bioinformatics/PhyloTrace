@@ -46,12 +46,46 @@ on_wsl <- function() {
   length(version) == 1L && grepl("microsoft", version, ignore.case = TRUE)
 }
 
+#' Root Folder of the File Dialogs
+#'
+#' @description On a shared Shiny server the file dialogs should not browse
+#'   the whole machine. Setting the environment variable
+#'   `PHYLOTRACE_FILE_ROOT` (or the R option `phylotrace.file_root`) to an
+#'   existing folder confines every dialog to it. Unset, nothing is confined.
+#'
+#' @return The root folder with forward slashes, or `NA` when not confined.
+#' @export
+file_root <- function() {
+  root <- getOption("phylotrace.file_root", Sys.getenv("PHYLOTRACE_FILE_ROOT"))
+  if (!is.character(root) || length(root) != 1L || !nzchar(root) || !dir.exists(root)) {
+    return(NA_character_)
+  }
+  normalizePath(root, winslash = "/", mustWork = TRUE)
+}
+
+#' Is a Path Inside the Root Folder?
+#'
+#' @param path Character absolute paths.
+#'
+#' @return Logical vector; always `TRUE` when the dialogs are not confined.
+#' @export
+within_root <- function(path) {
+  root <- file_root()
+  if (is.na(root)) {
+    return(rep(TRUE, length(path)))
+  }
+  path <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  path == root | startsWith(path, paste0(sub("/$", "", root), "/"))
+}
+
 #' Home Directory
 #'
-#' @return Character path with forward slashes.
+#' @return Character path with forward slashes: the root folder when the
+#'   dialogs are confined, else the user's home folder.
 #' @export
 home_dir <- function() {
-  as.character(path_home())
+  root <- file_root()
+  if (!is.na(root)) root else as.character(path_home())
 }
 
 #' Quick-Access Places
@@ -65,6 +99,9 @@ home_dir <- function() {
 #' @export
 places <- function() {
   home <- home_dir()
+  if (!is.na(file_root())) {
+    return(data.frame(label = "Files", path = home, icon = "folder-open"))
+  }
   rows <- data.frame(
     label = c("Home", "Desktop", "Documents", "Downloads"),
     path = c(home, file.path(home, c("Desktop", "Documents", "Downloads"))),
@@ -129,7 +166,8 @@ normalize_dir <- function(path) {
   if (!dir.exists(path)) {
     return(NA_character_)
   }
-  normalizePath(path, winslash = "/", mustWork = TRUE)
+  path <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  if (!within_root(path)) NA_character_ else path
 }
 
 #' Parent Folder
@@ -140,7 +178,8 @@ normalize_dir <- function(path) {
 #' @export
 parent_dir <- function(path) {
   parent <- dirname(path)
-  if (identical(parent, ".") || identical(parent, path)) path else parent
+  stuck <- identical(parent, ".") || identical(parent, path) || !within_root(parent)
+  if (stuck) path else parent
 }
 
 #' Breadcrumbs of a Folder Path
@@ -154,7 +193,13 @@ path_crumbs <- function(path) {
   repeat {
     label <- basename(path)
     if (!nzchar(label) || identical(parent_dir(path), path)) {
-      label <- if (grepl("^[A-Za-z]:", path)) substr(path, 1L, 2L) else "/"
+      label <- if (!is.na(file_root())) {
+        "Files"
+      } else if (grepl("^[A-Za-z]:", path)) {
+        substr(path, 1L, 2L)
+      } else {
+        "/"
+      }
       out[[length(out) + 1L]] <- c(label, path)
       break
     }

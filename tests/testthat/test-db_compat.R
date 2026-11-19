@@ -19,14 +19,18 @@ box::use(
       check_import_compatibility,
       read_db_signature
     ],
+  app / logic / db_compat,
+  app / logic / mlst_scheme[MLST_SCHEME_TABLES, store_mlst_scheme],
 )
+
+impl <- attr(db_compat, "namespace")
 
 status_of <- function(checks, name) checks$status[checks$check == name]
 
 test_that("attach_ro survives the paths a file picker actually produces", {
   dir <- local_tempdir()
 
-  # shinyFiles' "Root" volume yields a leading double slash. Pasted after
+  # A path with a leading double slash (as some pickers produce). Pasted after
   # "file:" that would parse as a URI authority and SQLite would refuse it.
   db <- file.path(dir, "peer.db")
   build_db(db, default_local())
@@ -267,4 +271,110 @@ test_that("missing core tables fail fast and skip the rest", {
   expect_true(attr(checks, "blocked"))
   expect_identical(status_of(checks, "Core tables"), "fail")
   expect_true(all(checks$status[checks$check != "Core tables"] == "skipped"))
+})
+
+scheme_fixture <- function(n_st = 2L, name = "Testus MLST", loci = c("adk", "gyr"),
+                           seq_tag = "M", version = paste0("v", n_st)) {
+  alleles <- do.call(rbind, lapply(loci, function(l) {
+    data.frame(locus = l, allele = 1:2, sequence = paste0(seqv(paste0(seq_tag, l)), c("A", "C")))
+  }))
+  profiles <- do.call(rbind, lapply(seq_len(n_st), function(st) {
+    data.frame(st = st, locus = loci, allele = ((st - 1L) %% 2L) + 1L)
+  }))
+  list(
+    scheme = list(loci = loci, profiles = profiles, alleles = alleles),
+    info = list(name = name, version = version, source = "test")
+  )
+}
+
+scheme_pair <- function(local = NULL, peer = NULL) {
+  dir <- local_tempdir(.local_envir = parent.frame())
+  paths <- c(local = file.path(dir, "local.db"), peer = file.path(dir, "peer.db"))
+  build_db(paths[["local"]], default_local())
+  build_db(paths[["peer"]], default_peer())
+  if (!is.null(local)) store_mlst_scheme(paths[["local"]], local$scheme, local$info)
+  if (!is.null(peer)) store_mlst_scheme(paths[["peer"]], peer$scheme, peer$info)
+  suppressMessages(check_import_compatibility(paths[["local"]], paths[["peer"]]))
+}
+
+test_that("the scheme table list matches the one mlst_scheme.R writes", {
+  expect_identical(impl$MLST_TABLES, MLST_SCHEME_TABLES)
+})
+
+test_that("no scheme on either side, or the same one, passes", {
+  none <- scheme_pair()
+  expect_identical(status_of(none, "Classical MLST scheme"), "pass")
+  expect_identical(attr(none, "mlst_scheme")$relation, "none")
+
+  same <- scheme_pair(scheme_fixture(), scheme_fixture())
+  expect_identical(status_of(same, "Classical MLST scheme"), "pass")
+  expect_identical(attr(same, "mlst_scheme")$relation, "identical")
+  expect_false(attr(same, "mlst_scheme")$adopt_offer)
+})
+
+test_that("a scheme only the peer has is offered for adoption, ticked", {
+  checks <- scheme_pair(NULL, scheme_fixture())
+  rel <- attr(checks, "mlst_scheme")
+  expect_identical(rel$relation, "ext_only")
+  expect_true(rel$adopt_offer)
+  expect_true(rel$adopt_default)
+  expect_true(rel$classical_default)
+  expect_false(attr(checks, "blocked"))
+})
+
+test_that("a scheme only the local database has is simply kept", {
+  rel <- attr(scheme_pair(scheme_fixture(), NULL), "mlst_scheme")
+  expect_identical(rel$relation, "local_only")
+  expect_false(rel$adopt_offer)
+})
+
+test_that("a newer copy of the same scheme warns and is offered", {
+  checks <- scheme_pair(scheme_fixture(2L), scheme_fixture(3L))
+  rel <- attr(checks, "mlst_scheme")
+  expect_identical(status_of(checks, "Classical MLST scheme"), "warn")
+  expect_identical(rel$relation, "newer")
+  expect_true(rel$adopt_offer)
+  expect_true(rel$classical_default)
+  expect_false(attr(checks, "blocked"))
+
+  older <- attr(scheme_pair(scheme_fixture(3L), scheme_fixture(2L)), "mlst_scheme")
+  expect_identical(older$relation, "older")
+  expect_false(older$adopt_offer)
+})
+
+test_that("a different scheme warns, unticks classical results and never blocks", {
+  renamed <- scheme_pair(scheme_fixture(), scheme_fixture(name = "Other MLST"))
+  other_loci <- scheme_pair(scheme_fixture(), scheme_fixture(loci = c("adk", "rec")))
+  resequenced <- scheme_pair(scheme_fixture(), scheme_fixture(seq_tag = "Z"))
+
+  for (checks in list(renamed, other_loci, resequenced)) {
+    rel <- attr(checks, "mlst_scheme")
+    expect_identical(status_of(checks, "Classical MLST scheme"), "warn")
+    expect_identical(rel$relation, "different")
+    expect_false(rel$classical_default)
+    expect_false(rel$adopt_offer)
+    expect_false(attr(checks, "blocked"))
+  }
+})
+
+test_that("a different AMR organism is an advisory row and only with AMR results", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local())
+  build_db(peer, default_peer())
+  for (x in list(c(local, "Escherichia"), c(peer, ""))) {
+    con <- DBI::dbConnect(RSQLite::SQLite(), x[1])
+    DBI::dbExecute(con, "CREATE TABLE phylotrace_meta (key TEXT PRIMARY KEY, value TEXT)")
+    DBI::dbExecute(con, "INSERT INTO phylotrace_meta VALUES ('amr_organism', ?)", list(x[2]))
+    DBI::dbDisconnect(con)
+  }
+
+  expect_identical(status_of(check_import_compatibility(local, peer), "AMR organism"), "pass")
+
+  seed_results(peer, "C", classical = FALSE, amr = TRUE)
+  checks <- check_import_compatibility(local, peer)
+  expect_identical(status_of(checks, "AMR organism"), "warn")
+  expect_true(grepl("local setting is kept", checks$detail[checks$check == "AMR organism"]))
+  expect_false(attr(checks, "blocked"))
 })

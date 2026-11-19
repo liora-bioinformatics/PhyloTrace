@@ -341,6 +341,58 @@ box::use(
            return url;
          }
 
+         // html2canvas 1.4 mis-resolves Leaflet's stacked CSS transforms (a
+         // translate3d per pane, plus a scale() on the tile container at the
+         // fractional zoom levels zoomSnap allows), so tiles and overlays came
+         // out shifted against each other and against the map's real view.
+         // Each drawn element's on-screen box is measured here, on the live
+         // DOM; flatLeafletClone() then drops every transform in html2canvas's
+         // clone and pins those elements to the measured boxes instead.
+         var LEAF_ITEMS='.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,'+
+           '.leaflet-tooltip,.leaflet-popup,.leaflet-image-layer,'+
+           '.leaflet-pane>svg,.leaflet-pane>canvas';
+         var LEAF_BOXES='.leaflet-map-pane,.leaflet-pane,.leaflet-tile-container,'+
+           '.leaflet-layer';
+         function measureLeaflet(root){
+           var boxes={};
+           root.querySelectorAll(LEAF_ITEMS).forEach(function(el,i){
+             var map=el.closest('.leaflet-container');
+             if(!map) return;
+             var r=el.getBoundingClientRect(), c=map.getBoundingClientRect();
+             el.setAttribute('data-pt-flat',i);
+             boxes[i]={left:r.left-c.left-map.clientLeft,
+                       top:r.top-c.top-map.clientTop,
+                       width:r.width,height:r.height,
+                       tile:el.classList.contains('leaflet-tile')};
+           });
+           return boxes;
+         }
+         function flatLeafletClone(doc,boxes){
+           doc.querySelectorAll(LEAF_BOXES).forEach(function(el){
+             el.style.transform='none';
+           });
+           doc.querySelectorAll('[data-pt-flat]').forEach(function(el){
+             var b=boxes[el.getAttribute('data-pt-flat')];
+             if(!b) return;
+             el.style.transform='none';
+             el.style.margin='0';
+             el.style.left=b.left+'px';
+             el.style.top=b.top+'px';
+             // Only tiles are resized (their container's scale() is gone);
+             // a half-pixel overlap hides seams between neighbouring tiles.
+             // Other items keep their own box, borders and all.
+             if(b.tile){
+               el.style.width=(b.width+0.5)+'px';
+               el.style.height=(b.height+0.5)+'px';
+             }
+           });
+         }
+         function unmarkLeaflet(root){
+           root.querySelectorAll('[data-pt-flat]').forEach(function(el){
+             el.removeAttribute('data-pt-flat');
+           });
+         }
+
          Shiny.addCustomMessageHandler('phylotrace_capture', function(msg){
            msg.format=msg.format||'png';
            try{
@@ -359,14 +411,17 @@ box::use(
                var current=root.clientWidth||
                  (root.getBoundingClientRect&&root.getBoundingClientRect().width)||960;
                var scale=effectiveScale(current,msg);
+               var boxes=measureLeaflet(root);
                html2canvas(root,{useCORS:true,logging:false,scale:scale,
                                  backgroundColor:isClear(msg.background)
-                                   ?'#ffffff':msg.background})
+                                   ?'#ffffff':msg.background,
+                                 onclone:function(doc){flatLeafletClone(doc,boxes);}})
                  .then(function(canvas){
+                   unmarkLeaflet(root);
                    var url='';
                    try{url=encode(canvas,msg.format,msg.background);}catch(e){url='';}
                    send(msg.inputId,url);
-                 }).catch(function(){send(msg.inputId,'');});
+                 }).catch(function(){unmarkLeaflet(root);send(msg.inputId,'');});
              } else {send(msg.inputId,'');}
            }catch(e){send(msg.inputId,'');}
          });

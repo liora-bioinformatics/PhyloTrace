@@ -18,7 +18,7 @@ box::use(
     dbRollback,
   ],
   rlang[`%||%`],
-  stats[complete.cases],
+  stats[complete.cases, setNames],
   utils[head, write.table],
 )
 
@@ -77,11 +77,13 @@ info_rows <- function(info) {
 #' @return Invisible `TRUE`.
 #' @export
 write_mlst_scheme <- function(con, scheme, info) {
+  # Schema-qualified: with another database attached (a merge), a bare name
+  # missing from `main` would resolve to the attached one.
   for (table in MLST_SCHEME_TABLES) {
-    dbExecute(con, sprintf("DROP TABLE IF EXISTS %s", table))
+    dbExecute(con, sprintf("DROP TABLE IF EXISTS main.%s", table))
   }
   for (ddl in MLST_SCHEME_DDL) {
-    dbExecute(con, ddl)
+    dbExecute(con, sub("^CREATE TABLE ", "CREATE TABLE main.", ddl))
   }
   info$imported_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   info$loci <- length(scheme$loci)
@@ -180,13 +182,22 @@ write_allele_files <- function(alleles, loci, dir) {
 #'
 #' @description Recreates the profile table (`ST` then the loci in scheme
 #'   order, tab-separated) and one allele FASTA per locus under `dir`, the
-#'   input `claMLST create` expects.
+#'   input `claMLST create` expects, and returns the same scheme in memory for
+#'   the ST lookup and the reference sequences a typing run stores.
+#'
+#' @details The profile table and the sequences come from the one read that
+#'   writes the files, so what a run looks STs and sequences up in is exactly
+#'   the reference claMLST was built from, and nothing has to be read back out
+#'   of the database while pyMLST is writing it.
 #'
 #' @param db_path Character path to the database.
 #' @param dir Character existing, empty folder.
 #'
-#' @return A scheme specification list for `write_scheme_spec()` with
-#'   `resolved = TRUE`, or `list(resolved = FALSE)` without a stored scheme.
+#' @return `list(resolved = FALSE)` without a stored scheme; otherwise a list
+#'   with `resolved = TRUE`, the scheme details (`scheme`, `repository`,
+#'   `species`, `version`), `dir`, `loci`, `profiles` (data frame of character
+#'   columns, `ST` first, one column per locus) and `sequences` (character,
+#'   named `gene<TAB>allele` by pyMLST gene id).
 #' @export
 materialize_mlst_scheme <- function(db_path, dir) {
   info <- mlst_scheme_info(db_path)
@@ -219,6 +230,7 @@ materialize_mlst_scheme <- function(db_path, dir) {
     wide[[locus]] <- rows$allele[match(wide$ST, rows$st)]
   }
   wide <- wide[complete.cases(wide), , drop = FALSE]
+  rownames(wide) <- NULL
   write.table(
     wide,
     file.path(dir, "profiles.tsv"),
@@ -230,42 +242,25 @@ materialize_mlst_scheme <- function(db_path, dir) {
   dir.create(locus_dir, showWarnings = FALSE)
   write_allele_files(alleles, info$loci, locus_dir)
 
+  alleles <- alleles[alleles$locus %in% info$loci, , drop = FALSE]
+  # Keyed the way `claMLST search` reports a call: the gene id pyMLST stored
+  # the locus under, then the allele number.
+  sequences <- setNames(
+    alleles$sequence,
+    paste(pymlst_gene_id(alleles$locus), alleles$allele, sep = "\t")
+  )
+
   list(
     resolved = TRUE,
     repository = info$source_label %||% info$source %||% "user-supplied",
     species = info$species %||% NA_character_,
     scheme = info$name %||% "Classical MLST",
     version = info$version %||% NA_character_,
-    local_dir = dir,
-    loci = info$loci
+    dir = dir,
+    loci = info$loci,
+    profiles = as.data.frame(lapply(wide, as.character), check.names = FALSE),
+    sequences = sequences
   )
-}
-
-#' Write a Scheme Specification File
-#'
-#' @description Serializes a materialized scheme into the `key=value` file
-#'   loop-pymlst.sh reads to build the reference with `claMLST create`.
-#'
-#' @param spec List returned by `materialize_mlst_scheme()`.
-#' @param path Character string. Destination file.
-#'
-#' @return `path`, invisibly.
-#' @export
-write_scheme_spec <- function(spec, path) {
-  one_line <- function(x) gsub("[\r\n]+", " ", if (is.null(x) || is.na(x)) "" else x)
-  # Species and version reach `conda run`'s command line; a database from
-  # elsewhere may hold anything there.
-  plain <- function(x) gsub("[$`\\\\\"']", "", one_line(x))
-  lines <- c(
-    paste0("repository=", one_line(spec$repository)),
-    paste0("species=", plain(spec$species)),
-    paste0("scheme=", one_line(spec$scheme)),
-    paste0("version=", plain(spec$version)),
-    paste0("local_dir=", one_line(spec$local_dir)),
-    paste0("locus=", vapply(spec$loci, one_line, character(1), USE.NAMES = FALSE))
-  )
-  writeLines(lines, path)
-  invisible(path)
 }
 
 #' Describe the Classical MLST Scheme of a Run
@@ -279,9 +274,12 @@ write_scheme_spec <- function(spec, path) {
 #' @export
 describe_resolution <- function(spec) {
   if (isTRUE(spec$resolved)) {
+    version <- spec$version %||% NA_character_
+    version <- if (is.na(version)) "" else sprintf(" (version %s)", version)
     return(sprintf(
-      "Classical MLST for this run: %s from %s, %d loci",
+      "Classical MLST for this run: %s%s from %s, %d loci",
       spec$scheme,
+      version,
       spec$repository,
       length(spec$loci)
     ))

@@ -1,9 +1,11 @@
 box::use(
+  DBI[dbConnect, dbDisconnect, dbExecute, dbGetQuery],
+  RSQLite[SQLite],
   testthat[expect_identical, expect_true, test_that],
   withr[local_tempdir],
 )
 box::use(
-  app / logic / amr[amr_species, store_amr_results],
+  app / logic / amr[AMR_ORGANISM_KEY, amr_species, db_amr_organism, store_amr_results],
 )
 
 test_that("amr_species maps a plain binomial to its abritamr token", {
@@ -42,9 +44,9 @@ test_that("re-storing a strain's AMR screen replaces its rows", {
   # end, so the same screen can be stored twice - it must not accumulate.
   dir <- local_tempdir()
   db <- file.path(dir, "db.sqlite")
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  DBI::dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
-  DBI::dbDisconnect(con)
+  con <- dbConnect(SQLite(), db)
+  dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
+  dbDisconnect(con)
 
   amr_dir <- file.path(dir, "strainA")
   dir.create(amr_dir)
@@ -75,9 +77,9 @@ test_that("re-storing a strain's AMR screen replaces its rows", {
   )
 
   count <- function() {
-    con <- DBI::dbConnect(RSQLite::SQLite(), db)
-    on.exit(DBI::dbDisconnect(con), add = TRUE)
-    DBI::dbGetQuery(
+    con <- dbConnect(SQLite(), db)
+    on.exit(dbDisconnect(con), add = TRUE)
+    dbGetQuery(
       con,
       "SELECT COUNT(*) AS n FROM amr_results WHERE isolate = 'strainA'"
     )$n
@@ -87,4 +89,32 @@ test_that("re-storing a strain's AMR screen replaces its rows", {
   expect_identical(count(), 1L)
   expect_true(store_amr_results(db, "strainA", amr_dir))
   expect_identical(count(), 1L)
+})
+
+test_that("db_amr_organism reads the organism chosen at setup, nothing else", {
+  db <- file.path(local_tempdir(), "db.sqlite")
+  con <- dbConnect(SQLite(), db)
+  dbExecute(con, "CREATE TABLE phylotrace_meta (key TEXT PRIMARY KEY, value TEXT)")
+  key <- AMR_ORGANISM_KEY
+  set_organism <- function(value) {
+    dbExecute(
+      con,
+      "INSERT OR REPLACE INTO phylotrace_meta (key, value) VALUES (?, ?)",
+      params = list(key, value)
+    )
+  }
+
+  set_organism("Staphylococcus_aureus")
+  expect_identical(db_amr_organism(db), "Staphylococcus_aureus")
+  # Empty means acquired genes only; a token abritamr does not know is ignored.
+  set_organism("")
+  expect_identical(db_amr_organism(db), NA_character_)
+  set_organism("Testus_organismus")
+  expect_identical(db_amr_organism(db), NA_character_)
+  dbDisconnect(con)
+
+  # No setting at all is acquired genes only, not a guess from the species.
+  bare <- file.path(local_tempdir(), "bare.sqlite")
+  dbDisconnect(dbConnect(SQLite(), bare))
+  expect_identical(db_amr_organism(bare), NA_character_)
 })

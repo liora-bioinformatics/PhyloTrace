@@ -96,6 +96,7 @@ box::use(
       fit_hint,
       layer_action_btn,
       on_confirmed_reset,
+      PLOT_SETTLE_MS,
       reset_button_row,
       scale_select,
       settled_inputs,
@@ -1850,9 +1851,10 @@ server <- function(
     # width the browser reports, so no size report from the client can redraw
     # the plot and the preview, the export and a saved Analysis are one
     # drawing. The heatmap grows it sideways for its gene columns (see
-    # amr_plot$amr_canvas_width_in()), and wider still for a bigger text size,
-    # since a gene name can only be as large as its column is wide; the
-    # prevalence chart keeps the base.
+    # amr_plot$amr_canvas_width_in()), but not with the text size beyond what
+    # the wider strips take: the preview is fitted to its frame, so a page
+    # grown in step with the text would cancel the control. The prevalence
+    # chart keeps the base.
     canvas_width <- function(col_names = show_col_names_mirror()) {
       if (identical(mode(), "prevalence")) {
         return(amr_plot$AMR_CANVAS_IN)
@@ -2230,27 +2232,22 @@ server <- function(
       )
     }
 
-    # Rebuilt live as the controls change; the matrix reactives above are what
-    # re-run when a data control moves, this only redraws.
-    amr_ggplot <- shiny$reactive({
-      # Which Generate this is the answer to. Everything the plot is built
-      # from is value-driven, so a Generate that changes nothing invalidates
-      # nothing — re-confirming the same isolate set applies the same metadata
-      # and the same selection — and the loading overlay comes down on this
-      # output's own value event. Without a dependency here no plot is drawn
-      # and the spinner runs to its client-side safety timeout over a picture
-      # that was already correct. Pressing Generate is an explicit request for
-      # the plot, so it draws one.
+    # Everything the figure is built from, resolved: the data, the options and
+    # the canvas it is laid out against.
+    plot_source <- shiny$reactive({
       generate()
       shiny$req(generated())
       background <- input$amr_background_color %||% BACKGROUND_DEFAULT
-
-      if (identical(mode(), "prevalence")) {
+      m <- mode()
+      if (identical(m, "prevalence")) {
         df <- prevalence_df()
         shiny$req(nrow(df) > 0)
-        return(amr_plot$build_amr_prevalence(
-          df,
-          c(
+        return(list(
+          generation = generate(),
+          mode = m,
+          canvas = plot_canvas(),
+          data = df,
+          opts = c(
             list(
               bar_scale = input$amr_bar_scale %||% BAR_SCALE_DEFAULT,
               text_color = input$amr_text_color %||% TEXT_COLOR_DEFAULT,
@@ -2261,20 +2258,64 @@ server <- function(
           )
         ))
       }
-
-      # The size the finished image is bound for. ComplexHeatmap lays the
-      # legends out against the device it is drawn on, so this has to be the
-      # real canvas rather than grid.grabExpr's 7x7 default — see
-      # amr_plot$amr_as_ggplot().
-      canvas <- plot_canvas()
-
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
+      list(
+        generation = generate(),
+        mode = m,
+        background = background,
+        canvas = plot_canvas(),
+        data = mat,
+        opts = heatmap_opts()
+      )
+    })
+
+    # The figure's inputs as last published, republished only when they differ
+    # from what was drawn.
+    #
+    # Built straight from plot_source(), the redraw was invalidation-driven: a
+    # Generate first reads the screen, and the observers that answers wakes
+    # refit the threshold sliders and the element picker while the gene picker
+    # mounts, each echoing back from the browser in its own flush. Every echo
+    # re-ran presence_mat() and drew the whole heatmap again, mostly to the same
+    # picture. Settled and value-compared, as the Tree's `plot_inputs` and the
+    # MST's `shell_built` are, no echo can redraw it.
+    #
+    # `generation` keeps a Generate that changes nothing visible: the loading
+    # overlay comes down on the plot's value event, so a re-confirmed identical
+    # selection must still draw. priority: the barrier settles before outputs
+    # are recalculated in the same flush.
+    plot_inputs <- shiny$reactiveVal(NULL)
+    settled_source <- shiny$debounce(plot_source, PLOT_SETTLE_MS)
+    shiny$observe(
+      {
+        current <- settled_source()
+        shiny$req(current)
+        if (!identical(shiny$isolate(plot_inputs()), current)) {
+          plot_inputs(current)
+        }
+      },
+      priority = 100
+    )
+
+    # The canvas the published figure is laid out on, which the render, the
+    # export and the thumbnail size it by.
+    drawn_canvas <- shiny$reactive(shiny$req(plot_inputs())$canvas)
+
+    # The figure, built from the barrier's inputs and nothing else.
+    amr_ggplot <- shiny$reactive({
+      p <- shiny$req(plot_inputs())
+      if (identical(p$mode, "prevalence")) {
+        return(amr_plot$build_amr_prevalence(p$data, p$opts))
+      }
+      # ComplexHeatmap lays the legends out against the device it is drawn on,
+      # so this has to be the real canvas rather than grid.grabExpr's 7x7
+      # default — see amr_plot$amr_as_ggplot().
       amr_plot$amr_as_ggplot(
-        amr_plot$build_amr_heatmap(mat, heatmap_opts()),
-        background,
-        width_in = canvas$width_in,
-        height_in = canvas$height_in
+        amr_plot$build_amr_heatmap(p$data, p$opts),
+        p$background,
+        width_in = p$canvas$width_in,
+        height_in = p$canvas$height_in
       )
     })
 
@@ -2388,7 +2429,7 @@ server <- function(
     output$amr_plot <- shiny$renderImage(
       {
         render_info("visualization_amr amr_plot")
-        canvas <- plot_canvas()
+        canvas <- drawn_canvas()
         canvas_image(
           amr_ggplot(),
           canvas$width_in,
@@ -2407,7 +2448,7 @@ server <- function(
     export <- canvas_export(
       label = shiny$reactive(paste0("amr_", mode())),
       ready = shiny$reactive(isTRUE(generated())),
-      canvas = plot_canvas,
+      canvas = drawn_canvas,
       plot = amr_ggplot,
       note = function() {
         legibility_note(
@@ -2572,7 +2613,7 @@ server <- function(
     # like the plot it stands for, with the resolution carrying the requested
     # pixel width.
     save_thumb <- function(file, w, h) {
-      canvas <- plot_canvas()
+      canvas <- drawn_canvas()
       render_canvas_png(
         amr_ggplot(),
         file,

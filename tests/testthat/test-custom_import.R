@@ -488,3 +488,35 @@ test_that("importing coordinates stores them as decimal degrees", {
     "52.52, 13.4"
   )
 })
+
+test_that("read_import_table converts a Latin-1 file instead of truncating it", {
+  path <- tempfile(fileext = ".csv")
+  writeBin(
+    iconv(enc2utf8("isolate;city\nA;München\nB;Köln\n"), "UTF-8", "latin1", toRaw = TRUE)[[1]],
+    path
+  )
+
+  df <- custom_import$read_import_table(path)$data
+
+  expect_identical(df$isolate, c("A", "B"))
+  expect_identical(df$city, enc2utf8(c("München", "Köln")))
+})
+
+test_that("read_import_table refuses a binary file with a clear message", {
+  path <- tempfile(fileext = ".csv")
+  writeBin(as.raw(c(0x69, 0x73, 0x00, 0x6f)), path)
+  expect_error(custom_import$read_import_table(path), "binary")
+})
+
+test_that("a metadata column with a quote in its name is written safely", {
+  path <- fixture()
+  con <- dbConnect(SQLite(), path)
+  dbExecute(con, 'ALTER TABLE metadata ADD COLUMN "lab ""x""" TEXT')
+  dbDisconnect(con)
+  rows <- data.frame(isolate = "A", lab = "L1", stringsAsFactors = FALSE)
+  plan <- data.frame(header = "lab", action = "fill", name = 'lab "x"', type = NA)
+
+  custom_import$apply_import(path, rows, plan)
+
+  expect_identical(q1(path, 'SELECT "lab ""x""" FROM metadata WHERE isolate = \'A\''), "L1")
+})

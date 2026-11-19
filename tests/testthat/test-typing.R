@@ -17,6 +17,7 @@ box::use(
 box::use(
   app / logic / db_connect[BUSY_TIMEOUT_MS, LIVE_BUSY_TIMEOUT_MS],
   app / logic / genome_hash[store_genome_hash],
+  app / logic / mlst_scheme,
   app / logic / provenance[scheme_provenance],
   app / logic / pymlst[cg_outcome, parse_typing_log],
   app / view / typing,
@@ -24,11 +25,8 @@ box::use(
 
 ALLELES <- "gapA=3,infB=3,mdh=1,pgi=1,phoE=1,rpoB=1,tonB=4"
 
-# The provenance the script reports once per run, before the first genome.
+# The tool versions the script reports once per run, before the first genome.
 RUN_PREAMBLE <- c(
-  "Classical MLST repository: pasteur",
-  "Classical MLST scheme: Klebsiella (MLST)",
-  "Classical MLST scheme version: 2026-07-28",
   "pyMLST version: 2.2.2",
   "BLAT version: 35",
   "MAFFT version: v7.525",
@@ -36,6 +34,33 @@ RUN_PREAMBLE <- c(
   "AMR finder version: 4.0.19",
   "AMR database version: 2026-01-01.1"
 )
+
+# The stored classical scheme a run types against, as begin_typing_run() keeps
+# it from materialize_mlst_scheme().
+RUN_SCHEME <- list(
+  resolved = TRUE,
+  scheme = "Klebsiella (MLST)",
+  version = "2026-07-28",
+  repository = "pasteur",
+  sequences = c("gapA\t3" = "ATGGAATAA", "tonB\t4" = "ATGTTTTAA")
+)
+
+# A two-locus scheme in the shape scheme_files$assemble_mlst_scheme() returns.
+toy_mlst_scheme <- function() {
+  list(
+    loci = c("adk", "fumC"),
+    profiles = data.frame(
+      st = c(1L, 1L, 2L, 2L),
+      locus = c("adk", "fumC", "adk", "fumC"),
+      allele = c(1L, 1L, 1L, 2L)
+    ),
+    alleles = data.frame(
+      locus = c("adk", "fumC", "fumC"),
+      allele = c(1L, 1L, 2L),
+      sequence = c("ATGAAATAA", "ATGCCCTAA", "ATGCCGTAA")
+    )
+  )
+}
 
 # scheme_overview as the cgMLST download leaves it.
 OVERVIEW <- data.frame(
@@ -329,6 +354,7 @@ test_that("every isolate gets a provenance row as it is typed", {
     Typing$queued_strains <- "A"
     Typing$queued_files <- genome
     Typing$cla_enabled <- TRUE
+    Typing$cla_scheme <- RUN_SCHEME
     Typing$amr_enabled <- TRUE
     Typing$amr_out <- amr_out
     Typing$log_file <- file.path(dir, "typing_20260805_090000_ab.log")
@@ -363,10 +389,23 @@ test_that("every isolate gets a provenance row as it is typed", {
     expect_identical(row$blat_version, "35")
     expect_identical(row$mafft_version, "v7.525")
     expect_identical(row$cla_scheme, "Klebsiella (MLST)")
+    expect_identical(row$cla_scheme_version, "2026-07-28")
     expect_identical(row$cla_repository, "pasteur")
     expect_identical(row$amr_abritamr_version, "1.0.19")
     expect_identical(row$amr_elements, 1L)
     expect_identical(row$elapsed_seconds, 10)
+
+    # Called alleles carry their sequence from the stored scheme, keyed by the
+    # gene id claMLST reports; an allele the scheme lacks is stored without.
+    cla <- DBI::dbGetQuery(
+      con,
+      "SELECT gene, sequence, scheme, scheme_version, repository, pymlst_version
+         FROM classical_mlst WHERE gene IN ('gapA', 'mdh') ORDER BY gene"
+    )
+    expect_identical(cla$sequence, c("ATGGAATAA", NA))
+    expect_identical(unique(cla$scheme_version), "2026-07-28")
+    expect_identical(unique(cla$repository), "pasteur")
+    expect_identical(unique(cla$pymlst_version), "2.2.2")
   })
 })
 
@@ -429,6 +468,7 @@ test_that("a provenance row says which steps failed, ran, or never ran", {
     Typing$queued_strains <- "A"
     Typing$queued_files <- genome
     Typing$cla_enabled <- TRUE
+    Typing$cla_scheme <- RUN_SCHEME
     Typing$amr_enabled <- TRUE
     Typing$amr_out <- file.path(dir, "amr")
 
@@ -623,6 +663,72 @@ test_that("a database without an MLST scheme says so in the run's own transcript
         "(skipping ST calls for this run)."
       )
     )
+  })
+})
+
+test_that("a stored MLST scheme is handed to the script as its folder and recorded by R", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+  mlst_scheme$store_mlst_scheme(path, toy_mlst_scheme(), list(
+    name = "Toy MLST",
+    source_label = "Institut Pasteur",
+    version = "2026-11-18",
+    species = "Testus organismus"
+  ))
+  repo_root <- normalizePath(file.path(getwd(), "..", ".."))
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- character(0)
+    Typing$queued_files <- character(0)
+
+    withr::with_dir(repo_root, begin_typing_run())
+    on.exit(
+      if (!is.null(Typing$proc)) Typing$proc$wait(timeout = 5000),
+      add = TRUE
+    )
+
+    # The scheme as read at launch: files for claMLST create in a private
+    # folder, profiles and sequences in memory, details for provenance.
+    expect_true(file.exists(file.path(Typing$cla_scheme$dir, "profiles.tsv")))
+    expect_true(file.exists(file.path(Typing$cla_scheme$dir, "locus", "adk.fasta")))
+    expect_identical(Typing$cla_scheme$profiles$ST, c("1", "2"))
+    expect_identical(unname(Typing$cla_scheme$sequences["fumC\t2"]), "ATGCCGTAA")
+    expect_identical(cla_field("version"), "2026-11-18")
+    expect_identical(cla_field("repository"), "Institut Pasteur")
+    expect_identical(
+      readLines(Typing$log_file)[2],
+      "Classical MLST for this run: Toy MLST (version 2026-11-18) from Institut Pasteur, 2 loci"
+    )
+
+    # Reload Database drops the run's scheme files along with its state.
+    scheme_dir <- Typing$cla_scheme$dir
+    Typing$proc$wait(timeout = 5000)
+    cleanup_cla_db(Typing$cla_db)
+    expect_false(dir.exists(scheme_dir))
+  })
+})
+
+test_that("a stored MLST scheme that cannot be written out stops the run", {
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.db")
+  build_db(path, default_local())
+  mlst_scheme$store_mlst_scheme(path, toy_mlst_scheme(), list(name = "Toy MLST"))
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  DBI::dbExecute(con, "UPDATE cla_scheme_loci SET locus = '../escaped' WHERE locus = 'adk'")
+  DBI::dbDisconnect(con)
+  repo_root <- normalizePath(file.path(getwd(), "..", ".."))
+
+  testServer(typing$server, args = list(db_path = reactive(path)), {
+    Typing$queued_strains <- "A"
+    Typing$queued_files <- file.path(dir, "A.fna")
+
+    withr::with_dir(repo_root, begin_typing_run())
+
+    expect_identical(Typing$status, "failed")
+    expect_null(Typing$proc)
+    expect_null(Typing$cla_db)
+    expect_null(Typing$cla_scheme)
   })
 })
 

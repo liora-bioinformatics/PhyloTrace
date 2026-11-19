@@ -1,42 +1,57 @@
 box::use(
-  DBI[dbConnect, dbDisconnect, dbGetQuery],
-  processx[process],
+  DBI[dbConnect, dbDisconnect, dbExecute, dbGetQuery],
   RSQLite[SQLite],
+  processx[run],
   testthat[expect_false, expect_identical, expect_true, test_that],
   utils[tail],
   withr[local_tempdir],
 )
 box::use(
-  app / logic / mlst_scheme[describe_resolution],
   app / logic / pymlst,
 )
 
 impl <- attr(pymlst, "namespace")
 
+SCRIPT <- normalizePath(file.path("..", "..", "app", "logic", "loop-pymlst.sh"))
+
 # The exact shape `claMLST search` prints for a genome whose gapA never got
 # called: the ST column holds every ST compatible with the six remaining loci.
 AMBIGUOUS_STS <- "1953;3684;5029;5510;6853;1384;11;2193;5809;690;3348;1460;7123;7252;6843"
 
-test_that("typing_args asks for classical MLST only with a resolved scheme", {
+test_that("typing_args asks for classical MLST only with a materialized scheme", {
   args <- function(...) {
     impl$typing_args("/db/x.db", "/genomes/a.fna", 0.95, 0.9, ...)
   }
 
-  # Both halves are needed: the reference path to build into and the spec that
-  # says what to build. A species alone buys nothing.
-  with_scheme <- args(
-    species = "Enterococcus faecium",
-    cla_db = "/tmp/c.db",
-    cla_spec = "/tmp/c.spec"
-  )
-  expect_true(all(c("-m", "/tmp/c.db", "-M", "/tmp/c.spec") %in% with_scheme))
+  # Both halves are needed: the reference path to build into and the folder
+  # holding the stored scheme's files. No species is required.
+  with_scheme <- args(cla_db = "/tmp/c.db", cla_dir = "/tmp/c.db.scheme")
+  expect_true(all(c("-m", "/tmp/c.db", "-M", "/tmp/c.db.scheme") %in% with_scheme))
+  expect_false(any(c("-s", "-V") %in% with_scheme))
 
-  no_spec <- args(species = "Enterococcus faecium", cla_db = "/tmp/c.db")
-  expect_false(any(c("-m", "-M") %in% no_spec))
-  expect_true(all(c("-s", "Enterococcus faecium") %in% no_spec))
+  no_dir <- args(cla_db = "/tmp/c.db", cla_species = "Enterococcus faecium")
+  expect_false(any(c("-m", "-M", "-s") %in% no_dir))
 
   # Genome paths always sit behind the separator so they cannot be read as flags.
   expect_identical(tail(with_scheme, 2), c("--", "/genomes/a.fna"))
+})
+
+test_that("typing_args strips shell syntax from the scheme species and version", {
+  # `conda run` rebuilds a command line from its arguments; a database from
+  # elsewhere may hold anything in these two stored values.
+  args <- impl$typing_args(
+    "/db/x.db",
+    "/genomes/a.fna",
+    0.95,
+    0.9,
+    cla_db = "/tmp/c.db",
+    cla_dir = "/tmp/c.db.scheme",
+    cla_species = "Foo $(rm -rf ~) `id` \\ \"bar\" 'baz'\nqux",
+    cla_version = "'$'"
+  )
+  expect_identical(args[match("-s", args) + 1L], "Foo (rm -rf ~) id  bar bazqux")
+  # Nothing left of the version, so no flag at all.
+  expect_false("-V" %in% args)
 })
 
 test_that("typing_args passes the classical search its own thresholds", {
@@ -45,11 +60,10 @@ test_that("typing_args passes the classical search its own thresholds", {
     "/genomes/a.fna",
     0.95,
     0.9,
-    species = "Acinetobacter baumannii",
     cla_identity = 0.9,
     cla_coverage = 0.85,
     cla_db = "/tmp/c.db",
-    cla_spec = "/tmp/c.spec"
+    cla_dir = "/tmp/c.db.scheme"
   )
 
   # The allele-calling pair and the classical pair travel under separate flags,
@@ -66,9 +80,8 @@ test_that("typing_args defaults the classical thresholds to pyMLST's own", {
     "/genomes/a.fna",
     0.95,
     0.9,
-    species = "Acinetobacter baumannii",
     cla_db = "/tmp/c.db",
-    cla_spec = "/tmp/c.spec"
+    cla_dir = "/tmp/c.db.scheme"
   )
   expect_identical(
     args[match("-I", args) + 1L],
@@ -91,8 +104,7 @@ test_that("typing_args omits classical thresholds when no scheme is built", {
     "/db/x.db",
     "/genomes/a.fna",
     0.95,
-    0.9,
-    species = "Acinetobacter baumannii"
+    0.9
   )
   expect_false(any(c("-I", "-C") %in% args))
 })
@@ -301,9 +313,9 @@ test_that("parse_typing_log resolves the ST it can and drops candidate lists", {
 
 test_that("store_clamlst_results persists an ST only for an unambiguous call", {
   db <- file.path(local_tempdir(), "db.sqlite")
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  DBI::dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
-  DBI::dbDisconnect(con)
+  con <- dbConnect(SQLite(), db)
+  dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
+  dbDisconnect(con)
 
   results <- data.frame(
     strain = c("clean", "gapA_missing"),
@@ -316,9 +328,9 @@ test_that("store_clamlst_results persists an ST only for an unambiguous call", {
   )
   expect_true(pymlst$store_clamlst_results(db, results))
 
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  stored <- DBI::dbGetQuery(
+  con <- dbConnect(SQLite(), db)
+  on.exit(dbDisconnect(con), add = TRUE)
+  stored <- dbGetQuery(
     con,
     "SELECT DISTINCT isolate, st, status FROM classical_mlst ORDER BY isolate"
   )
@@ -328,7 +340,7 @@ test_that("store_clamlst_results persists an ST only for an unambiguous call", {
   expect_identical(stored$status, c("known", "partial"))
 
   # The uncalled locus is dropped, the six that worked are still recorded.
-  n_loci <- DBI::dbGetQuery(
+  n_loci <- dbGetQuery(
     con,
     "SELECT COUNT(*) AS n FROM classical_mlst WHERE isolate = 'gapA_missing'"
   )
@@ -340,9 +352,9 @@ test_that("store_clamlst_results keeps calls with alleles the reference lacks", 
   # With reference sequences loaded, an allele the reference does not hold - a
   # novel "new" or a multi-hit "3;7" - used to abort the isolate's whole write.
   db <- file.path(local_tempdir(), "db.sqlite")
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  DBI::dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
-  DBI::dbDisconnect(con)
+  con <- dbConnect(SQLite(), db)
+  dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
+  dbDisconnect(con)
 
   results <- data.frame(
     strain = c("novel", "multi"),
@@ -357,9 +369,9 @@ test_that("store_clamlst_results keeps calls with alleles the reference lacks", 
   )
   expect_true(pymlst$store_clamlst_results(db, results, refs = refs))
 
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  on.exit(DBI::dbDisconnect(con), add = TRUE)
-  stored <- DBI::dbGetQuery(
+  con <- dbConnect(SQLite(), db)
+  on.exit(dbDisconnect(con), add = TRUE)
+  stored <- dbGetQuery(
     con,
     "SELECT isolate, gene, allele, sequence, status FROM classical_mlst
       ORDER BY isolate, gene"
@@ -385,15 +397,15 @@ test_that("storing one isolate at a time matches storing them in one batch", {
   dir <- local_tempdir()
   fresh_db <- function(name) {
     db <- file.path(dir, name)
-    con <- DBI::dbConnect(RSQLite::SQLite(), db)
-    DBI::dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
-    DBI::dbDisconnect(con)
+    con <- dbConnect(SQLite(), db)
+    dbExecute(con, "CREATE TABLE mlst_type (name TEXT)")
+    dbDisconnect(con)
     db
   }
   rows <- function(db) {
-    con <- DBI::dbConnect(RSQLite::SQLite(), db)
-    on.exit(DBI::dbDisconnect(con), add = TRUE)
-    DBI::dbGetQuery(
+    con <- dbConnect(SQLite(), db)
+    on.exit(dbDisconnect(con), add = TRUE)
+    dbGetQuery(
       con,
       "SELECT isolate, gene, allele, st, status FROM classical_mlst
        ORDER BY isolate, gene"
@@ -416,19 +428,113 @@ test_that("storing one isolate at a time matches storing them in one batch", {
   expect_identical(nrow(rows(incremental)), 14L)
 })
 
-test_that("parse_clamlst_meta reads the script's lines, not the app's run note", {
-  log <- c(
-    describe_resolution(list(
-      resolved = TRUE,
-      scheme = "Bordetella pertussis MLST",
-      repository = "Institut Pasteur BIGSdb",
-      loci = paste0("l", 1:7)
-    )),
-    "Classical MLST repository: Institut Pasteur BIGSdb",
-    "Classical MLST scheme: Bordetella pertussis MLST",
-    "Classical MLST scheme version: 2026-11-16"
+test_that("the script builds the reference from the scheme folder it is given", {
+  # A stand-in for conda records every command and fakes the reference build,
+  # so the script's own argument handling is what is under test.
+  dir <- local_tempdir()
+  calls <- file.path(dir, "calls.txt")
+  fake_conda <- file.path(dir, "conda")
+  writeLines(
+    c(
+      "#!/bin/bash",
+      sprintf("echo \"$*\" >> '%s'", calls),
+      "[[ \"$4\" == claMLST && \"$5\" == create ]] && touch \"$CLA_TARGET\"",
+      "exit 0"
+    ),
+    fake_conda
   )
-  meta <- pymlst$parse_clamlst_meta(log)
-  expect_identical(meta$scheme, "Bordetella pertussis MLST")
-  expect_identical(meta$scheme_version, "2026-11-16")
+  Sys.chmod(fake_conda, "0755")
+
+  scheme_dir <- file.path(dir, "c.db.scheme")
+  dir.create(file.path(scheme_dir, "locus"), recursive = TRUE)
+  writeLines("ST\tadk\tfumC", file.path(scheme_dir, "profiles.tsv"))
+  for (locus in c("adk", "fumC")) {
+    writeLines(
+      c(paste0(">", locus, "_1"), "ATGTAA"),
+      file.path(scheme_dir, "locus", paste0(locus, ".fasta"))
+    )
+  }
+  genome <- file.path(dir, "g1.fna")
+  writeLines(c(">c1", "ACGT"), genome)
+  cla_db <- file.path(dir, "c.db")
+
+  out <- run(
+    pymlst$bash_exe(),
+    c(
+      SCRIPT,
+      impl$typing_args(
+        file.path(dir, "x.db"),
+        genome,
+        0.95,
+        0.9,
+        cla_db = cla_db,
+        cla_dir = scheme_dir,
+        cla_species = "Testus organismus",
+        cla_version = "2026-11-18"
+      )
+    ),
+    wd = dir,
+    env = c("current", CONDA_EXE = fake_conda, CLA_TARGET = cla_db),
+    error_on_status = FALSE
+  )
+  create <- grep("claMLST create", readLines(calls), value = TRUE)
+  expect_identical(
+    create,
+    paste(
+      "run -n PhyloTrace claMLST create -f -s Testus organismus -V 2026-11-18",
+      cla_db,
+      file.path(scheme_dir, "profiles.tsv"),
+      file.path(scheme_dir, "locus", "adk.fasta"),
+      file.path(scheme_dir, "locus", "fumC.fasta")
+    )
+  )
+  expect_true(grepl("Classical MLST: reference built (2 loci)", out$stdout, fixed = TRUE))
+  # The ST search ran against the reference, and the script reports no scheme
+  # details of its own - R records those from the stored scheme.
+  expect_true(any(grepl("claMLST search", readLines(calls), fixed = TRUE)))
+  expect_false(grepl("Classical MLST scheme:", out$stdout, fixed = TRUE))
+})
+
+test_that("a scheme folder without allele files builds nothing", {
+  dir <- local_tempdir()
+  scheme_dir <- file.path(dir, "c.db.scheme")
+  dir.create(file.path(scheme_dir, "locus"), recursive = TRUE)
+  writeLines("ST\tadk", file.path(scheme_dir, "profiles.tsv"))
+  genome <- file.path(dir, "g1.fna")
+  writeLines(c(">c1", "ACGT"), genome)
+  fake_conda <- file.path(dir, "conda")
+  writeLines(c("#!/bin/bash", "exit 0"), fake_conda)
+  Sys.chmod(fake_conda, "0755")
+
+  out <- run(
+    pymlst$bash_exe(),
+    c(
+      SCRIPT,
+      impl$typing_args(
+        file.path(dir, "x.db"),
+        genome,
+        0.95,
+        0.9,
+        cla_db = file.path(dir, "c.db"),
+        cla_dir = scheme_dir
+      )
+    ),
+    wd = dir,
+    env = c("current", CONDA_EXE = fake_conda),
+    error_on_status = FALSE
+  )
+  expect_true(grepl("Classical MLST: incomplete scheme files.", out$stdout, fixed = TRUE))
+  expect_false(grepl("Classical MLST ST:", out$stdout, fixed = TRUE))
+})
+
+test_that("clamlst_alembic reads the reference's schema marker", {
+  db <- file.path(local_tempdir(), "cla.db")
+  con <- dbConnect(SQLite(), db)
+  dbExecute(con, "CREATE TABLE alembic_version (version_num TEXT)")
+  dbExecute(con, "INSERT INTO alembic_version VALUES ('c0f871a99d96')")
+  dbDisconnect(con)
+
+  expect_identical(pymlst$clamlst_alembic(db), "c0f871a99d96")
+  expect_identical(pymlst$clamlst_alembic(file.path(dirname(db), "missing.db")), NA_character_)
+  expect_identical(pymlst$clamlst_alembic(NA_character_), NA_character_)
 })

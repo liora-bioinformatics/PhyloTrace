@@ -2,15 +2,15 @@
 #
 # Merges a peer PhyloTrace database into the primary loaded database.
 #
-# The merge algorithm relies on the unique structural properties of the schema:
-# while `seqid` values are database-specific, `(gene, sha256(sequence))` pairs
-# globally identify alleles across systems. (In a valid PhyloTrace database,
-# each `seqid` maps uniquely to one `gene`, and the `hashes` table stores
-# `sha256(sequences.sequence)`, forming a bijective mapping with `seqid`.)
+# `seqid` values are database-specific, while the sequence itself identifies an
+# allele across systems. pyMLST stores every distinct sequence once
+# (`sequences` is UNIQUE(sequence)), whatever locus it was called for, so two
+# loci can share one `seqid`; the locus lives on the `mlst` row.
 #
 # Consequently, external `seqid` values are not trusted directly. Every incoming
-# allele is mapped to a local identifier by content hash, allocating new local
-# sequence IDs only when an allele is not present in the primary database.
+# sequence is matched to a local `sequences.id` by its content, regardless of
+# locus, and a new local id (with a freshly computed sha256 in `hashes`) is
+# allocated only for a sequence the primary database does not hold yet.
 #
 # To ensure atomic execution and data safety, operations are never performed
 # directly on the live database file. Merges execute against a temporary copy
@@ -19,39 +19,24 @@
 # The original database state is preserved as a timestamped backup (`.bak-*`).
 
 box::use(
+  DBI,
   RSQLite[SQLite],
-  DBI[
-    dbConnect,
-    dbDisconnect,
-    dbExecute,
-    dbGetQuery,
-    dbListFields,
-    dbListTables,
-    dbWriteTable,
-    dbBegin,
-    dbCommit,
-    dbRollback,
-    dbIsValid
-  ],
   openssl[sha256],
   rlang[`%||%`],
 )
 
 box::use(
-  app / logic / db_connect[connect],
   app / logic / custom_fields[CUSTOM_SCHEMA_DDL],
-  app /
-    logic /
-    db_compat[
-      REF_SOUCHE,
-      attach_ro,
-      connect_ro,
-      check_import_compatibility
-    ],
-  app / logic / pymlst[hash_database],
-  app / logic / database_functions[sync_metadata_table, load_db_species],
+  app / logic / amr[AMR_RESULTS_DDL, AMR_SUMMARY_DDL],
+  app / logic / database_functions[ISOLATE_KEYED_TABLES, load_db_species, sync_metadata_table],
+  app / logic / db_compat[REF_SOUCHE, attach_ro, check_import_compatibility, connect_ro],
+  app / logic / db_connect[connect],
   app / logic / db_sources[SOURCE_COL, db_uuid, register_source],
+  app / logic / genome_hash[GENOME_HASHES_DDL],
   app / logic / logging[log_event],
+  app / logic / mlst_scheme[write_mlst_scheme],
+  app / logic / provenance[PROVENANCE_DDL],
+  app / logic / pymlst[CLASSICAL_MLST_DDL, hash_database],
 )
 
 # Default progress callback placeholder.
@@ -96,10 +81,10 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 
 # Verifies whether all sequences in the connection have corresponding hash entries.
 .hashes_complete <- function(con) {
-  if (!"hashes" %in% dbListTables(con)) {
+  if (!"hashes" %in% DBI$dbListTables(con)) {
     return(FALSE)
   }
-  dbGetQuery(
+  DBI$dbGetQuery(
     con,
     "SELECT COUNT(*) AS n FROM sequences s
        LEFT JOIN hashes h ON h.id = s.id
@@ -119,7 +104,7 @@ CUSTOM_TABLES <- c("phylotrace_custom_fields", "phylotrace_custom_values")
 prepare_source <- function(path) {
   con <- connect_ro(path)
   complete <- tryCatch(.hashes_complete(con), error = function(e) FALSE)
-  dbDisconnect(con)
+  DBI$dbDisconnect(con)
 
   if (complete) {
     return(list(path = path, temp = FALSE))
@@ -127,9 +112,14 @@ prepare_source <- function(path) {
 
   tmp <- tempfile("phylotrace_import_", fileext = ".db")
   if (!file.copy(path, tmp)) {
-    stop("Could not stage the external database for hashing.")
+    unlink(tmp)
+    stop("Could not stage the database for hashing.")
   }
-  hash_database(tmp)
+  hashed <- tryCatch(hash_database(tmp), error = function(e) e)
+  if (inherits(hashed, "error")) {
+    unlink(tmp)
+    stop(conditionMessage(hashed))
+  }
   list(path = tmp, temp = TRUE)
 }
 
@@ -152,7 +142,7 @@ release_source <- function(prep) {
 
 # Computes SHA-256 profile digests for all isolates in the specified schema.
 .profiles <- function(con, schema) {
-  df <- dbGetQuery(
+  df <- DBI$dbGetQuery(
     con,
     sprintf(.PROFILE_SQL, schema),
     params = list(REF_SOUCHE)
@@ -175,7 +165,7 @@ isolate_profile_hashes <- function(db_path) {
   on.exit(release_source(prep), add = TRUE)
 
   con <- connect_ro(prep$path)
-  on.exit(dbDisconnect(con), add = TRUE)
+  on.exit(DBI$dbDisconnect(con), add = TRUE)
 
   .profiles(con, "main")
 }
@@ -335,14 +325,14 @@ suggest_rename <- function(name, taken) {
 
 # Extracts metadata column definitions from an attached SQLite schema.
 .metadata_cols <- function(con, schema) {
-  tbls <- dbGetQuery(
+  tbls <- DBI$dbGetQuery(
     con,
     sprintf("SELECT name FROM %s.sqlite_master WHERE type = 'table'", schema)
   )$name
   if (!"metadata" %in% tbls) {
     return(character(0))
   }
-  names(dbGetQuery(
+  names(DBI$dbGetQuery(
     con,
     sprintf("SELECT * FROM %s.metadata LIMIT 0", schema)
   ))
@@ -379,38 +369,36 @@ import_preview <- function(
     add = TRUE
   )
 
-  con <- dbConnect(SQLite(), ":memory:")
-  on.exit(dbDisconnect(con), add = TRUE)
+  con <- DBI$dbConnect(SQLite(), ":memory:")
+  on.exit(DBI$dbDisconnect(con), add = TRUE)
   attach_ro(con, prep_local$path, "loc")
   attach_ro(con, prep_ext$path, "ext")
 
   n_new_alleles <- 0L
   n_shared_alleles <- 0L
   if (nrow(accepted)) {
-    dbWriteTable(
+    DBI$dbWriteTable(
       con,
       "acc",
       data.frame(isolate = accepted$ext_isolate, stringsAsFactors = FALSE),
       temporary = TRUE,
       overwrite = TRUE
     )
-    counts <- dbGetQuery(
+    # Counted per distinct sequence, the unit the merge allocates: a sequence
+    # the local database holds under any locus is not novel.
+    counts <- DBI$dbGetQuery(
       con,
       "WITH used AS (
-         SELECT DISTINCT em.gene AS gene, eh.hash AS hash
+         SELECT DISTINCT eh.hash AS hash
            FROM ext.mlst em
            JOIN ext.hashes eh ON eh.id = em.seqid
            JOIN acc a ON a.isolate = em.souche
-       ),
-       local_alleles AS (
-         SELECT DISTINCT lm.gene AS gene, lh.hash AS hash
-           FROM loc.mlst lm JOIN loc.hashes lh ON lh.id = lm.seqid
        )
        SELECT
          SUM(CASE WHEN la.hash IS NULL THEN 1 ELSE 0 END) AS novel,
          SUM(CASE WHEN la.hash IS NULL THEN 0 ELSE 1 END) AS shared
        FROM used u
-       LEFT JOIN local_alleles la ON la.gene = u.gene AND la.hash = u.hash"
+       LEFT JOIN (SELECT DISTINCT hash FROM loc.hashes) la ON la.hash = u.hash"
     )
     n_new_alleles <- .as_count(counts$novel)
     n_shared_alleles <- .as_count(counts$shared)
@@ -420,6 +408,11 @@ import_preview <- function(
   ext_cols <- .metadata_cols(con, "ext")
   custom <- .custom_split(.custom_defs(con, "loc"), .custom_defs(con, "ext"))
 
+  # Column names compare case-insensitively, as SQLite does.
+  reserved <- tolower(METADATA_RESERVED)
+  ext_free <- ext_cols[!tolower(ext_cols) %in% reserved]
+  local_free <- local_cols[!tolower(local_cols) %in% reserved]
+
   list(
     n_new_isolates = sum(classification$status == "new"),
     n_identical_dupes = sum(classification$status == "identical_duplicate"),
@@ -427,18 +420,9 @@ import_preview <- function(
     n_accepted = nrow(accepted),
     n_new_alleles = n_new_alleles,
     n_shared_alleles = n_shared_alleles,
-    metadata_shared = setdiff(
-      intersect(local_cols, ext_cols),
-      METADATA_RESERVED
-    ),
-    metadata_only_ext = setdiff(
-      setdiff(ext_cols, local_cols),
-      METADATA_RESERVED
-    ),
-    metadata_only_local = setdiff(
-      setdiff(local_cols, ext_cols),
-      METADATA_RESERVED
-    ),
+    metadata_shared = ext_free[tolower(ext_free) %in% tolower(local_free)],
+    metadata_only_ext = ext_free[!tolower(ext_free) %in% tolower(local_free)],
+    metadata_only_local = local_free[!tolower(local_free) %in% tolower(ext_free)],
     custom_importable = custom$importable,
     custom_shared = custom$shared,
     custom_only_ext = custom$only_ext,
@@ -460,23 +444,21 @@ import_preview <- function(
   source_label
 ) {
   ext_meta <- if ("metadata" %in% ext_tables) {
-    dbGetQuery(con, "SELECT * FROM ext.metadata")
+    DBI$dbGetQuery(con, "SELECT * FROM ext.metadata")
   } else {
     NULL
   }
 
-  selected <- intersect(
-    setdiff(selected_cols, METADATA_RESERVED),
-    names(ext_meta) %||% character(0)
-  )
+  selected <- intersect(selected_cols, names(ext_meta) %||% character(0))
+  selected <- selected[!tolower(selected) %in% tolower(METADATA_RESERVED)]
 
   # `sync_metadata_table()` skips creation when the local database has no
   # isolates yet (a freshly downloaded scheme), so the table may not exist.
-  if (!"metadata" %in% dbListTables(con)) {
-    dbExecute(
+  if (!"metadata" %in% .main_tables(con)) {
+    DBI$dbExecute(
       con,
       sprintf(
-        "CREATE TABLE metadata (%s)",
+        "CREATE TABLE main.metadata (%s)",
         paste(
           paste(.quote_ident(c(METADATA_RESERVED, selected)), "TEXT"),
           collapse = ", "
@@ -485,15 +467,18 @@ import_preview <- function(
     )
   }
 
-  # Both the reserved columns and every
-  # newly selected external field must exist before the append.
-  for (col in setdiff(
-    c(METADATA_RESERVED, selected),
-    dbListFields(con, "metadata")
-  )) {
-    dbExecute(
+  # SQLite column names are case-insensitive, so an external "Country" lands
+  # in a local "country" rather than being added a second time. Both the
+  # reserved columns and every newly selected field must exist before the
+  # append.
+  local_fields <- names(DBI$dbGetQuery(con, "SELECT * FROM main.metadata LIMIT 0"))
+  target <- local_fields[match(tolower(selected), tolower(local_fields))]
+  target[is.na(target)] <- selected[is.na(target)]
+  missing_reserved <- METADATA_RESERVED[!tolower(METADATA_RESERVED) %in% tolower(local_fields)]
+  for (col in c(missing_reserved, setdiff(target, local_fields))) {
+    DBI$dbExecute(
       con,
-      sprintf("ALTER TABLE metadata ADD COLUMN %s TEXT", .quote_ident(col))
+      sprintf("ALTER TABLE main.metadata ADD COLUMN %s TEXT", .quote_ident(col))
     )
   }
 
@@ -528,13 +513,11 @@ import_preview <- function(
   )
   rows[[SOURCE_COL]] <- source_label
 
-  if (length(selected)) {
-    for (col in selected) {
-      rows[[col]] <- as.character(ext_meta[[col]][idx])
-    }
+  for (i in seq_along(selected)) {
+    rows[[target[i]]] <- as.character(ext_meta[[selected[i]]][idx])
   }
 
-  dbWriteTable(con, "metadata", rows, append = TRUE)
+  DBI$dbWriteTable(con, "metadata", rows, append = TRUE)
   invisible(nrow(rows))
 }
 
@@ -544,7 +527,7 @@ import_preview <- function(
 
 # Fetches custom field definitions from specified attached database schema.
 .custom_defs <- function(con, schema) {
-  tbls <- dbGetQuery(
+  tbls <- DBI$dbGetQuery(
     con,
     sprintf("SELECT name FROM %s.sqlite_master WHERE type = 'table'", schema)
   )$name
@@ -555,7 +538,7 @@ import_preview <- function(
       stringsAsFactors = FALSE
     ))
   }
-  dbGetQuery(
+  DBI$dbGetQuery(
     con,
     sprintf(
       "SELECT name, type FROM %s.phylotrace_custom_fields
@@ -614,8 +597,8 @@ import_preview <- function(
 #' @return A list categorizing fields as `importable`, `shared`, `only_ext`, and `conflicts`.
 #' @export
 importable_custom_fields <- function(local_path, ext_path) {
-  con <- dbConnect(SQLite(), ":memory:")
-  on.exit(dbDisconnect(con), add = TRUE)
+  con <- DBI$dbConnect(SQLite(), ":memory:")
+  on.exit(DBI$dbDisconnect(con), add = TRUE)
   attach_ro(con, local_path, "loc")
   attach_ro(con, ext_path, "ext")
 
@@ -629,10 +612,10 @@ importable_custom_fields <- function(local_path, ext_path) {
   }
 
   for (sql in CUSTOM_SCHEMA_DDL) {
-    dbExecute(con, sql)
+    DBI$dbExecute(con, sql)
   }
 
-  ext_defs <- dbGetQuery(
+  ext_defs <- DBI$dbGetQuery(
     con,
     "SELECT id, name, type, description, levels FROM ext.phylotrace_custom_fields
       ORDER BY COALESCE(position, id)"
@@ -642,7 +625,7 @@ importable_custom_fields <- function(local_path, ext_path) {
     return(0L)
   }
 
-  local_defs <- dbGetQuery(
+  local_defs <- DBI$dbGetQuery(
     con,
     "SELECT id, name, type FROM main.phylotrace_custom_fields"
   )
@@ -662,12 +645,12 @@ importable_custom_fields <- function(local_path, ext_path) {
     local_id <- if (nrow(hit)) {
       as.integer(hit$id[[1]])
     } else {
-      position <- dbGetQuery(
+      position <- DBI$dbGetQuery(
         con,
         "SELECT COALESCE(MAX(COALESCE(position, id)), 0) + 1 AS pos
            FROM main.phylotrace_custom_fields"
       )$pos[[1]]
-      dbExecute(
+      DBI$dbExecute(
         con,
         "INSERT INTO main.phylotrace_custom_fields
            (name, type, description, levels, position, created, modified)
@@ -683,7 +666,7 @@ importable_custom_fields <- function(local_path, ext_path) {
         )
       )
       new_id <- as.integer(
-        dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]]
+        DBI$dbGetQuery(con, "SELECT last_insert_rowid() AS id")$id[[1]]
       )
       local_defs <- rbind(
         local_defs,
@@ -705,7 +688,7 @@ importable_custom_fields <- function(local_path, ext_path) {
     return(0L)
   }
 
-  dbWriteTable(
+  DBI$dbWriteTable(
     con,
     "custom_map",
     data.frame(ext_id = ext_ids, local_id = local_ids),
@@ -713,7 +696,7 @@ importable_custom_fields <- function(local_path, ext_path) {
     overwrite = TRUE
   )
 
-  dbExecute(
+  DBI$dbExecute(
     con,
     "DELETE FROM main.phylotrace_custom_values
       WHERE isolate IN (
@@ -721,7 +704,7 @@ importable_custom_fields <- function(local_path, ext_path) {
       )"
   )
 
-  n <- dbExecute(
+  n <- DBI$dbExecute(
     con,
     "INSERT OR REPLACE INTO main.phylotrace_custom_values
        (field_id, isolate, value)
@@ -730,7 +713,7 @@ importable_custom_fields <- function(local_path, ext_path) {
          JOIN custom_map cm ON cm.ext_id = ev.field_id
          JOIN import_isolates s ON s.ext_isolate = ev.isolate"
   )
-  dbExecute(con, "DROP TABLE custom_map")
+  DBI$dbExecute(con, "DROP TABLE custom_map")
 
   as.integer(n)
 }
@@ -739,39 +722,41 @@ importable_custom_fields <- function(local_path, ext_path) {
 # Analysis-result tables (classical_mlst / amr_*)
 # ---------------------------------------------------------------------------
 
+# The app's own definitions of the result tables, used when the local database
+# has none yet: the external file's DDL is never executed.
+.RESULT_DDL <- c(
+  classical_mlst = sub("EXISTS ", "EXISTS main.", CLASSICAL_MLST_DDL, fixed = TRUE),
+  amr_results = sub("EXISTS ", "EXISTS main.", AMR_RESULTS_DDL, fixed = TRUE),
+  amr_summary = sub("EXISTS ", "EXISTS main.", AMR_SUMMARY_DDL, fixed = TRUE),
+  genome_hashes = sub("EXISTS ", "EXISTS main.", GENOME_HASHES_DDL, fixed = TRUE),
+  typing_provenance = sub("EXISTS ", "EXISTS main.", PROVENANCE_DDL, fixed = TRUE)
+)
+
+# Names of the tables in the working copy itself; the attached external
+# database and temp tables are left out.
+.main_tables <- function(con) {
+  DBI$dbGetQuery(con, "SELECT name FROM main.sqlite_master WHERE type = 'table'")$name
+}
+
 # Merges individual isolate-keyed analysis tables from external connection.
+# Rows of overwritten isolates were already removed by the caller.
 .merge_result_table <- function(con, nm) {
-  if (!nm %in% dbListTables(con)) {
-    ddl <- dbGetQuery(
-      con,
-      "SELECT sql FROM ext.sqlite_master WHERE type = 'table' AND name = ?",
-      params = list(nm)
-    )$sql
-    if (!length(ddl) || is.na(ddl[1])) {
-      return(0L)
-    }
-    dbExecute(con, ddl[1])
+  if (!nm %in% .main_tables(con)) {
+    DBI$dbExecute(con, .RESULT_DDL[[nm]])
   }
 
-  ext_cols <- names(dbGetQuery(
+  ext_cols <- names(DBI$dbGetQuery(
     con,
     sprintf("SELECT * FROM ext.%s LIMIT 0", nm)
   ))
-  cols <- setdiff(intersect(dbListFields(con, nm), ext_cols), "id")
+  local_cols <- names(DBI$dbGetQuery(
+    con,
+    sprintf("SELECT * FROM main.%s LIMIT 0", nm)
+  ))
+  cols <- setdiff(intersect(local_cols, ext_cols), "id")
   if (!("isolate" %in% cols)) {
     return(0L)
   }
-
-  # Replace overwritten isolates' existing rows so re-typed isolates never
-  # accumulate stale result rows.
-  dbExecute(
-    con,
-    sprintf(
-      "DELETE FROM main.%s WHERE isolate IN
-         (SELECT final_isolate FROM import_isolates WHERE action = 'overwrite')",
-      nm
-    )
-  )
 
   quoted <- vapply(cols, .quote_ident, character(1))
   select_exprs <- vapply(
@@ -786,7 +771,7 @@ importable_custom_fields <- function(local_path, ext_path) {
     character(1)
   )
 
-  dbExecute(
+  DBI$dbExecute(
     con,
     sprintf(
       "INSERT OR REPLACE INTO main.%s (%s)
@@ -835,16 +820,26 @@ restore_backup <- function(db_path, backup_path) {
     stop("Backup no longer exists: ", backup_path)
   }
 
-  if (file.exists(db_path)) {
-    file.rename(db_path, .new_backup_path(db_path))
-  }
-
+  # Stage first, so the live file is only moved once the copy is complete.
   staging <- paste0(db_path, ".restore")
   if (!file.copy(backup_path, staging, overwrite = TRUE)) {
+    unlink(staging)
     stop("Could not stage the backup for restore.")
+  }
+
+  safety <- NA_character_
+  if (file.exists(db_path)) {
+    safety <- .new_backup_path(db_path)
+    if (!file.rename(db_path, safety)) {
+      unlink(staging)
+      stop("Could not back up the current database, so nothing was restored.")
+    }
   }
   if (!file.rename(staging, db_path)) {
     unlink(staging)
+    if (!is.na(safety)) {
+      file.rename(safety, db_path)
+    }
     stop("Could not restore the backup.")
   }
   log_event("DB", "restore-backup", sprintf("from %s", backup_path))
@@ -881,6 +876,9 @@ restore_backup <- function(db_path, backup_path) {
 #' @param backup Logical indicating whether to retain timestamped original database backup.
 #' @param progress Optional progress reporting callback function.
 #' @param source_file Display label for external database source provenance.
+#' @param adopt_mlst_scheme Logical; replace the local classical MLST scheme
+#'   with the external one. Only allowed when `check_import_compatibility()`
+#'   offers it (no local scheme, or a newer copy of the same scheme).
 #' @return List summarizing total records added, modified, and created during merge.
 #' @export
 merge_databases <- function(
@@ -893,7 +891,8 @@ merge_databases <- function(
   custom_fields = character(0),
   backup = TRUE,
   progress = NULL,
-  source_file = NULL
+  source_file = NULL,
+  adopt_mlst_scheme = FALSE
 ) {
   progress <- progress %||% .noop_progress
 
@@ -906,14 +905,17 @@ merge_databases <- function(
       paste(failed, collapse = ", ")
     )
   }
+  adopt_mlst_scheme <- isTRUE(adopt_mlst_scheme)
+  if (adopt_mlst_scheme && !isTRUE(attr(compat, "mlst_scheme")$adopt_offer)) {
+    stop(
+      "The external database's classical MLST scheme cannot be adopted: ",
+      attr(compat, "mlst_scheme")$detail %||% "it has none"
+    )
+  }
 
   local_isolates <- attr(compat, "local")$isolates
   ext_isolates <- attr(compat, "ext")$isolates
   accepted <- .validate_resolutions(resolutions, local_isolates, ext_isolates)
-
-  progress(0.08, "Staging external database …")
-  prep_ext <- prepare_source(ext_path)
-  on.exit(release_source(prep_ext), add = TRUE)
 
   work <- paste0(local_path, ".import-work")
   if (file.exists(work)) {
@@ -937,26 +939,28 @@ merge_databases <- function(
   organism <- load_db_species(local_path)
 
   con <- connect(work)
-  on.exit(if (dbIsValid(con)) dbDisconnect(con), add = TRUE)
+  on.exit(if (DBI$dbIsValid(con)) DBI$dbDisconnect(con), add = TRUE)
 
-  attach_ro(con, prep_ext$path, "ext")
-  ext_tables <- dbGetQuery(
+  # The external `hashes` table is never consulted: sequences are matched by
+  # content and the hash of every new one is computed here.
+  attach_ro(con, ext_path, "ext")
+  ext_tables <- DBI$dbGetQuery(
     con,
     "SELECT name FROM ext.sqlite_master WHERE type = 'table'"
   )$name
 
-  dbExecute(
+  DBI$dbExecute(
     con,
     "DELETE FROM main.hashes WHERE id NOT IN (SELECT id FROM main.sequences)"
   )
 
   for (sql in .TRANSIENT_INDEXES) {
-    dbExecute(con, sql)
+    DBI$dbExecute(con, sql)
   }
 
-  progress(0.25, "Matching alleles by sequence hash …")
+  progress(0.25, "Matching alleles by sequence …")
 
-  dbWriteTable(
+  DBI$dbWriteTable(
     con,
     "import_isolates",
     accepted[, c("ext_isolate", "final_isolate", "action")],
@@ -964,48 +968,10 @@ merge_databases <- function(
     overwrite = TRUE
   )
 
-  dbExecute(
-    con,
-    "CREATE TEMP TABLE local_alleles AS
-       SELECT DISTINCT m.gene AS gene, h.hash AS hash, m.seqid AS local_seqid
-         FROM main.mlst m JOIN main.hashes h ON h.id = m.seqid"
-  )
-  dbExecute(
-    con,
-    "CREATE TEMP TABLE ext_used AS
-       SELECT DISTINCT em.gene AS gene, eh.hash AS hash, em.seqid AS ext_seqid
-         FROM ext.mlst em
-         JOIN ext.hashes eh ON eh.id = em.seqid
-         JOIN import_isolates s ON s.ext_isolate = em.souche"
-  )
-  dbExecute(
-    con,
-    "CREATE TEMP TABLE seqid_map AS
-       SELECT e.ext_seqid AS ext_seqid, e.gene AS gene, e.hash AS hash,
-              l.local_seqid AS local_seqid
-         FROM ext_used e
-         LEFT JOIN local_alleles l ON l.gene = e.gene AND l.hash = e.hash"
-  )
-  dbExecute(con, "CREATE INDEX temp.ix_seqid_map ON seqid_map(ext_seqid)")
+  new_seq <- .map_sequences(con)
+  n_new_alleles <- nrow(new_seq)
+  scheme <- if (adopt_mlst_scheme) .read_ext_mlst_scheme(con) else NULL
 
-  # Re-link existing sequence entries left orphaned by prior deletion operations
-  dbExecute(
-    con,
-    "UPDATE seqid_map
-        SET local_seqid = (
-              SELECT MIN(h.id) FROM main.hashes h
-               WHERE h.hash = seqid_map.hash
-                 AND h.id NOT IN (SELECT seqid FROM main.mlst)
-            )
-      WHERE local_seqid IS NULL
-        AND EXISTS (
-              SELECT 1 FROM main.hashes h
-               WHERE h.hash = seqid_map.hash
-                 AND h.id NOT IN (SELECT seqid FROM main.mlst)
-            )"
-  )
-
-  n_new_alleles <- 0L
   n_calls <- 0L
   result_rows <- 0L
   custom_rows <- 0L
@@ -1020,73 +986,64 @@ merge_databases <- function(
     ext_tables
   )
 
-  dbBegin(con)
+  DBI$dbBegin(con)
   tryCatch(
     {
       progress(0.45, "Adding novel alleles …")
-
-      dbExecute(
+      DBI$dbExecute(
         con,
-        "CREATE TEMP TABLE new_alleles AS
-           SELECT ext_seqid, gene, hash,
-                  (SELECT COALESCE(MAX(id), 0) FROM main.sequences)
-                    + ROW_NUMBER() OVER (ORDER BY ext_seqid) AS new_id
-             FROM seqid_map
-            WHERE local_seqid IS NULL"
+        "INSERT INTO main.sequences (id, sequence) SELECT id, sequence FROM new_seq"
       )
-      n_new_alleles <- dbGetQuery(
+      DBI$dbExecute(
         con,
-        "SELECT COUNT(*) AS n FROM new_alleles"
-      )$n
-
-      dbExecute(
-        con,
-        "INSERT INTO main.sequences (id, sequence)
-           SELECT n.new_id, s.sequence
-             FROM new_alleles n JOIN ext.sequences s ON s.id = n.ext_seqid"
+        "INSERT INTO main.hashes (id, hash) SELECT id, hash FROM new_seq"
       )
-      dbExecute(
+      DBI$dbExecute(
         con,
-        "INSERT INTO main.hashes (id, hash) SELECT new_id, hash FROM new_alleles"
-      )
-      dbExecute(
-        con,
-        "UPDATE seqid_map
-            SET local_seqid = (
-              SELECT new_id FROM new_alleles n WHERE n.ext_seqid = seqid_map.ext_seqid
-            )
+        "UPDATE ext_seq
+            SET local_seqid = (SELECT m.id FROM new_map m WHERE m.ext_seqid = ext_seq.ext_seqid)
           WHERE local_seqid IS NULL"
       )
 
       progress(0.6, "Replacing overwritten isolates …")
-      dbExecute(
+      # Everything recorded about a replaced isolate goes, whatever is imported
+      # in its place: results the external file does not carry, or that were
+      # left out, would otherwise describe the old genome under the new one.
+      main_tables <- .main_tables(con)
+      for (nm in c("metadata", intersect(ISOLATE_KEYED_TABLES, main_tables))) {
+        if (!nm %in% main_tables) {
+          next
+        }
+        DBI$dbExecute(
+          con,
+          sprintf(
+            "DELETE FROM main.%s WHERE isolate IN (
+               SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
+             )",
+            nm
+          )
+        )
+      }
+      DBI$dbExecute(
         con,
         "DELETE FROM main.mlst
           WHERE souche IN (
             SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
           )"
       )
-      if ("metadata" %in% dbListTables(con)) {
-        dbExecute(
-          con,
-          "DELETE FROM main.metadata
-            WHERE isolate IN (
-              SELECT final_isolate FROM import_isolates WHERE action = 'overwrite'
-            )"
-        )
-      }
 
       progress(0.7, "Writing allele calls …")
-      n_calls <- dbExecute(
+      n_calls <- DBI$dbExecute(
         con,
         "INSERT INTO main.mlst (souche, gene, seqid)
-           SELECT s.final_isolate, em.gene, sm.local_seqid
+           SELECT s.final_isolate, em.gene, es.local_seqid
              FROM ext.mlst em
              JOIN import_isolates s ON s.ext_isolate = em.souche
-             JOIN seqid_map sm ON sm.ext_seqid = em.seqid"
+             JOIN ext_seq es ON es.ext_seqid = em.seqid
+            WHERE es.local_seqid IS NOT NULL"
       )
 
-      expected <- dbGetQuery(
+      expected <- DBI$dbGetQuery(
         con,
         "SELECT COUNT(*) AS n FROM ext.mlst em
            JOIN import_isolates s ON s.ext_isolate = em.souche"
@@ -1125,12 +1082,22 @@ merge_databases <- function(
           result_rows <- result_rows +
             as.integer(.merge_result_table(con, nm))
         }
+        .blank_provenance(
+          con,
+          classical = "classical_mlst" %in% result_tables,
+          amr = "amr_results" %in% result_tables
+        )
       }
 
-      dbCommit(con)
+      if (!is.null(scheme)) {
+        progress(0.9, "Adopting the classical MLST scheme …")
+        .adopt_mlst_scheme(con, scheme)
+      }
+
+      DBI$dbCommit(con)
     },
     error = function(e) {
-      try(dbRollback(con), silent = TRUE)
+      try(DBI$dbRollback(con), silent = TRUE)
       stop("Merge failed and was rolled back: ", conditionMessage(e))
     }
   )
@@ -1138,10 +1105,10 @@ merge_databases <- function(
   progress(0.92, "Finalising …")
 
   for (nm in names(.TRANSIENT_INDEXES)) {
-    dbExecute(con, sprintf("DROP INDEX IF EXISTS %s", nm))
+    DBI$dbExecute(con, sprintf("DROP INDEX IF EXISTS %s", nm))
   }
-  dbExecute(con, "DETACH DATABASE ext")
-  dbDisconnect(con)
+  DBI$dbExecute(con, "DETACH DATABASE ext")
+  DBI$dbDisconnect(con)
 
   backup_path <- .swap_in(local_path, work, backup)
   committed <- TRUE
@@ -1152,13 +1119,14 @@ merge_databases <- function(
     "DB",
     "merge",
     sprintf(
-      "from %s (source '%s') | %d added, %d overwritten, %d renamed, %d new allele(s)",
+      "from %s (source '%s') | %d added, %d overwritten, %d renamed, %d new allele(s)%s",
       source_file %||% ext_path,
       source_label,
       sum(accepted$action == "add"),
       sum(accepted$action == "overwrite"),
       sum(accepted$action == "rename"),
-      as.integer(n_new_alleles)
+      as.integer(n_new_alleles),
+      if (!is.null(scheme)) ", classical MLST scheme adopted" else ""
     )
   )
 
@@ -1171,9 +1139,110 @@ merge_databases <- function(
     skipped = sum(resolutions$action == "skip"),
     new_alleles = as.integer(n_new_alleles),
     calls = as.integer(n_calls),
+    mlst_scheme_adopted = !is.null(scheme),
     backup_path = backup_path,
     source = source_label
   )
+}
+
+# Maps every external sequence the accepted isolates use onto a local
+# `sequences.id` by content, whatever locus holds it locally, and prepares the
+# rows for sequences that are new: one new id per distinct sequence, since
+# pyMLST's `sequences` is UNIQUE(sequence). Leaves temp tables `ext_seq`
+# (ext_seqid -> local_seqid), `new_seq` (id, sequence, hash) and `new_map`
+# (ext_seqid -> new id) behind and returns the new sequences.
+.map_sequences <- function(con) {
+  DBI$dbExecute(
+    con,
+    "CREATE TEMP TABLE ext_seq AS
+       SELECT DISTINCT em.seqid AS ext_seqid, CAST(NULL AS INTEGER) AS local_seqid
+         FROM ext.mlst em
+         JOIN import_isolates s ON s.ext_isolate = em.souche"
+  )
+  DBI$dbExecute(con, "CREATE INDEX temp.ix_ext_seq ON ext_seq(ext_seqid)")
+  DBI$dbExecute(
+    con,
+    "UPDATE ext_seq
+        SET local_seqid = (
+              SELECT MIN(s.id)
+                FROM ext.sequences es
+                JOIN main.sequences s ON s.sequence = es.sequence
+               WHERE es.id = ext_seq.ext_seqid
+            )"
+  )
+
+  novel <- DBI$dbGetQuery(
+    con,
+    "SELECT e.ext_seqid AS ext_seqid, es.sequence AS sequence
+       FROM ext_seq e
+       JOIN ext.sequences es ON es.id = e.ext_seqid
+      WHERE e.local_seqid IS NULL AND es.sequence IS NOT NULL
+      ORDER BY e.ext_seqid"
+  )
+  novel$hash <- if (nrow(novel)) as.character(sha256(novel$sequence)) else character(0)
+
+  first <- !duplicated(novel$hash)
+  max_id <- .as_count(DBI$dbGetQuery(con, "SELECT MAX(id) AS n FROM main.sequences")$n)
+  new_seq <- data.frame(
+    id = max_id + seq_len(sum(first)),
+    sequence = novel$sequence[first],
+    hash = novel$hash[first],
+    stringsAsFactors = FALSE
+  )
+  new_map <- data.frame(
+    ext_seqid = novel$ext_seqid,
+    id = new_seq$id[match(novel$hash, new_seq$hash)]
+  )
+  DBI$dbWriteTable(con, "new_seq", new_seq, temporary = TRUE, overwrite = TRUE)
+  DBI$dbWriteTable(con, "new_map", new_map, temporary = TRUE, overwrite = TRUE)
+  new_seq
+}
+
+# Clears the provenance claims about results that were not carried over, so a
+# merged isolate never states a classical MLST or AMR status it has no rows for.
+.blank_provenance <- function(con, classical, amr) {
+  if (!"typing_provenance" %in% .main_tables(con)) {
+    return(invisible(0L))
+  }
+  cols <- names(DBI$dbGetQuery(con, "SELECT * FROM main.typing_provenance LIMIT 0"))
+  drop <- c(
+    if (!classical) grep("^cla_", cols, value = TRUE),
+    if (!amr) grep("^amr_", cols, value = TRUE)
+  )
+  if (!length(drop)) {
+    return(invisible(0L))
+  }
+  invisible(DBI$dbExecute(
+    con,
+    sprintf(
+      "UPDATE main.typing_provenance SET %s
+        WHERE isolate IN (SELECT final_isolate FROM import_isolates)",
+      paste(paste(.quote_ident(drop), "= NULL"), collapse = ", ")
+    )
+  ))
+}
+
+# Reads the external classical MLST scheme in the shape write_mlst_scheme()
+# takes. The counts and the import time are derived again when it is written.
+.read_ext_mlst_scheme <- function(con) {
+  kv <- DBI$dbGetQuery(con, "SELECT key, value FROM ext.cla_scheme_info")
+  kv <- kv[!kv$key %in% c("imported_at", "loci", "profiles", "alleles"), , drop = FALSE]
+  info <- as.list(kv$value)
+  names(info) <- kv$key
+  list(
+    scheme = list(
+      loci = DBI$dbGetQuery(con, "SELECT locus FROM ext.cla_scheme_loci ORDER BY position")$locus,
+      profiles = DBI$dbGetQuery(con, "SELECT st, locus, allele FROM ext.cla_scheme_profiles"),
+      alleles = DBI$dbGetQuery(con, "SELECT locus, allele, sequence FROM ext.cla_scheme_alleles")
+    ),
+    info = info
+  )
+}
+
+# Replaces the working copy's classical MLST scheme inside the merge
+# transaction.
+.adopt_mlst_scheme <- function(con, adopted) {
+  write_mlst_scheme(con, adopted$scheme, adopted$info)
 }
 
 # Replaces active database file with working copy atomically, rolling back if rename steps fail.

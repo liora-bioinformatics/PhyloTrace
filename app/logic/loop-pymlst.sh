@@ -14,7 +14,8 @@ COVERAGE=0.9
 env=PhyloTrace
 SPECIES=""
 CLA_DB=""
-CLA_SPEC=""
+CLA_DIR=""
+CLA_VERSION=""
 # Classical MLST search thresholds. Empty means "not given": the cgMLST pair is
 # used instead, so the script keeps working when called without -I/-C.
 CLA_IDENTITY=""
@@ -31,7 +32,7 @@ AMR_OUT=""
 
 #' Display command-line usage and option flags.
 usage() {
-    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-s <species>] [-m <cla_db_path>] [-M <cla_scheme_spec>] [-I <cla_identity>] [-C <cla_coverage>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
+    echo "Usage: $0 -d <database_path> [-i <identity>] [-c <coverage>] [-e <conda_env>] [-m <cla_db_path>] [-M <cla_scheme_dir>] [-s <cla_species>] [-V <cla_version>] [-I <cla_identity>] [-C <cla_coverage>] [-A <amr_env>] [-p <amr_species>] [-o <amr_out_dir>] -- <genome_file> [<genome_file> ...]"
     exit 1
 }
 
@@ -113,14 +114,15 @@ process_genome() {
 # Option Parsing and Validation
 # ==============================================================================
 
-while getopts "d:i:c:e:s:m:M:I:C:A:p:o:" opt; do
+while getopts "d:i:c:e:s:m:M:V:I:C:A:p:o:" opt; do
     case "$opt" in
         d) DB_PATH="$OPTARG" ;;
         i) IDENTITY="$OPTARG" ;;
         c) COVERAGE="$OPTARG" ;;
         s) SPECIES="$OPTARG" ;;
         m) CLA_DB="$OPTARG" ;;
-        M) CLA_SPEC="$OPTARG" ;;
+        M) CLA_DIR="$OPTARG" ;;
+        V) CLA_VERSION="$OPTARG" ;;
         I) CLA_IDENTITY="$OPTARG" ;;
         C) CLA_COVERAGE="$OPTARG" ;;
         A) AMR_ENV="$OPTARG" ;;
@@ -149,65 +151,34 @@ fi
 
 # --- Build Classical MLST Reference Database ---
 # The scheme is the one stored in the PhyloTrace database: R writes its profile
-# table and allele files into a private folder (app/logic/mlst_scheme.R) and
-# names that folder in a spec file, so this step only builds the reference with
-# `claMLST create`. Nothing is downloaded.
-if [[ -n "$CLA_SPEC" && -f "$CLA_SPEC" && -n "$CLA_DB" ]]; then
-    CLA_REPO=""
-    CLA_SCHEME=""
-    CLA_VERSION=""
-    CLA_DIR=""
-    CLA_LOCI=()
-    while IFS= read -r line; do
-        key=${line%%=*}
-        value=${line#*=}
-        case "$key" in
-            repository) CLA_REPO="$value" ;;
-            species)    [[ -n "$value" ]] && SPECIES="$value" ;;
-            scheme)     CLA_SCHEME="$value" ;;
-            version)    CLA_VERSION="$value" ;;
-            local_dir)  CLA_DIR="$value" ;;
-            locus)      CLA_LOCI+=("$value") ;;
-        esac
-    done < "$CLA_SPEC"
-
+# table and one allele file per locus into a private folder
+# (app/logic/mlst_scheme.R), so this step only builds the reference with
+# `claMLST create`. Nothing is downloaded. Which scheme it is gets recorded by
+# R, not here. claMLST create matches allele files to profile columns by file
+# name, and the folder holds nothing but the scheme's own locus files.
+if [[ -n "$CLA_DIR" && -n "$CLA_DB" ]]; then
     echo "------------------------------------------------"
-    echo "Building classical MLST scheme for: $SPECIES"
-    echo "Scheme: $CLA_SCHEME from $CLA_REPO (${#CLA_LOCI[@]} loci)"
+    echo "Building classical MLST reference for: ${SPECIES:-unspecified species}"
 
-    # claMLST create matches allele files to profile columns by file name, so
-    # each locus file carries the name the profile table gives it.
+    shopt -s nullglob
+    allele_files=("$CLA_DIR"/locus/*.fasta)
+    shopt -u nullglob
+
     built=0
-    allele_files=()
-    for locus in "${CLA_LOCI[@]}"; do
-        allele_files+=("$CLA_DIR/locus/$locus.fasta")
-    done
-    complete=1
-    [[ -f "$CLA_DIR/profiles.tsv" && ${#allele_files[@]} -gt 0 ]] || complete=0
-    for allele_file in "${allele_files[@]}"; do
-        [[ -f "$allele_file" ]] || complete=0
-    done
-
-    if [[ "$complete" -ne 1 ]]; then
+    if [[ ! -f "$CLA_DIR/profiles.tsv" || ${#allele_files[@]} -eq 0 ]]; then
         echo "Classical MLST: incomplete scheme files."
     elif "$CONDA" run -n "$env" claMLST create -f \
-            -s "$SPECIES" ${CLA_VERSION:+-V "$CLA_VERSION"} \
+            ${SPECIES:+-s "$SPECIES"} ${CLA_VERSION:+-V "$CLA_VERSION"} \
             "$CLA_DB" "$CLA_DIR/profiles.tsv" "${allele_files[@]}"; then
         built=1
-        # Kept for the ST lookup on finalize: claMLST create drops profile
-        # rows whose locus is recorded as absent (allele 0), so the table
-        # itself is the only place those STs can still be reached.
-        cp "$CLA_DIR/profiles.tsv" "$CLA_DB.profiles.tsv"
     fi
 
     if [[ "$built" -eq 1 && -f "$CLA_DB" ]]; then
-        echo "Classical MLST repository: $CLA_REPO"
-        echo "Classical MLST scheme: $CLA_SCHEME"
-        echo "Classical MLST scheme version: $CLA_VERSION"
+        echo "Classical MLST: reference built (${#allele_files[@]} loci)"
         echo "Classical MLST thresholds: identity $CLA_IDENTITY, coverage $CLA_COVERAGE"
     else
         CLA_DB=""
-        echo "Classical MLST: reference build failed for '$SPECIES' (skipping ST calls)"
+        echo "Classical MLST: reference build failed (skipping ST calls)"
     fi
 fi
 

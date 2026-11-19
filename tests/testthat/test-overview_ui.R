@@ -50,6 +50,27 @@ test_that("key_value_table drops unrecorded rows and escapes labels", {
   expect_true(grepl("A&lt;b&gt;", widget$x$data$key[1], fixed = TRUE))
 })
 
+test_that("scheme_value_html escapes stored text and links plain web addresses", {
+  html <- overview_ui$scheme_value_html(c(
+    "https://example.org/scheme",
+    "<a href=\"https://example.org\">x</a>",
+    "Tom & Jerry",
+    NA
+  ))
+
+  expect_identical(
+    html[1],
+    paste0(
+      "<a href=\"https://example.org/scheme\" target=\"_blank\" rel=\"noopener\">",
+      "https://example.org/scheme</a>"
+    )
+  )
+  # Stored markup is shown as text, never rendered or turned into a link.
+  expect_identical(html[2], "&lt;a href=\"https://example.org\"&gt;x&lt;/a&gt;")
+  expect_identical(html[3], "Tom &amp; Jerry")
+  expect_identical(html[4], NA_character_)
+})
+
 test_that("count_label pluralizes its noun", {
   expect_identical(overview_ui$count_label(1), "1 isolate")
   expect_identical(overview_ui$count_label(1204), "1,204 isolates")

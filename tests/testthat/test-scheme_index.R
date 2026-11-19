@@ -34,12 +34,21 @@ test_that("a species finds group schemes and genus-wide schemes", {
   expect_identical(brucella$type, c("cgMLST", "cgMLST", "MLST"))
 
   salmonella <- scheme_index$schemes_for_species("Salmonella enterica", type = "MLST")
-  expect_identical(salmonella$provider, "pubmlst")
+  expect_true(all(c("pubmlst", "enterobase") %in% salmonella$provider))
+  expect_true(all(salmonella$type == "MLST"))
+
+  # A genus-wide row (EnteroBase's Streptococcus scheme) serves every species.
+  strep <- scheme_index$schemes_for_species("Streptococcus pneumoniae", type = "cgMLST")
+  expect_true("Streptococcus cgMLST V1" %in% strep$scheme)
 })
 
 test_that("wgMLST schemas are offered and listed after cgMLST", {
-  salmonella <- scheme_index$schemes_for_species("Salmonella enterica", type = scheme_index$CORE_TYPES)
-  expect_identical(salmonella$type, c("cgMLST", "wgMLST"))
+  salmonella <- scheme_index$schemes_for_species(
+    "Salmonella enterica",
+    type = scheme_index$CORE_TYPES
+  )
+  expect_true("wgMLST" %in% salmonella$type)
+  expect_false(is.unsorted(match(salmonella$type, c("cgMLST", "wgMLST"))))
 })
 
 test_that("unknown or empty species find nothing", {

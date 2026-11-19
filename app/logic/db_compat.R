@@ -13,6 +13,10 @@
 # share identical locus nomenclature but originate from different underlying
 # reference genomes.
 #
+# The optional classical MLST scheme and the AMR point-mutation setting are
+# compared as well. Neither can block a merge: they only decide which advisory
+# rows appear and what the import screen offers (see `mlst_scheme_relation`).
+#
 # Read-only enforcement: All database connections established in this module
 # are opened strictly in read-only mode to prevent unintended state mutations.
 
@@ -37,6 +41,20 @@ CORE_TABLES <- c("mlst", "mlst_type", "sequences")
 # The synthetic strain holding the scheme's reference alleles.
 #' @export
 REF_SOUCHE <- "ref"
+
+# The stored classical MLST scheme (app/logic/mlst_scheme.R). Spelled out here
+# because importing mlst_scheme would close an import cycle (mlst_scheme ->
+# scheme_files -> custom_import -> database_functions -> db_compat); a test
+# keeps the two lists equal.
+MLST_TABLES <- c(
+  "cla_scheme_info",
+  "cla_scheme_loci",
+  "cla_scheme_profiles",
+  "cla_scheme_alleles"
+)
+
+# phylotrace_meta key of the AMR point-mutation organism (amr$AMR_ORGANISM_KEY).
+AMR_KEY <- "amr_organism"
 
 # Standardizes locus identifiers by replacing underscores with hyphens.
 .norm_locus <- function(x) gsub("[-_]", "-", x)
@@ -194,7 +212,9 @@ read_db_signature <- function(db_path) {
     genes = character(0),
     ref_alleles = character(0),
     metadata_cols = NULL,
-    isolates = character(0)
+    isolates = character(0),
+    mlst_scheme = NULL,
+    amr_organism = NA_character_
   )
 
   if (
@@ -246,7 +266,227 @@ read_db_signature <- function(db_path) {
     } else {
       NULL
     },
-    isolates = sort(setdiff(souches, REF_SOUCHE))
+    isolates = sort(setdiff(souches, REF_SOUCHE)),
+    mlst_scheme = .read_mlst_scheme(con, tables),
+    amr_organism = .read_amr_organism(con, tables)
+  )
+}
+
+# Reads the stored classical MLST scheme: its labels, loci, profiles and a
+# sha256 per allele sequence, plus one digest over profiles and alleles. NULL
+# when the database carries no scheme.
+.read_mlst_scheme <- function(con, tables) {
+  if (!all(MLST_TABLES %in% tables)) {
+    return(NULL)
+  }
+  loci <- dbGetQuery(con, "SELECT locus FROM cla_scheme_loci ORDER BY position")$locus
+  if (!length(loci)) {
+    return(NULL)
+  }
+  kv <- dbGetQuery(con, "SELECT key, value FROM cla_scheme_info")
+  info <- function(key) .scalar(kv$value[kv$key == key])
+  profiles <- dbGetQuery(
+    con,
+    "SELECT st, locus, allele FROM cla_scheme_profiles ORDER BY st, locus"
+  )
+  alleles <- dbGetQuery(
+    con,
+    "SELECT locus, allele, sequence FROM cla_scheme_alleles ORDER BY locus, allele"
+  )
+  alleles$hash <- as.character(sha256(alleles$sequence))
+  alleles$sequence <- NULL
+  profile_keys <- paste(profiles$st, profiles$locus, profiles$allele, sep = "\t")
+  allele_keys <- paste(alleles$locus, alleles$allele, alleles$hash, sep = "\t")
+  list(
+    name = info("name"),
+    version = info("version"),
+    loci = loci,
+    profiles = profiles,
+    alleles = alleles,
+    digest = as.character(sha256(paste(
+      c(sort(profile_keys), "", sort(allele_keys)),
+      collapse = "\n"
+    )))
+  )
+}
+
+# Reads the AMR point-mutation organism; "" means acquired genes only and NA
+# that the setting is absent.
+.read_amr_organism <- function(con, tables) {
+  if (!"phylotrace_meta" %in% tables) {
+    return(NA_character_)
+  }
+  value <- dbGetQuery(
+    con,
+    "SELECT value FROM phylotrace_meta WHERE key = ?",
+    params = list(AMR_KEY)
+  )$value
+  if (!length(value) || is.na(value[1])) "" else as.character(value[1])
+}
+
+# Sorted, normalized locus set of a stored scheme.
+.scheme_loci <- function(scheme) sort(unique(tolower(trimws(scheme$loci))))
+
+#' Relate Two Stored Classical MLST Schemes
+#'
+#' Classifies how the imported database's classical MLST scheme relates to the
+#' loaded one and what the import screen should offer.
+#'
+#' @param local Scheme list from `read_db_signature()$mlst_scheme`, or `NULL`.
+#' @param ext Scheme list from `read_db_signature()$mlst_scheme`, or `NULL`.
+#' @return A list with `relation` (`"none"`, `"local_only"`, `"ext_only"`,
+#'   `"identical"`, `"older"`, `"newer"` or `"different"`), `status` and
+#'   `detail` for the check row, `adopt_offer` and `adopt_default` (whether to
+#'   offer adopting the imported scheme, and ticked or not), `classical_default`
+#'   (whether "Classical MLST results" starts ticked) and `note` (explanation
+#'   shown next to those options, or `NA`).
+#' @export
+mlst_scheme_relation <- function(local, ext) {
+  out <- function(relation, status, detail, adopt = FALSE, adopt_default = FALSE,
+                  classical = TRUE, note = NA_character_) {
+    list(
+      relation = relation,
+      status = status,
+      detail = detail,
+      adopt_offer = adopt,
+      adopt_default = adopt_default,
+      classical_default = classical,
+      note = note
+    )
+  }
+  label <- function(s) {
+    paste0(s$name %||na% "unnamed scheme", if (!is.na(s$version)) paste0(" ", s$version))
+  }
+
+  if (is.null(local) && is.null(ext)) {
+    return(out("none", "pass", "Neither database has a classical MLST scheme"))
+  }
+  if (is.null(ext)) {
+    return(out(
+      "local_only",
+      "pass",
+      sprintf("Only the loaded database has one (%s); it is kept", label(local))
+    ))
+  }
+  if (is.null(local)) {
+    return(out(
+      "ext_only",
+      "pass",
+      sprintf("Only the imported database has one (%s); it can be adopted", label(ext)),
+      adopt = TRUE,
+      adopt_default = TRUE,
+      note = paste(
+        "The loaded database has no classical MLST scheme. Adopt the imported one",
+        "to type sequence types for new isolates too."
+      )
+    ))
+  }
+
+  different <- function(why) {
+    out(
+      "different",
+      "warn",
+      sprintf("Different scheme: %s (advisory)", why),
+      classical = FALSE,
+      note = paste(
+        "The imported database uses a different classical MLST scheme, so its",
+        "sequence types are not comparable with the local ones. Its classical",
+        "MLST results are left out unless you tick them."
+      )
+    )
+  }
+  if (!identical(.norm_cmp(local$name), .norm_cmp(ext$name))) {
+    return(different(sprintf("%s vs %s", label(local), label(ext))))
+  }
+  if (!identical(.scheme_loci(local), .scheme_loci(ext))) {
+    return(different("the loci differ"))
+  }
+
+  # Shared allele numbers must name the same sequence and shared STs the same
+  # profile; otherwise the same numbers mean different things.
+  key_a <- function(s) paste(tolower(s$alleles$locus), s$alleles$allele, sep = "\t")
+  shared_a <- match(key_a(local), key_a(ext))
+  hit <- !is.na(shared_a)
+  if (any(local$alleles$hash[hit] != ext$alleles$hash[shared_a[hit]])) {
+    return(different("the same allele numbers have different sequences"))
+  }
+  key_p <- function(s) paste(s$profiles$st, tolower(s$profiles$locus), sep = "\t")
+  shared_p <- match(key_p(local), key_p(ext))
+  hit <- !is.na(shared_p)
+  if (any(local$profiles$allele[hit] != ext$profiles$allele[shared_p[hit]])) {
+    return(different("the same sequence types have different profiles"))
+  }
+
+  if (identical(local$digest, ext$digest)) {
+    return(out(
+      "identical",
+      "pass",
+      if (identical(.norm_cmp(local$version), .norm_cmp(ext$version))) {
+        sprintf("Identical (%s)", label(local))
+      } else {
+        sprintf("Identical content (%s); labelled version %s", label(local),
+                ext$version %||na% "—")
+      }
+    ))
+  }
+
+  ext_extra <- sum(!key_p(ext) %in% key_p(local)) + sum(!key_a(ext) %in% key_a(local))
+  if (!ext_extra) {
+    return(out(
+      "older",
+      "pass",
+      sprintf(
+        "Same scheme; the loaded database has the more complete copy (%s), which is kept",
+        label(local)
+      )
+    ))
+  }
+  n_st <- function(s) length(unique(s$profiles$st))
+  out(
+    "newer",
+    "warn",
+    sprintf(
+      "Same scheme, the imported copy is newer: %s with %d profiles (loaded: %s with %d)",
+      label(ext),
+      n_st(ext),
+      label(local),
+      n_st(local)
+    ),
+    adopt = TRUE,
+    adopt_default = FALSE,
+    note = paste(
+      "The imported database carries a newer copy of the same classical MLST",
+      "scheme. Adopt it to replace the local copy."
+    )
+  )
+}
+
+# Builds the advisory AMR row: point mutations screened for another organism
+# are not comparable, but the local setting always stays.
+.amr_row <- function(local, ext) {
+  show <- function(x) {
+    if (is.na(x)) "not set" else if (!nzchar(x)) "acquired genes only" else x
+  }
+  has_results <- "amr_results" %in% ext$tables
+  same <- identical(local$amr_organism, ext$amr_organism)
+  if (same || !has_results) {
+    return(.row(
+      "AMR organism",
+      "pass",
+      if (same) show(local$amr_organism) else "No AMR results in the imported database"
+    ))
+  }
+  .row(
+    "AMR organism",
+    "warn",
+    sprintf(
+      paste(
+        "AMR results were screened with a different point-mutation catalogue",
+        "(imported: %s, loaded: %s); the local setting is kept"
+      ),
+      show(ext$amr_organism),
+      show(local$amr_organism)
+    )
   )
 }
 
@@ -331,16 +571,20 @@ read_db_signature <- function(db_path) {
 #' @param local_path Character path to the target/local SQLite database file.
 #' @param ext_path Character path to the incoming external SQLite database file.
 #' @return A data frame containing check names, status ("pass", "warn", "fail", "skipped"), and descriptive details.
+#'   Attributes: `blocked`, the two signatures `local` and `ext`, and
+#'   `mlst_scheme` (from `mlst_scheme_relation()`, `NULL` when not checked).
 #' @export
 check_import_compatibility <- function(local_path, ext_path) {
   local <- read_db_signature(local_path)
   ext <- read_db_signature(ext_path)
+  scheme <- NULL
 
   # Attaches result metadata attributes upon return completion
   finish <- function(df) {
     attr(df, "blocked") <- any(df$status == "fail")
     attr(df, "local") <- local
     attr(df, "ext") <- ext
+    attr(df, "mlst_scheme") <- scheme
     df
   }
 
@@ -363,7 +607,9 @@ check_import_compatibility <- function(local_path, ext_path) {
       "Scheme identity",
       "Locus set",
       "Reference alleles",
-      "Schema revision"
+      "Schema revision",
+      "Classical MLST scheme",
+      "AMR organism"
     )
     return(finish(rbind(
       rows,
@@ -504,6 +750,15 @@ check_import_compatibility <- function(local_path, ext_path) {
         )
       }
     )
+  )
+
+  # 7. Classical MLST scheme (advisory) ---------------------------------------
+  scheme <- mlst_scheme_relation(local$mlst_scheme, ext$mlst_scheme)
+  checks <- rbind(
+    checks,
+    .row("Classical MLST scheme", scheme$status, scheme$detail),
+    # 8. AMR point-mutation organism (advisory) -------------------------------
+    .amr_row(local, ext)
   )
 
   finish(checks)

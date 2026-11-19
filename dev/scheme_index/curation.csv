@@ -63,6 +63,26 @@ chewie_ns,19/1,include,yes,chewie_ns,Legionella pneumophila,wgMLST,Legionella pn
 chewie_ns,20/1,include,yes,chewie_ns,Yersinia pestis,cgMLST,Yersinia pestis cgMLST,3139,https://chewbbaca.online/species/20/schemas/1,,2026-11-17
 chewie_ns,21/1,include,yes,chewie_ns,Enterobacter cloacae,cgMLST,Enterobacter cloacae complex cgMLST,1812,https://chewbbaca.online/species/21/schemas/1,Covers the E. cloacae complex.,2026-11-17
 chewie_ns,22/1,include,yes,chewie_ns,Streptococcus pneumoniae,wgMLST,Streptococcus pneumoniae wgMLST,3197,https://chewbbaca.online/species/22/schemas/1,,2026-11-17
+manual,enterobase:clostridium:cgMLST_V1,include,yes,enterobase,Clostridioides difficile,cgMLST,Clostridioides cgMLST V1,,https://enterobase.warwick.ac.uk/species/index/clostridium,,2026-11-18
+manual,enterobase:clostridium:wgMLST,include,yes,enterobase,Clostridioides difficile,wgMLST,Clostridioides wgMLST,,https://enterobase.warwick.ac.uk/species/index/clostridium,,2026-11-18
+manual,enterobase:ecoli:Achtman_MLST,include,yes,enterobase,Escherichia coli,MLST,Escherichia/Shigella Achtman 7 Gene MLST,,https://enterobase.warwick.ac.uk/species/index/ecoli,Escherichia/Shigella database,2026-11-18
+manual,enterobase:ecoli:cgMLST_V1,include,yes,enterobase,Escherichia coli,cgMLST,Escherichia/Shigella cgMLST V1,,https://enterobase.warwick.ac.uk/species/index/ecoli,Escherichia/Shigella database,2026-11-18
+manual,enterobase:ecoli:wgMLST,include,yes,enterobase,Escherichia coli,wgMLST,Escherichia/Shigella wgMLST,,https://enterobase.warwick.ac.uk/species/index/ecoli,Escherichia/Shigella database,2026-11-18
+manual,enterobase:enterococcus:cgMLST_ENT2,include,yes,enterobase,Enterococcus,cgMLST,Enterococcus cgMLST-ENT2,,https://enterobase.dsmz.de/species/index/enterococcus,hosted by DSMZ,2026-11-18
+manual,enterobase:enterococcus:cgMLST_faecalis,include,yes,enterobase,Enterococcus faecalis,cgMLST,Enterococcus faecalis cgMLST,,https://enterobase.dsmz.de/species/index/enterococcus,hosted by DSMZ,2026-11-18
+manual,enterobase:enterococcus:cgMLST_faecium,include,yes,enterobase,Enterococcus faecium,cgMLST,Enterococcus faecium cgMLST,,https://enterobase.dsmz.de/species/index/enterococcus,hosted by DSMZ,2026-11-18
+manual,enterobase:mcatarrhalis:Achtman_MLST,include,yes,enterobase,Moraxella catarrhalis,MLST,Moraxella Achtman 7 Gene MLST,,https://enterobase.warwick.ac.uk/species/index/mcatarrhalis,,2026-11-18
+manual,enterobase:mycobacterium:cgMLST,include,yes,enterobase,Mycobacterium tuberculosis,cgMLST,Mycobacterium tuberculosis cgMLST,,https://enterobase.dsmz.de/species/index/mycobacterium,hosted by DSMZ,2026-11-18
+manual,enterobase:mycobacterium:cgMLST_V2,include,yes,enterobase,Mycobacterium tuberculosis,cgMLST,Mycobacterium tuberculosis cgMLST V2,,https://enterobase.dsmz.de/species/index/mycobacterium,hosted by DSMZ,2026-11-18
+manual,enterobase:senterica:Achtman_MLST,include,yes,enterobase,Salmonella enterica,MLST,Salmonella Achtman 7 Gene MLST,,https://enterobase.warwick.ac.uk/species/index/senterica,,2026-11-18
+manual,enterobase:senterica:cgMLST_V2,include,yes,enterobase,Salmonella enterica,cgMLST,Salmonella cgMLST V2,,https://enterobase.warwick.ac.uk/species/index/senterica,,2026-11-18
+manual,enterobase:senterica:wgMLST,include,yes,enterobase,Salmonella enterica,wgMLST,Salmonella wgMLST,,https://enterobase.warwick.ac.uk/species/index/senterica,,2026-11-18
+manual,enterobase:streptococcus:cgMLST_V1,include,yes,enterobase,Streptococcus,cgMLST,Streptococcus cgMLST V1,,https://enterobase.warwick.ac.uk/species/index/streptococcus,,2026-11-18
+manual,enterobase:vibrio:cgMLST,include,yes,enterobase,Vibrio,cgMLST,Vibrio cgMLST,,https://enterobase.warwick.ac.uk/species/index/vibrio,,2026-11-18
+manual,enterobase:yersinia:Achtman_MLST,include,yes,enterobase,Yersinia,MLST,Yersinia Achtman 7 Gene MLST,,https://enterobase.warwick.ac.uk/species/index/yersinia,,2026-11-18
+manual,enterobase:yersinia:cgMLST_V1,include,yes,enterobase,Yersinia,cgMLST,Yersinia cgMLST V1,,https://enterobase.warwick.ac.uk/species/index/yersinia,,2026-11-18
+manual,enterobase:yersinia:McNally_MLST,include,yes,enterobase,Yersinia,MLST,Yersinia McNally 7 Gene MLST,,https://enterobase.warwick.ac.uk/species/index/yersinia,,2026-11-18
+manual,enterobase:yersinia:wgMLST,include,yes,enterobase,Yersinia,wgMLST,Yersinia wgMLST,,https://enterobase.warwick.ac.uk/species/index/yersinia,,2026-11-18
 manual,pasteur:Bordetella_spp:Bordetella_MLST,include,yes,pasteur,Bordetella spp,MLST,Bordetella MLST,,https://bigsdb.pasteur.fr/bordetella/,,2026-11-17
 manual,pasteur:Corynebacterium_diphtheriae:MLST,include,yes,pasteur,Corynebacterium diphtheriae,MLST,MLST,,https://bigsdb.pasteur.fr/diphtheria/,,2026-11-17
 manual,pasteur:Escherichia_coli:MLST_(Pasteur),include,yes,pasteur,Escherichia coli,MLST,MLST (Pasteur),,https://bigsdb.pasteur.fr/ecoli/,,2026-11-17

@@ -6,6 +6,7 @@ box::use(
     expect_identical,
     expect_setequal,
     expect_true,
+    skip_on_os,
     test_that
   ],
   withr[local_tempdir],
@@ -25,6 +26,7 @@ box::use(
       suggest_rename
     ],
   app / logic / database_functions[remove_isolates],
+  app / logic / mlst_scheme[mlst_scheme_info, store_mlst_scheme],
   app / logic / provenance[store_provenance],
 )
 
@@ -869,4 +871,268 @@ test_that("merging a peer that records no provenance leaves ours intact", {
   # The imported isolate simply has no row; ours is untouched.
   expect_identical(rows$isolate, "A")
   expect_identical(rows$genome_digest, "localdigest")
+})
+
+# Rebuilds `sequences` the way pyMLST defines it: one row per distinct
+# sequence (UNIQUE(sequence)), shared by every locus that calls it.
+pymlst_sequences <- function(path) {
+  con <- DBI::dbConnect(RSQLite::SQLite(), path)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  seqs <- DBI::dbGetQuery(con, "SELECT id, sequence FROM sequences ORDER BY id")
+  keep <- seqs$id[match(seqs$sequence, seqs$sequence)]
+  DBI::dbWriteTable(con, "remap", data.frame(old = seqs$id, new = keep), temporary = TRUE)
+  DBI::dbExecute(con, "UPDATE mlst SET seqid = (SELECT new FROM remap WHERE old = mlst.seqid)")
+  DBI::dbExecute(con, "DROP TABLE sequences")
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE sequences (id INTEGER NOT NULL, sequence TEXT, PRIMARY KEY (id),
+       UNIQUE (sequence))"
+  )
+  uniq <- seqs[!duplicated(seqs$sequence), , drop = FALSE]
+  DBI::dbWriteTable(con, "sequences", uniq, append = TRUE)
+  DBI::dbExecute(con, "DROP TABLE IF EXISTS hashes")
+  DBI::dbWriteTable(
+    con,
+    "hashes",
+    data.frame(id = uniq$id, hash = as.character(openssl::sha256(uniq$sequence)))
+  )
+  invisible(path)
+}
+
+test_that("a sequence already stored under another locus is reused, not re-inserted", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")))
+  # C's g2 allele is, letter for letter, A's g1 allele.
+  peer_alleles <- default_peer()
+  peer_alleles$C[["g2"]] <- seqv("A1")
+  build_db(peer, peer_alleles, metadata = meta_df(c("B", "C")))
+  pymlst_sequences(local)
+  pymlst_sequences(peer)
+
+  res <- quiet(merge_databases(local, peer, resolve("C", "add"), backup = FALSE))
+
+  expect_equal(res$calls, 3L)
+  shared <- q1(local, "SELECT seqid FROM mlst WHERE souche = 'A' AND gene = 'g1'")
+  expect_identical(
+    q1(local, "SELECT seqid FROM mlst WHERE souche = 'C' AND gene = 'g2'"),
+    shared
+  )
+  expect_equal(q1(local, "SELECT COUNT(*) - COUNT(DISTINCT sequence) FROM sequences"), 0L)
+})
+
+test_that("a sequence two loci share inside the peer is added once", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")))
+  peer_alleles <- default_peer()
+  peer_alleles$C[["g1"]] <- seqv("SHARED")
+  peer_alleles$C[["g2"]] <- seqv("SHARED")
+  build_db(peer, peer_alleles, metadata = meta_df(c("B", "C")))
+  pymlst_sequences(local)
+  pymlst_sequences(peer)
+
+  res <- quiet(merge_databases(local, peer, resolve("C", "add"), backup = FALSE))
+
+  expect_equal(res$new_alleles, 1L)
+  calls <- qdf(local, "SELECT gene, seqid FROM mlst WHERE souche = 'C' ORDER BY gene")
+  expect_identical(calls$gene, c("g1", "g2", "g3"))
+  expect_identical(calls$seqid[1], calls$seqid[2])
+  stored <- qdf(
+    local,
+    "SELECT s.sequence, h.hash FROM sequences s JOIN hashes h ON h.id = s.id
+      WHERE s.id = ?",
+    params = list(calls$seqid[1])
+  )
+  expect_identical(stored$sequence, seqv("SHARED"))
+  expect_identical(stored$hash, as.character(openssl::sha256(seqv("SHARED"))))
+})
+
+test_that("a wrong hash in the peer's hashes table is never copied", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  con <- DBI::dbConnect(RSQLite::SQLite(), p$peer)
+  DBI::dbExecute(
+    con,
+    "UPDATE hashes SET hash = 'forged' || id
+      WHERE id NOT IN (SELECT seqid FROM mlst WHERE souche = 'ref')"
+  )
+  DBI::dbDisconnect(con)
+
+  quiet(merge_databases(p$local, p$peer, resolve("C", "add"), backup = FALSE))
+
+  rows <- qdf(p$local, "SELECT s.sequence, h.hash FROM sequences s JOIN hashes h ON h.id = s.id")
+  expect_identical(rows$hash, as.character(openssl::sha256(rows$sequence)))
+})
+
+test_that("overwriting an isolate drops every result of the replaced genome", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B")))
+  peer_alleles <- default_peer()
+  peer_alleles$B[["g1"]] <- seqv("NEWB")
+  build_db(peer, peer_alleles, metadata = meta_df(c("B", "C")))
+  seed_results(local, "B")
+  seed_custom(local, list(ward = list(type = "text", values = c(B = "W1"))))
+  store_provenance(local, "B", list(genome_digest = "old", cla_status = "known"))
+
+  # Nothing ticked, and the peer carries no result tables at all.
+  quiet(merge_databases(local, peer, resolve("B", "overwrite"), backup = FALSE))
+
+  for (tbl in c("classical_mlst", "amr_results", "amr_summary", "phylotrace_custom_values",
+                "typing_provenance")) {
+    expect_equal(
+      q1(local, sprintf("SELECT COUNT(*) FROM %s WHERE isolate = 'B'", tbl)),
+      0L,
+      info = tbl
+    )
+  }
+})
+
+test_that("provenance claims about results left behind are cleared", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  seed_results(p$peer, "C")
+  store_provenance(p$peer, "C", list(
+    genome_digest = "peer",
+    cla_status = "known",
+    cla_scheme = "Testus MLST",
+    amr_status = "done",
+    amr_elements = 3L
+  ))
+
+  quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    include_classical = FALSE,
+    include_amr = TRUE,
+    backup = FALSE
+  ))
+
+  row <- qdf(p$local, "SELECT * FROM typing_provenance WHERE isolate = 'C'")
+  expect_identical(row$genome_digest, "peer")
+  expect_true(is.na(row$cla_status))
+  expect_true(is.na(row$cla_scheme))
+  expect_identical(row$amr_status, "done")
+})
+
+test_that("a metadata column differing only in case maps onto the local one", {
+  dir <- local_tempdir()
+  local <- file.path(dir, "local.db")
+  peer <- file.path(dir, "peer.db")
+  build_db(local, default_local(), metadata = meta_df(c("A", "B"), extra = list(Ward = "x")))
+  build_db(peer, default_peer(), metadata = meta_df(c("B", "C"), extra = list(ward = "w-ext")))
+
+  pv <- import_preview(local, peer)
+  expect_true("ward" %in% pv$metadata_shared)
+  expect_false("ward" %in% pv$metadata_only_ext)
+
+  quiet(merge_databases(local, peer, resolve("C", "add"), metadata_cols = "ward", backup = FALSE))
+
+  cols <- names(qdf(local, "SELECT * FROM metadata LIMIT 0"))
+  expect_equal(sum(tolower(cols) == "ward"), 1L)
+  expect_identical(q1(local, "SELECT Ward FROM metadata WHERE isolate = 'C'"), "w-ext")
+})
+
+test_that("a missing result table is created from the app's DDL, not the peer's", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  con <- DBI::dbConnect(RSQLite::SQLite(), p$peer)
+  DBI::dbExecute(
+    con,
+    "CREATE TABLE amr_summary (id INTEGER PRIMARY KEY, isolate TEXT, section TEXT,
+       drug_class TEXT, genes TEXT, called_at TEXT, smuggled TEXT DEFAULT 'x')"
+  )
+  DBI::dbExecute(
+    con,
+    "INSERT INTO amr_summary (isolate, section, drug_class, genes) VALUES ('C', 's', 'd', 'g')"
+  )
+  DBI::dbDisconnect(con)
+
+  quiet(merge_databases(p$local, p$peer, resolve("C", "add"), include_amr = TRUE, backup = FALSE))
+
+  cols <- names(qdf(p$local, "SELECT * FROM amr_summary LIMIT 0"))
+  expect_false("smuggled" %in% cols)
+  expect_identical(q1(p$local, "SELECT genes FROM amr_summary WHERE isolate = 'C'"), "g")
+})
+
+test_that("restore leaves the live database in place when it cannot write", {
+  skip_on_os("windows")
+  dir <- local_tempdir()
+  p <- pair(dir)
+  bak <- file.path(local_tempdir(), "old.db")
+  file.copy(p$local, bak)
+  before <- unname(tools::md5sum(p$local))
+  Sys.chmod(dir, "0555")
+  on.exit(Sys.chmod(dir, "0755"), add = TRUE)
+
+  expect_error(suppressWarnings(restore_backup(p$local, bak)))
+  expect_identical(unname(tools::md5sum(p$local)), before)
+})
+
+mlst_fixture <- function(n_st = 2L, seq_tag = "M", name = "Testus MLST", loci = c("adk", "gyr")) {
+  alleles <- do.call(rbind, lapply(loci, function(l) {
+    data.frame(locus = l, allele = 1:2, sequence = paste0(seqv(paste0(seq_tag, l)), c("A", "C")))
+  }))
+  profiles <- do.call(rbind, lapply(seq_len(n_st), function(st) {
+    data.frame(st = st, locus = loci, allele = ((st - 1L) %% 2L) + 1L)
+  }))
+  list(
+    scheme = list(loci = loci, profiles = profiles, alleles = alleles),
+    info = list(name = name, version = paste0("v", n_st), source = "test")
+  )
+}
+
+test_that("an adopted classical MLST scheme replaces the local one inside the merge", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  old <- mlst_fixture(2L)
+  new <- mlst_fixture(3L)
+  store_mlst_scheme(p$local, old$scheme, old$info)
+  store_mlst_scheme(p$peer, new$scheme, new$info)
+
+  res <- quiet(merge_databases(
+    p$local,
+    p$peer,
+    resolve("C", "add"),
+    adopt_mlst_scheme = TRUE,
+    backup = FALSE
+  ))
+
+  expect_true(res$mlst_scheme_adopted)
+  info <- mlst_scheme_info(p$local)
+  expect_identical(info$version, "v3")
+  expect_identical(info$profiles, "3")
+})
+
+test_that("a scheme is adopted into a database that had none", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  new <- mlst_fixture(2L)
+  store_mlst_scheme(p$peer, new$scheme, new$info)
+
+  quiet(merge_databases(p$local, p$peer, resolve("C", "add"), adopt_mlst_scheme = TRUE,
+                        backup = FALSE))
+
+  expect_identical(mlst_scheme_info(p$local)$loci, c("adk", "gyr"))
+})
+
+test_that("a different classical MLST scheme cannot be adopted", {
+  dir <- local_tempdir()
+  p <- pair(dir)
+  mine <- mlst_fixture(2L)
+  theirs <- mlst_fixture(2L, name = "Other MLST")
+  store_mlst_scheme(p$local, mine$scheme, mine$info)
+  store_mlst_scheme(p$peer, theirs$scheme, theirs$info)
+
+  expect_error(
+    quiet(merge_databases(p$local, p$peer, resolve("C", "add"), adopt_mlst_scheme = TRUE,
+                          backup = FALSE)),
+    "cannot be adopted"
+  )
+  expect_identical(mlst_scheme_info(p$local)$name, "Testus MLST")
 })

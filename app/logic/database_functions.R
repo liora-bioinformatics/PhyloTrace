@@ -254,8 +254,8 @@ read_metadata_table <- function(db_path) {
 
 #' Construct or Synchronize Metadata Table
 #'
-#' Ensures the `metadata` table exists in the database and includes all present isolates.
-#' Automatically handles missing schema columns and appends unlisted isolates.
+#' Ensures the `metadata` table exists in the database, with every built-in
+#' column, and includes all present isolates by appending unlisted ones.
 #'
 #' Call this only at a point that legitimately changes the isolate pool or the
 #' metadata schema, and follow it with a `db_events::bump()` of the `metadata`
@@ -309,19 +309,11 @@ sync_metadata_table <- function(db_path) {
     stamp
   }
 
-  # Append new isolates or migrate missing columns if table exists
+  # Append new isolates if the table exists
   if ("metadata" %in% tables) {
-    # Migrate metadata tables created before newer columns were added. SQLite
-    # appends them at the end of the physical table; readers restore the
-    # canonical order with order_metadata_cols().
-    added_cols <- c(
-      "geo_loc_name_city",
-      "geo_loc_name_postal_code",
-      "called_at",
-      "geo_loc_coordinates",
-      SOURCE_COL
-    )
-    for (col in setdiff(added_cols, dbListFields(con, "metadata"))) {
+    # A database exported with only some metadata columns lacks the others;
+    # new isolates are written with every built-in column, so add them empty.
+    for (col in setdiff(METADATA_COLS, dbListFields(con, "metadata"))) {
       dbExecute(con, sprintf('ALTER TABLE metadata ADD COLUMN "%s" TEXT', col))
     }
     .normalize_geo_values(con)
@@ -417,21 +409,12 @@ load_classical_mlst <- function(db_path) {
     return(NULL)
   }
 
-  # absence of `status` is tolerated so a
-  # partially-written table never errors the whole browse view.
-  has_status <- "status" %in% dbListFields(con, "classical_mlst")
   cm <- dbGetQuery(
     con,
-    sprintf(
-      "SELECT isolate, gene, allele, st%s FROM classical_mlst ORDER BY id",
-      if (has_status) ", status" else ""
-    )
+    "SELECT isolate, gene, allele, st, status FROM classical_mlst ORDER BY id"
   )
   if (!nrow(cm)) {
     return(NULL)
-  }
-  if (!has_status) {
-    cm$status <- NA_character_
   }
 
   isolates <- unique(cm$isolate)

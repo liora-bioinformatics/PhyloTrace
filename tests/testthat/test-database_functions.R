@@ -360,9 +360,8 @@ test_that("read_metadata_table does not backfill isolates mlst already has", {
 # Canonical metadata column order
 # ---------------------------------------------------------------------------
 
-# A metadata table laid out the way an older database has it: the original
-# columns, an unrelated extra column, then the later geo columns appended at the
-# end by migration.
+# A metadata table whose physical column order is not the canonical one: some
+# built-in columns, an unrelated extra column, then further built-ins.
 legacy_meta <- function(isolates) {
   meta_df(
     isolates,
@@ -423,6 +422,23 @@ test_that("sync_metadata_table appends rows to a legacy-ordered table by name", 
   expect_identical(b$source, "local")
   expect_true(is.na(b$geo_loc_name_city))
   expect_identical(md$geo_loc_name_city[md$isolate == "A"], "Berlin")
+})
+
+test_that("sync_metadata_table completes a table exported with only some columns", {
+  # An exported database keeps the metadata columns the user chose; typing into
+  # it later still writes every built-in column for the new isolates.
+  dir <- local_tempdir()
+  path <- file.path(dir, "db.sqlite")
+  build_db(
+    path,
+    default_local(),
+    metadata = data.frame(isolate = "A", organism = "Testus organismus")
+  )
+
+  md <- sync_metadata_table(path)
+  expect_identical(names(md), METADATA_COLS)
+  expect_identical(md$source[md$isolate == "B"], "local")
+  expect_true(is.na(md$sample_collection_date[md$isolate == "A"]))
 })
 
 # ---------------------------------------------------------------------------

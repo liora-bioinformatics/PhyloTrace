@@ -906,7 +906,7 @@ server <- function(
           )
         } else {
           sprintf(
-            "%d is this scheme's own complex-type distance (cgMLST.org).",
+            "%d is the complex-type distance published with this scheme.",
             value
           )
         },

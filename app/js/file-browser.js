@@ -1,5 +1,7 @@
 /**
- * Client side of the app's own file dialog (app/view/file_dialog.R).
+ * Client side of the app's own file dialog (app/view/file_dialog.R): an
+ * overlay of its own, outside Shiny's single modal slot, so it can open over
+ * another dialog.
  *
  * Rows and navigation targets carry only an index and the Shiny input to report
  * to; the server keeps the listing itself, so no path ever travels through
@@ -93,5 +95,64 @@ document.addEventListener("keydown", (event) => {
     // or the server would act on the value from before the last keystrokes.
     if (event.target.id) report(event.target.id, event.target.value);
     button.click();
+  }
+});
+
+// A Bootstrap dialog open underneath traps focus by watching focus events on
+// the document and pulling focus back into itself. Focus events from inside
+// this dialog are kept from reaching the document, so no trap - however and
+// whenever it was switched on - sees focus leave its own dialog.
+function shieldFocus(overlay) {
+  if (overlay.dataset.focusShield) return;
+  overlay.dataset.focusShield = "1";
+  overlay.addEventListener("focusin", (event) => event.stopPropagation());
+}
+
+function openDialogs() {
+  return document.querySelectorAll(".fb-overlay.is-open");
+}
+
+// Shiny pauses outputs it sees as hidden and only re-checks on a "shown" or
+// "hidden" event; showing the overlay by a class change must announce itself,
+// or its listing can stay paused at whatever it showed before.
+function announceVisibility(overlay, show) {
+  if (window.jQuery) window.jQuery(overlay).trigger(show ? "shown" : "hidden");
+}
+
+function setDialog(overlay, show, focusId) {
+  if (!overlay) return;
+  if (show) {
+    shieldFocus(overlay);
+    overlay.classList.add("is-open");
+    document.documentElement.classList.add("fb-open");
+    announceVisibility(overlay, true);
+    const field = focusId && document.getElementById(focusId);
+    if (field) setTimeout(() => field.focus(), 50);
+  } else {
+    overlay.classList.remove("is-open");
+    announceVisibility(overlay, false);
+    if (!openDialogs().length) {
+      document.documentElement.classList.remove("fb-open");
+    }
+  }
+}
+
+Shiny.addCustomMessageHandler("fb-dialog", (msg) => {
+  setDialog(document.getElementById(msg.id), msg.show, msg.focus);
+});
+
+// Cancel and the header's close button close the dialog; nothing is chosen.
+document.addEventListener("click", (event) => {
+  const close = event.target.closest(".fb-close");
+  if (close) setDialog(close.closest(".fb-overlay"), false);
+});
+
+// Escape closes the topmost open dialog.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const open = openDialogs();
+  if (open.length) {
+    event.stopPropagation();
+    setDialog(open[open.length - 1], false);
   }
 });

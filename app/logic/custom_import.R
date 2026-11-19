@@ -15,6 +15,7 @@ box::use(
     dbExecute,
     dbGetQuery,
     dbListTables,
+    dbQuoteIdentifier,
     dbRollback
   ],
   openxlsx[getSheetNames, read.xlsx],
@@ -37,6 +38,7 @@ box::use(
   ],
   app / logic / field_types[FIXED_FIELD_TYPES, TYPE_LABELS],
   app / logic / logging[log_event],
+  app / logic / profile_io[read_text_lines, unguard_cells],
   app / logic / pymlst[existing_strains],
 )
 
@@ -113,8 +115,7 @@ CATEGORY_MAX_LEVELS <- 100L
 }
 
 # Picks the delimiter that splits the header line into the most fields.
-.sniff_sep <- function(path) {
-  first <- readLines(path, n = 1L, warn = FALSE, encoding = "UTF-8")
+.sniff_sep <- function(first) {
   if (!length(first)) {
     stop("The file is empty.")
   }
@@ -184,19 +185,25 @@ read_import_table <- function(path, sheet = NULL) {
     }
     df[] <- lapply(df, .cell_text)
   } else {
+    # Read as bytes so a Latin-1 / Windows-1252 file is converted rather than
+    # cut off at its first non-UTF-8 character.
+    lines <- read_text_lines(path)
     df <- read.table(
-      path,
-      sep = .sniff_sep(path),
+      text = lines,
+      sep = .sniff_sep(lines[1]),
       header = TRUE,
       quote = "\"",
       comment.char = "",
       check.names = FALSE,
       colClasses = "character",
       na.strings = character(0),
-      fileEncoding = "UTF-8-BOM",
+      encoding = "UTF-8",
       blank.lines.skip = TRUE,
       strip.white = TRUE
     )
+    # A table PhyloTrace exported carries its formula guard; drop it again.
+    names(df) <- unguard_cells(names(df))
+    df[] <- lapply(df, unguard_cells)
     sheet <- NA_character_
   }
 
@@ -765,7 +772,10 @@ merge_preview <- function(db_path, rows, header, kind, name) {
       params = list(as.integer(id))
     )
   } else {
-    stored <- dbGetQuery(con, sprintf('SELECT isolate, "%s" AS value FROM metadata', name))
+    stored <- dbGetQuery(
+      con,
+      sprintf("SELECT isolate, %s AS value FROM metadata", dbQuoteIdentifier(con, name))
+    )
   }
   as.character(stored$value[match(isolates, stored$isolate)])
 }
@@ -916,7 +926,10 @@ apply_import <- function(db_path, rows, plan) {
           } else {
             dbExecute(
               con,
-              sprintf('UPDATE metadata SET "%s" = ? WHERE isolate = ?', target$name),
+              sprintf(
+                "UPDATE metadata SET %s = ? WHERE isolate = ?",
+                dbQuoteIdentifier(con, target$name)
+              ),
               params = list(new[write], ids[write])
             )
             counts$metadata <- TRUE

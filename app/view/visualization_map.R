@@ -1614,7 +1614,17 @@ build_map <- function(
     m <- leaflet$addScaleBar(m, position = "bottomleft")
   }
   if (o$minimap) {
-    m <- leaflet$addMiniMap(m, toggleDisplay = TRUE, minimized = FALSE)
+    # Left to its default, the minimap pulls tile.openstreetmap.org, whose usage
+    # policy rejects requests without a Referer -- which is every request from a
+    # saved HTML file opened via file://, so the export showed an "Access
+    # blocked" tile. Reusing the basemap's provider also keeps the inset in the
+    # same style as the map; Choropleth has no basemap, so it gets a neutral one.
+    m <- leaflet$addMiniMap(
+      m,
+      tiles = if (choropleth) "Esri.WorldGrayCanvas" else o$tiles,
+      toggleDisplay = TRUE,
+      minimized = FALSE
+    )
   }
   if (o$graticule) {
     m <- leaflet$addSimpleGraticule(m)

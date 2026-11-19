@@ -285,15 +285,28 @@ TASK_STATE_CSS <- c(
 #' @export
 task_states <- function(states) {
   shiny$renderUI({
-    st <- states()
+    all_states <- states()
     # "open" has no rules; formatting its empty template would warn.
-    st <- st[nzchar(TASK_STATE_CSS[st])]
+    st <- all_states[nzchar(TASK_STATE_CSS[all_states])]
     rules <- vapply(
       names(st),
       function(id) sprintf(TASK_STATE_CSS[[st[[id]]]], id),
       character(1)
     )
-    shiny$tags$style(shiny$HTML(paste(rules, collapse = "\n")))
+    # A locked task's controls are also made inert: dimming only blocks the
+    # mouse, and Tab and Enter would still reach them.
+    inert <- sprintf(
+      paste0(
+        "(function () { var b = document.querySelector('#%s > .setup-task_body');",
+        " if (b) b.inert = %s; })();"
+      ),
+      names(all_states),
+      ifelse(all_states == "locked", "true", "false")
+    )
+    shiny$tagList(
+      shiny$tags$style(shiny$HTML(paste(rules, collapse = "\n"))),
+      shiny$tags$script(shiny$HTML(paste(inert, collapse = "\n")))
+    )
   })
 }
 
