@@ -1363,8 +1363,12 @@ test_that("the element-type row is fitted to its panel, not to a class block", {
     element_cols = c(219L, 8L, 17L),
     aspect = 0.65
   )
-  expect_gt(fit$fontsize_element, fit$fontsize_title)
-  expect_gte(fit$fontsize_element, impl$AMR_ELEMENT_MIN_PT)
+  # "Virulence" under eight columns leans into the room "Stress" leaves, so
+  # the row stays flat and legible rather than turning (rules T6/T7 in
+  # docs/figure-text-rules.md: shrink before rotating, and a panel title may
+  # sit under a group title where its own room forces it).
+  expect_identical(fit$element_rot, 0)
+  expect_gte(fit$fontsize_element, impl$AMR_ELEMENT_MIN_PT + 1)
   expect_true(fit$elements_legible)
 })
 
@@ -1814,7 +1818,7 @@ test_that("the canvas grows sideways for gene names it can set legibly", {
   )
 })
 
-test_that("the text size does not grow the canvas, so it shows in a fitted preview", {
+test_that("without a fitted height the text size does not grow the canvas", {
   # The preview is scaled to its frame: a page that doubled with the text
   # would draw every label at the same share of the figure as before.
   fit_at <- function(k) {
@@ -1831,6 +1835,34 @@ test_that("the text size does not grow the canvas, so it shows in a fitted previ
   expect_gte(big$fit$fontsize_col, base$fit$fontsize_col)
   expect_true(small$fit$cols_legible)
   expect_gte(small$fit$fontsize_col, viz_fit$MIN_PRINT_PT)
+})
+
+test_that("a bigger text size widens a tall page's columns up to the stage's shape", {
+  base <- amr_plot$amr_canvas_width_in(100)
+  # Without a height (a ratio the reader set) the columns keep their width.
+  expect_equal(amr_plot$amr_canvas_width_in(100, text_scale = 2), base)
+  # A page far taller than the stage widens as far as the text size asks...
+  tall <- amr_plot$amr_canvas_width_in(40, text_scale = 2, height_in = 45)
+  expect_gt(tall, amr_plot$amr_canvas_width_in(40) * 1.8)
+  # ...and one only a little taller stops where it reaches the stage's shape.
+  capped <- amr_plot$amr_canvas_width_in(100, text_scale = 2, height_in = 28)
+  expect_gt(capped, base)
+  expect_equal(capped, 28 / viz_fit$STAGE_ASPECT, tolerance = 0.02)
+  # A page already flatter than the stage is limited by its width: no gain.
+  expect_equal(
+    amr_plot$amr_canvas_width_in(50, text_scale = 2, height_in = 7),
+    amr_plot$amr_canvas_width_in(50)
+  )
+  # Smaller text never narrows the page, which would only scale it back up.
+  expect_equal(
+    amr_plot$amr_canvas_width_in(40, text_scale = 0.6, height_in = 45),
+    amr_plot$amr_canvas_width_in(40)
+  )
+  # Names switched off are not text, so the size does not widen for them.
+  expect_equal(
+    amr_plot$amr_canvas_width_in(40, FALSE, text_scale = 2, height_in = 45),
+    amr_plot$amr_canvas_width_in(40, FALSE)
+  )
 })
 
 test_that("mapped strips widen with the text size, and the canvas only by that", {
@@ -2026,4 +2058,25 @@ test_that("the element types open on as many panels as fit under the gene cap", 
   twice <- rbind(screen(60, 0, 50), screen(60, 0, 50))
   expect_identical(capped(twice), c("AMR", "STRESS"))
   expect_identical(capped(screen(60, 0, 50), cap = 200), every)
+})
+
+test_that("an element label leans into the room its neighbours leave", {
+  titles <- c("Resistance", "Virulence", "Stress")
+  cols <- c(4, 22, 19)
+  # One narrow panel no longer sets every label on the page at its own size.
+  own_panel <- 72 * 6 * 4 / 45 * impl$AMR_TITLE_FILL /
+    viz_fit$text_width_in("Resistance", 72)
+  lean <- impl$.element_fontsize(titles, cols, 6, 30, left_in = 1)
+  expect_gt(lean, own_panel * 1.5)
+  # Still no two neighbours overlap at the size it returns.
+  widths <- 6 * cols / sum(cols)
+  centres <- cumsum(widths) - widths / 2
+  half <- vapply(titles, viz_fit$text_width_in, numeric(1), pt = lean) / 2
+  expect_true(all(diff(centres) >= half[-1] + half[-3]))
+  # The cap still binds, and the band to the left is what the first label uses.
+  expect_equal(impl$.element_fontsize(titles, cols, 6, 8, left_in = 1), 8)
+  expect_lt(
+    impl$.element_fontsize(titles, cols, 6, 30, left_in = 0),
+    lean
+  )
 })

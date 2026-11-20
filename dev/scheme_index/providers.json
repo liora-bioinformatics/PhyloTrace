@@ -5,8 +5,12 @@
       "name": "cgMLST.org Nomenclature Server",
       "operator": "Ridom GmbH",
       "website": "https://www.cgmlst.org/ncs",
-      "hosts": ["www.cgmlst.org"],
-      "offers": ["cgMLST"],
+      "hosts": [
+        "www.cgmlst.org"
+      ],
+      "offers": [
+        "cgMLST"
+      ],
       "terms_url": "https://www.cgmlst.org/serverpolicy.html",
       "terms_reviewed": "2026-11-16",
       "commercial_use": "Downloads permitted for non-commercial purposes only; commercial use needs Ridom's permission.",
@@ -26,8 +30,13 @@
       "name": "Chewie-NS",
       "operator": "chewBBACA team, University of Lisbon",
       "website": "https://chewbbaca.online",
-      "hosts": ["chewbbaca.online"],
-      "offers": ["cgMLST", "wgMLST"],
+      "hosts": [
+        "chewbbaca.online"
+      ],
+      "offers": [
+        "cgMLST",
+        "wgMLST"
+      ],
       "terms_url": "https://chewbbaca.online",
       "terms_reviewed": "2026-11-16",
       "commercial_use": "No data licence published for hosted schemas; schemas adapted from other providers can carry those providers' terms.",
@@ -47,50 +56,74 @@
       "name": "PubMLST",
       "operator": "University of Oxford",
       "website": "https://pubmlst.org",
-      "hosts": ["pubmlst.org"],
-      "offers": ["cgMLST", "wgMLST", "MLST"],
+      "hosts": [
+        "pubmlst.org"
+      ],
+      "offers": [
+        "cgMLST",
+        "wgMLST",
+        "MLST"
+      ],
       "terms_url": "https://pubmlst.org/terms-conditions",
       "terms_reviewed": "2026-11-16",
       "commercial_use": "Data submitted up to 2024-12-31 may be used with citation; data from 2025 on is limited to non-commercial academic research and public-health surveillance unless licensed. rMLST is academic only.",
       "listing": {
-        "method": "manual",
-        "reason": "Automated access by software tools needs permission; rest.pubmlst.org/robots.txt disallows all paths. Rows are curated by hand in curation.csv."
+        "method": "automated",
+        "reason": "Scheme metadata (database and scheme names, locus counts, page links) is read from rest.pubmlst.org with written permission. rMLST is never listed."
       },
       "permission": {
         "needed": true,
-        "requested": null,
-        "contact": null,
-        "status": "requested, awaiting reply",
-        "notes": "E-mail sent asking for permission to list schemes automatically; record the date sent, the contact and the reply here."
+        "requested": "2026-11-17",
+        "contact": "pubmlst@biology.ox.ac.uk",
+        "status": "granted",
+        "granted": "2026-11-19",
+        "granted_by": "Dr. Keith Jolley, University of Oxford",
+        "conditions": "Allowed as long as no scheme data is downloaded or distributed. robots.txt is aimed at crawler bots, not scripted API use. Up to 4 concurrent connections allowed, but sequential requests from a single process are preferred; no pause between calls needed.",
+        "notes": "Request: weekly automated listing of scheme metadata only, excluding rMLST, identified with a contact address."
       }
     },
     "pasteur": {
       "name": "Institut Pasteur BIGSdb",
       "operator": "Institut Pasteur",
       "website": "https://bigsdb.pasteur.fr",
-      "hosts": ["bigsdb.pasteur.fr"],
-      "offers": ["cgMLST", "MLST"],
+      "hosts": [
+        "bigsdb.pasteur.fr"
+      ],
+      "offers": [
+        "cgMLST",
+        "MLST"
+      ],
       "terms_url": "https://bigsdb.pasteur.fr/policy/",
       "terms_reviewed": "2026-11-16",
       "commercial_use": "Academic, non-commercial use only, no redistribution; other uses need a licence (bigsdb-policy@pasteur.fr).",
       "listing": {
-        "method": "manual",
-        "reason": "Use by software tools needs permission. Rows are curated by hand in curation.csv."
+        "method": "automated",
+        "reason": "Scheme metadata (database and scheme names, locus counts, page links) is read from bigsdb.pasteur.fr/api with written confirmation, sequentially with pauses."
       },
       "permission": {
         "needed": true,
-        "requested": null,
+        "requested": "2026-11-17",
         "contact": "bigsdb-policy@pasteur.fr",
-        "status": "requested, awaiting reply",
-        "notes": "E-mail sent asking for permission to list schemes automatically; record the date sent and the reply here."
+        "status": "granted",
+        "granted": "2026-11-19",
+        "granted_by": "Thomas Miron, Technology Transfer & Industrial Partnership, Institut Pasteur",
+        "conditions": "The use as described is acceptable and compliant with the BIGSdb-Pasteur policy: weekly at most, metadata only (no alleles, profiles or isolate data), sequential requests with pauses, identified with a contact address.",
+        "notes": "Keep the pauses and the contact address in the User-Agent; any wider use needs a new request."
       }
     },
     "enterobase": {
       "name": "EnteroBase",
       "operator": "University of Warwick; the Mycobacterium tuberculosis and Enterococcus databases are hosted by the Leibniz Institute DSMZ",
       "website": "https://enterobase.warwick.ac.uk",
-      "hosts": ["enterobase.warwick.ac.uk", "enterobase.dsmz.de"],
-      "offers": ["cgMLST", "wgMLST", "MLST"],
+      "hosts": [
+        "enterobase.warwick.ac.uk",
+        "enterobase.dsmz.de"
+      ],
+      "offers": [
+        "cgMLST",
+        "wgMLST",
+        "MLST"
+      ],
       "terms_url": "https://enterobase.warwick.ac.uk/terms",
       "terms_reviewed": "2026-11-18",
       "commercial_use": "Academic use only: the terms bar use 'for any commercial or business purposes whatsoever'; other uses need a licence from the University of Warwick (enterobase@warwick.ac.uk). The DSMZ-hosted databases were not reviewed separately.",

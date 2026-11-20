@@ -16,9 +16,11 @@ label:
   sooner.
 - **Room-bound labels** (tip names, isolate names, gene names, bar names,
   rotated class titles) are already as large as their row or column allows. A
-  larger design size changes nothing unless the geometry grows with it (G1, as
-  the AMR heatmap's gene columns now do). When it does, the page grows in the
-  same proportion, so the label's share of the page stays the same.
+  larger design size changes nothing unless the geometry grows with it (G1).
+  Growing the page pays only where it changes the page's shape: the Full view
+  scales any page into the stage, so a page grown on both axes alike, or
+  widened past the stage's shape, shows every label at the same size as
+  before.
 
 Worked example: AMR heatmap, 990 isolates x 96 genes, in an example stage of
 1400 x 900 CSS px.
@@ -75,9 +77,10 @@ the floor being measured at canvas width rather than at print width (S1).
   title >= data label, and legend title >= legend key, unless a higher role's
   own room forces it smaller.
 - **T7 Sacrifice order, cheapest first.** (1) shrink towards the floor;
-  (2) wrap or fold (a legend into a second column, labels into lanes);
-  (3) trim (legend keys, least frequent first, with a gap key and "n of N
-  shown"); (4) drop the label; (5) show its substitute.
+  (2) wrap or fold (labels into lanes); (3) trim (legend keys, least frequent
+  first, with a gap key and "n of N shown"); (4) drop the label; (5) show its
+  substitute. Legends are the exception: wrapping into width the legend column
+  already owns takes nothing from the drawing, so it comes first (L1).
 - **T8 Every dropped label has a substitute or a switch.** Class titles become
   the class strip and its legend keys; the element-type row becomes the legend
   heading; isolate and gene names have none, so the switch stays available and
@@ -88,12 +91,20 @@ the floor being measured at canvas width rather than at print width (S1).
 
 ### Geometry
 
-- **G1 Geometry follows text.** When a role is room-bound and its room is
-  geometry the engine owns, the canvas grows along that axis so the slot holds
-  the want: column pitch x k grows the width, row pitch x k grows the height.
-  Only for labels that will be drawn, and only when they are legible at the
-  floor within the ceiling.
-- **G2 Ceilings.** Width <= base x `CANVAS_MAX_FACTOR` (2.6) x max(k, 1);
+- **G1 Geometry follows text, by shape only.** When a role is room-bound and
+  its room is geometry the engine owns, the canvas may grow along that axis so
+  the slot holds the want (column pitch x k grows the width), but only while
+  that moves the page towards the stage's shape (`viz_fit$STAGE_ASPECT`, 0.7,
+  height over width): a page is widened only up to `height / STAGE_ASPECT`,
+  and its height stays what the rows need. Conditions: k > 1 (smaller text
+  never shrinks the page, which the Full view would scale straight back up);
+  the aspect is the fit's, not the reader's (G4, since a held ratio would grow
+  the height with the width); the labels will be drawn and are legible at the
+  floor within the ceiling. Decided 2026-11-20 from renders of the test
+  databases: growing both axes alike changed nothing on screen, and widening an
+  already-flat page only shrank its other labels.
+- **G2 Ceilings.** Width <= base x `CANVAS_MAX_FACTOR` (2.6), x k for G1
+  growth above 100%;
   aspect <= `ASPECT_MAX` (8); each side <= `PLOT_MAX_PX` (12,000 px, 62.5 in at
   192 px/in). Past a ceiling, rows or columns share what there is and T3-T8
   decide.
@@ -121,8 +132,12 @@ the floor being measured at canvas width rather than at print width (S1).
 
 ### Legends and measurement
 
-- **L1 Legends shrink before they trim.** Type goes to the floor before any key
-  is cut (the AMR policy).
+- **L1 Legends wrap, then shrink, then trim.** A legend first wraps into
+  further columns within the room beside the drawing (AMR: up to
+  `AMR_LEGEND_WRAP_MAX`, 3), then its type goes to the floor, and only then is
+  any key cut. Decided 2026-11-20: on the test databases the order mattered
+  only for short pages with long legends (9 pt wrapped against 6.8 pt in one
+  column).
 - **L2 Vocabularies stay whole.** Confidence tiers and drug classes are never
   capped; a mapped variable caps at `LEGEND_FULL_MAX` (18) keys.
 - **M1 Measure what is known.** Known strings are measured with `string_em()`
@@ -159,8 +174,8 @@ would come out at 7.8 pt, not 9.
 | T1 one Text size | yes | yes | yes | yes | no: node, edge and cluster sliders | no |
 | T3-T4 fit and floor | yes | yes | yes | yes | partial: fitted at Generate, 7 in print anchor | no |
 | T2 shared ramp | no | no | no | no | no | no |
-| G1 geometry follows text | no: tip rows ignore k | partial: annotation lanes | partial: columns yes (trial), rows no | no: ratio locked on purpose | n/a | n/a |
-| L1 shrink before trim | no: trims first at 8.2 pt | partial: "+ N more" | yes | n/a | n/a | n/a |
+| G1 geometry follows text | no: tip rows ignore k | partial: annotation lanes | partial: columns by shape, rows no | no: ratio locked on purpose | n/a | n/a |
+| L1 wrap, shrink, trim | no: trims first at 8.2 pt | partial: "+ N more" | yes | n/a | n/a | n/a |
 | M2 one solve, fixed canvas | yes | yes | yes | yes | no: live vis.js widget | no: Leaflet |
 | S2 Full-view size hint | no | no | no | no | no | no |
 
@@ -173,7 +188,8 @@ would come out at 7.8 pt, not 9.
    style may change the shape wherever geometry grows, or G1 grows both axes
    together and keeps the ratio.
 3. Apply G1 to the Tree's tip rows, so its height grows with k?
-4. Keep the canvas ceiling scaling with k (currently max(k, 1) x 2.6)?
+4. ~~Keep the canvas ceiling scaling with k?~~ Decided 2026-11-20: yes, but
+   only for G1 growth, which now changes the page's shape only (see G1).
 5. Add journal-width sizes to the export note (S2)?
 6. Fold the MST's three label sliders into one Text size (T1)?
 7. Bring the Map into the system at all?

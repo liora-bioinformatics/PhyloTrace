@@ -17,6 +17,13 @@ box::use(
 #' @export
 TAXID_KEY <- "species_taxid"
 
+#' Generic Species Picture
+#'
+#' @description Web path of the schematic bacteria illustration shown for a
+#'   catalog species without a picture of its own.
+#' @export
+GENERIC_IMAGE <- "static/species/generic.svg"
+
 # Lazily loaded species metadata (taxonomy and descriptions).
 .cache <- new.env(parent = emptyenv())
 
@@ -112,7 +119,8 @@ species_problem <- function(genus, epithets = character(0)) {
 #'   row per distinct species or species group.
 #'
 #' @return Data frame with `label` (the species name as stored), `genus`,
-#'   `rank`, `taxid` and `image` (web path of its picture, `NA` without one).
+#'   `rank`, `taxid` and `image` (web path of its picture, `GENERIC_IMAGE`
+#'   without one).
 #' @export
 species_catalog <- function() {
   if (is.null(.cache$catalog)) {
@@ -123,7 +131,8 @@ species_catalog <- function() {
       character(1)
     )
     abb <- vapply(records, function(r) r$abb %||% NA_character_, character(1))
-    image_file <- file.path("app", "static", "species", paste0(abb, ".png"))
+    # Resolved from this module, so images are found whatever the working directory.
+    image_file <- box::file("..", "static", "species", paste0(abb, ".png"))
     out <- data.frame(
       label = label,
       genus = vapply(label, function(l) species_parts(l)$genus, character(1)),
@@ -132,7 +141,7 @@ species_catalog <- function() {
       image = ifelse(
         file.exists(image_file),
         file.path("static", "species", paste0(abb, ".png")),
-        NA_character_
+        GENERIC_IMAGE
       ),
       stringsAsFactors = FALSE,
       row.names = NULL
@@ -163,12 +172,80 @@ species_record <- function(species) {
 #'
 #' @param species Character species name.
 #'
-#' @return Web path of the image, or `NA`.
+#' @return Web path of the image (`GENERIC_IMAGE` for a catalog species without
+#'   one), or `NA` for a species outside the catalog.
 #' @export
 species_image <- function(species) {
   catalog <- species_catalog()
   hit <- match(match_key(drop_curator(gsub("_", " ", species %||% ""))), match_key(catalog$label))
   if (is.na(hit)) NA_character_ else catalog$image[hit]
+}
+
+#' Credit of a Catalog Species' Picture
+#'
+#' @description Who made the species' picture and under which licence, as kept
+#'   in the record's `image_credit`. Openly licensed pictures (CC BY, CC BY-SA)
+#'   must show this wherever they appear.
+#'
+#' @param species Character species name.
+#'
+#' @return List with `author`, `license`, `license_url` (`NA` for public
+#'   domain) and `source` (page of the original), or `NULL` without a credit.
+#' @export
+image_credit <- function(species) {
+  credit <- species_record(species)$image_credit
+  if (is.null(credit)) {
+    return(NULL)
+  }
+  credit$license_url <- license_url(credit$license)
+  credit
+}
+
+#' Picture Credits of the Whole Catalog
+#'
+#' @return Data frame with `label`, `author`, `license`, `license_url` and
+#'   `source`, one row per catalog species with a credited picture.
+#' @export
+image_credits <- function() {
+  catalog <- species_catalog()
+  rows <- lapply(catalog$label[catalog$image != GENERIC_IMAGE], function(label) {
+    credit <- image_credit(label)
+    if (is.null(credit)) {
+      return(NULL)
+    }
+    data.frame(
+      label = label,
+      author = credit$author,
+      license = credit$license,
+      license_url = credit$license_url,
+      source = credit$source,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
+}
+
+# Deed of a Creative Commons licence named like "CC BY-SA 4.0"; NA for public
+# domain and anything else.
+license_url <- function(license) {
+  m <- regmatches(license, regexec("^CC (BY(-SA)?) ([0-9.]+)", license %||% ""))[[1]]
+  if (length(m)) {
+    return(sprintf("https://creativecommons.org/licenses/%s/%s/", tolower(m[2]), m[4]))
+  }
+  if (identical(license, "CC0")) {
+    return("https://creativecommons.org/publicdomain/zero/1.0/")
+  }
+  NA_character_
+}
+
+#' NCBI Taxonomy Page of a Taxon
+#'
+#' @param taxid Integer NCBI taxonomy id.
+#'
+#' @return URL of the taxon's NCBI Taxonomy Browser page.
+#' @export
+taxonomy_url <- function(taxid) {
+  paste0("https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=", taxid)
 }
 
 #' Default Database Name for a Species

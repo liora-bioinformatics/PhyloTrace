@@ -1,4 +1,5 @@
 import "./busy-shield";
+import "./delayed-busy";
 import "./dt-column-sizing";
 import "./dt-column-visibility";
 import "./dt-filter-exact";
@@ -9,6 +10,7 @@ import "./dt-visibility-resync";
 import "./file-browser";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";
+import "./viz-plot-zoom";
 import "./viz-scale-swatch";
 import "./viz-tab-strip";
 

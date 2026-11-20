@@ -1,48 +1,264 @@
 # app/view/landing_page.R
+#
+# Start screen: introduces PhyloTrace and lets the user open the last used or a
+# picked database, or start creating a new one.
 
 box::use(
-  DT[DTOutput, datatable, renderDT],
-  bslib[page_fillable],
   htmltools[htmlEscape],
   jsonlite[fromJSON],
+  later[later],
   rlang[`%||%`],
   shiny,
-  shinyjs[disabled, useShinyjs],
+  shinyjs[disabled, toggleState, useShinyjs],
 )
 
 box::use(
-  app / logic / db_compat[check_db_loadable],
+  app / logic / db_compat[check_db_loadable, describe_db],
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
+  app / logic / species[GENERIC_IMAGE, image_credit, species_image],
+  app / view / about,
   app / view / file_dialog,
 )
+
+# Labels of the database the card shows: the one remembered from an earlier
+# session, or one the user just picked (or created).
+LABEL_LAST_USED <- "Last used"
+LABEL_SELECTED <- "Selected"
+
+# Human-readable file size in decimal units.
+format_size <- function(bytes) {
+  if (is.na(bytes)) {
+    return(NA_character_)
+  }
+  units <- c("Bytes", "KB", "MB", "GB", "TB")
+  power <- min(max(floor(log(max(bytes, 1), 1000)), 0), length(units) - 1)
+  if (power == 0) {
+    return(paste(bytes, "Bytes"))
+  }
+  paste(format(round(bytes / 1000^power, 2), nsmall = 0), units[power + 1])
+}
+
+# Elides the middle of a long path, keeping its start and its end readable.
+truncate_middle <- function(text, max_chars = 64L) {
+  if (is.na(text) || nchar(text) <= max_chars) {
+    return(text)
+  }
+  keep <- max_chars - 1L
+  paste0(
+    substr(text, 1L, ceiling(keep / 2)),
+    "…",
+    substr(text, nchar(text) - floor(keep / 2) + 1L, nchar(text))
+  )
+}
+
+# One label/value pair of the card's fact list; omitted when the value is unknown.
+db_fact <- function(label, value) {
+  if (is.null(value) || is.na(value) || !nzchar(value)) {
+    return(NULL)
+  }
+  shiny$div(
+    class = "landing-db_fact",
+    shiny$tags$dt(label),
+    shiny$tags$dd(value)
+  )
+}
+
+# Text with a line-break opportunity after each separator character in `chars`,
+# so a long name without spaces wraps at "_" or "/" rather than mid-word.
+breakable <- function(text, chars) {
+  parts <- strsplit(text, sprintf("(?<=[%s])", chars), perl = TRUE)[[1]]
+  shiny$HTML(paste(htmlEscape(parts), collapse = "<wbr>"))
+}
+
+# The folder a database lives in, shortened for display and complete on hover.
+db_folder <- function(path) {
+  folder <- dirname(path)
+  shiny$div(
+    class = "landing-db_path",
+    title = folder,
+    shiny$icon("folder"),
+    shiny$span(breakable(truncate_middle(folder, 80L), "/\\\\"))
+  )
+}
+
+# Card content for a database that can be loaded.
+db_entry <- function(label, path) {
+  meta <- file.info(path)
+  info <- describe_db(path)
+  image <- species_image(info$species)
+
+  shiny$div(
+    class = "landing-db_entry",
+    shiny$div(class = "landing-db_kicker", label),
+    shiny$div(
+      class = "landing-db_title",
+      if (!is.na(image)) {
+        credit <- image_credit(info$species)
+        # Too small for a caption: the credit is its tooltip, and the About
+        # dialog lists every picture's credit.
+        shiny$tags$img(
+          class = "landing-db_thumb",
+          src = image,
+          alt = "",
+          title = if (identical(image, GENERIC_IMAGE)) {
+            "Generic illustration, no picture of this species"
+          } else if (!is.null(credit)) {
+            sprintf("Image: %s · %s", credit$author, credit$license)
+          }
+        )
+      } else {
+        shiny$div(
+          class = "landing-db_thumb landing-db_thumb--icon",
+          shiny$icon("database")
+        )
+      },
+      shiny$div(
+        class = "landing-db_heading",
+        shiny$div(
+          class = "landing-db_name",
+          title = basename(path),
+          breakable(basename(path), "_-")
+        ),
+        if (!is.na(info$species)) {
+          shiny$div(class = "landing-db_species", info$species)
+        }
+      )
+    ),
+    db_folder(path),
+    shiny$tags$dl(
+      class = "landing-db_facts",
+      db_fact("Scheme", info$scheme),
+      db_fact(
+        "Isolates",
+        if (!is.na(info$isolates)) format(info$isolates, big.mark = ",") else NA
+      ),
+      db_fact("Size", format_size(meta$size)),
+      db_fact("Last changed", format(meta$mtime, "%Y-%m-%d %H:%M"))
+    )
+  )
+}
+
+# Card content for a picked or remembered file that cannot be loaded.
+db_entry_invalid <- function(label, path, reason) {
+  shiny$div(
+    class = "landing-db_entry",
+    shiny$div(class = "landing-db_kicker", label),
+    if (length(path) && !is.na(path)) {
+      shiny$tagList(
+        shiny$div(
+          class = "landing-db_title",
+          shiny$div(
+            class = "landing-db_thumb landing-db_thumb--icon landing-db_thumb--warning",
+            shiny$icon("database")
+          ),
+          shiny$div(
+            class = "landing-db_heading",
+            shiny$div(
+              class = "landing-db_name",
+              title = basename(path),
+              breakable(basename(path), "_-")
+            )
+          )
+        ),
+        db_folder(path)
+      )
+    },
+    shiny$div(
+      class = "landing-db_alert",
+      role = "alert",
+      shiny$icon("triangle-exclamation"),
+      shiny$span(reason %||% "This file cannot be loaded.")
+    )
+  )
+}
+
+# Card content when no database is remembered or picked.
+db_entry_empty <- function() {
+  shiny$div(
+    class = "landing-db_entry landing-db_entry--empty",
+    shiny$div(class = "landing-db_empty-icon", shiny$icon("database")),
+    shiny$div(class = "landing-db_empty-title", "No database selected"),
+    shiny$p(
+      class = "landing-db_hint",
+      "Open an existing PhyloTrace database (.db file) or create a new one for your ",
+      "species and typing scheme."
+    )
+  )
+}
 
 #' @export
 ui <- function(id) {
   ns <- shiny$NS(id)
 
-  page_fillable(
+  shiny$div(
+    class = "landing html-fill-item",
     useShinyjs(),
-    shiny$imageOutput(ns("phylotrace_large")),
+    shiny$div(class = "landing_backdrop", `aria-hidden` = "true"),
     shiny$div(
-      class = "landing-page-ui",
-      shiny$div(
-        id = "loading-instructions",
-        shiny$div(
-          id = "instructions",
-          "Proceed by loading a compatible local database or create a new one."
+      class = "landing_main",
+      shiny$tags$section(
+        class = "landing_hero",
+        shiny$tags$img(
+          class = "landing_logo",
+          src = "static/images/PhyloTrace_flat_256.png",
+          alt = "",
+          width = 256,
+          height = 256
         ),
         shiny$div(
-          id = "loading-inputs",
-          file_dialog$ui(ns("db_pick"), "Select Database", "folder-open"),
-          shiny$actionButton(
-            ns("create_new_db"),
-            "Create New",
-            icon = shiny$icon("plus")
+          class = "landing_intro",
+          shiny$tags$h1(class = "landing_title", "PhyloTrace"),
+          shiny$p(
+            class = "landing_tagline",
+            "Decentralised pathogen surveillance — under your control."
+          ),
+          shiny$p(
+            class = "landing_lead",
+            "Open a database to continue where you left off, or set up a new one for ",
+            "your species and typing scheme."
+          ),
+          shiny$div(
+            class = "landing_actions",
+            file_dialog$ui(ns("db_pick"), "Open Database", "folder-open"),
+            shiny$actionButton(
+              ns("create_new_db"),
+              "Create New",
+              icon = shiny$icon("plus")
+            )
           )
+        )
+      ),
+      shiny$tags$section(
+        class = "landing-db pt-delayed-busy",
+        `aria-label` = "Database",
+        shiny$uiOutput(ns("database_selection"), class = "landing-db_body"),
+        shiny$div(
+          class = "landing-db_busy",
+          shiny$div(class = "spinner-border", role = "status"),
+          shiny$span(class = "visually-hidden", "Reading database")
         ),
-        shiny$uiOutput(ns("database_selection"))
+        disabled(shiny$actionButton(
+          ns("load_database"),
+          shiny$tagList("Load Database", shiny$icon("arrow-right")),
+          class = "btn-primary landing-db_load"
+        ))
       )
+    ),
+    shiny$tags$footer(
+      class = "landing_footer",
+      shiny$tags$a(
+        class = "landing_maker",
+        href = "https://liora-bioinformatics.com/phylotrace",
+        target = "_blank",
+        rel = "noopener noreferrer",
+        about$brand_logo()
+      ),
+      shiny$span(
+        class = "landing_legal",
+        "Open source under GPLv3 · For research use only. Not a medical device."
+      ),
+      about$ui(ns("about"), variant = "link")
     )
   )
 }
@@ -55,13 +271,19 @@ server <- function(
   shiny$moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    about$server("about")
+
     # Currently selected database location, as c(label, path) or c(label, NA).
     db_location <- shiny$reactiveVal(NULL)
 
     # Why the currently selected file cannot be loaded (missing, not SQLite, not
     # a PhyloTrace database), or NULL when the selection is fine / absent. Shown
-    # in place of the metadata table so the user learns why Load is disabled.
+    # in place of the database summary so the user learns why Load is disabled.
     db_invalid_reason <- shiny$reactiveVal(NULL)
+
+    # The file last offered for selection, kept even when it is not loadable
+    # (db_location() then holds NA) so the card can still name it.
+    db_candidate <- shiny$reactiveVal(NULL)
 
     # Resolve a candidate path to the c(label, path) pair db_location() expects,
     # applying the same validity check the app runs before opening a database. A
@@ -70,6 +292,7 @@ server <- function(
     # single gate that keeps db_path() from ever turning non-NULL for a file
     # every downstream module would then query and crash on.
     resolve_selection <- function(label, path) {
+      db_candidate(path)
       chk <- check_db_loadable(path)
       if (isTRUE(chk$ok)) {
         db_invalid_reason(NULL)
@@ -92,13 +315,15 @@ server <- function(
     # Combined load trigger: incremented by the UI button and by the external
     # db observer so that both paths share one downstream observeEvent.
     load_trigger <- shiny$reactiveVal(NULL)
+
+    # Starts a load: overlay signal now, the actual trigger one tick later.
     fire_load <- function() {
       loading_started(loading_started() + 1L)
 
       # Deferred one tick so the loading_started bump above reaches the
       # client - and the overlay it triggers actually paints - before
       # load_trigger changes db_path() and everything that cascades from it.
-      later::later(function() {
+      later(function() {
         shiny$withReactiveDomain(
           session,
           shiny$isolate({
@@ -109,27 +334,31 @@ server <- function(
       })
     }
 
-    # Observe a database location
+    # Loads a database handed over from another tab (the setup's "Load Database").
     shiny$observeEvent(external_db(), {
       db_path <- external_db()
       shiny$req(!is.null(db_path), length(db_path), is.character(db_path))
 
-      loc <- resolve_selection("Currently selected:", db_path)
+      loc <- resolve_selection(LABEL_SELECTED, db_path)
       db_location(loc)
 
-      # The request comes from another tab (the setup's "Load Database"), where
-      # the reason recorded on this one would never be seen.
+      # The request comes from another tab, where the reason recorded on this
+      # one would never be seen.
       if (!is.na(loc[2])) {
         fire_load()
       } else {
         shiny$showNotification(
-          paste("The database cannot be loaded:", db_invalid_reason() %||% basename(db_path)),
+          paste(
+            "The database cannot be loaded:",
+            db_invalid_reason() %||% basename(db_path)
+          ),
           type = "error",
           duration = 10
         )
       }
     })
 
+    # Loads the database shown on the card.
     shiny$observeEvent(input$load_database, {
       loc <- db_location()
       path <- if (is.null(loc)) NA_character_ else loc[2]
@@ -151,18 +380,6 @@ server <- function(
       fire_load()
     })
 
-    # Render PhyloTrace logo
-    output$phylotrace_large <- shiny$renderImage(
-      {
-        render_info("output$phylotrace_large")
-
-        list(
-          src = file.path(getwd(), "app/static/images/PhyloTrace_flat_512.png")
-        )
-      },
-      deleteFile = FALSE
-    )
-
     # The database the user picks in the file dialog.
     picked_db <- file_dialog$server(
       "db_pick",
@@ -171,7 +388,7 @@ server <- function(
       pattern = "\\.db$"
     )
 
-    # Observe current database path.
+    # Selects the picked database, or else the one remembered in state.json.
     # Falls back to disk (not in-memory) so it picks up whatever main.R wrote
     # in an earlier session.
     shiny$observe({
@@ -180,7 +397,7 @@ server <- function(
       location_input <- picked_db()
 
       if (length(location_input)) {
-        loc <- resolve_selection("Currently selected:", location_input)
+        loc <- resolve_selection(LABEL_SELECTED, location_input)
       } else {
         state_file <- file.path(app_local_share_path, "state.json")
         disk_stat <- tryCatch(
@@ -196,114 +413,36 @@ server <- function(
           # The remembered database is still on disk - but "on disk" is not
           # "loadable": it may have been emptied or replaced. Validate before
           # offering it as "Last used".
-          loc <- resolve_selection("Last used:", disk_stat$last_db)
+          loc <- resolve_selection(LABEL_LAST_USED, disk_stat$last_db)
         } else {
           db_invalid_reason(NULL)
+          db_candidate(NULL)
         }
       }
 
       db_location(loc)
     })
 
-    # Render database selection interface
-    output$database_selection <- shiny$renderUI({
-      shiny$req(db_location())
-
-      render_info("output$database_selection")
-
-      db_unselected <- is.na(db_location()[2])
-
-      load_button <- shiny$actionButton(
-        ns("load_database"),
-        "Load Database"
-      )
-
-      if (db_unselected) {
-        # No database selected, or one was picked but is not loadable - show the
-        # reason (missing file, not a PhyloTrace database, ...) when we have one.
-        reason <- db_invalid_reason()
-        table <- if (!is.null(reason)) {
-          shiny$div(
-            class = "db-selection-invalid",
-            shiny$icon("triangle-exclamation"),
-            " ",
-            reason
-          )
-        } else {
-          "No database selected"
-        }
-        load_button <- disabled(load_button)
-      } else {
-        # Case valid database selected
-        table <- DTOutput(ns("selected_database"))
-      }
-
-      shiny$div(
-        shiny$p(db_location()[1]),
-        table,
-        load_button
-      )
+    # Load is only offered for a database that passed the validity check.
+    shiny$observe({
+      loc <- db_location()
+      toggleState("load_database", condition = !is.null(loc) && !is.na(loc[2]))
     })
 
-    # Render selected database
-    output$selected_database <- renderDT({
-      render_info("output$selected_database")
+    # Database card: summary of the selected database, why it cannot be loaded,
+    # or an empty state. Plain HTML in one message, so an update swaps in place
+    # instead of re-initialising a table widget.
+    output$database_selection <- shiny$renderUI({
+      render_info("output$database_selection")
 
-      # Get database metadata
-      db_path <- db_location()[2]
-      shiny$req(
-        is.character(db_path) && !is.na(db_path) && file.exists(db_path)
-      )
-      db_metadata <- file.info(db_path)
-      db_name <- basename(db_path)
-      db_time <- format(db_metadata$mtime, "%Y-%m-%d %H:%M:%S")
-      db_size <- if (db_metadata$size >= 1000^3) {
-        paste0(round(db_metadata$size / 1000^3, 2), " GB")
-      } else if (db_metadata$size >= 1000^2) {
-        paste0(round(db_metadata$size / 1000^2, 2), " MB")
-      } else if (db_metadata$size >= 1000) {
-        paste0(round(db_metadata$size / 1000, 2), " KB")
-      } else {
-        paste0(db_metadata$size, " Bytes")
+      loc <- db_location()
+      if (is.null(loc)) {
+        return(db_entry_empty())
       }
-
-      # Elide the middle of a long path for display, keeping the leading
-      # directories and file name visible; the untruncated path is carried in a
-      # `title` attribute so hovering the cell always reveals it in full.
-      truncate_path <- function(path, max_chars = 99) {
-        display <- path
-        if (is.character(path) && !is.na(path) && nchar(path) > max_chars) {
-          keep <- max_chars - 1L
-          display <- paste0(
-            substr(path, 1, ceiling(keep / 2)),
-            "…",
-            substr(path, nchar(path) - floor(keep / 2) + 1, nchar(path))
-          )
-        }
-        as.character(shiny$span(title = path, display))
+      if (is.na(loc[2])) {
+        return(db_entry_invalid(loc[1], db_candidate(), db_invalid_reason()))
       }
-
-      # Render database metadata table
-      datatable(
-        data.frame(
-          Property = c("Name", "Location", "Size", "Last Changed"),
-          # Rendered with escape = FALSE for the path's tooltip span, so the
-          # file name - any name a received database was saved under - is
-          # escaped here.
-          Value = c(
-            htmlEscape(db_name),
-            truncate_path(db_path),
-            db_size,
-            db_time
-          )
-        ),
-        class = "stripe row-border order-column",
-        colnames = c("", ""),
-        rownames = FALSE,
-        escape = FALSE,
-        selection = "none",
-        options = list(dom = "t", ordering = FALSE)
-      )
+      db_entry(loc[1], loc[2])
     })
 
     # Return values

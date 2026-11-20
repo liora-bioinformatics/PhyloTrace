@@ -17,11 +17,13 @@ box::use(
 ui <- function(id, types = NULL, label = "Scheme provider") {
   ns <- shiny$NS(id)
   shiny$tagList(
-    shiny$selectInput(
+    # The dropdown is attached to the body so the card around it cannot clip it.
+    shiny$selectizeInput(
       ns("provider"),
       label,
       choices = c("Select the provider ..." = "", source_choices(types)),
-      width = "100%"
+      width = "100%",
+      options = list(dropdownParent = "body")
     ),
     shiny$uiOutput(ns("notice"))
   )

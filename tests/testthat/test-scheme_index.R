@@ -17,9 +17,9 @@ test_that("every index row is complete and points to a known provider", {
   expect_false(anyDuplicated(index[, c("species", "provider", "scheme", "url")]) > 0)
 })
 
-test_that("every catalog species finds its cgMLST scheme", {
+test_that("every catalog species finds a scheme for the cgMLST step", {
   for (label in species_catalog()$label) {
-    hits <- scheme_index$schemes_for_species(label, type = "cgMLST")
+    hits <- scheme_index$schemes_for_species(label, type = scheme_index$CORE_TYPES)
     expect_true(nrow(hits) > 0, info = label)
   }
 })
@@ -31,7 +31,8 @@ test_that("a species finds group schemes and genus-wide schemes", {
   brucella <- scheme_index$schemes_for_species("Brucella melitensis")
   expect_true(all(c("Brucella melitensis cgMLST", "Brucella spp. cgMLST") %in% brucella$scheme))
   # cgMLST schemes come first.
-  expect_identical(brucella$type, c("cgMLST", "cgMLST", "MLST"))
+  expect_false(is.unsorted(match(brucella$type, c("cgMLST", "wgMLST", "MLST"))))
+  expect_true("MLST" %in% brucella$type)
 
   salmonella <- scheme_index$schemes_for_species("Salmonella enterica", type = "MLST")
   expect_true(all(c("pubmlst", "enterobase") %in% salmonella$provider))

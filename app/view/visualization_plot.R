@@ -63,6 +63,7 @@ box::use(
     pickerOptions,
     updateRadioGroupButtons,
   ],
+  shinyjs[runjs],
   DT[DTOutput, renderDT, datatable, dataTableProxy, selectRows, JS],
   rlang[`%||%`],
 )
@@ -82,6 +83,8 @@ box::use(
       export_modal,
       export_panel,
       export_qualities,
+      export_release_js,
+      export_save_button,
       export_size,
       export_sizes,
       export_widget_px,
@@ -1570,6 +1573,12 @@ server <- function(
     # the file is written, so nothing downstream may read them live.
     export_request <- reactiveVal(NULL)
 
+    # Why the chosen format cannot be written right now, or NULL. An engine
+    # without a `blocked` reactive never refuses one.
+    export_block_reason <- reactive({
+      if (is.function(exporter$blocked)) exporter$blocked()[[export_format()]]
+    })
+
     reg(observeEvent(input$export_open, {
       # Refuse here rather than opening a settings form for a plot that does not
       # exist yet.
@@ -1601,6 +1610,11 @@ server <- function(
         condition = export_format() %in% c("pdf", "svg", "html")
       )
     }))
+
+    # Save, disabled with the reason on hover while the chosen format is blocked.
+    output$export_save <- renderUI({
+      export_save_button(ns, "export", export_block_reason())
+    })
 
     output$export_hint <- renderUI({
       aspect <- if (is.null(exporter$aspect)) {
@@ -1672,11 +1686,16 @@ server <- function(
     # The modal's Export button. Settings are read before the modal closes and
     # carried from here on, so nothing downstream depends on controls that no
     # longer exist.
+    #
+    # The Save click already put the UI on hold (see export_save_button()); every
+    # path out of here releases it, except a browser capture, whose hold runs
+    # on until the capture observer below has the image.
     reg(observeEvent(input$export_download, {
       fmt <- export_format()
       opts <- export_opts()
       removeModal()
       if (!isTRUE(exporter$ready())) {
+        runjs(export_release_js)
         showNotification(
           "Generate a plot before saving it.",
           type = "warning"
@@ -1689,7 +1708,7 @@ server <- function(
       if (export_widget && !identical(fmt, "html")) {
         exporter$capture(fmt, opts)
       } else {
-        stage(fmt, opts)
+        tryCatch(stage(fmt, opts), finally = runjs(export_release_js))
       }
     }))
 
@@ -1698,6 +1717,8 @@ server <- function(
       reg(observeEvent(
         exporter$capture_data(),
         {
+          # Ends the hold Save started, whether or not the capture succeeded.
+          on.exit(runjs(export_release_js), add = TRUE)
           fmt <- isolate(export_request())$format %||% "png"
           previous <- isolate(export_ready())
           if (!is.null(previous)) {

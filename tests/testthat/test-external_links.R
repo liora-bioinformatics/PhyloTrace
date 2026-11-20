@@ -1,0 +1,375 @@
+# tests/testthat/test-external_links.R
+#
+# Checks that every external URL the app links to or fetches from still works: every URL in the
+# app's source and data files, the licence deeds and NCBI Taxonomy pages built for species, the
+# basemap tiles and their attribution links, and the geocoder. The online tests need network
+# access; they skip offline and when PHYLOTRACE_SKIP_LINK_CHECK=true.
+
+box::use(
+  curl[handle_data, has_internet, multi_add, multi_run, new_handle, new_pool],
+  jsonlite[fromJSON],
+  leaflet.providers[providers_default],
+  rlang[`%||%`],
+  testthat[expect, expect_true, skip_if, test_that],
+  tidygeocoder[geo],
+  utils[modifyList, read.csv],
+)
+box::use(
+  app / logic / scheme_sources[safe_url],
+  app / logic / species,
+  app / view / visualization_map,
+)
+
+map_impl <- attr(visualization_map, "namespace")
+
+APP_DIR <- "../../app"
+
+USER_AGENT <- "PhyloTrace-link-check (+https://github.com/liora-bioinformatics/PhyloTrace)"
+
+# Files the sweep leaves out: binaries, the bundles built from app/js and app/styles (both swept
+# as sources), a vendored library, and local downloads .gitignore keeps out of the app.
+SKIP_FILE <- paste(
+  "\\.(png|jpe?g|gif|ico|webp|woff2?|ttf|otf|eot|fasta|gz|zip|pyc|map)$",
+  "^static/js/app\\.min\\.js$",
+  "^static/css/app\\.min\\.css$",
+  "^static/js/html2canvas\\.min\\.js$",
+  "^logic/data/assembly_summary\\.txt$",
+  "^logic/data/.*_log\\.txt$",
+  sep = "|"
+)
+
+# URL templates and string fragments in app/ that are no link on their own, each with what
+# covers the URLs built from it. A new one fails the inventory test until it is listed here (and
+# covered by a check below); one that disappears from the app fails it as well.
+FRAGMENTS <- c(
+  "https://" = "placeholder of the database wizard's scheme URL input",
+  "https://creativecommons.org/licenses/%s/%s/" = "licence deeds of species pictures",
+  "https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=" = "NCBI Taxonomy pages",
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/" = "choropleth label tiles",
+  "https://pubmed.ncbi.nlm.nih.gov/{pmid}/" = "output of a data-preparation script; not shown",
+  "https://www.ncbi.nlm.nih.gov/bioproject/{row[" = "output of a data-preparation script; not shown"
+)
+
+# Pages some providers serve with HTTP 200 although what was asked for does not exist. Each rule
+# returns a problem description for such a page, NULL for a real one.
+CONTENT_RULES <- list(
+  list(
+    pattern = "^https://www\\.cgmlst\\.org/ncs/schema/",
+    check = function(url, body) {
+      if (grepl("INSERT TITLE HERE", body, fixed = TRUE)) "unknown scheme (blank page template)"
+    }
+  ),
+  list(
+    pattern = "^https://enterobase\\.[^/]+/species/index/",
+    check = function(url, body) {
+      db <- sub("^.*/species/index/([^/?#]+).*$", "\\1", url)
+      if (!grepl(paste0("species/", db, "/"), body, fixed = TRUE)) {
+        "unknown database (generic page without the database's links)"
+      }
+    }
+  )
+)
+
+# Skips the online tests without network access or when the link check is switched off.
+skip_unless_online <- function() {
+  skip_if(
+    identical(tolower(Sys.getenv("PHYLOTRACE_SKIP_LINK_CHECK")), "true"),
+    "link check switched off by PHYLOTRACE_SKIP_LINK_CHECK"
+  )
+  skip_if(!has_internet(), "no network access")
+}
+
+# Inventory entries: the URL, where it comes from and what a working answer looks like ("page",
+# "image").
+entries <- function(url, where, kind = "page") {
+  data.frame(url = url, where = where, kind = kind, stringsAsFactors = FALSE)
+}
+
+# URLs in a piece of text. A whole string that is one URL is taken as it is (data values such as
+# Wikimedia file pages hold commas and parentheses); in running text a URL ends at whitespace,
+# quotes or angle brackets, and loses trailing punctuation and unbalanced closing parentheses.
+text_urls <- function(text) {
+  text <- text[!is.na(text)]
+  whole <- grepl("^https?://[^[:space:]]+$", text)
+  prose <- text[!whole]
+  found <- unlist(regmatches(prose, gregexpr("https?://[^[:space:]\"'<>`]*", prose)))
+  found <- sub("[.,;:!?]+$", "", found)
+  count <- function(u, char) nchar(gsub(paste0("[^", char, "]"), "", u))
+  found <- vapply(found, function(u) {
+    while (endsWith(u, ")") && count(u, "(") < count(u, ")")) {
+      u <- substr(u, 1L, nchar(u) - 1L)
+    }
+    u
+  }, character(1), USE.NAMES = FALSE)
+  c(text[whole], found)
+}
+
+# Every URL in the files under app/: data files are read as data (each JSON string and CSV cell),
+# everything else as text. XML namespace and DOCTYPE identifiers in SVGs are names, not links.
+app_urls <- function() {
+  files <- list.files(APP_DIR, recursive = TRUE)
+  files <- files[!grepl(SKIP_FILE, files) & !grepl("(^|/)__pycache__/", files)]
+  rows <- lapply(files, function(file) {
+    path <- file.path(APP_DIR, file)
+    where <- file.path("app", file)
+    if (grepl("\\.json$", file)) {
+      leaves <- unlist(fromJSON(path, simplifyVector = FALSE), use.names = FALSE)
+      urls <- text_urls(as.character(leaves))
+    } else if (grepl("\\.csv$", file)) {
+      cells <- as.matrix(read.csv(path, colClasses = "character", na.strings = ""))
+      urls <- character(0)
+      wheres <- character(0)
+      for (i in seq_len(nrow(cells))) {
+        found <- text_urls(cells[i, ])
+        urls <- c(urls, found)
+        wheres <- c(wheres, rep(sprintf("%s (row %d)", where, i + 1L), length(found)))
+      }
+      return(if (length(urls)) entries(urls, wheres))
+    } else {
+      text <- paste(readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+      text <- gsub("xmlns(:[[:alnum:]_-]+)?=\"[^\"]*\"", "", text)
+      text <- gsub("<!DOCTYPE[^>]*>", "", text)
+      urls <- text_urls(text)
+    }
+    if (length(urls)) entries(urls, where)
+  })
+  out <- do.call(rbind, rows)
+  out[!duplicated(out[c("url", "where")]), , drop = FALSE]
+}
+
+# TRUE for a template or a fragment of a URL rather than a link.
+is_fragment <- function(url) {
+  grepl("[{}]|%[0-9.]*[sd]|[=?&]$", url) | grepl("^https?://$", url) | url %in% names(FRAGMENTS)
+}
+
+# Tile URL of a leaflet.providers basemap name such as "Esri.WorldImagery", with its attribution
+# HTML resolved the way leaflet-providers resolves `{attribution.<Provider>}`.
+provider_tile <- function(name) {
+  details <- providers_default()$providers_details
+  parts <- strsplit(name, ".", fixed = TRUE)[[1]]
+  base <- details[[parts[1]]]
+  if (is.null(base)) {
+    return(list(url = NA_character_, attribution = ""))
+  }
+  variant <- if (length(parts) > 1L) base$variants[[parts[2]]]
+  if (length(parts) > 1L && is.null(variant)) {
+    return(list(url = NA_character_, attribution = ""))
+  }
+  if (is.character(variant)) {
+    variant <- list(options = list(variant = variant))
+  }
+  options <- modifyList(base$options %||% list(), variant$options %||% list())
+  attribution <- options$attribution %||% ""
+  while (grepl("\\{attribution\\.[[:alnum:]]+\\}", attribution)) {
+    ref <- sub("^.*?\\{attribution\\.([[:alnum:]]+)\\}.*$", "\\1", attribution, perl = TRUE)
+    attribution <- sub(
+      paste0("{attribution.", ref, "}"),
+      details[[ref]]$options$attribution %||% "",
+      attribution,
+      fixed = TRUE
+    )
+  }
+  list(url = fill_tile(variant$url %||% base$url, options), attribution = attribution)
+}
+
+# A tile template with its placeholders filled for the single tile of zoom level 0.
+fill_tile <- function(template, options = list()) {
+  subdomains <- paste(options$subdomains %||% "abc", collapse = "")
+  values <- list(
+    s = substr(subdomains, 1L, 1L),
+    z = "0", x = "0", y = "0", r = "",
+    variant = options$variant %||% "",
+    ext = options$ext %||% "png"
+  )
+  for (key in names(values)) {
+    template <- gsub(paste0("{", key, "}"), values[[key]], template, fixed = TRUE)
+  }
+  template
+}
+
+# Fetches URLs concurrently, at most two connections per host to stay within the providers'
+# rate limits. Returns, per URL, the HTTP status, content type, text body (empty for binary
+# answers) and the transport error, if any.
+fetch_urls <- function(urls, host_con = 2L) {
+  out <- list()
+  pool <- new_pool(total_con = 12L, host_con = host_con)
+  for (url in unique(urls)) {
+    local({
+      u <- url
+      h <- new_handle(
+        url = u,
+        followlocation = TRUE,
+        maxredirs = 10L,
+        connecttimeout = 20L,
+        timeout = 90L,
+        useragent = USER_AGENT,
+        # Large downloads (such as NCBI's assembly summary) stop after the headers.
+        maxfilesize = 2e7
+      )
+      multi_add(
+        h,
+        pool = pool,
+        done = function(res) {
+          type <- res$type %||% ""
+          type <- if (is.na(type)) "" else type
+          # Some servers (cgMLST.org) send no content type, so only declared binaries are skipped.
+          binary <- grepl("^(image|audio|video|font)/|octet-stream|zip|pdf", type)
+          body <- if (binary) "" else tryCatch(rawToChar(res$content), error = function(e) "")
+          out[[u]] <<- list(status = res$status_code, type = type, body = body, error = NA)
+        },
+        fail = function(msg) {
+          status <- tryCatch(handle_data(h)$status_code, error = function(e) 0L)
+          out[[u]] <<- list(status = status, type = "", body = "", error = msg)
+        }
+      )
+    })
+  }
+  multi_run(pool = pool)
+  out
+}
+
+# What is wrong with an answer, NA when it is a working one of the expected kind.
+problem <- function(url, kind, res) {
+  ok_status <- isTRUE(res$status >= 200L && res$status < 300L)
+  if (!is.na(res$error)) {
+    if (ok_status && grepl("file size", res$error, ignore.case = TRUE)) {
+      return(NA_character_)
+    }
+    return(res$error)
+  }
+  if (!ok_status) {
+    return(sprintf("HTTP %d", res$status))
+  }
+  if (kind == "image" && !startsWith(res$type, "image/")) {
+    return(sprintf("not an image (%s)", res$type))
+  }
+  for (rule in CONTENT_RULES) {
+    if (grepl(rule$pattern, url)) {
+      found <- rule$check(url, res$body)
+      if (!is.null(found)) {
+        return(found)
+      }
+    }
+  }
+  NA_character_
+}
+
+# Checks inventory entries online and reports every failing one with where it comes from.
+# Rate-limited, server-side and transport failures get a second, slower attempt.
+expect_urls_work <- function(inv) {
+  inv <- inv[!is.na(inv$url), , drop = FALSE]
+  results <- fetch_urls(inv$url)
+  retry <- names(results)[vapply(results, function(r) {
+    !is.na(r$error) || r$status == 429L || r$status >= 500L
+  }, logical(1))]
+  if (length(retry)) {
+    Sys.sleep(10)
+    results[retry] <- fetch_urls(retry, host_con = 1L)[retry]
+  }
+  issues <- vapply(seq_len(nrow(inv)), function(i) {
+    problem(inv$url[i], inv$kind[i], results[[inv$url[i]]])
+  }, character(1))
+  bad <- !is.na(issues)
+  expect(
+    !any(bad),
+    sprintf(
+      "%d of %d URLs do not work:\n%s",
+      sum(bad),
+      nrow(inv),
+      paste0("  ", inv$where[bad], ": ", inv$url[bad], "\n    -> ", issues[bad], collapse = "\n")
+    )
+  )
+}
+
+# The basemaps offered on the map, by leaflet.providers name.
+basemap_names <- function() {
+  unique(c(unname(map_impl$map_providers), unname(map_impl$mode_tile_defaults)))
+}
+
+test_that("every URL fragment in app/ is listed and every other URL is well-formed", {
+  urls <- app_urls()
+  expect_true(nrow(urls) > 0L)
+  fragments <- unique(urls$url[is_fragment(urls$url)])
+  unlisted <- setdiff(fragments, names(FRAGMENTS))
+  expect(
+    !length(unlisted),
+    paste(
+      "URL templates or fragments not covered by a link check; add them to FRAGMENTS and check",
+      "the URLs built from them:",
+      paste(unlisted, collapse = ", ")
+    )
+  )
+  gone <- setdiff(names(FRAGMENTS), fragments)
+  expect(!length(gone), paste("FRAGMENTS lists URLs no longer in app/:", toString(gone)))
+  links <- unique(urls$url[!is_fragment(urls$url)])
+  malformed <- links[!vapply(links, safe_url, logical(1))]
+  expect(!length(malformed), paste("Malformed URLs:", toString(malformed)))
+})
+
+test_that("every basemap resolves to a tile URL without placeholders", {
+  for (name in basemap_names()) {
+    tile <- provider_tile(name)
+    expect(!is.na(tile$url), sprintf("leaflet.providers does not know basemap %s", name))
+    expect(!grepl("[{}]", tile$url), sprintf("%s keeps a placeholder: %s", name, tile$url))
+  }
+  expect_true(!grepl("[{}]", fill_tile(map_impl$choropleth_labels_url)))
+})
+
+test_that("every URL in the app's source and data files works", {
+  skip_unless_online()
+  urls <- app_urls()
+  expect_urls_work(urls[!is_fragment(urls$url), , drop = FALSE])
+})
+
+test_that("the licence deeds and NCBI Taxonomy pages linked for species work", {
+  skip_unless_online()
+  catalog <- species$species_catalog()
+  licenses <- unlist(lapply(catalog$label, function(label) {
+    species$image_credit(label)$license_url
+  }))
+  licenses <- unique(licenses[!is.na(licenses)])
+  taxa <- catalog[!is.na(catalog$taxid), , drop = FALSE]
+  # NCBI answers scripts with a browser check (HTTP 200) instead of the page, so one page shows
+  # that the address still works and E-utilities confirms each species' taxon exists.
+  expect_urls_work(rbind(
+    entries(licenses, "species picture licence (species$image_credit)"),
+    entries(species$taxonomy_url(taxa$taxid[1]), "NCBI Taxonomy page (species$taxonomy_url)")
+  ))
+  summary_url <- paste0(
+    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=taxonomy&retmode=json&id=",
+    paste(unique(taxa$taxid), collapse = ",")
+  )
+  summary <- fromJSON(summary_url, simplifyVector = FALSE)$result
+  missing <- taxa$label[!vapply(as.character(taxa$taxid), function(id) {
+    identical(summary[[id]]$status, "active")
+  }, logical(1))]
+  expect(
+    !length(missing),
+    paste("Species whose NCBI taxon id is unknown or no longer active:", toString(missing))
+  )
+})
+
+test_that("every basemap serves tiles and its attribution links work", {
+  skip_unless_online()
+  tiles <- lapply(basemap_names(), provider_tile)
+  hrefs <- unlist(lapply(seq_along(tiles), function(i) {
+    found <- regmatches(tiles[[i]]$attribution, gregexpr("href=\"[^\"]+\"", tiles[[i]]$attribution))
+    sub("^href=\"(.*)\"$", "\\1", found[[1]])
+  }))
+  expect_urls_work(rbind(
+    entries(
+      vapply(tiles, `[[`, character(1), "url"),
+      paste("basemap", basemap_names()),
+      kind = "image"
+    ),
+    entries(fill_tile(map_impl$choropleth_labels_url), "choropleth label tiles", kind = "image"),
+    entries(unique(hrefs), "basemap attribution link")
+  ))
+})
+
+test_that("the geocoder places a known address", {
+  skip_unless_online()
+  # Same tidygeocoder method as the map's geocoding, so endpoint and answer format are both used.
+  hit <- geo(address = "Berlin, Germany", method = "osm", quiet = TRUE, progress_bar = FALSE)
+  expect_true(!is.na(hit$lat[1]) && !is.na(hit$long[1]))
+})

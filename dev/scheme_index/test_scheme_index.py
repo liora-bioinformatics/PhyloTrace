@@ -55,7 +55,62 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(rows[0]["source_id"], "1/1")
         self.assertEqual(rows[0]["type"], "wgMLST")
         self.assertEqual(rows[0]["loci"], 3044)
-        self.assertEqual(rows[0]["url"], "https://chewbbaca.online/species/1/schemas/1")
+        # The overview page: Chewie-NS's deep links render blank when opened directly.
+        self.assertEqual(rows[0]["url"], "https://chewbbaca.online/stats")
+
+
+class BigsdbTests(unittest.TestCase):
+    def test_bigsdb_keeps_typing_schemes_and_never_rmlst(self):
+        schemes = [
+            {"description": "MLST", "scheme": "https://rest.pubmlst.org/db/pubmlst_x_seqdef/schemes/1"},
+            {"description": "cgMLST", "scheme": "https://rest.pubmlst.org/db/pubmlst_x_seqdef/schemes/2"},
+            {"description": "Ribosomal MLST", "scheme": "https://rest.pubmlst.org/db/pubmlst_x_seqdef/schemes/3"},
+            {"description": "Antigen typing", "scheme": "https://rest.pubmlst.org/db/pubmlst_x_seqdef/schemes/4"},
+        ]
+        details = [{"loci": list("abcdefg")}, {"locus_count": 1500}, {"loci": ["r"] * 53}, {"loci": ["a"]}]
+        rows = si.parse_bigsdb_schemes("Testus spp. sequence/profile definitions",
+                                       "https://pubmlst.org/bigsdb?db=pubmlst_x_seqdef", schemes, details)
+        self.assertEqual([r["type"] for r in rows], ["MLST", "cgMLST"])
+        self.assertEqual([r["loci"] for r in rows], [7, 1500])
+        self.assertEqual(rows[0]["source_id"], "pubmlst_x_seqdef/1")
+        self.assertEqual(rows[0]["species"], "Testus spp")
+
+    def test_fetch_reads_only_typing_scheme_metadata(self):
+        class FakeClient:
+            def __init__(self):
+                self.urls = []
+
+            def json(self, url):
+                self.urls.append(url)
+                if url == "https://api.test/db":
+                    return [{"databases": [
+                        {"name": "pubmlst_x_isolates", "href": "https://api.test/db/pubmlst_x_isolates",
+                         "description": "Testus isolates"},
+                        {"name": "pubmlst_rmlst_seqdef", "href": "https://api.test/db/pubmlst_rmlst_seqdef",
+                         "description": "rMLST"},
+                        {"name": "pubmlst_locked_seqdef", "href": "https://api.test/db/pubmlst_locked_seqdef",
+                         "description": "Lockus sequence/profile definitions"},
+                        {"name": "pubmlst_x_seqdef", "href": "https://api.test/db/pubmlst_x_seqdef",
+                         "description": "Testus organismus sequence/profile definitions"},
+                    ]}]
+                if "locked" in url:
+                    raise si.SourceError(url + ": HTTP Error 401", status=401)
+                if url.endswith("/schemes"):
+                    return {"schemes": [
+                        {"description": "MLST", "scheme": "https://api.test/db/pubmlst_x_seqdef/schemes/1"},
+                        {"description": "rMLST", "scheme": "https://api.test/db/pubmlst_x_seqdef/schemes/2"},
+                    ]}
+                return {"locus_count": 7}
+
+        client = FakeClient()
+        rows = si.fetch_bigsdb(client, {"api": "https://api.test/db",
+                                        "page": "https://pubmlst.org/bigsdb?db={db}"})
+        self.assertEqual([r["source_id"] for r in rows], ["pubmlst_x_seqdef/1"])
+        # Isolate databases and rMLST are never even requested; a database
+        # behind a login is skipped without failing the source.
+        self.assertFalse(any("isolates" in u or "rmlst" in u or u.endswith("/schemes/2")
+                             for u in client.urls))
+        self.assertEqual(rows[0]["url"], "https://pubmlst.org/bigsdb?db=pubmlst_x_seqdef")
 
 
 class MergeTests(unittest.TestCase):
@@ -280,6 +335,39 @@ class RobotsTests(unittest.TestCase):
         client._robots["https://rest.example.org"] = parser
         with self.assertRaises(si.SourceError):
             client.text("https://rest.example.org/db")
+
+    def test_written_permission_lifts_robots_only_where_recorded(self):
+        allowed = si.Client("test-agent", 0, robots_permission="granted 2026-11-19")
+        self.assertTrue(allowed._allowed("https://rest.example.org/db"))
+        config = json.loads(si.CONFIG.read_text(encoding="utf-8"))
+        with_permission = [s for s, c in config["sources"].items() if c.get("robots_permission")]
+        self.assertEqual(with_permission, ["pubmlst"])
+
+
+class SupersededTests(unittest.TestCase):
+    def test_hand_entered_row_leaves_once_a_listed_row_is_approved(self):
+        manual = row(source="manual", source_id="pubmlst:Testus:MLST", provider="pubmlst",
+                     type="MLST", url="https://pubmlst.org/organisms/testus")
+        listed = row(source="pubmlst", source_id="pubmlst_t_seqdef/1", provider="pubmlst",
+                     type="MLST", url="https://pubmlst.org/bigsdb?db=pubmlst_t_seqdef")
+        other = row(source="manual", source_id="enterobase:x", provider="enterobase", type="MLST",
+                    url="https://enterobase.warwick.ac.uk/species/index/x")
+        self.assertEqual(si.drop_superseded([manual, listed, other]), [listed, other])
+        # Still pending, the listed row covers nothing yet.
+        self.assertEqual(si.drop_superseded([manual]), [manual])
+
+
+class BigsdbFailureTests(unittest.TestCase):
+    def test_other_errors_still_stop_the_source(self):
+        class Broken:
+            def json(self, url):
+                if url == "https://api.test/db":
+                    return [{"databases": [{"name": "x_seqdef", "href": "https://api.test/db/x_seqdef",
+                                            "description": "X"}]}]
+                raise si.SourceError(url + ": HTTP Error 500", status=500)
+
+        with self.assertRaises(si.SourceError):
+            si.fetch_bigsdb(Broken(), {"api": "https://api.test/db", "page": "https://pubmlst.org/{db}"})
 
 
 if __name__ == "__main__":

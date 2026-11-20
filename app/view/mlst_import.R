@@ -6,6 +6,7 @@
 # existing database.
 
 box::use(
+  bslib,
   rlang[`%||%`],
   shiny,
   stats[setNames],
@@ -29,8 +30,10 @@ ui <- function(id) {
   # the right.
   shiny$tagList(
     shiny$uiOutput(ns("task_states")),
-    shiny$div(
+    bslib$layout_columns(
       class = "setup-columns",
+      col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
+      fill = FALSE,
       shiny$div(
         class = "setup-form",
         setup_ui$setup_task(
@@ -38,13 +41,22 @@ ui <- function(id) {
           1,
           "Scheme source",
           shiny$uiOutput(ns("published")),
-          scheme_source$ui(ns("source"), types = "MLST")
+          scheme_source$ui(ns("source"), types = "MLST"),
+          hint = paste(
+            "The provider the scheme files come from, and your confirmation that",
+            "you may use them under its terms. 'Use details' on a published scheme",
+            "fills in its provider and name."
+          )
         ),
         setup_ui$setup_task(
           ns("t2"),
           2,
           "Scheme details",
           locked_hint = "Select and confirm the scheme source first.",
+          hint = paste(
+            "Recorded with the scheme. Only the name is required; a version or",
+            "download date tells later which release of the scheme was used."
+          ),
           shiny$div(
             class = "setup-grid allow-free-text",
             shiny$textInput(ns("name"), "Scheme name", width = "100%"),
@@ -64,26 +76,22 @@ ui <- function(id) {
           3,
           "Scheme files",
           locked_hint = "Complete the scheme details first.",
+          hint = paste(
+            "Profile table: an ST column and one column per locus (tab- or",
+            "comma-separated, or Excel), as offered by PubMLST and BIGSdb. Allele",
+            "files: one FASTA file per locus, named like the locus (adk.fasta), as",
+            "files, a folder or a ZIP archive - or one FASTA file with headers such",
+            "as >adk_1."
+          ),
           shiny$div(
             class = "setup-pick",
             file_dialog$ui(ns("profiles"), "Profile table", "table"),
             shiny$uiOutput(ns("profiles_label"), inline = TRUE)
           ),
           shiny$div(
-            class = "setup-help",
-            "Table with an ST column and one column per locus (tab- or",
-            " comma-separated, or Excel), as offered by PubMLST and BIGSdb."
-          ),
-          shiny$div(
             class = "setup-pick",
             file_dialog$ui(ns("alleles"), "Allele files", "dna"),
             shiny$uiOutput(ns("alleles_label"), inline = TRUE)
-          ),
-          shiny$div(
-            class = "setup-help",
-            "One FASTA file per locus, named like the locus (adk.fasta), as files,",
-            " a folder or a ZIP archive - or one FASTA file with headers such as",
-            " >adk_1."
           ),
           shiny$uiOutput(ns("report"))
         )
@@ -114,7 +122,7 @@ server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
       rows <- published()
       if (nrow(rows)) {
         shiny$tagList(
-          setup_ui$scheme_links(rows, use_input = session$ns("use"))
+          setup_ui$scheme_links(rows, use_input = session$ns("use"), scroll = TRUE)
         )
       }
     })

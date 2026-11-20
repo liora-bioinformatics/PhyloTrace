@@ -14,7 +14,12 @@
       "genus": "Acinetobacter"
     },
     "summary": "Acinetobacter baumannii is a Gram-negative, aerobic coccobacillus of the family Moraxellaceae. It is an opportunistic pathogen responsible for ventilator-associated pneumonia, bloodstream, wound and urinary-tract infections, almost exclusively in healthcare settings. It is notorious for multidrug resistance and environmental persistence, and ranks among the ESKAPE and WHO priority pathogens.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Acinetobacter_baumannii,_SEM,_9330_lores.JPG"
+    }
   },
   {
     "species": "Bacillus_anthracis",
@@ -31,7 +36,12 @@
       "genus": "Bacillus"
     },
     "summary": "Bacillus anthracis is a Gram-positive, rod-shaped, spore-forming, facultatively anaerobic bacterium of the family Bacillaceae. It is the causative agent of anthrax in herbivores and humans, with cutaneous, inhalational and gastrointestinal forms. Its durable spores and potent toxins make it a high-consequence biothreat agent.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Gram_Stain_Anthrax.jpg"
+    }
   },
   {
     "species": "Bordetella_pertussis",
@@ -48,7 +58,12 @@
       "genus": "Bordetella"
     },
     "summary": "Bordetella pertussis is a Gram-negative, aerobic coccobacillus of the family Alcaligenaceae. It causes whooping cough (pertussis), a highly contagious respiratory disease driven by toxins such as pertussis toxin. Although vaccine-preventable, it remains resurgent, making surveillance important.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Dan Higgins",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:23237_lores.jpg"
+    }
   },
   {
     "species": "Brucella_melitensis",
@@ -65,7 +80,12 @@
       "genus": "Brucella"
     },
     "summary": "Brucella melitensis is a Gram-negative, facultatively intracellular coccobacillus of the family Brucellaceae. It is the principal agent of brucellosis acquired from sheep and goats, causing undulant (Malta) fever in humans. It is a zoonotic, high-consequence pathogen of public and veterinary health.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:BrucellaMelitensis.jpg"
+    }
   },
   {
     "species": "Brucella_spp",
@@ -81,7 +101,12 @@
       "family": "Brucellaceae"
     },
     "summary": "Brucella is a genus of small, Gram-negative, facultatively intracellular coccobacilli of the family Brucellaceae, including species such as B. melitensis, B. abortus and B. suis. Its members cause brucellosis, a zoonosis transmitted from livestock to humans through direct contact or unpasteurised dairy products. The genus is regarded as a high-consequence pathogen group for both public and animal health.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Larry Stauffer, Oregon State Public Health Laboratory",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Brucella_spp.JPG"
+    }
   },
   {
     "species": "Burkholderia_mallei_(RKI)",
@@ -98,7 +123,12 @@
       "genus": "Burkholderia"
     },
     "summary": "Burkholderia mallei is a Gram-negative, non-motile, aerobic bacillus of the family Burkholderiaceae. It is the causative agent of glanders, a serious disease chiefly of horses and other equids that is occasionally transmitted to humans. It is classed as a high-consequence pathogen and potential biothreat agent; this scheme is the variant curated for the Robert Koch Institute (RKI).",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Todd Parker, Audra Marsh",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Burkholderia_mallei.tif"
+    }
   },
   {
     "species": "Burkholderia_mallei_(FLI)",
@@ -115,7 +145,12 @@
       "genus": "Burkholderia"
     },
     "summary": "Burkholderia mallei is a Gram-negative, non-motile, aerobic bacillus of the family Burkholderiaceae. It is the causative agent of glanders, a serious disease chiefly of horses and other equids that is occasionally transmitted to humans. It is classed as a high-consequence pathogen and potential biothreat agent; this scheme is the variant curated for the Friedrich-Loeffler-Institut (FLI).",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Todd Parker, Audra Marsh",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Burkholderia_mallei.tif"
+    }
   },
   {
     "species": "Burkholderia_pseudomallei",
@@ -132,7 +167,12 @@
       "genus": "Burkholderia"
     },
     "summary": "Burkholderia pseudomallei is a Gram-negative, motile, aerobic bacillus of the family Burkholderiaceae. It causes melioidosis, acquired from soil and surface water in tropical regions, with diverse and often severe clinical presentations. It is intrinsically resistant to many antibiotics and is considered a high-consequence pathogen.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Burkholderia_pseudomallei_01.jpg"
+    }
   },
   {
     "species": "Campylobacter_jejuni/coli",
@@ -149,7 +189,12 @@
       "genus": "Campylobacter"
     },
     "summary": "The Campylobacter jejuni/coli complex groups the two closely related species Campylobacter jejuni and C. coli, Gram-negative, microaerophilic, spirally curved rods of the family Campylobacteraceae. Together they are the leading cause of bacterial gastroenteritis (campylobacteriosis) worldwide, with poultry as the principal reservoir. cgMLST is used to distinguish the two species and trace foodborne transmission.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Sheila Mitchell",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:15985_lores.jpg"
+    }
   },
   {
     "species": "Candidozyma_auris",
@@ -166,7 +211,12 @@
       "genus": "Candidozyma"
     },
     "summary": "Candidozyma auris (formerly Candida auris) is an ascomycetous, budding yeast of the family Metschnikowiaceae. It is an emerging fungal pathogen that causes severe invasive candidiasis, bloodstream infections, and outbreaks in healthcare facilities. It is notorious for widespread multidrug resistance, environmental persistence, and rapid global dissemination.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Shawn Lockhart",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Candida-auris_2016-250px.jpg"
+    }
   },
   {
     "species": "Clostridioides_difficile",
@@ -183,7 +233,12 @@
       "genus": "Clostridioides"
     },
     "summary": "Clostridioides difficile is a Gram-positive, rod-shaped, anaerobic, spore-forming bacterium of the family Peptostreptococcaceae. Its toxins cause antibiotic-associated diarrhoea and pseudomembranous colitis, typically after disruption of the gut microbiota. Spread by resilient spores, it is a leading cause of healthcare-associated infection.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:9999_lores.jpg"
+    }
   },
   {
     "species": "Clostridium_perfringens",
@@ -200,7 +255,12 @@
       "genus": "Clostridium"
     },
     "summary": "Clostridium perfringens is a Gram-positive, rod-shaped, anaerobic, spore-forming bacterium of the family Clostridiaceae. Through a broad repertoire of toxins it causes food poisoning, gas gangrene (clostridial myonecrosis) and enteritis. Its environmental spores and rapid growth make it a notable agent of foodborne and wound infections.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Jennifer Oosthuizen",
+      "license": "CC0",
+      "source": "https://commons.wikimedia.org/wiki/File:21913_lores.jpg"
+    }
   },
   {
     "species": "Corynebacterium_diphtheriae",
@@ -217,7 +277,12 @@
       "genus": "Corynebacterium"
     },
     "summary": "Corynebacterium diphtheriae is a Gram-positive, club-shaped, pleomorphic, facultatively anaerobic bacillus of the family Corynebacteriaceae. Toxigenic strains produce diphtheria toxin, causing diphtheria with its characteristic pharyngeal pseudomembrane. It is vaccine-preventable, but toxigenic strains remain under close surveillance.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Microrao",
+      "license": "CC BY-SA 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Corynebacterium_diphtheriae.jpg"
+    }
   },
   {
     "species": "Corynebacterium_pseudotuberculosis",
@@ -234,7 +299,12 @@
       "genus": "Corynebacterium"
     },
     "summary": "Corynebacterium pseudotuberculosis is a Gram-positive, club-shaped, facultatively anaerobic bacillus of the family Corynebacteriaceae. It causes caseous lymphadenitis in sheep and goats and occasional zoonotic infections in humans. It is of major veterinary importance in small-ruminant flocks.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Kaoutar El Montacer",
+      "license": "CC BY-SA 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Lymphad%C3%A9nite_cas%C3%A9euse_-_Ovin.jpg"
+    }
   },
   {
     "species": "Cronobacter_sakazakii/malonaticus",
@@ -251,7 +321,12 @@
       "genus": "Cronobacter"
     },
     "summary": "The Cronobacter sakazakii/malonaticus complex groups two closely related species of Gram-negative, rod-shaped bacteria in the family Enterobacteriaceae. These opportunistic pathogens cause rare but severe neonatal infections — meningitis, sepsis and necrotising enterocolitis — frequently linked to powdered infant formula. cgMLST supports species delineation and source tracing during outbreaks.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Enterobacter_sakazakii.tif"
+    }
   },
   {
     "species": "Dermatophilus_congolensis",
@@ -268,7 +343,12 @@
       "genus": "Dermatophilus"
     },
     "summary": "Dermatophilus congolensis is a Gram-positive, facultatively anaerobic actinomycete of the family Dermatophilaceae that grows as branching filaments which fragment into motile, flagellated zoospores. It is the causative agent of dermatophilosis (also called streptothricosis, lumpy wool or strawberry footrot), an exudative, crusting dermatitis of cattle, sheep, goats and horses, with occasional zoonotic infection of humans. Infection is favoured by persistent moisture and skin damage and spreads by contact, arthropod vectors and fomites, making it an important veterinary pathogen in tropical and subtropical regions.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Dermatophilus.jpg"
+    }
   },
   {
     "species": "Enterococcus_faecalis",
@@ -285,7 +365,12 @@
       "genus": "Enterococcus"
     },
     "summary": "Enterococcus faecalis is a Gram-positive, ovoid coccus, facultatively anaerobic, of the family Enterococcaceae. A gut commensal, it is also a leading cause of healthcare-associated urinary-tract, bloodstream and endocardial infections. It is notable for intrinsic and acquired resistance, including vancomycin resistance (VRE).",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Dr. Sahay",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Enterococcus_faecalis.jpg"
+    }
   },
   {
     "species": "Enterococcus_faecium",
@@ -302,7 +387,12 @@
       "genus": "Enterococcus"
     },
     "summary": "Enterococcus faecium is a Gram-positive, ovoid coccus, facultatively anaerobic, of the family Enterococcaceae. A gut commensal and major nosocomial pathogen, it is prominent among vancomycin-resistant enterococci (VRE) and is an ESKAPE and WHO priority pathogen. cgMLST supports tracking of hospital outbreaks and resistant lineages.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Ajay Kumar Chaurasiya",
+      "license": "CC0",
+      "source": "https://commons.wikimedia.org/wiki/File:Enterococcus_faecium_in_Gram_Staining_of_culture.jpg"
+    }
   },
   {
     "species": "Escherichia_coli",
@@ -319,7 +409,12 @@
       "genus": "Escherichia"
     },
     "summary": "Escherichia coli is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Enterobacteriaceae. It is a common commensal of the mammalian gut, but specific pathotypes cause diarrhoeal disease, urinary-tract infections and bloodstream infections. It is a primary target for outbreak surveillance and antimicrobial-resistance monitoring.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "NIAID",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:E._coli_Bacteria_(7316101966).jpg"
+    }
   },
   {
     "species": "Francisella_tularensis",
@@ -336,7 +431,12 @@
       "genus": "Francisella"
     },
     "summary": "Francisella tularensis is a Gram-negative, facultatively intracellular coccobacillus of the family Francisellaceae. It causes tularaemia, a zoonosis acquired from lagomorphs, rodents, arthropod vectors and contaminated water or aerosols. It is highly infectious at very low doses and is classed as a high-consequence biothreat agent.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Francisella_tularensis_01.jpg"
+    }
   },
   {
     "species": "Klebsiella_oxytoca/grimontii/michiganensis/pasteurii",
@@ -353,7 +453,12 @@
       "genus": "Klebsiella"
     },
     "summary": "The Klebsiella oxytoca complex (K. oxytoca sensu lato) comprises several closely related, Gram-negative, encapsulated rods of the family Enterobacteriaceae, including K. oxytoca, K. michiganensis and K. grimontii. These opportunistic pathogens cause nosocomial infections and antibiotic-associated haemorrhagic colitis. cgMLST is required to resolve the constituent species, which routine tests cannot separate.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Riraq25",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Klebsiella_oxytoca.jpg"
+    }
   },
   {
     "species": "Klebsiella_pneumoniae/variicola/quasipneumoniae",
@@ -370,7 +475,12 @@
       "genus": "Klebsiella"
     },
     "summary": "The Klebsiella pneumoniae complex (K. pneumoniae sensu lato) groups closely related, Gram-negative, encapsulated rods of the family Enterobacteriaceae — chiefly K. pneumoniae, K. variicola and K. quasipneumoniae. A leading cause of healthcare-associated pneumonia, bloodstream and urinary-tract infections, it is a focus of multidrug-resistance (ESBL, carbapenemase) and hypervirulence surveillance. cgMLST distinguishes the complex members and high-risk clones.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Klebsiella-pneumoniae.jpg"
+    }
   },
   {
     "species": "Legionella_pneumophila",
@@ -387,7 +497,12 @@
       "genus": "Legionella"
     },
     "summary": "Legionella pneumophila is a Gram-negative, aerobic, facultatively intracellular bacillus of the family Legionellaceae. It inhabits freshwater and engineered water systems and causes Legionnaires' disease, a severe pneumonia, when contaminated aerosols are inhaled. Outbreak investigation often relies on high-resolution typing to link cases to water sources.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Haney Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:11108_lores.jpg"
+    }
   },
   {
     "species": "Listeria_monocytogenes",
@@ -404,7 +519,12 @@
       "genus": "Listeria"
     },
     "summary": "Listeria monocytogenes is a Gram-positive, rod-shaped, facultatively anaerobic, facultatively intracellular bacterium of the family Listeriaceae. It causes listeriosis, a foodborne disease especially dangerous in pregnancy, neonates and the immunocompromised. Its ability to grow at refrigeration temperatures makes it a key food-safety surveillance target.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Ajay Kumar Chaurasiya",
+      "license": "CC BY-SA 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Gram_staining_footage_of_Listeria_monocytogenes_in_Gram_staining_of_culture_microscopy.jpg"
+    }
   },
   {
     "species": "Mycobacterium_tuberculosis/bovis/africanum/canettii",
@@ -421,7 +541,12 @@
       "genus": "Mycobacterium"
     },
     "summary": "The Mycobacterium tuberculosis complex is a group of closely related, acid-fast, slow-growing, aerobic bacilli of the family Mycobacteriaceae — including M. tuberculosis, M. bovis, M. africanum and M. canettii — that cause tuberculosis in humans and animals. Its members are genetically near-identical, so high-resolution typing such as cgMLST is used to resolve lineages and trace transmission.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Ajay Kumar Chaurasiya",
+      "license": "CC0",
+      "source": "https://commons.wikimedia.org/wiki/File:Classic_serpentine_cording_of_Mycobacterium_tuberculosis_complex_(MTBC).jpg"
+    }
   },
   {
     "species": "Mycobacteroides_abscessus",
@@ -454,7 +579,12 @@
       "genus": "Mycoplasmoides"
     },
     "summary": "Mycoplasma gallisepticum is a small, wall-less bacterium of the family Mycoplasmoidaceae that lacks a true cell wall. It causes chronic respiratory disease in chickens and infectious sinusitis in turkeys, with significant impact on the poultry industry. It spreads both horizontally and vertically through flocks.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "M.H.B. Catroxo, A.M.C.R.P.F. Martins",
+      "license": "CC BY 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Mycoplasma_gallisepticum.jpg"
+    }
   },
   {
     "species": "Paenibacillus_larvae",
@@ -471,7 +601,12 @@
       "genus": "Paenibacillus"
     },
     "summary": "Paenibacillus larvae is a Gram-positive, rod-shaped, spore-forming bacterium of the family Paenibacillaceae. It is the causative agent of American foulbrood, a lethal and highly contagious disease of honeybee larvae. Its resilient spores underpin its veterinary and agricultural importance.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Tanarus",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Paenibacillus_larvae.jpg"
+    }
   },
   {
     "species": "Pseudomonas_aeruginosa",
@@ -488,7 +623,12 @@
       "genus": "Pseudomonas"
     },
     "summary": "Pseudomonas aeruginosa is a Gram-negative, rod-shaped, aerobic bacterium of the family Pseudomonadaceae. A versatile opportunistic pathogen, it causes nosocomial pneumonia, bloodstream, wound and urinary-tract infections, and chronic lung infection in cystic fibrosis. It is an ESKAPE and WHO priority pathogen, notable for multidrug resistance and biofilm formation.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Y_tambe",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Pseudomonas_aeruginosa_Gram.jpg"
+    }
   },
   {
     "species": "Salmonella_enterica",
@@ -505,7 +645,12 @@
       "genus": "Salmonella"
     },
     "summary": "Salmonella enterica is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Enterobacteriaceae. Its many serovars cause foodborne gastroenteritis as well as typhoid and paratyphoid fever. It is among the most important and most heavily surveilled foodborne pathogens worldwide.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "NIAID",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:SalmonellaNIAID.jpg"
+    }
   },
   {
     "species": "Serratia_marcescens",
@@ -522,7 +667,12 @@
       "genus": "Serratia"
     },
     "summary": "Serratia marcescens is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Yersiniaceae, often producing a red pigment (prodigiosin). It is an opportunistic pathogen causing healthcare-associated urinary-tract, respiratory and bloodstream infections. It is a recurrent cause of outbreaks in neonatal intensive care units.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Brudersohn (German Wikipedia)",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Serratia_marcescens.jpg"
+    }
   },
   {
     "species": "Staphylococcus_argenteus",
@@ -556,7 +706,12 @@
       "genus": "Staphylococcus"
     },
     "summary": "Staphylococcus aureus is a Gram-positive coccus occurring in clusters, facultatively anaerobic, of the family Staphylococcaceae. It is a leading cause of skin and soft-tissue, bloodstream, bone and device-associated infections, ranging from commensal carriage to invasive disease. Methicillin-resistant S. aureus (MRSA) is a major ESKAPE and WHO priority surveillance target.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Matthew J. Arduino, Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Staphylococcus_aureus_01.jpg"
+    }
   },
   {
     "species": "Staphylococcus_capitis",
@@ -573,7 +728,12 @@
       "genus": "Staphylococcus"
     },
     "summary": "Staphylococcus capitis is a Gram-positive, clustered coccus, facultatively anaerobic, of the family Staphylococcaceae. A coagulase-negative skin commensal, it causes device-associated and bloodstream infections, including neonatal sepsis. The multidrug-resistant NRCS-A clone is of particular concern in neonatal units.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Paulo Henrique Orlandi Mourao",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:CSF_S_capitis_2013-11-08.JPG"
+    }
   },
   {
     "species": "Streptococcus_pyogenes",
@@ -590,7 +750,12 @@
       "genus": "Streptococcus"
     },
     "summary": "Streptococcus pyogenes is a Gram-positive coccus occurring in chains, facultatively anaerobic, of the family Streptococcaceae (Lancefield group A). It causes pharyngitis, scarlet fever, impetigo and severe invasive disease, as well as post-infectious sequelae such as rheumatic fever. It is a globally important pathogen under active surveillance.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "NIAID",
+      "license": "CC BY 2.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Streptococcus_Pyogenes_(Group_A_Strep)_(52606801786).jpg"
+    }
   },
   {
     "species": "Yersinia_enterocolitica",
@@ -607,7 +772,12 @@
       "genus": "Yersinia"
     },
     "summary": "Yersinia enterocolitica is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Yersiniaceae. It causes yersiniosis, a foodborne gastroenteritis often linked to pork, and can grow at refrigeration temperatures. It is a notable food-safety pathogen.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Yersinia_enterocolitica_(BAP).jpg"
+    }
   },
   {
     "species": "Citrobacter_freundii",
@@ -624,7 +794,12 @@
       "genus": "Citrobacter"
     },
     "summary": "Citrobacter freundii is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Enterobacteriaceae. An environmental and gut organism, it is an opportunistic cause of urinary-tract, bloodstream and healthcare-associated infections. It is notable for AmpC-mediated and other antimicrobial resistance.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Riraq25",
+      "license": "CC BY 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Citrobacter_freundii_Gram_stain_slide.jpg"
+    }
   },
   {
     "species": "Citrobacter_freundii/portucalensis/braakii/europaeus",
@@ -632,7 +807,7 @@
     "query_name": "Citrobacter",
     "ncbi_taxid": 544,
     "scientific_name": "Citrobacter",
-    "rank": "genus",
+    "rank": "complex",
     "lineage": {
       "phylum": "Pseudomonadota",
       "class": "Gammaproteobacteria",
@@ -640,7 +815,12 @@
       "family": "Enterobacteriaceae"
     },
     "summary": "The Citrobacter complex (Citrobacter sensu lato) comprises several closely related, Gram-negative, rod-shaped species of the family Enterobacteriaceae, including C. freundii, C. koseri and their relatives. These opportunistic pathogens cause urinary-tract, bloodstream and neonatal infections and carry clinically important resistance determinants. cgMLST is used to resolve the closely related species.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Vitaliyua2001",
+      "license": "CC BY-SA 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Citrobacter_petridish.jpg"
+    }
   },
   {
     "species": "Enterobacter_hormaechei",
@@ -674,7 +854,12 @@
       "genus": "Morganella"
     },
     "summary": "Morganella morganii is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Morganellaceae. A gut and environmental organism, it causes opportunistic urinary-tract, wound and bloodstream infections, mainly in healthcare settings. It is notable for intrinsic resistance to several antibiotics.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Maryrose94",
+      "license": "CC BY 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Morganella_morganii_st._MM_1.tif"
+    }
   },
   {
     "species": "Proteus_mirabilis",
@@ -691,7 +876,12 @@
       "genus": "Proteus"
     },
     "summary": "Proteus mirabilis is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Morganellaceae, known for its swarming motility. It is a common cause of complicated and catheter-associated urinary-tract infections, where its urease promotes struvite stone formation. It is frequently implicated in healthcare-associated infection.",
-    "summary_source": "synthesized"
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:ProteusMirabilis_Schw%C3%A4rmen.jpg"
+    }
   },
   {
     "species": "Providencia_stuartii",
@@ -709,5 +899,743 @@
     },
     "summary": "Providencia stuartii is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Morganellaceae. It is an opportunistic pathogen causing catheter-associated urinary-tract infections and bloodstream infections, especially in long-term-care patients. It is notable for intrinsic multidrug resistance.",
     "summary_source": "synthesized"
+  },
+  {
+    "species": "Achromobacter_xylosoxidans",
+    "abb": "Axylosoxidans",
+    "query_name": "Achromobacter xylosoxidans",
+    "ncbi_taxid": 85698,
+    "scientific_name": "Achromobacter xylosoxidans",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Betaproteobacteria",
+      "order": "Burkholderiales",
+      "family": "Alcaligenaceae",
+      "genus": "Achromobacter"
+    },
+    "summary": "Achromobacter xylosoxidans is a Gram-negative, aerobic, motile rod of the family Alcaligenaceae found in water and soil. It is an opportunistic pathogen, notably colonising the airways of people with cystic fibrosis and causing healthcare-associated infections. Its broad intrinsic and acquired antimicrobial resistance makes infections difficult to treat.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Rodney M. Donlan, Janice Haney Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Achromobacter_xylosoxidans.tif"
+    }
+  },
+  {
+    "species": "Aliarcobacter_butzleri",
+    "abb": "Abutzleri",
+    "query_name": "Aliarcobacter butzleri",
+    "ncbi_taxid": 28197,
+    "scientific_name": "Aliarcobacter butzleri",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Campylobacterota",
+      "class": "Epsilonproteobacteria",
+      "order": "Campylobacterales",
+      "family": "Arcobacteraceae",
+      "genus": "Aliarcobacter"
+    },
+    "summary": "Aliarcobacter butzleri is a Gram-negative, microaerophilic, curved rod of the family Arcobacteraceae, formerly placed in the genus Arcobacter. It is an emerging enteric pathogen associated with diarrhoeal illness in humans and animals. It is frequently found in poultry, other foods of animal origin and water, making it relevant to food-safety surveillance.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Avibacterium_paragallinarum",
+    "abb": "Aparagallinarum",
+    "query_name": "Avibacterium paragallinarum",
+    "ncbi_taxid": 728,
+    "scientific_name": "Avibacterium paragallinarum",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Pasteurellales",
+      "family": "Pasteurellaceae",
+      "genus": "Avibacterium"
+    },
+    "summary": "Avibacterium paragallinarum is a Gram-negative, non-motile coccobacillus of the family Pasteurellaceae. It causes infectious coryza, an acute respiratory disease of chickens. Outbreaks reduce egg production and growth, and typing supports vaccine selection and outbreak tracing in poultry production.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Bacillus_cereus",
+    "abb": "Bcereus",
+    "query_name": "Bacillus cereus",
+    "ncbi_taxid": 1396,
+    "scientific_name": "Bacillus cereus",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Bacilli",
+      "order": "Caryophanales",
+      "family": "Bacillaceae",
+      "genus": "Bacillus"
+    },
+    "summary": "Bacillus cereus is a Gram-positive, rod-shaped, spore-forming, facultatively anaerobic bacterium of the family Bacillaceae and the namesake of the B. cereus group. It causes emetic and diarrhoeal food poisoning through preformed and enterotoxins, and occasionally invasive infections. Its heat-resistant spores make it a persistent concern in food production.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / William A. Clark",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:BacillusCereus.jpg"
+    }
+  },
+  {
+    "species": "Burkholderia_cepacia",
+    "abb": "Bcepacia",
+    "query_name": "Burkholderia cepacia",
+    "ncbi_taxid": 292,
+    "scientific_name": "Burkholderia cepacia",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Betaproteobacteria",
+      "order": "Burkholderiales",
+      "family": "Burkholderiaceae",
+      "genus": "Burkholderia"
+    },
+    "summary": "Burkholderia cepacia is a Gram-negative, aerobic rod of the family Burkholderiaceae and the namesake of the B. cepacia complex. It is an opportunistic pathogen of people with cystic fibrosis or chronic granulomatous disease and a cause of healthcare-associated outbreaks, often linked to contaminated products. It is intrinsically resistant to many antibiotics and disinfectants.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Burkholderia_cepacia.jpg"
+    }
+  },
+  {
+    "species": "Chlamydia_abortus",
+    "abb": "Cabortus",
+    "query_name": "Chlamydia abortus",
+    "ncbi_taxid": 83555,
+    "scientific_name": "Chlamydia abortus",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Chlamydiota",
+      "class": "Chlamydiia",
+      "order": "Chlamydiales",
+      "family": "Chlamydiaceae",
+      "genus": "Chlamydia"
+    },
+    "summary": "Chlamydia abortus is a Gram-negative, obligate intracellular bacterium of the family Chlamydiaceae. It causes enzootic abortion in sheep and goats, a major cause of reproductive losses in small ruminants. It is zoonotic and can cause severe illness and miscarriage in pregnant women exposed to infected animals.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Chlamydia_trachomatis",
+    "abb": "Ctrachomatis",
+    "query_name": "Chlamydia trachomatis",
+    "ncbi_taxid": 813,
+    "scientific_name": "Chlamydia trachomatis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Chlamydiota",
+      "class": "Chlamydiia",
+      "order": "Chlamydiales",
+      "family": "Chlamydiaceae",
+      "genus": "Chlamydia"
+    },
+    "summary": "Chlamydia trachomatis is a Gram-negative, obligate intracellular bacterium of the family Chlamydiaceae. It is the most common bacterial cause of sexually transmitted infections and, in endemic regions, causes trachoma, the leading infectious cause of blindness. Genotyping supports the surveillance of transmission networks and lymphogranuloma venereum strains.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / E. Arum, N. Jacobs",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Chlamydia_trachomatis.tif"
+    }
+  },
+  {
+    "species": "Clostridium_chauvoei",
+    "abb": "Cchauvoei",
+    "query_name": "Clostridium chauvoei",
+    "ncbi_taxid": 46867,
+    "scientific_name": "Clostridium chauvoei",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Clostridia",
+      "order": "Eubacteriales",
+      "family": "Clostridiaceae",
+      "genus": "Clostridium"
+    },
+    "summary": "Clostridium chauvoei is a Gram-positive, rod-shaped, spore-forming, anaerobic bacterium of the family Clostridiaceae. It causes blackleg, an acute and usually fatal myonecrosis of cattle and sheep. Its long-lived spores persist in soil, and outbreaks are controlled by vaccination.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Clostridium_neonatale",
+    "abb": "Cneonatale",
+    "query_name": "Clostridium neonatale",
+    "ncbi_taxid": 137838,
+    "scientific_name": "Clostridium neonatale",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Clostridia",
+      "order": "Eubacteriales",
+      "family": "Clostridiaceae",
+      "genus": "Clostridium"
+    },
+    "summary": "Clostridium neonatale is a Gram-positive, rod-shaped, spore-forming, anaerobic bacterium of the family Clostridiaceae. It colonises the gut of newborns and has been associated with necrotising enterocolitis in neonatal intensive care units. Typing helps investigate clusters among hospitalised infants.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Corynebacterium_ulcerans",
+    "abb": "Culcerans",
+    "query_name": "Corynebacterium ulcerans",
+    "ncbi_taxid": 65058,
+    "scientific_name": "Corynebacterium ulcerans",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Actinomycetota",
+      "class": "Actinomycetes",
+      "order": "Mycobacteriales",
+      "family": "Corynebacteriaceae",
+      "genus": "Corynebacterium"
+    },
+    "summary": "Corynebacterium ulcerans is a Gram-positive, rod-shaped, facultatively anaerobic bacterium of the family Corynebacteriaceae. Toxigenic strains carry the diphtheria toxin gene and cause diphtheria-like illness in humans. It is zoonotic, often acquired from companion or farm animals, and is notifiable in many countries.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Corynebacterium_ulcerans_01.jpg"
+    }
+  },
+  {
+    "species": "Dichelobacter_nodosus",
+    "abb": "Dnodosus",
+    "query_name": "Dichelobacter nodosus",
+    "ncbi_taxid": 870,
+    "scientific_name": "Dichelobacter nodosus",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Cardiobacteriales",
+      "family": "Cardiobacteriaceae",
+      "genus": "Dichelobacter"
+    },
+    "summary": "Dichelobacter nodosus is a Gram-negative, anaerobic rod of the family Cardiobacteriaceae. It is the primary cause of footrot, a contagious hoof disease of sheep and goats. Footrot causes major welfare and economic losses, and strain typing supports control and eradication programmes.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Enterobacter_bugandensis",
+    "abb": "Ebugandensis",
+    "query_name": "Enterobacter bugandensis",
+    "ncbi_taxid": 881260,
+    "scientific_name": "Enterobacter bugandensis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Enterobacterales",
+      "family": "Enterobacteriaceae",
+      "genus": "Enterobacter"
+    },
+    "summary": "Enterobacter bugandensis is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Enterobacteriaceae and a member of the E. cloacae complex. It was first described from neonatal sepsis cases and has since been found in hospital and environmental settings. Multidrug-resistant strains make it relevant to infection control.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Enterobacter_cloacae",
+    "abb": "Ecloacae",
+    "query_name": "Enterobacter cloacae",
+    "ncbi_taxid": 550,
+    "scientific_name": "Enterobacter cloacae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Enterobacterales",
+      "family": "Enterobacteriaceae",
+      "genus": "Enterobacter"
+    },
+    "summary": "Enterobacter cloacae is a Gram-negative, rod-shaped, facultatively anaerobic bacterium of the family Enterobacteriaceae and the namesake of the E. cloacae complex. It is a common cause of healthcare-associated infections of the urinary tract, bloodstream and lower respiratory tract. It readily acquires resistance, including carbapenemases, and belongs to the ESKAPE pathogens.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Enterobacter_cloacae_01.png"
+    }
+  },
+  {
+    "species": "Haemophilus_influenzae",
+    "abb": "Hinfluenzae",
+    "query_name": "Haemophilus influenzae",
+    "ncbi_taxid": 727,
+    "scientific_name": "Haemophilus influenzae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Pasteurellales",
+      "family": "Pasteurellaceae",
+      "genus": "Haemophilus"
+    },
+    "summary": "Haemophilus influenzae is a Gram-negative, facultatively anaerobic coccobacillus of the family Pasteurellaceae. Encapsulated type b strains cause meningitis and epiglottitis in unvaccinated children, while non-typeable strains cause otitis media, sinusitis and pneumonia. Surveillance tracks vaccine impact and the spread of resistant lineages.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / William B. Cherry",
+      "license": "CC0",
+      "source": "https://commons.wikimedia.org/wiki/File:23029_lores.jpg"
+    }
+  },
+  {
+    "species": "Haemophilus_parainfluenzae",
+    "abb": "Hparainfluenzae",
+    "query_name": "Haemophilus parainfluenzae",
+    "ncbi_taxid": 729,
+    "scientific_name": "Parahaemophilus parainfluenzae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Pasteurellales",
+      "family": "Pasteurellaceae",
+      "genus": "Parahaemophilus"
+    },
+    "summary": "Haemophilus parainfluenzae is a Gram-negative, facultatively anaerobic coccobacillus of the family Pasteurellaceae, reclassified by NCBI as Parahaemophilus parainfluenzae. It is a commensal of the human upper respiratory tract that occasionally causes endocarditis and other opportunistic infections. It is also a reservoir of antimicrobial resistance genes shared with H. influenzae.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Legionella_longbeachae",
+    "abb": "Llongbeachae",
+    "query_name": "Legionella longbeachae",
+    "ncbi_taxid": 450,
+    "scientific_name": "Legionella longbeachae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Legionellales",
+      "family": "Legionellaceae",
+      "genus": "Legionella"
+    },
+    "summary": "Legionella longbeachae is a Gram-negative, aerobic rod of the family Legionellaceae. It causes Legionnaires' disease and Pontiac fever, mainly through exposure to potting soil and compost rather than water systems. It is a leading cause of legionellosis in Australia and New Zealand.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Mycobacterium_avium",
+    "abb": "Mavium",
+    "query_name": "Mycobacterium avium",
+    "ncbi_taxid": 1764,
+    "scientific_name": "Mycobacterium avium",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Actinomycetota",
+      "class": "Actinomycetes",
+      "order": "Mycobacteriales",
+      "family": "Mycobacteriaceae",
+      "genus": "Mycobacterium"
+    },
+    "summary": "Mycobacterium avium is an acid-fast, slow-growing, rod-shaped bacterium of the family Mycobacteriaceae and a member of the M. avium complex. It causes chronic pulmonary disease in people with lung conditions and disseminated infection in immunocompromised patients; subspecies paratuberculosis causes Johne's disease in ruminants. It is acquired from the environment, especially water and soil.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Mycobacterium_avium-intracellulare_01.png"
+    }
+  },
+  {
+    "species": "Mycobacterium_chimaera",
+    "abb": "Mchimaera",
+    "query_name": "Mycobacterium chimaera",
+    "ncbi_taxid": 222805,
+    "scientific_name": "Mycobacterium intracellulare subsp. chimaera",
+    "rank": "subspecies",
+    "lineage": {
+      "phylum": "Actinomycetota",
+      "class": "Actinomycetes",
+      "order": "Mycobacteriales",
+      "family": "Mycobacteriaceae",
+      "genus": "Mycobacterium"
+    },
+    "summary": "Mycobacterium chimaera is an acid-fast, slow-growing, rod-shaped bacterium of the family Mycobacteriaceae, classified by NCBI as a subspecies of M. intracellulare. It became known through a global outbreak of invasive infections after open-heart surgery, traced to contaminated heater-cooler units. Whole-genome typing was central to linking these cases.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Mycobacterium_avium-intracellulare_01.png"
+    }
+  },
+  {
+    "species": "Mycobacterium_intracellulare",
+    "abb": "Mintracellulare",
+    "query_name": "Mycobacterium intracellulare",
+    "ncbi_taxid": 1767,
+    "scientific_name": "Mycobacterium intracellulare",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Actinomycetota",
+      "class": "Actinomycetes",
+      "order": "Mycobacteriales",
+      "family": "Mycobacteriaceae",
+      "genus": "Mycobacterium"
+    },
+    "summary": "Mycobacterium intracellulare is an acid-fast, slow-growing, rod-shaped bacterium of the family Mycobacteriaceae and a member of the M. avium complex. It is a common cause of non-tuberculous mycobacterial lung disease, particularly in older adults with underlying lung disease. It is acquired from environmental sources such as water and soil.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Mycobacterium_avium-intracellulare_01.png"
+    }
+  },
+  {
+    "species": "Neisseria_gonorrhoeae",
+    "abb": "Ngonorrhoeae",
+    "query_name": "Neisseria gonorrhoeae",
+    "ncbi_taxid": 485,
+    "scientific_name": "Neisseria gonorrhoeae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Betaproteobacteria",
+      "order": "Neisseriales",
+      "family": "Neisseriaceae",
+      "genus": "Neisseria"
+    },
+    "summary": "Neisseria gonorrhoeae is a Gram-negative, aerobic diplococcus of the family Neisseriaceae. It causes gonorrhoea, one of the most common sexually transmitted infections, with complications including pelvic inflammatory disease and infertility. Its rapidly emerging resistance to successive antibiotic classes makes it a WHO priority pathogen.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "NIAID",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Neisseriagonorrhoeae.jpg"
+    }
+  },
+  {
+    "species": "Neisseria_lactamica",
+    "abb": "Nlactamica",
+    "query_name": "Neisseria lactamica",
+    "ncbi_taxid": 486,
+    "scientific_name": "Neisseria lactamica",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Betaproteobacteria",
+      "order": "Neisseriales",
+      "family": "Neisseriaceae",
+      "genus": "Neisseria"
+    },
+    "summary": "Neisseria lactamica is a Gram-negative, aerobic diplococcus of the family Neisseriaceae. It is a harmless commensal of the human nasopharynx, most common in young children. Its carriage is thought to contribute to natural immunity against N. meningitidis, which makes it of interest for meningococcal research.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC, Division of STD Prevention",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Neisseria_lactamica_culture.jpg"
+    }
+  },
+  {
+    "species": "Neisseria_meningitidis",
+    "abb": "Nmeningitidis",
+    "query_name": "Neisseria meningitidis",
+    "ncbi_taxid": 487,
+    "scientific_name": "Neisseria meningitidis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Betaproteobacteria",
+      "order": "Neisseriales",
+      "family": "Neisseriaceae",
+      "genus": "Neisseria"
+    },
+    "summary": "Neisseria meningitidis is a Gram-negative, aerobic diplococcus of the family Neisseriaceae. It causes invasive meningococcal disease, including meningitis and septicaemia, which can be rapidly fatal. Genomic surveillance through PubMLST underpins outbreak detection and vaccine strategy.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Dan Higgins",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:22881_lores.jpg"
+    }
+  },
+  {
+    "species": "Pasteurella_multocida",
+    "abb": "Pmultocida",
+    "query_name": "Pasteurella multocida",
+    "ncbi_taxid": 747,
+    "scientific_name": "Pasteurella multocida",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Pasteurellales",
+      "family": "Pasteurellaceae",
+      "genus": "Pasteurella"
+    },
+    "summary": "Pasteurella multocida is a Gram-negative, facultatively anaerobic coccobacillus of the family Pasteurellaceae. It causes fowl cholera, haemorrhagic septicaemia in cattle and atrophic rhinitis in pigs, and wound infections in humans after animal bites. Typing supports veterinary outbreak investigation and vaccine selection.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / R. Weaver",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:PHIL_3621.tif"
+    }
+  },
+  {
+    "species": "Staphylococcus_epidermidis",
+    "abb": "Sepidermidis",
+    "query_name": "Staphylococcus epidermidis",
+    "ncbi_taxid": 1282,
+    "scientific_name": "Staphylococcus epidermidis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Bacilli",
+      "order": "Caryophanales",
+      "family": "Staphylococcaceae",
+      "genus": "Staphylococcus"
+    },
+    "summary": "Staphylococcus epidermidis is a Gram-positive, facultatively anaerobic coccus of the family Staphylococcaceae. It is a skin commensal and the leading cause of infections associated with catheters, prosthetic joints and other implanted devices, aided by biofilm formation. Hospital-adapted lineages are frequently multidrug-resistant.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Segrid McAllister, Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Staphylococcus_epidermidis_01.png"
+    }
+  },
+  {
+    "species": "Streptococcus_agalactiae",
+    "abb": "Sagalactiae",
+    "query_name": "Streptococcus agalactiae",
+    "ncbi_taxid": 1311,
+    "scientific_name": "Streptococcus agalactiae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Bacilli",
+      "order": "Lactobacillales",
+      "family": "Streptococcaceae",
+      "genus": "Streptococcus"
+    },
+    "summary": "Streptococcus agalactiae (group B Streptococcus) is a Gram-positive, facultatively anaerobic coccus of the family Streptococcaceae. It is a leading cause of neonatal sepsis and meningitis, also causes invasive disease in older adults, and causes mastitis in cattle. Surveillance supports maternal screening and vaccine development.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Blueiridium",
+      "license": "CC0",
+      "source": "https://commons.wikimedia.org/wiki/File:CAMP_test.JPG"
+    }
+  },
+  {
+    "species": "Streptococcus_pneumoniae",
+    "abb": "Spneumoniae",
+    "query_name": "Streptococcus pneumoniae",
+    "ncbi_taxid": 1313,
+    "scientific_name": "Streptococcus pneumoniae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Bacilli",
+      "order": "Lactobacillales",
+      "family": "Streptococcaceae",
+      "genus": "Streptococcus"
+    },
+    "summary": "Streptococcus pneumoniae is a Gram-positive, facultatively anaerobic diplococcus of the family Streptococcaceae. It is a major cause of pneumonia, meningitis, bacteraemia and otitis media worldwide, particularly in young children and older adults. Genomic surveillance tracks serotype replacement after vaccination and the spread of resistant clones.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Richard Facklam, Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Streptococcus_pneumoniae.jpg"
+    }
+  },
+  {
+    "species": "Streptococcus_uberis",
+    "abb": "Suberis",
+    "query_name": "Streptococcus uberis",
+    "ncbi_taxid": 1349,
+    "scientific_name": "Streptococcus uberis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Bacillota",
+      "class": "Bacilli",
+      "order": "Lactobacillales",
+      "family": "Streptococcaceae",
+      "genus": "Streptococcus"
+    },
+    "summary": "Streptococcus uberis is a Gram-positive, facultatively anaerobic coccus of the family Streptococcaceae. It is one of the most common causes of bovine mastitis worldwide, with largely environmental transmission. Typing helps distinguish persistent herd strains from sporadic environmental infections.",
+    "summary_source": "synthesized"
+  },
+  {
+    "species": "Vibrio_cholerae",
+    "abb": "Vcholerae",
+    "query_name": "Vibrio cholerae",
+    "ncbi_taxid": 666,
+    "scientific_name": "Vibrio cholerae",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Vibrionales",
+      "family": "Vibrionaceae",
+      "genus": "Vibrio"
+    },
+    "summary": "Vibrio cholerae is a Gram-negative, facultatively anaerobic, curved rod of the family Vibrionaceae. Toxigenic O1 and O139 strains cause cholera, an acute watery diarrhoea that can kill within hours without rehydration. Genomic surveillance traces the spread of pandemic lineages and resistance.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Tom Kirn, Ron Taylor, Louisa Howard, Dartmouth Electron Microscope Facility",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Vibrio_cholerae.jpg"
+    }
+  },
+  {
+    "species": "Vibrio_parahaemolyticus",
+    "abb": "Vparahaemolyticus",
+    "query_name": "Vibrio parahaemolyticus",
+    "ncbi_taxid": 670,
+    "scientific_name": "Vibrio parahaemolyticus",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Vibrionales",
+      "family": "Vibrionaceae",
+      "genus": "Vibrio"
+    },
+    "summary": "Vibrio parahaemolyticus is a Gram-negative, facultatively anaerobic, curved rod of the family Vibrionaceae living in warm coastal and estuarine waters. It is a leading cause of seafood-associated gastroenteritis, especially from raw or undercooked shellfish. Typing tracks pandemic clones and outbreaks linked to aquaculture.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Janice Carr",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Vibrio_parahaemolyticus_01.jpg"
+    }
+  },
+  {
+    "species": "Xanthomonas_citri",
+    "abb": "Xcitri",
+    "query_name": "Xanthomonas citri",
+    "ncbi_taxid": 346,
+    "scientific_name": "Xanthomonas citri",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Lysobacterales",
+      "family": "Lysobacteraceae",
+      "genus": "Xanthomonas"
+    },
+    "summary": "Xanthomonas citri is a Gram-negative, aerobic rod of the family Lysobacteraceae. Its pathovar citri causes citrus canker, a quarantine disease that damages fruit and leaves and leads to costly eradication campaigns. Typing supports the tracing of outbreaks and plant movements.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "USDA",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Citrus_canker_on_foliage.jpg"
+    }
+  },
+  {
+    "species": "Yersinia_pestis",
+    "abb": "Ypestis",
+    "query_name": "Yersinia pestis",
+    "ncbi_taxid": 632,
+    "scientific_name": "Yersinia pestis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Enterobacterales",
+      "family": "Yersiniaceae",
+      "genus": "Yersinia"
+    },
+    "summary": "Yersinia pestis is a Gram-negative, facultatively anaerobic coccobacillus of the family Yersiniaceae. It causes plague in its bubonic, septicaemic and pneumonic forms and persists in rodent reservoirs transmitted by fleas. It is a high-consequence biothreat agent, and genotyping supports outbreak and forensic investigations.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "US Government",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Yersinia_pestis.jpg"
+    }
+  },
+  {
+    "species": "Yersinia_pseudotuberculosis",
+    "abb": "Ypseudotuberculosis",
+    "query_name": "Yersinia pseudotuberculosis",
+    "ncbi_taxid": 633,
+    "scientific_name": "Yersinia pseudotuberculosis",
+    "rank": "species",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Enterobacterales",
+      "family": "Yersiniaceae",
+      "genus": "Yersinia"
+    },
+    "summary": "Yersinia pseudotuberculosis is a Gram-negative, facultatively anaerobic coccobacillus of the family Yersiniaceae. It causes enteric yersiniosis with abdominal pain that can mimic appendicitis, mostly through contaminated food or water. It is the ancestor of Y. pestis and is monitored in foodborne outbreak surveillance.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Yersinia_pseudotuberculosis_bacteria,.jpg"
+    }
+  },
+  {
+    "species": "Borrelia_spp",
+    "abb": "Borrelia",
+    "query_name": "Borrelia",
+    "ncbi_taxid": 138,
+    "scientific_name": "Borrelia",
+    "rank": "genus",
+    "lineage": {
+      "phylum": "Spirochaetota",
+      "class": "Spirochaetia",
+      "order": "Spirochaetales",
+      "family": "Borreliaceae"
+    },
+    "summary": "Borrelia is a genus of helical, motile spirochaetes of the family Borreliaceae transmitted by ticks and lice. It includes the agents of Lyme borreliosis (the B. burgdorferi sensu lato complex) and of relapsing fever. Typing distinguishes genospecies and tracks their geographic distribution.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Borrelia_burgdorferi_(CDC-PHIL_-6631)_lores.jpg"
+    }
+  },
+  {
+    "species": "Elizabethkingia_spp",
+    "abb": "Elizabethkingia",
+    "query_name": "Elizabethkingia",
+    "ncbi_taxid": 308865,
+    "scientific_name": "Elizabethkingia",
+    "rank": "genus",
+    "lineage": {
+      "phylum": "Bacteroidota",
+      "class": "Flavobacteriia",
+      "order": "Flavobacteriales",
+      "family": "Weeksellaceae"
+    },
+    "summary": "Elizabethkingia is a genus of Gram-negative, aerobic, non-motile rods of the family Weeksellaceae found in soil and water. Species such as E. anophelis and E. meningoseptica cause neonatal meningitis and healthcare-associated bloodstream infections. They are intrinsically resistant to many antibiotics, and typing supports outbreak investigation.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Dr.saptarshi",
+      "license": "CC BY-SA 3.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Elizabethkingia_meningoseptica_Blood_agar_plate.JPG"
+    }
+  },
+  {
+    "species": "Leptospira_spp",
+    "abb": "Leptospira",
+    "query_name": "Leptospira",
+    "ncbi_taxid": 171,
+    "scientific_name": "Leptospira",
+    "rank": "genus",
+    "lineage": {
+      "phylum": "Spirochaetota",
+      "class": "Leptospiria",
+      "order": "Leptospirales",
+      "family": "Leptospiraceae"
+    },
+    "summary": "Leptospira is a genus of thin, helical, motile spirochaetes of the family Leptospiraceae. Pathogenic species cause leptospirosis, a zoonosis acquired through contact with water or soil contaminated by the urine of infected animals. Severe forms include Weil's disease and pulmonary haemorrhage, and typing supports epidemiological tracing of reservoirs.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "CDC / Rob Weyant",
+      "license": "Public domain",
+      "source": "https://commons.wikimedia.org/wiki/File:Leptospira_scanning_micrograph.jpg"
+    }
+  },
+  {
+    "species": "Shewanella_spp",
+    "abb": "Shewanella",
+    "query_name": "Shewanella",
+    "ncbi_taxid": 22,
+    "scientific_name": "Shewanella",
+    "rank": "genus",
+    "lineage": {
+      "phylum": "Pseudomonadota",
+      "class": "Gammaproteobacteria",
+      "order": "Alteromonadales",
+      "family": "Shewanellaceae"
+    },
+    "summary": "Shewanella is a genus of Gram-negative, facultatively anaerobic, motile rods of the family Shewanellaceae common in marine and freshwater environments. Species such as S. algae and S. putrefaciens occasionally cause skin, soft-tissue and ear infections, usually after seawater exposure. The genus is also a natural reservoir of resistance genes, including carbapenemase precursors.",
+    "summary_source": "synthesized",
+    "image_credit": {
+      "author": "Gross L, PLoS Biology 4(8): e282 (2006)",
+      "license": "CC BY 2.5",
+      "source": "https://commons.wikimedia.org/wiki/File:Shewanella_oneidensis.png"
+    }
   }
 ]

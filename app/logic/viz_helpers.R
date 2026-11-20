@@ -11,7 +11,6 @@ box::use(
   stats[setNames],
   shinyWidgets[
     colorPickr,
-    radioGroupButtons,
     updateRadioGroupButtons,
     updatePrettyRadioButtons,
     updatePickerInput,
@@ -900,25 +899,23 @@ distance_issue_lines <- function(d, na_handling = "ignore_na") {
   ))
 }
 
-#' The Full / Zoomed Display Toggle
+#' Zoomable Viewport for a Fixed-Canvas Plot
 #'
-#' How a fixed-canvas image is presented in its stage: scaled to fit, or at its
-#' rendered size with the stage scrolling. Purely presentation — toggling it
-#' restyles the image and never redraws it.
+#' Wraps a plot output so app/js/viz-plot-zoom.js can zoom it with the mouse
+#' wheel and pan it by dragging. The plot sits in its own scroll box, so the
+#' stage's overlays (the Generate prompt, the loading spinner) and the zoom
+#' badge stay over the visible area instead of scrolling away with the image.
+#' Purely presentation: zooming resizes the finished image and never redraws it.
 #'
-#' @param ns Function. Module namespace function (`session$ns`).
-#' @return A `<div>` for the bottom of the control panel.
+#' @param plot A `plotOutput()` tag.
+#' @return A tag list of the scroll box and the zoom badge, for inside the
+#'   plot stage div.
 #' @export
-zoom_view_buttons <- function(ns) {
-  shiny$div(
-    class = "reset-buttons",
-    radioGroupButtons(
-      ns("zoom_view"),
-      NULL,
-      choiceNames = c("Full", "Zoomed"),
-      choiceValues = c(FALSE, TRUE),
-      width = "100%"
-    )
+zoom_viewport <- function(plot) {
+  shiny$tagList(
+    shiny$div(class = "viz-plot-scroll", plot),
+    # Hidden until the first image loads; the script writes its text.
+    shiny$div(class = "viz-zoom-badge", hidden = NA)
   )
 }
 

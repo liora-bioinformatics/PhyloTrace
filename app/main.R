@@ -65,6 +65,7 @@ box::use(
       take_start_tab,
       theme_restore_script
     ],
+  app / view / about,
   app / view / landing_page,
   app / view / database,
   app / view / db_wizard,
@@ -125,7 +126,7 @@ ui <- function(id) {
       # Baseline Bootstrap 5 theme; the navbar button toggles its light/dark mode.
       theme = bs_theme(version = 5, preset = "shiny"),
       navbar_options = navbar_options(underline = TRUE),
-      nav_panel(
+      fillable_panel(
         title = "Load Database",
         value = "landing_page_panel",
         landing_page$ui(ns("landing_page"))
@@ -140,21 +141,31 @@ ui <- function(id) {
       # output$typing_indicator. Always present in the navbar so it is
       # recognisable from any tab, not just Add Isolates.
       nav_item(uiOutput(ns("typing_indicator"), inline = TRUE)),
-      nav_item(paste0("v", APP_VERSION)),
+      # One cluster rather than an item each, so the collapsed menu shows them
+      # as a single row under the tabs instead of a column of loose icons.
       nav_item(
-        actionButton(
-          inputId = ns("toggle_dark"),
-          label = NULL,
-          icon = icon("moon"),
-          title = "Toggle Light/Dark Mode"
-        )
-      ),
-      nav_item(
-        actionButton(
-          inputId = ns("quit"),
-          label = NULL,
-          icon = icon("power-off"),
-          title = "Turn Off"
+        div(
+          class = "navbar-utilities",
+          tags$span(
+            class = "navbar-version",
+            title = "PhyloTrace version",
+            paste0("v", APP_VERSION)
+          ),
+          about$ui(ns("about")),
+          actionButton(
+            inputId = ns("toggle_dark"),
+            label = NULL,
+            icon = icon("moon"),
+            title = "Toggle Light/Dark Mode",
+            `aria-label` = "Toggle light/dark mode"
+          ),
+          actionButton(
+            inputId = ns("quit"),
+            label = NULL,
+            icon = icon("power-off"),
+            title = "Turn Off",
+            `aria-label` = "Turn off PhyloTrace"
+          )
         )
       )
     )
@@ -191,6 +202,8 @@ server <- function(id) {
     if (!is.null(start_tab)) {
       nav_select(id = "tabs", selected = start_tab)
     }
+
+    about$server("about")
 
     # Light/dark mode toggle
     observeEvent(input$toggle_dark, {
@@ -686,7 +699,7 @@ server <- function(id) {
           nav_insert(
             id = "tabs",
             nav = nav_item(
-              style = "margin-left: auto;",
+              class = "navbar-db-item",
               if (length(db_path) && !is.na(db_path)) {
                 div(
                   id = "loaded-db-path",

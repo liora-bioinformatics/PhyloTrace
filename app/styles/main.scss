@@ -899,16 +899,32 @@ $viz-tile-row-gap: 0.85rem;
     margin: 0 0.3rem;
 }
 
-// Tree display modes (see visualization_tree.R). The ggtree image is rendered
-// at panel-width × aspect-ratio by renderPlot(); this only restyles how that
-// already-rendered image is presented in the stage — it never re-renders.
-//   default   → "fit": scale the whole plot down to fit the visible stage,
-//               keeping its aspect ratio, centered.
-//   .is-zoom  → present the image at its full rendered size and let the stage
-//               scroll any overflow.
-// The plotOutput div carries an inline height (height="auto"), so the height
-// overrides below need !important to win over it.
-.tree-stage .shiny-plot-output {
+// Zoomable viewport of the fixed-canvas plot stages: the Tree, the Epi curve
+// and the AMR heatmap (zoom_viewport() in app/logic/viz_helpers.R). Each image
+// is rendered once on a fixed physical canvas at PLOT_RES; everything here only
+// changes how that image is presented, and never re-renders it.
+//
+// The plot lives in its own scroll box, laid over the whole stage, rather than
+// scrolling the stage itself: the stage's overlays (`.viz-plot-prompt`, the
+// `.is-loading .viz-loading` spinner, the zoom badge) are positioned against
+// the stage, and inside a scrolled stage they would scroll away with the image.
+//   default     → "fit": the whole plot scaled down to fit, keeping its aspect
+//                 ratio, centered.
+//   .is-zoomed  → set by app/js/viz-plot-zoom.js once the reader zooms past
+//                 fit. The script sizes the image inline, the box scrolls the
+//                 overflow, and a mouse drag pans it.
+// The plotOutput div carries an inline width and height (height="auto"), so
+// the size overrides below need !important to win over them.
+.viz-plot-scroll {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.viz-plot-scroll .shiny-plot-output {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -916,106 +932,70 @@ $viz-tile-row-gap: 0.85rem;
     height: 100% !important;
 }
 
-.tree-stage .shiny-plot-output img {
+.viz-plot-scroll .shiny-plot-output img {
     width: auto !important;
     height: auto !important;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
+    // WebKit starts a native image drag before the pointer handlers can refuse it.
+    -webkit-user-drag: none;
 }
 
-.tree-stage.is-zoom {
+// Anchored at the start rather than centred: when the image overflows, flex
+// centering pushes it out on both sides and scrolling never reaches the left
+// and top edges.
+.viz-plot-scroll.is-zoomed {
     overflow: auto;
-    // Anchor to the top-left so the whole image stays reachable while scrolling
-    // (flex centering would push overflow out of reach on both sides).
     align-items: flex-start;
     justify-content: flex-start;
 }
 
-.tree-stage.is-zoom .shiny-plot-output {
-    width: max-content;
-    height: max-content !important;
-    // Still fill the stage when the plot is smaller than it.
-    min-width: 100%;
-    min-height: 100%;
-    // The stage's own flex-start is not enough: this box is a flex *item*, so
-    // `width: max-content` is only its base size and it is shrunk back to the
-    // stage's width. The image it centres then overflows on both sides, and
-    // scrolling reaches only the overflow past the end — a fifth of the plot's
-    // left edge, its margin and the start of the tree, could not be reached at
-    // all. Not shrinkable, and anchored at the start like the stage around it.
+// The output box shrink-wraps the image instead of filling the box. Its auto
+// margins centre it on any axis the image is smaller than the viewport on (a
+// tall tree narrower than the panel), and fall back to zero on an axis it
+// overflows, where flex-start keeps the start reachable. A box that filled the
+// viewport would pin a narrower image top-left with the unused width empty on
+// its right. Not shrinkable, or flex squeezes it back to the viewport's width.
+.viz-plot-scroll.is-zoomed .shiny-plot-output {
     flex: 0 0 auto;
-    align-items: flex-start;
-    justify-content: flex-start;
-}
-
-.tree-stage.is-zoom .shiny-plot-output img {
-    max-width: none;
-    max-height: none;
-}
-
-// Epi and AMR plot stages (see visualization_epi.R / visualization_amr.R).
-// Both are ggplot images, so they are presented the way the Tree's is: rendered
-// at panel-width × aspect-ratio, then scaled down to fit the visible stage
-// without distorting the ratio. Keeps .viz-plot-stage for the shared
-// `.viz-plot-prompt` overlay and the `.viz-plot-stage.is-loading .viz-loading`
-// toggle. The plotOutput div carries an inline height (height="auto"), so the
-// override needs !important to win over it — same reason as .tree-stage.
-.epi-stage .shiny-plot-output,
-.amr-stage .shiny-plot-output {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100% !important;
-}
-
-.epi-stage .shiny-plot-output img,
-.amr-stage .shiny-plot-output img {
     width: auto !important;
     height: auto !important;
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
+    margin: auto;
 }
 
-// The Epi curve and the AMR heatmap get the Tree's second display mode as well:
-// both are drawn on a fixed physical canvas, a screen of hundreds of isolates
-// is several times taller than the stage, and scaled to fit it is a smear.
-// `.is-zoom` presents the image at its rendered size and lets the stage scroll
-// — same rules as `.tree-stage.is-zoom`, kept separate because the stages are
-// not otherwise interchangeable.
-.epi-stage.is-zoom,
-.amr-stage.is-zoom {
-    overflow: auto;
-    // Anchor top-left so the whole image stays reachable while scrolling
-    // (flex centering would push overflow out of reach on both sides).
-    align-items: flex-start;
-    justify-content: flex-start;
-}
-
-.epi-stage.is-zoom .shiny-plot-output,
-.amr-stage.is-zoom .shiny-plot-output {
-    width: max-content;
-    height: max-content !important;
-    // Still fill the stage when the plot is smaller than it.
-    min-width: 100%;
-    min-height: 100%;
-    // The stage's own flex-start is not enough: this box is a flex *item*, so
-    // `width: max-content` is only its base size and it is shrunk back to the
-    // stage's width. The image it centres then overflows on both sides, and
-    // scrolling reaches only the overflow past the end — a fifth of the plot's
-    // left edge, its margin and the start of the tree, could not be reached at
-    // all. Not shrinkable, and anchored at the start like the stage around it.
-    flex: 0 0 auto;
-    align-items: flex-start;
-    justify-content: flex-start;
-}
-
-.epi-stage.is-zoom .shiny-plot-output img,
-.amr-stage.is-zoom .shiny-plot-output img {
+.viz-plot-scroll.is-zoomed .shiny-plot-output img {
     max-width: none;
     max-height: none;
+}
+
+// `.can-pan` is set only while the image overflows, so the grab cursor never
+// promises a drag that has nowhere to go.
+.viz-plot-scroll.can-pan {
+    cursor: grab;
+}
+
+.viz-plot-scroll.is-panning {
+    cursor: grabbing;
+    user-select: none;
+}
+
+// Zoom level and how to change it, in the stage's bottom-right corner. Below
+// the Generate prompt (z-index 2) and the loading spinner, so it never shows
+// through either; clear of the scrollbars the viewport grows when zoomed.
+.viz-zoom-badge {
+    position: absolute;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 1;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 999px;
+    background: rgba(var(--bs-body-bg-rgb), 0.9);
+    color: var(--bs-secondary-color);
+    font-size: 0.75rem;
+    pointer-events: none;
+    user-select: none;
 }
 
 // Guidance under a control: secondary to the control it explains.
@@ -3353,17 +3333,6 @@ table.dataTable thead>tr>th.sorting {
     gap: 1rem;
 }
 
-#app-landing_page-load_database {
-    width: 100%;
-    font-size: 1.2em;
-    margin-top: 2rem;
-    height: 4rem;
-}
-
-#app-landing_page-selected_database td:nth-child(2) {
-    font-style: italic;
-}
-
 #app-interface {
     width: 100%;
     height: 100%;
@@ -3372,78 +3341,16 @@ table.dataTable thead>tr>th.sorting {
     gap: var(--bslib-spacer, 1rem);
 }
 
-.landing-page-ui {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 2rem;
-    height: 100%;
-}
-
-#app-landing_page-phylotrace_large {
-    width: fit-content !important;
-    height: 30% !important;
-    position: absolute;
-    right: 0;
-}
-
-#loading-instructions #instructions {
-    font-family: monospace;
-    border-bottom: 1px solid black;
-    padding-bottom: 2rem;
-    margin-bottom: 2rem;
-}
-
 #scheme-load,
 #db-load {
     font-size: 2em;
     font-family: monospace;
 }
 
-#app-landing_page-phylotrace_large img {
-    height: 100%;
-}
-
-#loading-instructions {
-    justify-items: center;
-}
-
-#loading-inputs {
-    display: flex;
-    gap: 1rem;
-    justify-content: center;
-}
-
-#loading-inputs .btn {
-    width: 200px;
-    min-width: fit-content;
-}
-
 .path {
     font-style: italic;
     font-family: monospace;
 
-}
-
-#app-landing_page-database_selection>div {
-    margin-top: 5rem;
-}
-
-#app-landing_page-database_selection p {
-    font-weight: bold;
-}
-
-.db-selection-invalid {
-    max-width: 32rem;
-    margin: 0 auto;
-    padding: 0.75rem 1rem;
-    border: 1px solid #e0b4b4;
-    border-radius: 8px;
-    background: #fff6f6;
-    color: #9f3a38;
-    font-size: 0.9rem;
-    line-height: 1.4;
 }
 
 #close {
@@ -4190,19 +4097,6 @@ table.dataTable thead>tr>th.sorting {
     margin: 0.5rem 0 0;
 }
 
-// Storage-location guidance under the new-database location picker. Muted
-// rather than an alert: it is advice at a decision point, not a fault report.
-.storage-location-hint {
-    margin-top: 0.5rem;
-    font-size: 0.85rem;
-    line-height: 1.4;
-    color: var(--bs-secondary-color);
-
-    i {
-        margin-right: 0.15rem;
-    }
-}
-
 label {
     font-size: 0.8em;
     font-style: italic;
@@ -4291,6 +4185,7 @@ label {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    line-height: 1;
     width: 1.7rem;
     height: 1.7rem;
     border-radius: 50%;
@@ -4311,18 +4206,111 @@ label {
     }
 }
 
+// Species step: a 2x2 grid that fills the step's height. The choice and the
+// setup overview size to their content; the species card and its schemes take
+// the rest and scroll inside their own cells, so the page itself never does.
+.setup-wizard .card-body > .tab-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.setup-wizard .tab-content > .tab-pane.active {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.setup-species {
+    height: 100%;
+    margin-bottom: 0;
+    // Below this the lower cards would get too short to read; the card body
+    // scrolls instead.
+    min-height: 30rem;
+
+    > .card {
+        margin-bottom: 0;
+    }
+}
+
+// The species card keeps the shaded look of the species details.
+.setup-species_card.card {
+    background: var(--bs-tertiary-bg);
+}
+
+// Stacked on narrow screens: every card at its own height, the step scrolls.
+@media (max-width: 991.98px) {
+    .setup-species {
+        height: auto;
+        min-height: 0;
+        grid-template-rows: none !important;
+    }
+}
+
+// A scheme list inside a task: bounded, scrolling on its own, so the provider
+// picker below and the next task stay visible on common screen sizes.
+.setup-schemes.is-scroll {
+    max-height: min(22vh, 12.5rem);
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+
+// The setup at a glance: numbered steps, a check once a step is settled.
+.setup-plan {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.setup-plan_item {
+    display: flex;
+    gap: 0.7rem;
+    align-items: flex-start;
+}
+
+.setup-plan_number {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    margin-top: 0.05rem;
+    border-radius: 50%;
+    border: 2px solid var(--bs-border-color);
+    background: var(--bs-body-bg);
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+
+    .is-done & {
+        border-color: var(--bs-success);
+        background: var(--bs-success);
+        color: #fff;
+    }
+}
+
+.setup-plan_title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    line-height: 1.3;
+}
+
+.setup-plan_detail {
+    font-size: 0.82rem;
+    line-height: 1.3;
+    color: var(--bs-secondary-color);
+}
+
+// Two-column steps (bslib::layout_columns): columns keep their own height.
 .setup-columns {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1.5rem;
     align-items: start;
 }
 
 @media (max-width: 1100px) {
-    .setup-columns {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
     .setup-step_label {
         display: none;
     }
@@ -4332,20 +4320,11 @@ label {
     }
 }
 
-.setup-form,
-.setup-report {
+.setup-form {
     display: flex;
     flex-direction: column;
     gap: 1rem;
     min-width: 0;
-}
-
-.setup-report {
-    position: sticky;
-    top: 0;
-    padding: 1rem;
-    border-radius: 8px;
-    background: var(--bs-tertiary-bg);
 }
 
 .setup-section {
@@ -4449,6 +4428,10 @@ label {
 
 .setup-toggle {
     margin-bottom: 1rem;
+
+    .setup-help + .shiny-html-output:not(:empty) {
+        margin-top: 0.5rem;
+    }
 }
 
 .setup-actions {
@@ -4681,17 +4664,22 @@ label {
     }
 }
 
-// Numbered tasks of a setup step (setup_ui$setup_task). The state of each -
-// current, done, locked - is applied by rules rendered per step
-// (setup_ui$task_states), which these defaults are written against.
-.setup-task {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    padding: 0.85rem 1rem;
-    border: 1px solid var(--bs-border-color);
-    border-radius: 10px;
-    background: var(--bs-body-bg);
+// Cards of the setup screens (setup_ui setup_card() and setup_task()): the
+// 42px header of the Database overview cards, the title centred and a hint
+// question mark (overview_ui hint_icon()) at the right end; the content
+// stacked in the body.
+.setup-card.card {
+    margin-bottom: 0;
+
+    > .card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        min-width: 0;
+        height: 42px;
+        padding-top: 0;
+        padding-bottom: 0;
+    }
 
     .form-group,
     .shiny-input-container {
@@ -4699,11 +4687,27 @@ label {
     }
 }
 
-.setup-task_head {
+.setup-card_body {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 0.6rem;
     min-width: 0;
+}
+
+// Keeps the first element of a card clear of the header, whatever it is (a
+// button, an input or a note) and wherever the card shows up.
+.setup-card .card-body.setup-card_body {
+    padding-top: 0.75rem;
+}
+
+// A numbered task: number, title and status in the header. Its state
+// (current, done, locked) is set by setup_ui$task_states().
+
+.setup-task_lock.card-body {
+    display: none;
+    padding-bottom: 0;
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
 }
 
 .setup-task_number {
@@ -4719,8 +4723,27 @@ label {
     font-weight: 600;
 }
 
+// The digit and the check are centred in the circle on their own box, not on
+// the text baseline, so the icon sits in the middle like the digit does.
+.setup-task_digit,
+.setup-task_check {
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.setup-task_digit {
+    display: inline-flex;
+}
+
 .setup-task_check {
     display: none;
+
+    > i,
+    > svg {
+        display: block;
+        line-height: 1;
+    }
 }
 
 .setup-task_title {
@@ -4733,6 +4756,11 @@ label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+// The status already takes the free space, so the hint follows it directly.
+.setup-task_head .overview-hint {
+    margin-left: 0;
 }
 
 .setup-task_status-text {
@@ -4752,17 +4780,7 @@ label {
     }
 }
 
-.setup-task_lock {
-    display: none;
-    font-size: 0.82rem;
-    color: var(--bs-secondary-color);
-}
-
 .setup-task_body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    min-width: 0;
     transition: opacity 0.15s ease;
 }
 
@@ -4789,9 +4807,6 @@ label {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    padding: 0.75rem;
-    border-radius: 8px;
-    background: var(--bs-tertiary-bg);
 }
 
 .setup-coverage_item {
@@ -4800,7 +4815,7 @@ label {
     align-items: flex-start;
     padding: 0.6rem 0.8rem;
     border-radius: 8px;
-    background: var(--bs-body-bg);
+    background: var(--bs-tertiary-bg);
 
     >i {
         margin-top: 0.2rem;
@@ -4927,6 +4942,18 @@ label {
     max-height: 300px;
     object-fit: cover;
     border-radius: 8px;
+}
+
+.species-card_credit {
+    margin-top: 0.3rem;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    color: var(--bs-secondary-color);
+    text-align: right;
+
+    a {
+        color: inherit;
+    }
 }
 
 // Classical MLST scheme line in the typing sidebar.
@@ -5254,8 +5281,7 @@ html.fb-open {
 .tab-pane[data-value="cgmlst_overview"],
 .tab-pane[data-value="mlst_overview"],
 .tab-pane[data-value="amr_overview"],
-.tab-pane[data-value="isolate_overview"],
-.tab-pane[data-value="db_wizard_panel"] {
+.tab-pane[data-value="isolate_overview"] {
     .bslib-card .card-header {
         height: 49px;
     }
@@ -7068,4 +7094,720 @@ table.dataTable.overview-table thead>tr>th,
 // the window like every other picker.
 .selectize-dropdown-content {
     max-height: min(18rem, 45vh);
+}
+// Brand -----------------------------------------------------------------------
+// Colours of the PhyloTrace hex logo: its green ring and its slate fill.
+:root {
+    --pt-brand-green: #3c8c56;
+    --pt-brand-ink: #282f39;
+}
+
+[data-bs-theme="dark"] {
+    --pt-brand-green: #62b47c;
+}
+
+// The Liora Bioinformatics logo ships in a black and a white variant (see
+// brand_logo() in app/view/about.R); show the one that reads on the theme.
+.brand-logo {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.brand-logo--dark {
+    display: none;
+}
+
+[data-bs-theme="dark"] {
+    .brand-logo--light {
+        display: none;
+    }
+
+    .brand-logo--dark {
+        display: block;
+    }
+}
+
+// Navbar utilities ------------------------------------------------------------
+// Version, About, theme and power share one nav item (see main.R): an inline
+// cluster on the expanded navbar, a row of its own in the collapsed menu.
+.navbar-utilities {
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.navbar-version {
+    margin-right: 0.5rem;
+    padding: 0.1rem 0.55rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 999px;
+    font-family: var(--bs-font-monospace);
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+    white-space: nowrap;
+}
+
+.navbar .navbar-toggle,
+.navbar .navbar-toggler {
+    padding: 0.35rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 1.1rem;
+
+    &:hover {
+        background-color: var(--bs-tertiary-bg);
+    }
+
+    &:focus {
+        box-shadow: none;
+    }
+
+    &:focus-visible {
+        box-shadow: 0 0 0 0.2rem rgba(var(--bs-emphasis-color-rgb), 0.15);
+    }
+}
+
+// Pushes the loaded database's name (inserted on load, see main.R) to the right
+// of the tabs - only while the tabs are a row.
+@media (min-width: 992px) {
+    .navbar-db-item {
+        margin-left: auto;
+    }
+}
+
+// Collapsed menu (below Bootstrap's lg breakpoint, where bslib collapses the
+// navbar): tabs as full-width rows with the active one marked by a side bar
+// instead of the underline, and the utility cluster as a separated row below.
+@media (max-width: 991.98px) {
+    .navbar .navbar-collapse {
+        .navbar-nav {
+            gap: 2px;
+            margin-top: 0.5rem;
+            padding-block: 0.5rem;
+            border-top: 1px solid var(--bs-border-color-translucent);
+        }
+
+        .nav-underline .nav-link {
+            margin-bottom: 0;
+            padding-block: 0.55rem;
+            // bslib pins underline links to 5px side padding with !important.
+            padding-inline: 0.75rem !important;
+            border-bottom: 0;
+            border-radius: 6px;
+
+            &:hover {
+                background-color: var(--bs-tertiary-bg);
+            }
+
+            &.active {
+                background-color: var(--bs-tertiary-bg);
+                box-shadow: inset 3px 0 0 var(--pt-brand-green);
+            }
+        }
+
+        .navbar-utilities {
+            margin-top: 0.5rem;
+            padding: 0.5rem 0.25rem 0 0.75rem;
+            border-top: 1px solid var(--bs-border-color-translucent);
+        }
+
+        .navbar-version {
+            margin-right: auto;
+        }
+
+        #loaded-db-path {
+            max-width: 100%;
+            padding: 0.55rem 0.75rem 0;
+        }
+    }
+}
+
+// Start screen (app/view/landing_page.R) ---------------------------------------
+// Introduction left, database card right, over a faint minimum spanning tree
+// silhouette; the maker footer underneath.
+// One column below the lg breakpoint; the large hex logo goes on narrow
+// screens, where the navbar brand already shows it.
+.landing {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    padding: 0 clamp(1rem, 4vw, 3rem);
+    // A fill item of the tab pane (see main.R), so it scrolls itself when the
+    // window is too short for its content.
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+// Decorative: the silhouette is a mask, so its colour follows the theme.
+.landing_backdrop {
+    position: absolute;
+    z-index: -1;
+    right: -4vw;
+    bottom: 3rem;
+    width: min(64vw, 70rem);
+    aspect-ratio: 1279 / 966;
+    background-color: var(--pt-brand-ink);
+    opacity: 0.07;
+    pointer-events: none;
+    -webkit-mask: url("../images/mst_silhouette.png") center / contain no-repeat;
+    mask: url("../images/mst_silhouette.png") center / contain no-repeat;
+}
+
+[data-bs-theme="dark"] .landing_backdrop {
+    background-color: #b9cde4;
+    opacity: 0.06;
+}
+
+.landing_main,
+.landing_footer {
+    width: 100%;
+    max-width: 74rem;
+    margin-inline: auto;
+}
+
+.landing_main {
+    flex: 1 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    align-items: center;
+    gap: clamp(2rem, 5vw, 5rem);
+    padding-block: clamp(1.5rem, 6vh, 4rem);
+}
+
+.landing_hero {
+    display: flex;
+    align-items: flex-start;
+    gap: clamp(1rem, 2.5vw, 2rem);
+    min-width: 0;
+}
+
+.landing_logo {
+    flex: none;
+    width: clamp(5rem, 9vw, 8.5rem);
+    height: auto;
+    filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.18));
+}
+
+.landing_intro {
+    min-width: 0;
+}
+
+.landing_title {
+    margin: 0;
+    font-size: clamp(2.25rem, 4.2vw, 3.5rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    color: var(--bs-emphasis-color);
+}
+
+.landing_tagline {
+    max-width: 30ch;
+    margin: 0.75rem 0 0;
+    font-size: clamp(1.05rem, 1.6vw, 1.35rem);
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--bs-emphasis-color);
+}
+
+.landing_lead {
+    max-width: 44ch;
+    margin: 0.75rem 0 0;
+    color: var(--bs-secondary-color);
+}
+
+.landing_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+
+    .btn {
+        min-width: 11rem;
+        padding-block: 0.6rem;
+    }
+}
+
+// Database card. Its body is re-rendered on every selection change; the fixed
+// minimum height and the fade-in keep that swap from jolting the layout.
+.landing-db {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    min-width: 0;
+    padding: clamp(1.25rem, 2.5vw, 1.75rem);
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 14px;
+    background-color: var(--bs-body-bg);
+    box-shadow:
+        0 1px 2px rgba(16, 24, 40, 0.04),
+        0 12px 32px -8px rgba(16, 24, 40, 0.14);
+}
+
+[data-bs-theme="dark"] .landing-db {
+    background-color: var(--bs-tertiary-bg);
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.5);
+}
+
+.landing-db_body {
+    // Shiny's own recalculation fade is replaced by the delayed overlay below.
+    --shiny-fade-opacity: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 13rem;
+
+    >* {
+        animation: landing-fade-in 0.22s ease-out both;
+    }
+}
+
+@keyframes landing-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.landing-db_entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    min-width: 0;
+}
+
+.landing-db_entry--empty {
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    text-align: center;
+}
+
+.landing-db_kicker {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--bs-secondary-color);
+}
+
+.landing-db_title {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    min-width: 0;
+}
+
+.landing-db_thumb {
+    flex: none;
+    width: 3.25rem;
+    height: 3.25rem;
+    border: 1px solid var(--bs-border-color-translucent);
+    border-radius: 12px;
+    object-fit: cover;
+}
+
+.landing-db_thumb--icon {
+    display: grid;
+    place-items: center;
+    background-color: var(--bs-secondary-bg);
+    font-size: 1.3rem;
+    color: var(--bs-secondary-color);
+}
+
+.landing-db_thumb--warning {
+    background-color: var(--bs-warning-bg-subtle);
+    color: var(--bs-warning-text-emphasis);
+}
+
+.landing-db_heading {
+    min-width: 0;
+}
+
+// Up to two lines. Breaks fall after "_" and "-" (see breakable() in
+// landing_page.R); `anywhere` is only the fallback for a name without them.
+.landing-db_name {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--bs-emphasis-color);
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+
+.landing-db_species {
+    font-style: italic;
+    color: var(--bs-secondary-color);
+}
+
+.landing-db_path {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-family: var(--bs-font-monospace);
+    font-size: 0.78rem;
+    color: var(--bs-secondary-color);
+    overflow-wrap: anywhere;
+
+    >:first-child {
+        flex: none;
+    }
+}
+
+.landing-db_facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1.25rem;
+    margin: 0;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--bs-border-color-translucent);
+
+    dt {
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--bs-secondary-color);
+    }
+
+    dd {
+        margin: 0.1rem 0 0;
+        font-weight: 500;
+        color: var(--bs-emphasis-color);
+        overflow-wrap: anywhere;
+    }
+}
+
+.landing-db_alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--bs-danger-border-subtle);
+    border-radius: 10px;
+    background-color: var(--bs-danger-bg-subtle);
+    font-size: 0.9rem;
+    line-height: 1.4;
+    color: var(--bs-danger-text-emphasis);
+
+    >:first-child {
+        flex: none;
+        margin-top: 0.2rem;
+    }
+}
+
+.landing-db_empty-icon {
+    display: grid;
+    place-items: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    margin-bottom: 0.35rem;
+    border-radius: 50%;
+    background-color: var(--bs-secondary-bg);
+    font-size: 1.4rem;
+    color: var(--bs-secondary-color);
+}
+
+.landing-db_empty-title {
+    font-weight: 700;
+    color: var(--bs-emphasis-color);
+}
+
+.landing-db_hint {
+    max-width: 34ch;
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--bs-secondary-color);
+}
+
+.landing-db_load {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding-block: 0.8rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+// Shown by app/js/delayed-busy.js only once a card update runs past a short
+// delay, then kept up for a minimum time, so a fast update never flashes it.
+.landing-db_busy {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    border-radius: inherit;
+    background-color: rgba(var(--bs-body-bg-rgb), 0.7);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+        opacity 0.2s ease,
+        visibility 0s linear 0.2s;
+
+    .spinner-border {
+        width: 2rem;
+        height: 2rem;
+        border-width: 0.2rem;
+        color: var(--pt-brand-green);
+    }
+}
+
+.landing-db.is-busy .landing-db_busy {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.2s ease;
+}
+
+.landing_footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.5rem;
+    padding-block: 1rem;
+    border-top: 1px solid var(--bs-border-color-translucent);
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+.landing_maker {
+    flex: none;
+
+    .brand-logo {
+        width: auto;
+        height: 1.75rem;
+    }
+}
+
+.landing_legal {
+    flex: 1 1 auto;
+}
+
+.about-link {
+    font-weight: 600;
+    color: inherit;
+    text-decoration: none;
+
+    &:hover,
+    &:focus-visible {
+        color: var(--bs-emphasis-color);
+        text-decoration: underline;
+    }
+}
+
+@media (max-width: 991.98px) {
+
+    .landing_main,
+    .landing_footer {
+        max-width: 40rem;
+    }
+
+    .landing_main {
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+    }
+
+    .landing_backdrop {
+        top: 1rem;
+        right: -30vw;
+        bottom: auto;
+        width: 110vw;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .landing_logo {
+        display: none;
+    }
+
+    .landing_actions .btn {
+        flex: 1 1 100%;
+    }
+
+    .landing_footer {
+        justify-content: center;
+        text-align: center;
+    }
+}
+
+// Short windows: keep the database card above the fold.
+@media (max-height: 700px) and (min-width: 992px) {
+    .landing_logo {
+        width: 4.5rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .landing-db_body>* {
+        animation: none;
+    }
+}
+
+// About dialog (app/view/about.R) -----------------------------------------------
+// Shares the help dialog's sheet (.help-modal), but shrink-wraps its shorter
+// content instead of keeping the help page's fixed portrait height.
+.about-modal .modal-content {
+    height: auto;
+    max-height: min(calc(100vh - 2rem), 66rem);
+}
+
+.about {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.about_head {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.about_logo {
+    flex: none;
+    width: 4.5rem;
+    height: auto;
+}
+
+.about_title {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+}
+
+.about_tagline {
+    margin: 0.2rem 0 0;
+    color: var(--bs-secondary-color);
+}
+
+.about_lead {
+    margin: 0;
+}
+
+.about_points {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        padding: 0.75rem 0.9rem;
+        border-left: 3px solid var(--pt-brand-green);
+        border-radius: 4px 10px 10px 4px;
+        background-color: var(--bs-tertiary-bg);
+        font-size: 0.875rem;
+    }
+
+    strong {
+        color: var(--bs-emphasis-color);
+    }
+
+    span {
+        color: var(--bs-secondary-color);
+    }
+}
+
+.about_facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.45rem 1.5rem;
+    margin: 0;
+    font-size: 0.9rem;
+
+    dt {
+        font-weight: 600;
+        color: var(--bs-secondary-color);
+    }
+
+    dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+    }
+}
+
+.about_maker {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--bs-border-color-translucent);
+    font-size: 0.85rem;
+    color: var(--bs-secondary-color);
+
+    a {
+        flex: none;
+    }
+
+    p {
+        margin: 0;
+    }
+}
+
+.about_maker-logo {
+    width: 11rem;
+    height: auto;
+}
+
+.about_disclaimer {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+}
+
+.about_credits {
+    margin-bottom: 1rem;
+    font-size: 0.8rem;
+    color: var(--bs-secondary-color);
+
+    summary {
+        cursor: pointer;
+    }
+
+    ul {
+        max-height: 12rem;
+        overflow-y: auto;
+        margin: 0.5rem 0 0;
+        padding-left: 1.1rem;
+    }
+
+    a {
+        color: inherit;
+    }
+}
+
+@media (max-width: 575.98px) {
+
+    .about_points,
+    .about_facts {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .about_facts dd {
+        margin-bottom: 0.4rem;
+    }
+
+    .about_maker {
+        flex-direction: column;
+        align-items: flex-start;
+    }
 }

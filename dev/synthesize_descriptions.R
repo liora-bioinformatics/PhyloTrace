@@ -1,24 +1,24 @@
 # dev/synthesize_descriptions.R
 #
 # Replaces the existing summaries in species_metadata.json with
-# concise, editorially synthesized descriptions written for this cgMLST
-# scheme browser. Each description follows a fixed 3-sentence template:
+# concise, editorially synthesized descriptions written for the species
+# catalogue of the database setup. Each description follows a fixed 3-sentence template:
 #   1. identity & morphology (Gram reaction, shape, oxygen, family)
 #   2. clinical / biological significance
 #   3. relevance (transmission, AMR, biothreat or typing note)
 #
-# Taxonomy fields (TaxID, lineage) remain NCBI-verified and untouched; they are
-# re-aligned to the current CSV `species`/`abb` columns by row position (the
-# organisms are unchanged, only the scheme labels), so editing names in the CSV
-# does not require re-fetching from NCBI. Schemes whose cgMLST abbreviation ends
-# in "_complex" describe a group of species-level taxa (tagged rank = "complex").
+# Taxonomy fields (TaxID, lineage) remain NCBI-verified and untouched; records
+# are matched to their description by the `species` field. Entries whose
+# abbreviation ends in "_complex", or species groups, describe several
+# species-level taxa (tagged rank = "complex").
 #
 # Run from the project root:  Rscript dev/synthesize_descriptions.R
 
-library(jsonlite)
+box::use(
+  jsonlite[fromJSON, toJSON],
+)
 
 json_path <- "app/logic/data/species_metadata.json"
-csv_path <- "app/logic/data/cgmlst_schemes.csv"
 
 # Synthesized descriptions, keyed by the CSV `species` field.
 descriptions <- c(
@@ -206,7 +206,7 @@ descriptions <- c(
     "grow at refrigeration temperatures makes it a key food-safety surveillance",
     "target."
   ),
-  "Mycobacterium_tuberculosis/bovis/africanum/canettii_complex" = paste(
+  "Mycobacterium_tuberculosis/bovis/africanum/canettii" = paste(
     "The Mycobacterium tuberculosis complex is a group of closely related,",
     "acid-fast, slow-growing, aerobic bacilli of the family Mycobacteriaceae",
     "— including M. tuberculosis, M. bovis, M. africanum and M. canettii —",
@@ -337,49 +337,274 @@ descriptions <- c(
     "pathogen causing catheter-associated urinary-tract infections and",
     "bloodstream infections, especially in long-term-care patients. It is",
     "notable for intrinsic multidrug resistance."
+  ),
+  "Achromobacter_xylosoxidans" = paste(
+    "Achromobacter xylosoxidans is a Gram-negative, aerobic, motile rod of",
+    "the family Alcaligenaceae found in water and soil. It is an",
+    "opportunistic pathogen, notably colonising the airways of people with",
+    "cystic fibrosis and causing healthcare-associated infections. Its broad",
+    "intrinsic and acquired antimicrobial resistance makes infections",
+    "difficult to treat."
+  ),
+  "Aliarcobacter_butzleri" = paste(
+    "Aliarcobacter butzleri is a Gram-negative, microaerophilic, curved rod",
+    "of the family Arcobacteraceae, formerly placed in the genus Arcobacter.",
+    "It is an emerging enteric pathogen associated with diarrhoeal illness in",
+    "humans and animals. It is frequently found in poultry, other foods of",
+    "animal origin and water, making it relevant to food-safety surveillance."
+  ),
+  "Avibacterium_paragallinarum" = paste(
+    "Avibacterium paragallinarum is a Gram-negative, non-motile coccobacillus",
+    "of the family Pasteurellaceae. It causes infectious coryza, an acute",
+    "respiratory disease of chickens. Outbreaks reduce egg production and",
+    "growth, and typing supports vaccine selection and outbreak tracing in",
+    "poultry production."
+  ),
+  "Bacillus_cereus" = paste(
+    "Bacillus cereus is a Gram-positive, rod-shaped, spore-forming,",
+    "facultatively anaerobic bacterium of the family Bacillaceae and the",
+    "namesake of the B. cereus group. It causes emetic and diarrhoeal food",
+    "poisoning through preformed and enterotoxins, and occasionally invasive",
+    "infections. Its heat-resistant spores make it a persistent concern in",
+    "food production."
+  ),
+  "Burkholderia_cepacia" = paste(
+    "Burkholderia cepacia is a Gram-negative, aerobic rod of the family",
+    "Burkholderiaceae and the namesake of the B. cepacia complex. It is an",
+    "opportunistic pathogen of people with cystic fibrosis or chronic",
+    "granulomatous disease and a cause of healthcare-associated outbreaks,",
+    "often linked to contaminated products. It is intrinsically resistant to",
+    "many antibiotics and disinfectants."
+  ),
+  "Chlamydia_abortus" = paste(
+    "Chlamydia abortus is a Gram-negative, obligate intracellular bacterium",
+    "of the family Chlamydiaceae. It causes enzootic abortion in sheep and",
+    "goats, a major cause of reproductive losses in small ruminants. It is",
+    "zoonotic and can cause severe illness and miscarriage in pregnant women",
+    "exposed to infected animals."
+  ),
+  "Chlamydia_trachomatis" = paste(
+    "Chlamydia trachomatis is a Gram-negative, obligate intracellular",
+    "bacterium of the family Chlamydiaceae. It is the most common bacterial",
+    "cause of sexually transmitted infections and, in endemic regions, causes",
+    "trachoma, the leading infectious cause of blindness. Genotyping supports",
+    "the surveillance of transmission networks and lymphogranuloma venereum",
+    "strains."
+  ),
+  "Clostridium_chauvoei" = paste(
+    "Clostridium chauvoei is a Gram-positive, rod-shaped, spore-forming,",
+    "anaerobic bacterium of the family Clostridiaceae. It causes blackleg, an",
+    "acute and usually fatal myonecrosis of cattle and sheep. Its long-lived",
+    "spores persist in soil, and outbreaks are controlled by vaccination."
+  ),
+  "Clostridium_neonatale" = paste(
+    "Clostridium neonatale is a Gram-positive, rod-shaped, spore-forming,",
+    "anaerobic bacterium of the family Clostridiaceae. It colonises the gut",
+    "of newborns and has been associated with necrotising enterocolitis in",
+    "neonatal intensive care units. Typing helps investigate clusters among",
+    "hospitalised infants."
+  ),
+  "Corynebacterium_ulcerans" = paste(
+    "Corynebacterium ulcerans is a Gram-positive, rod-shaped, facultatively",
+    "anaerobic bacterium of the family Corynebacteriaceae. Toxigenic strains",
+    "carry the diphtheria toxin gene and cause diphtheria-like illness in",
+    "humans. It is zoonotic, often acquired from companion or farm animals,",
+    "and is notifiable in many countries."
+  ),
+  "Dichelobacter_nodosus" = paste(
+    "Dichelobacter nodosus is a Gram-negative, anaerobic rod of the family",
+    "Cardiobacteriaceae. It is the primary cause of footrot, a contagious",
+    "hoof disease of sheep and goats. Footrot causes major welfare and",
+    "economic losses, and strain typing supports control and eradication",
+    "programmes."
+  ),
+  "Enterobacter_bugandensis" = paste(
+    "Enterobacter bugandensis is a Gram-negative, rod-shaped, facultatively",
+    "anaerobic bacterium of the family Enterobacteriaceae and a member of the",
+    "E. cloacae complex. It was first described from neonatal sepsis cases",
+    "and has since been found in hospital and environmental settings.",
+    "Multidrug-resistant strains make it relevant to infection control."
+  ),
+  "Enterobacter_cloacae" = paste(
+    "Enterobacter cloacae is a Gram-negative, rod-shaped, facultatively",
+    "anaerobic bacterium of the family Enterobacteriaceae and the namesake of",
+    "the E. cloacae complex. It is a common cause of healthcare-associated",
+    "infections of the urinary tract, bloodstream and lower respiratory",
+    "tract. It readily acquires resistance, including carbapenemases, and",
+    "belongs to the ESKAPE pathogens."
+  ),
+  "Haemophilus_influenzae" = paste(
+    "Haemophilus influenzae is a Gram-negative, facultatively anaerobic",
+    "coccobacillus of the family Pasteurellaceae. Encapsulated type b strains",
+    "cause meningitis and epiglottitis in unvaccinated children, while",
+    "non-typeable strains cause otitis media, sinusitis and pneumonia.",
+    "Surveillance tracks vaccine impact and the spread of resistant lineages."
+  ),
+  "Haemophilus_parainfluenzae" = paste(
+    "Haemophilus parainfluenzae is a Gram-negative, facultatively anaerobic",
+    "coccobacillus of the family Pasteurellaceae, reclassified by NCBI as",
+    "Parahaemophilus parainfluenzae. It is a commensal of the human upper",
+    "respiratory tract that occasionally causes endocarditis and other",
+    "opportunistic infections. It is also a reservoir of antimicrobial",
+    "resistance genes shared with H. influenzae."
+  ),
+  "Legionella_longbeachae" = paste(
+    "Legionella longbeachae is a Gram-negative, aerobic rod of the family",
+    "Legionellaceae. It causes Legionnaires' disease and Pontiac fever,",
+    "mainly through exposure to potting soil and compost rather than water",
+    "systems. It is a leading cause of legionellosis in Australia and New",
+    "Zealand."
+  ),
+  "Mycobacterium_avium" = paste(
+    "Mycobacterium avium is an acid-fast, slow-growing, rod-shaped bacterium",
+    "of the family Mycobacteriaceae and a member of the M. avium complex. It",
+    "causes chronic pulmonary disease in people with lung conditions and",
+    "disseminated infection in immunocompromised patients; subspecies",
+    "paratuberculosis causes Johne's disease in ruminants. It is acquired",
+    "from the environment, especially water and soil."
+  ),
+  "Mycobacterium_chimaera" = paste(
+    "Mycobacterium chimaera is an acid-fast, slow-growing, rod-shaped",
+    "bacterium of the family Mycobacteriaceae, classified by NCBI as a",
+    "subspecies of M. intracellulare. It became known through a global",
+    "outbreak of invasive infections after open-heart surgery, traced to",
+    "contaminated heater-cooler units. Whole-genome typing was central to",
+    "linking these cases."
+  ),
+  "Mycobacterium_intracellulare" = paste(
+    "Mycobacterium intracellulare is an acid-fast, slow-growing, rod-shaped",
+    "bacterium of the family Mycobacteriaceae and a member of the M. avium",
+    "complex. It is a common cause of non-tuberculous mycobacterial lung",
+    "disease, particularly in older adults with underlying lung disease. It",
+    "is acquired from environmental sources such as water and soil."
+  ),
+  "Neisseria_gonorrhoeae" = paste(
+    "Neisseria gonorrhoeae is a Gram-negative, aerobic diplococcus of the",
+    "family Neisseriaceae. It causes gonorrhoea, one of the most common",
+    "sexually transmitted infections, with complications including pelvic",
+    "inflammatory disease and infertility. Its rapidly emerging resistance to",
+    "successive antibiotic classes makes it a WHO priority pathogen."
+  ),
+  "Neisseria_lactamica" = paste(
+    "Neisseria lactamica is a Gram-negative, aerobic diplococcus of the",
+    "family Neisseriaceae. It is a harmless commensal of the human",
+    "nasopharynx, most common in young children. Its carriage is thought to",
+    "contribute to natural immunity against N. meningitidis, which makes it",
+    "of interest for meningococcal research."
+  ),
+  "Neisseria_meningitidis" = paste(
+    "Neisseria meningitidis is a Gram-negative, aerobic diplococcus of the",
+    "family Neisseriaceae. It causes invasive meningococcal disease,",
+    "including meningitis and septicaemia, which can be rapidly fatal.",
+    "Genomic surveillance through PubMLST underpins outbreak detection and",
+    "vaccine strategy."
+  ),
+  "Pasteurella_multocida" = paste(
+    "Pasteurella multocida is a Gram-negative, facultatively anaerobic",
+    "coccobacillus of the family Pasteurellaceae. It causes fowl cholera,",
+    "haemorrhagic septicaemia in cattle and atrophic rhinitis in pigs, and",
+    "wound infections in humans after animal bites. Typing supports",
+    "veterinary outbreak investigation and vaccine selection."
+  ),
+  "Staphylococcus_epidermidis" = paste(
+    "Staphylococcus epidermidis is a Gram-positive, facultatively anaerobic",
+    "coccus of the family Staphylococcaceae. It is a skin commensal and the",
+    "leading cause of infections associated with catheters, prosthetic joints",
+    "and other implanted devices, aided by biofilm formation.",
+    "Hospital-adapted lineages are frequently multidrug-resistant."
+  ),
+  "Streptococcus_agalactiae" = paste(
+    "Streptococcus agalactiae (group B Streptococcus) is a Gram-positive,",
+    "facultatively anaerobic coccus of the family Streptococcaceae. It is a",
+    "leading cause of neonatal sepsis and meningitis, also causes invasive",
+    "disease in older adults, and causes mastitis in cattle. Surveillance",
+    "supports maternal screening and vaccine development."
+  ),
+  "Streptococcus_pneumoniae" = paste(
+    "Streptococcus pneumoniae is a Gram-positive, facultatively anaerobic",
+    "diplococcus of the family Streptococcaceae. It is a major cause of",
+    "pneumonia, meningitis, bacteraemia and otitis media worldwide,",
+    "particularly in young children and older adults. Genomic surveillance",
+    "tracks serotype replacement after vaccination and the spread of",
+    "resistant clones."
+  ),
+  "Streptococcus_uberis" = paste(
+    "Streptococcus uberis is a Gram-positive, facultatively anaerobic coccus",
+    "of the family Streptococcaceae. It is one of the most common causes of",
+    "bovine mastitis worldwide, with largely environmental transmission.",
+    "Typing helps distinguish persistent herd strains from sporadic",
+    "environmental infections."
+  ),
+  "Vibrio_cholerae" = paste(
+    "Vibrio cholerae is a Gram-negative, facultatively anaerobic, curved rod",
+    "of the family Vibrionaceae. Toxigenic O1 and O139 strains cause cholera,",
+    "an acute watery diarrhoea that can kill within hours without",
+    "rehydration. Genomic surveillance traces the spread of pandemic lineages",
+    "and resistance."
+  ),
+  "Vibrio_parahaemolyticus" = paste(
+    "Vibrio parahaemolyticus is a Gram-negative, facultatively anaerobic,",
+    "curved rod of the family Vibrionaceae living in warm coastal and",
+    "estuarine waters. It is a leading cause of seafood-associated",
+    "gastroenteritis, especially from raw or undercooked shellfish. Typing",
+    "tracks pandemic clones and outbreaks linked to aquaculture."
+  ),
+  "Xanthomonas_citri" = paste(
+    "Xanthomonas citri is a Gram-negative, aerobic rod of the family",
+    "Lysobacteraceae. Its pathovar citri causes citrus canker, a quarantine",
+    "disease that damages fruit and leaves and leads to costly eradication",
+    "campaigns. Typing supports the tracing of outbreaks and plant movements."
+  ),
+  "Yersinia_pestis" = paste(
+    "Yersinia pestis is a Gram-negative, facultatively anaerobic",
+    "coccobacillus of the family Yersiniaceae. It causes plague in its",
+    "bubonic, septicaemic and pneumonic forms and persists in rodent",
+    "reservoirs transmitted by fleas. It is a high-consequence biothreat",
+    "agent, and genotyping supports outbreak and forensic investigations."
+  ),
+  "Yersinia_pseudotuberculosis" = paste(
+    "Yersinia pseudotuberculosis is a Gram-negative, facultatively anaerobic",
+    "coccobacillus of the family Yersiniaceae. It causes enteric yersiniosis",
+    "with abdominal pain that can mimic appendicitis, mostly through",
+    "contaminated food or water. It is the ancestor of Y. pestis and is",
+    "monitored in foodborne outbreak surveillance."
+  ),
+  "Borrelia_spp" = paste(
+    "Borrelia is a genus of helical, motile spirochaetes of the family",
+    "Borreliaceae transmitted by ticks and lice. It includes the agents of",
+    "Lyme borreliosis (the B. burgdorferi sensu lato complex) and of",
+    "relapsing fever. Typing distinguishes genospecies and tracks their",
+    "geographic distribution."
+  ),
+  "Elizabethkingia_spp" = paste(
+    "Elizabethkingia is a genus of Gram-negative, aerobic, non-motile rods of",
+    "the family Weeksellaceae found in soil and water. Species such as E.",
+    "anophelis and E. meningoseptica cause neonatal meningitis and",
+    "healthcare-associated bloodstream infections. They are intrinsically",
+    "resistant to many antibiotics, and typing supports outbreak",
+    "investigation."
+  ),
+  "Leptospira_spp" = paste(
+    "Leptospira is a genus of thin, helical, motile spirochaetes of the",
+    "family Leptospiraceae. Pathogenic species cause leptospirosis, a",
+    "zoonosis acquired through contact with water or soil contaminated by the",
+    "urine of infected animals. Severe forms include Weil's disease and",
+    "pulmonary haemorrhage, and typing supports epidemiological tracing of",
+    "reservoirs."
+  ),
+  "Shewanella_spp" = paste(
+    "Shewanella is a genus of Gram-negative, facultatively anaerobic, motile",
+    "rods of the family Shewanellaceae common in marine and freshwater",
+    "environments. Species such as S. algae and S. putrefaciens occasionally",
+    "cause skin, soft-tissue and ear infections, usually after seawater",
+    "exposure. The genus is also a natural reservoir of resistance genes,",
+    "including carbapenemase precursors."
   )
 )
 
 # --- merge into the metadata file ------------------------------------------
 
 records <- fromJSON(json_path, simplifyVector = FALSE)
-schemes <- read.csv(csv_path, stringsAsFactors = FALSE)
-
-if (length(records) != nrow(schemes)) {
-  stop(
-    "Record count (",
-    length(records),
-    ") != CSV rows (",
-    nrow(schemes),
-    "); cannot re-align by position."
-  )
-}
-
-genus_of <- function(x) sub("[ _].*$", "", trimws(x))
-
-# Re-align the existing (organism-stable) taxonomy to the current CSV labels by
-# row position, then refresh species/abb. A genus sanity-check guards against a
-# reordered CSV.
-records <- Map(
-  function(r, i) {
-    if (!identical(genus_of(r$species), genus_of(schemes$species[i]))) {
-      stop(
-        "Row ",
-        i,
-        " genus mismatch: JSON '",
-        r$species,
-        "' vs CSV '",
-        schemes$species[i],
-        "'. CSV order may have changed."
-      )
-    }
-    r$species <- schemes$species[i]
-    r$abb <- schemes$abb[i]
-    r
-  },
-  records,
-  seq_along(records)
-)
 
 missing <- setdiff(
   vapply(records, function(r) r$species, character(1)),
@@ -392,8 +617,9 @@ if (length(missing) > 0) {
 records <- lapply(records, function(r) {
   r$summary <- unname(descriptions[[r$species]])
   r$summary_source <- "synthesized"
-  # Flag multi-taxon complex schemes (abb ends in _complex) for the UI badge.
-  if (grepl("_complex$", r$abb)) {
+  # Flag multi-taxon complexes (abb ends in _complex, or a species group) for
+  # the UI badge.
+  if (grepl("_complex$", r$abb) || grepl("/", r$species, fixed = TRUE)) {
     r$rank <- "complex"
   }
   r

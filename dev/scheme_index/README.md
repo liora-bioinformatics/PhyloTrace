@@ -19,16 +19,23 @@ test makes sure only providers marked `automated` there can be.
 | --- | --- | --- |
 | cgMLST.org | read | The list page `/ncs/` is open to automated access; `robots.txt` blocks only `/ncs/schema/` and `/ncs/strain/`. |
 | Chewie-NS | read | The API invites programmatic use. |
-| PubMLST | curated by hand | `rest.pubmlst.org/robots.txt` disallows all automated clients; reading it needs written permission from the University of Oxford (requested). |
-| Institut Pasteur | curated by hand | Its policy covers software tools; reading it needs written permission (requested). |
+| PubMLST | read | Written permission from the University of Oxford (2026-11-19). Its `robots.txt` targets crawlers, not scripted API use; requests run one after another without pauses, as they asked. rMLST is never listed. |
+| Institut Pasteur | read | Written confirmation from Institut Pasteur (2026-11-19) for metadata listing, sequential with pauses and a contact address. |
 | EnteroBase | curated by hand | Its terms exclude business use of the service; reading it for a commercial product needs a licence from the University of Warwick (not requested). Two of its databases are hosted by the DSMZ. |
 
-The tool has no reader for PubMLST, Institut Pasteur or EnteroBase. Their schemes
-are entered by hand in `curation.csv` (`source = manual`) and checked like any
-other row.
+From PubMLST and Institut Pasteur only scheme metadata is read: database and
+scheme names, locus counts and page links - never alleles, profiles or isolate
+data. EnteroBase's schemes are entered by hand in `curation.csv`
+(`source = manual`) and checked like any other row. The PubMLST and Pasteur
+rows entered by hand before the permissions stay in the index until a row read
+from the provider for the same species and scheme type has been approved; the
+hand-entered row is then left out automatically.
 
 The tool checks `robots.txt` before every host and stops a source whose path is
 disallowed, so switching a source on cannot override a provider's robots rules.
+The one exception is a source whose entry in `config.json` records a written
+permission (`robots_permission`), currently only PubMLST; a test makes sure no
+other source has one.
 
 ## Monthly pull request
 

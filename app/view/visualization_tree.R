@@ -113,7 +113,7 @@ box::use(
       PLOT_SETTLE_MS,
       status_line,
       text_size_slider,
-      zoom_view_buttons,
+      zoom_viewport,
     ],
   app / logic / viz_layers[layer_cards, layer_defaults, normalize_layers],
 )
@@ -673,7 +673,7 @@ TREE_CONTROLS <- control_families(
     "nj_tippoint_size",
     "nj_heatmap_dend"
   ),
-  radio_groups = c("zoom_view", "nj_heatmap_element_pos"),
+  radio_groups = "nj_heatmap_element_pos",
   colors = c(
     "nj_color",
     "nj_bg",
@@ -716,9 +716,6 @@ branch_length_choices <- function(has_long) {
   }
 }
 
-# `zoom_view` is a string because radioGroupButtons' choiceValues are: the
-# browser reports "FALSE", not FALSE, and updateRadioGroupButtons matches on the
-# value as written.
 TREE_CONTROL_DEFAULTS <- c(
   as.list(FITTED_DEFAULTS),
   list(
@@ -743,8 +740,7 @@ TREE_CONTROL_DEFAULTS <- c(
     nj_bg = "#ffffff",
     nj_tiplab_color = "#000000",
     nj_branch_color = "#000000",
-    nj_tippoint_color = "#3A4657",
-    zoom_view = "FALSE"
+    nj_tippoint_color = "#3A4657"
   )
 )
 
@@ -1235,7 +1231,6 @@ tree_controls <- function(ns, options_ui = NULL) {
         )
       )
     ),
-    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
@@ -2714,18 +2709,7 @@ server <- function(
       )
 
       shiny$div(
-        # `tree-stage` scopes the display-mode CSS to this engine (MST/map share
-        # `viz-plot-stage`). The `is-zoom` modifier is re-applied here on every
-        # (re)mount from the current switch value via isolate() — read without a
-        # reactive dependency so toggling the switch never re-renders the plot;
-        # live toggles are handled by the observer below.
-        class = paste(
-          "viz-plot-stage tree-stage",
-          # radioGroupButtons' choiceValues = c(FALSE, TRUE) round-trip as the
-          # strings "FALSE"/"TRUE" (the widget's HTML `value` attribute), never
-          # as a logical — as.logical() is what makes isTRUE() mean anything here.
-          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
-        ),
+        class = "viz-plot-stage tree-stage",
         id = ns("plot_stage"),
         prompt,
         loading,
@@ -2733,7 +2717,7 @@ server <- function(
         # height renderPlot() derives from the panel width and the aspect-ratio
         # control below. The plotOutput default (height="400px") would instead
         # pin the box at 400px and clip the aspect-sized plot.
-        shiny$plotOutput(ns("tree_plot"), height = "auto")
+        zoom_viewport(shiny$plotOutput(ns("tree_plot"), height = "auto"))
       )
     })
 
@@ -2770,24 +2754,6 @@ server <- function(
         min(PLOT_MAX_PX, as.integer(plot_canvas()$height_in * PLOT_RES))
       },
       res = PLOT_RES
-    )
-
-    # Fit ⇄ Zoom display mode, driven by this engine's own `zoom_view` switch
-    # (right sidebar, tree_controls()). Purely toggles the .is-zoom class on the
-    # mounted stage — the image itself is not re-rendered (see the tree-stage
-    # CSS in app/styles/main.scss). ignoreInit: the initial state is already
-    # stamped on the stage div by renderUI's isolate() read, so the first
-    # (FALSE) value needs no toggle; this only fires on user changes.
-    shiny$observeEvent(
-      input$zoom_view,
-      {
-        shinyjs::toggleClass(
-          id = "plot_stage",
-          class = "is-zoom",
-          condition = isTRUE(as.logical(input$zoom_view))
-        )
-      },
-      ignoreInit = TRUE
     )
 
     # --- Heatmap panels ------------------------------------------------------
@@ -3529,7 +3495,6 @@ server <- function(
     snapshot <- shiny$reactive(c(
       collect_input_snapshot(input, "nj_"),
       list(
-        zoom_view = isTRUE(as.logical(input$zoom_view)),
         .layers = nj_layers(),
         .heatmaps = nj_heatmaps(),
         .clades = nj_clades()

@@ -95,7 +95,7 @@ box::use(
       text_size_slider,
       update_field_select,
       viz_color,
-      zoom_view_buttons,
+      zoom_viewport,
     ],
   app /
     logic /
@@ -202,7 +202,6 @@ EPI_CONTROLS <- control_families(
   sliders = c("epi_aspect_ratio", "epi_text_size", "epi_moving_avg_window"),
   texts = "epi_anno_label",
   dates = c("epi_anno_start", "epi_anno_end"),
-  radio_groups = "zoom_view",
   colors = c(
     "epi_single_color",
     "epi_text_color",
@@ -240,10 +239,7 @@ epi_control_defaults <- function() {
     epi_background_color = BACKGROUND_DEFAULT,
     epi_cumulative_color = CUMULATIVE_COLOR_DEFAULT,
     epi_moving_avg_color = MOVING_AVG_COLOR_DEFAULT,
-    epi_anno_color = ANNO_COLOR_DEFAULT,
-    # A string because radioGroupButtons' choiceValues are: the browser
-    # reports "FALSE", not FALSE.
-    zoom_view = "FALSE"
+    epi_anno_color = ANNO_COLOR_DEFAULT
   )
 }
 
@@ -577,7 +573,6 @@ epi_controls <- function(ns) {
         )
       )
     ),
-    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
@@ -2078,18 +2073,11 @@ server <- function(
       )
 
       shiny$div(
-        # `is-zoom` is re-applied on every (re)mount from the current control
-        # value via isolate(), so toggling it never re-renders the plot; live
-        # toggles are the observer's job. radioGroupButtons round-trips its
-        # choiceValues as the strings "FALSE"/"TRUE", which as.logical() reads.
-        class = paste(
-          "viz-plot-stage epi-stage",
-          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
-        ),
+        class = "viz-plot-stage epi-stage",
         id = ns("plot_stage"),
         prompt,
         loading,
-        shiny$plotOutput(ns("epi_plot"), height = "auto")
+        zoom_viewport(shiny$plotOutput(ns("epi_plot"), height = "auto"))
       )
     })
 
@@ -2121,21 +2109,6 @@ server <- function(
         )
       },
       deleteFile = TRUE
-    )
-
-    # Full ⇄ Zoomed display mode. Purely toggles the .is-zoom class on the
-    # mounted stage — the image is not re-rendered. ignoreInit: the initial
-    # state is already stamped on the stage div by renderUI's isolate() read.
-    shiny$observeEvent(
-      input$zoom_view,
-      {
-        shinyjs::toggleClass(
-          id = "plot_stage",
-          class = "is-zoom",
-          condition = isTRUE(as.logical(input$zoom_view))
-        )
-      },
-      ignoreInit = TRUE
     )
 
     # ---- Export contract ----------------------------------------------------

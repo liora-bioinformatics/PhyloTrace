@@ -136,18 +136,19 @@ function engage() {
  * of `body` regardless of stacking, and a single `pointer-events: auto` re-opens
  * exactly the controls marked `.pt-shield-passthrough`.
  */
-function holdShield() {
+function holdShield(maxMs) {
   if (holdFailsafeTimer) clearTimeout(holdFailsafeTimer);
   document.documentElement.classList.add("pt-busy-hold");
 
   // The server should always release, but a crash mid-operation must not leave
-  // the UI permanently dead.
+  // the UI permanently dead. A caller that knows its operation is short (a plot
+  // export) passes a tighter bound, so a lost release costs seconds, not minutes.
   holdFailsafeTimer = setTimeout(function () {
     holdFailsafeTimer = null;
     // eslint-disable-next-line no-console
-    console.warn("busy-shield: hold exceeded MAX_HOLD_MS, releasing");
+    console.warn("busy-shield: hold exceeded its failsafe, releasing");
     releaseHold();
-  }, MAX_HOLD_MS);
+  }, maxMs > 0 ? maxMs : MAX_HOLD_MS);
 }
 
 function releaseHold() {

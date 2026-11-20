@@ -132,7 +132,6 @@ set_default_inputs <- function(session) {
     amr_cluster_method = "ward.D2",
     amr_dend_scale = 100,
     amr_aspect_ratio = 0.9,
-    zoom_view = "FALSE",
     amr_show_row_names = FALSE,
     amr_level = "gene",
     amr_top_n = 30
@@ -724,10 +723,10 @@ test_that("the snapshot carries the amr_ controls and restore accepts it", {
       expect_identical(snap$amr_mode, "heatmap")
       expect_identical(snap$amr_top_n, 15)
       # `.layers` (annotation strips) and `.element_colors` (per-panel confidence
-      # colours) are reactiveVal state rather than inputs, and `zoom_view` is the
-      # shared display-mode control; everything else is an amr_ control.
+      # colours) are reactiveVal state rather than inputs; everything else is an
+      # amr_ control.
       expect_true(all(startsWith(
-        setdiff(names(snap), c(".layers", ".element_colors", "zoom_view")),
+        setdiff(names(snap), c(".layers", ".element_colors")),
         "amr_"
       )))
 
@@ -1092,7 +1091,7 @@ test_that("a restored aspect ratio reaches the mirror on the same flush", {
   )
 })
 
-test_that("the snapshot carries the display mode and the aspect ratio", {
+test_that("the snapshot carries the aspect ratio", {
   path <- amr_db()
   meta <- meta_fixture()
 
@@ -1107,15 +1106,11 @@ test_that("the snapshot carries the display mode and the aspect ratio", {
     ),
     {
       set_default_inputs(session)
-      session$setInputs(amr_aspect_ratio = 2.2, zoom_view = "TRUE")
+      session$setInputs(amr_aspect_ratio = 2.2)
       session$flushReact()
 
       snap <- snapshot()
       expect_identical(snap$amr_aspect_ratio, 2.2)
-      # zoom_view has no amr_ prefix — it is the shared display-mode control the
-      # Tree declares under the same name — so it travels in its own key, as a
-      # logical rather than as the widget's "TRUE"/"FALSE" strings.
-      expect_identical(snap$zoom_view, TRUE)
     }
   )
 })
@@ -1211,8 +1206,7 @@ test_that("a reset returns the pickers and radios shinyjs::reset() skipped", {
         "amr_cluster_method",
         "amr_level",
         "amr_cluster_rows",
-        "amr_cluster_cols",
-        "zoom_view"
+        "amr_cluster_cols"
       )
       for (id in ids) {
         expect_true(any(endsWith(names(sent()), id)))

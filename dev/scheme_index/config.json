@@ -11,6 +11,20 @@
       "enabled": true,
       "api": "https://chewbbaca.online/api/NS/api",
       "reason": "The Chewie-NS API invites programmatic use, asking for a pause between requests."
+    },
+    "pubmlst": {
+      "enabled": true,
+      "api": "https://rest.pubmlst.org/db",
+      "page": "https://pubmlst.org/bigsdb?db={db}",
+      "delay_seconds": 0,
+      "robots_permission": "Written permission from PubMLST (Keith Jolley, University of Oxford), 2026-11-19: robots.txt targets crawler bots, not scripted API use; sequential requests from one process, no pause needed.",
+      "reason": "Metadata listing allowed in writing by PubMLST on 2026-11-19 (see providers.json)."
+    },
+    "pasteur": {
+      "enabled": true,
+      "api": "https://bigsdb.pasteur.fr/api/db",
+      "page": "https://bigsdb.pasteur.fr/cgi-bin/bigsdb/bigsdb.pl?db={db}",
+      "reason": "Metadata listing confirmed as compliant by Institut Pasteur on 2026-11-19 for sequential requests with pauses and a contact address (see providers.json)."
     }
   }
 }

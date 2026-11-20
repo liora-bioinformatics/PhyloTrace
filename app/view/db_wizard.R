@@ -45,6 +45,24 @@ WIZARD_TAB <- "db_wizard_panel"
 # Shown on a task until the allele files have been read.
 NEEDS_ALLELES <- "Available once the allele files have been read."
 
+SPECIES_HINT <- paste(
+  "A database holds isolates of one species, or of a group of closely related",
+  "species typed with the same scheme. Outside the catalog, separate several",
+  "species with commas to define a species group, or leave the species empty",
+  "for a genus-wide database."
+)
+
+PLAN_HINT <- paste(
+  "What each step of the setup needs. Once a species is chosen, it shows how",
+  "many schemes are published for it and what AMR screening covers."
+)
+
+SCHEMES_HINT <- paste(
+  "Schemes published for this species, from the index shipped with PhyloTrace.",
+  "Download the scheme files from the provider's page; they are imported in",
+  "the next steps."
+)
+
 # Display labels of the abritamr organism tokens ("Escherichia" covers a genus).
 organism_choices <- function() {
   tokens <- amr_organisms()
@@ -70,79 +88,81 @@ summary_table <- function(rows) {
   )
 }
 
-# Step 1: the species, from the catalog or entered by hand.
+# Step 1: the species, as a 2x2 grid - the choice and an overview of the
+# setup on top, the species card and its published schemes below, each of the
+# lower cells scrolling on its own.
 species_step <- function(ns) {
-  shiny$div(
-    class = "setup-columns",
-    shiny$div(
-      class = "setup-form",
-      setup_ui$setup_section(
-        "Species",
-        shiny$div(
-          class = "setup-help",
-          "A database holds isolates of one species, or of a group of closely",
-          " related species typed with the same scheme."
+  bslib$layout_columns(
+    class = "setup-species",
+    col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6, 6, 6)),
+    row_heights = c("auto", "1fr"),
+    setup_ui$setup_card(
+      "Species",
+      hint = SPECIES_HINT,
+      shiny$radioButtons(
+        ns("species_mode"),
+        NULL,
+        choices = c(
+          "Species catalog" = "catalog",
+          "Other species or species group" = "custom"
         ),
-        shiny$radioButtons(
-          ns("species_mode"),
-          NULL,
-          choices = c(
-            "Species catalog" = "catalog",
-            "Other species or species group" = "custom"
-          ),
-          inline = TRUE,
+        inline = TRUE,
+        width = "100%"
+      ),
+      shiny$conditionalPanel(
+        "input.species_mode == 'catalog'",
+        ns = ns,
+        virtualSelectInput(
+          ns("species_pick"),
+          "Species",
+          choices = species$species_catalog()$label,
+          selected = NULL,
+          autoSelectFirstOption = FALSE,
+          search = TRUE,
+          placeholder = "Select a species ...",
+          searchPlaceholderText = "Search species ...",
+          optionsCount = 10,
+          # Opens as a popup over the window, like the other pickers in the
+          # app, rather than a dropdown spanning the page.
+          dropboxWrapper = "body",
+          showDropboxAsPopup = TRUE,
+          popupDropboxBreakpoint = "10000px",
           width = "100%"
-        ),
-        shiny$conditionalPanel(
-          "input.species_mode == 'catalog'",
-          ns = ns,
-          virtualSelectInput(
-            ns("species_pick"),
-            "Species",
-            choices = species$species_catalog()$label,
-            selected = NULL,
-            autoSelectFirstOption = FALSE,
-            search = TRUE,
-            placeholder = "Select a species ...",
-            searchPlaceholderText = "Search species ...",
-            optionsCount = 10,
-            # Opens as a popup over the window, like the other pickers in the
-            # app, rather than a dropdown spanning the page.
-            dropboxWrapper = "body",
-            showDropboxAsPopup = TRUE,
-            popupDropboxBreakpoint = "10000px",
+        )
+      ),
+      shiny$conditionalPanel(
+        "input.species_mode == 'custom'",
+        ns = ns,
+        shiny$div(
+          class = "setup-grid allow-free-text",
+          shiny$textInput(
+            ns("genus"),
+            "Genus",
+            placeholder = "Klebsiella",
             width = "100%"
-          )
-        ),
-        shiny$conditionalPanel(
-          "input.species_mode == 'custom'",
-          ns = ns,
-          shiny$div(
-            class = "setup-grid allow-free-text",
-            shiny$textInput(
-              ns("genus"),
-              "Genus",
-              placeholder = "Klebsiella",
-              width = "100%"
-            ),
-            shiny$textInput(
-              ns("epithets"),
-              "Species",
-              placeholder = "pneumoniae, variicola, quasipneumoniae",
-              width = "100%"
-            )
           ),
-          shiny$div(
-            class = "setup-help",
-            "Separate several species with commas to define a species group.",
-            " Leave the species empty for a genus-wide database."
+          shiny$textInput(
+            ns("epithets"),
+            "Species",
+            placeholder = "pneumoniae, variicola, quasipneumoniae",
+            width = "100%"
           )
         )
       )
     ),
-    shiny$div(
-      class = "setup-report",
-      shiny$uiOutput(ns("species_card")),
+    setup_ui$setup_card(
+      "Setting up a database",
+      hint = PLAN_HINT,
+      shiny$uiOutput(ns("species_plan"))
+    ),
+    bslib$card(
+      class = "setup-species_card",
+      bslib$card_body(fillable = FALSE, shiny$uiOutput(ns("species_card")))
+    ),
+    # The header stays in place; only the list scrolls in the body.
+    setup_ui$setup_card(
+      "Available schemes",
+      hint = SCHEMES_HINT,
       shiny$uiOutput(ns("species_schemes"))
     )
   )
@@ -154,8 +174,10 @@ species_step <- function(ns) {
 cgmlst_step <- function(ns) {
   shiny$tagList(
     shiny$uiOutput(ns("cg_task_states")),
-    shiny$div(
+    bslib$layout_columns(
       class = "setup-columns",
+      col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
+      fill = FALSE,
       shiny$div(
         class = "setup-form",
         setup_ui$setup_task(
@@ -163,13 +185,22 @@ cgmlst_step <- function(ns) {
           1,
           "Scheme source",
           shiny$uiOutput(ns("cg_published")),
-          scheme_source$ui(ns("cg_source"), types = CORE_TYPES)
+          scheme_source$ui(ns("cg_source"), types = CORE_TYPES),
+          hint = paste(
+            "The provider the allele files come from, and your confirmation that",
+            "you may use them under its terms. 'Use details' on a published scheme",
+            "fills in its provider, name and web page."
+          )
         ),
         setup_ui$setup_task(
           ns("cg_t2"),
           2,
           "Scheme details",
           locked_hint = "Select and confirm the scheme source first.",
+          hint = paste(
+            "Recorded with the database. Only the scheme name is required; the",
+            "other fields document the scheme's origin."
+          ),
           shiny$div(
             class = "setup-grid allow-free-text",
             shiny$textInput(ns("cg_name"), "Scheme name", width = "100%"),
@@ -218,14 +249,13 @@ cgmlst_step <- function(ns) {
             file_dialog$ui(ns("cg_alleles"), "Select allele files", "dna"),
             shiny$uiOutput(ns("cg_alleles_label"), inline = TRUE)
           ),
-          shiny$div(
-            class = "setup-help",
-            "One FASTA file per locus (ZIP archive, folder or individual files), or",
-            " one FASTA file with one sequence per locus. The first allele of each",
-            " locus becomes its reference."
-          ),
           shiny$uiOutput(ns("cg_report")),
-          locked_hint = "Complete the scheme details first."
+          locked_hint = "Complete the scheme details first.",
+          hint = paste(
+            "One FASTA file per locus (ZIP archive, folder or individual files), or",
+            "one FASTA file with one sequence per locus. The first allele of each",
+            "locus becomes its reference."
+          )
         ),
         setup_ui$setup_task(
           ns("cg_t4"),
@@ -233,15 +263,14 @@ cgmlst_step <- function(ns) {
           "Locus annotation",
           optional = TRUE,
           locked_hint = NEEDS_ALLELES,
+          hint = paste(
+            "Gene names, products and positions shown in the cgMLST overview (CSV,",
+            "TSV or Excel). Loci without a row remain unannotated."
+          ),
           shiny$div(
             class = "setup-pick",
             file_dialog$ui(ns("cg_table"), "Select locus table", "table"),
             shiny$uiOutput(ns("cg_table_label"), inline = TRUE)
-          ),
-          shiny$div(
-            class = "setup-help",
-            "Gene names, products and positions shown in the cgMLST overview (CSV,",
-            " TSV or Excel). Loci without a row remain unannotated."
           ),
           shiny$uiOutput(ns("cg_mapping"))
         )
@@ -264,7 +293,8 @@ mlst_step <- function(ns) {
         class = "setup-help",
         "Optional. With a scheme, every typed isolate is also assigned its",
         " sequence type (ST). A scheme can also be added to the database later."
-      )
+      ),
+      shiny$uiOutput(ns("mlst_hint"))
     ),
     shiny$conditionalPanel("input.mlst_on", ns = ns, mlst_import$ui(ns("mlst")))
   )
@@ -274,71 +304,83 @@ mlst_step <- function(ns) {
 # from the species, so the step informs rather than asks; the override is
 # folded away for the rare case the automatic choice does not fit.
 amr_step <- function(ns) {
-  shiny$div(
+  bslib$layout_columns(
     class = "setup-columns",
-    shiny$div(
-      class = "setup-form",
-      setup_ui$setup_section(
-        "AMR screening",
-        shiny$div(
-          class = "setup-help",
-          "Every typed isolate is screened for antimicrobial resistance with",
-          " AMRFinderPlus. What is screened follows from the species."
-        ),
-        shiny$uiOutput(ns("amr_report")),
-        shiny$tags$details(
-          class = "setup-advanced",
-          shiny$tags$summary("Change the point-mutation catalogue"),
-          shiny$selectInput(
-            ns("amr_organism"),
-            NULL,
-            choices = c("None (acquired genes only)" = "", organism_choices()),
-            width = "100%"
-          )
+    col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
+    fill = FALSE,
+    setup_ui$setup_card(
+      "AMR screening",
+      hint = paste(
+        "Every typed isolate is screened for antimicrobial resistance with",
+        "AMRFinderPlus. What is screened follows from the species."
+      ),
+      shiny$uiOutput(ns("amr_report")),
+      shiny$tags$details(
+        class = "setup-advanced",
+        shiny$tags$summary("Change the point-mutation catalogue"),
+        # The dropdown is attached to the body so the card around it cannot clip it.
+        shiny$selectizeInput(
+          ns("amr_organism"),
+          NULL,
+          choices = c("None (acquired genes only)" = "", organism_choices()),
+          width = "100%",
+          options = list(dropdownParent = "body")
         )
       )
     ),
-    shiny$div(class = "setup-report", shiny$uiOutput(ns("amr_coverage")))
+    setup_ui$setup_card(
+      "Coverage",
+      hint = paste(
+        "What AMR screening reports for every typed isolate. Resistance point",
+        "mutations need a catalogue for the species."
+      ),
+      shiny$uiOutput(ns("amr_coverage"))
+    )
   )
 }
 
 # Step 5: summary, storage location and the build itself.
 save_step <- function(ns) {
-  shiny$div(
+  bslib$layout_columns(
     class = "setup-columns",
-    shiny$div(
-      class = "setup-form",
-      setup_ui$setup_section("Summary", shiny$uiOutput(ns("summary"))),
-      setup_ui$setup_section(
-        "Storage location",
-        shiny$div(
-          class = "setup-pick",
-          file_dialog$ui(
-            ns("target"),
-            "Choose location and name",
-            "floppy-disk"
-          ),
-          shiny$uiOutput(ns("target_label"), inline = TRUE)
-        ),
-        shiny$div(
-          class = "storage-location-hint",
-          shiny$icon("circle-info"),
-          " Choose a folder on this computer. Databases kept on network or",
-          " shared drives (NFS, SMB, cloud-synced folders) can be corrupted."
-        ),
-        shiny$div(
-          class = "setup-actions",
-          shiny$actionButton(
-            ns("create"),
-            "Create Database",
-            icon = shiny$icon("database"),
-            class = "btn-primary"
-          )
-        ),
-        shiny$uiOutput(ns("create_hint"))
-      )
+    col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
+    fill = FALSE,
+    setup_ui$setup_card(
+      "Summary",
+      hint = paste(
+        "What the new database will hold, from the choices of the previous",
+        "steps. Entries still missing are flagged."
+      ),
+      shiny$uiOutput(ns("summary"))
     ),
-    shiny$div(class = "setup-report", shiny$uiOutput(ns("result")))
+    setup_ui$setup_card(
+      "Storage location",
+      hint = paste(
+        "Choose a folder on this computer. Databases kept on network or shared",
+        "drives (NFS, SMB, cloud-synced folders) can be corrupted. The database",
+        "file is written only once it is complete."
+      ),
+      shiny$div(
+        class = "setup-pick",
+        file_dialog$ui(
+          ns("target"),
+          "Choose location and name",
+          "floppy-disk"
+        ),
+        shiny$uiOutput(ns("target_label"), inline = TRUE)
+      ),
+      shiny$div(
+        class = "setup-actions",
+        shiny$actionButton(
+          ns("create"),
+          "Create Database",
+          icon = shiny$icon("database"),
+          class = "btn-primary"
+        )
+      ),
+      shiny$uiOutput(ns("create_hint")),
+      shiny$uiOutput(ns("build_error"))
+    )
   )
 }
 
@@ -532,13 +574,52 @@ server <- function(id) {
       }
       record <- sp$record
       image <- species$species_image(sp$name)
+      # A custom species has no picture of its own; it gets the generic stand-in.
+      if (is.na(image)) {
+        image <- species$GENERIC_IMAGE
+      }
       ranks <- c("phylum", "class", "order", "family", "genus")
       shiny$div(
         class = "species-card_article",
         if (!is.na(image)) {
-          shiny$div(
+          credit <- species$image_credit(sp$name)
+          generic <- identical(image, species$GENERIC_IMAGE)
+          shiny$tags$figure(
             class = "species-card_media",
-            shiny$tags$img(src = image, alt = sp$name)
+            shiny$tags$img(
+              src = image,
+              alt = if (generic) "Generic bacteria illustration" else sp$name
+            ),
+            # Openly licensed pictures must name author and licence where shown;
+            # the stand-in says it does not show this species.
+            if (generic) {
+              shiny$tags$figcaption(
+                class = "species-card_credit",
+                "Generic illustration, no picture of this species"
+              )
+            } else if (!is.null(credit)) {
+              shiny$tags$figcaption(
+                class = "species-card_credit",
+                shiny$a(
+                  href = credit$source,
+                  target = "_blank",
+                  rel = "noopener",
+                  title = "Open the original picture",
+                  credit$author
+                ),
+                " · ",
+                if (is.na(credit$license_url)) {
+                  credit$license
+                } else {
+                  shiny$a(
+                    href = credit$license_url,
+                    target = "_blank",
+                    rel = "noopener",
+                    credit$license
+                  )
+                }
+              )
+            }
           )
         },
         shiny$div(
@@ -551,10 +632,7 @@ server <- function(id) {
             },
             if (!is.na(sp$taxid)) {
               shiny$a(
-                href = paste0(
-                  "https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=",
-                  sp$taxid
-                ),
+                href = species$taxonomy_url(sp$taxid),
                 target = "_blank",
                 rel = "noopener",
                 class = "species-details_taxid",
@@ -591,30 +669,99 @@ server <- function(id) {
     # app; no provider is contacted.
     published <- shiny$reactive(schemes_for_species(chosen_species()$name))
 
+    # The whole setup at a glance: what each step needs and, once a species
+    # is chosen, what is published for it and what AMR screening covers.
+    output$species_plan <- shiny$renderUI({
+      render_info("output$species_plan")
+      sp <- chosen_species()
+      chosen <- !is.na(sp$name)
+      rows <- if (chosen) published() else NULL
+      count <- function(types) {
+        n <- if (is.null(rows)) 0L else sum(rows$type %in% types)
+        if (!chosen) {
+          NULL
+        } else if (n) {
+          sprintf("%d published.", n)
+        } else {
+          "None published; an in-house scheme works too."
+        }
+      }
+      organism <- if (chosen) amr_species(sp$name) else NA_character_
+      setup_ui$plan_list(list(
+        list(
+          title = "Species",
+          detail = if (chosen) shiny$em(sp$name) else "Choose it on the left.",
+          done = chosen
+        ),
+        list(
+          title = "cgMLST scheme",
+          detail = shiny$tagList(
+            "Allele files from the provider. ",
+            count(CORE_TYPES)
+          )
+        ),
+        list(
+          title = "Classical MLST (optional)",
+          detail = shiny$tagList(
+            "Profile table and allele files. ",
+            count("MLST")
+          )
+        ),
+        list(
+          title = "AMR screening",
+          detail = if (!chosen) {
+            "Set automatically from the species."
+          } else if (is.na(organism)) {
+            "Acquired genes only; no point-mutation catalogue."
+          } else {
+            sprintf("Genes and point mutations (%s).", gsub("_", " ", organism))
+          }
+        ),
+        list(
+          title = "Review & create",
+          detail = "Summary and storage location."
+        )
+      ))
+    })
+
     # Where schemes for the species are published.
     output$species_schemes <- shiny$renderUI({
       render_info("output$species_schemes")
       sp <- chosen_species()
-      shiny$req(!is.na(sp$name))
+      if (is.na(sp$name)) {
+        return(setup_ui$setup_note(
+          "Once a species is chosen, the schemes published for it are listed here."
+        ))
+      }
       rows <- published()
-      setup_ui$setup_section(
-        "Available schemes",
-        if (nrow(rows)) {
-          shiny$tagList(
-            shiny$div(
-              class = "setup-help",
-              "Download the scheme files from the provider's page; they are",
-              " imported in the next steps."
-            ),
-            setup_ui$scheme_links(rows)
-          )
-        } else {
-          setup_ui$setup_note(paste(
-            "No published scheme is listed for this species. Check the providers'",
-            "sites (cgMLST.org, PubMLST, Institut Pasteur, Chewie-NS) or use an",
-            "in-house scheme."
-          ))
-        }
+      if (nrow(rows)) {
+        setup_ui$scheme_links(rows)
+      } else {
+        setup_ui$setup_note(paste(
+          "No published scheme is listed for this species. Check the providers'",
+          "sites (cgMLST.org, PubMLST, Institut Pasteur, Chewie-NS) or use an",
+          "in-house scheme."
+        ))
+      }
+    })
+
+    # Subtle hint on the MLST step, shown only when the curated index lists no
+    # classical MLST scheme at all for the chosen species. Other providers and
+    # in-house schemes stay selectable.
+    output$mlst_hint <- shiny$renderUI({
+      render_info("output$mlst_hint")
+      sp <- chosen_species()
+      if (is.na(sp$name) || any(published()$type == "MLST")) {
+        return(NULL)
+      }
+      shiny$div(
+        class = "setup-help",
+        shiny$icon("circle-info"),
+        sprintf(
+          " No classical MLST scheme is listed for %s in our curated catalog.",
+          sp$name
+        ),
+        " You can still add one from any provider or an in-house scheme."
       )
     })
 
@@ -628,7 +775,7 @@ server <- function(id) {
       rows <- core_published()
       if (nrow(rows)) {
         shiny$tagList(
-          setup_ui$scheme_links(rows, use_input = ns("cg_use"))
+          setup_ui$scheme_links(rows, use_input = ns("cg_use"), scroll = TRUE)
         )
       }
     })
@@ -1306,8 +1453,8 @@ server <- function(id) {
         return()
       }
 
+      # No id: a full-page overlay, so the navbar cannot be used mid-build either.
       waiter <- Waiter$new(
-        id = ns("wizard"),
         html = shiny$div(
           class = "spinner-custom",
           spin_flower(),
@@ -1413,16 +1560,10 @@ server <- function(id) {
       )
     })
 
-    # Review notes, or why the last attempt failed.
-    output$result <- shiny$renderUI({
-      render_info("output$result")
-      if (!is.null(state$error)) {
-        return(setup_ui$setup_note(state$error, "bad"))
-      }
-      setup_ui$setup_note(paste(
-        "Check the summary, choose the storage location and create the database.",
-        "The database file is written only once it is complete."
-      ))
+    # Why the last build attempt failed, under the create button.
+    output$build_error <- shiny$renderUI({
+      render_info("output$build_error")
+      if (!is.null(state$error)) setup_ui$setup_note(state$error, "bad")
     })
 
     # The created database: where it is, what it holds, what was skipped.

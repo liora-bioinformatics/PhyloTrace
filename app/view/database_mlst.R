@@ -35,7 +35,7 @@ box::use(
     ],
   app / logic / mlst_scheme[mlst_scheme_info, store_mlst_scheme],
   app / logic / overview_ui,
-  app / logic / setup_ui[setup_note, setup_section, stat_row],
+  app / logic / setup_ui[setup_card, setup_note, stat_row],
   app / view / mlst_import,
 )
 
@@ -791,52 +791,50 @@ server <- function(
         "From files" = info$files %||% NA
       )
       details <- details[!is.na(details)]
-      shiny$tagList(
-        setup_section(
-          "Classical MLST scheme of this database",
-          setup_note(
-            shiny$tagList(
-              "Typing determines sequence types with ",
-              shiny$tags$strong(info$name),
-              "."
-            ),
-            "good"
+      setup_card(
+        "Classical MLST scheme of this database",
+        hint = paste(
+          "The scheme typing assigns sequence types with. A new scheme applies",
+          "to isolates typed from then on; existing calls keep the scheme they",
+          "were made with."
+        ),
+        setup_note(
+          shiny$tagList(
+            "Typing determines sequence types with ",
+            shiny$tags$strong(info$name),
+            "."
           ),
-          stat_row(
-            c(
-              "Loci" = length(info$loci),
-              "Sequence types" = as.integer(info$profiles),
-              "Alleles" = as.integer(info$alleles)
-            ),
-            tones = "good"
+          "good"
+        ),
+        stat_row(
+          c(
+            "Loci" = length(info$loci),
+            "Sequence types" = as.integer(info$profiles),
+            "Alleles" = as.integer(info$alleles)
           ),
-          shiny$div(class = "setup-loci", paste(info$loci, collapse = "  ·  ")),
-          shiny$div(
-            class = "setup-summary",
-            lapply(names(details), function(key) {
-              shiny$div(
-                class = "setup-summary_row",
-                shiny$span(class = "setup-summary_label", key),
-                shiny$span(class = "setup-summary_value", details[[key]])
-              )
-            })
-          ),
-          if (!replacing()) {
+          tones = "good"
+        ),
+        shiny$div(class = "setup-loci", paste(info$loci, collapse = "  ·  ")),
+        shiny$div(
+          class = "setup-summary",
+          lapply(names(details), function(key) {
             shiny$div(
-              class = "setup-actions",
-              shiny$actionButton(
-                session$ns("replace_scheme"),
-                "Replace scheme ...",
-                icon = shiny$icon("arrows-rotate")
-              ),
-              shiny$span(
-                class = "setup-help",
-                "A new scheme applies to isolates typed from then on; existing",
-                " calls keep the scheme they were made with."
-              )
+              class = "setup-summary_row",
+              shiny$span(class = "setup-summary_label", key),
+              shiny$span(class = "setup-summary_value", details[[key]])
             )
-          }
-        )
+          })
+        ),
+        if (!replacing()) {
+          shiny$div(
+            class = "setup-actions",
+            shiny$actionButton(
+              session$ns("replace_scheme"),
+              "Replace scheme ...",
+              icon = shiny$icon("arrows-rotate")
+            )
+          )
+        }
       )
     })
 

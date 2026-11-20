@@ -36,6 +36,7 @@ import json
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.robotparser
@@ -77,17 +78,33 @@ SPECIES_RE = re.compile(r"^[A-Z][A-Za-z0-9-]* ?([A-Za-z0-9-]+(/[A-Za-z0-9-]+)*)?
 class SourceError(Exception):
     """A source could not be read; its entries are left untouched."""
 
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+# HTTP answers of a database that needs a login: skipped, never a failure.
+RESTRICTED = {401, 403}
+
 
 class Client:
-    """Polite HTTP client: identifies itself, honours robots.txt, paces calls."""
+    """Polite HTTP client: identifies itself, honours robots.txt, paces calls.
 
-    def __init__(self, user_agent, delay):
+    ``robots_permission`` names the written permission under which a provider
+    lets this tool use an API its robots.txt closes to crawlers (PubMLST);
+    without it, robots.txt always decides.
+    """
+
+    def __init__(self, user_agent, delay, robots_permission=None):
         self.user_agent = user_agent
         self.delay = delay
+        self.robots_permission = robots_permission
         self._robots = {}
         self._last = {}
 
     def _allowed(self, url):
+        if self.robots_permission:
+            return True
         parts = urllib.parse.urlsplit(url)
         host = f"{parts.scheme}://{parts.netloc}"
         if host not in self._robots:
@@ -114,7 +131,9 @@ class Client:
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 body = response.read().decode("utf-8", errors="replace")
-        except Exception as err:  # network, HTTP or decoding failure
+        except urllib.error.HTTPError as err:
+            raise SourceError(f"{url}: {err}", status=err.code) from err
+        except Exception as err:  # network or decoding failure
             raise SourceError(f"{url}: {err}") from err
         finally:
             self._last[host] = time.monotonic()
@@ -179,6 +198,9 @@ def fetch_cgmlst_org(client, settings):
     return parse_cgmlst_org(client.text(settings["url"]))
 
 
+CHEWIE_PAGE = "https://chewbbaca.online/stats"
+
+
 def parse_chewie_species(listing):
     """(species id, name) pairs of the Chewie-NS species list."""
     out = []
@@ -199,7 +221,11 @@ def parse_chewie_totals(species_id, species_name, totals):
             "species": clean_species(species_name),
             "type": guess_type(schema["name"]) or "wgMLST",
             "loci": int(schema["nr_loci"]),
-            "url": f"https://chewbbaca.online/species/{species_id}/schemas/{schema_id}",
+            # Chewie-NS's species and schema pages only render when reached
+            # inside the site; opened from a link they stay blank (a script
+            # error in its web app, seen 2026-11-19). The schemas overview
+            # loads directly; the row's note names the species to open there.
+            "url": CHEWIE_PAGE,
         })
     return rows
 
@@ -212,9 +238,72 @@ def fetch_chewie_ns(client, settings):
     return rows
 
 
+def parse_bigsdb_schemes(db_description, db_page, schemes, details):
+    """Schemes of one BIGSdb typing database (PubMLST, Institut Pasteur)."""
+    rows = []
+    species = clean_species(re.sub(r"sequence/profile definitions|REST API access to|seqdef database",
+                                   " ", db_description, flags=re.I))
+    for scheme, detail in zip(schemes, details):
+        description = scheme["description"].strip()
+        lowered = description.lower()
+        # rMLST is licensed for academic, non-commercial use only and may not be
+        # used to provide a service; it is never listed.
+        if "rmlst" in lowered or "ribosomal" in lowered:
+            continue
+        kind = guess_type(description)
+        if not kind:
+            continue
+        scheme_id = scheme["scheme"].rstrip("/").rsplit("/", 1)[1]
+        db_name = scheme["scheme"].split("/db/", 1)[1].split("/", 1)[0]
+        loci = detail.get("locus_count") or len(detail.get("loci", [])) or ""
+        rows.append({
+            "source_id": f"{db_name}/{scheme_id}",
+            "scheme": f"{species} {description}".strip(),
+            "species": species,
+            "type": kind,
+            "loci": loci,
+            "url": db_page,
+        })
+    return rows
+
+
+def fetch_bigsdb(client, settings):
+    """Scheme metadata of every sequence-definition database of a BIGSdb site.
+
+    Reads names, locus counts and page links only - never alleles, profiles or
+    isolates. Requests run one after another from one process, as the
+    operators asked.
+    """
+    rows = []
+    for group in client.json(settings["api"]):
+        for db in group.get("databases", []):
+            name = db["name"]
+            # rMLST databases are never read; isolate databases hold no schemes.
+            if not name.endswith("seqdef") or "rmlst" in name.lower():
+                continue
+            try:
+                listed = client.json(db["href"].rstrip("/") + "/schemes").get("schemes", [])
+                wanted = [s for s in listed if "rmlst" not in s["description"].lower()
+                          and "ribosomal" not in s["description"].lower()
+                          and guess_type(s["description"])]
+                details = [client.json(s["scheme"]) for s in wanted]
+            except SourceError as err:
+                # A database behind a login is not public; it is left out.
+                # Any other failure stops the source, so nothing it lists is
+                # marked as gone because of a hiccup.
+                if err.status in RESTRICTED:
+                    continue
+                raise
+            page = settings["page"].format(db=name)
+            rows += parse_bigsdb_schemes(db["description"], page, wanted, details)
+    return rows
+
+
 FETCHERS = {
     "cgmlst_org": fetch_cgmlst_org,
     "chewie_ns": fetch_chewie_ns,
+    "pubmlst": fetch_bigsdb,
+    "pasteur": fetch_bigsdb,
 }
 
 
@@ -335,6 +424,21 @@ def validate(rows):
     return [p for r in rows for p in row_problems(r)]
 
 
+def drop_superseded(rows):
+    """Leaves out hand-entered rows an approved listed row now covers.
+
+    PubMLST and Institut Pasteur were curated by hand until they allowed
+    automated listing. A hand-entered row stays in the index until a row read
+    from the provider for the same species and scheme type is approved, so no
+    link disappears before its replacement is checked.
+    """
+    def key(r):
+        return (r["provider"], r["type"], r["species"].strip().lower())
+
+    covered = {key(r) for r in rows if r["source"] != "manual"}
+    return [r for r in rows if r["source"] != "manual" or key(r) not in covered]
+
+
 def build_index(curation, path=INDEX):
     """Write the app's index from the included, still listed, valid curation rows.
 
@@ -345,6 +449,7 @@ def build_index(curation, path=INDEX):
         r for r in curation
         if r["status"] == "include" and r.get("listed", "yes") != "no" and not row_problems(r)
     ]
+    rows = drop_superseded(rows)
     rows.sort(key=lambda r: (r["type"] != "cgMLST", r["species"].lower(), r["provider"], r["scheme"].lower()))
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=INDEX_FIELDS, quoting=csv.QUOTE_ALL, lineterminator="\n")
@@ -417,7 +522,6 @@ def report_markdown(results, problems, n_index):
 
 def update(report_path=None, offline=False):
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    client = Client(config["user_agent"], config["delay_seconds"])
     curation = read_curation()
     today = datetime.date.today().isoformat()
     results = {}
@@ -431,6 +535,13 @@ def update(report_path=None, offline=False):
         if source not in FETCHERS:
             results[source] = "no fetcher for this source"
             continue
+        # Each source gets its own pacing; PubMLST asked for no pause, the
+        # others keep the default one.
+        client = Client(
+            config["user_agent"],
+            settings.get("delay_seconds", config["delay_seconds"]),
+            settings.get("robots_permission"),
+        )
         try:
             found = FETCHERS[source](client, settings)
         except SourceError as err:

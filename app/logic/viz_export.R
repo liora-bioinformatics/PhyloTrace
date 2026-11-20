@@ -33,6 +33,7 @@ box::use(
     icon,
     modalDialog,
     reactive,
+    span,
     tagList,
     tags,
     uiOutput,
@@ -132,6 +133,23 @@ export_qualities <- c(
   `Print` = 300L,
   `Journal` = 600L
 )
+
+# Failsafe for the UI hold an export takes out. Save blocks the UI from the
+# click until the server reports the file handed over (or the export failed).
+# The server always releases it; this bound only matters if that release is
+# lost, and is set well past the slowest real export (a poster-width browser
+# capture of a dense map).
+export_hold_ms <- 120000L
+
+# Starts the export hold; see `export_hold_ms`.
+hold_js <- sprintf(
+  "if (window.__ptHoldShield) window.__ptHoldShield(%d);",
+  export_hold_ms
+)
+
+#' JavaScript that ends the export hold.
+#' @export
+export_release_js <- "if (window.__ptReleaseShieldHold) window.__ptReleaseShieldHold();"
 
 
 # --- UI ----------------------------------------------------------------------
@@ -273,14 +291,39 @@ export_modal <- function(
       uiOutput(id("hint"), class = "viz-export-hint small text-muted"),
       footer = tagList(
         actionButton(id("cancel"), "Cancel"),
-        actionButton(
-          id("download"),
-          "Save",
-          icon = icon("download"),
-          class = "btn-primary"
-        )
+        # Rendered by the caller (see `export_save_button()`), since whether
+        # Save is allowed depends on the format picked and the engine's state.
+        uiOutput(id("save"), inline = TRUE)
       ),
       easyClose = TRUE
+    )
+  )
+}
+
+#' Export Save Button
+#'
+#' The modal's Save button, disabled with a hover title when `reason` says why
+#' the chosen format cannot be written. The title sits on a wrapper because
+#' Bootstrap gives a disabled button `pointer-events: none`, so it never sees
+#' the hover. The click starts the UI hold in the browser: a server-sent one
+#' would only arrive once a synchronous export had already finished.
+#'
+#' @param ns Function. Module namespace function (`session$ns`).
+#' @param prefix Character. ID prefix unique to the calling module.
+#' @param reason Character or NULL. Why the chosen format is blocked.
+#' @return A `span` wrapping the `actionButton`.
+#' @export
+export_save_button <- function(ns, prefix, reason = NULL) {
+  span(
+    class = "d-inline-block",
+    title = reason,
+    actionButton(
+      ns(paste0(prefix, "_download")),
+      "Save",
+      icon = icon("download"),
+      class = "btn-primary",
+      onclick = hold_js,
+      disabled = !is.null(reason)
     )
   )
 }

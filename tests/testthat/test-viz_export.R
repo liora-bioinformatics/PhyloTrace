@@ -296,7 +296,7 @@ test_that("the format picker spans the same width as the preset row", {
 
 test_that("the modal footer commits or abandons the export", {
   html <- as.character(viz_export$export_modal(identity, "e", "ggplot"))
-  expect_true(grepl("e_download", html, fixed = TRUE))
+  expect_true(grepl("e_save", html, fixed = TRUE))
   expect_true(grepl("e_cancel", html, fixed = TRUE))
   # The download target belongs to the sidebar, not here — removeModal() would
   # destroy it before the server ever clicks it. Matched on the exact id, since
@@ -334,6 +334,27 @@ test_that("a modal reopened on a format without resolution hides the slider", {
   expect_true(grepl("d-none", wrap("html"), fixed = TRUE))
   expect_false(grepl("d-none", wrap("png"), fixed = TRUE))
   expect_false(grepl("d-none", wrap("jpeg"), fixed = TRUE))
+})
+
+test_that("Save holds the UI from the click itself, with a short failsafe", {
+  # A hold sent from the server would only arrive after a synchronous export
+  # had finished, so the button starts it in the browser.
+  html <- as.character(viz_export$export_save_button(identity, "e"))
+  expect_true(grepl("__ptHoldShield(120000)", html, fixed = TRUE))
+})
+
+test_that("Save is disabled, with its reason on hover, only when blocked", {
+  blocked <- as.character(
+    viz_export$export_save_button(identity, "e", "No HTML here.")
+  )
+  expect_true(grepl("disabled", blocked, fixed = TRUE))
+  # The title sits on the wrapper: a disabled button never receives the hover.
+  expect_true(grepl("<span class=\"d-inline-block\" title=\"No HTML here.\">",
+                    blocked, fixed = TRUE))
+
+  open <- as.character(viz_export$export_save_button(identity, "e"))
+  expect_false(grepl("disabled", open, fixed = TRUE))
+  expect_false(grepl("title=", open, fixed = TRUE))
 })
 
 test_that("the sidebar panel is just a trigger plus the download target", {

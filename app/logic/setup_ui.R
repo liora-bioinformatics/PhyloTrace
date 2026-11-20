@@ -5,11 +5,13 @@
 # scheme and the list of what an import skipped and why.
 
 box::use(
+  bslib,
   shiny,
   utils[head],
 )
 
 box::use(
+  app / logic / overview_ui[hint_icon],
   app / logic / scheme_sources[safe_url, scheme_source],
 )
 
@@ -120,9 +122,30 @@ issue_list <- function(issues) {
   }))
 }
 
-#' Section of a Setup Step
+#' Setup Card
+#'
+#' @description The card every setup screen is built from: the title and an
+#'   optional hint question mark in the header, the content in the body.
 #'
 #' @param title Character heading.
+#' @param ... Content tags.
+#' @param hint Optional character text shown on hovering a question mark at the
+#'   right end of the header.
+#' @param class Optional extra class of the card.
+#'
+#' @return A `bslib::card()`.
+#' @export
+setup_card <- function(title, ..., hint = NULL, class = NULL) {
+  bslib$card(
+    class = paste(c("setup-card", class), collapse = " "),
+    bslib$card_header(title, hint_icon(title, hint)),
+    bslib$card_body(class = "setup-card_body", fillable = FALSE, ...)
+  )
+}
+
+#' Section Within a Setup Card
+#'
+#' @param title Character subheading.
 #' @param ... Content tags.
 #' @param optional Logical. Mark the section as optional.
 #'
@@ -149,12 +172,14 @@ setup_section <- function(title, ..., optional = FALSE) {
 #'
 #' @param rows Data frame from `scheme_index$schemes_for_species()`.
 #' @param use_input Character namespaced input id, or `NULL` for no button.
+#' @param scroll Logical. Bound the list's height and scroll within it, so the
+#'   controls below it stay in view however many schemes are listed.
 #'
 #' @return A tag.
 #' @export
-scheme_links <- function(rows, use_input = NULL) {
+scheme_links <- function(rows, use_input = NULL, scroll = FALSE) {
   shiny$div(
-    class = "setup-schemes",
+    class = paste("setup-schemes", if (scroll) "is-scroll"),
     lapply(seq_len(nrow(rows)), function(i) {
       src <- scheme_source(rows$provider[i])
       provider <- if (is.null(src)) rows$provider[i] else src$label
@@ -220,6 +245,8 @@ scheme_links <- function(rows, use_input = NULL) {
 #' @param ... Content tags.
 #' @param optional Logical. Mark the task as optional.
 #' @param locked_hint Character shown while the task is locked.
+#' @param hint Optional character text shown on hovering a question mark at the
+#'   right end of the header.
 #'
 #' @return A tag.
 #' @export
@@ -229,12 +256,13 @@ setup_task <- function(
   title,
   ...,
   optional = FALSE,
-  locked_hint = "Complete the previous task first."
+  locked_hint = "Complete the previous task first.",
+  hint = NULL
 ) {
-  shiny$div(
+  bslib$card(
     id = id,
-    class = "setup-task",
-    shiny$div(
+    class = "setup-card setup-task",
+    bslib$card_header(
       class = "setup-task_head",
       shiny$span(
         class = "setup-task_number",
@@ -243,10 +271,14 @@ setup_task <- function(
       ),
       shiny$span(class = "setup-task_title", title),
       if (optional) shiny$span(class = "setup-optional", "optional"),
-      shiny$uiOutput(paste0(id, "_status"), inline = TRUE, class = "setup-task_status")
+      shiny$uiOutput(paste0(id, "_status"), inline = TRUE, class = "setup-task_status"),
+      hint_icon(title, hint)
     ),
-    shiny$div(class = "setup-task_lock", shiny$icon("lock"), " ", locked_hint),
-    shiny$div(class = "setup-task_body", ...)
+    bslib$card_body(
+      class = "setup-task_lock",
+      shiny$span(shiny$icon("lock"), " ", locked_hint)
+    ),
+    bslib$card_body(class = "setup-card_body setup-task_body", fillable = FALSE, ...)
   )
 }
 
@@ -263,7 +295,7 @@ TASK_STATE_CSS <- c(
     "#%1$s .setup-task_number { background: var(--bs-success); color: #fff;",
     "border-color: var(--bs-success); }",
     "#%1$s .setup-task_digit { display: none; }",
-    "#%1$s .setup-task_check { display: inline; }"
+    "#%1$s .setup-task_check { display: inline-flex; }"
   ),
   locked = paste(
     "#%1$s > .setup-task_body { opacity: 0.4; pointer-events: none; user-select: none; }",
@@ -344,6 +376,37 @@ coverage_list <- function(items) {
         shiny$div(
           shiny$div(class = "setup-coverage_label", it$label),
           if (!is.null(it$detail)) shiny$div(class = "setup-coverage_detail", it$detail)
+        )
+      )
+    })
+  )
+}
+
+#' Plan List
+#'
+#' @description The steps of a procedure, numbered, each with a short detail;
+#'   a step marked `done` shows a check instead of its number.
+#'
+#' @param steps List of lists with `title`, `detail` (text or tags) and
+#'   optionally `done`.
+#'
+#' @return A tag.
+#' @export
+plan_list <- function(steps) {
+  shiny$tags$ol(
+    class = "setup-plan",
+    lapply(seq_along(steps), function(i) {
+      st <- steps[[i]]
+      done <- isTRUE(st$done)
+      shiny$tags$li(
+        class = paste("setup-plan_item", if (done) "is-done"),
+        shiny$span(
+          class = "setup-plan_number",
+          if (done) shiny$icon("check") else i
+        ),
+        shiny$div(
+          shiny$div(class = "setup-plan_title", st$title),
+          shiny$div(class = "setup-plan_detail", st$detail)
         )
       )
     })

@@ -330,6 +330,17 @@ ASPECT_MAX <- 8
 #' @export
 CANVAS_MAX_FACTOR <- 2.6
 
+#' Height over width of the stage a figure is assumed to be previewed in.
+#'
+#' The Full view scales the canvas to fit the stage, so a page wider than the
+#' stage's shape is limited by the stage's width, and widening it further only
+#' shrinks it back down. An engine may widen a page for its labels (rule G1,
+#' docs/figure-text-rules.md) only while the page stays at least this tall. A
+#' typical desktop stage, not a measured one: the layout never reads the
+#' browser's size (rule M2).
+#' @export
+STAGE_ASPECT <- 0.7
+
 #' Pixels a canvas side of `inches` is drawn at.
 #'
 #' @param inches Numeric.

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="450" height="300" viewBox="0 0 450 300" role="img" aria-label="Generic bacteria illustration">
+  <title>Generic bacteria illustration</title>
+  <!-- Stand-in for catalog species without a picture: schematic bacterial
+       shapes (rods, cocci, a chain, a spiral), deliberately not any one species.
+       Mid-grey outlines on a faint ground read on light and dark themes. -->
+  <rect x="1.5" y="1.5" width="447" height="297" rx="14" fill="#94a3b8" fill-opacity="0.12"
+        stroke="#94a3b8" stroke-opacity="0.5" stroke-width="3" stroke-dasharray="10 8"/>
+  <g fill="#94a3b8" fill-opacity="0.3" stroke="#64748b" stroke-width="3.5" stroke-linecap="round">
+    <!-- Rod with a flagellum -->
+    <rect x="70" y="64" width="128" height="46" rx="23" transform="rotate(-14 134 87)"/>
+    <path d="M196 70 q16 -18 32 0 t32 0 t32 0" fill="none"/>
+    <!-- Short rods -->
+    <rect x="262" y="150" width="96" height="38" rx="19" transform="rotate(24 310 169)"/>
+    <rect x="118" y="196" width="84" height="36" rx="18" transform="rotate(-8 160 214)"/>
+    <!-- Diplococcus -->
+    <circle cx="330" cy="72" r="21"/>
+    <circle cx="370" cy="72" r="21"/>
+    <!-- Chain of cocci -->
+    <circle cx="58" cy="168" r="14"/>
+    <circle cx="84" cy="176" r="14"/>
+    <circle cx="108" cy="190" r="14"/>
+    <!-- Cluster -->
+    <circle cx="230" cy="218" r="15"/>
+    <circle cx="258" cy="226" r="15"/>
+    <circle cx="242" cy="246" r="15"/>
+    <!-- Spiral -->
+    <path d="M300 250 q14 -26 28 0 t28 0 t28 0 t28 0" fill="none" stroke-width="7"/>
+  </g>
+</svg>

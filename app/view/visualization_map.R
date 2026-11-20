@@ -107,10 +107,18 @@ map_providers <- c(
   "Esri Gray Canvas" = "Esri.WorldGrayCanvas"
 )
 
+# Why Save is disabled for an HTML export on the OpenStreetMap basemap.
+osm_html_block_reason <- paste(
+  "OpenStreetMap blocks its map tiles in saved HTML files.",
+  "Choose another basemap to export as HTML."
+)
+
 # Basemap auto-selected when the user switches into each map mode (a sensible
-# starting point per mode; the user can still change it afterward).
+# starting point per mode; the user can still change it afterward). Markers
+# uses the German-style OSM rather than the standard one, whose tile servers
+# block saved HTML files (see the export contract's `blocked`).
 mode_tile_defaults <- c(
-  Markers = "OpenStreetMap",
+  Markers = "OpenStreetMap.DE",
   Choropleth = "Esri.WorldGrayCanvas",
   Heatmap = "Esri.WorldGrayCanvas",
   Charts = "Esri.WorldGrayCanvas"
@@ -3243,7 +3251,7 @@ server <- function(
           tiles = if (isTRUE(input$map_tiles %in% map_providers)) {
             input$map_tiles
           } else {
-            "OpenStreetMap"
+            mode_tile_defaults[["Markers"]]
           },
           scalebar = isTRUE(input$map_scalebar),
           minimap = isTRUE(input$map_minimap),
@@ -3988,6 +3996,18 @@ server <- function(
       kind = "widget",
       label = "map",
       ready = shiny$reactive(isTRUE(generated())),
+      # tile.openstreetmap.org serves an "Access blocked" image to any request
+      # without a Referer, which is every request from a saved HTML file opened
+      # from disk. The other providers have no such rule, and Choropleth draws
+      # no basemap (its minimap uses Esri), so only this case is refused.
+      blocked = shiny$reactive({
+        o <- map_opts()
+        if (identical(o$tiles, "OpenStreetMap") && !identical(o$mode, "Choropleth")) {
+          list(html = osm_html_block_reason)
+        } else {
+          list()
+        }
+      }),
       save = function(file, format, opts) {
         o <- map_opts()
         base <- map_coords()

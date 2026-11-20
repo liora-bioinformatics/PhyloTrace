@@ -106,7 +106,7 @@ box::use(
       update_field_select,
       update_scale_select,
       viz_color,
-      zoom_view_buttons
+      zoom_viewport
     ],
   app /
     logic /
@@ -291,8 +291,7 @@ AMR_CONTROLS <- control_families(
   radio_groups = c(
     "amr_level",
     "amr_cluster_rows",
-    "amr_cluster_cols",
-    "zoom_view"
+    "amr_cluster_cols"
   ),
   colors = c("amr_dend_color", "amr_text_color", "amr_background_color")
 )
@@ -300,7 +299,7 @@ AMR_CONTROLS <- control_families(
 # Every catalogued control's coded default, taken from the named constant where
 # there is one so the reset and the widget cannot disagree.
 #
-# The cluster and zoom values are strings because radioGroupButtons'
+# The cluster values are strings because radioGroupButtons'
 # choiceValues are: the browser reports "TRUE", not TRUE, and
 # updateRadioGroupButtons matches on the value as written.
 AMR_CONTROL_DEFAULTS <- list(
@@ -326,8 +325,7 @@ AMR_CONTROL_DEFAULTS <- list(
   amr_bar_scale = BAR_SCALE_DEFAULT,
   amr_dend_color = DEND_COLOR_DEFAULT,
   amr_text_color = TEXT_COLOR_DEFAULT,
-  amr_background_color = BACKGROUND_DEFAULT,
-  zoom_view = "FALSE"
+  amr_background_color = BACKGROUND_DEFAULT
 )
 
 # --- AMR control tabs --------------------------------------------------------
@@ -766,7 +764,6 @@ amr_controls <- function(ns) {
         selected = PLOT_MODE_DEFAULT
       )
     ),
-    zoom_view_buttons(ns),
     reset_button_row(
       ns,
       paste(
@@ -1850,27 +1847,42 @@ server <- function(
     # The canvas the plot is drawn on, in inches: a physical size, never the
     # width the browser reports, so no size report from the client can redraw
     # the plot and the preview, the export and a saved Analysis are one
-    # drawing. The heatmap grows it sideways for its gene columns (see
-    # amr_plot$amr_canvas_width_in()), but not with the text size beyond what
-    # the wider strips take: the preview is fitted to its frame, so a page
-    # grown in step with the text would cancel the control. The prevalence
-    # chart keeps the base.
+    # drawing. The heatmap grows it sideways for its gene columns, and for a
+    # text size over 100% further still, but only while the page stays taller
+    # than the stage and its aspect is the fit's (see
+    # amr_plot$amr_canvas_width_in()): that is the height measured here, at
+    # the base width. A ratio the reader set keeps the base width. The
+    # prevalence chart keeps the base.
     canvas_width <- function(col_names = show_col_names_mirror()) {
       if (identical(mode(), "prevalence")) {
         return(amr_plot$AMR_CANVAS_IN)
       }
-      amr_plot$amr_canvas_width_in(
+      args <- list(
         ncol(presence_mat()),
         col_names,
         length(anno_layers()),
         text_scale = text_scale_percent(text_size_mirror())
       )
+      base <- do.call(amr_plot$amr_canvas_width_in, args)
+      if (
+        args$text_scale <= 1 || !is.null(hand_aspect()[["heatmap"]])
+      ) {
+        return(base)
+      }
+      fitted <- do.call(
+        amr_plot$amr_auto_layout,
+        fit_args(col_names, width_in = base)
+      )
+      do.call(
+        amr_plot$amr_canvas_width_in,
+        c(args, list(height_in = base * fitted$aspect))
+      )
     }
     canvas_in <- shiny$reactive(canvas_width())
 
     # A radioGroupButtons round-trips its boolean choiceValues as the strings
-    # "TRUE"/"FALSE", never as a logical — see the zoom_view comment further
-    # down for why as.logical() is doing the work here rather than isTRUE().
+    # "TRUE"/"FALSE", never as a logical, so as.logical() does the work here
+    # rather than isTRUE().
     grouping <- function() {
       if (isTRUE(as.logical(input$amr_cluster_cols))) {
         "cluster"
@@ -1990,13 +2002,13 @@ server <- function(
     # (what Generate and Auto-fit seed the switches from).
     fit_args <- function(
       col_names = show_col_names_mirror(),
-      row_names = show_row_names_mirror()
+      row_names = show_row_names_mirror(),
+      width_in = canvas_width(col_names)
     ) {
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)
       blocks <- amr_plot$amr_column_blocks(mat, grouping())
       elements <- amr_plot$amr_element_blocks(mat, grouping())
-      width_in <- canvas_width(col_names)
       list(
         n_rows = nrow(mat),
         n_cols = ncol(mat),
@@ -2350,20 +2362,11 @@ server <- function(
       )
 
       shiny$div(
-        # The `is-zoom` modifier is re-applied on every (re)mount from the
-        # current control value via isolate() — read without a reactive
-        # dependency so toggling it never re-renders the plot; live toggles are
-        # the observer's job. radioGroupButtons' choiceValues = c(FALSE, TRUE)
-        # round-trip as the strings "FALSE"/"TRUE", never as a logical, which is
-        # what as.logical() is doing here.
-        class = paste(
-          "viz-plot-stage amr-stage",
-          if (isTRUE(as.logical(shiny$isolate(input$zoom_view)))) "is-zoom"
-        ),
+        class = "viz-plot-stage amr-stage",
         id = ns("plot_stage"),
         prompt,
         loading,
-        shiny$plotOutput(ns("amr_plot"), height = "auto")
+        zoom_viewport(shiny$plotOutput(ns("amr_plot"), height = "auto"))
       )
     })
 
@@ -2401,24 +2404,6 @@ server <- function(
         layout_fit()$min_pt
       }
     }
-
-    # Fit ⇄ Zoom display mode, driven by this engine's own `zoom_view` control
-    # (right sidebar, amr_controls()). Purely toggles the .is-zoom class on the
-    # mounted stage — the image is not re-rendered (see the amr-stage CSS in
-    # app/styles/main.scss), which is what makes it free on a matrix that takes
-    # a second to draw. ignoreInit: the initial state is already stamped on the
-    # stage div by renderUI's isolate() read.
-    shiny$observeEvent(
-      input$zoom_view,
-      {
-        shinyjs::toggleClass(
-          id = "plot_stage",
-          class = "is-zoom",
-          condition = isTRUE(as.logical(input$zoom_view))
-        )
-      },
-      ignoreInit = TRUE
-    )
 
     # Rendered through ggsave (via renderImage) rather than renderPlot so the
     # whole frame takes the chosen background: ggsave derives the device
@@ -2489,10 +2474,6 @@ server <- function(
       c(
         collect_input_snapshot(input, "amr_"),
         list(
-          # No amr_ prefix: `zoom_view` is the shared display-mode control, named
-          # the same here as in the Tree, so the prefix sweep never picks it up.
-          # Saved as a logical, as the Tree saves it.
-          zoom_view = isTRUE(as.logical(input$zoom_view)),
           .layers = amr_layers(),
           .element_colors = amr_element_colors()
         )

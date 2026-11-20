@@ -17,6 +17,7 @@ box::use(
       attach_ro,
       check_db_loadable,
       check_import_compatibility,
+      describe_db,
       read_db_signature
     ],
   app / logic / db_compat,
@@ -111,6 +112,28 @@ test_that("check_db_loadable accepts a real database and rejects the rest", {
   junk <- file.path(dir, "notes.txt")
   writeLines("hello", junk)
   expect_false(check_db_loadable(junk)$ok)
+})
+
+test_that("describe_db summarises a database and tolerates missing tables", {
+  dir <- local_tempdir()
+  db <- file.path(dir, "local.db")
+  build_db(db, default_local(), metadata = meta_df(c("A", "B")))
+
+  info <- describe_db(db)
+  expect_identical(info$species, "Testus organismus")
+  expect_identical(info$isolates, 2L)
+  expect_true(nzchar(info$scheme))
+
+  # No metadata table yet: the count is unknown, not an error.
+  bare <- file.path(dir, "bare.db")
+  build_db(bare, default_local())
+  expect_true(is.na(describe_db(bare)$isolates))
+  expect_identical(describe_db(bare)$species, "Testus organismus")
+
+  # Not a database at all.
+  junk <- file.path(dir, "notes.txt")
+  writeLines("hello", junk)
+  expect_true(is.na(describe_db(junk)$species))
 })
 
 test_that("read_db_signature summarises a well-formed database", {

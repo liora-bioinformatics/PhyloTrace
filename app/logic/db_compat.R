@@ -143,6 +143,51 @@ check_db_loadable <- function(db_path) {
   list(ok = TRUE, reason = NA_character_)
 }
 
+#' Describe a PhyloTrace Database
+#'
+#' Cheap read-only summary shown on the start screen before a database is
+#' opened: the species, the cgMLST scheme and how many isolates it holds. Every
+#' field is optional: a database that lacks a table (or is not readable) yields
+#' `NA` for that field rather than an error, so the caller can always render.
+#'
+#' @param db_path Character path to a database file that passed
+#'   [check_db_loadable()].
+#' @return A list with `species`, `scheme` (character, `NA` when unknown) and
+#'   `isolates` (integer, `NA` when unknown).
+#' @export
+describe_db <- function(db_path) {
+  out <- list(species = NA_character_, scheme = NA_character_, isolates = NA_integer_)
+  con <- tryCatch(connect_ro(db_path), error = function(e) NULL)
+  if (is.null(con)) {
+    return(out)
+  }
+  on.exit(dbDisconnect(con), add = TRUE)
+
+  tables <- tryCatch(dbListTables(con), error = function(e) character(0))
+  # First non-empty value of a query's single column, or NA.
+  first_value <- function(sql) {
+    v <- tryCatch(dbGetQuery(con, sql)[[1]], error = function(e) NULL)
+    v <- v[!is.na(v) & nzchar(v)]
+    if (length(v)) as.character(v[[1]]) else NA_character_
+  }
+
+  if ("mlst_type" %in% tables) {
+    out$species <- first_value("SELECT species FROM mlst_type")
+    out$scheme <- first_value("SELECT source FROM mlst_type")
+  }
+  # The scheme's own display name ("L. monocytogenes cgMLST") beats the bare
+  # provider recorded in mlst_type.
+  if ("scheme_overview" %in% tables) {
+    name <- first_value("SELECT value FROM scheme_overview WHERE key = 'Name'")
+    if (!is.na(name)) out$scheme <- name
+  }
+  if ("metadata" %in% tables) {
+    n <- tryCatch(dbGetQuery(con, "SELECT COUNT(*) AS n FROM metadata")$n, error = function(e) NA)
+    out$isolates <- as.integer(n %||na% NA_integer_)
+  }
+  out
+}
+
 # Formats a file path into a SQLite-safe file: URI string with encoded path segments.
 .db_uri <- function(path) {
   # Normalize slashes and clean up leading slash sequences

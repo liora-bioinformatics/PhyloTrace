@@ -1068,19 +1068,26 @@ AMR_COL_IN <- 0.135
 #' grows only as far as keeps a cell a cell (`AMR_GRID_MIN_IN`). A page made
 #' wide for labels nobody can read is only white space.
 #'
-#' The reader's text size moves it only by the width the mapped strips gain
-#' (see .strip_in). The preview is shown fitted to its frame, so a page grown
-#' in step with the text would scale every label straight back down and the
-#' control would change nothing anyone can see; the Tree and the Epi curve
-#' keep a fixed page for the same reason. A rotated gene name is as tall as
-#' its column is wide, so a bigger text size cannot set it past the column
-#' this width gives it.
+#' A rotated gene name is as tall as its column is wide, so a text size over
+#' 100% can only enlarge it by widening the columns (rule G1). The preview is
+#' fitted to its stage, though, so that pays only while it changes the page's
+#' shape: a page widened and heightened alike is scaled straight back down, and
+#' one already flatter than the stage is limited by the stage's width. The
+#' columns therefore widen with the text size only up to the width at which
+#' the page, `height_in` tall, reaches the stage's shape
+#' (`viz_fit$STAGE_ASPECT`), and only when a height is given - the caller
+#' passes one only while the aspect is the fit's, since a ratio the reader set
+#' would grow the height along with the width (rule G4). A text size under
+#' 100% never narrows the page, for the same reason. The mapped strips' own
+#' gain (see .strip_in) is added either way.
 #'
 #' @param n_cols Integer. Gene (or class) columns drawn.
 #' @param show_col_names Logical. Whether the gene names are wanted.
 #' @param n_strips Integer. Annotation strips beside the rows.
 #' @param base_in Numeric. The canvas before it grows.
 #' @param text_scale Numeric. The reader's text-size bias, 1 = fitted.
+#' @param height_in Numeric or NULL. The page's height at the base width, when
+#'   the aspect follows the fit; NULL keeps the columns at their 100% width.
 #' @return Numeric inches.
 #' @export
 amr_canvas_width_in <- function(
@@ -1088,7 +1095,8 @@ amr_canvas_width_in <- function(
   show_col_names = TRUE,
   n_strips = 0L,
   base_in = AMR_CANVAS_IN,
-  text_scale = 1
+  text_scale = 1,
+  height_in = NULL
 ) {
   n <- max(as.integer(n_cols %||% 1L), 1L)
   n_strips <- max(as.integer(n_strips %||% 0L), 0L)
@@ -1101,9 +1109,16 @@ amr_canvas_width_in <- function(
   if (isFALSE(show_col_names) || width_for(floor_cell_in) > ceiling_in) {
     return(round(bare + extra, 2))
   }
-  cell_in <- max(AMR_COL_IN, floor_cell_in)
+  base_w <- .clamp(width_for(max(AMR_COL_IN, floor_cell_in)), base_in, ceiling_in)
+  k <- viz_fit$text_scale(text_scale)
+  height_in <- suppressWarnings(as.numeric(height_in %||% NA_real_))
+  w <- base_w
+  if (k > 1 && length(height_in) == 1L && isTRUE(is.finite(height_in))) {
+    grown <- min(width_for(AMR_COL_IN * k), ceiling_in * k)
+    w <- max(base_w, min(grown, height_in / viz_fit$STAGE_ASPECT))
+  }
   # Rounded up, so a page sized to seat names exactly at the floor still does.
-  ceiling((.clamp(width_for(cell_in), base_in, ceiling_in) + extra) * 100) / 100
+  ceiling((w + extra) * 100) / 100
 }
 
 #' The dendrogram depth control's default, in percent of the fitted depth.
@@ -1588,7 +1603,13 @@ amr_auto_layout <- function(
       k,
     AMR_ELEMENT_MIN_PT
   )
-  elem_flat <- .element_fontsize(element_titles, element_cols, body_w, elem_cap)
+  elem_flat <- .element_fontsize(
+    element_titles,
+    element_cols,
+    body_w,
+    elem_cap,
+    left_in = n_strips * strip_in + max(dend_cm, 0) / 2.54
+  )
   elem_rot <- if (elem_flat >= AMR_ELEMENT_MIN_PT) 0 else 90
   fontsize_element <- if (identical(elem_rot, 0)) {
     elem_flat
@@ -1916,21 +1937,41 @@ amr_auto_layout <- function(
   min(body_w * cols / sum(cols))
 }
 
-# The largest type, up to `cap`, that fits every element-type label flat inside
-# its own panel. Returns the cap where there is nothing to label, so a screen
-# of one unnamed panel is never forced into the rotated branch by an empty
-# title.
-.element_fontsize <- function(titles, cols, body_w, cap) {
+# The largest type, up to `cap`, at which every element-type label sits flat
+# without running into the next one. Returns the cap where there is nothing to
+# label, so a screen of one unnamed panel is never forced into the rotated
+# branch by an empty title.
+#
+# Each label is centred under its panel, and nothing clips it there, so its
+# room is the gap to its neighbours' labels rather than its own panel's width
+# (rule T5, docs/figure-text-rules.md): "Resistance" under a four-gene panel
+# beside "Virulence" under twenty-two leans into the room the shorter
+# neighbour leaves. Measured against only its own panel, the narrowest panel
+# set every label on the page in five-point type. The first label may also
+# lean left into `left_in`, the empty band under the strips and the row
+# dendrogram; the last stays inside the body, since the legend column sits to
+# its right.
+.element_fontsize <- function(titles, cols, body_w, cap, left_in = 0) {
   titles <- as.character(titles %||% character(0))
   cols <- as.numeric(cols %||% numeric(0))
   if (!length(titles) || length(titles) != length(cols) || sum(cols) <= 0) {
     return(cap)
   }
   widths <- body_w * cols / sum(cols)
-  min(
-    cap,
-    72 * widths * AMR_TITLE_FILL / (AMR_CHAR_EM * pmax(nchar(titles), 1))
+  centres <- cumsum(widths) - widths / 2
+  # Inches each label takes per point of type.
+  per_pt <- vapply(titles, viz_fit$text_width_in, numeric(1), pt = 1)
+  per_pt <- pmax(per_pt, 1e-6)
+  n <- length(titles)
+  room <- c(
+    (centres[[1L]] + max(left_in, 0)) / (per_pt[[1L]] / 2),
+    (body_w - centres[[n]]) / (per_pt[[n]] / 2)
   )
+  if (n > 1L) {
+    pair <- (centres[-1L] - centres[-n]) / ((per_pt[-1L] + per_pt[-n]) / 2)
+    room <- c(room, pair)
+  }
+  min(cap, min(room) * AMR_TITLE_FILL)
 }
 
 # Whether the column-block titles have to be turned on their side.
