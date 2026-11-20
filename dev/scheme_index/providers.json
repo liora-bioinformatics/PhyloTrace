@@ -16,7 +16,7 @@
       "commercial_use": "Downloads permitted for non-commercial purposes only; commercial use needs Ridom's permission.",
       "listing": {
         "method": "automated",
-        "reason": "The scheme list page /ncs/ is open to automated access; robots.txt disallows only /ncs/schema/ and /ncs/strain/, which the tool never requests."
+        "reason": "The scheme list page /ncs/ is open to automated access; robots.txt disallows only /ncs/schema/ and /ncs/strain/. Neither this tool nor the weekly link check (tests/testthat/test-external_links.R, which honours robots.txt since 2026-11-20) requests them."
       },
       "permission": {
         "needed": false,
@@ -69,7 +69,7 @@
       "commercial_use": "Data submitted up to 2024-12-31 may be used with citation; data from 2025 on is limited to non-commercial academic research and public-health surveillance unless licensed. rMLST is academic only.",
       "listing": {
         "method": "automated",
-        "reason": "Scheme metadata (database and scheme names, locus counts, page links) is read from rest.pubmlst.org with written permission. rMLST is never listed."
+        "reason": "Scheme metadata (database and scheme names, locus counts, page links) is read from rest.pubmlst.org with written permission. rMLST is never listed. The scheme pages under /bigsdb, which robots.txt disallows, are not opened by this tool or by the weekly link check."
       },
       "permission": {
         "needed": true,

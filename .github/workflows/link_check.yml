@@ -12,8 +12,9 @@ name: Link Check
 #
 # Run it on demand with the "Run workflow" button, or locally with
 #   PHYLOTRACE_LINK_CHECK=true Rscript -e 'rhino::test_r()'
-# Weekly is deliberate: the providers are asked about ~300 pages per run, which is polite at
-# this rate but not on every push.
+# Weekly is deliberate: the providers are asked about ~100 pages per run, which is polite at
+# this rate but not on every push. Pages a host's robots.txt closes to automated clients (the
+# scheme pages of cgMLST.org and PubMLST among them) are never opened, only listed in the log.
 
 on:
   schedule:
@@ -54,7 +55,6 @@ jobs:
             any::leaflet.providers
             any::rlang
             any::testthat
-            any::tidygeocoder
           needs: check
           dependencies: '"hard"'
 

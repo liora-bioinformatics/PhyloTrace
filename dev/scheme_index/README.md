@@ -2,7 +2,7 @@
 
 The app's list of published typing schemes (`app/logic/data/scheme_index.csv`) is
 generated from `curation.csv` by `scheme_index.py`. The app itself never contacts a
-scheme provider; this tool does, monthly, from GitHub Actions
+scheme provider; this tool does, weekly, from GitHub Actions
 (`.github/workflows/scheme_index.yml`), and only reads scheme names, locus counts
 and page addresses.
 
@@ -26,18 +26,19 @@ test makes sure only providers marked `automated` there can be.
 From PubMLST and Institut Pasteur only scheme metadata is read: database and
 scheme names, locus counts and page links - never alleles, profiles or isolate
 data. EnteroBase's schemes are entered by hand in `curation.csv`
-(`source = manual`) and checked like any other row. The PubMLST and Pasteur
-rows entered by hand before the permissions stay in the index until a row read
-from the provider for the same species and scheme type has been approved; the
-hand-entered row is then left out automatically.
+(`source = manual`) and checked like any other row.
 
 The tool checks `robots.txt` before every host and stops a source whose path is
 disallowed, so switching a source on cannot override a provider's robots rules.
 The one exception is a source whose entry in `config.json` records a written
 permission (`robots_permission`), currently only PubMLST; a test makes sure no
-other source has one.
+other source has one. That permission covers this tool's API calls only: the
+weekly link check (`tests/testthat/test-external_links.R`) also honours
+robots.txt and so never opens the scheme pages of cgMLST.org (`/ncs/schema/`) or
+PubMLST (`/bigsdb`) that the index links to; their addresses are kept current by
+this tool's listing instead.
 
-## Monthly pull request
+## Weekly pull request
 
 The workflow opens (or updates) one pull request, `Scheme index: provider listing
 changes`, when a listing changed:
@@ -62,8 +63,9 @@ For each pending row in `curation.csv`:
    licences (e.g. rMLST).
 3. Run `python dev/scheme_index/scheme_index.py build` and commit both files.
 
-Rows with `source = manual` (classical MLST schemes from PubMLST and Institut
-Pasteur, checked by hand) are never touched by the tool.
+Rows with `source = manual` (EnteroBase) are never touched by the tool. An
+`exclude` row of an automated source is the tool's memory of your decision:
+delete it and the scheme returns as `pending` on the next run.
 
 ## Validation
 

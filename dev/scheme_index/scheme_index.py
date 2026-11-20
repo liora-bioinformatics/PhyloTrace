@@ -524,7 +524,9 @@ def report_markdown(results, problems, n_index):
 
 def update(report_path=None, offline=False):
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    curation = read_curation()
+    # Paths are passed explicitly: the functions' defaults are bound when they
+    # are defined and would ignore a CURATION or INDEX changed afterwards.
+    curation = read_curation(CURATION)
     today = datetime.date.today().isoformat()
     results = {}
     for source, settings in config["sources"].items():
@@ -553,8 +555,8 @@ def update(report_path=None, offline=False):
             continue
         results[source] = merge(curation, source, found, today)
     problems = validate(curation)
-    write_curation(curation)
-    n_index = build_index(curation)
+    write_curation(curation, CURATION)
+    n_index = build_index(curation, INDEX)
     report = report_markdown(results, problems, n_index)
     if report_path:
         Path(report_path).write_text(report, encoding="utf-8")

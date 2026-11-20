@@ -4938,6 +4938,14 @@ label {
     white-space: nowrap;
 }
 
+// The provider's commercial-use rule, on its own row above the checkbox.
+.scheme-terms_rule {
+    flex: 1 1 100%;
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.35;
+}
+
 .species-card_media img {
     display: block;
     width: 100%;

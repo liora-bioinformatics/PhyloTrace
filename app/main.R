@@ -101,6 +101,7 @@ ui <- function(id) {
 
   main_layout <- tagList(
     tags$script(HTML(theme_restore_script())),
+    tags$link(rel = "stylesheet", href = "static/fonts/fonts.css"),
     useWaiter(),
     waiterShowOnLoad(
       html = div(
@@ -124,7 +125,9 @@ ui <- function(id) {
       ),
       window_title = "PhyloTrace",
       # Baseline Bootstrap 5 theme; the navbar button toggles its light/dark mode.
-      theme = bs_theme(version = 5, preset = "shiny"),
+      # The preset's fonts would be imported from Google Fonts; the app serves
+      # them itself (static/fonts), so it starts the same offline.
+      theme = bs_theme(version = 5, preset = "shiny", "web-font-path" = FALSE),
       navbar_options = navbar_options(underline = TRUE),
       fillable_panel(
         title = "Load Database",

@@ -1,8 +1,8 @@
 # app/view/scheme_source.R
 #
-# Provider picker for an imported typing scheme. Links the provider's terms of
-# use and collects the user's confirmation that they obtained the files
-# themselves and may use them.
+# Provider picker for an imported typing scheme. Shows the provider's rule for
+# commercial use, links its terms of use and collects the user's confirmation
+# that they obtained the files themselves and may use them.
 
 box::use(
   rlang[`%||%`],
@@ -59,6 +59,11 @@ server <- function(id, reset = NULL) {
         },
         shiny$div(
           class = "scheme-terms",
+          # The provider's commercial-use rule sits above the checkbox, so it is read before
+          # the terms are confirmed; most providers exclude commercial use.
+          if (!is.na(src$commercial_use)) {
+            shiny$p(class = "scheme-terms_rule", shiny$icon("circle-info"), " ", src$commercial_use)
+          },
           shiny$checkboxInput(
             ns("confirmed"),
             if (own) {

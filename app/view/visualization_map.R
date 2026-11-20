@@ -20,10 +20,8 @@
 
 box::use(
   bslib,
-  curl[nslookup],
   htmltools[HTML],
   htmlwidgets[onRender, saveWidget],
-  httr[timeout, with_config],
   leaflet,
   leaflet.extras[addFullscreenControl, addHeatmap],
   leaflet.minicharts[addMinicharts, clearMinicharts],
@@ -38,7 +36,6 @@ box::use(
   ],
   shinyjs[runjs, toggle, toggleClass, toggleState, useShinyjs],
   stats[aggregate],
-  tidygeocoder[geocode],
   utils[head, tail],
   waiter[Waiter, spin_flower, useWaiter],
 )
@@ -67,6 +64,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / geo[country_code, parse_coordinates],
   app / logic / geocode_cache[clear_geocodes, read_geocodes, write_geocodes],
+  app / logic / geocoder[geocode_places, geocode_stop_text],
   app /
     logic /
     mapping_engine[
@@ -270,8 +268,9 @@ empty_geocode_status <- function() {
     n_new = 0L,
     n_failed_places = 0L,
     failed_preview = "",
-    # Every fresh lookup failed and Nominatim's host does not resolve.
-    offline = FALSE,
+    # Why geocoding stopped before trying every place (see geocode_places()),
+    # "" when it did not.
+    geocode_stop = "",
     # The geocoder's own error, when it aborted rather than missing places.
     geocode_error = "",
     # Coordinates that could not be read, so the row fell back to geocoding.
@@ -312,11 +311,6 @@ geo_problems <- function(kind = character(0), isolate = character(0),
 # still count as inside it: coastal and island sites routinely fall just off a
 # generalised coastline.
 COUNTRY_TOLERANCE_M <- 25000
-
-# Longest a single geocoding request may take, in seconds. tidygeocoder sets no
-# timeout of its own on single lookups, so a stalled connection would otherwise
-# hold the (blocking) Generate indefinitely.
-GEOCODE_TIMEOUT_S <- 15
 
 # Up to this many failed place strings are named in the sidebar feedback;
 # beyond that it just adds a "+N more" tail rather than growing unbounded.
@@ -569,10 +563,10 @@ country_fit <- function(lat, lon, code) {
 # to Nominatim. Newly resolved places are appended to the cache. Returns a list
 # with `located` (one row per distinct place — place, latitude, longitude, with
 # NA coords where a lookup failed), `n_cached` (distinct places served from the
-# cache), `n_new` (distinct places freshly geocoded this call), `offline` and
-# `error` (see empty_geocode_status()), for the geocode-status feedback. A
-# geocoder failure leaves its places unresolved instead of aborting, so
-# isolates with explicit coordinates and cached places still reach the map.
+# cache), `n_new` (distinct places freshly geocoded this call), `stopped` and
+# `error` (see geocode_places()), for the geocode-status feedback. A geocoder
+# failure leaves its places unresolved instead of aborting, so isolates with
+# explicit coordinates and cached places still reach the map.
 # `progress`, when given, is called before each lookup with the number done,
 # the number to do and the seconds spent so far.
 geocode_places_cached <- function(place_vec, db_path = NULL, progress = NULL) {
@@ -590,7 +584,7 @@ geocode_places_cached <- function(place_vec, db_path = NULL, progress = NULL) {
       located = located,
       n_cached = 0L,
       n_new = 0L,
-      offline = FALSE,
+      stopped = "",
       error = ""
     ))
   }
@@ -603,58 +597,18 @@ geocode_places_cached <- function(place_vec, db_path = NULL, progress = NULL) {
 
   todo <- located$place[is.na(hit)]
   n_new <- 0L
-  offline <- FALSE
+  stopped <- ""
   error <- ""
   if (length(todo)) {
+    looked_up <- geocode_places(todo, progress)
     fresh <- data.frame(
       place = todo,
-      latitude = rep(NA_real_, length(todo)),
-      longitude = rep(NA_real_, length(todo)),
+      latitude = looked_up$latitude,
+      longitude = looked_up$longitude,
       stringsAsFactors = FALSE
     )
-    # One place per request, so a slow or stalled one costs at most
-    # GEOCODE_TIMEOUT_S and progress can be reported between them. tidygeocoder
-    # keeps Nominatim's one-request-per-second limit across calls.
-    started <- Sys.time()
-    checked_network <- FALSE
-    for (i in seq_along(todo)) {
-      if (is.function(progress)) {
-        progress(i - 1L, length(todo), as.numeric(difftime(Sys.time(), started, units = "secs")))
-      }
-      res <- tryCatch(
-        with_config(
-          timeout(GEOCODE_TIMEOUT_S),
-          geocode(
-            fresh[i, "place", drop = FALSE],
-            place,
-            method = "osm",
-            lat = "latitude",
-            long = "longitude",
-            quiet = TRUE,
-            progress_bar = FALSE
-          )
-        ),
-        error = function(e) {
-          error <<- conditionMessage(e)
-          NULL
-        }
-      )
-      if (!is.null(res) && nrow(res)) {
-        fresh$latitude[i] <- res$latitude[1]
-        fresh$longitude[i] <- res$longitude[1]
-      }
-      # A failure is usually the data, but the first one checks whether the
-      # service is reachable at all: offline, the remaining lookups would each
-      # only wait for their timeout, so they are skipped and the sidebar says
-      # "offline" instead of blaming every place string.
-      if (is.na(fresh$latitude[i]) && !checked_network) {
-        checked_network <- TRUE
-        offline <- is.null(nslookup("nominatim.openstreetmap.org", error = FALSE))
-        if (offline) {
-          break
-        }
-      }
-    }
+    stopped <- looked_up$stopped
+    error <- looked_up$message
     fill <- match(located$place, fresh$place)
     got <- !is.na(fill)
     located$latitude[got] <- fresh$latitude[fill[got]]
@@ -671,7 +625,7 @@ geocode_places_cached <- function(place_vec, db_path = NULL, progress = NULL) {
     located = located,
     n_cached = n_cached,
     n_new = n_new,
-    offline = offline,
+    stopped = stopped,
     error = error
   )
 }
@@ -702,8 +656,8 @@ geocode_pending_count <- function(meta, db_path = NULL) {
 
 # Format a whole-second duration as M:SS, for the geocoding countdown. The
 # total estimate is the distinct-place count: the public OSM/Nominatim endpoint
-# is rate-limited to ~1 lookup per second (tidygeocoder waits out that min_time
-# between requests), so wall-clock time tracks the count almost 1:1.
+# is rate-limited to ~1 lookup per second (geocode_places() waits out that
+# interval between requests), so wall-clock time tracks the count almost 1:1.
 format_mmss <- function(secs) {
   secs <- max(as.integer(secs), 0L)
   sprintf("%d:%02d", secs %/% 60L, secs %% 60L)
@@ -848,13 +802,15 @@ build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
   df$longitude[fill] <- geo$located$longitude[hit[fill]]
   n_cached <- geo$n_cached
   n_new <- geo$n_new
-  offline <- geo$offline
+  stopped <- geo$stopped
   error <- geo$error
 
   # A postcode Nominatim does not know sinks the whole query, so places that
   # failed with one are retried without it, which places them at city level.
+  # Skipped once the geocoder has stopped: the network or service is the
+  # problem then, not the postcode.
   retry <- need & is.na(df$latitude) & nzchar(fallback) & fallback != df$place
-  if (any(retry) && !offline) {
+  if (any(retry) && !nzchar(stopped)) {
     geo2 <- geocode_places_cached(
       fallback[retry],
       db_path,
@@ -877,8 +833,8 @@ build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
     df$place[got] <- fallback[got]
     n_cached <- n_cached + geo2$n_cached
     n_new <- n_new + geo2$n_new
-    offline <- geo2$offline
-    if (!nzchar(error)) {
+    stopped <- geo2$stopped
+    if (nzchar(geo2$error)) {
       error <- geo2$error
     }
   }
@@ -898,7 +854,7 @@ build_map_coords <- function(meta, db_path = NULL, progress = NULL) {
   status$n_new <- n_new
   status$n_failed_places <- length(failed_places)
   status$failed_preview <- format_failed_preview(failed_places)
-  status$offline <- offline
+  status$geocode_stop <- stopped
   status$geocode_error <- error
 
   out <- df[mapped, , drop = FALSE]
@@ -1555,6 +1511,44 @@ format_daterange_label <- function(rng) {
   }
 }
 
+# Tiles are fetched by the browser, not the server, so only the page can tell
+# that they fail: offline, behind a proxy, or with the provider down, the map
+# would just stay grey. After a few failed tiles with none loading in between,
+# a notice says so over the map; it goes away as soon as a tile loads again
+# (connection back, or another basemap picked). Styled inline so the saved HTML
+# export, which carries no app stylesheet, shows it the same; html2canvas skips
+# it, so a PNG export is never stamped with it.
+tile_error_script <- paste(
+  "function(el, x) {",
+  "  var map = this, failed = 0, note = null;",
+  "  function show() {",
+  "    if (note) { note.style.display = ''; return; }",
+  "    note = document.createElement('div');",
+  "    note.setAttribute('data-html2canvas-ignore', 'true');",
+  "    note.setAttribute('role', 'status');",
+  "    note.style.cssText = 'position:absolute;top:10px;left:50%;' +",
+  "      'transform:translateX(-50%);z-index:1000;max-width:80%;padding:6px 10px;' +",
+  "      'font-size:12px;line-height:1.3;color:#000;background:rgba(255,255,255,0.92);' +",
+  "      'border-radius:4px;box-shadow:0 1px 5px rgba(0,0,0,0.4);pointer-events:none;';",
+  "    note.textContent = 'Basemap tiles could not be loaded. Check the internet ' +",
+  "      'connection, or pick another basemap. Isolates are still drawn.';",
+  "    el.appendChild(note);",
+  "  }",
+  "  function watch(layer) {",
+  "    if (!(layer instanceof L.TileLayer) || layer.__ptTileWatch) return;",
+  "    layer.__ptTileWatch = true;",
+  "    layer.on('tileerror', function() { if (++failed >= 3) show(); });",
+  "    layer.on('tileload', function() {",
+  "      failed = 0;",
+  "      if (note) note.style.display = 'none';",
+  "    });",
+  "  }",
+  "  map.eachLayer(watch);",
+  "  map.on('layeradd', function(e) { watch(e.layer); });",
+  "}",
+  sep = "\n"
+)
+
 # Assemble the full leaflet widget (no view/zoom — the caller sets that): base
 # tiles, decorations, plugins, then the layer for the active mode. Shared by the
 # live renderer and the HTML export. `regions` is build_map_coords()'s
@@ -1604,6 +1598,7 @@ build_map <- function(
       leaflet$addProviderTiles(m, o$tiles)
     }
   }
+  m <- onRender(m, tile_error_script)
   if (o$scalebar) {
     m <- leaflet$addScaleBar(m, position = "bottomleft")
   }
@@ -2847,11 +2842,14 @@ server <- function(
           sprintf(" All %d isolates mapped", s$n_mapped)
         )
       } else {
-        why <- if (isTRUE(s$offline)) {
+        stopped <- s$geocode_stop %||% ""
+        why <- if (nzchar(stopped)) {
           paste(
-            "Nominatim (nominatim.openstreetmap.org) could not be reached, so",
-            "no new places were geocoded. Isolates with coordinates or with",
-            "places geocoded before are still shown. Not found:"
+            geocode_stop_text(stopped),
+            if (nzchar(s$geocode_error %||% "")) sprintf("(%s)", s$geocode_error),
+            "Places not looked up yet are tried again on the next Generate;",
+            "isolates with coordinates or with places geocoded before are",
+            "still shown. Not mapped:"
           )
         } else if (nzchar(s$geocode_error %||% "")) {
           paste0("The geocoder failed (", s$geocode_error, "). Not found:")
@@ -2866,7 +2864,7 @@ server <- function(
               " %d of %d isolates mapped%s",
               s$n_mapped,
               s$n_isolates,
-              if (isTRUE(s$offline)) " (offline)" else ""
+              if (nzchar(stopped)) " (geocoding stopped)" else ""
             )
           ),
           paste(why, s$failed_preview)
@@ -3966,8 +3964,11 @@ server <- function(
         }
         shiny$showNotification(
           paste0(
-            if (isTRUE(built$status$offline)) {
-              "Nominatim could not be reached, so no isolate place could be geocoded."
+            if (nzchar(built$status$geocode_stop)) {
+              paste(
+                geocode_stop_text(built$status$geocode_stop),
+                "No isolate place could be geocoded."
+              )
             } else {
               paste(
                 "No mappable locations found. Fill in coordinates, or a city,",
@@ -3980,6 +3981,19 @@ server <- function(
           duration = 8
         )
       } else {
+        # A partial map would otherwise hide that the run was cut short: the
+        # sidebar's tooltip is easy to miss.
+        if (nzchar(built$status$geocode_stop)) {
+          shiny$showNotification(
+            paste(
+              geocode_stop_text(built$status$geocode_stop),
+              "The map shows the isolates placed so far; Generate again to",
+              "look up the rest."
+            ),
+            type = "warning",
+            duration = 10
+          )
+        }
         fit_data_controls(coords)
       }
       map_coords(coords)

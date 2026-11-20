@@ -1,4 +1,5 @@
 box::use(
+  jsonlite[fromJSON],
   testthat[expect_false, expect_identical, expect_match, expect_null, expect_true, test_that],
 )
 box::use(
@@ -25,4 +26,16 @@ test_that("versions with shell or control characters are refused", {
   expect_null(scheme_sources$version_problem("2026-11-16"))
   expect_match(scheme_sources$version_problem("$(rm -rf ~)"), "may only contain")
   expect_match(scheme_sources$version_problem("1`id`"), "may only contain")
+})
+
+test_that("every provider but an own scheme shows a rule for commercial use", {
+  # The register of reviewed provider terms; each provider in it must reach the picker.
+  register <- fromJSON("../../dev/scheme_index/providers.json")$providers
+  ids <- unname(scheme_sources$source_choices())
+  expect_true(all(names(register) %in% ids))
+  for (id in setdiff(ids, "own")) {
+    rule <- scheme_sources$scheme_source(id)$commercial_use
+    expect_true(is.character(rule) && !is.na(rule) && nzchar(rule), info = id)
+  }
+  expect_true(is.na(scheme_sources$scheme_source("own")$commercial_use))
 })

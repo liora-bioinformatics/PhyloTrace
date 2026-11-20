@@ -13,13 +13,20 @@ box::use(
 # One provider per row. `offers` lists the scheme types it publishes, so a
 # picker only names providers that can supply the scheme asked for;
 # `terms_url` is the provider's own policy, which governs its data (reviewed
-# November 2026). Acknowledgement and citation are recorded in the database.
+# November 2026); `commercial_use` sums up its rule for commercial use, shown
+# next to the terms confirmation (the full wording, with the review date, is
+# in dev/scheme_index/providers.json). Acknowledgement and citation are
+# recorded in the database.
 SOURCES <- list(
   cgmlst_org = list(
     offers = c("cgMLST"),
     label = "cgMLST.org Nomenclature Server (Ridom GmbH)",
     url = "https://www.cgmlst.org/ncs",
     terms_url = "https://www.cgmlst.org/serverpolicy.html",
+    commercial_use = paste(
+      "cgMLST.org: downloads for non-commercial purposes only; commercial use",
+      "needs permission from Ridom GmbH."
+    ),
     acknowledgement = paste(
       "This publication made use of the cgMLST.org website",
       "(http://www.cgMLST.org/) that is developed and maintained by Ridom GmbH."
@@ -34,6 +41,11 @@ SOURCES <- list(
     label = "PubMLST (University of Oxford)",
     url = "https://pubmlst.org",
     terms_url = "https://pubmlst.org/terms-conditions",
+    commercial_use = paste(
+      "PubMLST: data submitted from 2025 on is limited to non-commercial",
+      "research and public-health surveillance unless licensed; rMLST is",
+      "academic only."
+    ),
     acknowledgement = paste(
       "This publication made use of the PubMLST website (https://pubmlst.org/)",
       "sited at the University of Oxford. The development of that website was",
@@ -50,6 +62,10 @@ SOURCES <- list(
     label = "Institut Pasteur BIGSdb",
     url = "https://bigsdb.pasteur.fr",
     terms_url = "https://bigsdb.pasteur.fr/policy/",
+    commercial_use = paste(
+      "Institut Pasteur: academic, non-commercial use only; other uses need a",
+      "licence from Institut Pasteur."
+    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Jolley KA, Maiden MCJ. BIGSdb: Scalable analysis of bacterial genome",
@@ -61,6 +77,10 @@ SOURCES <- list(
     label = "Chewie-NS (chewBBACA)",
     url = "https://chewbbaca.online",
     terms_url = "https://chewbbaca.online",
+    commercial_use = paste(
+      "Chewie-NS: no data licence published; schemas adapted from other",
+      "providers can carry those providers' terms."
+    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Mamede R, Vila-Cerqueira P, Silva M, Carriço JA, Ramirez M. Chewie",
@@ -74,6 +94,10 @@ SOURCES <- list(
     label = "EnteroBase (University of Warwick)",
     url = "https://enterobase.warwick.ac.uk",
     terms_url = "https://enterobase.warwick.ac.uk/terms",
+    commercial_use = paste(
+      "EnteroBase: academic use only; commercial or business use needs a",
+      "licence from the University of Warwick."
+    ),
     acknowledgement = NA_character_,
     citation = paste(
       "Zhou Z, Alikhan NF, Mohamed K, Fan Y, Achtman M. The EnteroBase user's",
@@ -87,6 +111,7 @@ SOURCES <- list(
     label = "Own / in-house scheme",
     url = NA_character_,
     terms_url = NA_character_,
+    commercial_use = NA_character_,
     acknowledgement = NA_character_,
     citation = NA_character_
   ),
@@ -95,6 +120,10 @@ SOURCES <- list(
     label = "Other provider",
     url = NA_character_,
     terms_url = NA_character_,
+    commercial_use = paste(
+      "Many scheme providers allow non-commercial use only; check this",
+      "provider's terms before commercial use."
+    ),
     acknowledgement = NA_character_,
     citation = NA_character_
   )
@@ -118,7 +147,8 @@ source_choices <- function(types = NULL) {
 #' @param id Character provider id, as in `source_choices()`.
 #'
 #' @return List with `id`, `offers`, `label`, `url`, `terms_url`,
-#'   `acknowledgement` and `citation`; `NULL` for an unknown id.
+#'   `commercial_use`, `acknowledgement` and `citation`; `NULL` for an unknown
+#'   id.
 #' @export
 scheme_source <- function(id) {
   if (is.null(id) || length(id) != 1L || is.na(id) || !id %in% names(SOURCES)) {

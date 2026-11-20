@@ -8,6 +8,10 @@
 # run only when PHYLOTRACE_LINK_CHECK=true, which the weekly workflow
 # .github/workflows/link_check.yml sets; locally:
 #   PHYLOTRACE_LINK_CHECK=true Rscript -e 'rhino::test_r()'
+# Pages a host's robots.txt closes to automated clients are not opened, only listed as not
+# checked: the scheme pages of cgMLST.org (/ncs/schema/) and PubMLST (/bigsdb), whose addresses
+# the weekly scheme index run (dev/scheme_index) reads from the providers' listings instead.
+# The geocoder and NCBI E-utilities are APIs, called under their own usage policies.
 
 box::use(
   curl[handle_data, has_internet, multi_add, multi_run, new_handle, new_pool],
@@ -15,10 +19,10 @@ box::use(
   leaflet.providers[providers_default],
   rlang[`%||%`],
   testthat[expect, expect_true, skip_if, test_that],
-  tidygeocoder[geo],
   utils[getParseData, modifyList, read.csv],
 )
 box::use(
+  app / logic / geocoder[nominatim_lookup],
   app / logic / scheme_sources[safe_url],
   app / logic / species,
   app / logic / urls,
@@ -28,7 +32,8 @@ box::use(
 # one fails the offline test until it is added here.
 URL_BUILDERS <- list(
   taxonomy_url = function() urls$taxonomy_url(470L),
-  cc_license_url = function() c(urls$cc_license_url("by-sa", "4.0"), urls$cc_license_url("zero"))
+  cc_license_url = function() c(urls$cc_license_url("by-sa", "4.0"), urls$cc_license_url("zero")),
+  nominatim_search_url = function() urls$nominatim_search_url("Berlin, Germany")
 )
 
 # Constants of urls.R that are tile templates rather than pages.
@@ -41,6 +46,12 @@ LITERAL_HOMES <- c("logic/urls.R", "logic/scheme_sources.R")
 APP_DIR <- "../../app"
 
 USER_AGENT <- "PhyloTrace-link-check (+https://github.com/liora-bioinformatics/PhyloTrace)"
+
+# Product token of USER_AGENT that robots.txt groups are matched against (RFC 9309).
+ROBOTS_AGENT <- "phylotrace-link-check"
+
+# robots.txt rules per origin, fetched once per run.
+robots_cache <- new.env()
 
 # Files the sweep leaves out: binaries, the bundles built from app/js and app/styles (both swept
 # as sources), a vendored library, and local downloads .gitignore keeps out of the app.
@@ -242,6 +253,100 @@ fetch_urls <- function(urls, host_con = 2L) {
   out
 }
 
+# Allow and Disallow rules of a robots.txt that apply to the link check (RFC 9309): those of the
+# groups naming its product token, otherwise those of the `*` groups. Consecutive user-agent
+# lines share a group; a user-agent line after a rule starts a new one.
+robots_rules <- function(text) {
+  lines <- trimws(sub("#.*$", "", strsplit(text, "\r?\n|\r")[[1]]))
+  lines <- lines[grepl("^[A-Za-z-]+[[:space:]]*:", lines)]
+  keys <- tolower(trimws(sub(":.*$", "", lines)))
+  values <- trimws(sub("^[^:]*:", "", lines))
+  groups <- list()
+  for (i in seq_along(keys)) {
+    if (keys[i] == "user-agent") {
+      n <- length(groups)
+      if (!n || groups[[n]]$closed) {
+        groups[[n + 1L]] <- list(
+          agents = character(0), type = character(0), path = character(0), closed = FALSE
+        )
+        n <- n + 1L
+      }
+      groups[[n]]$agents <- c(groups[[n]]$agents, tolower(values[i]))
+    } else if (keys[i] %in% c("allow", "disallow") && length(groups)) {
+      n <- length(groups)
+      groups[[n]]$closed <- TRUE
+      # An empty Disallow allows everything, the same as no rule.
+      if (nzchar(values[i])) {
+        groups[[n]]$type <- c(groups[[n]]$type, keys[i])
+        groups[[n]]$path <- c(groups[[n]]$path, values[i])
+      }
+    }
+  }
+  chosen <- Filter(function(g) ROBOTS_AGENT %in% g$agents, groups)
+  if (!length(chosen)) {
+    chosen <- Filter(function(g) "*" %in% g$agents, groups)
+  }
+  data.frame(
+    type = as.character(unlist(lapply(chosen, `[[`, "type"))),
+    path = as.character(unlist(lapply(chosen, `[[`, "path"))),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Regular expression of a robots.txt path pattern: `*` matches any characters, a final `$` ends
+# the path, everything else is literal and matched from the start of the path.
+robots_regex <- function(pattern) {
+  anchored <- endsWith(pattern, "$")
+  if (anchored) {
+    pattern <- substr(pattern, 1L, nchar(pattern) - 1L)
+  }
+  literal <- gsub("([\\[\\].\\\\|(){}^$*+?])", "\\\\\\1", pattern, perl = TRUE)
+  paste0("^", gsub("\\*", ".*", literal, fixed = TRUE), if (anchored) "$")
+}
+
+# TRUE when robots.txt rules let the link check open a URL: the longest matching rule decides
+# and Allow wins a tie; a URL no rule matches is allowed. NULL rules (robots.txt unreachable)
+# allow nothing.
+robots_allows <- function(rules, url) {
+  if (is.null(rules)) {
+    return(FALSE)
+  }
+  target <- sub("#.*$", "", sub("^https?://[^/?#]+", "", url))
+  if (!startsWith(target, "/")) {
+    target <- paste0("/", target)
+  }
+  hit <- vapply(rules$path, function(p) grepl(robots_regex(p), target, perl = TRUE), logical(1))
+  if (!any(hit)) {
+    return(TRUE)
+  }
+  len <- nchar(rules$path[hit])
+  any(rules$type[hit][len == max(len)] == "allow")
+}
+
+# For each URL, whether its host's robots.txt lets the link check open it. A missing robots.txt
+# (HTTP 4xx) allows everything; an unreachable one (transport error, HTTP 5xx) nothing, as
+# RFC 9309 asks.
+robots_permitted <- function(urls) {
+  origins <- sub("^(https?://[^/?#]+).*$", "\\1", urls)
+  todo <- setdiff(unique(origins), ls(robots_cache))
+  if (length(todo)) {
+    answers <- fetch_urls(paste0(todo, "/robots.txt"))
+    for (origin in todo) {
+      res <- answers[[paste0(origin, "/robots.txt")]]
+      robots_cache[[origin]] <- if (!is.na(res$error) || res$status >= 500L) {
+        NULL
+      } else if (res$status >= 400L) {
+        robots_rules("")
+      } else {
+        robots_rules(res$body)
+      }
+    }
+  }
+  vapply(seq_along(urls), function(i) {
+    robots_allows(robots_cache[[origins[i]]], urls[i])
+  }, logical(1))
+}
+
 # What is wrong with an answer, NA when it is a working one of the expected kind.
 problem <- function(url, kind, res) {
   ok_status <- isTRUE(res$status >= 200L && res$status < 300L)
@@ -269,15 +374,28 @@ problem <- function(url, kind, res) {
 }
 
 # Checks inventory entries online and reports every failing one with where it comes from.
-# Rate-limited, server-side and transport failures get a second, slower attempt.
+# Rate-limited, server-side and transport failures get up to three slower attempts. Entries
+# robots.txt closes to the link check are not opened, only listed.
 expect_urls_work <- function(inv) {
   inv <- inv[!is.na(inv$url), , drop = FALSE]
+  allowed <- robots_permitted(inv$url)
+  if (any(!allowed)) {
+    closed <- unique(inv$url[!allowed])
+    message(sprintf(
+      "Not checked, robots.txt closes them to automated clients (%d):\n%s",
+      length(closed),
+      paste0("  ", closed, collapse = "\n")
+    ))
+  }
+  inv <- inv[allowed, , drop = FALSE]
   results <- fetch_urls(inv$url)
-  retry <- names(results)[vapply(results, function(r) {
-    !is.na(r$error) || r$status == 429L || r$status >= 500L
-  }, logical(1))]
-  if (length(retry)) {
-    Sys.sleep(10)
+  transient <- function(r) !is.na(r$error) || r$status == 429L || r$status >= 500L
+  for (wait in c(10, 30, 60)) {
+    retry <- names(results)[vapply(results, transient, logical(1))]
+    if (!length(retry)) {
+      break
+    }
+    Sys.sleep(wait)
     results[retry] <- fetch_urls(retry, host_con = 1L)[retry]
   }
   issues <- vapply(seq_len(nrow(inv)), function(i) {
@@ -379,6 +497,34 @@ test_that("every basemap resolves to a tile URL without placeholders", {
   }
 })
 
+test_that("robots.txt rules are applied as RFC 9309 describes", {
+  robots <- paste(
+    "User-agent: SomeBot",
+    "Disallow: /",
+    "",
+    "User-agent: *",
+    "Disallow: /ncs/schema/ # schemes",
+    "Disallow: /bigsdb",
+    "Allow: /bigsdb/open$",
+    "Disallow: /*.pdf$",
+    "Disallow:",
+    sep = "\n"
+  )
+  rules <- robots_rules(robots)
+  expect_true(robots_allows(rules, "https://www.cgmlst.org/ncs/"))
+  expect_true(!robots_allows(rules, "https://www.cgmlst.org/ncs/schema/Abaumannii/"))
+  expect_true(!robots_allows(rules, "https://pubmlst.org/bigsdb?db=pubmlst_neisseria_seqdef"))
+  expect_true(robots_allows(rules, "https://pubmlst.org/bigsdb/open"))
+  expect_true(!robots_allows(rules, "https://pubmlst.org/bigsdb/open/more"))
+  expect_true(!robots_allows(rules, "https://x.org/a/b.pdf"))
+  expect_true(robots_allows(rules, "https://x.org/a/b.pdf?page=2"))
+  expect_true(robots_allows(rules, "https://x.org"))
+  own_group <- robots_rules("User-agent: phylotrace-link-check\nDisallow: /")
+  expect_true(!robots_allows(own_group, "https://x.org/"))
+  expect_true(robots_allows(robots_rules("<!doctype html><html></html>"), "https://x.org/a"))
+  expect_true(!robots_allows(NULL, "https://x.org/a"))
+})
+
 test_that("every URL of urls.R works", {
   skip_unless_online()
   constants <- url_constants()
@@ -446,7 +592,10 @@ test_that("every basemap serves tiles and its attribution links work", {
 
 test_that("the geocoder places a known address", {
   skip_unless_online()
-  # Same tidygeocoder method as the map's geocoding, so endpoint and answer format are both used.
-  hit <- geo(address = "Berlin, Germany", method = "osm", quiet = TRUE, progress_bar = FALSE)
-  expect_true(!is.na(hit$lat[1]) && !is.na(hit$long[1]))
+  # The map's own request, so endpoint, User-Agent and answer format are all exercised.
+  hit <- nominatim_lookup("Berlin, Germany")
+  expect(
+    identical(hit$outcome, "found"),
+    paste("Nominatim lookup failed:", hit$outcome, hit$message)
+  )
 })

@@ -1,6 +1,8 @@
 """Offline tests of the scheme index tooling (run: python -m unittest discover -s dev/scheme_index)."""
 
+import contextlib
 import csv
+import io
 import json
 import sys
 import tempfile
@@ -295,11 +297,16 @@ class UpdateTests(unittest.TestCase):
             si.CURATION, si.INDEX, si.CONFIG, si.FETCHERS["cgmlst_org"] = curation, index, config, down
             try:
                 report = tmp / "report.md"
-                self.assertEqual(si.update(str(report)), 0)
+                # The report is printed too; kept out of the test log, where its
+                # made-up failure would read like a real one.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(si.update(str(report)), 0)
             finally:
                 si.CURATION, si.INDEX, si.CONFIG, si.FETCHERS["cgmlst_org"] = saved
             self.assertEqual(si.read_curation(curation)[0]["listed"], "yes")
             self.assertIn("failed - connection refused", report.read_text())
+            # Only the temporary files are used, never the shipped curation.
+            self.assertIn("The app's index now lists 1 schemes.", report.read_text())
 
 
 class ReportTests(unittest.TestCase):

@@ -70,7 +70,6 @@ dependencies:
   - r-terra
   - r-testthat
   - r-tibble
-  - r-tidygeocoder
   - r-tidyr
   - r-viridislite
   - r-visnetwork=2.1.4=r43_0

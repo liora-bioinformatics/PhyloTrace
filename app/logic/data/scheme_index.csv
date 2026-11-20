@@ -157,7 +157,6 @@
 "Brucella spp","MLST","pubmlst","Brucella spp MLST (21 locus)","21","https://pubmlst.org/bigsdb?db=pubmlst_brucella_seqdef",""
 "Brucella spp","MLST","pubmlst","Brucella spp MLST (9 locus)","9","https://pubmlst.org/bigsdb?db=pubmlst_brucella_seqdef",""
 "Burkholderia cepacia","MLST","pubmlst","Burkholderia cepacia MLST","7","https://pubmlst.org/bigsdb?db=pubmlst_bcc_seqdef",""
-"Burkholderia mallei","MLST","pubmlst","MLST","","https://pubmlst.org/organisms/burkholderia-mallei",""
 "Burkholderia pseudomallei","MLST","pubmlst","Burkholderia pseudomallei MLST","7","https://pubmlst.org/bigsdb?db=pubmlst_bpseudomallei_seqdef",""
 "Campylobacter concisus/curvus","MLST","pubmlst","Campylobacter non-jejuni/coli C. concisus/curvus MLST","7","https://pubmlst.org/bigsdb?db=pubmlst_campylobacter_nonjejuni_seqdef",""
 "Campylobacter fetus","MLST","pubmlst","Campylobacter non-jejuni/coli C. fetus MLST","7","https://pubmlst.org/bigsdb?db=pubmlst_campylobacter_nonjejuni_seqdef",""

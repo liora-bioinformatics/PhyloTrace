@@ -6,6 +6,10 @@
 # their addresses together with their terms and citation in scheme_sources.R, and the scheme
 # index and species metadata carry theirs as data.
 
+box::use(
+  curl[curl_escape],
+)
+
 #' Website of PhyloTrace
 #' @export
 WEBSITE <- "https://liora-bioinformatics.com/phylotrace"
@@ -50,6 +54,21 @@ MAP_LABEL_TILES <- paste0(
   "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/",
   "World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
 )
+
+#' Nominatim Search Request for a Place
+#'
+#' @description OpenStreetMap's Nominatim geocoder, asked for the single best match of a
+#'   free-text place as JSON.
+#'
+#' @param place Character string, e.g. `"Berlin, Germany"`.
+#' @return URL of the search request.
+#' @export
+nominatim_search_url <- function(place) {
+  paste0(
+    "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=",
+    curl_escape(place)
+  )
+}
 
 #' NCBI Taxonomy Page of a Taxon
 #'
