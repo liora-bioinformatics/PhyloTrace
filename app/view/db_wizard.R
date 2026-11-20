@@ -89,6 +89,12 @@ summary_table <- function(rows) {
   )
 }
 
+# Wrapper that lets a step's cards stretch over the step's full height, as on
+# the species step.
+fill_step <- function(...) {
+  shiny$div(class = "setup-fill", ...)
+}
+
 # Step 1: the species, as a 2x2 grid - the choice and an overview of the
 # setup on top, the species card and its published schemes below, each of the
 # lower cells scrolling on its own.
@@ -173,12 +179,11 @@ species_step <- function(ns) {
 # left (a published scheme's "Use details" fills both), the allele files and
 # the optional annotation on the right.
 cgmlst_step <- function(ns) {
-  shiny$tagList(
+  fill_step(
     shiny$uiOutput(ns("cg_task_states")),
     bslib$layout_columns(
       class = "setup-columns",
       col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
-      fill = FALSE,
       shiny$div(
         class = "setup-form",
         setup_ui$setup_task(
@@ -282,7 +287,7 @@ cgmlst_step <- function(ns) {
 
 # Step 3: the optional classical MLST scheme.
 mlst_step <- function(ns) {
-  shiny$tagList(
+  fill_step(
     shiny$div(
       class = "setup-toggle",
       bslib$input_switch(
@@ -297,7 +302,12 @@ mlst_step <- function(ns) {
       ),
       shiny$uiOutput(ns("mlst_hint"))
     ),
-    shiny$conditionalPanel("input.mlst_on", ns = ns, mlst_import$ui(ns("mlst")))
+    shiny$conditionalPanel(
+      "input.mlst_on",
+      ns = ns,
+      class = "setup-fill",
+      mlst_import$ui(ns("mlst"))
+    )
   )
 }
 
@@ -305,10 +315,9 @@ mlst_step <- function(ns) {
 # from the species, so the step informs rather than asks; the override is
 # folded away for the rare case the automatic choice does not fit.
 amr_step <- function(ns) {
-  bslib$layout_columns(
+  fill_step(bslib$layout_columns(
     class = "setup-columns",
     col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
-    fill = FALSE,
     setup_ui$setup_card(
       "AMR screening",
       hint = paste(
@@ -337,15 +346,14 @@ amr_step <- function(ns) {
       ),
       shiny$uiOutput(ns("amr_coverage"))
     )
-  )
+  ))
 }
 
 # Step 5: summary, storage location and the build itself.
 save_step <- function(ns) {
-  bslib$layout_columns(
+  fill_step(bslib$layout_columns(
     class = "setup-columns",
     col_widths = bslib$breakpoints(sm = 12, lg = c(6, 6)),
-    fill = FALSE,
     setup_ui$setup_card(
       "Summary",
       hint = paste(
@@ -382,7 +390,7 @@ save_step <- function(ns) {
       shiny$uiOutput(ns("create_hint")),
       shiny$uiOutput(ns("build_error"))
     )
-  )
+  ))
 }
 
 # The end of a setup: the database exists, and it can only be loaded or a new

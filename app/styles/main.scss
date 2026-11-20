@@ -4306,9 +4306,22 @@ label {
     color: var(--bs-secondary-color);
 }
 
-// Two-column steps (bslib::layout_columns): columns keep their own height.
+// Two-column steps (bslib::layout_columns): the cards stretch over the full
+// height of the step, like the species step. The grid never shrinks below its
+// content, so a tall step scrolls instead.
+.setup-fill {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+
 .setup-columns {
-    align-items: start;
+    flex: 1 0 auto;
+    margin-bottom: 0;
+
+    >.card {
+        margin-bottom: 0;
+    }
 }
 
 @media (max-width: 1100px) {
@@ -4326,6 +4339,10 @@ label {
     flex-direction: column;
     gap: 1rem;
     min-width: 0;
+
+    >.card {
+        flex: 1 1 auto;
+    }
 }
 
 .setup-section {

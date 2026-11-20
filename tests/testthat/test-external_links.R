@@ -212,10 +212,10 @@ fill_tile <- function(template, options = list()) {
   template
 }
 
-# Fetches URLs concurrently, at most two connections per host to stay within the providers'
-# rate limits. Returns, per URL, the HTTP status, content type, text body (empty for binary
-# answers) and the transport error, if any.
-fetch_urls <- function(urls, host_con = 2L) {
+# Fetches URLs concurrently across hosts but one at a time per host, to stay within the
+# providers' rate limits (PubMLST alone is asked about 130 pages). Returns, per URL, the HTTP
+# status, content type, text body (empty for binary answers) and the transport error, if any.
+fetch_urls <- function(urls, host_con = 1L, connect_timeout = 30L) {
   out <- list()
   pool <- new_pool(total_con = 12L, host_con = host_con)
   for (url in unique(urls)) {
@@ -225,8 +225,8 @@ fetch_urls <- function(urls, host_con = 2L) {
         url = u,
         followlocation = TRUE,
         maxredirs = 10L,
-        connecttimeout = 20L,
-        timeout = 90L,
+        connecttimeout = connect_timeout,
+        timeout = 120L,
         useragent = USER_AGENT,
         # Large downloads (such as NCBI's assembly summary) stop after the headers.
         maxfilesize = 2e7
@@ -396,7 +396,7 @@ expect_urls_work <- function(inv) {
       break
     }
     Sys.sleep(wait)
-    results[retry] <- fetch_urls(retry, host_con = 1L)[retry]
+    results[retry] <- fetch_urls(retry, connect_timeout = 90L)[retry]
   }
   issues <- vapply(seq_len(nrow(inv)), function(i) {
     problem(inv$url[i], inv$kind[i], results[[inv$url[i]]])
