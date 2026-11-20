@@ -4222,6 +4222,31 @@ label {
     min-height: 0;
 }
 
+// Steps that may outgrow the window (all but species): the tab wrappers are
+// fixed at 100% height app-wide (Database Browser layout), so a taller step
+// would overflow them and the card body's bottom padding would be lost - the
+// last cards would touch the footer. Here they are a flex chain instead, at
+// least as tall as the card body and growing with the step.
+.setup-wizard .tabbable:has(.tab-pane.active > .setup-fill) {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 100%;
+
+    >.tab-content {
+        display: flex;
+        flex-direction: column;
+        flex: 1 0 auto;
+        height: auto;
+    }
+
+    >.tab-content>.tab-pane.active {
+        flex: 1 0 auto;
+        height: auto;
+    }
+}
+
 .setup-species {
     height: 100%;
     margin-bottom: 0;
@@ -4312,16 +4337,25 @@ label {
 .setup-fill {
     display: flex;
     flex-direction: column;
-    min-height: 100%;
-}
-
-.setup-columns {
     flex: 1 0 auto;
-    margin-bottom: 0;
 
-    >.card {
+    // A nested fill area (the MLST form below its switch) takes only the
+    // height left over, so the step does not overflow by the switch's height.
+    .setup-fill {
+        flex: 1 0 auto;
+        min-height: 0;
+    }
+
+    .setup-columns {
+        flex: 1 0 auto;
         margin-bottom: 0;
     }
+}
+
+// bslib wraps every column in a flex-column grid item; the form stack has to
+// grow inside it for its cards to reach the bottom.
+.setup-columns>.bslib-grid-item>.setup-form {
+    flex: 1 1 auto;
 }
 
 @media (max-width: 1100px) {
@@ -4340,8 +4374,13 @@ label {
     gap: 1rem;
     min-width: 0;
 
+    // Stacked cards share the column's height evenly, whatever they hold, so
+    // content appearing in one (a terms note, a file check) does not resize
+    // the others. A card still grows when its content needs more room.
     >.card {
-        flex: 1 1 auto;
+        flex: 1 1 0;
+        min-height: min-content;
+        margin-bottom: 0;
     }
 }
 
@@ -4721,10 +4760,14 @@ label {
 // A numbered task: number, title and status in the header. Its state
 // (current, done, locked) is set by setup_ui$task_states().
 
-.setup-task_lock.card-body {
+.setup-task_lock {
     display: none;
-    padding-bottom: 0;
-    font-size: 0.85rem;
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
     color: var(--bs-secondary-color);
 }
 
@@ -4904,6 +4947,14 @@ label {
     code {
         overflow-wrap: anywhere;
     }
+}
+
+// The location picker and the create button share one width.
+.setup-storage .setup-pick .btn,
+.setup-storage .setup-actions .btn {
+    width: 16rem;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .setup-done_actions .btn {

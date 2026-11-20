@@ -271,12 +271,11 @@ setup_task <- function(
       ),
       shiny$span(class = "setup-task_title", title),
       if (optional) shiny$span(class = "setup-optional", "optional"),
+      # The lock hint sits in the header, in place of the status, so locking
+      # and unlocking a task never changes the height of its body.
+      shiny$span(class = "setup-task_lock", shiny$icon("lock"), " ", locked_hint),
       shiny$uiOutput(paste0(id, "_status"), inline = TRUE, class = "setup-task_status"),
       hint_icon(title, hint)
-    ),
-    bslib$card_body(
-      class = "setup-task_lock",
-      shiny$span(shiny$icon("lock"), " ", locked_hint)
     ),
     bslib$card_body(class = "setup-card_body setup-task_body", fillable = FALSE, ...)
   )
@@ -299,7 +298,8 @@ TASK_STATE_CSS <- c(
   ),
   locked = paste(
     "#%1$s > .setup-task_body { opacity: 0.4; pointer-events: none; user-select: none; }",
-    "#%1$s .setup-task_lock { display: block; }",
+    "#%1$s .setup-task_lock { display: inline; }",
+    "#%1$s .setup-task_status { display: none; }",
     "#%1$s .setup-task_title { color: var(--bs-secondary-color); }"
   ),
   open = ""

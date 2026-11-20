@@ -364,6 +364,7 @@ save_step <- function(ns) {
     ),
     setup_ui$setup_card(
       "Storage location",
+      class = "setup-storage",
       hint = paste(
         "Choose a folder on this computer. Databases kept on network or shared",
         "drives (NFS, SMB, cloud-synced folders) can be corrupted. The database",
@@ -373,7 +374,7 @@ save_step <- function(ns) {
         class = "setup-pick",
         file_dialog$ui(
           ns("target"),
-          "Choose location and name",
+          "Choose location",
           "floppy-disk"
         ),
         shiny$uiOutput(ns("target_label"), inline = TRUE)
