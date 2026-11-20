@@ -10,6 +10,10 @@ box::use(
   utils[head],
 )
 
+box::use(
+  app / logic / urls[cc_license_url],
+)
+
 #' Settings Key of the Species' NCBI Taxonomy Id
 #'
 #' @description Key of `phylotrace_meta` holding the taxonomy id of the species
@@ -230,22 +234,12 @@ image_credits <- function() {
 license_url <- function(license) {
   m <- regmatches(license, regexec("^CC (BY(-SA)?) ([0-9.]+)", license %||% ""))[[1]]
   if (length(m)) {
-    return(sprintf("https://creativecommons.org/licenses/%s/%s/", tolower(m[2]), m[4]))
+    return(cc_license_url(tolower(m[2]), m[4]))
   }
   if (identical(license, "CC0")) {
-    return("https://creativecommons.org/publicdomain/zero/1.0/")
+    return(cc_license_url("zero"))
   }
   NA_character_
-}
-
-#' NCBI Taxonomy Page of a Taxon
-#'
-#' @param taxid Integer NCBI taxonomy id.
-#'
-#' @return URL of the taxon's NCBI Taxonomy Browser page.
-#' @export
-taxonomy_url <- function(taxid) {
-  paste0("https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=", taxid)
 }
 
 #' Default Database Name for a Species

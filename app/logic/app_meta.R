@@ -11,4 +11,4 @@
 #'
 #' @return Character string, without a leading "v".
 #' @export
-APP_VERSION <- "1.6.1"
+APP_VERSION <- "2.0.0"

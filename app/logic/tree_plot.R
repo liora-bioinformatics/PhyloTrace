@@ -1454,7 +1454,7 @@ LEGEND_SIZE_PT <- round(AXIS_LABEL_SIZE * .MM_TO_PT, 1)
 #' @return Numeric points.
 #' @export
 tree_min_type_pt <- function(opts, md, panel_in = NULL) {
-  opts <- resolve_annotation_widths(opts, md)
+  opts <- resolve_annotation_widths(resolve_text_geometry(opts, md), md)
   panel_in <- panel_in %||%
     tree_panel_width_in(
       opts,
@@ -1463,7 +1463,7 @@ tree_min_type_pt <- function(opts, md, panel_in = NULL) {
     )
   axis_in <- tree_axis_in(opts, panel_in)
   scale <- .scale_of(opts)
-  want <- HEADER_SIZE_MAX * .type_of(opts)
+  want <- HEADER_SIZE_MAX * .header_type_of(opts)
 
   # An annotation header is the smallest type the plot sets, because it is
   # fitted to a column rather than to a row. Only the ones that will actually
@@ -1562,6 +1562,8 @@ scale_tree_opts <- function(opts, k) {
 # branch strokes along with the type, which is what makes an export at another
 # width the same figure (see scale_tree_opts). Text size has to move the type
 # and leave the layout where it is, or "does this still fit?" has no answer.
+# The one exception is rule G1: the annotation columns widen for it, solved
+# once per figure by `tree_column_gain()` and carried on `opts`.
 #' Text size the plot is drawn at when the reader has not said otherwise.
 #' @export
 TEXT_SCALE_DEFAULT <- viz_fit$TEXT_SCALE_DEFAULT
@@ -1572,6 +1574,18 @@ TEXT_SCALE_DEFAULT <- viz_fit$TEXT_SCALE_DEFAULT
 # The scale a piece of *type* is set at: the design's physical scale times the
 # reader's bias. Geometry takes `.scale_of()` alone.
 .type_of <- function(opts) .scale_of(opts) * .text_of(opts)
+
+# The reader's bias on the header band's type (column headers, element-type
+# labels, class names), held to `opts$header_text` where the band may not grow
+# past the room it had at 100% (`tree_header_text()`, rules T3 and G4).
+.header_text_of <- function(opts) {
+  cap <- suppressWarnings(as.numeric(opts$header_text %||% NA_real_))
+  k <- .text_of(opts)
+  if (length(cap) != 1L || !isTRUE(is.finite(cap) && cap >= 1)) k else min(k, cap)
+}
+
+# The scale a header-band label is set at: `.type_of()` under that cap.
+.header_type_of <- function(opts) .scale_of(opts) * .header_text_of(opts)
 
 # Type size for a label fitted to a slot, under the two rules above.
 #
@@ -1592,12 +1606,6 @@ TEXT_SCALE_DEFAULT <- viz_fit$TEXT_SCALE_DEFAULT
   isTRUE(is.finite(size) && size >= HEADER_SIZE_MIN * scale)
 }
 
-#' Legend type size, at the reader's text scale and inside the plot's height.
-#'
-#' ggplot2 draws the guide box at whatever its contents need and lets it run
-#' off the bottom of the figure — there is no "wrap the guides into a second
-#' column", and `legend.box = "vertical"` means exactly one column. So the only
-#' two things that can keep a legend on the page are how many keys each guide
 #' The mappings and heatmap panels this layout will actually draw a guide for.
 #'
 #' An inward tree has no room past its tips for anything (`tree_annotations_
@@ -1627,14 +1635,21 @@ tree_guide_inputs <- function(opts) {
   )
 }
 
-#' lists (`tree_legend_max_keys()`) and how large they are set, and this is the
-#' second: the requested size, cut back until the box fits the height beside
-#' the tree, and no further than a journal's own type floor.
+#' Legend type size, at the reader's text scale and inside the plot's height.
 #'
-#' Solved by repeated halving-toward-fit rather than in closed form because the
-#' row count is itself a function of the size — a smaller guide lists more keys
-#' per column, so shrinking does not reduce the rows proportionally. Four
-#' passes settle it; the loop stops as soon as it fits.
+#' ggplot2 stacks the guides in one column (`legend.box = "vertical"`) and clips
+#' whatever runs off the bottom of the figure, so a legend stays on the page by
+#' three means, taken in the order rule L1 (docs/figure-text-rules.md) puts
+#' them: a long guide first folds its keys into further columns, within the
+#' width the guide box may claim (`tree_legend_fold_in()`); then the type
+#' shrinks towards the print floor; and only where not even the floor holds
+#' every key does the key budget trim them, with a gap key and "n of N shown"
+#' on the title (T7). Folding first takes nothing from the drawing: the canvas
+#' grows beside the tree for the guide box, under the same ceiling (G2).
+#'
+#' Solved by `viz_legend$legend_fit()`, which bisects between the floor and the
+#' size asked for, because the row count is itself a function of the size: a
+#' smaller row lets more keys stand in the same height.
 #'
 #' Exported because the canvas budget is solved in the view and has to reserve
 #' the guide box at the size it will really be drawn at (see
@@ -1644,6 +1659,8 @@ tree_guide_inputs <- function(opts) {
 #' @param opts List. Resolved tree options.
 #' @param height_in Numeric. Height the plot is drawn at, in inches. Without
 #'   it the requested size is returned unchecked.
+#' @param md Data frame or NULL. Tip metadata, for the level counts and the
+#'   key labels' widths.
 #' @return Numeric points.
 #' @export
 tree_legend_size <- function(opts, height_in = NULL, md = NULL) {
@@ -1652,37 +1669,22 @@ tree_legend_size <- function(opts, height_in = NULL, md = NULL) {
     return(size)
   }
   scale <- .scale_of(opts)
-  floor_pt <- MIN_PRINT_PT * scale
-  # The guide box gets the figure's height less the plot margin, which is
-  # outside it — the same inches the tip-label reserve does not receive.
-  room_in <- height_in - PLOT_MARGIN_IN * scale
   guides <- tree_guide_inputs(opts)
-  fits <- function(pt) {
-    plan <- tree_legend_plan(
+  fold_in <- tree_legend_fold_in(opts, md)
+  # The plan at one size: every key in one column, else folded within
+  # `fold_in`, else trimmed (`tree_legend_plan()`).
+  plan_at <- function(pt) {
+    tree_legend_plan(
       guides$layers,
       guides$heatmaps,
       pt,
       height_in,
       scale,
-      md
+      md,
+      fold_in
     )
-    need <- plan$rows * .legend_row_in(pt, scale) * LEGEND_HEIGHT_SAFETY
-    !isTRUE(is.finite(need)) || need <= room_in
   }
-  if (size <= floor_pt || fits(size)) {
-    return(max(size, floor_pt))
-  }
-  # Bisect rather than step towards it. Shrinking the type also *lengthens* the
-  # box — a shorter row means more rows fit, so each guide is allowed more keys
-  # — and stepping into that feedback converges slowly enough that a fixed
-  # number of steps stopped one short and left the last guide off the page.
-  lo <- floor_pt
-  hi <- size
-  for (i in seq_len(LEGEND_SIZE_STEPS)) {
-    mid <- (lo + hi) / 2
-    if (fits(mid)) lo <- mid else hi <- mid
-  }
-  lo
+  viz_legend$legend_fit(size, MIN_PRINT_PT * scale, plan_at)$size
 }
 
 #' Inches of height the guide box will stand in.
@@ -1712,7 +1714,8 @@ tree_legend_height_in <- function(opts, height_in = NULL, md = NULL) {
     size,
     height_in,
     scale,
-    md
+    md,
+    tree_legend_fold_in(opts, md)
   )
   if (!plan$rows) {
     return(0)
@@ -1781,7 +1784,13 @@ tree_canvas_height_in <- function(opts, md = NULL) {
   if (length(aspect) != 1L || !is.finite(aspect) || aspect <= 0) {
     aspect <- 1
   }
-  want <- base * aspect
+  # A fitted page grows by what its header band gains over 100% (T3,
+  # `tree_band_extra_in()`); a hand-set one holds its height (G4).
+  extra <- suppressWarnings(as.numeric(opts$band_extra_in %||% 0))
+  if (length(extra) != 1L || !isTRUE(is.finite(extra) && extra > 0)) {
+    extra <- 0
+  }
+  want <- base * aspect + extra
   max(want, min(tree_legend_height_in(opts, want, md), base * TREE_CANVAS_MAX_FACTOR))
 }
 
@@ -2187,9 +2196,23 @@ HEADER_CHAR_ROWS <- HEADER_ROW_PACK *
 HEATMAP_COL_IN <- HEADER_SIZE_MAX / HEADER_FILL / 25.4
 
 # The column widths at this plot's scale. They are derived from the header size
-# a column has to carry, so they follow it.
-.heat_col_in <- function(opts) HEATMAP_COL_IN * .scale_of(opts)
-.tile_col_in <- function(opts) TILE_COL_IN * .scale_of(opts)
+# a column has to carry, so they follow it: the design scale always, and the
+# reader's text size as far as `tree_column_gain()` lets the page widen (G1).
+# A tile strip is already wide enough for a header at 160% and widens only
+# past that.
+.heat_col_in <- function(opts) {
+  HEATMAP_COL_IN * .column_gain(opts, "heat") * .scale_of(opts)
+}
+.tile_col_in <- function(opts) {
+  max(TILE_COL_IN, HEATMAP_COL_IN * .column_gain(opts, "tile")) * .scale_of(opts)
+}
+
+# The text-size gain one kind of column is drawn at, from `tree_column_gain()`
+# as carried on `opts`; 1 where none was solved.
+.column_gain <- function(opts, kind) {
+  g <- suppressWarnings(as.numeric((opts$column_gain %||% c())[kind]))
+  if (length(g) != 1L || !isTRUE(is.finite(g) && g > 1)) 1 else g
+}
 
 # Width of one tile strip. Wider than a heatmap column and for a reason: a
 # strip carries one variable rather than a run of them, and its header is a
@@ -2236,6 +2259,168 @@ ANNOTATION_SPAN_MAX_CIRC <- 1.0
 # where a single tile strip drew no tiles until a second strip was added
 # beside it, and where the last heatmap column went missing.
 ANNOTATION_SLACK <- 0.02
+
+#' How far the annotation columns widen for the reader's text size.
+#'
+#' A column header is set on its side across the column, so a text size over
+#' 100% can only enlarge it by widening the column (rule G1): a heatmap
+#' column reaches the header's want at `k` times its width, a tile strip once
+#' `k` passes 1.6. The canvas grows by that width, and the Full view scales the
+#' page into its stage, so a page that only gets wider shows every label
+#' smaller. The columns therefore widen only while the page stays at least as
+#' tall as the stage's shape (`viz_fit$STAGE_ASPECT`): up to the width
+#' `height / STAGE_ASPECT`, and never past the canvas ceiling (G2; the Tree's
+#' ceiling does not scale with `k`).
+#'
+#' Only where it can pay: `k > 1` (smaller text never narrows the page), a
+#' linear layout (rings grow a radial panel in both directions alike), an
+#' aspect that is the fit's rather than the reader's (`opts$aspect_fitted`,
+#' G4, since a held ratio would grow the height with the width), and headers
+#' that are wanted. Heatmap columns whose gene names are switched off keep
+#' their width.
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame or NULL. Tip metadata.
+#' @return Named numeric, `c(heat = , tile = )`, each from 1 to `k`.
+#' @export
+tree_column_gain <- function(opts, md = NULL) {
+  k <- .text_of(opts)
+  shown <- tree_annotations_drawn(opts)
+  heat_names <- shown && any(vapply(
+    opts$heatmaps %||% list(),
+    function(h) length(h$cols) > 0L && !isFALSE(h$show_gene_names),
+    logical(1)
+  ))
+  tiles <- shown && .n_tiles(opts) > 0L
+  # The gain each kind of column takes at text gain `t`: only columns with a
+  # header to grow for.
+  gain_at <- function(t) c(heat = if (heat_names) t else 1, tile = if (tiles) t else 1)
+  if (
+    k <= 1 ||
+      .is_circular(opts) ||
+      !isTRUE(opts$aspect_fitted) ||
+      !(heat_names || tiles)
+  ) {
+    return(gain_at(1))
+  }
+  base <- suppressWarnings(as.numeric(opts$width_in %||% 5.5))
+  if (length(base) != 1L || !isTRUE(is.finite(base) && base > 0)) {
+    base <- 5.5
+  }
+  opts$column_gain <- NULL
+  opts$panel_squeeze <- NULL
+  height_in <- tree_canvas_height_in(opts, md)
+  guides <- tree_guide_inputs(opts)
+  legend_in <- tree_legend_width_in(
+    guides$layers,
+    md,
+    tree_legend_size(opts, height_in, md),
+    base,
+    guides$heatmaps,
+    height_in,
+    .scale_of(opts),
+    tree_legend_fold_in(opts, md)
+  )
+  # The page's width with the columns at one gain: the panel they grow, and the
+  # guide box beside it, which does not move with them.
+  width_at <- function(t) {
+    opts$column_gain <- gain_at(t)
+    tree_panel_width_in(opts, md, base) + legend_in
+  }
+  limit <- min(
+    base * TREE_CANVAS_MAX_FACTOR,
+    max(width_at(1), height_in / viz_fit$STAGE_ASPECT)
+  )
+  gain_at(viz_fit$largest_fitting(k, function(t) width_at(t) <= limit, floor = 1))
+}
+
+#' The two layout answers the view and the builder have to share.
+#'
+#' The width the guide box may fold into (`tree_legend_fold_in()`) and the
+#' annotation columns' text-size gain (`tree_column_gain()`) both measure the
+#' whole page, so both are solved once from the options and metadata the view
+#' sizes the canvas from, and carried on `opts` so the builder draws into the
+#' same canvas (M2).
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame or NULL. Tip metadata.
+#' @return `opts`, with `legend_fold_in` and `column_gain` set.
+#' @export
+resolve_text_geometry <- function(opts, md = NULL) {
+  opts$legend_fold_in <- NULL
+  opts$column_gain <- NULL
+  opts$header_text <- NULL
+  opts$band_extra_in <- NULL
+  opts$legend_fold_in <- tree_legend_fold_in(opts, md)
+  opts$column_gain <- tree_column_gain(opts, md)
+  if (isTRUE(opts$aspect_fitted)) {
+    opts$band_extra_in <- tree_band_extra_in(opts, md)
+  } else {
+    opts$header_text <- tree_header_text(opts, md)
+  }
+  opts
+}
+
+# Inches the header band takes at text size `text`, with the columns at the
+# gain `opts` carries (none at 100%).
+.band_in_at <- function(opts, md, text) {
+  opts$text_scale <- text
+  if (text <= 1) {
+    opts$column_gain <- NULL
+    opts$header_text <- NULL
+  }
+  n <- if (is.null(md)) 1L else max(nrow(md), 1L)
+  tree_band_in(resolve_annotation_widths(opts, md), n)
+}
+
+#' Height the header band grows by over its 100% depth, on a fitted aspect.
+#'
+#' The band over the tips is taken out of the page's height, so headers set
+#' larger for the reader's text size would take their room from the tip rows
+#' and set every isolate name smaller than at 100%, which rule T3 forbids.
+#' Where the aspect is the fit's, the page grows by the difference instead:
+#' the fitted aspect is measured at 100% (`tree_fitted_aspect()`), and this
+#' is added to the height it gives (`tree_canvas_height_in()`), so the tip
+#' pitch stays what it was.
+#'
+#' @param opts List. Resolved tree options, with `column_gain` set.
+#' @param md Data frame or NULL. Tip metadata.
+#' @return Numeric inches, at least 0.
+#' @export
+tree_band_extra_in <- function(opts, md = NULL) {
+  k <- .text_of(opts)
+  if (k <= 1 || .is_circular(opts)) {
+    return(0)
+  }
+  max(.band_in_at(opts, md, k) - .band_in_at(opts, md, 1), 0)
+}
+
+#' The text size the header band may be set at under an aspect the reader set.
+#'
+#' A hand-set aspect holds the page's height (G4), so a header band that grew
+#' with the text size would take its room from the tip rows and set the
+#' isolate names smaller than at 100% (T3). The band's type therefore grows
+#' only as far as the band still fits the depth it had at 100%. Slack in the
+#' tip rows is not counted: what the rows can spare depends on the drawn
+#' pitch, which only the builder knows.
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame or NULL. Tip metadata.
+#' @return Numeric multiplier, from 1 to the text size.
+#' @export
+tree_header_text <- function(opts, md = NULL) {
+  k <- .text_of(opts)
+  if (k <= 1 || .is_circular(opts)) {
+    return(k)
+  }
+  room <- .band_in_at(opts, md, 1) + 1e-9
+  # Whether the band, set at header text `h`, still fits its 100% depth.
+  fits <- function(h) {
+    opts$header_text <- h
+    .band_in_at(opts, md, k) <= room
+  }
+  viz_fit$largest_fitting(k, fits, floor = 1)
+}
 
 #' Resolve what one annotation column is worth, in tree spans.
 #'
@@ -2601,10 +2786,12 @@ LEGEND_SAFETY <- 1.03
 # that already fits is left at the size it asked for.
 LEGEND_HEIGHT_SAFETY <- 1.3
 
-# Bisection steps `tree_legend_size()` takes between the legibility floor and
-# the size that was asked for. Twelve halvings of a 15pt range settle it to
-# under a hundredth of a point, which is finer than the answer means.
-LEGEND_SIZE_STEPS <- 12L
+# Key columns one guide may fold into before its type shrinks instead (rule
+# L1). The shared planner folds a guide only past its share of the height and
+# at most twice (`viz_legend$LEGEND_KEY_COLS`); this is the further fold the
+# Tree takes to keep every key at full size, and the same three columns the
+# AMR legend wraps into (`AMR_LEGEND_WRAP_MAX`).
+LEGEND_FOLD_MAX <- 3L
 
 # Keys one mapping layer's guide would list if nothing trimmed it.
 #
@@ -2642,6 +2829,12 @@ LEGEND_SIZE_STEPS <- 12L
 #' (its confidence tiers, then the drug classes under it) in the order the
 #' panels are drawn left to right.
 #'
+#' Where the shared plan cannot list every key in the height, and the guide
+#' box has width to claim (`fold_in`), the long guides fold their keys into up
+#' to `LEGEND_FOLD_MAX` columns instead of losing them (rule L1). Only where no
+#' fold fits that width does the plan trim keys; `tree_legend_size()` asks
+#' for that only once the type is at the floor.
+#'
 #' @param layers List of mapping layer records.
 #' @param heatmaps List of heatmap panel records.
 #' @param legend_size Numeric. Legend text size in points.
@@ -2649,7 +2842,11 @@ LEGEND_SIZE_STEPS <- 12L
 #' @param scale Numeric. This plot's physical scale.
 #' @param md Data frame. The metadata the scales are built from, for the level
 #'   counts. Optional; without it the layers' recorded counts are used.
-#' @return list(ids, demand, keys, order, rows), the last four named by id.
+#' @param fold_in Numeric or NULL. Inches the guide box may be wide when its
+#'   guides fold, from `tree_legend_fold_in()`; NULL folds only as the shared
+#'   planner does.
+#' @return list(ids, demand, cap, keys, ncol, order, max_rows, room, rows), the
+#'   per-guide entries named by id.
 #' @export
 tree_legend_plan <- function(
   layers,
@@ -2657,7 +2854,8 @@ tree_legend_plan <- function(
   legend_size = 10,
   height_in = NULL,
   scale = 1,
-  md = NULL
+  md = NULL,
+  fold_in = NULL
 ) {
   ls <- layers %||% list()
   drawn <- Filter(function(h) length(h$cols) > 0L, heatmaps %||% list())
@@ -2679,7 +2877,60 @@ tree_legend_plan <- function(
     }
   }
   names(demand) <- ids
-  viz_legend$legend_plan(demand, tree_legend_room(legend_size, height_in, scale))
+  room <- tree_legend_room(legend_size, height_in, scale)
+  plan <- viz_legend$legend_plan(demand, room)
+  if (
+    !isTRUE(is.finite(fold_in) && fold_in > 0) ||
+      (all(plan$keys >= plan$cap) && plan$rows <= plan$room)
+  ) {
+    return(plan)
+  }
+  col_in <- .guide_col_in(ls, drawn, md, legend_size, scale, plan$cap)
+  .fold_plan(plan, col_in, fold_in, scale) %||% plan
+}
+
+# The plan that lists every guide whole by folding its keys, or NULL where no
+# fold fits.
+#
+# Starts every guide at one column and folds the one that gives back the most
+# rows, one column at a time, until the box fits its height (T7's wrap step,
+# taken first for a legend under L1). A fold is refused where it would make the
+# box wider than `fold_in`, measured the way `tree_legend_width_in()` reserves
+# it, so the box drawn and the width reserved agree (T9).
+.fold_plan <- function(plan, col_in, fold_in, scale) {
+  ids <- plan$ids
+  cap <- as.integer(plan$cap)
+  demand <- as.integer(plan$demand)
+  ncol <- rep(1L, length(ids))
+  # Rows the box stands in with every key listed in `nc` key columns.
+  rows <- function(nc) sum(viz_legend$legend_guide_rows(cap, demand, nc))
+  # Inches the box is reserved at in `nc` key columns.
+  box_in <- function(nc) {
+    (max(col_in[ids] * nc) + LEGEND_PAD_IN * scale) * LEGEND_SAFETY
+  }
+  while (rows(ncol) > plan$room) {
+    gain <- ceiling(cap / ncol) - ceiling(cap / (ncol + 1L))
+    ok <- ncol < LEGEND_FOLD_MAX &
+      gain > 0L &
+      vapply(
+        seq_along(ids),
+        function(i) {
+          nc <- ncol
+          nc[[i]] <- nc[[i]] + 1L
+          box_in(nc) <= fold_in
+        },
+        logical(1)
+      )
+    if (!any(ok)) {
+      return(NULL)
+    }
+    i <- which(ok)[which.max(gain[ok])]
+    ncol[[i]] <- ncol[[i]] + 1L
+  }
+  plan$keys <- setNames(cap, ids)
+  plan$ncol <- setNames(ncol, ids)
+  plan$rows <- as.integer(rows(ncol))
+  plan
 }
 
 #' The name one guide is filed under in a `tree_legend_plan()`.
@@ -2793,6 +3044,9 @@ tree_legend_max_rows <- function(
 #' @param legend_size Numeric. Legend text size in points.
 #' @param height_in Numeric. Height the plot is drawn at, in inches.
 #' @param scale Numeric. This plot's physical scale.
+#' @param md Data frame or NULL. Tip metadata, for the level counts.
+#' @param fold_in Numeric or NULL. Width the guides may fold into (see
+#'   `tree_legend_plan()`).
 #' @return Integer, at least 1.
 #' @export
 tree_legend_cols <- function(
@@ -2801,7 +3055,8 @@ tree_legend_cols <- function(
   legend_size = 10,
   height_in = NULL,
   scale = 1,
-  md = NULL
+  md = NULL,
+  fold_in = NULL
 ) {
   rows <- tree_legend_plan(
     layers,
@@ -2809,7 +3064,8 @@ tree_legend_cols <- function(
     legend_size,
     height_in,
     scale,
-    md
+    md,
+    fold_in
   )$rows
   room <- tree_legend_room(legend_size, height_in, scale)
   as.integer(min(max(ceiling(rows / room), 1), LEGEND_MAX_COLS))
@@ -2850,6 +3106,9 @@ tree_legend_cols <- function(
 #'   own — a panel with no mapping layer beside it still needs room for it.
 #' @param height_in Numeric. Height the plot is drawn at, for deciding how many
 #'   columns the guides have to flow into so that none is cut off.
+#' @param scale Numeric. This plot's physical scale.
+#' @param fold_in Numeric or NULL. Width the guides may fold into (see
+#'   `tree_legend_plan()`), so the box is reserved as wide as it is drawn.
 #' @return Numeric width in inches; 0 when the plot draws no guide at all.
 #' @export
 tree_legend_width_in <- function(
@@ -2859,7 +3118,8 @@ tree_legend_width_in <- function(
   width_in,
   heatmaps = list(),
   height_in = NULL,
-  scale = 1
+  scale = 1,
+  fold_in = NULL
 ) {
   layers <- layers %||% list()
   # A panel with no columns draws nothing and so carries no guide either.
@@ -2873,84 +3133,107 @@ tree_legend_width_in <- function(
     width_in
   }
   size <- legend_size %||% 10
-  # The same key-wrapping budget the renderer solves each guide against
-  # (tree_legend_max_rows, used at build time). Estimating every guide at one
-  # key column while the render wrapped a nine-key scale into two is how the
-  # legend came out wider than budgeted and squeezed the tip labels.
-  max_rows <- tree_legend_max_rows(layers, heatmaps, size, height_in, scale)
-  plan <- tree_legend_plan(layers, heatmaps, size, height_in, scale, md)
-  guide_in <- function(chars, ncol) {
-    if (!is.finite(chars)) {
-      chars <- 1L
-    }
-    ncol * (LEGEND_KEY_IN * scale + chars * TIP_CHAR_EM * size / 72)
-  }
-  per <- vapply(
-    layers,
-    function(l) {
-      # Only the keys the guide will list, since that is all it is sized from.
-      id <- legend_guide_id("layer", l)
-      labs <- head(unique(as.character(md[[l$field]])), .plan_keys(plan, id))
-      chars <- suppressWarnings(max(
-        vapply(c(labs, l$title %||% ""), .legend_text_cols, integer(1)),
-        1L
-      ))
-      guide_in(chars, .plan_ncol(plan, id))
-    },
-    numeric(1)
-  )
-  # Each panel's key labels are the fixed AMR states, whatever it is showing —
-  # the *values* in the matrix never reach the legend. Leaving these out is how
-  # a single-column matrix with no mapping beside it came out with a guide box
-  # nothing had budgeted for, drawn over the tip labels it had squeezed.
-  heat <- vapply(
-    heatmaps,
-    function(h) {
-      states <- .tier_guide_levels(h, AMR_CONFIDENCE_STATES)
-      chars <- suppressWarnings(max(
-        vapply(c(states, h$title %||% ""), .legend_text_cols, integer(1)),
-        1L
-      ))
-      guide_in(chars, .plan_ncol(plan, legend_guide_id("heat", h)))
-    },
-    numeric(1)
-  )
-  # A clustered panel's second guide names drug classes, which run far longer
-  # than a tier does — left out, the strip's keys were drawn over the tips.
-  strip <- vapply(
-    seq_along(heatmaps),
-    function(i) {
-      h <- heatmaps[[i]]
-      id <- legend_guide_id("class", h, i)
-      lvls <- head(.class_guide_levels(h), .plan_keys(plan, id))
-      if (!length(lvls)) {
-        return(0)
-      }
-      chars <- suppressWarnings(max(
-        vapply(
-          c(lvls, .class_guide_title(h)),
-          .legend_text_cols,
-          integer(1)
-        ),
-        1L
-      ))
-      guide_in(chars, .plan_ncol(plan, id))
-    },
-    numeric(1)
-  )
-  widest <- max(c(per, heat, strip, 0))
+  # The same plan the renderer draws each guide from, keys and key columns
+  # alike. Estimating every guide at one key column while the render folded a
+  # nine-key scale into two is how the legend came out wider than budgeted and
+  # squeezed the tip labels.
+  plan <- tree_legend_plan(layers, heatmaps, size, height_in, scale, md, fold_in)
+  col_in <- .guide_col_in(layers, heatmaps, md, size, scale, plan$keys)
+  ncol <- vapply(names(col_in), function(id) .plan_ncol(plan, id), integer(1))
+  widest <- max(c(col_in * ncol, 0))
   if (widest <= 0) {
     return(0)
   }
   # A box that has to flow into several columns is that many times as wide.
-  cols <- tree_legend_cols(layers, heatmaps, size, height_in, scale, md)
+  cols <- tree_legend_cols(layers, heatmaps, size, height_in, scale, md, fold_in)
   box <- cols * min(widest + LEGEND_PAD_IN * scale, LEGEND_MAX_FRAC * w)
-  # LEGEND_SAFETY rounds the estimate up: `guide_in` counts a few percent short
-  # against a real guide's title and key spacing, and this estimate has one job
-  # — keep the canvas wide enough that the panel gets its whole budget and the
-  # tip-label reserve holds. Over is free (the canvas grows, the tree does not
-  # shrink); under is the band of squeezed labels this path exists to stop.
+  # LEGEND_SAFETY rounds the estimate up: one key column counts a few percent
+  # short against a real guide's title and key spacing, and this estimate has
+  # one job — keep the canvas wide enough that the panel gets its whole budget
+  # and the tip-label reserve holds. Over is free (the canvas grows, the tree
+  # does not shrink); under is the band of squeezed labels this path exists to
+  # stop.
   box * LEGEND_SAFETY
+}
+
+# Inches one key column of each guide takes, named by guide id.
+#
+# The estimate uses the same mean character advance the tip-label reserve is
+# built on, applied to the keys the guide will list (`keys`, by id; all of them
+# where absent) and its title, after the same wrapping the guide renders under.
+# A folded guide is this times its key columns (`tree_legend_width_in()`).
+.guide_col_in <- function(layers, heatmaps, md, size, scale, keys = NULL) {
+  # Keys guide `id` lists, out of the `n` it has.
+  n_keys <- function(id, n) {
+    k <- (keys %||% integer(0))[id]
+    if (length(k) != 1L || is.na(k)) n else as.integer(k)
+  }
+  # One key column set with the longest of `labels`.
+  col_in <- function(labels) {
+    chars <- suppressWarnings(max(
+      vapply(as.character(labels), .legend_text_cols, integer(1)),
+      1L
+    ))
+    if (!is.finite(chars)) {
+      chars <- 1L
+    }
+    LEGEND_KEY_IN * scale + chars * TIP_CHAR_EM * size / 72
+  }
+  out <- numeric(0)
+  for (l in layers %||% list()) {
+    id <- legend_guide_id("layer", l)
+    vals <- if (is.null(md)) character(0) else md[[l$field %||% ""]]
+    labs <- unique(as.character(vals))
+    out[[id]] <- col_in(c(head(labs, n_keys(id, length(labs))), l$title %||% ""))
+  }
+  for (i in seq_along(heatmaps)) {
+    h <- heatmaps[[i]]
+    # Each panel's key labels are the fixed AMR states, whatever it is showing:
+    # the *values* in the matrix never reach the legend.
+    states <- .tier_guide_levels(h, AMR_CONFIDENCE_STATES)
+    out[[legend_guide_id("heat", h, i)]] <- col_in(c(states, h$title %||% ""))
+    # A clustered panel's second guide names drug classes, which run far longer
+    # than a tier does.
+    id <- legend_guide_id("class", h, i)
+    lvls <- .class_guide_levels(h)
+    if (length(lvls)) {
+      out[[id]] <- col_in(c(head(lvls, n_keys(id, length(lvls))), .class_guide_title(h)))
+    }
+  }
+  out
+}
+
+#' Inches the guide box may be wide when its guides fold their keys.
+#'
+#' Rule L1 has a legend fold before its type shrinks, and on the Tree the
+#' canvas grows beside the drawing for the guide box, so a fold is paid for in
+#' page width. It is bounded twice: by what the canvas ceiling leaves beside
+#' the drawing (G2, `TREE_CANVAS_MAX_FACTOR`), so a fold never squeezes the
+#' panel, and by `LEGEND_MAX_FRAC` of the tree's own budget, past which the
+#' box estimate is clamped and would no longer match the box drawn (T9).
+#'
+#' Measured at the annotation columns' 100% width (`opts$column_gain` is
+#' dropped), because the columns' own growth for the text size is solved
+#' against the legend's width (`tree_column_gain()`).
+#'
+#' @param opts List. Resolved tree options.
+#' @param md Data frame or NULL. Tip metadata.
+#' @return Numeric inches, at least 0.
+#' @export
+tree_legend_fold_in <- function(opts, md = NULL) {
+  held <- suppressWarnings(as.numeric(opts$legend_fold_in %||% NA_real_))
+  if (length(held) == 1L && isTRUE(is.finite(held) && held >= 0)) {
+    return(held)
+  }
+  base <- suppressWarnings(as.numeric(opts$width_in %||% 5.5))
+  if (length(base) != 1L || !isTRUE(is.finite(base) && base > 0)) {
+    base <- 5.5
+  }
+  opts$column_gain <- NULL
+  opts$panel_squeeze <- NULL
+  panel_in <- tree_panel_width_in(opts, md, base)
+  beside <- base * TREE_CANVAS_MAX_FACTOR - tree_image_width_in(opts, panel_in, 0)
+  max(min(beside, LEGEND_MAX_FRAC * base), 0)
 }
 
 # The inward layout's radius is solved by the same axis split every other
@@ -3309,14 +3592,14 @@ heatmap_header_frac <- function(
   # reserve does too.
   rows_per_char <- function(col_span) {
     size <- if (is.null(tree_span) || !is.finite(axis_units)) {
-      HEADER_SIZE_MAX * .type_of(opts)
+      HEADER_SIZE_MAX * .header_type_of(opts)
     } else {
       tree_header_size(
         col_span * squeeze * tree_span,
         axis_units,
         width_in,
         .scale_of(opts),
-        .text_of(opts)
+        .header_text_of(opts)
       )
     }
     HEADER_CHAR_ROWS * size / (HEADER_SIZE_MAX * .scale_of(opts))
@@ -3336,7 +3619,7 @@ heatmap_header_frac <- function(
       return(0)
     }
     size <- if (is.null(tree_span) || !is.finite(axis_units)) {
-      HEADER_SIZE_MAX * .type_of(opts)
+      HEADER_SIZE_MAX * .header_type_of(opts)
     } else {
       .element_label_size(
         .element_label_text(h),
@@ -3351,9 +3634,9 @@ heatmap_header_frac <- function(
           axis_units,
           width_in,
           .scale_of(opts),
-          .text_of(opts)
+          .header_text_of(opts)
         ),
-        text = .text_of(opts)
+        text = .header_text_of(opts)
       )
     }
     ELEMENT_LABEL_GAP_ROWS + .element_label_rows(size)
@@ -3385,7 +3668,7 @@ heatmap_header_frac <- function(
     axis_units,
     width_in,
     .scale_of(opts),
-    .text_of(opts)
+    .header_text_of(opts)
   )
   tile_rows <- if (
     !is.null(tree_span) &&
@@ -3551,7 +3834,7 @@ tree_open_angle <- function(opts, md, panel_in = NULL) {
       axis,
       axis_in,
       .scale_of(opts),
-      .text_of(opts)
+      .header_text_of(opts)
     )
     arc <- max(chars, 1L) * TIP_CHAR_EM * size / 25.4
     r_in <- axis_in * radius / axis
@@ -3899,7 +4182,7 @@ AXIS_FRAC_MAX <- 0.2
     return(0)
   }
   .fitted_type(
-    HEADER_SIZE_MAX * .type_of(opts),
+    HEADER_SIZE_MAX * .header_type_of(opts),
     col_in * squeeze * 25.4 * HEADER_FILL,
     .scale_of(opts)
   )
@@ -3970,6 +4253,11 @@ tree_fitted_aspect <- function(aspect, opts, n_tip) {
   if (is.null(w) || !is.finite(w) || w <= 0) {
     w <- 5.5
   }
+  # Measured at 100%: a larger text size buys its own band height on top of
+  # this (`tree_band_extra_in()`), so a re-fit at 200% does not count it twice.
+  opts$text_scale <- 1
+  opts$column_gain <- NULL
+  opts$header_text <- NULL
   round(
     .clamp(a + tree_band_in(opts, n_tip) / w, TIP_ASPECT_MIN, TIP_ASPECT_MAX),
     1
@@ -4335,7 +4623,7 @@ tree_header_drawn <- function(size, scale = 1) {
     axis_units,
     axis_in,
     scale,
-    .text_of(opts)
+    .header_text_of(opts)
   )
   drawn <- tree_header_drawn(size, scale)
   lapply(opts$heatmaps %||% list(), function(h) {
@@ -5880,14 +6168,14 @@ tree_tile_layers <- function(
     header_y <- .header_y(opts, n_tip)
     centres <- tile_centres(opts, length(tiles), label_frac, max_x, tree_span)
     header_size <- if (is.null(axis_units)) {
-      HEADER_SIZE_MAX * .type_of(opts)
+      HEADER_SIZE_MAX * .header_type_of(opts)
     } else {
       tree_header_size(
         pwidth,
         axis_units,
         axis_in,
         .scale_of(opts),
-        .text_of(opts)
+        .header_text_of(opts)
       )
     }
     # A strip too narrow to carry its variable's name legibly carries none: the
@@ -5997,6 +6285,10 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   if (!"package:ggplot2" %in% search()) {
     base::attachNamespace("ggplot2")
   }
+
+  # Solved from exactly what the view sized the canvas from, before anything
+  # below reshapes the options or the metadata.
+  opts <- resolve_text_geometry(opts, metadata)
 
   # Neighbour-joining estimates branch lengths independently of the topology it
   # builds, so some come out negative — six in a few hundred is ordinary. They
@@ -6111,8 +6403,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   axis_in <- tree_axis_in(opts, panel_in)
   # Every physical length this build draws is multiplied by it (see .scale_of).
   scale <- .scale_of(opts)
-  # ...and every piece of type by this as well (see .text_of).
-  text <- .text_of(opts)
+  # ...and every header-band label by this as well (see .header_text_of).
+  text <- .header_text_of(opts)
   # How tall this plot is drawn. It decides two things nothing else can: how
   # many rows a header of a given height occupies, and whether the guides fit
   # in one column. A circular panel is square and grows with its rings, so its
@@ -6143,6 +6435,9 @@ build_tree_ggtree <- function(tree, metadata, opts) {
   # keys is a column of blank paper.
   guides <- tree_guide_inputs(opts)
   legend_size <- tree_legend_size(opts, image_height_in, md)
+  # Width the guides may fold into before they trim (rule L1), the same number
+  # the view reserves the canvas from.
+  fold_in <- tree_legend_fold_in(opts, md)
   legend_max_rows <- tree_legend_max_rows(
     guides$layers,
     guides$heatmaps,
@@ -6164,7 +6459,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
       opts$width_in %||% 5.5,
       guides$heatmaps,
       image_height_in,
-      scale
+      scale,
+      fold_in
     )
   )
   # The disc as it will really be drawn, now that the squeeze is known.
@@ -6178,7 +6474,8 @@ build_tree_ggtree <- function(tree, metadata, opts) {
     legend_size,
     image_height_in,
     scale,
-    md
+    md,
+    fold_in
   )
 
   circular <- opts$layout %in% .circular_layouts

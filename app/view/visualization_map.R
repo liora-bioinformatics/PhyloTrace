@@ -78,6 +78,7 @@ box::use(
       rebalance_layers,
       set_layer_granularity,
     ],
+  app / logic / urls[MAP_BASEMAPS, MAP_LABEL_TILES],
   app / logic / viz_helpers,
   app /
     logic /
@@ -92,20 +93,8 @@ box::use(
     ],
 )
 
-# Basemap providers offered in the Basemap select. Only ones that serve tiles
-# without an API key: CARTO's basemaps now stamp "API KEY REQUIRED" across every
-# tile requested without one, so they are not offered.
-map_providers <- c(
-  "OpenStreetMap" = "OpenStreetMap",
-  "OSM Humanitarian" = "OpenStreetMap.HOT",
-  "OSM (German style)" = "OpenStreetMap.DE",
-  "OpenTopoMap" = "OpenTopoMap",
-  "Esri Satellite" = "Esri.WorldImagery",
-  "Esri Topographic" = "Esri.WorldTopoMap",
-  "Esri Streets" = "Esri.WorldStreetMap",
-  "Esri NatGeo" = "Esri.NatGeoWorldMap",
-  "Esri Gray Canvas" = "Esri.WorldGrayCanvas"
-)
+# Basemaps offered in the Basemap select (see MAP_BASEMAPS for which and why).
+map_providers <- MAP_BASEMAPS
 
 # Why Save is disabled for an HTML export on the OpenStreetMap basemap.
 osm_html_block_reason <- paste(
@@ -131,10 +120,7 @@ mode_tile_defaults <- c(
 # still useful for context, though, so Esri's labels-only reference layer for
 # its gray canvas is placed in its own pane stacked above the polygon overlay.
 # It is not in leaflet.providers, hence a URL rather than a provider name.
-choropleth_labels_url <- paste0(
-  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/",
-  "World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
-)
+choropleth_labels_url <- MAP_LABEL_TILES
 choropleth_labels_attribution <- "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
 
 # --- Variable mapping and control defaults -----------------------------------
@@ -3135,10 +3121,10 @@ server <- function(
       step_daterange("end", 1)
     })
 
-    # The tick loop: advance one bin every 750ms (comfortably above map_opts()'s
-    # 250ms debounce, so every tick reliably produces a rendered frame) while
-    # playing. Mirrors the guarded shiny$observe()+shiny$invalidateLater() polling pattern
-    # already used in app/view/typing.R for the typing-progress loop. Stops
+    # The tick loop: advance one bin every 750ms while playing (the map's
+    # barrier draws each tick at once, see map_inputs). Mirrors the guarded
+    # shiny$observe()+shiny$invalidateLater() polling pattern already used in
+    # app/view/typing.R for the typing-progress loop. Stops
     # (does not reschedule) once the bins are exhausted; also goes dormant
     # while this plot's tab is in the background — a hidden tab is only
     # display:none, and Shiny auto-suspends hidden *outputs* but not a running
@@ -3240,60 +3226,100 @@ server <- function(
       color = "rgba(255, 255, 255, 0.85)"
     )
 
-    # All styling controls bundled together, debounced so dragging a slider
-    # doesn't rebuild the map on every intermediate value.
-    map_opts <- shiny$debounce(
-      shiny$reactive({
-        list(
-          mode = input$map_mode %||% "Markers",
-          # A basemap no longer offered (a saved plot on a CARTO one) draws
-          # the default rather than a watermarked tile.
-          tiles = if (isTRUE(input$map_tiles %in% map_providers)) {
-            input$map_tiles
-          } else {
-            mode_tile_defaults[["Markers"]]
-          },
-          scalebar = isTRUE(input$map_scalebar),
-          minimap = isTRUE(input$map_minimap),
-          graticule = isTRUE(input$map_graticule),
-          show_controls = isTRUE(input$map_show_controls),
-          radius = input$map_radius %||% 10,
-          marker_color = input$map_marker_color %||% "#2C7FB8C7",
-          layer = mapped_layer(),
-          legend = isTRUE(input$map_legend),
-          legend_pos = input$map_legend_pos %||% "topleft",
-          legend_title = input$map_legend_title %||% "",
-          legend_opacity = input$map_legend_opacity %||% 0.85,
-          legend_digits = input$map_legend_digits %||% 2,
-          popup_fields = input$map_popup,
-          hover_field = input$map_hover_field,
-          permanent = isTRUE(input$map_permanent),
-          label_size = input$map_label_size %||% 12,
-          daterange = input$map_daterange,
-          date_field = time_field(),
-          date_bounds = daterange_bounds(),
-          show_time_label = isTRUE(input$map_show_time_label),
-          cluster = (input$map_cluster_radius %||% 0) > 0,
-          cluster_radius = input$map_cluster_radius %||% 0,
-          region_transform = input$map_region_transform %||% "Raw",
-          region_fixed_scale = isTRUE(input$map_region_fixed_scale),
-          region_scale = input$map_region_scale %||% "Oranges",
-          region_opacity = input$map_region_opacity %||% 0.7,
-          region_border = input$map_region_border %||% "#000000",
-          region_permanent = isTRUE(input$map_region_permanent),
-          heat_radius = input$map_heat_radius %||% 25,
-          heat_max = input$map_heat_max %||% 10,
-          heat_scale = input$map_heat_scale %||% "viridis",
-          chart_type = input$map_chart_type %||% "pie",
-          chart_size = input$map_chart_size %||% 40,
-          chart_opacity = input$map_chart_opacity %||% 0.7,
-          chart_cluster = (input$map_chart_cluster_radius %||% 100) > 0,
-          chart_cluster_radius = input$map_chart_cluster_radius %||% 100,
-          chart_max_categories = input$map_chart_max_categories %||% 0
-        )
-      }),
-      250
+    # Every styling control, as currently set.
+    control_opts <- shiny$reactive({
+      list(
+        mode = input$map_mode %||% "Markers",
+        # A basemap no longer offered (a saved plot on a CARTO one) draws
+        # the default rather than a watermarked tile.
+        tiles = if (isTRUE(input$map_tiles %in% map_providers)) {
+          input$map_tiles
+        } else {
+          mode_tile_defaults[["Markers"]]
+        },
+        scalebar = isTRUE(input$map_scalebar),
+        minimap = isTRUE(input$map_minimap),
+        graticule = isTRUE(input$map_graticule),
+        show_controls = isTRUE(input$map_show_controls),
+        radius = input$map_radius %||% 10,
+        marker_color = input$map_marker_color %||% "#2C7FB8C7",
+        layer = mapped_layer(),
+        legend = isTRUE(input$map_legend),
+        legend_pos = input$map_legend_pos %||% "topleft",
+        legend_title = input$map_legend_title %||% "",
+        legend_opacity = input$map_legend_opacity %||% 0.85,
+        legend_digits = input$map_legend_digits %||% 2,
+        popup_fields = input$map_popup,
+        hover_field = input$map_hover_field,
+        permanent = isTRUE(input$map_permanent),
+        label_size = input$map_label_size %||% 12,
+        daterange = input$map_daterange,
+        date_field = time_field(),
+        date_bounds = daterange_bounds(),
+        show_time_label = isTRUE(input$map_show_time_label),
+        cluster = (input$map_cluster_radius %||% 0) > 0,
+        cluster_radius = input$map_cluster_radius %||% 0,
+        region_transform = input$map_region_transform %||% "Raw",
+        region_fixed_scale = isTRUE(input$map_region_fixed_scale),
+        region_scale = input$map_region_scale %||% "Oranges",
+        region_opacity = input$map_region_opacity %||% 0.7,
+        region_border = input$map_region_border %||% "#000000",
+        region_permanent = isTRUE(input$map_region_permanent),
+        heat_radius = input$map_heat_radius %||% 25,
+        heat_max = input$map_heat_max %||% 10,
+        heat_scale = input$map_heat_scale %||% "viridis",
+        chart_type = input$map_chart_type %||% "pie",
+        chart_size = input$map_chart_size %||% 40,
+        chart_opacity = input$map_chart_opacity %||% 0.7,
+        chart_cluster = (input$map_chart_cluster_radius %||% 100) > 0,
+        chart_cluster_radius = input$map_chart_cluster_radius %||% 100,
+        chart_max_categories = input$map_chart_max_categories %||% 0
+      )
+    })
+
+    # Bumped by this engine's own Generate, so each one draws (and frames) the
+    # map once even when it changes nothing else.
+    map_generation <- shiny$reactiveVal(0L)
+
+    # Everything the map is drawn from: the controls, the coordinates and the
+    # regions a Choropleth counts.
+    map_source <- shiny$reactive(list(
+      generation = map_generation(),
+      opts = control_opts(),
+      coords = map_coords(),
+      regions = map_regions()
+    ))
+
+    # The map's inputs as last published, republished only when they differ
+    # from what was drawn.
+    #
+    # Built straight from the controls, one Generate drew the map up to four
+    # times: once for the new coordinates, once more when the date, interval
+    # and heat controls it refits reached the debounced controls, and again for
+    # each slider's echo arriving from the browser after that. Settled and
+    # value-compared, as the Epi curve's and the AMR's `plot_inputs` are, a
+    # Generate draws once and no echo redraws. Playback does not wait to settle:
+    # each tick is a frame. priority: the barrier settles before outputs are
+    # recalculated in the same flush.
+    map_inputs <- shiny$reactiveVal(NULL)
+    settled_source <- shiny$debounce(
+      map_source,
+      function() if (isTRUE(anim_playing())) 0 else viz_helpers$PLOT_SETTLE_MS
     )
+    shiny$observe(
+      {
+        current <- settled_source()
+        if (!identical(shiny$isolate(map_inputs()), current)) {
+          map_inputs(current)
+        }
+      },
+      priority = 100
+    )
+
+    # The controls the map on screen was drawn with, which the zoom re-cluster,
+    # the reset view and the export read too, so none of them can disagree
+    # with it.
+    map_opts <- shiny$reactive(shiny$req(map_inputs())$opts)
 
     # The plot output element is kept mounted so that each Generate re-renders
     # the *same* output; the "press Generate" prompt is an overlay toggled
@@ -3351,26 +3377,24 @@ server <- function(
     })
 
     # Set TRUE by every Generate to make the renderer (re)frame the view on the
-    # new data, and held TRUE across the several re-renders one Generate can
-    # trigger — the generate observer also reprograms the date / interval / heat
-    # controls, each of which invalidates the debounced map_opts() ~250ms later
-    # and fires a second render pass. It's cleared only once the user moves the
-    # map themselves (see the map_user_view observer below). Tracking a mere
-    # "did the coords change" flag inside the render instead raced that second
-    # pass: the coords were already recorded, so the pass fell back to
-    # setView(current zoom/center) — but Leaflet reports a freshly fitted view
-    # only asynchronously, so it read the *pre-Generate* view and snapped the map
-    # back to the previous data's frame instead of the new isolates'.
+    # new data, and held TRUE across every re-render until the user moves the
+    # map themselves (see the map_user_view observer below). A Generate draws
+    # once (see map_inputs), but a control changed before the reader has touched
+    # the map draws again, and Leaflet reports a freshly fitted view only
+    # asynchronously: a pass that fell back to setView(current zoom/center) read
+    # the *pre-Generate* view and snapped the map back to the previous data's
+    # frame instead of the new isolates'.
     pending_fit <- shiny$reactiveVal(FALSE)
 
-    # Whole-map render. Reacts to the coordinates and the debounced control
-    # bundle; date-filtering and widget assembly are delegated to the helpers.
+    # Whole-map render, from the barrier's inputs and nothing else;
+    # date-filtering and widget assembly are delegated to the helpers.
     # While hidden (not yet generated — see the `generated` toggle below),
     # Shiny suspends this output entirely, so no tiles are ever built or shown
     # before the user's first Generate.
     output$map <- leaflet$renderLeaflet({
-      o <- map_opts()
-      base <- map_coords()
+      p <- shiny$req(map_inputs())
+      o <- p$opts
+      base <- p$coords
       coords <- filter_coords(base, o)
 
       # Read the current view first so Charts-mode clustering can bin at the
@@ -3390,7 +3414,7 @@ server <- function(
         o,
         full_coords = base,
         zoom = z,
-        regions = map_regions()
+        regions = p$regions
       )
 
       # Fit every mapped isolate after a Generate, and keep doing so on each
@@ -3440,7 +3464,8 @@ server <- function(
     shiny$observeEvent(
       map_zoom_d(),
       {
-        o <- map_opts()
+        p <- shiny$req(map_inputs())
+        o <- p$opts
         z <- map_zoom_d()
         if (!identical(o$mode, "Charts") || !isTRUE(o$chart_cluster)) {
           return()
@@ -3448,7 +3473,7 @@ server <- function(
         if (is.null(z)) {
           return()
         }
-        base <- map_coords()
+        base <- p$coords
         coords <- filter_coords(base, o)
         if (is.null(coords) || !nrow(coords)) {
           return()
@@ -3960,6 +3985,7 @@ server <- function(
       map_coords(coords)
       map_regions(built$regions)
       generated(TRUE)
+      map_generation(map_generation() + 1L)
       # Frame the view on this Generate's data, refitting even if the previous
       # map was left zoomed in on an earlier (e.g. single-isolate) selection.
       pending_fit(TRUE)
@@ -3982,7 +4008,8 @@ server <- function(
 
     # Reset-view button: refit to the (date-filtered) data with a fly animation.
     shiny$observeEvent(input$map_reset, {
-      coords <- filter_coords(map_coords(), map_opts())
+      p <- shiny$req(map_inputs())
+      coords <- filter_coords(p$coords, p$opts)
       shiny$req(!is.null(coords) && nrow(coords) > 0)
       frame_coords(leaflet$leafletProxy("map"), coords, fly = TRUE)
     })
@@ -4009,8 +4036,9 @@ server <- function(
         }
       }),
       save = function(file, format, opts) {
-        o <- map_opts()
-        base <- map_coords()
+        p <- shiny$req(map_inputs())
+        o <- p$opts
+        base <- p$coords
         coords <- filter_coords(base, o)
         # Bin Charts-mode clustering at the current on-screen zoom so the export
         # is a faithful snapshot; the exported HTML is static (no server), so it
@@ -4020,7 +4048,7 @@ server <- function(
           o,
           full_coords = base,
           zoom = shiny$isolate(input$map_zoom),
-          regions = map_regions()
+          regions = p$regions
         )
         if (!is.null(coords) && nrow(coords) > 0) {
           m <- frame_coords(m, coords)

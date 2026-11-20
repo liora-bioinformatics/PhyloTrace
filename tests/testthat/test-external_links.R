@@ -1,9 +1,13 @@
 # tests/testthat/test-external_links.R
 #
-# Checks that every external URL the app links to or fetches from still works: every URL in the
-# app's source and data files, the licence deeds and NCBI Taxonomy pages built for species, the
-# basemap tiles and their attribution links, and the geocoder. The online tests need network
-# access; they skip offline and when PHYLOTRACE_SKIP_LINK_CHECK=true.
+# Checks that every external URL the app links to or fetches from still works: the addresses of
+# app/logic/urls.R, every URL in the app's source and data files, the licence deeds and NCBI
+# Taxonomy pages built for species, the basemap tiles and their attribution links, and the
+# geocoder. The offline tests keep URLs in their central place (app/logic/urls.R, or
+# scheme_sources.R for the scheme providers). The online tests hit third-party servers, so they
+# run only when PHYLOTRACE_LINK_CHECK=true, which the weekly workflow
+# .github/workflows/link_check.yml sets; locally:
+#   PHYLOTRACE_LINK_CHECK=true Rscript -e 'rhino::test_r()'
 
 box::use(
   curl[handle_data, has_internet, multi_add, multi_run, new_handle, new_pool],
@@ -12,15 +16,27 @@ box::use(
   rlang[`%||%`],
   testthat[expect, expect_true, skip_if, test_that],
   tidygeocoder[geo],
-  utils[modifyList, read.csv],
+  utils[getParseData, modifyList, read.csv],
 )
 box::use(
   app / logic / scheme_sources[safe_url],
   app / logic / species,
-  app / view / visualization_map,
+  app / logic / urls,
 )
 
-map_impl <- attr(visualization_map, "namespace")
+# Exported functions of urls.R that build a URL, each with an example of a working one. A new
+# one fails the offline test until it is added here.
+URL_BUILDERS <- list(
+  taxonomy_url = function() urls$taxonomy_url(470L),
+  cc_license_url = function() c(urls$cc_license_url("by-sa", "4.0"), urls$cc_license_url("zero"))
+)
+
+# Constants of urls.R that are tile templates rather than pages.
+TILE_TEMPLATES <- "MAP_LABEL_TILES"
+
+# Scripts that may hold URL literals themselves: the central module, and the scheme providers'
+# registry, which keeps each address next to its terms and citation.
+LITERAL_HOMES <- c("logic/urls.R", "logic/scheme_sources.R")
 
 APP_DIR <- "../../app"
 
@@ -35,6 +51,7 @@ SKIP_FILE <- paste(
   "^static/js/html2canvas\\.min\\.js$",
   "^logic/data/assembly_summary\\.txt$",
   "^logic/data/.*_log\\.txt$",
+  "^logic/urls\\.R$",
   sep = "|"
 )
 
@@ -43,9 +60,6 @@ SKIP_FILE <- paste(
 # covered by a check below); one that disappears from the app fails it as well.
 FRAGMENTS <- c(
   "https://" = "placeholder of the database wizard's scheme URL input",
-  "https://creativecommons.org/licenses/%s/%s/" = "licence deeds of species pictures",
-  "https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=" = "NCBI Taxonomy pages",
-  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/" = "choropleth label tiles",
   "https://pubmed.ncbi.nlm.nih.gov/{pmid}/" = "output of a data-preparation script; not shown",
   "https://www.ncbi.nlm.nih.gov/bioproject/{row[" = "output of a data-preparation script; not shown"
 )
@@ -70,11 +84,11 @@ CONTENT_RULES <- list(
   )
 )
 
-# Skips the online tests without network access or when the link check is switched off.
+# Skips the online tests unless PHYLOTRACE_LINK_CHECK=true, and without network access.
 skip_unless_online <- function() {
   skip_if(
-    identical(tolower(Sys.getenv("PHYLOTRACE_SKIP_LINK_CHECK")), "true"),
-    "link check switched off by PHYLOTRACE_SKIP_LINK_CHECK"
+    !identical(tolower(Sys.getenv("PHYLOTRACE_LINK_CHECK")), "true"),
+    "online link check runs only with PHYLOTRACE_LINK_CHECK=true"
   )
   skip_if(!has_internet(), "no network access")
 }
@@ -283,7 +297,26 @@ expect_urls_work <- function(inv) {
 
 # The basemaps offered on the map, by leaflet.providers name.
 basemap_names <- function() {
-  unique(c(unname(map_impl$map_providers), unname(map_impl$mode_tile_defaults)))
+  unique(unname(urls$MAP_BASEMAPS))
+}
+
+# URL constants of urls.R: name to URL.
+url_constants <- function() {
+  values <- mget(ls(urls), envir = as.environment(urls))
+  values[vapply(values, function(v) is.character(v) && length(v) == 1L, logical(1))]
+}
+
+# Strings that are URLs in the R scripts of app/, per script (relative to app/).
+r_url_literals <- function() {
+  files <- list.files(APP_DIR, pattern = "\\.R$", recursive = TRUE)
+  found <- lapply(files, function(file) {
+    data <- getParseData(parse(file.path(APP_DIR, file), keep.source = TRUE))
+    strings <- data$text[data$token == "STR_CONST"]
+    strings <- substr(strings, 2L, nchar(strings) - 1L)
+    strings[grepl("^https?://.", strings)]
+  })
+  names(found) <- files
+  found[lengths(found) > 0L]
 }
 
 test_that("every URL fragment in app/ is listed and every other URL is well-formed", {
@@ -306,13 +339,58 @@ test_that("every URL fragment in app/ is listed and every other URL is well-form
   expect(!length(malformed), paste("Malformed URLs:", toString(malformed)))
 })
 
+test_that("URLs live in app/logic/urls.R, scheme_sources.R or the data files only", {
+  literals <- r_url_literals()
+  stray <- literals[!names(literals) %in% LITERAL_HOMES]
+  expect(
+    !length(stray),
+    paste(
+      "URLs written into scripts; move them to app/logic/urls.R so the link check covers them:",
+      paste0(names(stray), ": ", vapply(stray, toString, character(1)), collapse = "; ")
+    )
+  )
+  constants <- url_constants()
+  expect_true(length(constants) > 0L)
+  plain <- constants[!names(constants) %in% TILE_TEMPLATES]
+  expect(
+    all(vapply(plain, safe_url, logical(1))) && !any(grepl("[{}]", plain)),
+    "A constant of urls.R is no plain URL; tile templates go in TILE_TEMPLATES"
+  )
+  functions <- ls(urls)[vapply(ls(urls), function(n) is.function(urls[[n]]), logical(1))]
+  expect(
+    setequal(functions, names(URL_BUILDERS)),
+    paste(
+      "URL builders of urls.R and URL_BUILDERS differ:",
+      toString(c(setdiff(functions, names(URL_BUILDERS)), setdiff(names(URL_BUILDERS), functions)))
+    )
+  )
+  built <- unlist(lapply(URL_BUILDERS, function(f) f()))
+  expect(all(vapply(built, safe_url, logical(1))), "A URL builder returns no plain URL")
+})
+
 test_that("every basemap resolves to a tile URL without placeholders", {
   for (name in basemap_names()) {
     tile <- provider_tile(name)
     expect(!is.na(tile$url), sprintf("leaflet.providers does not know basemap %s", name))
     expect(!grepl("[{}]", tile$url), sprintf("%s keeps a placeholder: %s", name, tile$url))
   }
-  expect_true(!grepl("[{}]", fill_tile(map_impl$choropleth_labels_url)))
+  for (name in TILE_TEMPLATES) {
+    expect_true(!grepl("[{}]", fill_tile(urls[[name]])))
+  }
+})
+
+test_that("every URL of urls.R works", {
+  skip_unless_online()
+  constants <- url_constants()
+  plain <- constants[!names(constants) %in% TILE_TEMPLATES]
+  tiles <- constants[names(constants) %in% TILE_TEMPLATES]
+  expect_urls_work(rbind(
+    entries(unname(unlist(plain)), paste("urls$", names(plain), sep = "")),
+    entries(unname(vapply(tiles, fill_tile, character(1))), paste("urls$", names(tiles), sep = ""),
+      kind = "image"
+    ),
+    entries(unname(unlist(lapply(URL_BUILDERS, function(f) f()))), "urls.R builder")
+  ))
 })
 
 test_that("every URL in the app's source and data files works", {
@@ -333,7 +411,7 @@ test_that("the licence deeds and NCBI Taxonomy pages linked for species work", {
   # that the address still works and E-utilities confirms each species' taxon exists.
   expect_urls_work(rbind(
     entries(licenses, "species picture licence (species$image_credit)"),
-    entries(species$taxonomy_url(taxa$taxid[1]), "NCBI Taxonomy page (species$taxonomy_url)")
+    entries(urls$taxonomy_url(taxa$taxid[1]), "NCBI Taxonomy page (urls$taxonomy_url)")
   ))
   summary_url <- paste0(
     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=taxonomy&retmode=json&id=",
@@ -362,7 +440,6 @@ test_that("every basemap serves tiles and its attribution links work", {
       paste("basemap", basemap_names()),
       kind = "image"
     ),
-    entries(fill_tile(map_impl$choropleth_labels_url), "choropleth label tiles", kind = "image"),
     entries(unique(hrefs), "basemap attribution link")
   ))
 })

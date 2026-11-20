@@ -59,6 +59,7 @@ box::use(
       tree_level_colors,
     ],
   app / logic / viz_fit[MIN_PRINT_PT],
+  app / logic / viz_legend[LEGEND_FULL_MAX, legend_fit, legend_key_budget],
 )
 
 # --- Geometry constants ------------------------------------------------------
@@ -1281,7 +1282,7 @@ MST_CLUSTER_LABEL_BUSY <- 2
     return(NULL)
   }
   geom <- mst_legend_layout(items, canvas)
-  chars <- max(nchar(vapply(items, function(i) i$label %||% "", character(1))))
+  chars <- max(nchar(vapply(geom$items, function(i) i$label %||% "", character(1))))
   col <- min(
     chars * geom$font_size * TEXT_EM + geom$symbol_size * 2.2 + 8,
     canvas[[1]] * geom$width / geom$ncol
@@ -2291,8 +2292,9 @@ mst_node_radii <- function(counts, size_range) {
 #' @param metadata Isolate metadata frame.
 #' @param field Column name.
 #' @return List with `levels` (NULL when continuous), `shares` (list of named
-#'   numeric vectors per node, names being levels) and `value` (numeric per
-#'   node, continuous only).
+#'   numeric vectors per node, names being levels), `counts` (isolates per
+#'   level across the drawn nodes, NULL when continuous) and `value` (numeric
+#'   per node, continuous only).
 #' @export
 mst_node_values <- function(ids, metadata, field, layer = NULL) {
   # A declared date arrives from SQLite as character, so without this it fell
@@ -2314,6 +2316,7 @@ mst_node_values <- function(ids, metadata, field, layer = NULL) {
       levels = NULL,
       date = is_date,
       shares = vector("list", length(ids)),
+      counts = NULL,
       value = vapply(
         rows,
         function(r) {
@@ -2334,10 +2337,15 @@ mst_node_values <- function(ids, metadata, field, layer = NULL) {
     tab <- tab[tab > 0]
     setNames(as.numeric(tab) / sum(tab), names(tab))
   })
+  # How often each level is met on the drawing, which decides the keys a
+  # trimmed legend keeps (mst_legend_layout).
+  drawn <- as.character(mapped[unlist(rows)])
+  drawn[is.na(drawn)] <- MISSING_LABEL
   list(
     levels = lev,
     date = FALSE,
     shares = shares,
+    counts = setNames(as.integer(table(factor(drawn, levels = lev))), lev),
     value = rep(NA_real_, length(ids))
   )
 }
@@ -2376,15 +2384,22 @@ mst_gradient_colors <- function(values, palette) {
 
 # --- 7. Legend ---------------------------------------------------------------
 
-# Keys, in total across every section, past which a legend stops being a key and
-# becomes a second figure. The reference database has 46 countries; at 46 keys
-# the legend is taller than the canvas whatever the font. The budget is shared
-# out between the sections rather than applied per section, because two mapped
-# variables at 22 keys each is the same failure twice.
-MST_LEGEND_MAX_KEYS <- 24L
-# The floor a section keeps whatever else is on the plot: fewer than four keys
-# says nothing at all about a variable.
-MST_LEGEND_MIN_KEYS <- 4L
+# The legend's type in CSS px: the size it starts at, and the floor it shrinks
+# to before any key is cut. Below 11px a key stops being readable.
+MST_LEGEND_FONT_PX <- 16
+MST_LEGEND_FONT_MIN_PX <- 11
+# Row pitch as a multiple of the type size: the renderer's `stepY`.
+MST_LEGEND_ROW_EM <- 1.9
+# Most columns the legend wraps into before its type shrinks instead (L1 in
+# docs/figure-text-rules.md).
+MST_LEGEND_WRAP_MAX <- 3L
+# The share of the canvas height the legend may run down, and the shares of its
+# width the panel takes at least and at most. Past about a third of the width
+# the plot is a legend with a diagram beside it: labels ellipsise instead, and
+# the node tooltips carry the untruncated value.
+MST_LEGEND_HEIGHT_SHARE <- 0.92
+MST_LEGEND_WIDTH_MIN <- 0.12
+MST_LEGEND_WIDTH_MAX <- 0.36
 # Characters a key is budgeted for when the panel's width is estimated. Not a
 # truncation limit — the browser measures the real string and ellipsises what
 # does not fit — but set below the longest key it has to hold, the estimate is
@@ -2394,48 +2409,58 @@ MST_LEGEND_LABEL_CHARS <- 36L
 
 # One legend entry. `kind` is "header", "key" or "note"; headers and notes are
 # drawn as text-only nodes, which is how one legend block carries sections.
-.legend_entry <- function(kind, label, color = NULL, shape = "dot") {
-  list(kind = kind, label = label, color = color, shape = shape)
+# `section` ties a header and its keys together for the trim, and `weight` is
+# how often a key is met on the drawing; entries without a section are notes
+# that are always drawn.
+.legend_entry <- function(
+  kind,
+  label,
+  color = NULL,
+  shape = "dot",
+  section = NULL,
+  weight = NULL
+) {
+  list(
+    kind = kind,
+    label = label,
+    color = color,
+    shape = shape,
+    section = section,
+    weight = weight
+  )
 }
 
-# The keys one mapping layer contributes, within its share of the key budget.
-.layer_entries <- function(layer, budget = MST_LEGEND_MAX_KEYS) {
+# The header and every key one mapping layer contributes, as section `section`.
+.layer_entries <- function(layer, section) {
   keys <- layer$levels %||% character(0)
   if (!length(keys)) {
     return(list())
   }
-  shown <- head(keys, max(budget, MST_LEGEND_MIN_KEYS))
-  out <- c(
-    list(.legend_entry("header", layer$title)),
-    lapply(shown, function(k) {
+  c(
+    list(.legend_entry("header", layer$title, section = section)),
+    lapply(keys, function(k) {
       .legend_entry(
         "key",
         k,
         color = .lookup(layer$colors, k, MISSING_COLOR),
-        shape = .lookup(layer$shapes, k, "dot")
+        shape = .lookup(layer$shapes, k, "dot"),
+        section = section,
+        weight = .lookup(layer$counts, k, 0)
       )
     })
   )
-  if (length(keys) > length(shown)) {
-    out <- c(
-      out,
-      list(.legend_entry(
-        "note",
-        sprintf("+ %d more", length(keys) - length(shown))
-      ))
-    )
-  }
-  out
 }
 
 #' The legend's entries, in draw order.
 #'
 #' Sections in a fixed order — mapped variables, then clusters, then the note
 #' about node size — so a reader who has seen one of these figures knows where
-#' to look in the next.
+#' to look in the next. Every key is listed: how many of them the canvas has
+#' room for is `mst_legend_layout()`'s to decide.
 #'
 #' @param layers List of legend layer records (`title`, `levels`, `colors`,
-#'   `shapes`).
+#'   `shapes`, and `counts`, the isolates per level that rank the keys a
+#'   trimmed legend keeps).
 #' @param clusters Cluster table from `mst_clusters()`, or NULL.
 #' @param cluster_colors Named colours per cluster.
 #' @param threshold Cluster threshold, for the section header.
@@ -2454,24 +2479,14 @@ mst_legend_items <- function(
   unclustered = NULL,
   cluster_shape = "square"
 ) {
-  # Sections share the key budget: the clusters count as one section when there
-  # are any, so a plot with two mappings and clusters gives each of the three a
-  # third of it rather than each taking the whole thing.
-  sections <- length(layers) + as.integer(!is.null(clusters) && nrow(clusters))
-  budget <- if (sections <= 1L) {
-    MST_LEGEND_MAX_KEYS
-  } else {
-    max(MST_LEGEND_MIN_KEYS, MST_LEGEND_MAX_KEYS %/% sections)
-  }
-
   items <- unlist(
-    lapply(layers, .layer_entries, budget = budget),
+    lapply(seq_along(layers), function(i) .layer_entries(layers[[i]], i)),
     recursive = FALSE
   )
   items <- items %||% list()
 
   if (!is.null(clusters) && nrow(clusters)) {
-    shown <- head(seq_len(nrow(clusters)), budget)
+    section <- length(layers) + 1L
     items <- c(
       items,
       list(.legend_entry(
@@ -2480,9 +2495,10 @@ mst_legend_items <- function(
           "Clusters"
         } else {
           sprintf("Clusters (≤ %s alleles)", threshold)
-        }
+        },
+        section = section
       )),
-      lapply(shown, function(i) {
+      lapply(seq_len(nrow(clusters)), function(i) {
         .legend_entry(
           "key",
           sprintf(
@@ -2491,21 +2507,14 @@ mst_legend_items <- function(
             .count_label(clusters$isolates[[i]], "isolate")
           ),
           color = .lookup(cluster_colors, clusters$cluster[[i]], MISSING_COLOR),
-          shape = cluster_shape
+          shape = cluster_shape,
+          section = section,
+          weight = clusters$isolates[[i]]
         )
       })
     )
-    if (nrow(clusters) > length(shown)) {
-      items <- c(
-        items,
-        list(.legend_entry(
-          "note",
-          sprintf("+ %d more", nrow(clusters) - length(shown))
-        ))
-      )
-    }
     # The clusters account for part of the collection and the reader cannot
-    # subtract their way to the rest: the cluster keys may be truncated, and a
+    # subtract their way to the rest: the cluster keys may be trimmed, and a
     # singleton is in no cluster at all yet is still an isolate in this tree.
     # Naming it keeps the section a complete partition of the isolates.
     #
@@ -2530,30 +2539,100 @@ mst_legend_items <- function(
   items
 }
 
+# The section each entry belongs to, NA for a note drawn whatever the room.
+.entry_sections <- function(items) {
+  vapply(
+    items,
+    function(i) as.integer(i$section %||% NA_integer_),
+    integer(1)
+  )
+}
+
+# Entries one section stands in when it lists `keys` of its `demand`: the
+# header, the keys, and the "+ N more" note when it is trimmed. The cost
+# viz_legend$legend_key_budget() shares the room out by.
+.section_entries <- function(keys, demand) {
+  as.integer(keys + 1L + (keys < demand))
+}
+
+# A legend column's width in px for labels of `chars` characters at `font`: an
+# estimate only, since the renderer measures the text it is about to draw.
+# TEXT_EM is the same mean advance the tree's legend reserve is built on.
+.legend_col_px <- function(chars, font) {
+  chars * font * TEXT_EM + font * 2.6
+}
+
+# The entries with each section cut to its key budget: its most frequent keys
+# kept in their own order, a missing value's key always among them (its grey
+# cannot be guessed from the others), and a "+ N more" note after the last.
+.trim_legend <- function(items, keys) {
+  sec <- .entry_sections(items)
+  kinds <- vapply(items, function(i) i$kind %||% "", character(1))
+  keep <- rep(TRUE, length(items))
+  more <- integer(length(items))
+  for (s in names(keys)) {
+    at <- which(sec == as.integer(s) & kinds == "key")
+    hidden <- length(at) - keys[[s]]
+    if (hidden <= 0L) {
+      next
+    }
+    weight <- vapply(
+      items[at],
+      function(i) suppressWarnings(as.numeric(i$weight %||% 0)),
+      numeric(1)
+    )
+    weight[is.na(weight)] <- 0
+    weight[vapply(items[at], function(i) identical(i$label, MISSING_LABEL), logical(1))] <- Inf
+    kept <- head(order(-weight, seq_along(at)), keys[[s]])
+    keep[at[-kept]] <- FALSE
+    more[[max(which(sec == as.integer(s)))]] <- hidden
+  }
+  out <- list()
+  for (i in seq_along(items)) {
+    if (keep[[i]]) {
+      out <- c(out, items[i])
+    }
+    if (more[[i]] > 0L) {
+      out <- c(out, list(.legend_entry("note", sprintf("+ %d more", more[[i]]))))
+    }
+  }
+  out
+}
+
 #' Geometry for a legend of `items`, given the canvas it has to fit in.
 #'
 #' Replaces three sliders — orientation, font size, key size — because none of
 #' the three had an answer the user could know: the font that suits four keys
 #' overflows at forty-six, and the width that fits "Kenya" truncates
-#' "Antimicrobial resistance surveillance". The rules here are just those
-#' constraints written down: as many rows as fit at a legible size, then more
-#' columns, then a cap.
+#' "Antimicrobial resistance surveillance".
+#'
+#' Legends wrap, then shrink, then trim (L1 in docs/figure-text-rules.md). The
+#' room is the canvas: `MST_LEGEND_HEIGHT_SHARE` of its height, and at most
+#' `MST_LEGEND_WIDTH_MAX` of its width for the columns. At each type size the
+#' keys first wrap into up to `MST_LEGEND_WRAP_MAX` columns, as many as that
+#' width holds; the type shrinks towards `MST_LEGEND_FONT_MIN_PX` only where no
+#' wrap holds every key; and only where the floor does not either are keys cut,
+#' least frequent first, each trimmed section ending in "+ N more". The keys are
+#' budgeted by the entries the room holds (viz_legend$legend_key_budget), and a
+#' section lists at most `LEGEND_FULL_MAX` keys however much room there is (L2).
 #'
 #' @param items List from `mst_legend_items()`.
 #' @param canvas_px Numeric length-2 canvas size in pixels.
 #' @return List with `ncol`, `font_size`, `symbol_size`, `step_y` (row pitch),
-#'   `width` (the share of the canvas the panel may take) and `rows`.
+#'   `width` (the share of the canvas the panel may take), `rows`, `items` (the
+#'   entries to draw, trimmed) and `complete` (FALSE where keys were cut).
 #' @export
 mst_legend_layout <- function(items, canvas_px = c(900, 600)) {
-  n <- length(items)
-  if (!n) {
+  if (!length(items)) {
     return(list(
       ncol = 1L,
       font_size = 14,
       symbol_size = 12,
       step_y = 27,
       width = 0,
-      rows = 0L
+      rows = 0L,
+      items = list(),
+      complete = TRUE
     ))
   }
   # unlist(): the caller reads these off the browser's clientData, which hands
@@ -2563,43 +2642,69 @@ mst_legend_layout <- function(items, canvas_px = c(900, 600)) {
   w <- max(if (length(px) >= 1L) px[[1]] else 900, 200)
   h <- max(if (length(px) >= 2L) px[[2]] else 600, 200)
 
-  # Start comfortable and shrink only as far as the tallest column forces.
-  # 11px is the floor: below it a key stops being readable and a second column
-  # is the better trade.
-  font <- 16
-  ncol <- 1L
-  repeat {
-    rows <- ceiling(n / ncol)
-    if (rows * font * 1.9 <= h * 0.92 || (font <= 11 && ncol >= 3L)) {
-      break
-    }
-    if (font > 11) {
-      font <- font - 1
-    } else {
-      ncol <- ncol + 1L
-    }
-  }
-  rows <- ceiling(n / ncol)
-
+  sec <- .entry_sections(items)
+  is_key <- vapply(items, function(i) identical(i$kind, "key"), logical(1))
+  ids <- unique(sec[!is.na(sec)])
+  demand <- vapply(ids, function(s) sum(is_key & sec %in% s), integer(1))
+  cap <- as.integer(pmin(demand, LEGEND_FULL_MAX))
+  fixed <- sum(is.na(sec))
   chars <- min(
     max(nchar(vapply(items, function(i) i$label %||% "", character(1))), 1L),
     MST_LEGEND_LABEL_CHARS
   )
-  # An estimate only — the renderer measures the text it is about to draw. This
-  # decides how much of the canvas the panel is *allowed*, which is a question
-  # about the arrangement rather than about the glyphs. TEXT_EM is the same mean
-  # advance the tree's legend reserve is built on.
-  col_px <- chars * font * TEXT_EM + font * 2.6
+
+  # The plan at one type size: the fewest columns, up to as many as the width
+  # holds, that list every section up to its cap; else the widest wrap, with
+  # the keys its entries have room for. `rows` and `room` count entries, which
+  # is what the renderer's column-major flow fills.
+  plan_at <- function(font) {
+    step <- round(font * MST_LEGEND_ROW_EM)
+    per_col <- max(floor(h * MST_LEGEND_HEIGHT_SHARE / step), 1)
+    widest <- .clamp(
+      floor(w * MST_LEGEND_WIDTH_MAX / .legend_col_px(chars, font)),
+      1L,
+      MST_LEGEND_WRAP_MAX
+    )
+    for (cols in seq_len(widest)) {
+      room <- per_col * cols
+      keys <- legend_key_budget(
+        demand,
+        room - fixed,
+        full_max = cap,
+        guide_rows = .section_entries
+      )
+      plan <- list(
+        keys = keys,
+        cap = cap,
+        ncol = as.integer(cols),
+        room = room,
+        rows = fixed + sum(.section_entries(keys, demand))
+      )
+      if (all(plan$keys >= plan$cap) && plan$rows <= plan$room) {
+        return(plan)
+      }
+    }
+    plan
+  }
+  fit <- legend_fit(MST_LEGEND_FONT_PX, MST_LEGEND_FONT_MIN_PX, plan_at)
+  # Whole pixels: the bisection's size, rounded down, holds whatever it held.
+  font <- floor(fit$size)
+  plan <- plan_at(font)
+  shown <- .trim_legend(items, setNames(plan$keys, ids))
+  ncol <- plan$ncol
   list(
     ncol = ncol,
     font_size = font,
     symbol_size = .clamp(round(font * 0.85), 8, 18),
-    step_y = round(font * 1.9),
-    # A legend may not take much more than a third of the canvas: past that the
-    # plot is a legend with a diagram beside it. Labels ellipsise instead, and
-    # the node tooltips carry the untruncated value.
-    width = .clamp(col_px * ncol / w, 0.12, 0.36),
-    rows = as.integer(rows)
+    step_y = round(font * MST_LEGEND_ROW_EM),
+    width = .clamp(
+      .legend_col_px(chars, font) * ncol / w,
+      MST_LEGEND_WIDTH_MIN,
+      MST_LEGEND_WIDTH_MAX
+    ),
+    rows = as.integer(ceiling(length(shown) / ncol)),
+    items = shown,
+    complete = isTRUE(all(plan$keys >= plan$cap) && plan$rows <= plan$room)
   )
 }
 
@@ -3495,6 +3600,7 @@ clear_layout_cache <- function() {
     per_node <- mst_gradient_colors(vals$value, layer$palette)
     return(list(
       keys = keys,
+      counts = NULL,
       colors = colors,
       node_color = per_node,
       # A gradient fill is a one-slice pie: the renderer path stays the same
@@ -3516,6 +3622,7 @@ clear_layout_cache <- function() {
   }
   list(
     keys = vals$levels,
+    counts = vals$counts,
     colors = colors,
     node_color = .dominant(vals$shares, colors, MISSING_COLOR),
     # Shares are keyed by level; the renderer needs them keyed by colour.
@@ -3723,6 +3830,7 @@ mst_frames <- function(graph, metadata, opts) {
       list(list(
         title = l$title %||% l$field,
         levels = ch$keys,
+        counts = ch$counts,
         colors = ch$colors
       ))
     )
@@ -3937,9 +4045,10 @@ build_mst_visnetwork <- function(graph, metadata, opts, frames = NULL) {
     )
 
   legend <- if (length(fr$legend) && !isFALSE(opts$show_legend)) {
+    geom <- mst_legend_layout(fr$legend, opts$canvas_px %||% c(900, 600))
     .legend_spec(
-      fr$legend,
-      mst_legend_layout(fr$legend, opts$canvas_px %||% c(900, 600)),
+      geom$items,
+      geom,
       opts$legend_ori %||% "left",
       opts$node_font_color %||% "#000000",
       halo

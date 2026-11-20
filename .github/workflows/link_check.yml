@@ -1,0 +1,99 @@
+name: Link Check
+
+# Weekly check that every external URL the app uses still works (the online part of
+# tests/testthat/test-external_links.R). Silent while everything works; when a link breaks the
+# run fails, the report goes to the job summary and, when the mail secrets below are set, to
+# the maintainers by e-mail. Without the secrets GitHub's own notification of a failed
+# scheduled run (sent to whoever last edited this schedule) still applies.
+#
+# Repository secrets for the e-mail: LINK_CHECK_SMTP_SERVER, LINK_CHECK_SMTP_PORT,
+# LINK_CHECK_SMTP_USERNAME, LINK_CHECK_SMTP_PASSWORD, LINK_CHECK_MAIL_TO (comma separated)
+# and LINK_CHECK_MAIL_FROM.
+#
+# Run it on demand with the "Run workflow" button, or locally with
+#   PHYLOTRACE_LINK_CHECK=true Rscript -e 'rhino::test_r()'
+# Weekly is deliberate: the providers are asked about ~300 pages per run, which is polite at
+# this rate but not on every push.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: link-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PHYLOTRACE_LINK_CHECK: 'true'
+      MAIL_SERVER: ${{ secrets.LINK_CHECK_SMTP_SERVER }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install the packages the link check needs
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::box
+            any::curl
+            any::jsonlite
+            any::leaflet.providers
+            any::rlang
+            any::testthat
+            any::tidygeocoder
+          needs: check
+          dependencies: '"hard"'
+
+      - name: Check the links
+        id: check
+        working-directory: tests/testthat
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/link-check.R" <<'RSCRIPT'
+          options(box.path = normalizePath("../.."))
+          testthat::test_file(
+            "test-external_links.R",
+            reporter = "summary",
+            stop_on_failure = TRUE
+          )
+          RSCRIPT
+          Rscript "$RUNNER_TEMP/link-check.R" 2>&1 | tee "$RUNNER_TEMP/link-check.txt"
+
+      - name: Report to the job summary
+        if: ${{ failure() && steps.check.conclusion == 'failure' }}
+        run: |
+          {
+            echo '## Broken links'
+            echo '```'
+            cat "$RUNNER_TEMP/link-check.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: E-mail the maintainers
+        # Skipped when run locally with `act`, and when the mail secrets are not set.
+        if: ${{ failure() && steps.check.conclusion == 'failure' && !env.ACT && env.MAIL_SERVER != '' }}
+        uses: dawidd6/action-send-mail@v6
+        with:
+          server_address: ${{ secrets.LINK_CHECK_SMTP_SERVER }}
+          server_port: ${{ secrets.LINK_CHECK_SMTP_PORT }}
+          username: ${{ secrets.LINK_CHECK_SMTP_USERNAME }}
+          password: ${{ secrets.LINK_CHECK_SMTP_PASSWORD }}
+          to: ${{ secrets.LINK_CHECK_MAIL_TO }}
+          from: ${{ secrets.LINK_CHECK_MAIL_FROM }}
+          subject: PhyloTrace link check failed
+          body: file://${{ runner.temp }}/link-check.txt
+          attachments: ${{ runner.temp }}/link-check.txt

@@ -1,9 +1,10 @@
 # Figure type rules
 
-Status: **proposal, 2026-09-14.** Nothing here is implemented beyond what
-"Where each engine stands" marks. Applies to every figure engine: Tree, Epi
-curve, AMR heatmap, AMR prevalence, MST and Map. Rule IDs (T1, G1, ...) are
-meant to be cited in code comments and tests.
+Status: **proposal, 2026-09-14; partly implemented and decided since** (dated
+where decided). Nothing here is implemented beyond what "Where each engine
+stands" marks; "Decision log" records what changed and why. Applies to every
+figure engine: Tree, Epi curve, AMR heatmap, AMR prevalence, MST and Map. Rule
+IDs (T1, G1, ...) are meant to be cited in code comments and tests.
 
 ## Can type simply be larger everywhere?
 
@@ -66,7 +67,12 @@ the floor being measured at canvas width rather than at print width (S1).
   `viz_fit.R`, not from engine constants. A new kind of text maps to an
   existing role; an engine does not invent a size.
 - **T3 As big as possible.** `size = min(want, room)`. Raising k fills gaps and
-  then stops; it cannot make two labels collide.
+  then stops; it cannot make two labels collide, and it never sets another
+  label smaller. Where labels share one dimension (AMR: the body, the isolate
+  names and the legend share the width), each keeps at least what it had at
+  100% on the page as it was at 100%, and only the canvas's growth is shared
+  out. On a page that does not grow, a room-bound label stays at its 100%
+  size.
 - **T4 As small as necessary.** A label shrinks only to the floor. Where the room
   is under the floor the label is not drawn. It is never set below the floor.
 - **T5 Room is measured where the label is drawn.** The drawn row or column
@@ -134,10 +140,21 @@ the floor being measured at canvas width rather than at print width (S1).
 
 - **L1 Legends wrap, then shrink, then trim.** A legend first wraps into
   further columns within the room beside the drawing (AMR: up to
-  `AMR_LEGEND_WRAP_MAX`, 3), then its type goes to the floor, and only then is
-  any key cut. Decided 2026-11-20: on the test databases the order mattered
-  only for short pages with long legends (9 pt wrapped against 6.8 pt in one
-  column).
+  `AMR_LEGEND_WRAP_MAX`, 3; MST: `MST_LEGEND_WRAP_MAX`, 3), then its type goes
+  to the floor, and only then is any key cut. Decided 2026-11-20: on the test
+  databases the order mattered only for short pages with long legends (9 pt
+  wrapped against 6.8 pt in one column). Its room is measured where it is
+  drawn (T5):
+  - Height: from where the column starts to the page foot. Labels under the
+    drawing that sit to the legend's left (AMR gene names, element row) do not
+    take from it.
+  - Width: what the drawing leaves (M3), not a fixed share.
+  - Rows: a guide folded into two key columns costs the rows it is drawn in.
+    `viz_legend` charges one column per guide on purpose; an engine whose
+    legend width is checked separately (AMR) credits the fold.
+  - Widths are measured from the keys shown and the title as drawn ("9 of 81
+    shown"), and the gutter between key columns adds the metric slack, or a
+    long key runs into the next column's swatch.
 - **L2 Vocabularies stay whole.** Confidence tiers and drug classes are never
   capped; a mapped variable caps at `LEGEND_FULL_MAX` (18) keys.
 - **M1 Measure what is known.** Known strings are measured with `string_em()`
@@ -145,6 +162,27 @@ the floor being measured at canvas width rather than at print width (S1).
   only for reserving room for labels not yet known.
 - **M2 One solve.** View, builder, export and saved Analysis read the same
   layout result. The browser's width never drives layout.
+- **M3 Measure the split, not a share.** Where a drawing library lays parts
+  out side by side and gives the main panel what is left (ComplexHeatmap gives
+  the AMR body what the strips, isolate names, legend and padding leave), the
+  fit predicts that remainder from the parts it plans and solves the sizes
+  again against it until the two agree. The AMR fit used a fixed 62% share: on
+  the test databases the drawn body was 28% narrower (S. capitis, isolate names
+  on) to 36% wider (Klebsiella) than planned, so gene names were sized for the
+  wrong columns and the legend was planned into 0.9 in while drawn 2.2 in wide.
+  Decided 2026-11-20.
+
+### Redraws
+
+- **R1 One draw per change.** Everything a figure is built from passes one
+  settled value before it is drawn: a `plot_source` reactive, debounced by
+  `PLOT_SETTLE_MS` (450 ms), copied into a `reactiveVal` by an observer at
+  priority 100 only when not `identical()` to the last. Preview, export and
+  thumbnail read that value only. Browser echoes of `update*Input()` and
+  `renderUI()` inputs mounting (NULL, then a value) each arrive in their own
+  flush, and without the barrier each one drew the figure again (AMR: 5-8
+  draws per Generate; Epi: 4; Map: up to 4). Generate is part of the source
+  (a generation counter) so it always draws. Playback may settle at 0 ms.
 
 ## Proposed role ramp
 
@@ -172,11 +210,13 @@ would come out at 7.8 pt, not 9.
 | Rule | Tree | Epi | AMR heatmap | AMR prevalence | MST | Map |
 |---|---|---|---|---|---|---|
 | T1 one Text size | yes | yes | yes | yes | no: node, edge and cluster sliders | no |
-| T3-T4 fit and floor | yes | yes | yes | yes | partial: fitted at Generate, 7 in print anchor | no |
+| T3-T4 fit and floor | yes, tip rows held above 100% | yes | yes, with 100% floors above 100% | yes | partial: fitted at Generate, 7 in print anchor | no |
 | T2 shared ramp | no | no | no | no | no | no |
-| G1 geometry follows text | no: tip rows ignore k | partial: annotation lanes | partial: columns by shape, rows no | no: ratio locked on purpose | n/a | n/a |
-| L1 wrap, shrink, trim | no: trims first at 8.2 pt | partial: "+ N more" | yes | n/a | n/a | n/a |
+| G1 geometry follows text | partial: annotation columns by shape, tip rows no | partial: annotation lanes | partial: columns by shape, rows no | no: ratio locked on purpose | n/a | n/a |
+| L1 wrap, shrink, trim | yes: folds up to 3 key columns | yes: page grows to the stage's shape first | yes, room measured to the page foot | n/a: wraps, never trims | yes: room-based, up to 3 columns | n/a: plain Leaflet legend |
 | M2 one solve, fixed canvas | yes | yes | yes | yes | no: live vis.js widget | no: Leaflet |
+| M3 measured width split | n/a | n/a | yes | n/a | n/a | n/a |
+| R1 one draw per change | yes | yes | yes | yes | yes | yes |
 | S2 Full-view size hint | no | no | no | no | no | no |
 
 ## Open decisions
@@ -199,7 +239,51 @@ would come out at 7.8 pt, not 9.
 1. Role table in `viz_fit.R` with tests; engines read it, values unchanged (no
    visual change).
 2. Set the values; one render pass per engine on the S. aureus database.
-3. G1 per engine (Tree rows; prevalence per decision 2).
-4. L1 on the Tree legend.
+3. G1 per engine (Tree tip rows; prevalence per decision 2).
+4. ~~L1 on the Tree legend.~~ Done 2026-11-20.
 5. S2 hints.
-6. MST, then Map.
+6. MST text size (decision 6), then Map.
+
+## Decision log
+
+**2026-11-20, AMR heatmap and every engine's legend and redraws.** Measured on
+the test databases in `PhyloTrace_Test_Data` (read-only), rendered through the
+app's own builders.
+
+- *Text size had no visible effect on the AMR heatmap.* The canvas width was
+  multiplied by k, and the Full view scaled the page straight back. Now the
+  canvas grows with k by shape only (G1, `viz_fit$STAGE_ASPECT`), and only
+  while the aspect is the fit's.
+- *Mapped-variable strip names were tiny.* Strips were a fixed 0.12 in; now
+  `0.16 in x k` with a floor (`.strip_in()`), the canvas growing by exactly
+  that gain. The Tree's heatmap and tile columns follow k the same way
+  (`tree_column_gain()`), by shape.
+- *Element-type names did not grow.* Their room is now the gap to the
+  neighbouring labels, leaning into the empty band under the strips, not their
+  own panel's width (T5).
+- *Short pages got a 5 pt, trimmed legend beside empty space.* Three causes,
+  all fixed: the body was planned as 62% of the width (M3); the legend's
+  height stopped at the body's foot (L1); folded guides were charged one row
+  per key (L1). S. capitis: legend 5 pt with 28 of 37 keys became 6.9 pt with
+  all 37, isolate names 6 to 8.9 pt, gene names 13 to 9.4 pt (they had been
+  the largest type on the page, against T6). Providencia (51 genes, 51 keys,
+  36-character names on 12 x 7.7 in) stays near the floor: the page is full,
+  and the reader can turn isolate names off or set the aspect by hand.
+- *Bigger text set other labels smaller* (seen while fixing the above):
+  above 100% the AMR body and legend keep their 100% widths and only the
+  canvas's growth is shared out: isolate names, then the gene columns up to
+  their size x k, then the legend (T3). On the Tree, larger column headers buy
+  their own height under a fitted aspect (`tree_band_extra_in()`), and under a
+  hand-set one stay at their 100% depth (`tree_header_text()`), so the tip
+  rows never tighten.
+- *Long keys ran into the next key column.* The gutter between folded key
+  columns adds the export device's metric slack (`.key_gap_in()`).
+- *Figures were drawn several times per Generate.* Every engine now has the
+  R1 barrier (AMR 5-8 draws, Epi 4, Map up to 4, down to 1).
+- *Legends trimmed before shrinking.* The Tree (`tree_legend_size()` via
+  `legend_fit`, folds up to `LEGEND_FOLD_MAX` 3) and the MST
+  (`mst_legend_layout()`, room-based key budget instead of a fixed 24) now
+  follow L1. The Epi legend's room is at least what keeps the page as flat as
+  the stage (`0.7 x width - plot height`) before its type shrinks.
+- `viz_legend$legend_key_budget()` takes an optional `guide_rows` cost; its
+  default, which the Tree relies on, is unchanged.

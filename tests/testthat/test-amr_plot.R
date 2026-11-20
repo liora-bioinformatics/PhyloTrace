@@ -1559,10 +1559,11 @@ test_that("the heatmap legend shrinks for its width as well as its height", {
     cols = setNames(rep("#000000", 3), c("a", strrep("Macrolide/", 6), "b")),
     n = 3L
   ))
-  args <- list(n_rows = 40, n_cols = 20, legend_guides = guides)
+  args <- list(n_rows = 40, n_cols = 50, legend_guides = guides)
   wide <- do.call(amr_plot$amr_auto_layout, c(args, list(width_in = 30)))
-  # Nine inches with the isolate names beside the matrix leave the column too
-  # narrow for that name at any legible size: the floor, not the design size.
+  # Fifty gene columns at their 100% width and the isolate names leave nine
+  # inches no room for that name at any legible size: the floor, not the
+  # design size.
   narrow <- do.call(
     amr_plot$amr_auto_layout,
     c(args, list(width_in = 9, show_row_names = TRUE))
@@ -1877,7 +1878,7 @@ test_that("mapped strips widen with the text size, and the canvas only by that",
   expect_equal(big$strip_in, 2 * base$strip_in)
   expect_gt(big$fontsize_anno, base$fontsize_anno * 1.8)
   # The strips' gain is the canvas's, not the gene columns'.
-  expect_equal(big$cell_width_in, base$cell_width_in, tolerance = 1e-3)
+  expect_equal(big$cell_width_in, base$cell_width_in, tolerance = 0.03)
 })
 
 test_that("a legend longer than the page wraps into columns before it shrinks", {
@@ -2079,4 +2080,105 @@ test_that("an element label leans into the room its neighbours leave", {
     impl$.element_fontsize(titles, cols, 6, 30, left_in = 0),
     lean
   )
+})
+
+# A short screen shaped like S. capitis: long isolate names, three mapped strips
+# and a legend longer than the page is tall.
+capitis_like <- function(text_scale = 1) {
+  # The canvas the view opens it on, widened by the strips' gain above 100%.
+  width_in <- amr_plot$amr_canvas_width_in(12, n_strips = 3L, text_scale = text_scale)
+  tiers <- c("Absent", "Partial", "Strong", "Perfect")
+  guide <- function(kind, title, keys) {
+    list(
+      id = paste0(kind, ":", title), kind = kind, title = title,
+      cols = setNames(rep("#000000", length(keys)), keys), n = length(keys)
+    )
+  }
+  guides <- c(
+    lapply(c("Resistance", "Virulence", "Stress"), function(t) {
+      guide("fill", paste(t, "gene call"), tiers)
+    }),
+    list(
+      guide("strip", "Sub Compartment", c("composite dishes", "dairy", "fish", "meat", "veg")),
+      guide("strip", "Year", as.character(2003:2016)),
+      guide("strip", "Country", c("Austria", "Czechia", "Denmark", "France", "Italy", "Sweden"))
+    )
+  )
+  amr_plot$amr_auto_layout(
+    22, 12,
+    width_in = width_in,
+    show_row_names = TRUE,
+    row_label_chars = 35,
+    row_label_text = "GCA_003040555.1_ASM304055v1_genomic",
+    element_titles = c("Resistance", "Virulence", "Stress"),
+    element_cols = c(8L, 1L, 3L),
+    n_strips = 3L,
+    aspect = 0.65,
+    text_scale = text_scale,
+    legend_guides = guides
+  )
+}
+
+test_that("the body is what the strips, names, legend and padding leave", {
+  fit <- capitis_like()
+  share <- 9 * impl$AMR_BODY_FRAC - 3 * impl$AMR_STRIP_IN
+  # The isolate names and a wrapped legend take more than a 62% share leaves.
+  expect_lt(fit$body_width_in, share)
+  # Solved against the body it predicts, to within the passes' tolerance.
+  expect_equal(fit$cell_width_in * 12, fit$body_width_in, tolerance = 0.05)
+  # Every key, wrapped beside the matrix rather than trimmed at the floor.
+  expect_true(all(fit$legend_keys >= pmin(c(4, 4, 4, 5, 14, 6), 18L)))
+  expect_gt(fit$fontsize_legend, impl$AMR_LEGEND_MIN_PT + 1)
+  # A tall screen without names leaves the body more than the share.
+  tall <- amr_plot$amr_auto_layout(1000, 40, width_in = 12)
+  expect_gt(tall$body_width_in, 12 * impl$AMR_BODY_FRAC)
+})
+
+test_that("the legend's height runs to the page foot, not the body's", {
+  fit <- capitis_like()
+  expect_gt(fit$legend_height_in, 22 * fit$row_pitch_in + fit$col_label_in - 1e-6)
+})
+
+test_that("a bigger text size shrinks no label on a page that does not grow", {
+  base <- capitis_like()
+  big <- capitis_like(text_scale = 2)
+  expect_gte(big$fontsize_legend, base$fontsize_legend)
+  expect_gte(big$fontsize_col, base$fontsize_col - 0.2)
+  expect_gte(big$fontsize_row, base$fontsize_row - 0.2)
+  expect_gte(sum(big$legend_keys), sum(base$legend_keys))
+})
+
+test_that(".fold_credit plans the keys a folded drawing holds", {
+  demand <- c(a = 4L, b = 15L, c = 14L, d = 6L)
+  plain <- viz_legend$legend_plan(demand, 30L, full_max = demand, max_rows_cap = 40L)
+  credited <- impl$.fold_credit(demand, 30L, demand, 40L)
+  expect_lt(sum(plain$keys), sum(demand))
+  expect_gt(sum(credited$keys), sum(plain$keys))
+  expect_lte(credited$rows, 30L)
+  expect_identical(credited$room, 30L)
+  # Nothing to credit where every key already fits.
+  roomy <- impl$.fold_credit(demand, 200L, demand, 40L)
+  expect_identical(roomy$keys, viz_legend$legend_plan(demand, 200L, demand, 40L)$keys)
+})
+
+test_that("a trimmed guide is measured by the keys it shows", {
+  levels <- c(paste0("L", 1:20), strrep("Very long rare level ", 4))
+  g <- list(
+    id = "strip:X", kind = "strip", title = "X",
+    cols = setNames(rep("#000000", 21), levels),
+    values = c(rep(paste0("L", 1:20), 5), levels[[21]]),
+    n = 21L
+  )
+  all_keys <- impl$.legend_width_in(list(g), list(keys = c("strip:X" = 21L)), 9)
+  shown <- impl$.legend_width_in(list(g), list(keys = c("strip:X" = 6L)), 9)
+  expect_lt(shown, all_keys)
+  # Guides planned from an estimate still reserve a key's width.
+  est <- impl$.estimated_guides(NULL, "Resistance", 0L)
+  expect_gt(impl$.legend_width_in(est, list(), 9), 0.5)
+})
+
+test_that("folded key columns are spaced for the export device's wider type", {
+  long <- "Lincosamide/Macrolide/Streptogramin"
+  expect_gt(impl$.key_gap_in(long, 18), impl$AMR_LEGEND_COL_GAP_MM / 25.4 + 0.1)
+  expect_equal(impl$.key_gap_in(character(0), 9), impl$AMR_LEGEND_COL_GAP_MM / 25.4)
 })

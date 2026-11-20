@@ -47,6 +47,21 @@ test_that("the plan budgets keys per guide and costs the rows they take", {
   expect_identical(empty$rows, 0L)
 })
 
+test_that("an engine can cost its guides its own way", {
+  # A header, the keys and one note line when trimmed: the MST's legend, whose
+  # sections stand in fewer rows than a guide box's, so the same room lists more.
+  entries <- function(keys, demand) keys + 1L + (keys < demand)
+  own <- viz_legend$legend_key_budget(40L, room = 20L, guide_rows = entries)
+  expect_identical(own, 18L)
+  expect_identical(entries(own, 40L), 20L)
+  # The default costing is unchanged by the option.
+  expect_identical(
+    viz_legend$legend_key_budget(40L, room = 20L),
+    viz_legend$legend_key_budget(40L, room = 20L, guide_rows = viz_legend$legend_guide_rows)
+  )
+  expect_lte(sum(viz_legend$legend_guide_rows(viz_legend$legend_key_budget(40L, 20L), 40L)), 20L)
+})
+
 test_that("a missing level always keeps its key", {
   levels <- c(sprintf("v%02d", 1:20), "NA")
   cut <- viz_legend$legend_breaks(levels, max_keys = 5L, missing = "NA")

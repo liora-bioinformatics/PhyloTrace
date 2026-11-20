@@ -387,6 +387,47 @@ test_that("the canvas changes with the picture, not before it", {
   )
 })
 
+test_that("the canvas knows whether the aspect is still the fit's", {
+  # Only a fitted aspect lets the annotation columns widen the page for the
+  # text size (G1); a ratio the reader set holds (G4). A saved Analysis carries
+  # which it was, so it reopens at the same width.
+  dir <- local_tempdir()
+  db <- fixture_db(dir)
+  generate <- reactiveVal(0L)
+  meta <- data.frame(isolate = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+
+  testServer(
+    visualization_tree$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      selected_isolates = reactiveVal(c("A", "B", "C", "D")),
+      generate = generate,
+      plot_type = reactiveVal("Tree")
+    ),
+    {
+      set_tree_inputs(session)
+      generate(1L)
+      settle(session)
+      expect_true(tree_opts()$aspect_fitted)
+      # The browser echoing the fitted value back is not a hand-set ratio.
+      session$setInputs(nj_aspect_ratio = isolate(fitted$nj_aspect_ratio))
+      session$flushReact()
+      expect_true(tree_opts()$aspect_fitted)
+      saved <- snapshot()
+      expect_equal(saved$.fit_aspect, isolate(fitted$nj_aspect_ratio))
+
+      session$setInputs(nj_aspect_ratio = 3)
+      session$flushReact()
+      expect_false(tree_opts()$aspect_fitted)
+
+      restore(saved)
+      session$flushReact()
+      expect_true(tree_opts()$aspect_fitted)
+    }
+  )
+})
+
 test_that("Generate names the isolates when the rows can hold a name", {
   # The fit decides the labels in both directions wherever it is armed at all.
   # Only ever switching them *off* left a tree fitted for labels with none on

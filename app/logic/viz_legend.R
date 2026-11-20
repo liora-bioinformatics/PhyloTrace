@@ -108,12 +108,16 @@ legend_guide_rows <- function(keys, demand, ncol = 1L) {
 #' @param demands Integer vector. Levels each guide holds, in stacking order.
 #' @param room Integer. Rows the whole box has.
 #' @param full_max Integer. Most keys any one guide lists.
+#' @param guide_rows Function of `keys` and `demand` (integer vectors, one entry
+#'   per guide) giving the rows each guide stands in. An engine whose guides are
+#'   laid out differently from `legend_guide_rows()` costs them its own way.
 #' @return Integer vector of key budgets, one per guide.
 #' @export
 legend_key_budget <- function(
   demands,
   room = LEGEND_MAX_ROWS,
-  full_max = LEGEND_FULL_MAX
+  full_max = LEGEND_FULL_MAX,
+  guide_rows = legend_guide_rows
 ) {
   d <- suppressWarnings(as.integer(demands))
   d <- d[!is.na(d)]
@@ -124,7 +128,7 @@ legend_key_budget <- function(
   d <- pmax(d, 1L)
   cap <- pmin(d, full_max)
   give <- pmin(cap, LEGEND_MIN_KEYS)
-  cost <- function(g) sum(legend_guide_rows(g, d))
+  cost <- function(g) sum(guide_rows(g, d))
   # The floor is not negotiable: a box that cannot hold it has its type shrunk.
   budget <- max(suppressWarnings(as.integer(room %||% LEGEND_MAX_ROWS)), cost(give))
   for (i in order(d)) {

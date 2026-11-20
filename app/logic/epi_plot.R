@@ -799,7 +799,8 @@ EPI_KEY_SPACING_Y_FRAC <- 0.35
 
 # Shares of the plot height the legend and the annotation band may take before
 # their type is shrunk. Past the floor the legend grows the canvas and the band
-# drops its outermost lanes' labels.
+# drops its outermost lanes' labels. A page flatter than the stage may give the
+# legend more (see the legend fit in epi_layout()).
 EPI_LEGEND_FRAC <- 0.35
 EPI_ANNO_BAND_FRAC <- 0.4
 
@@ -1167,9 +1168,17 @@ epi_layout <- function(binned, opts = list()) {
     (!identical(cats, EPI_ALL_LABEL) && !end_drawn)
   legend_cats <- if (isTRUE(show_legend)) cats else character(0)
   legend_rows_extra <- if (moving_avg) 1L else 0L
+  # The legend's room is a share of the plot's height, or, on a page flatter
+  # than the stage, whatever brings the page up to the stage's shape: the Full
+  # view is bound by the stage's width until then, so that height costs nothing
+  # on screen, and a short curve need not set its keys smaller than a tall one.
+  legend_room_in <- max(
+    EPI_LEGEND_FRAC * plot_h,
+    viz_fit$STAGE_ASPECT * w - plot_h
+  )
   legend_fits <- function(pt) {
     .legend_geometry(legend_cats, pt, w, legend_rows_extra)$height_in <=
-      EPI_LEGEND_FRAC * plot_h
+      legend_room_in
   }
   legend_pt <- if (length(legend_cats) || moving_avg) {
     viz_fit$largest_fitting(EPI_LEGEND_PT * k, legend_fits)
@@ -1182,7 +1191,9 @@ epi_layout <- function(binned, opts = list()) {
   # variable with a hundred categories would otherwise hang a page of keys
   # under the curve. What does not fit is listed as a count in a final key.
   legend_keys <- legend_cats
-  legend_cap_in <- (viz_fit$CANVAS_MAX_FACTOR - 1) * plot_h
+  # Never under the room the type was fitted to, so no key is cut before the
+  # type has reached the floor.
+  legend_cap_in <- max((viz_fit$CANVAS_MAX_FACTOR - 1) * plot_h, legend_room_in)
   if (legend$height_in > legend_cap_in && length(legend_cats) > 1L) {
     row_in <- legend$height_in / max(legend$rows, 1L)
     rows_room <- max(1L, as.integer(floor(legend_cap_in / row_in)) - legend_rows_extra)

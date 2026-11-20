@@ -82,6 +82,7 @@ box::use(
   app /
     logic /
     viz_helpers[
+      PLOT_SETTLE_MS,
       apply_controls,
       collect_input_snapshot,
       control_families,
@@ -814,15 +815,10 @@ server <- function(
       text_size_mirror(value)
     }
 
-    # Puts the fitted aspect back and resumes following the fit.
+    # Puts the fitted aspect back: the curve takes it at once (see plot_source),
+    # the slider once the refitted curve is drawn.
     refit_aspect <- function() {
       aspect_follows_fit(TRUE)
-      fitted <- shiny$isolate(
-        tryCatch(epi_layout()$fitted_aspect, error = function(e) NULL)
-      )
-      if (!is.null(fitted)) {
-        set_aspect(fitted)
-      }
     }
 
     # Timeline annotations the user has added (see the Annotations tab).
@@ -1688,8 +1684,6 @@ server <- function(
 
       awaiting_dates <<- FALSE
       generated(TRUE)
-      # Fitted before the plot is published, so the first draw is already at
-      # the aspect this curve calls for rather than the one before it.
       refit_aspect()
     }
 
@@ -1977,47 +1971,85 @@ server <- function(
       )
     }
 
-    # The curve's canvas and every size on it, solved once for the binned data
-    # (see epi_plot$epi_layout()). The canvas is a physical size, never the
-    # width the browser reports, so the preview, the export and a saved
-    # Analysis are one drawing.
-    epi_layout <- shiny$reactive({
-      # Which Generate this is the answer to. Everything the plot is built
-      # from is value-driven, so a Generate that changes nothing invalidates
-      # nothing — re-confirming the same isolate set applies the same metadata
-      # and the same selection — and the loading overlay comes down on the
-      # plot's own value event. Without a dependency here no plot is drawn
-      # and the spinner runs to its client-side safety timeout over a picture
-      # that was already correct. Pressing Generate is an explicit request for
-      # the plot, so it draws one.
-      generate()
+    # Everything the curve is drawn from, resolved: the binned data, every
+    # drawing option, and the aspect and text size it is laid out at.
+    plot_source <- shiny$reactive({
       binned <- epi_data()
       shiny$req(nrow(binned) > 0)
+      list(
+        generation = generate(),
+        data = binned,
+        opts = plot_opts(),
+        # NULL while the aspect follows the fit: the layout then fits it itself,
+        # so a curve whose fit changes is drawn once, at the new fit, rather
+        # than first at the old ratio and again once the slider has caught up.
+        aspect = if (isTRUE(aspect_follows_fit())) NULL else aspect_mirror(),
+        text_size = text_size_mirror()
+      )
+    })
+
+    # The curve's inputs as last published, republished only when they differ
+    # from what was drawn.
+    #
+    # Built straight from the controls, one Generate drew the curve up to four
+    # times: the interval, date-axis and date-range controls are renderUI
+    # output, and each one mounting reports its value back in a flush of its
+    # own, re-running date_field(), current_interval() or the window - each to
+    # the same answer, each a full redraw. Settled and value-compared, as the
+    # AMR's and the Tree's `plot_inputs` are, no echo can redraw it.
+    #
+    # `generation` keeps a Generate that changes nothing visible: the loading
+    # overlay comes down on the plot's value event, so a re-confirmed identical
+    # selection must still draw. Playback does not wait to settle: its ticks are
+    # STEP_MS apart, and each one is a frame. priority: the barrier settles
+    # before outputs are recalculated in the same flush.
+    plot_inputs <- shiny$reactiveVal(NULL)
+    settled_source <- shiny$debounce(
+      plot_source,
+      function() if (isTRUE(anim_playing())) 0 else PLOT_SETTLE_MS
+    )
+    shiny$observe(
+      {
+        current <- settled_source()
+        shiny$req(current)
+        if (!identical(shiny$isolate(plot_inputs()), current)) {
+          plot_inputs(current)
+        }
+      },
+      priority = 100
+    )
+
+    # The curve's canvas and every size on it, solved once for the published
+    # inputs (see epi_plot$epi_layout()). The canvas is a physical size, never
+    # the width the browser reports, so the preview, the export and a saved
+    # Analysis are one drawing.
+    epi_layout <- shiny$reactive({
+      p <- shiny$req(plot_inputs())
       epi_plot$epi_layout(
-        binned,
+        p$data,
         c(
-          plot_opts(),
+          p$opts,
           list(
             width_in = epi_plot$EPI_CANVAS_IN,
-            aspect = aspect_mirror(),
-            text_scale = text_scale_percent(text_size_mirror())
+            aspect = p$aspect,
+            text_scale = text_scale_percent(p$text_size)
           )
         )
       )
     })
 
-    # Rebuilt live as the controls change; the binning above is what re-runs
-    # when a data control moves, this only redraws.
+    # The curve, built from the barrier's inputs and nothing else.
     epi_ggplot <- shiny$reactive({
-      lay <- epi_layout()
-      epi_plot$build_epi_ggplot(epi_data(), c(plot_opts(), list(layout = lay)))
+      p <- shiny$req(plot_inputs())
+      epi_plot$build_epi_ggplot(p$data, c(p$opts, list(layout = epi_layout())))
     })
 
-    # Keep a fitted aspect fitted as the curve changes shape — an annotation
-    # that needs another lane, a mapping whose lines need labelling — until the
-    # reader has set a ratio of their own. Ahead of the render (priority), so a
-    # changed fit is drawn once rather than at the old ratio first.
-    shiny$observe(priority = 10, {
+    # Keep the slider on the fitted ratio while the aspect follows the fit, as
+    # the curve changes shape — an annotation that needs another lane, a
+    # mapping whose lines need labelling. The curve itself already took the fit
+    # (see plot_source); this only shows it, so the slider's echo redraws
+    # nothing.
+    shiny$observe({
       shiny$req(aspect_follows_fit())
       fitted <- tryCatch(epi_layout()$fitted_aspect, error = function(e) NULL)
       shiny$req(fitted)

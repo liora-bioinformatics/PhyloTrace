@@ -2017,6 +2017,7 @@ server <- function(
         show_col_names = col_names,
         show_element_names = show_element_names_mirror(),
         row_label_chars = max(nchar(rownames(mat)), 1L),
+        row_label_text = rownames(mat),
         col_label_chars = max(nchar(colnames(mat)), 1L),
         block_titles = blocks$titles,
         block_cols = blocks$cols,

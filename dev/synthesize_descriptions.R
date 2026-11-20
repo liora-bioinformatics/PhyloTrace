@@ -87,8 +87,8 @@ descriptions <- c(
     "species Campylobacter jejuni and C. coli, Gram-negative, microaerophilic,",
     "spirally curved rods of the family Campylobacteraceae. Together they are",
     "the leading cause of bacterial gastroenteritis (campylobacteriosis)",
-    "worldwide, with poultry as the principal reservoir. cgMLST is used to",
-    "distinguish the two species and trace foodborne transmission."
+    "worldwide, with poultry as the principal reservoir. cgMLST is used",
+    "to type both species and trace foodborne transmission."
   ),
   "Candidozyma_auris" = paste(
     "Candidozyma auris (formerly Candida auris) is an ascomycetous, budding",
@@ -177,8 +177,9 @@ descriptions <- c(
     "closely related, Gram-negative, encapsulated rods of the family",
     "Enterobacteriaceae, including K. oxytoca, K. michiganensis and",
     "K. grimontii. These opportunistic pathogens cause nosocomial infections",
-    "and antibiotic-associated haemorrhagic colitis. cgMLST is required to",
-    "resolve the constituent species, which routine tests cannot separate."
+    "and antibiotic-associated haemorrhagic colitis. Genomic methods such",
+    "as cgMLST are used to resolve the constituent species, which routine",
+    "tests cannot separate."
   ),
   "Klebsiella_pneumoniae/variicola/quasipneumoniae" = paste(
     "The Klebsiella pneumoniae complex (K. pneumoniae sensu lato) groups",
@@ -262,8 +263,8 @@ descriptions <- c(
     "Staphylococcus argenteus is a Gram-positive coccus occurring in clusters,",
     "facultatively anaerobic, of the family Staphylococcaceae. A close relative",
     "of S. aureus and formerly misidentified as it, it causes similar skin,",
-    "soft-tissue and invasive infections. It is distinguished mainly by genomic",
-    "methods such as cgMLST."
+    "soft-tissue and invasive infections. It is distinguished by",
+    "MALDI-TOF with updated databases or by genomic methods."
   ),
   "Staphylococcus_aureus" = paste(
     "Staphylococcus aureus is a Gram-positive coccus occurring in clusters,",
@@ -301,9 +302,10 @@ descriptions <- c(
     "other antimicrobial resistance."
   ),
   "Citrobacter_freundii/portucalensis/braakii/europaeus" = paste(
-    "The Citrobacter complex (Citrobacter sensu lato) comprises several closely",
-    "related, Gram-negative, rod-shaped species of the family",
-    "Enterobacteriaceae, including C. freundii, C. koseri and their relatives.",
+    "The Citrobacter freundii complex groups closely related,",
+    "Gram-negative, rod-shaped species of the family Enterobacteriaceae,",
+    "including C. freundii, C. portucalensis, C. braakii and C.",
+    "europaeus.",
     "These opportunistic pathogens cause urinary-tract, bloodstream and",
     "neonatal infections and carry clinically important resistance",
     "determinants. cgMLST is used to resolve the closely related species."
@@ -364,7 +366,8 @@ descriptions <- c(
     "Bacillus cereus is a Gram-positive, rod-shaped, spore-forming,",
     "facultatively anaerobic bacterium of the family Bacillaceae and the",
     "namesake of the B. cereus group. It causes emetic and diarrhoeal food",
-    "poisoning through preformed and enterotoxins, and occasionally invasive",
+    "poisoning through the preformed emetic toxin cereulide and",
+    "diarrhoeal enterotoxins, and occasionally invasive",
     "infections. Its heat-resistant spores make it a persistent concern in",
     "food production."
   ),
@@ -566,8 +569,8 @@ descriptions <- c(
     "Yersinia pseudotuberculosis is a Gram-negative, facultatively anaerobic",
     "coccobacillus of the family Yersiniaceae. It causes enteric yersiniosis",
     "with abdominal pain that can mimic appendicitis, mostly through",
-    "contaminated food or water. It is the ancestor of Y. pestis and is",
-    "monitored in foodborne outbreak surveillance."
+    "contaminated food or water. Y. pestis evolved from it as a recent",
+    "clone, and it is monitored in foodborne outbreak surveillance."
   ),
   "Borrelia_spp" = paste(
     "Borrelia is a genus of helical, motile spirochaetes of the family",

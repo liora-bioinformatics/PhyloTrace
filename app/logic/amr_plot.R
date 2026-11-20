@@ -1157,6 +1157,28 @@ amr_dend_cm <- function(scale_pct = AMR_DEND_SCALE_DEFAULT, width_in = AMR_CANVA
 # ComplexHeatmap's own 2mm default is inside that error; this is not.
 AMR_LEGEND_PAD_MM <- 6
 
+# The rest of the page's horizontal furniture, in millimetres, which the fit
+# measures the body's width against (see amr_auto_layout): the padding on each
+# side of the page, the gutter between two element-type panels, and
+# ComplexHeatmap's own gap between the body and the isolate names.
+AMR_PAGE_PAD_MM <- 2
+AMR_PANEL_GAP_MM <- 4
+AMR_ROW_NAME_PAD_MM <- 1
+
+# Passes the fit makes towards a body width that its own sizes leave drawn, and
+# how close two passes have to come to count as agreeing.
+AMR_WIDTH_PASSES <- 3L
+AMR_WIDTH_TOLERANCE_IN <- 0.02
+
+# The narrowest legend column the fit plans for, and the narrowest share of the
+# page the body is ever predicted at, so a page too crowded to seat everything
+# still gets a legend and a matrix rather than a negative width for either.
+AMR_LEGEND_MIN_ROOM_IN <- 0.5
+AMR_BODY_MIN_FRAC <- 0.2
+
+# Nominal rooms .fold_credit() tries for a trimmed legend.
+AMR_FOLD_CREDIT_STEPS <- 24L
+
 # Share of the room between two block titles that the type may take, leaving
 # the rest as clearance. A rotated title's footprint across the page is its
 # line height rather than its length, so this is measured against the type
@@ -1210,9 +1232,38 @@ AMR_LEGEND_COL_GAP_MM <- 2
 # right padding, the longest drug class lost its last letters at the edge.
 AMR_LEGEND_METRIC_SLACK <- 0.08
 
+# The gutter between two folded columns of keys, in inches. ComplexHeatmap
+# sizes each key column on the layout device and the labels are set on the
+# export device, a few percent wider (AMR_LEGEND_METRIC_SLACK), so a fixed 2mm
+# let "Lincosamide/Macrolide/Streptogramin" run into the next column's swatch.
+.key_gap_in <- function(labels, pt) {
+  AMR_LEGEND_COL_GAP_MM / 25.4 + AMR_LEGEND_METRIC_SLACK * viz_fit$text_width_in(labels, pt)
+}
+
+# The keys and title one guide is drawn with at a key budget, by the same call
+# .guide_legend() makes, so the width measured is the width drawn (rule T9).
+.guide_shown <- function(g, keys) {
+  if (is.null(g$cols)) {
+    return(list(labels = character(0), title = g$title %||% ""))
+  }
+  cut <- viz_legend$legend_breaks(
+    names(g$cols),
+    g$values,
+    keys %||% length(g$cols),
+    missing = AMR_MISSING_LABEL
+  )
+  list(
+    labels = cut$breaks,
+    title = viz_legend$legend_title(g$title %||% "", cut$hidden, cut$total)
+  )
+}
+
 # Inches the widest guide in the legend column takes across at a type size: its
-# title, or its keys in the columns the plan folds them into. Guides planned
-# from an estimate carry no names, and cost nothing here.
+# title, or the keys it shows in the columns the plan folds them into. Guides
+# planned from an estimate carry no names, so they reserve a typical key
+# (AMR_LEGEND_EST_CHARS long at the mean character width, rule M1): the body
+# is measured against this width, and reserving none predicted a body as wide
+# as the page.
 .legend_width_in <- function(guides, plan, pt) {
   if (!length(guides)) {
     return(0)
@@ -1221,20 +1272,28 @@ AMR_LEGEND_METRIC_SLACK <- 0.08
   widths <- vapply(
     guides,
     function(g) {
-      title_in <- viz_fit$text_width_in(g$title %||% "", pt + 2)
-      labels <- if (is.null(g$col_fun)) names(g$cols) else "0000.0"
+      if (is.null(g$cols) && is.null(g$col_fun) && is.null(g$title)) {
+        return(key_in + .pt_in(pt) * AMR_CHAR_EM * AMR_LEGEND_EST_CHARS)
+      }
+      id <- as.character(g$id)
+      shown <- .guide_shown(g, .planned(plan$keys, id, length(g$cols)))
+      title_in <- viz_fit$text_width_in(shown$title, pt + 2)
+      labels <- if (is.null(g$col_fun)) shown$labels else "0000.0"
       if (!length(labels)) {
         return(title_in)
       }
-      ncol <- .planned(plan$ncol, as.character(g$id), 1L)
+      ncol <- .planned(plan$ncol, id, 1L)
       keys_in <- ncol * (key_in + viz_fit$text_width_in(labels, pt)) +
-        (ncol - 1L) * AMR_LEGEND_COL_GAP_MM / 25.4
+        (ncol - 1L) * .key_gap_in(labels, pt)
       max(title_in, keys_in)
     },
     numeric(1)
   )
   max(widths)
 }
+
+# Characters an estimated guide's widest key is reserved at.
+AMR_LEGEND_EST_CHARS <- 16
 
 # Most columns the legend may wrap into before its type shrinks instead, and
 # the gutter between them, in millimetres (handed to packLegend() as well).
@@ -1262,6 +1321,44 @@ AMR_LEGEND_WRAP_GAP_MM <- 4
 .wrapped_width_in <- function(guides, plan, pt) {
   cols <- plan$wrap %||% 1L
   cols * .legend_width_in(guides, plan, pt) + (cols - 1L) * AMR_LEGEND_WRAP_GAP_MM / 25.4
+}
+
+# Inches the isolate names take across at a type size: the longest name
+# measured where it is known (rule M1), estimated from its length where not.
+.row_names_in <- function(text, chars, pt) {
+  if (length(text) && any(nzchar(text))) {
+    return(viz_fit$text_width_in(text, pt))
+  }
+  .pt_in(pt) * AMR_CHAR_EM * max(chars %||% 1, 1)
+}
+
+# The key plan for `rows` rows of legend, crediting long guides with the rows
+# they are drawn in. legend_plan() charges a guide one row per key though a
+# long one is drawn folded into two key columns, which is the right caution
+# for the Tree, whose legend column takes width from its page; here the
+# legend's width is checked on its own (legend_w_room), so the keys a folded
+# drawing holds are planned: the plan listing the most keys among nominal
+# rooms up to three times `rows` whose folded rows still stand in `rows`. A
+# larger room folds less, so the rows a plan takes are not monotone in it and
+# the rooms are scanned, in steps of `rows` / AMR_FOLD_CREDIT_STEPS.
+.fold_credit <- function(demand, rows, caps, rows_cap) {
+  plan_at <- function(r) {
+    viz_legend$legend_plan(demand, r, full_max = caps, max_rows_cap = rows_cap)
+  }
+  plan <- plan_at(rows)
+  if (all(plan$keys >= plan$cap)) {
+    return(plan)
+  }
+  best <- plan
+  step <- max(as.integer(rows %/% AMR_FOLD_CREDIT_STEPS), 1L)
+  for (r in seq(rows + step, rows * 3L, by = step)) {
+    p <- plan_at(r)
+    if (p$rows <= rows && sum(p$keys) > sum(best$keys)) {
+      best <- p
+    }
+  }
+  best$room <- as.integer(rows)
+  best
 }
 
 .clamp <- function(x, lo, hi) min(max(x, lo), hi)
@@ -1496,6 +1593,12 @@ amr_prevalence_layout <- function(
 #'   `amr_legend_guides()` (each with an `id`, a `kind` and `n` keys). NULL
 #'   plans against an estimate from the block and element titles and the strip
 #'   count.
+#' @param row_label_text Character. The isolate names, measured for the width
+#'   they take beside the body (the longest few by length); NULL estimates it
+#'   from `row_label_chars`.
+#' @param floors List or NULL. Internal: the widths the body and the legend
+#'   keep above 100% text size (`body`, `legend`, inches). NULL solves them at
+#'   100% first.
 #' @return A list of fitted sizes and rotations, plus one legibility verdict
 #'   per text role (`legible` for the isolate names, `cols_legible`,
 #'   `titles_legible`, `elements_legible`, `anno_names_legible`), the isolate
@@ -1527,8 +1630,11 @@ amr_auto_layout <- function(
   column_grouping = "cluster",
   aspect = NULL,
   text_scale = 1,
-  legend_guides = NULL
+  legend_guides = NULL,
+  row_label_text = NULL,
+  floors = NULL
 ) {
+  call_args <- as.list(environment())
   n_rows <- max(as.integer(n_rows %||% 1L), 1L)
   n_cols <- max(as.integer(n_cols %||% 1L), 1L)
   w <- if (is.null(width_in) || !is.finite(width_in) || width_in <= 0) {
@@ -1539,391 +1645,485 @@ amr_auto_layout <- function(
   k <- viz_fit$text_scale(text_scale)
   font_max <- AMR_FONT_MAX * k
   strip_in <- .strip_in(k)
+  # Above 100% the body, the isolate names and the legend all want more of the
+  # same width, and whichever took it would set another smaller for asking for
+  # bigger text (rule T3). So the body and the legend keep at least what they
+  # are drawn at 100% on the page as it is at 100% (without the strips' gain
+  # or any G1 growth, see amr_canvas_width_in()), and whatever the canvas grew
+  # by is shared out: the isolate names first, then the gene columns up to
+  # their size x k (G1 widened it for them), then the legend. On a page no
+  # wider than at 100% none of them gains.
+  if (is.null(floors)) {
+    floors <- list(body = 0, legend = 0)
+    if (k > 1) {
+      call_args$text_scale <- 1
+      call_args$floors <- floors
+      call_args$width_in <- min(
+        w - .strip_extra_in(n_strips, k),
+        amr_canvas_width_in(n_cols, show_col_names, n_strips)
+      )
+      at_100 <- do.call(amr_auto_layout, call_args)
+      floors <- list(body = at_100$body_width_in, legend = at_100$legend_width_in)
+    }
+  }
+  # The widest name is among the longest; measuring a thousand of them on every
+  # pass bought nothing.
+  row_label_text <- as.character(row_label_text %||% character(0))
+  row_label_text <- row_label_text[order(-nchar(row_label_text))][
+    seq_len(min(length(row_label_text), 10L))
+  ]
 
-  # The body loses width to whatever sits beside it, and the strips are the one
-  # part of that which the reader controls. Measured against the strips at
-  # 100% text size: a bigger text size widens them out of the legend's room
-  # rather than out of every gene column, which would set
-  # the gene names smaller for asking for bigger text. The canvas grew by that
-  # gain (amr_canvas_width_in()), so it is taken off before the body's share.
-  body_w <- (w - .strip_extra_in(n_strips, k)) * AMR_BODY_FRAC -
-    n_strips * AMR_STRIP_IN
-  body_w <- max(body_w, w * 0.25)
-  cell_w <- body_w / n_cols
+  # What sits beside the body whatever its width: the strips and the row
+  # dendrogram on its left, the gutters between element-type panels, and the
+  # page's padding with the clearance before the legend and the isolate names.
+  left_in <- n_strips * strip_in + max(dend_cm, 0) / 2.54
+  gaps_in <- max(length(element_titles %||% character(0)) - 1L, 0L) *
+    AMR_PANEL_GAP_MM /
+    25.4
+  pads_in <- (2 * AMR_PAGE_PAD_MM + AMR_LEGEND_PAD_MM + AMR_ROW_NAME_PAD_MM) / 25.4
 
-  # Column labels are always drawn rotated (a horizontal gene name is wider
-  # than any cell it could sit over), so their size is the cell width and the
-  # room they need is vertical.
-  col_room <- 72 * cell_w * AMR_LABEL_FILL
-  cols_legible <- min(col_room, font_max) >= AMR_COL_MIN_PT
-  fontsize_col <- .clamp(col_room, AMR_FONT_MIN, font_max)
-  fontsize_title <- .clamp(
-    fontsize_col + 3 * k,
-    max(8 * k, AMR_TITLE_MIN_PT),
-    16 * k
-  )
+  # Every size below answers to the body's width, and the body is not a share
+  # of the page: ComplexHeatmap draws the legend column and the isolate names at
+  # their own width and gives the body what is left. So the sizes are solved
+  # against a body width, the body that solution leaves is measured from the
+  # parts it draws (rules T5, M2), and the sizes are solved again against that
+  # until the two agree. A fixed 62% share was 28% too wide on a short page with
+  # isolate names, where the legend was planned into 0.9in and drawn into 2.2in,
+  # and up to 36% too narrow on a tall one, whose gene names were set for
+  # columns narrower than the ones drawn.
+  solve <- function(body_w) {
+    cell_w <- body_w / n_cols
 
-  rot <- .title_rotation(block_titles, block_cols, cell_w, fontsize_title)
-  # Rotated, a title's footprint on the page is its own line height rather than
-  # its length - but that footprint still has to clear the next title along, or
-  # the two run through each other exactly as unrotated ones did. fontsize_col
-  # + 3 above answers only to the *average* column, so a screen split into many
-  # narrow drug classes needs the size brought down to what the tightest pair
-  # of neighbours can actually carry (see .title_pitch).
-  if (identical(rot, 90)) {
-    fontsize_title <- min(
-      fontsize_title,
-      72 * .title_pitch(block_cols, cell_w) * AMR_TITLE_FILL
+    # Column labels are always drawn rotated (a horizontal gene name is wider
+    # than any cell it could sit over), so their size is the cell width and the
+    # room they need is vertical.
+    col_room <- 72 * cell_w * AMR_LABEL_FILL
+    cols_legible <- min(col_room, font_max) >= AMR_COL_MIN_PT
+    fontsize_col <- .clamp(col_room, AMR_FONT_MIN, font_max)
+    fontsize_title <- .clamp(
+      fontsize_col + 3 * k,
+      max(8 * k, AMR_TITLE_MIN_PT),
+      16 * k
     )
-  }
-  # Past a point no size fits: forty drug classes over two hundred genes leaves
-  # each title a third of a millimetre of page to sit in. Where that happens
-  # the titles come off the plot entirely and the class strip takes their place
-  # (see .class_strip_drawn), so the floor below is a floor on what is *drawn*
-  # rather than a size anything is squeezed down to — a title set at four
-  # points was a smudge that still cost the page a full row.
-  titles_legible <- fontsize_title >= AMR_TITLE_MIN_PT
-  fontsize_title <- max(fontsize_title, AMR_TITLE_MIN_PT)
 
-  # The element-type row. One label under a whole panel, not one per drug-class
-  # block — it only ever shared fontsize_title by accident, and that size is
-  # solved against the *tightest* class block on the screen, which is what set
-  # "Resistance" in four-point type under a seven-inch panel. Fitted to its own
-  # panel's width instead, and, like a block title, turned on its side rather
-  # than shrunk past reading when a narrow panel cannot carry it flat.
-  # The reader's text size moves the ceiling, but never under the floor: a
-  # smaller text size shrinks the label to the floor and no further, rather
-  # than declaring a label that fits illegible.
-  elem_cap <- max(
-    .clamp(
-      w * AMR_ELEMENT_PT_PER_IN,
-      AMR_ELEMENT_MIN_PT,
-      AMR_ELEMENT_MAX_PT
-    ) *
-      k,
-    AMR_ELEMENT_MIN_PT
-  )
-  elem_flat <- .element_fontsize(
-    element_titles,
-    element_cols,
-    body_w,
-    elem_cap,
-    left_in = n_strips * strip_in + max(dend_cm, 0) / 2.54
-  )
-  elem_rot <- if (elem_flat >= AMR_ELEMENT_MIN_PT) 0 else 90
-  fontsize_element <- if (identical(elem_rot, 0)) {
-    elem_flat
-  } else {
-    # Turned, the label's footprint across the page is its line height and it
-    # has its panel's whole width to sit in — the length that would not fit
-    # flat now runs down the page instead, where elem_in reserves for it.
-    min(72 * .panel_width(element_cols, body_w) * AMR_TITLE_FILL, elem_cap)
-  }
-  elements_legible <- fontsize_element >= AMR_ELEMENT_MIN_PT
-  fontsize_element <- max(fontsize_element, AMR_ELEMENT_MIN_PT)
-
-  # Everything stacked above and below the body: the rotated column labels, the
-  # column dendrogram, the block titles, the element-type row and the plot's
-  # own margins. Subtracted from the canvas before the rows get their share, so
-  # a screen with long gene names does not lose the room to draw them.
-  #
-  # Each part is budgeted if and only if it is drawn, and those conditions are
-  # the same ones the builders read (see .class_strip_drawn and .gene_panel)
-  # rather than a second set that could drift from them. Room set aside for a
-  # label nobody draws is a band of white under the matrix; a label drawn into
-  # room nobody set aside runs through whatever sits below it. Drawn means
-  # wanted (the switch) *and* legible (the verdict): a label the room cannot
-  # hold at its floor is left off whatever the switch says, so it is never
-  # budgeted either.
-  has_blocks <- length(block_titles %||% character(0)) > 0
-  class_titles_drawn <- has_blocks &&
-    identical(column_grouping, "class") &&
-    titles_legible
-  strip_drawn <- has_blocks && !class_titles_drawn
-  element_row_drawn <- !isFALSE(show_element_names) && elements_legible
-  col_names_drawn <- !isFALSE(show_col_names) && cols_legible
-
-  title_in <- AMR_TITLE_GAP_IN +
+    rot <- .title_rotation(block_titles, block_cols, cell_w, fontsize_title)
+    # Rotated, a title's footprint on the page is its own line height rather than
+    # its length - but that footprint still has to clear the next title along, or
+    # the two run through each other exactly as unrotated ones did. fontsize_col
+    # + 3 above answers only to the *average* column, so a screen split into many
+    # narrow drug classes needs the size brought down to what the tightest pair
+    # of neighbours can actually carry (see .title_pitch).
     if (identical(rot, 90)) {
-      .pt_in(fontsize_title) * AMR_CHAR_EM * max(nchar(block_titles %||% ""), 0)
-    } else {
-      .pt_in(fontsize_title) * 2
+      fontsize_title <- min(
+        fontsize_title,
+        72 * .title_pitch(block_cols, cell_w) * AMR_TITLE_FILL
+      )
     }
-  # Turned, the element label runs down the page rather than across it, so what
-  # it costs is its length rather than two lines of type.
-  elem_in <- if (!element_row_drawn) {
-    0
-  } else if (identical(elem_rot, 90)) {
-    AMR_TITLE_GAP_IN +
-      .pt_in(fontsize_element) *
-        AMR_CHAR_EM *
-        max(nchar(element_titles %||% ""), 1)
-  } else {
-    .pt_in(fontsize_element) * 2
-  }
-  # Reserved exactly when the names are drawn. Reserving nothing for names that
-  # *are* drawn left ComplexHeatmap a zero-height band to draw them in, so they
-  # ran off the foot of the page and through the element-type row below.
-  col_label_in <- if (!col_names_drawn) {
-    0
-  } else {
-    .pt_in(fontsize_col) *
-      AMR_CHAR_EM *
-      max(col_label_chars, 1) +
-      AMR_COL_LABEL_GAP_IN
-  }
-  overhead <- col_label_in +
-    max(dend_cm, 0) / 2.54 +
-    (if (class_titles_drawn) title_in else 0) +
-    (if (strip_drawn) AMR_CLASS_STRIP_IN else 0) +
-    elem_in +
-    0.5
+    # Past a point no size fits: forty drug classes over two hundred genes leaves
+    # each title a third of a millimetre of page to sit in. Where that happens
+    # the titles come off the plot entirely and the class strip takes their place
+    # (see .class_strip_drawn), so the floor below is a floor on what is *drawn*
+    # rather than a size anything is squeezed down to — a title set at four
+    # points was a smudge that still cost the page a full row.
+    titles_legible <- fontsize_title >= AMR_TITLE_MIN_PT
+    fontsize_title <- max(fontsize_title, AMR_TITLE_MIN_PT)
 
-  # The rows. Square cells where the matrix is small enough to allow it, the
-  # target pitch where it is not; the reader's ratio wins where they have set
-  # one, and otherwise the row count picks it, within bounds that stop a
-  # six-isolate screen being a letterbox. What the ratio leaves for the body is
-  # the pitch the isolate names have to fit inside - not the pitch that was
-  # asked for.
-  given_aspect <- !is.null(aspect) &&
-    length(aspect) == 1L &&
-    isTRUE(is.finite(aspect) && aspect > 0)
-  # Square cells are a small matrix's shape, so they are measured on the base
-  # canvas: a canvas widened to seat gene names has wide cells, and squaring
-  # a thousand rows to them made a page ten times taller than any row needs.
-  square_w <- min(
-    cell_w,
-    max(
-      AMR_CANVAS_IN * AMR_BODY_FRAC - n_strips * AMR_STRIP_IN,
-      AMR_CANVAS_IN * 0.25
-    ) /
-      n_cols
-  )
-  solve_rows <- function(labelled) {
-    row_in <- if (labelled) AMR_ROW_IN_LABELLED else AMR_ROW_IN_PLAIN
-    row_h <- .clamp(min(square_w, AMR_SQUARE_BODY_IN / n_rows), row_in, AMR_ROW_IN_MAX)
-    a <- if (given_aspect) {
-      as.numeric(aspect)
-    } else {
-      raw <- (n_rows * row_h + overhead) / w
-      floor_aspect <- (n_rows * row_in + overhead) / w
+    # The element-type row. One label under a whole panel, not one per drug-class
+    # block — it only ever shared fontsize_title by accident, and that size is
+    # solved against the *tightest* class block on the screen, which is what set
+    # "Resistance" in four-point type under a seven-inch panel. Fitted to its own
+    # panel's width instead, and, like a block title, turned on its side rather
+    # than shrunk past reading when a narrow panel cannot carry it flat.
+    # The reader's text size moves the ceiling, but never under the floor: a
+    # smaller text size shrinks the label to the floor and no further, rather
+    # than declaring a label that fits illegible.
+    elem_cap <- max(
       .clamp(
-        max(
-          min(raw * AMR_ASPECT_FIT_SCALE, AMR_SQUARE_ASPECT_MAX),
-          floor_aspect
-        ),
-        AMR_ASPECT_MIN,
-        AMR_ASPECT_MAX
-      )
+        w * AMR_ELEMENT_PT_PER_IN,
+        AMR_ELEMENT_MIN_PT,
+        AMR_ELEMENT_MAX_PT
+      ) *
+        k,
+      AMR_ELEMENT_MIN_PT
+    )
+    elem_flat <- .element_fontsize(
+      element_titles,
+      element_cols,
+      body_w,
+      elem_cap,
+      left_in = left_in
+    )
+    elem_rot <- if (elem_flat >= AMR_ELEMENT_MIN_PT) 0 else 90
+    fontsize_element <- if (identical(elem_rot, 0)) {
+      elem_flat
+    } else {
+      # Turned, the label's footprint across the page is its line height and it
+      # has its panel's whole width to sit in — the length that would not fit
+      # flat now runs down the page instead, where elem_in reserves for it.
+      min(72 * .panel_width(element_cols, body_w) * AMR_TITLE_FILL, elem_cap)
     }
-    pitch <- max(a * w - overhead, 0.2) / n_rows
-    # Read off the room rather than off a clamped size: an isolate name whose
-    # pitch is worth two points has to be told apart from one that genuinely
-    # fits at the floor. A name wider than the margin kept for it is the other
-    # way this fails.
-    room <- min(
-      72 * pitch * AMR_LABEL_FILL,
+    elements_legible <- fontsize_element >= AMR_ELEMENT_MIN_PT
+    fontsize_element <- max(fontsize_element, AMR_ELEMENT_MIN_PT)
+
+    # Everything stacked above and below the body: the rotated column labels, the
+    # column dendrogram, the block titles, the element-type row and the plot's
+    # own margins. Subtracted from the canvas before the rows get their share, so
+    # a screen with long gene names does not lose the room to draw them.
+    #
+    # Each part is budgeted if and only if it is drawn, and those conditions are
+    # the same ones the builders read (see .class_strip_drawn and .gene_panel)
+    # rather than a second set that could drift from them. Room set aside for a
+    # label nobody draws is a band of white under the matrix; a label drawn into
+    # room nobody set aside runs through whatever sits below it. Drawn means
+    # wanted (the switch) *and* legible (the verdict): a label the room cannot
+    # hold at its floor is left off whatever the switch says, so it is never
+    # budgeted either.
+    has_blocks <- length(block_titles %||% character(0)) > 0
+    class_titles_drawn <- has_blocks &&
+      identical(column_grouping, "class") &&
+      titles_legible
+    strip_drawn <- has_blocks && !class_titles_drawn
+    element_row_drawn <- !isFALSE(show_element_names) && elements_legible
+    col_names_drawn <- !isFALSE(show_col_names) && cols_legible
+
+    title_in <- AMR_TITLE_GAP_IN +
+      if (identical(rot, 90)) {
+        .pt_in(fontsize_title) * AMR_CHAR_EM * max(nchar(block_titles %||% ""), 0)
+      } else {
+        .pt_in(fontsize_title) * 2
+      }
+    # Turned, the element label runs down the page rather than across it, so what
+    # it costs is its length rather than two lines of type.
+    elem_in <- if (!element_row_drawn) {
+      0
+    } else if (identical(elem_rot, 90)) {
+      AMR_TITLE_GAP_IN +
+        .pt_in(fontsize_element) *
+          AMR_CHAR_EM *
+          max(nchar(element_titles %||% ""), 1)
+    } else {
+      .pt_in(fontsize_element) * 2
+    }
+    # Reserved exactly when the names are drawn. Reserving nothing for names that
+    # *are* drawn left ComplexHeatmap a zero-height band to draw them in, so they
+    # ran off the foot of the page and through the element-type row below.
+    col_label_in <- if (!col_names_drawn) {
+      0
+    } else {
+      .pt_in(fontsize_col) *
+        AMR_CHAR_EM *
+        max(col_label_chars, 1) +
+        AMR_COL_LABEL_GAP_IN
+    }
+    overhead <- col_label_in +
+      max(dend_cm, 0) / 2.54 +
+      (if (class_titles_drawn) title_in else 0) +
+      (if (strip_drawn) AMR_CLASS_STRIP_IN else 0) +
+      elem_in +
+      0.5
+
+    # The rows. Square cells where the matrix is small enough to allow it, the
+    # target pitch where it is not; the reader's ratio wins where they have set
+    # one, and otherwise the row count picks it, within bounds that stop a
+    # six-isolate screen being a letterbox. What the ratio leaves for the body is
+    # the pitch the isolate names have to fit inside - not the pitch that was
+    # asked for.
+    given_aspect <- !is.null(aspect) &&
+      length(aspect) == 1L &&
+      isTRUE(is.finite(aspect) && aspect > 0)
+    # Square cells are a small matrix's shape, so they are measured on the base
+    # canvas: a canvas widened to seat gene names has wide cells, and squaring
+    # a thousand rows to them made a page ten times taller than any row needs.
+    square_w <- min(
+      cell_w,
+      max(
+        AMR_CANVAS_IN * AMR_BODY_FRAC - n_strips * AMR_STRIP_IN,
+        AMR_CANVAS_IN * 0.25
+      ) /
+        n_cols
+    )
+    # The type the isolate names' width allows: at 100% a share of what the
+    # body leaves, above it what the body and the legend leave at their floors.
+    names_cap_pt <- if (floors$legend > 0) {
+      names_room_in <- w - left_in - pads_in - gaps_in - floors$body -
+        floors$legend * (1 + AMR_LEGEND_METRIC_SLACK)
+      names_room_in / .row_names_in(row_label_text, row_label_chars, 1)
+    } else {
       72 * (w - body_w) * 0.45 / (AMR_CHAR_EM * max(row_label_chars, 1))
-    )
-    list(aspect = a, pitch = pitch, room = room)
-  }
-  # Whether the isolate names earn the height a labelled row buys. Decided by
-  # the fit when asked (NA) - the Tree's rule: legible at that pitch, and not
-  # so many rows that a per-isolate label carries nothing - otherwise the
-  # switch as it stands, so turning the names on by hand buys their height.
-  row_names <- if (length(show_row_names) == 1L && is.na(show_row_names)) {
-    solve_rows(TRUE)$room >= AMR_ROW_MIN_PT && !crowded_tips(n_rows)
-  } else {
-    isTRUE(show_row_names)
-  }
-  rows <- solve_rows(row_names)
-  aspect <- rows$aspect
-  pitch <- rows$pitch
-  row_pt <- rows$room
-  rows_legible <- row_pt >= AMR_ROW_MIN_PT
-  fontsize_row <- .clamp(row_pt, AMR_FONT_MIN, font_max)
-
-  # A mapped variable's name, turned on its side over a strip `strip_in`
-  # wide: that width is its line height, and a strip too narrow to carry the
-  # floor goes unnamed rather than smudged - its own legend, which is titled
-  # with the same variable name, is what a reader has left to read it from.
-  fontsize_anno <- 72 * strip_in * AMR_LABEL_FILL
-  anno_names_legible <- n_strips > 0L &&
-    min(fontsize_anno, font_max) >= AMR_ANNO_NAME_MIN_PT
-  fontsize_anno <- .clamp(fontsize_anno, AMR_ANNO_NAME_MIN_PT, font_max)
-
-  # The legend column belongs to the page rather than to the matrix, so its
-  # type does not answer to cell_w the way everything above does. What it does
-  # answer to is the height it is drawn into: the whole stack has to fit
-  # between the top of the body and the bottom of the page, because that is
-  # where align_heatmap_legend = "heatmap_top" starts it (see amr_as_ggplot).
-  #
-  # Planned by the Tree's own guide planner (app/logic/viz_legend.R) against
-  # the guides this screen really draws, under the rule every label on the
-  # figure follows: the type shrinks before any key is dropped, and keys are
-  # trimmed only where not even the floor holds them all (legend_fit). A
-  # trimmed guide lists its most frequent keys with a gap key and a count on
-  # its title; one longer than a column folds into a second.
-  #
-  # The tiers and the drug classes are a vocabulary the reader needs whole, so
-  # they are never capped; a mapped variable is capped at LEGEND_FULL_MAX keys,
-  # past which its colours are a population no key list helps anyone tell
-  # apart. The class strip's keys count only where the strip is drawn.
-  legend_h <- max(aspect * w - overhead, 1)
-  guides <- Filter(
-    function(g) !identical(g$kind, "class") || strip_drawn,
-    legend_guides %||% .estimated_guides(block_titles, element_titles, n_strips)
-  )
-  demand <- setNames(
-    vapply(guides, function(g) max(as.integer(g$n %||% 1L), 1L), integer(1)),
-    vapply(guides, function(g) as.character(g$id), character(1))
-  )
-  caps <- ifelse(
-    vapply(guides, function(g) identical(g$kind, "strip"), logical(1)),
-    viz_legend$LEGEND_FULL_MAX,
-    demand
-  )
-  # The column's width is the other half of its room: it sits in what the body
-  # leaves beside the dendrogram, the strips and the isolate names, and a key
-  # wider than that takes the width out of the body every size above was
-  # fitted to. The type shrinks for it the way it shrinks for the height.
-  legend_w_room <- max(
-    w -
-      body_w -
-      n_strips * strip_in -
-      max(dend_cm, 0) / 2.54 -
-      (if (row_names && rows_legible) max(w - body_w, 0.1) * 0.45 else 0) -
-      (AMR_LEGEND_PAD_MM + 4) / 25.4,
-    0.5
-  )
-  # packLegend() wraps the guides into further columns once one runs out of
-  # height (see .pack_legends), so a long legend beside a short page need not
-  # shrink to the floor while the width beside the body stands empty. Planned
-  # with the fewest columns that hold every key and still fit that width; a
-  # single column where none does, which then shrinks and trims as before.
-  legend_plan_at <- function(pt) {
-    row_in <- .legend_row_in(pt) * AMR_LEGEND_HEIGHT_SAFETY
-    per_col <- max(floor(legend_h / row_in), 1)
-    plan_with <- function(cols) {
-      # A guide folds into a second key column only where its share of the
-      # height cannot hold it: a second column is width the matrix needs.
-      # Wrapped, no guide may run taller than one column, since packLegend()
-      # never breaks a single guide across two.
-      rows_cap <- max(c(demand, viz_legend$LEGEND_MAX_ROWS))
-      if (cols > 1L) {
-        rows_cap <- max(min(rows_cap, per_col - 4L), 3L)
+    }
+    solve_rows <- function(labelled) {
+      row_in <- if (labelled) AMR_ROW_IN_LABELLED else AMR_ROW_IN_PLAIN
+      row_h <- .clamp(min(square_w, AMR_SQUARE_BODY_IN / n_rows), row_in, AMR_ROW_IN_MAX)
+      a <- if (given_aspect) {
+        as.numeric(aspect)
+      } else {
+        raw <- (n_rows * row_h + overhead) / w
+        floor_aspect <- (n_rows * row_in + overhead) / w
+        .clamp(
+          max(
+            min(raw * AMR_ASPECT_FIT_SCALE, AMR_SQUARE_ASPECT_MAX),
+            floor_aspect
+          ),
+          AMR_ASPECT_MIN,
+          AMR_ASPECT_MAX
+        )
       }
-      plan <- viz_legend$legend_plan(
-        demand,
-        per_col * cols,
-        full_max = caps,
-        max_rows_cap = rows_cap
-      )
-      plan$wrap <- cols
-      plan$fits_wrap <- .wrap_columns(
-        viz_legend$legend_guide_rows(plan$keys, plan$demand, plan$ncol),
-        per_col
-      ) <=
-        cols
-      plan
+      pitch <- max(a * w - overhead, 0.2) / n_rows
+      # Read off the room rather than off a clamped size: an isolate name whose
+      # pitch is worth two points has to be told apart from one that genuinely
+      # fits at the floor. A name wider than the margin kept for it is the other
+      # way this fails.
+      room <- min(72 * pitch * AMR_LABEL_FILL, names_cap_pt)
+      list(aspect = a, pitch = pitch, room = room)
     }
-    single <- plan_with(1L)
-    if (all(single$keys >= single$cap) && single$rows <= single$room) {
-      return(single)
+    # Whether the isolate names earn the height a labelled row buys. Decided by
+    # the fit when asked (NA) - the Tree's rule: legible at that pitch, and not
+    # so many rows that a per-isolate label carries nothing - otherwise the
+    # switch as it stands, so turning the names on by hand buys their height.
+    row_names <- if (length(show_row_names) == 1L && is.na(show_row_names)) {
+      solve_rows(TRUE)$room >= AMR_ROW_MIN_PT && !crowded_tips(n_rows)
+    } else {
+      isTRUE(show_row_names)
     }
-    for (cols in seq_len(AMR_LEGEND_WRAP_MAX)[-1L]) {
-      plan <- plan_with(cols)
-      if (
-        plan$fits_wrap &&
-          all(plan$keys >= plan$cap) &&
+    rows <- solve_rows(row_names)
+    aspect <- rows$aspect
+    pitch <- rows$pitch
+    row_pt <- rows$room
+    rows_legible <- row_pt >= AMR_ROW_MIN_PT
+    fontsize_row <- .clamp(row_pt, AMR_FONT_MIN, font_max)
+
+    # A mapped variable's name, turned on its side over a strip `strip_in`
+    # wide: that width is its line height, and a strip too narrow to carry the
+    # floor goes unnamed rather than smudged - its own legend, which is titled
+    # with the same variable name, is what a reader has left to read it from.
+    fontsize_anno <- 72 * strip_in * AMR_LABEL_FILL
+    anno_names_legible <- n_strips > 0L &&
+      min(fontsize_anno, font_max) >= AMR_ANNO_NAME_MIN_PT
+    fontsize_anno <- .clamp(fontsize_anno, AMR_ANNO_NAME_MIN_PT, font_max)
+
+    # The legend column belongs to the page rather than to the matrix, so its
+    # type does not answer to cell_w the way everything above does. What it does
+    # answer to is the height it is drawn into: align_heatmap_legend =
+    # "heatmap_top" (see amr_as_ggplot) starts it level with the class strip,
+    # above the body, and it may run to the page foot, since the gene names,
+    # the element-type row and the panel titles under the body all sit to its
+    # left. Budgeted from the top of the body (a little short of where it
+    # starts) to the foot of what is drawn under it; stopping at the foot of
+    # the body left a third of a short page empty under a 5pt legend.
+    #
+    # Planned by the Tree's own guide planner (app/logic/viz_legend.R) against
+    # the guides this screen really draws, under the rule every label on the
+    # figure follows: the type shrinks before any key is dropped, and keys are
+    # trimmed only where not even the floor holds them all (legend_fit). A
+    # trimmed guide lists its most frequent keys with a gap key and a count on
+    # its title; one longer than a column folds into a second.
+    #
+    # The tiers and the drug classes are a vocabulary the reader needs whole, so
+    # they are never capped; a mapped variable is capped at LEGEND_FULL_MAX keys,
+    # past which its colours are a population no key list helps anyone tell
+    # apart. The class strip's keys count only where the strip is drawn.
+    legend_h <- max(aspect * w - overhead + col_label_in + elem_in, 1)
+    guides <- Filter(
+      function(g) !identical(g$kind, "class") || strip_drawn,
+      legend_guides %||% .estimated_guides(block_titles, element_titles, n_strips)
+    )
+    demand <- setNames(
+      vapply(guides, function(g) max(as.integer(g$n %||% 1L), 1L), integer(1)),
+      vapply(guides, function(g) as.character(g$id), character(1))
+    )
+    caps <- ifelse(
+      vapply(guides, function(g) identical(g$kind, "strip"), logical(1)),
+      viz_legend$LEGEND_FULL_MAX,
+      demand
+    )
+    # The column's width is the other half of its room. Whatever the legend is
+    # drawn at comes out of the body, so it may take what the page has beside
+    # the strips, the isolate names and the padding less what the body needs:
+    # its gene names at their size at 100% (AMR_COL_IN a column), or its cells
+    # at the narrowest that still show a grid where no names are drawn. Held at
+    # 100% on purpose: reserved at x k, a bigger text size took the legend's
+    # width for the gene names and set the legend smaller for asking for bigger
+    # text, and below it the gene names would shrink for the legend (rule T3).
+    # The type shrinks for it the way it shrinks for the height.
+    names_in <- if (row_names && rows_legible) {
+      .row_names_in(row_label_text, row_label_chars, fontsize_row)
+    } else {
+      0
+    }
+    # Above 100% the body also keeps its floor, and where G1 widened the canvas
+    # for the gene names (amr_canvas_width_in()) that width is theirs, up to
+    # their size x k, before the legend's: the legend keeps its own 100% width
+    # and grows into what is left.
+    avail_in <- w - left_in - names_in - pads_in - gaps_in
+    need_in <- max(
+      n_cols * if (col_names_drawn) AMR_COL_IN else AMR_GRID_MIN_IN,
+      floors$body,
+      if (k > 1 && col_names_drawn) {
+        min(
+          n_cols * AMR_COL_IN * k,
+          avail_in - floors$legend * (1 + AMR_LEGEND_METRIC_SLACK)
+        )
+      } else {
+        0
+      }
+    )
+    legend_w_room <- max(avail_in - need_in, AMR_LEGEND_MIN_ROOM_IN)
+    # packLegend() wraps the guides into further columns once one runs out of
+    # height (see .pack_legends), so a long legend beside a short page need not
+    # shrink to the floor while the width beside the body stands empty. Planned
+    # with the fewest columns that hold every key and still fit that width; a
+    # single column where none does, which then shrinks and trims as before.
+    legend_plan_at <- function(pt) {
+      row_in <- .legend_row_in(pt) * AMR_LEGEND_HEIGHT_SAFETY
+      per_col <- max(floor(legend_h / row_in), 1)
+      plan_with <- function(cols) {
+        # A guide folds into a second key column only where its share of the
+        # height cannot hold it: a second column is width the matrix needs.
+        # Wrapped, no guide may run taller than one column, since packLegend()
+        # never breaks a single guide across two.
+        rows_cap <- max(c(demand, viz_legend$LEGEND_MAX_ROWS))
+        if (cols > 1L) {
+          rows_cap <- max(min(rows_cap, per_col - 4L), 3L)
+        }
+        plan <- .fold_credit(demand, per_col * cols, caps, rows_cap)
+        plan$wrap <- cols
+        plan$fits_wrap <- .wrap_columns(
+          viz_legend$legend_guide_rows(plan$keys, plan$demand, plan$ncol),
+          per_col
+        ) <=
+          cols
+        plan
+      }
+      single <- plan_with(1L)
+      if (all(single$keys >= single$cap) && single$rows <= single$room) {
+        return(single)
+      }
+      for (cols in seq_len(AMR_LEGEND_WRAP_MAX)[-1L]) {
+        plan <- plan_with(cols)
+        if (
+          plan$fits_wrap &&
+            all(plan$keys >= plan$cap) &&
+            .wrapped_width_in(guides, plan, pt) <= legend_w_room
+        ) {
+          return(plan)
+        }
+      }
+      single
+    }
+    legend_fit <- viz_legend$legend_fit(
+      AMR_LEGEND_PT * k,
+      AMR_LEGEND_MIN_PT,
+      legend_plan_at,
+      fits = function(pt, plan) {
+        isTRUE(plan$wrap == 1L || plan$fits_wrap) &&
           .wrapped_width_in(guides, plan, pt) <= legend_w_room
-      ) {
-        return(plan)
       }
-    }
-    single
-  }
-  legend_fit <- viz_legend$legend_fit(
-    AMR_LEGEND_PT * k,
-    AMR_LEGEND_MIN_PT,
-    legend_plan_at,
-    fits = function(pt, plan) {
-      isTRUE(plan$wrap == 1L || plan$fits_wrap) &&
-        .wrapped_width_in(guides, plan, pt) <= legend_w_room
-    }
-  )
-  fontsize_legend <- legend_fit$size
-  legend_plan <- legend_fit$plan
-
-  list(
-    aspect = round(aspect, 2),
-    fontsize_row = round(fontsize_row, 1),
-    fontsize_col = round(fontsize_col, 1),
-    fontsize_title = round(fontsize_title, 1),
-    fontsize_element = round(fontsize_element, 1),
-    fontsize_anno = round(fontsize_anno, 1),
-    fontsize_legend = round(fontsize_legend, 1),
-    legend_rows = as.integer(legend_plan$max_rows),
-    # Keys and key columns per guide, by the ids amr_legend_guides() gives them.
-    legend_keys = legend_plan$keys,
-    legend_ncol = legend_plan$ncol,
-    # The height the legend column is drawn into, which the builders pack it
-    # against so it wraps rather than overrunning the page. See .pack_legends.
-    legend_height_in = round(legend_h, 3),
-    # Its width at the fitted size, wrapped columns and all, which
-    # amr_as_ggplot() pads the page for (see AMR_LEGEND_METRIC_SLACK).
-    legend_width_in = round(.wrapped_width_in(guides, legend_plan, fontsize_legend), 3),
-    # Width of one mapped-variable strip, which .row_annotation() draws at.
-    strip_in = round(strip_in, 4),
-    # The room the labels were budgeted above, handed to ComplexHeatmap as the
-    # room it may use for them. Its own defaults are a flat 6cm either way, so
-    # a name longer than that was quietly cut off at the edge of the page while
-    # `overhead` here had already set aside the whole of it — a band of white
-    # above the matrix and a clipped label under it, from the same disagreement.
-    col_label_in = round(col_label_in, 3),
-    row_label_in = round(max(w - body_w, 0.1) * 0.45, 3),
-    # The room reserved for a class block's own title text alone, without the
-    # dendrogram below it - handed back so .gene_panel can size the combined
-    # title+dendrogram region it draws by hand (see .class_dend_reserve()) to
-    # exactly what this fit already budgeted for it.
-    title_in = round(title_in, 3),
-    grid_width = if (min(cell_w, pitch) < AMR_GRID_MIN_IN) 0 else 0.5,
-    title_rot = rot,
-    element_rot = elem_rot,
-    # Whether the row labels came out at a size worth drawing. The view uses
-    # this to say so rather than to override the switch: isolate names are off
-    # until a reader asks for them, so there is no initial draw for the fit to
-    # keep clean, and a reader who has asked is better answered with the reason
-    # than with a switch that silently undoes itself.
-    legible = rows_legible,
-    # The same verdict for every label the plot draws without being asked.
-    # Each is acted on rather than only reported: the gene names are seeded off
-    # (refit_labels() in visualization_amr.R, so a reader can still overrule
-    # it), and the block titles, the element-type row and the strip names are
-    # dropped outright by the builders, each falling back to whatever names the
-    # same thing in the legend column.
-    titles_legible = titles_legible,
-    cols_legible = cols_legible,
-    elements_legible = elements_legible,
-    anno_names_legible = anno_names_legible,
-    row_pitch_in = round(pitch, 4),
-    cell_width_in = round(cell_w, 4),
-    # The isolate names decision (see `show_row_names`), and what is actually
-    # drawn once each switch has met its verdict.
-    show_row_names = row_names,
-    col_names_drawn = col_names_drawn,
-    element_names_drawn = element_row_drawn,
-    text_scale = k,
-    # Smallest type on the figure, for the export's legibility note.
-    min_pt = viz_fit$min_type_pt(
-      if (row_names && rows_legible) fontsize_row,
-      if (col_names_drawn) fontsize_col,
-      if (class_titles_drawn) fontsize_title,
-      if (element_row_drawn) fontsize_element,
-      if (anno_names_legible) fontsize_anno,
-      fontsize_legend
     )
+    fontsize_legend <- legend_fit$size
+    legend_plan <- legend_fit$plan
+    legend_w <- .wrapped_width_in(guides, legend_plan, fontsize_legend)
+
+    list(
+      aspect = round(aspect, 2),
+      fontsize_row = round(fontsize_row, 1),
+      fontsize_col = round(fontsize_col, 1),
+      fontsize_title = round(fontsize_title, 1),
+      fontsize_element = round(fontsize_element, 1),
+      fontsize_anno = round(fontsize_anno, 1),
+      fontsize_legend = round(fontsize_legend, 1),
+      legend_rows = as.integer(legend_plan$max_rows),
+      # Keys and key columns per guide, by the ids amr_legend_guides() gives them.
+      legend_keys = legend_plan$keys,
+      legend_ncol = legend_plan$ncol,
+      # The height the legend column is drawn into, which the builders pack it
+      # against so it wraps rather than overrunning the page. See .pack_legends.
+      legend_height_in = round(legend_h, 3),
+      # Its width at the fitted size, wrapped columns and all, which
+      # amr_as_ggplot() pads the page for (see AMR_LEGEND_METRIC_SLACK).
+      legend_width_in = round(legend_w, 3),
+      # The body these sizes leave once everything beside it is drawn, which
+      # the caller solves again against until it is the body they were solved
+      # for (the legend's own slack included, as amr_as_ggplot() pads for it).
+      body_width_in = max(
+        w - left_in - names_in - pads_in - gaps_in -
+          legend_w * (1 + AMR_LEGEND_METRIC_SLACK),
+        w * AMR_BODY_MIN_FRAC
+      ),
+      # Width of one mapped-variable strip, which .row_annotation() draws at.
+      strip_in = round(strip_in, 4),
+      # The room the labels were budgeted above, handed to ComplexHeatmap as the
+      # room it may use for them. Its own defaults are a flat 6cm either way, so
+      # a name longer than that was quietly cut off at the edge of the page while
+      # `overhead` here had already set aside the whole of it — a band of white
+      # above the matrix and a clipped label under it, from the same disagreement.
+      col_label_in = round(col_label_in, 3),
+      row_label_in = round(
+        if (names_in > 0) {
+          names_in * (1 + AMR_LEGEND_METRIC_SLACK)
+        } else {
+          max(w - body_w, 0.1) * 0.45
+        },
+        3
+      ),
+      # The room reserved for a class block's own title text alone, without the
+      # dendrogram below it - handed back so .gene_panel can size the combined
+      # title+dendrogram region it draws by hand (see .class_dend_reserve()) to
+      # exactly what this fit already budgeted for it.
+      title_in = round(title_in, 3),
+      grid_width = if (min(cell_w, pitch) < AMR_GRID_MIN_IN) 0 else 0.5,
+      title_rot = rot,
+      element_rot = elem_rot,
+      # Whether the row labels came out at a size worth drawing. The view uses
+      # this to say so rather than to override the switch: isolate names are off
+      # until a reader asks for them, so there is no initial draw for the fit to
+      # keep clean, and a reader who has asked is better answered with the reason
+      # than with a switch that silently undoes itself.
+      legible = rows_legible,
+      # The same verdict for every label the plot draws without being asked.
+      # Each is acted on rather than only reported: the gene names are seeded off
+      # (refit_labels() in visualization_amr.R, so a reader can still overrule
+      # it), and the block titles, the element-type row and the strip names are
+      # dropped outright by the builders, each falling back to whatever names the
+      # same thing in the legend column.
+      titles_legible = titles_legible,
+      cols_legible = cols_legible,
+      elements_legible = elements_legible,
+      anno_names_legible = anno_names_legible,
+      row_pitch_in = round(pitch, 4),
+      cell_width_in = round(cell_w, 4),
+      # The isolate names decision (see `show_row_names`), and what is actually
+      # drawn once each switch has met its verdict.
+      show_row_names = row_names,
+      col_names_drawn = col_names_drawn,
+      element_names_drawn = element_row_drawn,
+      text_scale = k,
+      # Smallest type on the figure, for the export's legibility note.
+      min_pt = viz_fit$min_type_pt(
+        if (row_names && rows_legible) fontsize_row,
+        if (col_names_drawn) fontsize_col,
+        if (class_titles_drawn) fontsize_title,
+        if (element_row_drawn) fontsize_element,
+        if (anno_names_legible) fontsize_anno,
+        fontsize_legend
+      )
+    )
+  }
+  # Started from the share the canvas was sized by (amr_canvas_width_in()),
+  # measured against the strips at 100% text size: the canvas grew by their
+  # gain at a bigger text size, so it is taken off before the share.
+  body_w <- max(
+    (w - .strip_extra_in(n_strips, k)) * AMR_BODY_FRAC - n_strips * AMR_STRIP_IN,
+    w * 0.25
   )
+  fit <- solve(body_w)
+  for (pass in seq_len(AMR_WIDTH_PASSES)) {
+    if (abs(fit$body_width_in - body_w) < AMR_WIDTH_TOLERANCE_IN) {
+      break
+    }
+    body_w <- fit$body_width_in
+    fit <- solve(body_w)
+  }
+  fit
 }
 
 # The width one column block gets on the page, and the narrowest of them —
@@ -2086,6 +2286,7 @@ amr_auto_layout <- function(
     grid_height = legend_gp$grid,
     grid_width = legend_gp$grid,
     row_gap = legend_gp$row_gap,
+    column_gap = unit(.key_gap_in(names(cols), legend_gp$size), "in"),
     ncol = ncol
   )
 }
@@ -3093,7 +3294,7 @@ build_amr_heatmap <- function(mat, opts = list()) {
 amr_as_ggplot <- function(
   ht,
   background = "#FFFFFF",
-  gap_mm = 4,
+  gap_mm = AMR_PANEL_GAP_MM,
   width_in = 9,
   height_in = 9
 ) {
@@ -3143,10 +3344,11 @@ amr_as_ggplot <- function(
         # side widened by the error it makes measuring the legend column.
         padding = unit(
           c(
-            2,
-            2,
-            2,
-            2 + AMR_LEGEND_METRIC_SLACK * 25.4 * (attr(ht, "legend_width_in") %||% 0)
+            AMR_PAGE_PAD_MM,
+            AMR_PAGE_PAD_MM,
+            AMR_PAGE_PAD_MM,
+            AMR_PAGE_PAD_MM +
+              AMR_LEGEND_METRIC_SLACK * 25.4 * (attr(ht, "legend_width_in") %||% 0)
           ),
           "mm"
         ),

@@ -89,6 +89,7 @@ box::use(
   app /
     logic /
     viz_helpers[
+      PLOT_SETTLE_MS,
       apply_controls,
       collect_input_snapshot,
       control_families,
@@ -1305,7 +1306,7 @@ server <- function(
       fit <- mst_fit_drawing(
         graph,
         shiny$isolate(viz_metadata()),
-        shiny$isolate(mst_opts()),
+        shiny$isolate(opts_source()),
         label_chars = label_chars(graph)
       )
 
@@ -1404,7 +1405,7 @@ server <- function(
     # reactiveValues, so merely reading it inside a reactive takes a dependency
     # on it. Without this every browser report of a new size — the first layout
     # pass, a font finishing loading, a scrollbar appearing, a window drag —
-    # invalidates mst_opts(), which rebuilds every frame and pushes it into the
+    # invalidates opts_source(), which rebuilds every frame and pushes it into the
     # network again. The comment here used to claim there was no dependency;
     # there was, and it is a large part of what put three "Rendering mst_plot"
     # lines in the log for a single Generate.
@@ -1420,10 +1421,10 @@ server <- function(
       })
     }
 
-    # Resolved control values, gathered once so the live render, the incremental
-    # update and the HTML export share an identical configuration. Fitted
-    # controls are read from `fitted`, never from `input`.
-    mst_opts <- shiny$reactive(
+    # Resolved control values as the controls hold them now. The fit reads these;
+    # everything drawn reads them through the settle barrier below (`mst_opts`).
+    # Fitted controls are read from `fitted`, never from `input`.
+    opts_source <- shiny$reactive(
       list(
         # Labels.
         show_label = isTRUE(fitted$mst_show_label),
@@ -1469,11 +1470,59 @@ server <- function(
       )
     )
 
+    # Everything the drawing is built from: the graph, the metadata and the
+    # resolved options.
+    plot_source <- shiny$reactive({
+      list(
+        generation = generate(),
+        graph = shiny$req(mst_obj()),
+        metadata = viz_metadata(),
+        opts = opts_source()
+      )
+    })
+
+    # The drawing's inputs as last published, republished only when they settle
+    # on a value that differs from what was drawn.
+    #
+    # frames() used to read the controls directly, so every invalidation re-ran
+    # mst_frames() — the layout, the clusters and their regions — whether or not
+    # the value had changed: each browser echo of a Generate's update*Input()
+    # messages, each picker that re-reported its selection, each value a slider
+    # passed through on the way to the one the reader let go of. The pushes
+    # downstream were already gated by identical(), but only after the whole
+    # computation had run. Settled and value-compared, as the AMR heatmap's
+    # `plot_inputs` and the Tree's are, a burst is one computation and an echo
+    # none. The graph and the metadata settle with the options, so a Generate
+    # never draws its new graph with the controls' pre-fit values first.
+    #
+    # Nothing here is a live interaction: panning, zooming, hovering and the
+    # tooltips are vis.js's own and never reach the server.
+    #
+    # `generation` keeps a Generate that changes nothing visible: the loading
+    # overlay comes down on the widget's draw event. priority: the barrier
+    # settles before outputs are recalculated in the same flush.
+    plot_inputs <- shiny$reactiveVal(NULL)
+    settled_source <- shiny$debounce(plot_source, PLOT_SETTLE_MS)
+    shiny$observe(
+      {
+        current <- settled_source()
+        shiny$req(current)
+        if (!identical(shiny$isolate(plot_inputs()), current)) {
+          plot_inputs(current)
+        }
+      },
+      priority = 100
+    )
+
+    # The options the drawing on screen was built from, which the live render,
+    # the incremental update and the HTML export share.
+    mst_opts <- shiny$reactive(shiny$req(plot_inputs())$opts)
+
     # Node and edge tables. Everything in here can be pushed into a running
     # network; see `shell` for what cannot.
     frames <- shiny$reactive({
-      shiny$req(mst_obj())
-      mst_frames(mst_obj(), viz_metadata(), mst_opts())
+      p <- shiny$req(plot_inputs())
+      mst_frames(p$graph, p$metadata, p$opts)
     })
 
     # How many branches the threshold folded, and into how few nodes — stated
@@ -1502,7 +1551,7 @@ server <- function(
     # frames, so it follows the cluster threshold and collapse threshold live.
     output$mst_status_ui <- shiny$renderUI({
       shiny$req(generated(), mst_obj())
-      mst_status(frames(), distance_status(), fitted$mst_cluster_threshold, na_handling())
+      mst_status(frames(), distance_status(), mst_opts()$cluster_threshold, na_handling())
     })
 
     # What the widget's *shell* is built from: the parts that live in the
@@ -1510,7 +1559,9 @@ server <- function(
     # place — the canvas background, the legend, the custom node renderer, and
     # the beforeDrawing hook that paints the cluster regions. A change to any of
     # these rebuilds the network; a change to anything else is a data push.
-    shell <- shiny$reactive(
+    shell <- shiny$reactive({
+      p <- shiny$req(plot_inputs())
+      o <- p$opts
       list(
         # Which Generate this is the answer to. Everything else here is
         # value-compared, which is the point — but it makes a Generate that
@@ -1521,49 +1572,49 @@ server <- function(
         # was already correct. Pressing Generate is an explicit request for the
         # plot, so it draws one; the echoing controls this gate exists to
         # absorb do not touch this field.
-        generation = generate(),
-        graph = mst_obj(),
+        generation = p$generation,
+        graph = p$graph,
         # Collapsing changes which nodes exist, not just what is drawn on
         # them — the incremental path only updates and adds rows by id, it
         # never removes one, so a node the threshold has just folded away
         # would be stranded on screen forever without a full rebuild.
-        collapse_threshold = input$mst_collapse_threshold,
-        transparent = input$mst_background_transparent,
-        background = input$mst_background_color,
-        shadow = input$mst_shadow,
-        legend = input$mst_show_legend,
-        legend_clusters = input$mst_legend_clusters,
-        legend_layers = input$mst_legend_layers,
-        legend_ori = input$mst_legend_ori,
-        show_caption = input$mst_show_scale_caption,
+        collapse_threshold = o$collapse_threshold,
+        transparent = o$transparent,
+        background = o$background,
+        shadow = o$shadow,
+        legend = o$show_legend,
+        legend_clusters = o$legend_clusters,
+        legend_layers = o$legend_layers,
+        legend_ori = o$legend_ori,
+        show_caption = o$show_caption,
         # Both the legend's type and an untinted cluster caption are painted by
         # hooks, so the text colour is a shell input as well as node data.
-        text_color = input$mst_text_color,
+        text_color = o$node_font_color,
         # Any mapping at all installs the pie/border renderer, and the
         # legend's keys come from the layers.
-        layers = mst_layers(),
+        layers = o$layers,
         # The cluster regions are painted by a hook, and their geometry follows
         # the coordinates and the node radii. Everything the hook is built from
         # belongs here — a beforeDrawing handler is baked into the widget and
         # cannot be pushed through the proxy.
-        clusters = input$mst_show_clusters,
-        cluster_style = input$mst_cluster_style,
-        cluster_threshold = fitted$mst_cluster_threshold,
-        cluster_col_scale = input$mst_cluster_col_scale,
-        cluster_width = fitted$mst_cluster_width,
-        cluster_label_size = fitted$mst_cluster_label_size,
-        scale_nodes = input$mst_scale_nodes,
-        node_size = fitted$mst_node_size,
-        length_mode = fitted$mst_length_mode,
-        spread = fitted$mst_edge_length_scale,
-        shorten_long = input$mst_shorten_long,
-        cap_mult = input$mst_cap_mult,
+        clusters = o$show_clusters,
+        cluster_style = o$cluster_style,
+        cluster_threshold = o$cluster_threshold,
+        cluster_col_scale = o$cluster_col_scale,
+        cluster_width = o$cluster_width,
+        cluster_label_size = o$cluster_label_size,
+        scale_nodes = o$scale_nodes,
+        node_size = o$node_size,
+        length_mode = o$length_mode,
+        spread = o$spread,
+        shorten_long = o$shorten_long,
+        cap_mult = o$cap_mult,
         # Rotation moves every coordinate, and the cluster regions are baked
         # from those coordinates at build time — so it belongs here for the
         # same reason spread and length_mode do.
-        rotation = fitted$mst_rotation
+        rotation = o$rotation
       )
-    )
+    })
 
     # The frames currently on the canvas, so an incremental update can tell
     # whether it has anything to do.
@@ -1579,7 +1630,9 @@ server <- function(
     # writes six mirrors and then sends six update*Input() messages, each of
     # which the browser echoes back in its own flush — and every echo was a
     # rebuilt canvas. Comparing the resolved value makes it value-driven
-    # instead, which no echo can defeat.
+    # instead, which no echo can defeat. The shell is read off the settled
+    # `plot_inputs`, so this gate is what keeps a change that is only a data
+    # push (a colour, a font size) from rebuilding the network as well.
     #
     # priority: the gate has to settle before outputs are recalculated in the
     # same flush, or the widget is built once from the stale value and again
@@ -1589,7 +1642,6 @@ server <- function(
     shell_built <- shiny$reactiveVal(NULL)
     shiny$observe(
       {
-        shiny$req(mst_obj())
         current <- shell()
         if (!identical(shiny$isolate(shell_built()), current)) {
           shell_built(current)
@@ -1601,14 +1653,10 @@ server <- function(
     output$mst_plot <- renderVisNetwork({
       render_info("visualization_mst mst_plot")
       shiny$req(shell_built())
+      p <- shiny$isolate(plot_inputs())
       fr <- shiny$isolate(frames())
       shiny$isolate(drawn(fr))
-      build_mst_visnetwork(
-        shiny$isolate(mst_obj()),
-        shiny$isolate(viz_metadata()),
-        shiny$isolate(mst_opts()),
-        fr
-      )
+      build_mst_visnetwork(p$graph, p$metadata, p$opts, fr)
     })
 
     # The incremental path: push the new node and edge tables into the network
@@ -1720,13 +1768,9 @@ server <- function(
       label = "MST",
       ready = shiny$reactive(isTRUE(generated())),
       save = function(file, format, opts) {
+        p <- plot_inputs()
         save_mst_html(
-          build_mst_visnetwork(
-            mst_obj(),
-            viz_metadata(),
-            mst_opts(),
-            frames()
-          ),
+          build_mst_visnetwork(p$graph, p$metadata, p$opts, frames()),
           file,
           export_bg()
         )

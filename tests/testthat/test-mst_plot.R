@@ -806,35 +806,142 @@ test_that("the legend accounts for the isolates no cluster claimed", {
   expect_false(any(grepl("Unclustered", labels())))
 })
 
-test_that("a legend too long to draw is capped and says how much it left out", {
-  layer <- list(
-    title = "Country",
-    levels = paste("Country", 1:46),
-    colors = stats::setNames(rep("#123456", 46), paste("Country", 1:46)),
-    shapes = stats::setNames(rep("dot", 46), paste("Country", 1:46))
+# A mapping layer's legend record: `n` levels named "<title> <i>", each met
+# `counts` times on the drawing (the most frequent first unless told otherwise).
+legend_layer <- function(title, n, counts = rev(seq_len(n)), width = 0L) {
+  lev <- paste(strrep("x", width), title, seq_len(n))
+  list(
+    title = title,
+    levels = lev,
+    counts = setNames(as.integer(counts), lev),
+    colors = setNames(rep("#123456", n), lev),
+    shapes = setNames(rep("dot", n), lev)
   )
-  items <- mst_plot$mst_legend_items(list(layer))
-  keys <- Filter(function(i) identical(i$kind, "key"), items)
-  expect_identical(length(keys), as.integer(impl$MST_LEGEND_MAX_KEYS))
-  expect_true(grepl(
-    "\\+ 22 more",
-    items[[length(items)]]$label
-  ))
+}
+
+legend_keys <- function(items) {
+  vapply(
+    Filter(function(i) identical(i$kind, "key"), items),
+    function(i) i$label,
+    character(1)
+  )
+}
+
+legend_labels <- function(items) vapply(items, function(i) i$label, character(1))
+
+test_that("a mapped variable's level counts follow the drawn isolates", {
+  vals <- mst_plot$mst_node_values(c("a", "b\nc", "e"), demo_meta(), "country")
+  expect_identical(
+    vals$counts[c("Kenya", "Peru", "Not recorded")],
+    c(Kenya = 2L, Peru = 1L, `Not recorded` = 1L)
+  )
+  # Chile is a level of the column but on no drawn node.
+  expect_identical(vals$counts[["Chile"]], 0L)
 })
 
-test_that("two mapped variables share the key budget instead of doubling it", {
-  wide <- function(title, n) {
-    lev <- paste(title, seq_len(n))
-    list(title = title, levels = lev,
-         colors = stats::setNames(rep("#123456", n), lev),
-         shapes = stats::setNames(rep("dot", n), lev))
-  }
-  items <- mst_plot$mst_legend_items(list(wide("A", 40), wide("B", 40)))
-  keys <- Filter(function(i) identical(i$kind, "key"), items)
-  expect_true(length(keys) <= impl$MST_LEGEND_MAX_KEYS)
-  # And each section still says something: a legend of one key per variable
-  # would be no legend at all.
-  expect_true(length(keys) >= 2L * impl$MST_LEGEND_MIN_KEYS)
+test_that("the legend's items list every key; the layout decides how many fit", {
+  items <- mst_plot$mst_legend_items(list(legend_layer("Country", 46)))
+  expect_identical(length(legend_keys(items)), 46L)
+})
+
+test_that("a long legend wraps into columns before its type shrinks (L1)", {
+  items <- mst_plot$mst_legend_items(list(legend_layer("Host", 12)))
+  # 13 entries; one column at 16px holds 9 of them on a 300px-high canvas.
+  geom <- mst_plot$mst_legend_layout(items, c(900, 300))
+  expect_identical(geom$font_size, impl$MST_LEGEND_FONT_PX)
+  expect_identical(geom$ncol, 2L)
+  expect_true(geom$complete)
+  expect_identical(length(legend_keys(geom$items)), 12L)
+  # Never more than the wrap allows, however short the canvas.
+  short <- mst_plot$mst_legend_layout(items, c(900, 200))
+  expect_lte(short$ncol, impl$MST_LEGEND_WRAP_MAX)
+})
+
+test_that("a legend too wide to wrap shrinks its type before any key is cut", {
+  # Labels long enough that the width holds one column at any size.
+  items <- mst_plot$mst_legend_items(list(legend_layer("Host", 14, width = 24L)))
+  geom <- mst_plot$mst_legend_layout(items, c(900, 360))
+  expect_identical(geom$ncol, 1L)
+  expect_lt(geom$font_size, impl$MST_LEGEND_FONT_PX)
+  expect_gte(geom$font_size, impl$MST_LEGEND_FONT_MIN_PX)
+  expect_true(geom$complete)
+  expect_identical(length(legend_keys(geom$items)), 14L)
+})
+
+test_that("keys are cut only at the floor, least frequent first, and say so", {
+  layer <- legend_layer("Host", 14, counts = c(1, 9, 2, 8, 3, 7, 4, 6, 5, 10:14),
+                        width = 24L)
+  # The value nobody recorded keeps its key however rare: its grey cannot be
+  # guessed from the others.
+  layer$levels[[1]] <- "Not recorded"
+  names(layer$counts)[[1]] <- "Not recorded"
+  items <- mst_plot$mst_legend_items(list(layer))
+  geom <- mst_plot$mst_legend_layout(items, c(900, 250))
+  expect_identical(geom$font_size, impl$MST_LEGEND_FONT_MIN_PX)
+  expect_false(geom$complete)
+  kept <- legend_keys(geom$items)
+  # The room the canvas has, not a fixed budget: header, keys and the note.
+  per_col <- floor(250 * impl$MST_LEGEND_HEIGHT_SHARE /
+                     round(impl$MST_LEGEND_FONT_MIN_PX * impl$MST_LEGEND_ROW_EM))
+  expect_identical(length(geom$items), as.integer(per_col))
+  expect_identical(kept[[1]], "Not recorded")
+  # The rest are the most frequent, in the scale's own order.
+  others <- layer$levels[-1]
+  top <- others[sort(order(-layer$counts[-1])[seq_len(length(kept) - 1L)])]
+  expect_identical(kept[-1], top)
+  last <- geom$items[[length(geom$items)]]
+  expect_identical(last$kind, "note")
+  expect_identical(last$label, sprintf("+ %d more", 14L - length(kept)))
+})
+
+test_that("a mapped variable lists at most LEGEND_FULL_MAX keys, room or not (L2)", {
+  items <- mst_plot$mst_legend_items(list(legend_layer("Country", 46)))
+  geom <- mst_plot$mst_legend_layout(items, c(4000, 4000))
+  expect_identical(length(legend_keys(geom$items)), 18L)
+  expect_identical(legend_labels(geom$items)[[length(geom$items)]], "+ 28 more")
+  # A legend under the cap is left whole.
+  whole <- mst_plot$mst_legend_items(list(legend_layer("Host", 18)))
+  expect_identical(
+    length(legend_keys(mst_plot$mst_legend_layout(whole, c(4000, 4000))$items)),
+    18L
+  )
+})
+
+test_that("two mapped variables share the room instead of doubling it", {
+  items <- mst_plot$mst_legend_items(
+    list(legend_layer("A", 40, width = 24L), legend_layer("B", 40, width = 24L))
+  )
+  geom <- mst_plot$mst_legend_layout(items, c(900, 600))
+  per_col <- floor(600 * impl$MST_LEGEND_HEIGHT_SHARE / round(geom$font_size * 1.9))
+  expect_lte(length(geom$items), per_col * geom$ncol)
+  labels <- legend_keys(geom$items)
+  # Each section still says something: one key per variable is no legend.
+  expect_gte(sum(grepl(" A ", labels)), 4L)
+  expect_gte(sum(grepl(" B ", labels)), 4L)
+  expect_identical(sum(grepl("^\\+ \\d+ more$", legend_labels(geom$items))), 2L)
+})
+
+test_that("a trimmed cluster section keeps the largest and the unclustered note", {
+  n <- 30L
+  clusters <- data.frame(
+    cluster = sprintf("Cluster %d", seq_len(n)),
+    nodes = rep(2L, n),
+    isolates = rev(seq_len(n)) + 1L,
+    stringsAsFactors = FALSE
+  )
+  items <- mst_plot$mst_legend_items(
+    clusters = clusters,
+    cluster_colors = setNames(rep("#111111", n), clusters$cluster),
+    threshold = 5,
+    unclustered = 3
+  )
+  geom <- mst_plot$mst_legend_layout(items, c(900, 300))
+  labels <- legend_labels(geom$items)
+  expect_identical(labels[[length(labels)]], "Unclustered \u2013 3 isolates")
+  expect_true(grepl("^\\+ \\d+ more$", labels[[length(labels) - 1L]]))
+  # Clusters come ordered by size, so the kept ones are the head of the list.
+  kept <- legend_keys(geom$items)
+  expect_identical(sub(" \u2013.*", "", kept), clusters$cluster[seq_along(kept)])
 })
 
 test_that("the legend gains columns and loses type size as it grows", {

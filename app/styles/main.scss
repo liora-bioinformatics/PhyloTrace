@@ -1931,6 +1931,7 @@ table.dataTable>tbody>tr.selected>* {
 // column - only it also re-styled every drawn cell on every draw. Same class
 // name, so the fill and tint rules here apply to both kinds of pinned column.
 .edit-table {
+
     table.dataTable thead tr>.dtfc-fixed-left,
     table.dataTable tbody tr>.dtfc-fixed-left {
         position: sticky;
@@ -3781,7 +3782,7 @@ table.dataTable thead>tr>th.sorting {
     // body on every draw to size the columns. A popup open during a draw (a
     // filter just applied) is copied open, and its absolute position lets it
     // escape the zero-height copy: a second, dead slider below the real one.
-    .dataTables_scrollBody > table > thead {
+    .dataTables_scrollBody>table>thead {
         visibility: hidden;
     }
 
@@ -4209,14 +4210,14 @@ label {
 // Species step: a 2x2 grid that fills the step's height. The choice and the
 // setup overview size to their content; the species card and its schemes take
 // the rest and scroll inside their own cells, so the page itself never does.
-.setup-wizard .card-body > .tab-content {
+.setup-wizard .card-body>.tab-content {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
 }
 
-.setup-wizard .tab-content > .tab-pane.active {
+.setup-wizard .tab-content>.tab-pane.active {
     flex: 1 1 auto;
     min-height: 0;
 }
@@ -4228,7 +4229,7 @@ label {
     // scrolls instead.
     min-height: 30rem;
 
-    > .card {
+    >.card {
         margin-bottom: 0;
     }
 }
@@ -4429,7 +4430,7 @@ label {
 .setup-toggle {
     margin-bottom: 1rem;
 
-    .setup-help + .shiny-html-output:not(:empty) {
+    .setup-help+.shiny-html-output:not(:empty) {
         margin-top: 0.5rem;
     }
 }
@@ -4671,7 +4672,7 @@ label {
 .setup-card.card {
     margin-bottom: 0;
 
-    > .card-header {
+    >.card-header {
         display: flex;
         align-items: center;
         gap: 0.6rem;
@@ -4739,8 +4740,8 @@ label {
 .setup-task_check {
     display: none;
 
-    > i,
-    > svg {
+    >i,
+    >svg {
         display: block;
         line-height: 1;
     }
@@ -4826,6 +4827,7 @@ label {
     }
 
     &.is-off {
+
         >i,
         .setup-coverage_label {
             color: var(--bs-secondary-color);
@@ -7095,6 +7097,7 @@ table.dataTable.overview-table thead>tr>th,
 .selectize-dropdown-content {
     max-height: min(18rem, 45vh);
 }
+
 // Brand -----------------------------------------------------------------------
 // Colours of the PhyloTrace hex logo: its green ring and its slate fill.
 :root {
@@ -7595,6 +7598,7 @@ table.dataTable.overview-table thead>tr>th,
 
 .landing_legal {
     flex: 1 1 auto;
+    text-align: center;
 }
 
 .about-link {

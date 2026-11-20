@@ -1,6 +1,6 @@
 box::use(
   leaflet[leaflet],
-  shiny[NS, reactive, testServer],
+  shiny[NS, observe, reactive, reactiveVal, testServer],
   testthat[
     expect_false,
     expect_identical,
@@ -14,11 +14,19 @@ box::use(
 )
 box::use(
   app / logic / geocode_cache[write_geocodes],
-  app / logic / viz_helpers[control_ids],
+  app / logic / viz_helpers[PLOT_SETTLE_MS, control_ids],
   app / view / visualization_map,
 )
 
 impl <- attr(visualization_map, "namespace")
+
+# The map is drawn once its inputs stop moving (see map_inputs), so a mock
+# session has to be walked past that timer before a change reaches it.
+settle <- function(session) {
+  session$flushReact()
+  session$elapse(PLOT_SETTLE_MS + 50)
+  session$flushReact()
+}
 
 meta_fixture <- function() {
   data.frame(
@@ -360,6 +368,57 @@ test_that("picking a variable adds one layer and a reset removes it", {
 
       session$setInputs(reset_settings_confirm = 1)
       expect_identical(length(map_layers()), 0L)
+    }
+  )
+})
+
+test_that("a Generate draws the map once, its controls' echoes included", {
+  db <- file.path(local_tempdir(), "t.db")
+  build_db(db, default_local(), metadata = meta_df(c("A", "B")))
+  # Coordinates given outright, so the Generate geocodes nothing.
+  meta <- data.frame(
+    isolate = c("A", "B", "C"),
+    sample_collection_date = c("2026-01-14", "2026-02-18", "2026-03-03"),
+    geo_loc_name_country = c("Germany", "Germany", "France"),
+    geo_loc_coordinates = c("52.5, 13.4", "48.1, 11.6", "48.857, 2.352"),
+    stringsAsFactors = FALSE
+  )
+  generate <- reactiveVal(NULL)
+
+  testServer(
+    visualization_map$server,
+    args = list(
+      db_path = reactive(db),
+      viz_metadata = reactive(meta),
+      generate = generate,
+      plot_type = reactive("Map")
+    ),
+    {
+      settle(session)
+      draws <- 0L
+      observe({
+        map_inputs()
+        draws <<- draws + 1L
+      })
+      session$flushReact()
+      draws <- 0L
+
+      # What a Generate sets off: new coordinates, then the date and heat
+      # sliders it refits reporting their new values back from the browser.
+      generate(1L)
+      session$flushReact()
+      session$setInputs(
+        map_daterange = daterange_bounds(),
+        map_heat_max = max(table(map_coords()$place))
+      )
+      settle(session)
+      expect_identical(draws, 1L)
+      expect_identical(map_inputs()$coords, map_coords())
+
+      # Another Generate over the same data still draws, to frame it again.
+      generate(2L)
+      settle(session)
+      expect_identical(draws, 2L)
     }
   )
 })

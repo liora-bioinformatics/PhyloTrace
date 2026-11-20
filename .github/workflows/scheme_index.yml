@@ -1,7 +1,8 @@
 name: Scheme Index Update
 
-# Monthly check of the providers' public scheme listings. Changes arrive as a
-# pull request against dev/scheme_index/curation.csv and the app's index; new
+# Weekly check of the providers' public scheme listings. Changes arrive as a
+# pull request against dev/scheme_index/curation.csv and the app's index, and
+# are e-mailed with the same mail secrets as link_check.yml; new
 # schemes stay "pending" until a maintainer reviews them, so nothing reaches
 # the app unreviewed. Which providers are read, and why, is in
 # dev/scheme_index/config.json.
@@ -11,7 +12,7 @@ name: Scheme Index Update
 
 on:
   schedule:
-    - cron: '0 6 1 * *'
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 # Read-only by default; only the job that opens the pull request may write.
@@ -29,6 +30,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      MAIL_SERVER: ${{ secrets.LINK_CHECK_SMTP_SERVER }}
 
     steps:
       - name: Checkout repository
@@ -59,6 +62,7 @@ jobs:
         run: git status --short && git diff --stat
 
       - name: Open a pull request with the changes
+        id: pr
         # Skipped when run locally with `act`, which cannot open pull requests.
         if: ${{ !env.ACT }}
         uses: peter-evans/create-pull-request@v7
@@ -72,3 +76,26 @@ jobs:
           title: 'Scheme index: provider listing changes'
           body-path: ${{ runner.temp }}/scheme-index-report.md
           labels: scheme-index
+
+      - name: E-mail the maintainers
+        # Only when the run opened or updated the pull request, i.e. found something new; skipped
+        # with `act` and without the mail secrets (shared with link_check.yml).
+        if: >-
+          ${{ !env.ACT && env.MAIL_SERVER != '' &&
+          (steps.pr.outputs.pull-request-operation == 'created' ||
+          steps.pr.outputs.pull-request-operation == 'updated') }}
+        uses: dawidd6/action-send-mail@v6
+        with:
+          server_address: ${{ secrets.LINK_CHECK_SMTP_SERVER }}
+          server_port: ${{ secrets.LINK_CHECK_SMTP_PORT }}
+          username: ${{ secrets.LINK_CHECK_SMTP_USERNAME }}
+          password: ${{ secrets.LINK_CHECK_SMTP_PASSWORD }}
+          to: ${{ secrets.LINK_CHECK_MAIL_TO }}
+          from: ${{ secrets.LINK_CHECK_MAIL_FROM }}
+          subject: 'PhyloTrace scheme index: provider listing changes'
+          body: |
+            The scheme index run found changes and opened a pull request for review:
+            ${{ steps.pr.outputs.pull-request-url }}
+
+            The report is attached.
+          attachments: ${{ runner.temp }}/scheme-index-report.md

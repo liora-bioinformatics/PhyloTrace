@@ -188,7 +188,7 @@
       "family": "Campylobacteraceae",
       "genus": "Campylobacter"
     },
-    "summary": "The Campylobacter jejuni/coli complex groups the two closely related species Campylobacter jejuni and C. coli, Gram-negative, microaerophilic, spirally curved rods of the family Campylobacteraceae. Together they are the leading cause of bacterial gastroenteritis (campylobacteriosis) worldwide, with poultry as the principal reservoir. cgMLST is used to distinguish the two species and trace foodborne transmission.",
+    "summary": "The Campylobacter jejuni/coli complex groups the two closely related species Campylobacter jejuni and C. coli, Gram-negative, microaerophilic, spirally curved rods of the family Campylobacteraceae. Together they are the leading cause of bacterial gastroenteritis (campylobacteriosis) worldwide, with poultry as the principal reservoir. cgMLST is used to type both species and trace foodborne transmission.",
     "summary_source": "synthesized",
     "image_credit": {
       "author": "CDC / Sheila Mitchell",
@@ -205,8 +205,8 @@
     "rank": "species",
     "lineage": {
       "phylum": "Ascomycota",
-      "class": "Saccharomycetes",
-      "order": "Saccharomycetales",
+      "class": "Pichiomycetes",
+      "order": "Serinales",
       "family": "Metschnikowiaceae",
       "genus": "Candidozyma"
     },
@@ -452,7 +452,7 @@
       "family": "Enterobacteriaceae",
       "genus": "Klebsiella"
     },
-    "summary": "The Klebsiella oxytoca complex (K. oxytoca sensu lato) comprises several closely related, Gram-negative, encapsulated rods of the family Enterobacteriaceae, including K. oxytoca, K. michiganensis and K. grimontii. These opportunistic pathogens cause nosocomial infections and antibiotic-associated haemorrhagic colitis. cgMLST is required to resolve the constituent species, which routine tests cannot separate.",
+    "summary": "The Klebsiella oxytoca complex (K. oxytoca sensu lato) comprises several closely related, Gram-negative, encapsulated rods of the family Enterobacteriaceae, including K. oxytoca, K. michiganensis and K. grimontii. These opportunistic pathogens cause nosocomial infections and antibiotic-associated haemorrhagic colitis. Genomic methods such as cgMLST are used to resolve the constituent species, which routine tests cannot separate.",
     "summary_source": "synthesized",
     "image_credit": {
       "author": "Riraq25",
@@ -521,9 +521,9 @@
     "summary": "Listeria monocytogenes is a Gram-positive, rod-shaped, facultatively anaerobic, facultatively intracellular bacterium of the family Listeriaceae. It causes listeriosis, a foodborne disease especially dangerous in pregnancy, neonates and the immunocompromised. Its ability to grow at refrigeration temperatures makes it a key food-safety surveillance target.",
     "summary_source": "synthesized",
     "image_credit": {
-      "author": "Ajay Kumar Chaurasiya",
-      "license": "CC BY-SA 4.0",
-      "source": "https://commons.wikimedia.org/wiki/File:Gram_staining_footage_of_Listeria_monocytogenes_in_Gram_staining_of_culture_microscopy.jpg"
+      "author": "NIAID",
+      "license": "CC BY 2.0",
+      "source": "https://commons.wikimedia.org/wiki/File:Listeria_Bacterium_01.jpg"
     }
   },
   {
@@ -688,7 +688,7 @@
       "family": "Staphylococcaceae",
       "genus": "Staphylococcus"
     },
-    "summary": "Staphylococcus argenteus is a Gram-positive coccus occurring in clusters, facultatively anaerobic, of the family Staphylococcaceae. A close relative of S. aureus and formerly misidentified as it, it causes similar skin, soft-tissue and invasive infections. It is distinguished mainly by genomic methods such as cgMLST.",
+    "summary": "Staphylococcus argenteus is a Gram-positive coccus occurring in clusters, facultatively anaerobic, of the family Staphylococcaceae. A close relative of S. aureus and formerly misidentified as it, it causes similar skin, soft-tissue and invasive infections. It is distinguished by MALDI-TOF with updated databases or by genomic methods.",
     "summary_source": "synthesized"
   },
   {
@@ -804,17 +804,18 @@
   {
     "species": "Citrobacter_freundii/portucalensis/braakii/europaeus",
     "abb": "Cfreundii_complex",
-    "query_name": "Citrobacter",
-    "ncbi_taxid": 544,
-    "scientific_name": "Citrobacter",
+    "query_name": "Citrobacter freundii complex",
+    "ncbi_taxid": 1344959,
+    "scientific_name": "Citrobacter freundii complex",
     "rank": "complex",
     "lineage": {
       "phylum": "Pseudomonadota",
       "class": "Gammaproteobacteria",
       "order": "Enterobacterales",
-      "family": "Enterobacteriaceae"
+      "family": "Enterobacteriaceae",
+      "genus": "Citrobacter"
     },
-    "summary": "The Citrobacter complex (Citrobacter sensu lato) comprises several closely related, Gram-negative, rod-shaped species of the family Enterobacteriaceae, including C. freundii, C. koseri and their relatives. These opportunistic pathogens cause urinary-tract, bloodstream and neonatal infections and carry clinically important resistance determinants. cgMLST is used to resolve the closely related species.",
+    "summary": "The Citrobacter freundii complex groups closely related, Gram-negative, rod-shaped species of the family Enterobacteriaceae, including C. freundii, C. portucalensis, C. braakii and C. europaeus. These opportunistic pathogens cause urinary-tract, bloodstream and neonatal infections and carry clinically important resistance determinants. cgMLST is used to resolve the closely related species.",
     "summary_source": "synthesized",
     "image_credit": {
       "author": "Vitaliyua2001",
@@ -970,7 +971,7 @@
       "family": "Bacillaceae",
       "genus": "Bacillus"
     },
-    "summary": "Bacillus cereus is a Gram-positive, rod-shaped, spore-forming, facultatively anaerobic bacterium of the family Bacillaceae and the namesake of the B. cereus group. It causes emetic and diarrhoeal food poisoning through preformed and enterotoxins, and occasionally invasive infections. Its heat-resistant spores make it a persistent concern in food production.",
+    "summary": "Bacillus cereus is a Gram-positive, rod-shaped, spore-forming, facultatively anaerobic bacterium of the family Bacillaceae and the namesake of the B. cereus group. It causes emetic and diarrhoeal food poisoning through the preformed emetic toxin cereulide and diarrhoeal enterotoxins, and occasionally invasive infections. Its heat-resistant spores make it a persistent concern in food production.",
     "summary_source": "synthesized",
     "image_credit": {
       "author": "CDC / William A. Clark",
@@ -1356,9 +1357,9 @@
     "summary": "Pasteurella multocida is a Gram-negative, facultatively anaerobic coccobacillus of the family Pasteurellaceae. It causes fowl cholera, haemorrhagic septicaemia in cattle and atrophic rhinitis in pigs, and wound infections in humans after animal bites. Typing supports veterinary outbreak investigation and vaccine selection.",
     "summary_source": "synthesized",
     "image_credit": {
-      "author": "CDC / R. Weaver",
-      "license": "Public domain",
-      "source": "https://commons.wikimedia.org/wiki/File:PHIL_3621.tif"
+      "author": "Vetmag79",
+      "license": "CC BY-SA 4.0",
+      "source": "https://commons.wikimedia.org/wiki/File:%D0%9C%D0%B8%D0%BA%D1%80%D0%BE%D1%84%D0%BE%D1%82%D0%BE%D0%B3%D1%80%D0%B0%D1%84%D0%B8%D1%8F_%D1%83%D0%BB%D1%8C%D1%82%D1%80%D0%B0%D1%82%D0%BE%D0%BD%D0%BA%D0%B8%D1%85_%D1%81%D1%80%D0%B5%D0%B7%D0%BE%D0%B2_%D0%B1%D0%B0%D0%BA%D1%82%D0%B5%D1%80%D0%B8%D0%B9_P._multocida_8_%D1%87%D0%B0%D1%81%D0%BE%D0%B2_%D0%BA%D1%83%D0%BB%D1%8C%D1%82%D0%B8%D0%B2%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F.jpg"
     }
   },
   {
@@ -1546,7 +1547,7 @@
       "family": "Yersiniaceae",
       "genus": "Yersinia"
     },
-    "summary": "Yersinia pseudotuberculosis is a Gram-negative, facultatively anaerobic coccobacillus of the family Yersiniaceae. It causes enteric yersiniosis with abdominal pain that can mimic appendicitis, mostly through contaminated food or water. It is the ancestor of Y. pestis and is monitored in foodborne outbreak surveillance.",
+    "summary": "Yersinia pseudotuberculosis is a Gram-negative, facultatively anaerobic coccobacillus of the family Yersiniaceae. It causes enteric yersiniosis with abdominal pain that can mimic appendicitis, mostly through contaminated food or water. Y. pestis evolved from it as a recent clone, and it is monitored in foodborne outbreak surveillance.",
     "summary_source": "synthesized",
     "image_credit": {
       "author": "CDC",

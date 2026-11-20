@@ -3757,7 +3757,8 @@ test_that("the text scale moves every kind of type and nothing else", {
   )
 
   # Geometry: an annotation column, a key square and a branch stroke are the
-  # layout the type has to fit inside, so they do not move with it.
+  # layout the type has to fit inside, so they do not move with it - except
+  # where `tree_column_gain()` widens the columns for it (G1, tested below).
   expect_identical(impl$.heat_col_in(large), impl$.heat_col_in(small))
   expect_identical(impl$.tile_col_in(large), impl$.tile_col_in(small))
   expect_identical(impl$.scale_of(large), impl$.scale_of(small))
@@ -4506,4 +4507,237 @@ test_that("a bar spans exactly the clade's own tips", {
   ys <- impl$.clade_tip_rows(data, 20)$y
   expect_equal(bar$y[[1]], min(ys) - impl$CLADE_BAR_EXTEND)
   expect_equal(bar$yend[[1]], max(ys) + impl$CLADE_BAR_EXTEND)
+})
+
+# --- L1: a legend folds, then shrinks, then trims -----------------------------
+
+# Sixteen long category names on one guide and twelve short ones on another:
+# more keys than a short page holds in one column at full size.
+.long_legend <- function(n = 24) {
+  st <- paste0("ST", 100 + seq_len(16), " Klebsiella")
+  md <- data.frame(
+    isolate = sprintf("isolate-%02d", seq_len(n)),
+    st = factor(rep(st, length.out = n)),
+    country = rep(sprintf("Country %02d", 1:12), length.out = n),
+    stringsAsFactors = FALSE
+  )
+  opts <- .annot_opts(n)
+  opts$legend_size <- 8.2
+  opts$layers <- list(
+    list(field = "st", title = "st", aesthetic = "tile", n_levels = 16L),
+    list(field = "country", title = "country", aesthetic = "tile", n_levels = 12L)
+  )
+  list(md = md, opts = opts, height = 6)
+}
+
+test_that("a long legend folds its keys before its type shrinks or a key goes", {
+  fx <- .long_legend()
+  g <- tree_plot$tree_guide_inputs(fx$opts)
+  plan <- function(fold_in) {
+    tree_plot$tree_legend_plan(g$layers, list(), 8.2, fx$height, 1, fx$md, fold_in)
+  }
+
+  # Without width to claim, the shared planner trims at full size...
+  trimmed <- plan(NULL)
+  expect_true(any(trimmed$keys < trimmed$cap))
+  # ...with it, every key stays and the long guide folds instead (L1).
+  folded <- plan(3)
+  expect_identical(unname(folded$keys), unname(folded$cap))
+  expect_gt(max(folded$ncol), 1L)
+  expect_lte(max(folded$ncol), impl$LEGEND_FOLD_MAX)
+  expect_lte(folded$rows, folded$room)
+
+  # And the type is left at the size asked for: folding came first.
+  expect_equal(tree_plot$tree_legend_size(fx$opts, fx$height, fx$md), 8.2)
+})
+
+test_that("a legend with no width to fold into shrinks before it trims", {
+  fx <- .long_legend()
+  opts <- fx$opts
+  opts$legend_fold_in <- 0
+  g <- tree_plot$tree_guide_inputs(opts)
+
+  size <- tree_plot$tree_legend_size(opts, fx$height, fx$md)
+  expect_lt(size, 8.2)
+  expect_gt(size, tree_plot$MIN_PRINT_PT)
+  # At the size it shrank to, every key is listed.
+  plan <- tree_plot$tree_legend_plan(g$layers, list(), size, fx$height, 1, fx$md, 0)
+  expect_identical(unname(plan$keys), unname(plan$cap))
+})
+
+test_that("keys are trimmed only once the type is at the floor", {
+  fx <- .long_legend()
+  opts <- fx$opts
+  opts$legend_fold_in <- 0
+  g <- tree_plot$tree_guide_inputs(opts)
+
+  size <- tree_plot$tree_legend_size(opts, 1.5, fx$md)
+  expect_equal(size, tree_plot$MIN_PRINT_PT)
+  plan <- tree_plot$tree_legend_plan(g$layers, list(), size, 1.5, 1, fx$md, 0)
+  expect_true(any(plan$keys < plan$cap))
+})
+
+test_that("a folded guide box is reserved as wide as it is drawn", {
+  # T9: the canvas grows by the reserve, and ggplot2 draws the folded guide at
+  # its full width, so the two have to come from the same plan.
+  fx <- .long_legend()
+  g <- tree_plot$tree_guide_inputs(fx$opts)
+  width <- function(fold_in) {
+    tree_plot$tree_legend_width_in(
+      g$layers, fx$md, 8.2, 5.5, list(), fx$height, 1, fold_in
+    )
+  }
+  expect_gt(width(3), width(NULL))
+  expect_lte(width(3), 3)
+})
+
+test_that("the fold room stays under the canvas ceiling and the box's own cap", {
+  fx <- .long_legend()
+  room <- tree_plot$tree_legend_fold_in(fx$opts, fx$md)
+  expect_gt(room, 0)
+  expect_lte(room, impl$LEGEND_MAX_FRAC * 5.5)
+  panel <- tree_plot$tree_panel_width_in(fx$opts, fx$md, 5.5)
+  expect_lte(panel + room, 5.5 * tree_plot$TREE_CANVAS_MAX_FACTOR + 1e-9)
+  # A value already solved for this figure is the answer, so the view and the
+  # builder read one number.
+  fx$opts$legend_fold_in <- 1.25
+  expect_identical(tree_plot$tree_legend_fold_in(fx$opts, fx$md), 1.25)
+})
+
+# --- G1: annotation columns follow the text size, by shape only ---------------
+
+# A tall fitted page with a heatmap and a tile strip beside it.
+.gain_fixture <- function(text = 2, aspect = 2) {
+  fx <- .annot_fixture(40)
+  opts <- .annot_opts(40)
+  opts$layers <- list(.tile_layer("L1", "ward", "Set1"))
+  opts$heatmaps <- list(list(
+    id = "H1", kind = "amr", level = "class",
+    cols = c("amr_Beta-lactam", "amr_Colistin", "amr_Quinolone"),
+    palette = "Reds", title = "AMR classes"
+  ))
+  opts$aspect <- aspect
+  opts$aspect_fitted <- TRUE
+  opts$text_scale <- text
+  list(meta = fx$meta, opts = opts)
+}
+
+test_that("annotation columns widen with the text size so headers reach their want", {
+  fx <- .gain_fixture()
+  gain <- tree_plot$tree_column_gain(fx$opts, fx$meta)
+  expect_equal(unname(gain[["heat"]]), 2)
+  opts <- tree_plot$resolve_text_geometry(fx$opts, fx$meta)
+  expect_equal(impl$.heat_col_in(opts), 2 * tree_plot$HEATMAP_COL_IN)
+  # A strip already holds a header at 160%, and widens only past that.
+  expect_equal(impl$.tile_col_in(opts), 2 * tree_plot$HEATMAP_COL_IN)
+  expect_equal(
+    impl$.nominal_header_size(opts),
+    impl$HEADER_SIZE_MAX * 2,
+    tolerance = 1e-6
+  )
+  fx$opts$text_scale <- 1.5
+  opts <- tree_plot$resolve_text_geometry(fx$opts, fx$meta)
+  expect_equal(impl$.tile_col_in(opts), tree_plot$TILE_COL_IN)
+})
+
+test_that("the columns never widen where the page would not gain by it", {
+  base <- tree_plot$HEATMAP_COL_IN
+  heat_in <- function(opts) {
+    impl$.heat_col_in(tree_plot$resolve_text_geometry(opts, .gain_fixture()$meta))
+  }
+  # Smaller text never narrows the page (k > 1 only).
+  fx <- .gain_fixture(text = 0.8)
+  expect_equal(heat_in(fx$opts), base)
+  # A ratio the reader set holds, so the height would grow with the width (G4).
+  fx <- .gain_fixture()
+  fx$opts$aspect_fitted <- FALSE
+  expect_equal(heat_in(fx$opts), base)
+  # A page already flatter than the stage only gets smaller in the Full view.
+  fx <- .gain_fixture(aspect = 0.5)
+  expect_equal(heat_in(fx$opts), base)
+  # A radial panel grows both ways alike, which changes nothing on screen.
+  fx <- .gain_fixture()
+  fx$opts$layout <- "circular"
+  expect_equal(heat_in(fx$opts), base)
+  # Gene names switched off have no header to grow for.
+  fx <- .gain_fixture()
+  fx$opts$layers <- list()
+  fx$opts$heatmaps[[1]]$show_gene_names <- FALSE
+  expect_equal(heat_in(fx$opts), base)
+})
+
+test_that("the columns widen only as far as the stage's shape", {
+  # A page of moderate height: the columns may grow, but only until the page is
+  # as flat as the stage, and never past the canvas ceiling (G1, G2).
+  fx <- .gain_fixture(aspect = 1.1)
+  opts <- tree_plot$resolve_text_geometry(fx$opts, fx$meta)
+  gain <- opts$column_gain[["heat"]]
+  expect_gt(gain, 1)
+  expect_lt(gain, 2)
+  height <- tree_plot$tree_canvas_height_in(opts, fx$meta)
+  g <- tree_plot$tree_guide_inputs(opts)
+  legend_in <- tree_plot$tree_legend_width_in(
+    g$layers, fx$meta, tree_plot$tree_legend_size(opts, height, fx$meta), 5.5,
+    g$heatmaps, height, 1, opts$legend_fold_in
+  )
+  width <- tree_plot$tree_panel_width_in(opts, fx$meta, 5.5) + legend_in
+  expect_lte(width, height / viz_fit$STAGE_ASPECT + 1e-6)
+  expect_lte(width, 5.5 * tree_plot$TREE_CANVAS_MAX_FACTOR + 1e-6)
+})
+
+test_that("the builder draws headers at the gain the canvas was sized for", {
+  fx <- .gain_fixture()
+  tree <- .annot_fixture(40)$tree
+  p <- .built_tree(tree, fx$meta, fx$opts)
+  sizes <- unlist(lapply(p$layers, function(l) {
+    if (identical(l$aes_params$angle, 90)) l$aes_params$size
+  }))
+  expect_true(any(abs(sizes - impl$HEADER_SIZE_MAX * 2) < 1e-6))
+})
+
+# --- T3: a larger text size never sets the isolate names smaller --------------
+
+# The size a built tree sets its isolate names at.
+.tiplab_drawn_size <- function(tree, meta, opts) {
+  p <- .built_tree(tree, meta, opts)
+  geoms <- vapply(p$layers, function(l) class(l$geom)[1], character(1))
+  p$layers[[which(geoms == "GeomTextGGtree")[[1]]]]$aes_params$size
+}
+
+test_that("headers grown for the text size never tighten the tip rows", {
+  # The header band is taken out of the page's height. A fitted page grows by
+  # what the band gains; a hand-set one keeps its height, so the band's type
+  # grows only as far as the band fits its 100% depth (T3, G4).
+  tree <- .annot_fixture(40)$tree
+  for (fitted in c(TRUE, FALSE)) {
+    for (aspect in c(1.2, 2)) {
+      size <- function(k) {
+        fx <- .gain_fixture(text = k, aspect = aspect)
+        fx$opts$aspect_fitted <- fitted
+        .tiplab_drawn_size(tree, fx$meta, fx$opts)
+      }
+      expect_gte(size(2), size(1) - 1e-9)
+    }
+  }
+})
+
+test_that("a fitted page buys its larger header band, a hand-set one caps it", {
+  fx <- .gain_fixture()
+  fitted <- tree_plot$resolve_text_geometry(fx$opts, fx$meta)
+  expect_gt(fitted$band_extra_in, 0)
+  expect_gt(
+    tree_plot$tree_canvas_height_in(fitted, fx$meta),
+    5.5 * fx$opts$aspect
+  )
+  fx$opts$aspect_fitted <- FALSE
+  held <- tree_plot$resolve_text_geometry(fx$opts, fx$meta)
+  expect_null(held$band_extra_in)
+  expect_lt(held$header_text, 2)
+  expect_equal(tree_plot$tree_canvas_height_in(held, fx$meta), 5.5 * fx$opts$aspect)
+  # The fitted aspect is measured at 100%, so a re-fit at 200% does not count
+  # the larger band a second time.
+  expect_identical(
+    tree_plot$tree_fitted_aspect(1, fx$opts, 40),
+    tree_plot$tree_fitted_aspect(1, modifyList(fx$opts, list(text_scale = 1)), 40)
+  )
 })

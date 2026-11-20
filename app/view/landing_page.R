@@ -17,6 +17,7 @@ box::use(
   app / logic / functions[render_info],
   app / logic / paths[app_local_share_path],
   app / logic / species[GENERIC_IMAGE, image_credit, species_image],
+  app / logic / urls[WEBSITE],
   app / view / about,
   app / view / file_dialog,
 )
@@ -249,7 +250,7 @@ ui <- function(id) {
       class = "landing_footer",
       shiny$tags$a(
         class = "landing_maker",
-        href = "https://liora-bioinformatics.com/phylotrace",
+        href = WEBSITE,
         target = "_blank",
         rel = "noopener noreferrer",
         about$brand_logo()

@@ -100,16 +100,29 @@ ui <- function(id) {
   )
 }
 
+# Scheme name proposed for a species, "" without one.
+species_name <- function(species) {
+  if (is.null(species) || is.na(species)) {
+    return("")
+  }
+  paste(gsub("_", " ", default_db_name(species)), "MLST")
+}
+
 #' @export
 server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
   shiny$moduleServer(id, function(input, output, session) {
     source <- scheme_source$server("source", reset = reset)
 
+    # Scheme name last proposed, from the species or a published scheme.
+    proposed_name <- shiny$reactiveVal("")
+
     # Clears the form: name and version here, provider and files in their
-    # own modules (Reload Database drops transient state, see CLAUDE.md).
+    # own modules (Reload Database drops transient state, see CLAUDE.md). The
+    # name goes back to the species' proposal.
     if (!is.null(reset)) {
       shiny$observeEvent(reset(), {
-        shiny$updateTextInput(session, "name", value = "")
+        proposed_name(species_name(species()))
+        shiny$updateTextInput(session, "name", value = proposed_name())
         shiny$updateTextInput(session, "version", value = "")
       }, ignoreInit = TRUE)
     }
@@ -127,8 +140,6 @@ server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
       }
     })
 
-    # Scheme name last proposed, from the species or a published scheme.
-    proposed_name <- shiny$reactiveVal("")
 
     # Fills the provider and name of a published scheme into the form.
     shiny$observeEvent(input$use, {
@@ -176,7 +187,7 @@ server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
         !is.na(species()) &&
           (!nzchar(current) || identical(current, proposed_name()))
       ) {
-        proposed_name(paste(gsub("_", " ", default_db_name(species())), "MLST"))
+        proposed_name(species_name(species()))
         shiny$updateTextInput(session, "name", value = proposed_name())
       }
     })

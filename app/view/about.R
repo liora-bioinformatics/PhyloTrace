@@ -11,13 +11,7 @@ box::use(
 box::use(
   app / logic / app_meta[APP_VERSION],
   app / logic / species[image_credits],
-)
-
-URLS <- list(
-  website = "https://liora-bioinformatics.com/phylotrace",
-  github = "https://github.com/liora-bioinformatics/PhyloTrace",
-  doi = "https://doi.org/10.5281/zenodo.10996423",
-  license = "https://www.gnu.org/licenses/gpl-3.0"
+  app / logic / urls[DOI, GITHUB, GPL_LICENSE, WEBSITE],
 )
 
 # A link that opens outside the app window.
@@ -107,15 +101,15 @@ about_page <- function() {
 
   facts <- list(
     list("Version", paste0("v", APP_VERSION)),
-    list("Licence", external_link(URLS$license, "GNU GPL v3.0")),
-    list("Source code", external_link(URLS$github, "github.com/liora-bioinformatics/PhyloTrace")),
-    list("Website", external_link(URLS$website, "liora-bioinformatics.com/phylotrace")),
+    list("Licence", external_link(GPL_LICENSE, "GNU GPL v3.0")),
+    list("Source code", external_link(GITHUB, "github.com/liora-bioinformatics/PhyloTrace")),
+    list("Website", external_link(WEBSITE, "liora-bioinformatics.com/phylotrace")),
     list("Contact", "info@liora-bioinformatics.com"),
     list(
       "Cite as",
       shiny$tagList(
         "Freisleben, M. & Paskali, F. (2024). PhyloTrace. Zenodo. ",
-        external_link(URLS$doi, "doi:10.5281/zenodo.10996423")
+        external_link(DOI, "doi:10.5281/zenodo.10996423")
       )
     )
   )
@@ -159,7 +153,7 @@ about_page <- function() {
     ),
     shiny$div(
       class = "about_maker",
-      external_link(URLS$website, brand_logo("about_maker-logo")),
+      external_link(WEBSITE, brand_logo("about_maker-logo")),
       shiny$p(
         "Developed by Liora Bioinformatics in collaboration with Hochschule Furtwangen ",
         "University (HFU) and the Medical University of Graz (MUG). Made in Germany."

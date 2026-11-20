@@ -25,6 +25,7 @@ box::use(
   app / logic / session_restart[restart_session],
   app / logic / setup_ui,
   app / logic / species,
+  app / logic / urls[taxonomy_url],
   app / view / file_dialog,
   app / view / mlst_import,
   app / view / scheme_source,
@@ -477,18 +478,26 @@ server <- function(id) {
       # Error of the last failed build, shown on the review step.
       error = NULL,
       # The finished database; once set, the setup is closed.
-      result = NULL
+      result = NULL,
+      # Species the scheme steps were filled in for: the one confirmed when
+      # leaving the species step. NULL until the species step is first left.
+      committed_species = NULL
     )
+
+    # Bumped when a different species is confirmed, so the scheme steps start
+    # over instead of keeping files picked for the previous species.
+    scheme_reset <- shiny$reactiveVal(0L)
 
     # Plain mirror of the running build, so session teardown - outside any
     # reactive context - can still stop it and remove its unfinished database.
     live_build <- NULL
     session$onSessionEnded(function() cancel_db_build(live_build))
 
-    cg_source <- scheme_source$server("cg_source")
+    cg_source <- scheme_source$server("cg_source", reset = scheme_reset)
     mlst <- mlst_import$server(
       "mlst",
-      species = shiny$reactive(chosen_species()$name)
+      species = shiny$reactive(chosen_species()$name),
+      reset = scheme_reset
     )
 
     cg_paths <- file_dialog$server(
@@ -501,13 +510,15 @@ server <- function(id) {
       hint = paste(
         "Select a ZIP archive or FASTA files (Ctrl-click for several), or open",
         "the folder that holds the locus files and choose 'Use this folder'."
-      )
+      ),
+      reset = scheme_reset
     )
     cg_table_path <- file_dialog$server(
       "cg_table",
       mode = "file",
       title = "Select the locus annotation table",
-      pattern = scheme_files$TABLE_FILE_RE
+      pattern = scheme_files$TABLE_FILE_RE,
+      reset = scheme_reset
     )
     target_path <- file_dialog$server(
       "target",
@@ -632,7 +643,7 @@ server <- function(id) {
             },
             if (!is.na(sp$taxid)) {
               shiny$a(
-                href = species$taxonomy_url(sp$taxid),
+                href = taxonomy_url(sp$taxid),
                 target = "_blank",
                 rel = "noopener",
                 class = "species-details_taxid",
@@ -877,6 +888,26 @@ server <- function(id) {
     shiny$observeEvent(input$cg_table_clear, {
       state$cg_table <- NULL
     })
+
+    # Clears the cgMLST step after a change of species: the read scheme and
+    # table here, provider and picked paths in their own modules. The scheme
+    # name and web page go back to the new species' proposal.
+    shiny$observeEvent(scheme_reset(), {
+      state$cg <- NULL
+      state$cg_table <- NULL
+      name <- chosen_species()$name
+      state$proposed_name <- if (is.na(name)) {
+        ""
+      } else {
+        paste(gsub("_", " ", species$default_db_name(name)), "cgMLST")
+      }
+      state$proposed_url <- ""
+      shiny$updateTextInput(session, "cg_name", value = state$proposed_name)
+      for (field in c("cg_version", "cg_url", "cg_seed", "cg_citation")) {
+        shiny$updateTextInput(session, field, value = "")
+      }
+      shiny$updateNumericInput(session, "cg_distance", value = NA)
+    }, ignoreInit = TRUE)
 
     output$cg_alleles_label <- shiny$renderUI(setup_ui$picked_label(cg_paths()))
     output$cg_table_label <- shiny$renderUI({
@@ -1226,12 +1257,45 @@ server <- function(id) {
     # TRUE once the database is created: the setup is closed from then on.
     finished <- shiny$reactive(!is.null(state$result))
 
+    # Records the species the scheme steps are filled in for. Going back to
+    # the species step changes nothing by itself; confirming a different
+    # species clears the scheme steps, so files picked for the previous species
+    # cannot end up in this database, and its later steps have to be visited
+    # again.
+    commit_species <- function() {
+      name <- chosen_species()$name
+      previous <- state$committed_species
+      state$committed_species <- name
+      if (is.null(previous) || identical(previous, name)) {
+        return(invisible(NULL))
+      }
+      entered <- !is.null(state$cg) || !is.null(state$cg_table) ||
+        !is.null(cg_source()) || isTRUE(input$mlst_on)
+      scheme_reset(scheme_reset() + 1L)
+      state$reached <- 1L
+      if (entered) {
+        shiny$showNotification(
+          paste(
+            "The species has changed, so the scheme files and details entered",
+            "for the previous species were removed. Please enter them again."
+          ),
+          type = "warning",
+          duration = 10
+        )
+      }
+    }
+
     # Shows a step and remembers how far the setup has come.
     go <- function(step) {
       if (finished()) {
         return(invisible(NULL))
       }
       step <- min(max(step, 1L), length(STEPS))
+      # Leaving the species step forward - by Next or a stepper link -
+      # confirms the species.
+      if (state$step == 1L && step > 1L) {
+        commit_species()
+      }
       state$step <- step
       state$reached <- max(state$reached, step)
       bslib$nav_select(

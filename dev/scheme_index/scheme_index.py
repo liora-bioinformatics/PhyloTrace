@@ -20,8 +20,10 @@ Only scheme metadata is read - names, locus counts and page addresses - never
 alleles, profiles or locus tables. Each source is switched on in config.json
 only where its operator permits automated listing; robots.txt is checked before
 every host and a disallowed path stops that source. Requests are sequential,
-paced and identify the maintainer. PubMLST and Institut Pasteur are not read
-at all; their rows are curated by hand (``source = manual``).
+paced and identify the maintainer. cgMLST.org, Chewie-NS, PubMLST and
+Institut Pasteur are read; EnteroBase is not, and its rows are curated by hand
+(``source = manual``). Hand-entered PubMLST and Pasteur rows from before those
+providers allowed automated listing stay until a read row replaces them.
 
 Usage:
     scheme_index.py update [--report FILE] [--offline]

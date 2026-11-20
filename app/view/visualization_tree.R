@@ -1573,6 +1573,12 @@ server <- function(
       )
     })
 
+    # The aspect ratio the last fit wrote, so the canvas can tell a fitted
+    # aspect from one the reader set: only a fitted one lets the annotation
+    # columns widen the page for the text size (rule G1 and G4,
+    # tree_plot$tree_column_gain()).
+    fit_aspect <- shiny$reactiveVal(NULL)
+
     # Fit the layout controls to the data, the way the Map fits its "Max
     # intensity" slider to the busiest place. The coded defaults (aspect 0.6,
     # tip label size 4) suit roughly fifteen tips and nothing else — five
@@ -1681,6 +1687,7 @@ server <- function(
             shiny$isolate(tree_opts()),
             length(tree$tip.label)
           )
+          fit_aspect(value)
         }
         # Sent unconditionally. Guarding on `input[[id]]` — "the slider already
         # shows this" — reads a value the browser may be about to replace: a
@@ -2096,6 +2103,11 @@ server <- function(
         # The tree's own aspect. The builder turns it into a plot height, which
         # for a radial layout is not this at all (see tree_legend_cols).
         aspect = fitted$nj_aspect_ratio,
+        # Whether that aspect is still the fit's (see fit_aspect).
+        aspect_fitted = isTRUE(all.equal(
+          as.numeric(fitted$nj_aspect_ratio),
+          as.numeric(fit_aspect() %||% NA_real_)
+        )),
         # Degrees of circle left open for the ring headers. Fitted on Generate
         # and adjustable after; only a radial layout uses it.
         open_angle = fitted$nj_open_angle
@@ -2123,6 +2135,9 @@ server <- function(
       opts <- if (is.null(published)) tree_opts() else published$opts
       meta <- if (is.null(published)) viz_metadata() else published$metadata
       md <- if (is.null(meta)) data.frame() else meta
+      # The guide box's fold room and the columns' text-size gain, solved as the
+      # builder solves them (tree_plot$resolve_text_geometry()).
+      opts <- tree_plot$resolve_text_geometry(opts, meta)
 
       # Solved in tree_plot.R, beside the axis split it has to agree with: the
       # annotations' share is a fraction of the tree's *span*, not of the panel,
@@ -2181,7 +2196,8 @@ server <- function(
         legend_size,
         TREE_PANEL_IN,
         guides$heatmaps,
-        height_in
+        height_in,
+        fold_in = opts$legend_fold_in
       )
       # How much of the panel the annotations asked for the image can hold. The
       # builder stashes the same number on `opts` for the axis solve; here it is
@@ -3497,7 +3513,8 @@ server <- function(
       list(
         .layers = nj_layers(),
         .heatmaps = nj_heatmaps(),
-        .clades = nj_clades()
+        .clades = nj_clades(),
+        .fit_aspect = fit_aspect()
       )
     ))
 
@@ -3505,6 +3522,9 @@ server <- function(
       # Same catalogue a reset applies, holding saved values instead of the
       # coded ones.
       apply_controls(session, vals, TREE_CONTROLS)
+      # Whether the saved aspect was the fit's, so the reopened figure widens
+      # its columns exactly as the saved one did.
+      fit_aspect(vals$.fit_aspect)
 
       # Put the fitted controls' saved values straight into the mirrors the
       # render reads, so restoring an Analysis redraws the tree once rather than

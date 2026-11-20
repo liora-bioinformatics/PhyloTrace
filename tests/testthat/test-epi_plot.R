@@ -1498,6 +1498,30 @@ test_that("end labels too many to set legibly give way to the legend", {
   expect_lte(unset$fitted_aspect, 1)
 })
 
+test_that("a short curve's legend grows the page to the stage's shape first", {
+  # Long names, three keys a row: a legend more than a third as tall as either
+  # curve below.
+  binned <- strata_fixture(
+    30,
+    function(i) sprintf("Regional hospital network site %02d", i)
+  )
+  flat <- epi_plot$epi_layout(
+    binned,
+    list(mode = "stacked", interval = "month", aspect = 0.3)
+  )
+  expect_equal(flat$legend_pt, impl$EPI_LEGEND_PT)
+  expect_gt(flat$legend_height_in, 0.35 * flat$plot_height_in)
+  expect_lte(flat$height_in, viz_fit$STAGE_ASPECT * flat$width_in)
+
+  # A page already at the stage's shape keeps the share of its plot height.
+  tall <- epi_plot$epi_layout(
+    binned,
+    list(mode = "stacked", interval = "month", aspect = 0.6)
+  )
+  expect_lt(tall$legend_pt, impl$EPI_LEGEND_PT)
+  expect_lte(tall$legend_height_in, 0.35 * tall$plot_height_in)
+})
+
 test_that("a legend longer than the canvas can hold ends in a count", {
   # Long names, one key per row: three hundred rows is far more than the
   # canvas grows for, even at the floor size.

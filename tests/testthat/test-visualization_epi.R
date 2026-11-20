@@ -14,11 +14,19 @@ box::use(
 box::use(
   app / logic / epi_plot,
   app / logic / field_profile,
-  app / logic / viz_helpers[control_ids],
+  app / logic / viz_helpers[PLOT_SETTLE_MS, control_ids],
   app / view / visualization_epi,
 )
 
 impl <- attr(visualization_epi, "namespace")
+
+# The curve is drawn once its inputs stop moving (see plot_inputs), so a mock
+# session has to be walked past that timer before a change reaches the plot.
+settle <- function(session) {
+  session$flushReact()
+  session$elapse(PLOT_SETTLE_MS + 50)
+  session$flushReact()
+}
 
 meta_fixture <- function() {
   data.frame(
@@ -80,7 +88,7 @@ test_that("Generate bins the metadata only while Epi is the active engine", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       # Two ISO weeks carry the four isolates with a readable date.
       expect_true(generated())
@@ -105,12 +113,12 @@ test_that("a sibling engine's Generate leaves the Epi curve untouched", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       before <- epi_data()
 
       plot_type("MST")
       generate(2L)
-      session$flushReact()
+      settle(session)
 
       expect_true(generated())
       expect_identical(epi_data(), before)
@@ -134,7 +142,7 @@ test_that("the interval re-bins the curve without another Generate", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       weekly <- nrow(epi_data())
 
       session$setInputs(epi_interval = "day")
@@ -164,7 +172,7 @@ test_that("a mapping re-splits the curve without another Generate", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       expect_identical(unique(epi_data()$stratum), epi_plot$EPI_ALL_LABEL)
 
       map_variable(session, "organism")
@@ -219,7 +227,7 @@ test_that("the interval default is fitted to the dataset's span", {
       plot_type = reactiveVal("Epi")
     ),
     {
-      session$flushReact()
+      settle(session)
 
       expect_identical(fitted_interval(), "day")
     }
@@ -240,7 +248,7 @@ test_that("a decade of data fits the interval up to months", {
       plot_type = reactiveVal("Epi")
     ),
     {
-      session$flushReact()
+      settle(session)
 
       # Days would need 3653 bars across the span; months fit the budget.
       expect_identical(fitted_interval(), "month")
@@ -263,7 +271,7 @@ test_that("a database with no readable dates produces no curve", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       expect_false(generated())
     }
@@ -423,7 +431,7 @@ test_that("the mapping picker offers the metadata fields but not the plotted dat
     ),
     {
       set_default_inputs(session)
-      session$flushReact()
+      settle(session)
 
       expect_identical(
         sort(mappable_fields()),
@@ -450,7 +458,7 @@ test_that("the plot carries no background grid", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       grid <- ggplot2::ggplot_build(epi_ggplot())$plot$theme$panel.grid
 
       expect_s3_class(grid, "element_blank")
@@ -472,13 +480,14 @@ test_that("the plot builds from the generated data in every style", {
       set_default_inputs(session)
       session$setInputs(epi_stratify = "organism")
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       # "square" is a PLOT_MODES choice, not a separate switch — see mode_for()
       # /square_for(). It must fold back to the stacked curve with square cells
       # rather than reach build_epi_ggplot as a third, unknown mode.
       for (mode in c("stacked", "square", "cumulative")) {
         session$setInputs(epi_plot_mode = mode)
+        settle(session)
         expect_s3_class(epi_ggplot(), "ggplot")
       }
     }
@@ -511,6 +520,79 @@ test_that("the 'square' mode choice folds to the stacked curve with squares on",
   )
 })
 
+test_that("an echo that changes nothing the curve is built from does not redraw it", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      generate(1L)
+      settle(session)
+      drawn <- plot_inputs()
+      expect_false(is.null(drawn))
+
+      # What a Generate sets off: the server-rendered date axis, interval and
+      # date range mounting with the values the curve already used, and the
+      # aspect slider reporting the fit it was just set to.
+      bins <- epi_bins()
+      session$setInputs(
+        epi_date_field = date_field(),
+        epi_interval = current_interval(),
+        epi_daterange = slider_bounds(1L, length(bins)),
+        epi_aspect_ratio = aspect_mirror()
+      )
+      settle(session)
+      expect_identical(plot_inputs(), drawn)
+
+      # Another Generate over the same data still draws, so its overlay comes
+      # down, and draws the same curve.
+      generate(2L)
+      settle(session)
+      expect_false(identical(plot_inputs(), drawn))
+      expect_identical(plot_inputs()$data, drawn$data)
+
+      # A real change draws.
+      before <- plot_inputs()
+      session$setInputs(epi_background_color = "#123456")
+      settle(session)
+      expect_false(identical(plot_inputs(), before))
+    }
+  )
+})
+
+test_that("playback draws each frame without waiting for the controls to settle", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "day")
+      generate(1L)
+      settle(session)
+      bins <- epi_bins()
+      expect_identical(plot_inputs()$opts$reveal_to, bins[length(bins)])
+
+      # The first tick lands on the same flush as the press, and is drawn there.
+      session$setInputs(epi_play = 1)
+      expect_true(anim_playing())
+      expect_identical(plot_inputs()$opts$reveal_to, bins[win_end_idx()])
+      expect_true(win_end_idx() < length(bins))
+    }
+  )
+})
+
 test_that("the export is the canvas the curve is drawn on", {
   # One drawing: the exported file is the preview at the size it is on
   # screen, Square blocks mode's true squares included.
@@ -526,7 +608,7 @@ test_that("the export is the canvas the curve is drawn on", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       lay <- epi_layout()
       expect_equal(lay$width_in, epi_plot$EPI_CANVAS_IN)
@@ -537,12 +619,12 @@ test_that("the export is the canvas the curve is drawn on", {
 
       # A reader's ratio is drawn as set, and stops the fit overriding it.
       session$setInputs(epi_aspect_ratio = 0.9)
-      session$flushReact()
+      settle(session)
       expect_false(aspect_follows_fit())
       expect_equal(epi_layout()$plot_height_in, 0.9 * lay$width_in)
 
       session$setInputs(epi_plot_mode = "square")
-      session$flushReact()
+      settle(session)
       square <- epi_layout()
       expect_true(square$square)
       expect_equal(export$aspect(), square$height_in / square$width_in)
@@ -563,15 +645,15 @@ test_that("Auto-fit drops the text size and returns the aspect to the fit", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       session$setInputs(epi_text_size = 160, epi_aspect_ratio = 2)
-      session$flushReact()
+      settle(session)
       expect_equal(epi_layout()$text_scale, 1.6)
       expect_equal(epi_layout()$aspect, 2)
 
       session$setInputs(auto_fit = 1L)
-      session$flushReact()
+      settle(session)
       expect_equal(text_size_mirror(), 100)
       expect_equal(epi_layout()$text_scale, 1)
       expect_true(aspect_follows_fit())
@@ -622,7 +704,7 @@ test_that("the cumulative overlay switch reaches the plot only outside Cumulativ
       map_variable(session, "organism")
       session$setInputs(epi_show_cumulative = TRUE)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       n_steps <- function() {
         sum(vapply(epi_ggplot()$layers, function(l) inherits(l$geom, "GeomStep"), logical(1)))
@@ -640,6 +722,7 @@ test_that("the cumulative overlay switch reaches the plot only outside Cumulativ
       # of 2. The legend seed layer draws as GeomStep here (matching the curve
       # style) rather than GeomCol, so it still counts for one.
       session$setInputs(epi_plot_mode = "cumulative")
+      settle(session)
       expect_identical(n_steps(), 2L)
     }
   )
@@ -661,14 +744,16 @@ test_that("the zoom-axis switch is off by default and narrows the axis when on",
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       session$setInputs(epi_step_end_prev = 1)
+      settle(session)
       x_range <- function() {
         ggplot2::ggplot_build(epi_ggplot())$layout$panel_params[[1]]$x.range
       }
 
       fixed <- diff(x_range())
       session$setInputs(epi_zoom_axis = TRUE)
+      settle(session)
       zoomed <- diff(x_range())
 
       expect_true(zoomed < fixed)
@@ -691,7 +776,7 @@ test_that("a fresh curve starts with the window untouched", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       expect_identical(win_start_idx(), 0L)
       expect_identical(win_end_idx(), 0L)
@@ -719,7 +804,7 @@ test_that("Play freezes the start, sweeps the end forward, and stops at the targ
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       session$setInputs(epi_play = 1)
       # Collapsed to the start and already stepping (the tick loop runs on the
@@ -747,7 +832,7 @@ test_that("the step buttons move one interval and clamp against each other", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
 
       # Two bins in the fixture. Stepping the end back lands on the first.
       session$setInputs(epi_step_end_prev = 1)
@@ -784,11 +869,12 @@ test_that("the window reveals only the bins inside it", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       bars <- function() nrow(ggplot2::ggplot_build(epi_ggplot())$data[[1]])
 
       expect_identical(bars(), 2L)
       session$setInputs(epi_step_end_prev = 1)
+      settle(session)
       expect_identical(bars(), 1L)
     }
   )
@@ -807,7 +893,7 @@ test_that("dragging the range slider sets the window, snapped to the bin it land
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       bins <- epi_bins()
 
       session$setInputs(epi_daterange = c(bins[1], bins[1]))
@@ -842,7 +928,7 @@ test_that("the range slider is labelled in collected dates, not bin names", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       bins <- epi_bins()
 
       # Full span: the first and last dates in the metadata, not 2026-01-12
@@ -878,12 +964,12 @@ test_that("a re-bin resets the window and stops any playback", {
     {
       set_default_inputs(session)
       generate(1L)
-      session$flushReact()
+      settle(session)
       session$setInputs(epi_step_end_prev = 1)
       expect_identical(win_end_idx(), 1L)
 
       session$setInputs(epi_interval = "day")
-      session$flushReact()
+      settle(session)
 
       expect_identical(win_start_idx(), 0L)
       expect_identical(win_end_idx(), 0L)
@@ -1018,7 +1104,7 @@ test_that("restore() brings a saved mapping back", {
         n_levels = 2L,
         auto = FALSE
       ))))
-      session$flushReact()
+      settle(session)
 
       expect_identical(length(epi_layers()), 1L)
       expect_identical(epi_layers()[[1]]$field, "geo_loc_name_country")
@@ -1045,7 +1131,7 @@ test_that("restore() drops a saved layer whose column the database no longer has
         field = NA_character_,
         aesthetic = "bar_fill"
       ))))
-      session$flushReact()
+      settle(session)
 
       expect_identical(length(epi_layers()), 0L)
     }
@@ -1064,7 +1150,7 @@ test_that("a restore carrying no mapping leaves the curve unsplit", {
     {
       set_default_inputs(session)
       restore(list(epi_plot_mode = "stacked"))
-      session$flushReact()
+      settle(session)
 
       expect_identical(length(epi_layers()), 0L)
     }
@@ -1089,7 +1175,7 @@ test_that("a plot saved before the rewrite comes back as a mapping layer", {
         epi_stratify_granularity = "month",
         epi_col_scale = "Set1"
       ))
-      session$flushReact()
+      settle(session)
 
       expect_identical(length(epi_layers()), 1L)
       l <- epi_layers()[[1]]
@@ -1121,7 +1207,7 @@ test_that("a restore with no saved stratifier at all adds nothing", {
     {
       set_default_inputs(session)
       restore(list(epi_stratify = "", epi_col_scale = "Set1"))
-      session$flushReact()
+      settle(session)
 
       expect_identical(length(epi_layers()), 0L)
     }
@@ -1173,7 +1259,7 @@ test_that("a reset returns the pickers shinyjs::reset() used to skip", {
       sent <- record_input_messages(session)
 
       session$setInputs(reset_settings_confirm = 1)
-      session$flushReact()
+      settle(session)
 
       for (id in c("epi_plot_mode", "epi_moving_avg_align", "epi_anno_type")) {
         expect_true(any(endsWith(names(sent()), id)))
@@ -1193,11 +1279,11 @@ test_that("Auto-fit re-fits the interval and leaves the rest alone", {
     {
       set_default_inputs(session)
       map_variable(session, "organism")
-      session$flushReact()
+      settle(session)
       before <- interval_rebuild()
 
       session$setInputs(auto_fit = 1)
-      session$flushReact()
+      settle(session)
 
       expect_gt(interval_rebuild(), before)
       # Only the interval and the window: the mapping is a deliberate choice.
@@ -1219,11 +1305,11 @@ test_that("Auto-fit before a curve exists changes nothing", {
     ),
     {
       set_default_inputs(session)
-      session$flushReact()
+      settle(session)
       before <- interval_rebuild()
 
       session$setInputs(auto_fit = 1)
-      session$flushReact()
+      settle(session)
       expect_equal(interval_rebuild(), before)
     }
   )
@@ -1263,7 +1349,7 @@ test_that("the curve opens on the first date variable that holds dates", {
     ),
     {
       set_default_inputs(session)
-      session$flushReact()
+      settle(session)
 
       # The collection date is listed first, but holds nothing to plot.
       expect_identical(date_choices(), c("sample_collection_date", "custom_year"))
@@ -1313,7 +1399,7 @@ test_that("a curve refused for an empty date axis draws once a dated one is pick
       set_default_inputs(session)
       session$setInputs(epi_date_field = "sample_collection_date")
       generate(1L)
-      session$flushReact()
+      settle(session)
       expect_false(generated())
 
       # The tab keeps Generate locked after the press, so the re-pick must draw.
