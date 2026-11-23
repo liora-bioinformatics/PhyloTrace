@@ -1341,9 +1341,25 @@ AMR_LEGEND_WRAP_GAP_MM <- 4
 # rooms up to three times `rows` whose folded rows still stand in `rows`. A
 # larger room folds less, so the rows a plan takes are not monotone in it and
 # the rooms are scanned, in steps of `rows` / AMR_FOLD_CREDIT_STEPS.
-.fold_credit <- function(demand, rows, caps, rows_cap) {
+#
+# `plan_memo`, an environment, keeps the plans across calls: the rooms scanned
+# for neighbouring row budgets overlap, and a plan is a pure function of its
+# room and these arguments.
+.fold_credit <- function(demand, rows, caps, rows_cap, plan_memo = NULL) {
+  prefix <- paste(c(names(demand), demand, caps, rows_cap), collapse = "\r")
+  # The legend_plan() for a nominal room of `r` rows, from the memo if planned.
   plan_at <- function(r) {
-    viz_legend$legend_plan(demand, r, full_max = caps, max_rows_cap = rows_cap)
+    if (is.null(plan_memo)) {
+      return(viz_legend$legend_plan(demand, r, full_max = caps, max_rows_cap = rows_cap))
+    }
+    key <- paste(prefix, r, sep = "\r")
+    plan_memo[[key]] %||%
+      (plan_memo[[key]] <- viz_legend$legend_plan(
+        demand,
+        r,
+        full_max = caps,
+        max_rows_cap = rows_cap
+      ))
   }
   plan <- plan_at(rows)
   if (all(plan$keys >= plan$cap)) {
@@ -1355,6 +1371,10 @@ AMR_LEGEND_WRAP_GAP_MM <- 4
     p <- plan_at(r)
     if (p$rows <= rows && sum(p$keys) > sum(best$keys)) {
       best <- p
+      # Every key up to its cap: no larger room can list more.
+      if (all(best$keys >= best$cap)) {
+        break
+      }
     }
   }
   best$room <- as.integer(rows)
@@ -1682,6 +1702,21 @@ amr_auto_layout <- function(
     25.4
   pads_in <- (2 * AMR_PAGE_PAD_MM + AMR_LEGEND_PAD_MM + AMR_ROW_NAME_PAD_MM) / 25.4
 
+  # .fold_credit(), answered once per distinct question for the rest of this
+  # fit. The legend's type size is bisected in every width pass, and most of
+  # the sizes it tries round to a row budget already planned; each plan scans
+  # up to fifty rooms, so planning them afresh cost seconds per fit once mapped
+  # strips joined the legend. The answer is a pure function of these four
+  # arguments, so the cached one is the one a fresh call would give; the rooms
+  # it scans are kept the same way, for the next budget's overlapping scan.
+  fold_memo <- new.env(parent = emptyenv())
+  plan_memo <- new.env(parent = emptyenv())
+  fold_credit <- function(demand, rows, caps, rows_cap) {
+    key <- paste(c(names(demand), demand, caps, rows, rows_cap), collapse = "\r")
+    fold_memo[[key]] %||%
+      (fold_memo[[key]] <- .fold_credit(demand, rows, caps, rows_cap, plan_memo))
+  }
+
   # Every size below answers to the body's width, and the body is not a share
   # of the page: ComplexHeatmap draws the legend column and the isolate names at
   # their own width and gives the body what is left. So the sizes are solved
@@ -1985,7 +2020,7 @@ amr_auto_layout <- function(
         if (cols > 1L) {
           rows_cap <- max(min(rows_cap, per_col - 4L), 3L)
         }
-        plan <- .fold_credit(demand, per_col * cols, caps, rows_cap)
+        plan <- fold_credit(demand, per_col * cols, caps, rows_cap)
         plan$wrap <- cols
         plan$fits_wrap <- .wrap_columns(
           viz_legend$legend_guide_rows(plan$keys, plan$demand, plan$ncol),

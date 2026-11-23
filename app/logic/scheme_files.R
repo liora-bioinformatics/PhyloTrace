@@ -356,6 +356,14 @@ zip_fasta_entries <- function(zip_path) {
   }
   # Hidden members and macOS resource forks; a leading "./" is no hidden name.
   regular <- !grepl("/$", names) & !grepl("(^|/)(__MACOSX(/|$)|\\.[^/])", names)
+  # A chewBBACA schema (as Chewie-NS ships it) repeats a few representative
+  # alleles of every locus in short/<locus>_short.fasta; read as loci of their
+  # own they would double the scheme.
+  regular <- regular & !grepl(
+    paste0("(^|/)short/[^/]+_short", FASTA_RE),
+    names,
+    ignore.case = TRUE
+  )
   # FASTA-named members when there are any; otherwise every member, each then
   # checked by content like any other locus file.
   fasta <- regular & is_fasta_path(names)

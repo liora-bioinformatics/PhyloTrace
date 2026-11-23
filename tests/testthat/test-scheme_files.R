@@ -93,6 +93,21 @@ test_that("a ZIP archive and a single reference FASTA read like the folder", {
   expect_identical(from_fasta$loci$sequence, from_dir$loci$sequence)
 })
 
+test_that("a chewBBACA schema archive reads without its short/ representative files", {
+  dir <- write_loci(local_tempdir(), list(A_1 = cds(20), B_2 = cds(21, c("CTG"))))
+  short <- file.path(dir, "short")
+  dir.create(short)
+  writeLines(c(">A_1", cds(20)), file.path(short, "A_1_short.fasta"))
+  writeLines(c(">B_2", cds(21, c("CTG"))), file.path(short, "B_2_short.fasta"))
+
+  archive <- file.path(local_tempdir(), "schema.zip")
+  run("zip", c("-q", "-r", archive, "."), wd = dir)
+  scheme <- scheme_files$read_cg_scheme(archive)
+
+  expect_setequal(scheme$loci$locus, c("A_1", "B_2"))
+  expect_identical(nrow(scheme$issues), 0L)
+})
+
 test_that("an archive with an escaping path is refused before anything is extracted", {
   dir <- local_tempdir()
   inner <- file.path(dir, "a", "b")

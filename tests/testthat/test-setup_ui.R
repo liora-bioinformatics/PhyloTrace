@@ -28,6 +28,23 @@ test_that("task state rules are built per state, and 'open' adds none", {
   expect_match(got$css, "#a > .setup-task_body'); if (b) b.inert = false", fixed = TRUE)
 })
 
+test_that("scheme cards offer the download guide only when asked to", {
+  rows <- data.frame(
+    type = "cgMLST",
+    provider = "pubmlst",
+    scheme = "Test cgMLST",
+    loci = 10L,
+    url = "https://pubmlst.org/bigsdb?db=pubmlst_test_seqdef",
+    note = NA_character_,
+    stringsAsFactors = FALSE
+  )
+  plain <- as.character(setup_ui$scheme_links(rows))
+  expect_false(grepl("How to download", plain, fixed = TRUE))
+  guided <- as.character(setup_ui$scheme_links(rows, guide_input = "x-guide"))
+  expect_match(guided, "Shiny.setInputValue(&#39;x-guide&#39;, {i: 1", fixed = TRUE)
+  expect_match(guided, "How to download", fixed = TRUE)
+})
+
 test_that("a task status is dropped when it has no text", {
   expect_null(setup_ui$task_status(""))
   expect_null(setup_ui$task_status(NA_character_))

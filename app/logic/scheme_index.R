@@ -33,8 +33,10 @@ TYPE_ORDER <- c("cgMLST", "wgMLST", "MLST")
 #' @description One row per published scheme: `species` (as stored for a
 #'   database; `Genus spp` for a genus-wide scheme), `type` (`cgMLST`,
 #'   `wgMLST` or `MLST`), `provider` (id of `scheme_sources`), `scheme`, `loci` (integer,
-#'   `NA` when not recorded), `url` (the provider's page for the scheme) and
-#'   `note`.
+#'   `NA` when not recorded), `url` (the provider's page for the scheme), `note`
+#'   and `source_id` (the scheme's id at the provider, e.g.
+#'   `pubmlst_listeria_seqdef/3`; used by `scheme_guide` to build download
+#'   commands).
 #'
 #' @return Data frame.
 #' @export

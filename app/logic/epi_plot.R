@@ -42,7 +42,7 @@ box::use(
   ],
   grDevices[col2rgb, colorRampPalette, rgb],
   grid[unit],
-  stats[ave, setNames],
+  stats[ave, isoreg, setNames],
   viridisLite[viridis],
   rlang[`%||%`],
 )
@@ -814,8 +814,9 @@ EPI_LEGEND_MORE <- "+ %d more"
 # end-of-line labels a pitch each.
 EPI_END_PANEL_MAX <- 1.2
 
-# Clearance between a label and what it names (a line's end, a milestone's
-# rule, a period's bracket), in inches.
+#' Clearance between a label and what it names (a line's end, a milestone's
+#' rule, a period's bracket), in inches.
+#' @export
 EPI_LABEL_GAP_IN <- 0.05
 
 # Pitch between two neighbouring end-of-line labels, in lines of their type.
@@ -1642,26 +1643,13 @@ build_epi_ggplot <- function(binned, opts = list()) {
     }
   }
 
-  # The end labels' pitch is a length on the page, so it is converted to
-  # counts against the panel the layout measured.
   y_span <- y_limit * (1 + .Y_HEADROOM)
-  data_in <- max(lay$panel_height_in - (lay$band_in %||% 0), 0.1)
-  end_positions <- if (label_ends) {
-    .cumulative_end_positions(
-      shown,
-      y_max,
-      min_gap = lay$end_pitch_in * y_span / data_in,
-      offset = EPI_LABEL_GAP_IN / lay$day_in
-    )
-  } else {
-    NULL
-  }
-  bottom_room <- if (!is.null(end_positions)) {
-    half <- lay$end_pitch_in * y_span / data_in / 2
-    min(half, max(0, half - min(end_positions$y_label)))
-  } else {
-    0
-  }
+  ends <- if (label_ends) .end_label_layout(shown, y_max, lay)
+  end_positions <- ends$positions
+  # Play draws the end labels itself and holds the axis at the room its last
+  # frame needs (`end_label_room`), so the frames it wipes between share one
+  # y axis.
+  bottom_room <- opts$end_label_room %||% ends$bottom_room %||% 0
   band <- .band_counts(lay, y_span + bottom_room)
 
   # The limits themselves run past the counts rather than an expansion doing
@@ -1846,30 +1834,82 @@ square_panel_ratio <- function(binned, mode = "stacked") {
   as.Date(lims, origin = "1970-01-01")
 }
 
-# Where each end-of-line label goes: beside its line's last value, pushed down
-# where it would sit closer than one label pitch (`min_gap`, in counts) to the
-# label above it.
-.cumulative_end_positions <- function(shown, y_max, min_gap, offset) {
+# Where each end-of-line label goes, beside its line's last value. Only strata
+# with a case so far get one: a line still at zero has no curve to name, and
+# a crowd of them would stack far past the panel. The rest keep their lines'
+# order and at least one label pitch (`min_gap`, in counts) between them, and
+# sit as close to their lines as the bounds `lower` and `upper` (label
+# centres, in counts) allow — the least-squares placement, solved as an
+# isotonic regression of the targets with each label's share of the stack
+# taken off.
+.cumulative_end_positions <- function(shown, min_gap, offset, lower, upper) {
   if (!nrow(shown)) {
     return(NULL)
   }
   last_bin <- max(shown$date_bin)
-  ends <- shown[shown$date_bin == last_bin, , drop = FALSE]
-  ends <- ends[order(-ends$count), , drop = FALSE]
-
-  y_label <- numeric(nrow(ends))
-  for (i in seq_len(nrow(ends))) {
-    y <- ends$count[i]
-    if (i > 1 && (y_label[i - 1] - y) < min_gap) {
-      y <- y_label[i - 1] - min_gap
-    }
-    y_label[i] <- y
+  ends <- shown[shown$date_bin == last_bin & shown$count > 0, , drop = FALSE]
+  if (!nrow(ends)) {
+    return(NULL)
   }
-  ends$y_label <- y_label
+  # Bottom to top; ties keep the legend's order reading downwards.
+  ends <- ends[order(ends$count, -seq_len(nrow(ends))), , drop = FALSE]
+  stack <- (seq_len(nrow(ends)) - 1) * min_gap
+  fit <- if (nrow(ends) > 1L) isoreg(ends$count - stack)$yf else ends$count
+  top <- max(lower, upper - stack[length(stack)])
+  ends$y_label <- pmin(pmax(fit, lower), top) + stack
   ends$x_label <- ends$date_bin + offset
-  ends
+  ends[rev(seq_len(nrow(ends))), , drop = FALSE]
 }
 
+# Where a cumulative curve's end-of-line labels go for the revealed rows
+# `shown`, and how far below zero the y axis has to reach to hold the lowest.
+# The labels' pitch is a length on the page, so it is converted to counts
+# against the panel the layout measured. A label may centre on zero, hanging
+# half a pitch below it, unless the axis is already held at `room` (Play's
+# frames share the room of their last one), when it stays inside that.
+.end_label_layout <- function(shown, y_max, lay, room = NULL) {
+  y_span <- max(1, y_max) * (1 + .Y_HEADROOM)
+  data_in <- max(lay$panel_height_in - (lay$band_in %||% 0), 0.1)
+  pitch <- lay$end_pitch_in * y_span / data_in
+  positions <- .cumulative_end_positions(
+    shown,
+    min_gap = pitch,
+    offset = EPI_LABEL_GAP_IN / lay$day_in,
+    lower = if (is.null(room)) 0 else pitch / 2 - room,
+    upper = y_span - pitch / 2
+  )
+  if (is.null(room)) {
+    lowest <- if (is.null(positions)) Inf else min(positions$y_label)
+    room <- min(pitch / 2, max(0, pitch / 2 - lowest))
+  }
+  list(positions = positions, bottom_room = room)
+}
+
+#' End-of-Line Labels of a Cumulative Curve
+#'
+#' Where `build_epi_ggplot()` sets each stratum's end label for the window
+#' `opts` reveals, so Play can draw them itself between frames.
+#'
+#' @param binned Binned epi data frame, as passed to `build_epi_ggplot()`.
+#' @param opts Plot options, as for `build_epi_ggplot()`. With
+#'   `end_label_room` set the labels stay within that room below zero.
+#' @param lay The layout `epi_layout()` solved for those options.
+#' @return List: `positions` (a data frame with `stratum` and `y_label`, in
+#'   counts, or NULL) and `bottom_room` (counts the y axis reaches below zero).
+#' @export
+epi_end_labels <- function(binned, opts, lay) {
+  binned <- epi_cumulate(binned)
+  shown <- binned
+  if (!is.null(opts$reveal_from) && nrow(shown)) {
+    shown <- shown[shown$date_bin >= opts$reveal_from, , drop = FALSE]
+  }
+  if (!is.null(opts$reveal_to) && nrow(shown)) {
+    shown <- shown[shown$date_bin <= opts$reveal_to, , drop = FALSE]
+  }
+  .end_label_layout(shown, .y_max(binned, "cumulative"), lay, opts$end_label_room)
+}
+
+# The end-of-line labels layer, at the positions .cumulative_end_positions() set.
 .cumulative_end_labels <- function(end_positions, pt) {
   if (is.null(end_positions)) {
     return(NULL)

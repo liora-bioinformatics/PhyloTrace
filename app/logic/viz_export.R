@@ -602,7 +602,11 @@ render_canvas_png <- function(plot, file, width_in, height_in, res = PLOT_RES) {
 #' @param width_in,height_in Numeric. Canvas size in inches.
 #' @param res Numeric. Pixels per inch.
 #' @return List: `panel` (the panel's left and right edge, as fractions of the
-#'   image width) and `x_range` (the data range the panel spans, as numbers).
+#'   image width), `panel_y` (its top and bottom edge, as fractions of the
+#'   image height from the top), `x_range` and `y_range` (the data ranges the
+#'   panel spans, as numbers), `res` (the pixels per inch drawn at),
+#'   `colour_of` (a function mapping values through the plot's colour scale,
+#'   NULL without one).
 #' @export
 render_canvas_png_panel <- function(plot, file, width_in, height_in, res = PLOT_RES) {
   res <- .canvas_res(width_in, height_in, res)
@@ -630,16 +634,22 @@ render_canvas_png_panel <- function(plot, file, width_in, height_in, res = PLOT_
         respect = table$respect
       )))
       pushViewport(viewport(layout.pos.row = cell$t:cell$b, layout.pos.col = cell$l:cell$r))
-      deviceLoc(unit(c(0, 1), "npc"), unit(c(0, 0), "npc"), valueOnly = TRUE)$x
+      deviceLoc(unit(c(0, 1), "npc"), unit(c(1, 0), "npc"), valueOnly = TRUE)
     },
     finally = {
       dev.off()
       if (old_dev > 1) dev.set(old_dev)
     }
   )
+  params <- built$layout$panel_params[[1]]
+  colour <- built$plot$scales$get_scales("colour")
   list(
-    panel = panel_in / width_in,
-    x_range = as.numeric(built$layout$panel_params[[1]]$x.range)
+    panel = panel_in$x / width_in,
+    panel_y = 1 - panel_in$y / height_in,
+    x_range = as.numeric(params$x.range),
+    y_range = as.numeric(params$y.range),
+    res = res,
+    colour_of = if (!is.null(colour)) function(values) colour$map(values)
   )
 }
 

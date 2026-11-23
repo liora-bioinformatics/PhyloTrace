@@ -10,7 +10,7 @@ box::use(
   rlang[`%||%`],
   shiny,
   shinyWidgets[virtualSelectInput],
-  shinyjs[hide, html, runjs, toggleState, useShinyjs],
+  shinyjs[hide, html, runjs, toggle, toggleState, useShinyjs],
   stats[setNames],
   waiter[Waiter, spin_flower],
 )
@@ -20,6 +20,7 @@ box::use(
   app / logic / db_build[cancel_db_build, finish_db_build, start_db_build],
   app / logic / functions[render_info],
   app / logic / scheme_files,
+  app / logic / scheme_guide[guide_modal],
   app / logic / scheme_index[CORE_TYPES, schemes_for_species],
   app / logic / scheme_sources[safe_url, version_problem],
   app / logic / session_restart[restart_session],
@@ -60,8 +61,8 @@ PLAN_HINT <- paste(
 
 SCHEMES_HINT <- paste(
   "Schemes published for this species, from the index shipped with PhyloTrace.",
-  "Download the scheme files from the provider's page; they are imported in",
-  "the next steps."
+  "Download the scheme files from the provider's page ('How to download' shows",
+  "the steps); they are imported in the next steps."
 )
 
 # Display labels of the abritamr organism tokens ("Escherichia" covers a genus).
@@ -457,6 +458,13 @@ ui <- function(id) {
             "Next",
             icon = shiny$icon("arrow-right"),
             class = "btn-primary"
+          ),
+          shiny$actionButton(
+            ns("create_footer"),
+            "Create Database",
+            icon = shiny$icon("database"),
+            class = "btn-primary",
+            style = "display: none;"
           )
         )
       )
@@ -755,7 +763,7 @@ server <- function(id) {
       }
       rows <- published()
       if (nrow(rows)) {
-        setup_ui$scheme_links(rows)
+        setup_ui$scheme_links(rows, guide_input = ns("species_guide"))
       } else {
         setup_ui$setup_note(paste(
           "No published scheme is listed for this species. Check the providers'",
@@ -795,9 +803,28 @@ server <- function(id) {
       rows <- core_published()
       if (nrow(rows)) {
         shiny$tagList(
-          setup_ui$scheme_links(rows, use_input = ns("cg_use"), scroll = TRUE)
+          setup_ui$scheme_links(
+            rows,
+            use_input = ns("cg_use"),
+            scroll = TRUE,
+            guide_input = ns("cg_guide")
+          )
         )
       }
+    })
+
+    # Download guide of a scheme listed on the species step.
+    shiny$observeEvent(input$species_guide, {
+      row <- published()[input$species_guide$i, , drop = FALSE]
+      shiny$req(nrow(row) == 1L)
+      shiny$showModal(guide_modal(row))
+    })
+
+    # Download guide of a scheme listed in the cgMLST source task.
+    shiny$observeEvent(input$cg_guide, {
+      row <- core_published()[input$cg_guide$i, , drop = FALSE]
+      shiny$req(nrow(row) == 1L)
+      shiny$showModal(guide_modal(row))
     })
 
     # Fills the provider, name and page of a published scheme into the form.
@@ -1369,7 +1396,12 @@ server <- function(id) {
       last <- state$step == length(STEPS)
       toggleState("back", state$step > 1L)
       toggleState("next_step", !last && is.null(step_problem(state$step)))
-      toggleState("create", is.na(first_open_step()) && is.null(state$build))
+      ready <- is.na(first_open_step()) && is.null(state$build)
+      toggleState("create", ready)
+      toggleState("create_footer", ready)
+      # On the last step, Next is replaced by a second way to create the database.
+      toggle("next_step", condition = !last)
+      toggle("create_footer", condition = last)
     })
 
     # Review and build --------------------------------------------------------
@@ -1513,7 +1545,8 @@ server <- function(id) {
 
     # Starts the build in the background: pyMLST can take a while on a large
     # scheme, and running it synchronously would freeze the session.
-    shiny$observeEvent(input$create, {
+    # Both the storage card and the footer button trigger it.
+    start_build <- function() {
       shiny$req(is.null(state$build), is.na(first_open_step()), !finished())
       build_plan <- plan()
       build <- tryCatch(start_db_build(build_plan), error = function(e) e)
@@ -1563,7 +1596,9 @@ server <- function(id) {
         started = Sys.time(),
         cancelled = FALSE
       )
-    })
+    }
+    shiny$observeEvent(input$create, start_build())
+    shiny$observeEvent(input$create_footer, start_build())
 
     # Cancels the running build; the poll below reports it and cleans up.
     shiny$observeEvent(input$cancel_build, {

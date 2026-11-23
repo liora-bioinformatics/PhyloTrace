@@ -14,6 +14,7 @@ box::use(
 
 box::use(
   app / logic / scheme_files,
+  app / logic / scheme_guide[guide_modal],
   app / logic / scheme_index[schemes_for_species],
   app / logic / scheme_sources[version_problem],
   app / logic / setup_ui,
@@ -135,11 +136,23 @@ server <- function(id, species = shiny$reactive(NA_character_), reset = NULL) {
       rows <- published()
       if (nrow(rows)) {
         shiny$tagList(
-          setup_ui$scheme_links(rows, use_input = session$ns("use"), scroll = TRUE)
+          setup_ui$scheme_links(
+            rows,
+            use_input = session$ns("use"),
+            scroll = TRUE,
+            guide_input = session$ns("guide")
+          )
         )
       }
     })
 
+
+    # Download guide of a published scheme.
+    shiny$observeEvent(input$guide, {
+      row <- published()[input$guide$i, , drop = FALSE]
+      shiny$req(nrow(row) == 1L)
+      shiny$showModal(guide_modal(row))
+    })
 
     # Fills the provider and name of a published scheme into the form.
     shiny$observeEvent(input$use, {

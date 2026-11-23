@@ -91,3 +91,56 @@ cc_license_url <- function(kind, version = NULL) {
   }
   sprintf("https://creativecommons.org/licenses/%s/%s/", kind, version)
 }
+
+#' PubMLST REST API
+#'
+#' @description Root of the API of PubMLST's databases, named in the scheme download guide's
+#'   commands (`<root>/<database>/schemes/<id>/loci`).
+#' @export
+PUBMLST_API <- "https://rest.pubmlst.org/db"
+
+#' PubMLST Account Page
+#'
+#' @description Where users register and create a personal API key.
+#' @export
+PUBMLST_ACCOUNT <- "https://pubmlst.org/bigsdb"
+
+#' Institut Pasteur BIGSdb REST API
+#'
+#' @description Root of the API of BIGSdb-Pasteur's databases, named in the scheme download
+#'   guide's commands.
+#' @export
+PASTEUR_API <- "https://bigsdb.pasteur.fr/api/db"
+
+#' Institut Pasteur BIGSdb Account Page
+#' @export
+PASTEUR_ACCOUNT <- "https://bigsdb.pasteur.fr/cgi-bin/bigsdb/bigsdb.pl"
+
+#' How to Request a BIGSdb-Pasteur API Key
+#' @export
+PASTEUR_API_KEY_HELP <- "https://bigsdb.pasteur.fr/requesting-api-key/"
+
+#' Chewie-NS Schemas Page
+#'
+#' @description Overview of the hosted schemas; each has a "Schema details" page offering the
+#'   compressed schema.
+#' @export
+CHEWIE_NS_SCHEMAS <- "https://chewbbaca.online/stats"
+
+#' EnteroBase Scheme Directory
+#'
+#' @description Public directory with one folder per scheme: a gzipped FASTA file per locus
+#'   and, for MLST, the profile table.
+#' @export
+ENTEROBASE_SCHEMES <- "https://enterobase.warwick.ac.uk/schemes/"
+
+#' Chewie-NS API Request
+#'
+#' @description The API root is no page of its own, so the guide builds its requests from it.
+#'
+#' @param path Character path below the API root, starting with `/`.
+#' @return URL of the request.
+#' @export
+chewie_ns_api <- function(path) {
+  paste0("https://chewbbaca.online/api/NS/api", path)
+}

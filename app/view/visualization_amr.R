@@ -2003,7 +2003,14 @@ server <- function(
     fit_args <- function(
       col_names = show_col_names_mirror(),
       row_names = show_row_names_mirror(),
-      width_in = canvas_width(col_names)
+      # canvas_in() is this same width for the switch in force, cached: over
+      # 100% text size it costs a fit of its own (see canvas_width()), which
+      # layout_fit(), fitted_aspect() and the canvas would otherwise each redo.
+      width_in = if (identical(col_names, show_col_names_mirror())) {
+        canvas_in()
+      } else {
+        canvas_width(col_names)
+      }
     ) {
       mat <- presence_mat()
       shiny$req(ncol(mat) > 0)

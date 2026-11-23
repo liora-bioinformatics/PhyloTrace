@@ -1853,9 +1853,10 @@ server <- function(
     # Wherever every frame shares one layout — the fixed date axis — a run is
     # just two renders, the window with nothing revealed and fully revealed,
     # and the browser wipes from one to the other, a continuous sweep rather
-    # than a step per bin. Where the layout moves with the window (the zoomed
-    # axis), or a label follows the newest bin (the cumulative end labels),
-    # every frame is rendered up front and played as a flipbook.
+    # than a step per bin; the cumulative lines' end labels, which follow the
+    # newest bin, are drawn by the browser on top. Where the layout moves with
+    # the window (the zoomed axis), every frame is rendered up front and played
+    # as a flipbook.
 
     # Id of the latest run; the browser's reports name the run they are about.
     last_run <- 0L
@@ -1889,7 +1890,9 @@ server <- function(
     }
 
     # The curve `p` with bins `from` to `to` revealed, built at its layout.
-    reveal_frame <- function(p, from, to) {
+    # `label_room` set: built without the end-of-line labels the layout made
+    # room for (the browser draws them), its y axis reaching that far below 0.
+    reveal_frame <- function(p, from, to, label_room = NULL) {
       opts <- modifyList(p$opts, list(reveal_from = from, reveal_to = to))
       lay <- epi_plot$epi_layout(
         p$data,
@@ -1902,22 +1905,63 @@ server <- function(
           )
         )
       )
-      list(plot = epi_plot$build_epi_ggplot(p$data, c(opts, list(layout = lay))), lay = lay)
+      drawn <- lay
+      if (!is.null(label_room)) {
+        drawn$end_drawn <- FALSE
+        opts$end_label_room <- label_room
+      }
+      list(
+        plot = epi_plot$build_epi_ggplot(p$data, c(opts, list(layout = drawn))),
+        lay = lay,
+        opts = opts
+      )
+    }
+
+    # The end-of-line labels of a wipe over bins s to e, drawn by the browser so
+    # they glide with the line ends instead of jumping a bin at a time: each
+    # stratum's height in every frame (image fractions from the top, NA where it
+    # has none yet), kept inside the axis room the run holds; its colour, the
+    # text size and the gap to the line end.
+    wipe_labels <- function(p, bins, s, e, lay, geom, room) {
+      cats <- epi_plot$epi_strata_levels(p$data$stratum)
+      y <- lapply(s:e, function(k) {
+        opts <- modifyList(
+          p$opts,
+          list(reveal_from = bins[s], reveal_to = bins[k], end_label_room = room)
+        )
+        ends <- epi_plot$epi_end_labels(p$data, opts, lay)$positions
+        at <- ends$y_label[match(cats, ends$stratum)]
+        I(geom$panel_y[1] + (geom$y_range[2] - at) / diff(geom$y_range) * diff(geom$panel_y))
+      })
+      day_frac <- diff(geom$panel) / diff(geom$x_range)
+      list(
+        text = I(cats),
+        colour = I(unname(geom$colour_of(cats))),
+        y = y,
+        size_px = lay$end_pt / 72 * geom$res,
+        gap = epi_plot$EPI_LABEL_GAP_IN / lay$day_in * day_frac
+      )
     }
 
     # Renders what one run of bins s to e plays: for a wipe the first and the
     # last frame and where each bin ends across them (fractions of the image
     # width), for a flipbook one image per bin.
     prepare_run <- function(p, bins, s, e) {
-      wipe <- isTRUE(p$opts$fixed_axis) &&
-        !(identical(p$opts$mode, "cumulative") && isTRUE(p$opts$label_ends))
-      if (wipe) {
+      if (isTRUE(p$opts$fixed_axis)) {
         files <- c(tempfile(fileext = ".png"), tempfile(fileext = ".png"))
+        # Cumulative lines with their end labels: the images leave the labels
+        # out and share the axis the last frame's labels need.
+        full <- reveal_frame(p, bins[s], bins[e])
+        room <- if (isTRUE(full$lay$end_drawn)) {
+          epi_plot$epi_end_labels(p$data, full$opts, full$lay)$bottom_room
+        }
+        if (!is.null(room)) {
+          full <- reveal_frame(p, bins[s], bins[e], label_room = room)
+        }
         # The run opens on its first bin alone, as the old stepped Play did. A
         # window revealing nothing at all would also drop the legend keys the
         # moving average and cumulative lines add, and shift the layout.
-        first <- reveal_frame(p, bins[s], bins[s])
-        full <- reveal_frame(p, bins[s], bins[e])
+        first <- reveal_frame(p, bins[s], bins[s], label_room = room)
         geom <- render_canvas_png_panel(
           first$plot,
           files[1],
@@ -1938,7 +1982,8 @@ server <- function(
         return(list(
           kind = "wipe",
           urls = serve_images(session, "epi_anim", files),
-          edges = frac
+          edges = frac,
+          labels = if (!is.null(room)) wipe_labels(p, bins, s, e, full$lay, geom, room)
         ))
       }
       # Named here, not in the workers: forked processes share one random
@@ -1989,6 +2034,7 @@ server <- function(
         urls = I(run$urls),
         # A flipbook has no wipe stops.
         edges = if (!is.null(run$edges)) I(run$edges),
+        labels = run$labels,
         step_ms = STEP_MS
       )
       anim_playing(TRUE)

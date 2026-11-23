@@ -621,6 +621,34 @@ test_that("Play prepares one wipe run and leaves the drawn curve alone", {
   )
 })
 
+test_that("cumulative lines wipe too, their end labels handed to the browser", {
+  # The labels follow the newest bin, so the images leave them out and the
+  # browser glides them along with the line ends.
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      sent <- capture_anim(session)
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "day", epi_plot_mode = "cumulative", epi_label_ends = TRUE)
+      generate(1L)
+      settle(session)
+
+      session$setInputs(epi_play = 1)
+      play <- sent$msgs[[length(sent$msgs)]]
+      expect_identical(play$kind, "wipe")
+      expect_length(play$labels$y, length(epi_bins()))
+      expect_true(play$labels$size_px > 0)
+    }
+  )
+})
+
 test_that("a paused run hands the bin it stopped at back as the window", {
   generate <- reactiveVal(0L)
 

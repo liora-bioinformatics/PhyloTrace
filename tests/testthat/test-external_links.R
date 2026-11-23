@@ -33,7 +33,8 @@ box::use(
 URL_BUILDERS <- list(
   taxonomy_url = function() urls$taxonomy_url(470L),
   cc_license_url = function() c(urls$cc_license_url("by-sa", "4.0"), urls$cc_license_url("zero")),
-  nominatim_search_url = function() urls$nominatim_search_url("Berlin, Germany")
+  nominatim_search_url = function() urls$nominatim_search_url("Berlin, Germany"),
+  chewie_ns_api = function() urls$chewie_ns_api("/species/list")
 )
 
 # Constants of urls.R that are tile templates rather than pages.
@@ -56,7 +57,7 @@ robots_cache <- new.env()
 # Files the sweep leaves out: binaries, the bundles built from app/js and app/styles (both swept
 # as sources), a vendored library, and local downloads .gitignore keeps out of the app.
 SKIP_FILE <- paste(
-  "\\.(png|jpe?g|gif|ico|webp|woff2?|ttf|otf|eot|fasta|gz|zip|pyc|map)$",
+  "\\.(png|jpe?g|gif|ico|webp|woff2?|ttf|otf|eot|fasta|gz|zip|pyc|map|rds)$",
   "^static/js/app\\.min\\.js$",
   "^static/css/app\\.min\\.css$",
   "^static/js/html2canvas\\.min\\.js$",

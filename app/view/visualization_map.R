@@ -1750,6 +1750,31 @@ heat_state <- function(coords, o, full_coords = NULL) {
   list(agg = agg, max = effective_max)
 }
 
+# Keeps the heat layer's canvas on the map while it moves. leaflet.heat only
+# re-aligns its canvas on `moveend`, so while the map moves (a drag, the
+# Reset-view flight) any redraw is drawn for the current view onto a canvas
+# that has not moved with it: the heat stayed pinned to the screen during a
+# flight and came to rest offset, and dragged the wrong way under Play, which
+# redraws it every frame. Re-aligning and redrawing once per animation frame of
+# any move fixes both. A CSS zoom animation scales the canvas itself
+# (`zoomanim`), so that is left alone.
+HEAT_FOLLOW_JS <- "function(el, x) {
+  var map = this;
+  if (map.__ptHeatFollow) return;
+  map.__ptHeatFollow = true;
+  var pending = false;
+  map.on('move zoom', function() {
+    if (pending || map._animatingZoom) return;
+    pending = true;
+    L.Util.requestAnimFrame(function() {
+      pending = false;
+      map.eachLayer(function(layer) {
+        if (L.HeatLayer && layer instanceof L.HeatLayer && layer._heat) layer._reset();
+      });
+    });
+  });
+}"
+
 # The heatmap legend: the heat layer's own gradient from 0 to `max`, so the
 # colour a place shows reads back to an isolate count the way Choropleth's fill
 # does.
@@ -1821,6 +1846,7 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
     m$x$calls[[last]]$args[[4]]$maxZoom <- 0
   }
 
+  m <- onRender(m, HEAT_FOLLOW_JS)
   heat_legend(m, st$max, o)
 }
 

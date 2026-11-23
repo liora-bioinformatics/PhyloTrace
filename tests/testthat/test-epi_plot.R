@@ -849,7 +849,74 @@ test_that("label_ends does not balloon the y axis below zero with many strata", 
   # The floor must be a small fraction below 0 (one label height), never a
   # multiple of the data's own extent.
   expect_gt(y_range[1], -y_max * 0.2)
-  expect_lt(y_range[1], 0)
+  expect_lte(y_range[1], 0)
+})
+
+end_rows <- function(counts) {
+  data.frame(
+    date_bin = as.Date("2020-01-01"),
+    stratum = names(counts),
+    count = unname(counts),
+    stringsAsFactors = FALSE
+  )
+}
+
+test_that("strata with no case yet get no end label", {
+  pos <- impl$.cumulative_end_positions(
+    end_rows(c(A = 5, B = 0, C = 2, D = 0)),
+    min_gap = 1,
+    offset = 0,
+    lower = 0,
+    upper = 100
+  )
+  expect_identical(pos$stratum, c("A", "C"))
+  expect_null(impl$.cumulative_end_positions(
+    end_rows(c(A = 0, B = 0)),
+    min_gap = 1,
+    offset = 0,
+    lower = 0,
+    upper = 100
+  ))
+})
+
+test_that("crowded end labels spread both ways and stay inside the bounds", {
+  # Six lines ending together low on the axis: stacking only downwards ran
+  # the labels out of the panel; they now spread up from the crowd, keep their
+  # lines' order and one pitch apart, and never cross the floor.
+  counts <- c(A = 3, B = 2, C = 2, D = 1, E = 1, F = 1)
+  pos <- impl$.cumulative_end_positions(
+    end_rows(counts),
+    min_gap = 2,
+    offset = 0,
+    lower = 0.5,
+    upper = 50
+  )
+  expect_identical(pos$stratum, names(counts))
+  expect_true(all(-diff(pos$y_label) >= 2 - 1e-9))
+  expect_gte(min(pos$y_label), 0.5)
+  expect_lte(max(pos$y_label), 50)
+  # Spread around the crowd, not all pushed to one side of it.
+  expect_gt(max(pos$y_label), max(counts))
+
+  # Against the ceiling the stack is held down instead.
+  top <- impl$.cumulative_end_positions(
+    end_rows(c(A = 50, B = 50, C = 50)),
+    min_gap = 2,
+    offset = 0,
+    lower = 0,
+    upper = 50
+  )
+  expect_equal(top$y_label, c(50, 48, 46))
+
+  # Labels with room to spare sit exactly at their lines.
+  apart <- impl$.cumulative_end_positions(
+    end_rows(c(A = 40, B = 20, C = 5)),
+    min_gap = 2,
+    offset = 0,
+    lower = 0,
+    upper = 50
+  )
+  expect_equal(apart$y_label, c(40, 20, 5))
 })
 
 test_that("a windowed curve keeps a legend key for every stratum in the data", {

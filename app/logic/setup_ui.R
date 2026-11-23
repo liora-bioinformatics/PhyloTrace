@@ -163,21 +163,41 @@ setup_section <- function(title, ..., optional = FALSE) {
   )
 }
 
+# Button of a scheme card that reports the card's row number to a Shiny input;
+# the time stamp makes a second click on the same card count again.
+row_button <- function(input, i, title, icon, label, class = "btn-outline-secondary") {
+  shiny$tags$button(
+    type = "button",
+    class = paste("btn btn-sm", class),
+    title = title,
+    onclick = sprintf(
+      "Shiny.setInputValue('%s', {i: %d, t: Date.now()}, {priority: 'event'})",
+      input,
+      i
+    ),
+    shiny$icon(icon),
+    paste0(" ", label)
+  )
+}
+
 #' Published Schemes List
 #'
 #' @description Rows of the scheme index as cards: scheme, provider, locus
-#'   count, a link to the provider's download page and, when `use_input` is
-#'   given, a button reporting the row's number to that Shiny input so the
-#'   caller can fill in the scheme's details.
+#'   count, a link to the provider's download page and, when `guide_input` or
+#'   `use_input` is given, a button reporting the row's number to that Shiny
+#'   input so the caller can show how to download the scheme or fill in its
+#'   details.
 #'
 #' @param rows Data frame from `scheme_index$schemes_for_species()`.
 #' @param use_input Character namespaced input id, or `NULL` for no button.
+#' @param guide_input Character namespaced input id of the download guide
+#'   button, or `NULL` for none.
 #' @param scroll Logical. Bound the list's height and scroll within it, so the
 #'   controls below it stay in view however many schemes are listed.
 #'
 #' @return A tag.
 #' @export
-scheme_links <- function(rows, use_input = NULL, scroll = FALSE) {
+scheme_links <- function(rows, use_input = NULL, scroll = FALSE, guide_input = NULL) {
   shiny$div(
     class = paste("setup-schemes", if (scroll) "is-scroll"),
     lapply(seq_len(nrow(rows)), function(i) {
@@ -214,18 +234,23 @@ scheme_links <- function(rows, use_input = NULL, scroll = FALSE) {
               " Download page"
             )
           },
+          if (!is.null(guide_input)) {
+            row_button(
+              guide_input,
+              i,
+              "Step-by-step instructions for downloading this scheme",
+              "list-ol",
+              "How to download"
+            )
+          },
           if (!is.null(use_input)) {
-            shiny$tags$button(
-              type = "button",
-              class = "btn btn-sm btn-outline-primary",
-              title = "Fill in the provider, name and web page of this scheme",
-              onclick = sprintf(
-                "Shiny.setInputValue('%s', {i: %d, t: Date.now()}, {priority: 'event'})",
-                use_input,
-                i
-              ),
-              shiny$icon("pen-to-square"),
-              " Use details"
+            row_button(
+              use_input,
+              i,
+              "Fill in the provider, name and web page of this scheme",
+              "pen-to-square",
+              "Use details",
+              class = "btn-outline-primary"
             )
           }
         )

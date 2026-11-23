@@ -114,6 +114,46 @@ function alignEpi(run) {
   style.top = box.top - view.top + run.viewport.scrollTop + "px";
   style.width = box.width + "px";
   style.height = box.height + "px";
+  // End labels are sized in the image's own pixels, scaled as the image is.
+  if (run.labels && run.naturalWidth) {
+    style.fontSize = (run.labels.sizePx * box.width) / run.naturalWidth + "px";
+  }
+}
+
+// Places the cumulative lines' end labels for position `t`, just right of the
+// wipe's front at `x`: each glides from its height in the frame with the bins
+// completed so far to its height once the bin being uncovered is in. A label
+// its line gains or loses over that bin (its first case) fades in or out.
+function drawEpiLabels(run, t, x) {
+  var lab = run.labels;
+  var last = lab.y.length - 1;
+  var n = Math.floor(t);
+  var from = Math.max(0, Math.min(n, last + 1) - 1);
+  var to = n < 1 ? 0 : Math.min(n, last);
+  var f = n < 1 ? 0 : t - n;
+  var a = asArray(lab.y[from]);
+  var b = asArray(lab.y[to]);
+  for (var j = 0; j < lab.els.length; j++) {
+    var ya = a[j];
+    var yb = b[j];
+    var el = lab.els[j];
+    if (ya === null && yb === null) {
+      el.style.opacity = 0;
+      continue;
+    }
+    var opacity = 1;
+    if (ya === null) {
+      ya = yb;
+      opacity = f;
+    }
+    if (yb === null) {
+      yb = ya;
+      opacity = 1 - f;
+    }
+    el.style.opacity = opacity;
+    el.style.left = (x + lab.gap) * 100 + "%";
+    el.style.top = (ya + (yb - ya) * f) * 100 + "%";
+  }
 }
 
 // Draws a run at position `t`, in bins from its start.
@@ -123,6 +163,7 @@ function drawEpi(run, t) {
     var i = Math.min(Math.floor(t), edges.length - 2);
     var x = edges[i] + (edges[i + 1] - edges[i]) * (t - i);
     run.top.style.clipPath = "inset(0 " + (100 - x * 100).toFixed(3) + "% 0 0)";
+    if (run.labels) drawEpiLabels(run, t, x);
     return;
   }
   var k = Math.min(Math.floor(t), run.images.length - 1);
@@ -167,6 +208,24 @@ function playEpi(run, msg) {
         images[1].className = "viz-anim-top";
         run.top = images[1];
         run.layer.append(images[0], images[1]);
+        run.naturalWidth = images[0].naturalWidth;
+        if (msg.labels) {
+          var texts = asArray(msg.labels.text);
+          var colours = asArray(msg.labels.colour);
+          run.labels = {
+            y: asArray(msg.labels.y),
+            sizePx: msg.labels.size_px,
+            gap: msg.labels.gap,
+            els: texts.map(function (text, j) {
+              var el = document.createElement("span");
+              el.className = "viz-anim-label";
+              el.textContent = text;
+              el.style.color = colours[j];
+              run.layer.appendChild(el);
+              return el;
+            }),
+          };
+        }
       } else {
         run.images = images;
         run.shown = -1;
@@ -358,7 +417,10 @@ function heatBlend(run, from, to, f) {
   // the layer caps each point at options.max and its renderer scales by its own.
   st.layer.options.max = max;
   if (st.layer._heat) st.layer._heat.max(max);
-  st.layer.setLatLngs(points);
+  // _reset() re-aligns the canvas to the view before drawing, so the heat
+  // stays put while the map is dragged mid-run.
+  st.layer._latlngs = points;
+  if (st.layer._map && st.layer._heat) st.layer._reset();
 }
 
 // Swaps in frame k's legend where it differs from the one shown.

@@ -54,7 +54,7 @@ CURATION_FIELDS = [
     "source", "source_id", "status", "listed", "provider", "species", "type",
     "scheme", "loci", "url", "note", "first_seen",
 ]
-INDEX_FIELDS = ["species", "type", "provider", "scheme", "loci", "url", "note"]
+INDEX_FIELDS = ["species", "type", "provider", "scheme", "loci", "url", "note", "source_id"]
 STATUSES = {"include", "exclude", "pending"}
 TYPES = {"cgMLST", "wgMLST", "MLST"}
 PROVIDERS = HERE / "providers.json"
