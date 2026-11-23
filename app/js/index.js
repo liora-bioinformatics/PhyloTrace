@@ -11,6 +11,7 @@ import "./file-browser";
 import "./virtual-select-count-label";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";
+import "./viz-anim";
 import "./viz-plot-zoom";
 import "./viz-scale-swatch";
 import "./viz-tab-strip";

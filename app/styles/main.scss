@@ -980,6 +980,24 @@ $viz-tile-row-gap: 0.85rem;
     user-select: none;
 }
 
+// Epi Play, drawn by app/js/viz-anim.js over the plot image: the run's images
+// stacked in one box the script keeps aligned with the image, through zoom and
+// pan. It never takes the pointer, so wheel zoom and drag-pan reach the image.
+// A wipe uncovers its top image (the fully revealed curve) over its base (the
+// first frame) by clip-path.
+.viz-anim-layer {
+    position: absolute;
+    pointer-events: none;
+}
+
+.viz-anim-layer img {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
 // Zoom level and how to change it, in the stage's bottom-right corner. Below
 // the Generate prompt (z-index 2) and the loading spinner, so it never shows
 // through either; clear of the scrollbars the viewport grows when zoomed.
@@ -1257,6 +1275,23 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     // green/yellow/orange cluster fills. Pin them dark regardless of theme.
     .marker-cluster {
         color: #000;
+    }
+}
+
+// Map Play steps the regions' fills frame by frame (app/js/viz-anim.js); the
+// transition eases each change in, so the counts flow from one frame into the
+// next rather than snapping. A marker joining the map fades in the same way.
+.leaflet-container path.map-region {
+    transition: fill 0.45s ease;
+}
+
+.leaflet-container path.map-anim-in {
+    animation: map-anim-in 0.35s ease-out;
+}
+
+@keyframes map-anim-in {
+    from {
+        opacity: 0;
     }
 }
 
@@ -3579,9 +3614,9 @@ table.dataTable thead>tr>th.sorting {
 
 // While Play is running the slider wrapper gets .date-slider--playing (see the
 // anim_playing observers in visualization_epi.R / visualization_map.R). The
-// per-tick updateSliderInput redraws the ion.rangeSlider on every frame, which
-// reads as a flickering, half-broken control — so an opaque cover with an
-// "Animating…" spinner is laid over it instead.
+// browser plays the run (app/js/viz-anim.js) and the slider keeps the window it
+// had until the run ends, so an opaque cover with an "Animating…" spinner says
+// what is going on instead of a slider that looks stuck.
 //
 // The cover deliberately does NOT rely on `visibility: hidden` on the slider:
 // ionRangeSlider sets INLINE `visibility: visible` on its handle tooltips as
@@ -5262,6 +5297,15 @@ html.fb-open {
 
     &.is-match .fb-name {
         font-weight: 600;
+    }
+
+    // Files listed in a folder picker: visible, but not selectable.
+    &.is-inert {
+        color: var(--bs-secondary-color);
+
+        &:hover {
+            background: inherit;
+        }
     }
 }
 

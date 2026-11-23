@@ -38,6 +38,8 @@ function selectRange(list, from, to) {
 
 document.addEventListener("click", (event) => {
   const row = event.target.closest(".fb-row");
+  // Files in a folder picker are shown for orientation only.
+  if (row && row.classList.contains("is-inert")) return;
   if (row) {
     const list = row.closest(".fb-list");
     const multiple = list.dataset.multiple === "true";
@@ -74,7 +76,7 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("dblclick", (event) => {
   const row = event.target.closest(".fb-row");
-  if (!row) return;
+  if (!row || row.classList.contains("is-inert")) return;
   const list = row.closest(".fb-list");
   report(`${list.dataset.input}_open`, {
     no: Number(list.dataset.no),

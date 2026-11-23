@@ -26,7 +26,7 @@ box::use(
   htmlwidgets[JS, onRender, saveWidget],
   leaflet,
   leaflet.extras[addFullscreenControl, addHeatmap],
-  leaflet.minicharts[addMinicharts, clearMinicharts],
+  leaflet.minicharts[addMinicharts, clearMinicharts, updateMinicharts],
   rlang[`%||%`],
   shiny,
   shinyWidgets[
@@ -1349,8 +1349,73 @@ COINCIDENT_PX <- 1
 # to the layer as a whole (see build_markers()).
 MARKER_PANE <- "mapMarkers"
 
+# Fixed ids of the drawn layers Play animates in place (see anim_timeline() and
+# app/js/viz-anim.js): the marker cluster, the heat layer, the legend, and the
+# prefixes of each choropleth region's and minichart's id.
+MARKER_CLUSTER_ID <- "map-markers"
+HEAT_LAYER_ID <- "map-heat"
+LEGEND_ID <- "map-legend"
+REGION_ID_PREFIX <- "map-region-"
+CHART_ID_PREFIX <- "map-chart-"
+
+# The fill of each marker in `coords`, with the mapping layer and palette it
+# came from (both NULL when the Fill color picker supplies it).
+marker_fill <- function(coords, o, full_coords = NULL) {
+  layer <- drawn_layer(o, coords)
+  if (is.null(layer)) {
+    return(list(layer = NULL, pal_info = NULL, fill = hex_rgb(o$marker_color)))
+  }
+  # "Fix color scale to full date range" (o$region_fixed_scale): build the
+  # palette + legend from the full, unfiltered values so a category keeps its
+  # color and the legend keeps every key as the date range animates — rather
+  # than rescaling to whichever subset is currently visible. The fill is still
+  # applied to the visible coords (a subset of the domain). Off: domain and
+  # fill both come from the visible subset.
+  fixed <- isTRUE(o$region_fixed_scale) &&
+    !is.null(full_coords) &&
+    layer$field %in% names(full_coords)
+  ref_vals <- granular_vals(
+    if (fixed) full_coords[[layer$field]] else coords[[layer$field]],
+    layer$granularity
+  )
+  pal_info <- layer_palette(layer, ref_vals)
+  list(
+    layer = layer,
+    pal_info = pal_info,
+    fill = pal_info$pal(pal_info$convert(
+      granular_vals(coords[[layer$field]], layer$granularity)
+    ))
+  )
+}
+
+# The Markers legend for the palette marker_fill() returned as `style`.
+marker_legend <- function(m, style, o) {
+  if (is.null(style$layer) || !isTRUE(o$legend)) {
+    return(m)
+  }
+  leaflet$addLegend(
+    m,
+    layerId = LEGEND_ID,
+    position = o$legend_pos,
+    pal = style$pal_info$pal,
+    values = style$pal_info$values,
+    title = if (nzchar(o$legend_title)) o$legend_title else style$layer$title,
+    # Swatches stay fully opaque so their colors read correctly; the
+    # legend's background transparency (what map_legend_opacity actually
+    # controls) is applied to the whole box in build_map() below.
+    opacity = 1,
+    labFormat = if (identical(style$pal_info$type, "Date")) {
+      leaflet$labelFormat(transform = function(x) {
+        as.Date(x, origin = "1970-01-01")
+      })
+    } else {
+      leaflet$labelFormat(digits = o$legend_digits)
+    }
+  )
+}
+
 # Styled point markers. layerId = isolate keeps each marker individually
-# addressable (e.g. for a future click-driven cross-filter).
+# addressable, which is how Play shows and hides them.
 build_markers <- function(m, coords, o, full_coords = NULL) {
   # Spiderfying is always on: without it, isolates sharing one geocoded place
   # stay a cluster at every zoom and can never be told apart. Coverage and
@@ -1379,28 +1444,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     textsize = paste0(o$label_size, "px")
   )
 
-  layer <- drawn_layer(o, coords)
-  pal_info <- NULL
-  fill <- hex_rgb(o$marker_color)
-  if (!is.null(layer)) {
-    # "Fix color scale to full date range" (o$region_fixed_scale): build the
-    # palette + legend from the full, unfiltered values so a category keeps its
-    # color and the legend keeps every key as the date range animates — rather
-    # than rescaling to whichever subset is currently visible. The fill is still
-    # applied to the visible coords (a subset of the domain). Off: domain and
-    # fill both come from the visible subset.
-    fixed <- isTRUE(o$region_fixed_scale) &&
-      !is.null(full_coords) &&
-      layer$field %in% names(full_coords)
-    ref_vals <- granular_vals(
-      if (fixed) full_coords[[layer$field]] else coords[[layer$field]],
-      layer$granularity
-    )
-    pal_info <- layer_palette(layer, ref_vals)
-    fill <- pal_info$pal(pal_info$convert(
-      granular_vals(coords[[layer$field]], layer$granularity)
-    ))
-  }
+  style <- marker_fill(coords, o, full_coords)
 
   # Opacity (the Fill color picker's alpha, which also applies when a mapped
   # layer supplies the hue) is set on the marker pane as a whole, not on each
@@ -1420,13 +1464,14 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     color = "#000000",
     weight = 1,
     opacity = 1,
-    fillColor = fill,
+    fillColor = style$fill,
     fillOpacity = 1,
     popup = popup,
     label = label,
     labelOptions = lopts,
     options = leaflet$pathOptions(pane = MARKER_PANE),
-    clusterOptions = cluster_opts
+    clusterOptions = cluster_opts,
+    clusterId = MARKER_CLUSTER_ID
   )
   # createPane() adds a fresh pane element on every render, so every copy is
   # set rather than just the latest one.
@@ -1443,27 +1488,7 @@ build_markers <- function(m, coords, o, full_coords = NULL) {
     )
   )
 
-  if (!is.null(layer) && o$legend) {
-    m <- leaflet$addLegend(
-      m,
-      position = o$legend_pos,
-      pal = pal_info$pal,
-      values = pal_info$values,
-      title = if (nzchar(o$legend_title)) o$legend_title else layer$title,
-      # Swatches stay fully opaque so their colors read correctly; the
-      # legend's background transparency (what map_legend_opacity actually
-      # controls) is applied to the whole box in build_map() below.
-      opacity = 1,
-      labFormat = if (identical(pal_info$type, "Date")) {
-        leaflet$labelFormat(transform = function(x) {
-          as.Date(x, origin = "1970-01-01")
-        })
-      } else {
-        leaflet$labelFormat(digits = o$legend_digits)
-      }
-    )
-  }
-  m
+  marker_legend(m, style, o)
 }
 
 # Isolates per region, aligned with `keys` (one per drawn polygon; NA for
@@ -1539,13 +1564,11 @@ count_domain <- function(n) {
   if (r[1] == r[2]) c(0, max(r[2], 1)) else r
 }
 
-# Choropleth: shade regions by isolate count, using the Region tab's palette
-# (the mapping layers don't apply here — the mapped variable is always the
-# isolate count). The level (o$region_level) decides the regions, see
-# choropleth_units(); everything from the palette on is shared. At country
-# level `coords` are build_map_coords()'s `regions`, at state level its
-# `coords`, as build_map() passes them; `shapes` is its `shapes`.
-build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
+# What the choropleth draws for `coords`: the regions (see choropleth_units()),
+# and for each one its fill, its label and whether that label is pinned, plus
+# the count range the legend spans (NULL for no legend). Shared by the drawn
+# map and Play's timeline, which restyles the same regions frame by frame.
+choropleth_state <- function(coords, o, full_coords = NULL, shapes = NULL) {
   units <- choropleth_units(
     o$region_level %||% "country",
     coords,
@@ -1553,6 +1576,91 @@ build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
     shapes,
     o$focus
   )
+  if (is.null(units$polys)) {
+    return(list(units = units))
+  }
+  n <- units$n
+
+  # Off (default): the domain is the currently-shown (possibly date-filtered)
+  # counts, so the color scale rescales to whatever subset is visible — the
+  # darkest region always looks "full" regardless of its absolute count. On:
+  # the domain comes from the full, unfiltered counts instead, so a partial
+  # range renders lighter until the count actually approaches the final
+  # total — useful for watching the animation "fill in" over time.
+  domain_n <- if (isTRUE(o$region_fixed_scale) && !is.null(units$full_n)) {
+    units$full_n
+  } else {
+    n
+  }
+
+  vals <- if (identical(o$region_transform, "Log")) log1p(n) else n
+  domain_range <- count_domain(domain_n)
+  domain_vals <- if (identical(o$region_transform, "Log")) {
+    log1p(domain_range)
+  } else {
+    domain_range
+  }
+  # The full range's scale starts at its smallest final count, so a window
+  # holding fewer isolates than that falls below it, and leaflet's palette maps
+  # an out-of-domain value to the no-data grey: early in Play every region read
+  # as empty. Held at the scale's lightest colour instead, which is the "renders
+  # lighter" the fixed scale promises; the full window is unchanged.
+  if (!identical(domain_n, n)) {
+    vals <- pmin(pmax(vals, domain_vals[1]), domain_vals[2])
+  }
+  pal <- suppressWarnings(leaflet$colorNumeric(
+    viz_helpers$resolve_gradient_palette(o$region_scale),
+    domain = domain_vals,
+    na.color = "#f0f0f0"
+  ))
+  fill <- pal(vals)
+  fill[is.na(vals)] <- "#f0f0f0"
+
+  list(
+    units = units,
+    fill = fill,
+    # Every region is labelled, those without isolates included: "0 isolates"
+    # is an answer, where no label at all reads as a region the map forgot.
+    label = paste0(units$label, ": ", ifelse(is.na(n), 0L, n), " isolates"),
+    # "Always show labels" only pins the ones actually saying something: a
+    # region with zero isolates permanently printing "0 isolates" all over an
+    # otherwise empty map just adds noise.
+    pinned = isTRUE(o$region_permanent) & !is.na(n) & n > 0,
+    legend_range = if (any(!is.na(domain_n))) domain_range
+  )
+}
+
+# The choropleth legend for the state choropleth_state() returned.
+choropleth_legend <- function(m, st, o) {
+  if (!isTRUE(o$legend) || is.null(st$legend_range)) {
+    return(m)
+  }
+  lpal <- suppressWarnings(leaflet$colorNumeric(
+    viz_helpers$resolve_gradient_palette(o$region_scale),
+    domain = st$legend_range,
+    na.color = "#f0f0f0"
+  ))
+  leaflet$addLegend(
+    m,
+    layerId = LEGEND_ID,
+    position = o$legend_pos,
+    pal = lpal,
+    values = st$legend_range,
+    title = "Isolate count",
+    opacity = 1,
+    labFormat = leaflet$labelFormat(digits = 0)
+  )
+}
+
+# Choropleth: shade regions by isolate count, using the Region tab's palette
+# (the mapping layers don't apply here — the mapped variable is always the
+# isolate count). The level (o$region_level) decides the regions, see
+# choropleth_units(); everything from the palette on is shared. At country
+# level `coords` are build_map_coords()'s `regions`, at state level its
+# `coords`, as build_map() passes them; `shapes` is its `shapes`.
+build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
+  st <- choropleth_state(coords, o, full_coords, shapes)
+  units <- st$units
   # Countries counted at no finer level go underneath, grey and labelled by
   # name only: a count there would read as zero isolates, though some may
   # name just the country.
@@ -1576,64 +1684,28 @@ build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
   if (is.null(units$polys)) {
     return(m)
   }
-  n <- units$n
-
-  # Off (default): the domain is the currently-shown (possibly date-filtered)
-  # counts, so the color scale rescales to whatever subset is visible — the
-  # darkest region always looks "full" regardless of its absolute count. On:
-  # the domain comes from the full, unfiltered counts instead, so a partial
-  # range renders lighter until the count actually approaches the final
-  # total — useful for watching the animation "fill in" over time.
-  domain_n <- if (isTRUE(o$region_fixed_scale) && !is.null(units$full_n)) {
-    units$full_n
-  } else {
-    n
-  }
-
-  vals <- if (identical(o$region_transform, "Log")) log1p(n) else n
-  domain_range <- count_domain(domain_n)
-  domain_vals <- if (identical(o$region_transform, "Log")) {
-    log1p(domain_range)
-  } else {
-    domain_range
-  }
-  pal <- suppressWarnings(leaflet$colorNumeric(
-    viz_helpers$resolve_gradient_palette(o$region_scale),
-    domain = domain_vals,
-    na.color = "#f0f0f0"
-  ))
-  fill <- pal(vals)
-  fill[is.na(vals)] <- "#f0f0f0"
-
-  # Every region is labelled, those without isolates included: "0 isolates"
-  # is an answer, where no label at all reads as a region the map forgot.
-  region_label <- paste0(
-    units$label,
-    ": ",
-    ifelse(is.na(n), 0L, n),
-    " isolates"
-  )
-
-  # "Always show labels" only pins the ones actually saying something: a
-  # region with zero isolates permanently printing "0 isolates" all over an
-  # otherwise empty map just adds noise. One labelOptions() per row (rather
-  # than the single shared object every other addPolygons() argument takes)
-  # is what lets `permanent` vary polygon by polygon here.
-  has_isolates <- !is.na(n) & n > 0
-  region_label_opts <- lapply(has_isolates, function(shown) {
-    leaflet$labelOptions(permanent = isTRUE(o$region_permanent) && shown)
-  })
 
   m <- leaflet$addPolygons(
     m,
     data = units$polys,
-    fillColor = fill,
+    # By position: the regions drawn do not depend on the date window, so the
+    # same id names the same region in every frame Play restyles.
+    layerId = paste0(REGION_ID_PREFIX, seq_len(nrow(units$polys))),
+    fillColor = st$fill,
     fillOpacity = o$region_opacity,
     color = o$region_border,
     weight = 1,
     smoothFactor = 0.3,
-    label = region_label,
-    labelOptions = region_label_opts,
+    label = st$label,
+    # One labelOptions() per row (rather than the single shared object every
+    # other addPolygons() argument takes) is what lets `permanent` vary
+    # polygon by polygon.
+    labelOptions = lapply(st$pinned, function(pinned) {
+      leaflet$labelOptions(permanent = pinned)
+    }),
+    # The class eases a fill change in (see main.scss), so Play's frames flow
+    # into one another rather than snapping.
+    options = leaflet$pathOptions(className = "map-region"),
     highlightOptions = leaflet$highlightOptions(
       weight = 2,
       color = "#000000",
@@ -1641,30 +1713,13 @@ build_choropleth <- function(m, coords, o, full_coords = NULL, shapes = NULL) {
       bringToFront = TRUE
     )
   )
-
-  if (o$legend && any(!is.na(domain_n))) {
-    lpal <- suppressWarnings(leaflet$colorNumeric(
-      viz_helpers$resolve_gradient_palette(o$region_scale),
-      domain = domain_range,
-      na.color = "#f0f0f0"
-    ))
-    m <- leaflet$addLegend(
-      m,
-      position = o$legend_pos,
-      pal = lpal,
-      values = domain_range,
-      title = "Isolate count",
-      opacity = 1,
-      labFormat = leaflet$labelFormat(digits = 0)
-    )
-  }
-  m
+  choropleth_legend(m, st, o)
 }
 
-# Point-density heatmap (one unit of intensity per isolate). minOpacity is the
-# only opacity-like knob leaflet.heat exposes; raising it makes the map read as
-# less "solid" over dark basemaps.
-build_heatmap <- function(m, coords, o, full_coords = NULL) {
+# What the heatmap draws for `coords`: one point per place with its isolate
+# count (`agg`), and the count that reaches full colour (`max`). Shared by the
+# drawn map and Play's timeline.
+heat_state <- function(coords, o, full_coords = NULL) {
   # Aggregate to one point per distinct place with intensity = isolate count,
   # rather than letting addHeatmap default every isolate to intensity 1 and
   # rely on many overlapping points at the same geocoded coordinate to sum up
@@ -1672,11 +1727,11 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # isolates already saturates the color scale for any max in a normal range.
   # Explicit counts make `max` a meaningful, explainable knob ("isolate count
   # needed to reach full color") — see build_map_coords()'s auto-fitted slider.
-  agg <- aggregate(
-    isolate ~ place + longitude + latitude,
-    data = coords,
-    FUN = length
-  )
+  agg <- if (is.null(coords) || !nrow(coords)) {
+    data.frame(place = character(), longitude = numeric(), latitude = numeric(), count = integer())
+  } else {
+    aggregate(isolate ~ place + longitude + latitude, data = coords, FUN = length)
+  }
   names(agg)[names(agg) == "isolate"] <- "count"
 
   # Mirrors Choropleth's own on/off domain switch (region_fixed_scale). On
@@ -1692,6 +1747,37 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   } else {
     max(agg$count, 1)
   }
+  list(agg = agg, max = effective_max)
+}
+
+# The heatmap legend: the heat layer's own gradient from 0 to `max`, so the
+# colour a place shows reads back to an isolate count the way Choropleth's fill
+# does.
+heat_legend <- function(m, max, o) {
+  if (!isTRUE(o$legend)) {
+    return(m)
+  }
+  lpal <- leaflet$colorNumeric(
+    viz_helpers$resolve_gradient_palette(o$heat_scale %||% "viridis"),
+    domain = c(0, max)
+  )
+  leaflet$addLegend(
+    m,
+    layerId = LEGEND_ID,
+    position = o$legend_pos,
+    pal = lpal,
+    values = c(0, max),
+    title = if (nzchar(o$legend_title)) o$legend_title else "Isolate count",
+    opacity = 1,
+    labFormat = leaflet$labelFormat(digits = 0)
+  )
+}
+
+# Point-density heatmap (one unit of intensity per isolate). minOpacity is the
+# only opacity-like knob leaflet.heat exposes; raising it makes the map read as
+# less "solid" over dark basemaps.
+build_heatmap <- function(m, coords, o, full_coords = NULL) {
+  st <- heat_state(coords, o, full_coords)
 
   # addHeatmap()'s `gradient` argument must be a palette *function* (or a
   # value colorNumeric() itself accepts) — passing a pre-built named list of
@@ -1712,13 +1798,14 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
   # relative softness at any radius; 0.3 matches the app's previous default.
   m <- addHeatmap(
     m,
-    data = agg,
+    data = st$agg,
     lng = ~longitude,
     lat = ~latitude,
     intensity = ~count,
+    layerId = HEAT_LAYER_ID,
     radius = o$heat_radius,
     blur = o$heat_radius * 0.6,
-    max = effective_max,
+    max = st$max,
     minOpacity = 0.3,
     gradient = gradient
   )
@@ -1734,25 +1821,7 @@ build_heatmap <- function(m, coords, o, full_coords = NULL) {
     m$x$calls[[last]]$args[[4]]$maxZoom <- 0
   }
 
-  # Mirrors Choropleth's legend: same gradient the heat layer itself uses
-  # (0 to the effective max), so the color a place shows on the map reads
-  # back to an isolate count the same way Choropleth's fill does.
-  if (o$legend) {
-    lpal <- leaflet$colorNumeric(
-      viz_helpers$resolve_gradient_palette(o$heat_scale %||% "viridis"),
-      domain = c(0, effective_max)
-    )
-    m <- leaflet$addLegend(
-      m,
-      position = o$legend_pos,
-      pal = lpal,
-      values = c(0, effective_max),
-      title = if (nzchar(o$legend_title)) o$legend_title else "Isolate count",
-      opacity = 1,
-      labFormat = leaflet$labelFormat(digits = 0)
-    )
-  }
-  m
+  heat_legend(m, st$max, o)
 }
 
 # Assign each point to a cell of a square pixel grid at the given zoom, so that
@@ -1784,9 +1853,60 @@ cluster_cell <- function(lng, lat, zoom, radius_px) {
 # render before the client reports one, or the static HTML export, which has no
 # server to re-bin on zoom) it falls back to one chart per exact place.
 build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
+  cats <- chart_categories(coords, o, full_coords)
+  if (is.null(cats)) {
+    return(m)
+  }
+  tab <- chart_table(coords, cats, o, zoom)
+
+  m <- addMinicharts(
+    m,
+    lng = tab$lng,
+    lat = tab$lat,
+    # By group key (place, or pixel-grid cell), which Play's timeline also
+    # counts by, so it can update each chart in place.
+    layerId = paste0(CHART_ID_PREFIX, rownames(tab$cd)),
+    type = o$chart_type,
+    chartdata = tab$cd,
+    colorPalette = unname(cats$colors),
+    width = o$chart_size,
+    opacity = o$chart_opacity,
+    # minicharts draws a legend of its own, but it takes no title and ignores
+    # the shared Legend tab's styling, so this mode's legend always read as a
+    # different object from every other mode's. It is switched off in favour
+    # of the same addLegend() the other modes use, below.
+    legend = FALSE
+  )
+
+  # The one legend every mode draws — same title, same swatch/background
+  # treatment, same position control — over the columns actually charted, in
+  # the column order set above. Colours come from `colors`, so the keys, their
+  # order and their colours are the Markers legend's for the same variable.
+  # The fixed layerId makes the zoom re-cluster (a leafletProxy redraw) replace
+  # this legend instead of stacking another copy on every zoom step.
+  if (isTRUE(o$legend)) {
+    m <- leaflet$addLegend(
+      m,
+      position = o$legend_pos,
+      layerId = LEGEND_ID,
+      colors = unname(cats$colors),
+      labels = cats$cats,
+      title = if (nzchar(o$legend_title)) o$legend_title else cats$layer$title,
+      opacity = 1
+    )
+  }
+  m
+}
+
+# Slice name of isolates missing the mapped value.
+CHART_MISSING_LABEL <- "Missing"
+
+# The categories the charts slice by, in column order, with a colour each, for
+# `coords`; NULL without a mapping layer.
+chart_categories <- function(coords, o, full_coords = NULL) {
   layer <- drawn_layer(o, coords)
   if (is.null(layer)) {
-    return(m)
+    return(NULL)
   }
   var <- layer$field
 
@@ -1829,20 +1949,53 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   # follow suit, since this one column order drives both.
   top <- top[order(pal_info$convert(top))]
   # Master column/legend order; "Other" (the fold bucket) and "Missing" last.
-  missing_label <- "Missing"
   cats <- c(
     top,
     if (folded) "Other",
-    if (anyNA(ref_vals)) missing_label
+    if (anyNA(ref_vals)) CHART_MISSING_LABEL
   )
 
-  vals <- blank_to_na(granular_vals(coords[[var]], layer$granularity))
-  if (folded) {
-    vals <- ifelse(is.na(vals) | vals %in% top, vals, "Other")
-  }
-  vals[is.na(vals)] <- missing_label
+  # "Other" (the fold bucket) and "Missing" aren't real domain levels, so they
+  # take their own fixed greys; every other column takes its colour from the
+  # shared palette built above.
+  named <- !(cats %in% c("Other", CHART_MISSING_LABEL))
+  colors <- rep(NA_COLOR, length(cats))
+  colors[named] <- pal_info$pal(pal_info$convert(cats[named]))
+  colors[cats == "Other"] <- OTHER_COLOR
+  list(layer = layer, top = top, folded = folded, cats = cats, colors = colors)
+}
 
-  key <- if (isTRUE(o$chart_cluster) && !is.null(zoom)) {
+# Isolates per chart and category (`cd`, one row per chart) for `coords`, under
+# the categories chart_categories() chose, with each chart's position.
+chart_table <- function(coords, cats, o, zoom = NULL) {
+  vals <- blank_to_na(granular_vals(coords[[cats$layer$field]], cats$layer$granularity))
+  if (cats$folded) {
+    vals <- ifelse(is.na(vals) | vals %in% cats$top, vals, "Other")
+  }
+  vals[is.na(vals)] <- CHART_MISSING_LABEL
+
+  key <- chart_keys(coords, o, zoom)
+
+  # Force the full master category set as columns via a fixed-level factor, so
+  # levels absent from the current frame still get a (zero) column. That keeps
+  # both the palette and the minichart legend covering every category — when
+  # fixed, the complete full-range set, otherwise just the visible set.
+  cd <- as.data.frame.matrix(table(key, factor(vals, levels = cats$cats)))
+
+  # Each chart sits at the centroid of the points in its group; with the
+  # per-place key every point in a group shares one coordinate, so the
+  # unclustered layout is identical to before.
+  list(
+    cd = cd,
+    lng = as.numeric(tapply(coords$longitude, key, mean)[rownames(cd)]),
+    lat = as.numeric(tapply(coords$latitude, key, mean)[rownames(cd)])
+  )
+}
+
+# The chart each row of `coords` is counted in: its pixel-grid cell at `zoom`
+# with clustering on (see cluster_cell()), otherwise its place.
+chart_keys <- function(coords, o, zoom = NULL) {
+  if (isTRUE(o$chart_cluster) && !is.null(zoom)) {
     cluster_cell(
       coords$longitude,
       coords$latitude,
@@ -1852,63 +2005,6 @@ build_charts <- function(m, coords, o, full_coords = NULL, zoom = NULL) {
   } else {
     coords$place
   }
-
-  # Force the full master category set as columns via a fixed-level factor, so
-  # levels absent from the current frame still get a (zero) column. That keeps
-  # both the palette and the minichart legend covering every category — when
-  # fixed, the complete full-range set, otherwise just the visible set.
-  cd <- as.data.frame.matrix(table(key, factor(vals, levels = cats)))
-
-  # Each chart sits at the centroid of the points in its group; with the
-  # per-place key every point in a group shares one coordinate, so the
-  # unclustered layout is identical to before.
-  lng <- as.numeric(tapply(coords$longitude, key, mean)[rownames(cd)])
-  lat <- as.numeric(tapply(coords$latitude, key, mean)[rownames(cd)])
-
-  # "Other" (the fold bucket) and "Missing" aren't real domain levels, so they
-  # take their own fixed greys; every other column takes its colour from the
-  # shared palette built above.
-  named <- !(names(cd) %in% c("Other", missing_label))
-  colors <- rep(NA_COLOR, ncol(cd))
-  colors[named] <- pal_info$pal(pal_info$convert(names(cd)[named]))
-  if ("Other" %in% names(cd)) {
-    colors[names(cd) == "Other"] <- OTHER_COLOR
-  }
-
-  m <- addMinicharts(
-    m,
-    lng = lng,
-    lat = lat,
-    type = o$chart_type,
-    chartdata = cd,
-    colorPalette = unname(colors),
-    width = o$chart_size,
-    opacity = o$chart_opacity,
-    # minicharts draws a legend of its own, but it takes no title and ignores
-    # the shared Legend tab's styling, so this mode's legend always read as a
-    # different object from every other mode's. It is switched off in favour
-    # of the same addLegend() the other modes use, below.
-    legend = FALSE
-  )
-
-  # The one legend every mode draws — same title, same swatch/background
-  # treatment, same position control — over the columns actually charted, in
-  # the column order set above. Colours come from `colors`, so the keys, their
-  # order and their colours are the Markers legend's for the same variable.
-  # The fixed layerId makes the zoom re-cluster (a leafletProxy redraw) replace
-  # this legend instead of stacking another copy on every zoom step.
-  if (isTRUE(o$legend)) {
-    m <- leaflet$addLegend(
-      m,
-      position = o$legend_pos,
-      layerId = "charts_legend",
-      colors = unname(colors),
-      labels = names(cd),
-      title = if (nzchar(o$legend_title)) o$legend_title else layer$title,
-      opacity = 1
-    )
-  }
-  m
 }
 
 # Human-readable "Date range" label — "YYYY-MM-DD to YYYY-MM-DD", or a
@@ -1961,6 +2057,21 @@ tile_error_script <- paste(
   "}",
   sep = "\n"
 )
+
+# The rows the active mode draws, under the Show filter: `coords`, the
+# date-filtered rows, and `full`, every row, for a colour scale fixed to the
+# full range. The country choropleth counts build_map_coords()'s `regions`
+# (every isolate naming a recognised country) rather than the geocoded points,
+# under the same time filter, so an isolate whose place failed to geocode still
+# counts. The state level needs a point, so it counts the geocoded `coords`.
+layer_rows <- function(coords, o, full_coords = NULL, regions = NULL) {
+  regions <- focus_rows(regions, o$focus, "country_code")
+  country_level <- identical(o$region_level %||% "country", "country")
+  if (identical(o$mode, "Choropleth") && country_level && !is.null(regions)) {
+    return(list(coords = filter_coords(regions, o), full = regions))
+  }
+  list(coords = focus_rows(coords, o$focus), full = focus_rows(full_coords, o$focus))
+}
 
 # Assemble the full leaflet widget (no view/zoom — the caller sets that): base
 # tiles, decorations, plugins, then the layer for the active mode. Shared by the
@@ -2043,13 +2154,9 @@ build_map <- function(
     )
   }
 
-  # The country choropleth counts build_map_coords()'s `regions` (every isolate
-  # naming a recognised country) rather than the geocoded points, under the same
-  # time filter, so an isolate whose place failed to geocode still counts. The
-  # state level needs a point, so it counts the (filtered) geocoded `coords`.
   # The Show filter blanks every country outside the selection, base tiles
   # and choropleth labels included, and applies to every mode alike before
-  # anything is counted.
+  # anything is counted (see layer_rows()).
   mask <- focus_mask(o$focus)
   if (!is.null(mask)) {
     m <- leaflet$addMapPane(
@@ -2072,14 +2179,9 @@ build_map <- function(
     )
     m <- onRender(m, FOCUS_MASK_FOLLOW_JS)
   }
-  coords <- focus_rows(coords, o$focus)
-  full_coords <- focus_rows(full_coords, o$focus)
-  regions <- focus_rows(regions, o$focus, "country_code")
-  country_level <- identical(o$region_level %||% "country", "country")
-  if (choropleth && country_level && !is.null(regions)) {
-    full_coords <- regions
-    coords <- filter_coords(regions, o)
-  }
+  rows <- layer_rows(coords, o, full_coords, regions)
+  coords <- rows$coords
+  full_coords <- rows$full
 
   # A choropleth still draws its regions, uncounted, for an empty date window.
   if (!choropleth && (is.null(coords) || !nrow(coords))) {
@@ -2207,6 +2309,8 @@ build_map <- function(
            l.style.overflowX = 'hidden';
          }
          requestAnimationFrame(fit);
+         // Play swaps the legend for each frame's, which re-fits it here.
+         el.__ptLegendFit = fit;
          if (window.ResizeObserver) {
            new ResizeObserver(fit).observe(el);
          } else {
@@ -2218,6 +2322,153 @@ build_map <- function(
     )
   }
   m
+}
+
+# How long Play spends on each bin, in milliseconds.
+MAP_STEP_MS <- 750
+
+# Play's legend per frame: the distinct legends `legend_of` (a function of a
+# map and a frame's index, adding that frame's legend) draws over `frames`, and
+# which one each frame shows (NA for none). Taken from leaflet's own serialised addLegend() call, so
+# the browser adds it exactly as a render would.
+frame_legends <- function(frames, legend_of) {
+  items <- list()
+  idx <- integer(length(frames))
+  for (k in seq_along(frames)) {
+    calls <- legend_of(leaflet$leaflet(), k)$x$calls
+    legend <- Filter(function(cl) identical(cl$method, "addLegend"), calls)
+    if (!length(legend)) {
+      idx[k] <- NA_integer_
+      next
+    }
+    args <- legend[[1]]$args
+    hit <- Position(function(item) identical(item, args), items)
+    if (is.na(hit)) {
+      items[[length(items) + 1L]] <- args
+      hit <- length(items)
+    }
+    idx[k] <- hit
+  }
+  list(items = items, idx = I(idx))
+}
+
+# Everything Play needs to step the drawn map through `bins` in place, without
+# re-rendering it: per frame (the window from the first bin to each bin in
+# turn) the state of the active mode's layer, the legend where the colour scale
+# follows the window, and the date label. The last frame is the window the map
+# is drawn at, so a run that plays out ends on the map as drawn. Everything is
+# derived by the same state functions the builders draw with. `p` is the
+# map's drawn inputs (map_inputs()), `zoom` the zoom the charts are clustered
+# at.
+#
+# Charts keep the drawn (last frame's) categories, colours, legend and chart
+# positions for the whole run, even with the colour scale following the
+# window: a chart is updated in place, so its slices and position stay put.
+anim_timeline <- function(p, bins, zoom = NULL) {
+  o <- p$opts
+  n <- length(bins)
+  frames <- lapply(seq_len(n), function(k) {
+    ok <- o
+    ok$daterange <- c(bins[1], bins[k])
+    rows <- layer_rows(filter_coords(p$coords, ok), ok, p$coords, p$regions)
+    list(o = ok, coords = rows$coords, full = rows$full)
+  })
+  last <- frames[[n]]
+  out <- list(
+    n = n,
+    labels = I(vapply(
+      frames,
+      function(fr) format_daterange_label(fr$o$daterange),
+      character(1)
+    )),
+    kind = "none"
+  )
+  # A scale fixed to the full range keeps the drawn legend in every frame.
+  legends <- function(legend_of) {
+    if (isTRUE(o$region_fixed_scale) || !isTRUE(o$legend)) {
+      return(NULL)
+    }
+    frame_legends(frames, legend_of)
+  }
+  has_rows <- !is.null(last$coords) && nrow(last$coords) > 0
+
+  if (identical(o$mode, "Choropleth")) {
+    states <- lapply(frames, function(fr) choropleth_state(fr$coords, fr$o, fr$full, p$shapes))
+    polys <- states[[n]]$units$polys
+    if (!is.null(polys)) {
+      out$kind <- "regions"
+      out$regions <- list(
+        ids = I(paste0(REGION_ID_PREFIX, seq_len(nrow(polys)))),
+        fills = lapply(states, function(st) I(st$fill)),
+        labels = lapply(states, function(st) I(st$label)),
+        pinned = lapply(states, function(st) I(st$pinned))
+      )
+      out$legends <- legends(function(m, k) choropleth_legend(m, states[[k]], o))
+    }
+  } else if (identical(o$mode, "Heatmap") && has_rows) {
+    states <- lapply(frames, function(fr) heat_state(fr$coords, fr$o, fr$full))
+    places <- states[[n]]$agg
+    place_key <- function(agg) paste(agg$place, agg$longitude, agg$latitude)
+    out$kind <- "heat"
+    out$heat <- list(
+      id = HEAT_LAYER_ID,
+      lat = I(places$latitude),
+      lng = I(places$longitude),
+      counts = lapply(states, function(st) {
+        count <- st$agg$count[match(place_key(places), place_key(st$agg))]
+        I(ifelse(is.na(count), 0L, count))
+      }),
+      max = I(vapply(states, function(st) as.numeric(st$max), numeric(1)))
+    )
+    out$legends <- legends(function(m, k) heat_legend(m, states[[k]]$max, o))
+  } else if (identical(o$mode, "Charts") && has_rows) {
+    cats <- chart_categories(last$coords, o, last$full)
+    if (!is.null(cats)) {
+      keys <- rownames(chart_table(last$coords, cats, o, zoom)$cd)
+      out$kind <- "charts"
+      out$charts <- lapply(frames, function(fr) {
+        counts <- matrix(0, length(keys), length(cats$cats), dimnames = list(keys, cats$cats))
+        if (nrow(fr$coords)) {
+          cd <- chart_table(fr$coords, cats, o, zoom)$cd
+          counts[rownames(cd), ] <- as.matrix(cd)
+        }
+        # A chart with nothing in it yet is hidden rather than drawn empty.
+        update <- updateMinicharts(
+          leaflet$leaflet(),
+          layerId = paste0(CHART_ID_PREFIX, keys),
+          chartdata = counts,
+          colorPalette = unname(cats$colors),
+          opacity = ifelse(rowSums(counts) > 0, o$chart_opacity, 0),
+          transitionTime = round(MAP_STEP_MS * 0.8),
+          legend = FALSE
+        )
+        # legend = FALSE queues a removeControl() ahead of the update itself.
+        Filter(function(cl) identical(cl$method, "updateMinicharts"), update$x$calls)[[1]]$args
+      })
+    }
+  } else if (!identical(o$mode, "Heatmap") && !identical(o$mode, "Charts") && has_rows) {
+    ids <- as.character(last$coords$isolate)
+    # The frame each marker first shows in; frames widen the window from a
+    # fixed start, so a marker once shown stays.
+    appear <- rep(n, length(ids))
+    for (k in rev(seq_len(n))) {
+      hit <- match(as.character(frames[[k]]$coords$isolate), ids)
+      appear[hit[!is.na(hit)]] <- k
+    }
+    styles <- lapply(frames, function(fr) marker_fill(fr$coords, fr$o, fr$full))
+    out$kind <- "markers"
+    out$markers <- list(cluster = MARKER_CLUSTER_ID, ids = I(ids), appear = I(appear))
+    # A palette following the window recolours the markers already shown.
+    if (!is.null(styles[[n]]$layer) && !isTRUE(o$region_fixed_scale)) {
+      out$markers$fills <- lapply(seq_len(n), function(k) {
+        fill <- rep(NA_character_, length(ids))
+        fill[match(as.character(frames[[k]]$coords$isolate), ids)] <- styles[[k]]$fill
+        I(fill)
+      })
+      out$legends <- legends(function(m, k) marker_legend(m, styles[[k]], o))
+    }
+  }
+  out
 }
 
 # Frame the map on a coordinate set. When the points span an area this is a
@@ -2906,12 +3157,8 @@ map_controls <- function(ns) {
         shiny$div(
           class = "custom-slider date-slider",
           # Covered while Play is running (see the anim_playing observer): the
-          # per-tick updateSliderInput redraws the ion.rangeSlider — handles,
-          # rotated tick labels and all — on every frame, which reads as a
-          # flickering, half-broken control. The window it would show is already
-          # narrated by the on-map date label and map_anim_label, so the slider
-          # is hidden behind an opaque "Animating…" cover for the duration
-          # rather than left twitching.
+          # window is narrated by the on-map date label and map_anim_label, and
+          # the slider stays where it was until the run ends.
           id = ns("daterange_slider_wrap"),
           shiny$sliderInput(
             ns("map_daterange"),
@@ -3431,34 +3678,9 @@ server <- function(
     # the data; see step_daterange() below.
     daterange_bounds <- shiny$reactiveVal(c(Sys.Date() - 30, Sys.Date()))
 
-    # Whether the "Play" animation is currently running. Drives the tick loop
-    # below, the Play/Pause button label, and disabling the date-range/interval
-    # controls (a manual drag mid-playback is indistinguishable server-side
-    # from an animation tick, so the controls are simply locked while playing).
+    # Whether the "Play" animation is currently running. Drives the Play/Pause
+    # button label and locks the other Time controls while a run plays.
     anim_playing <- shiny$reactiveVal(FALSE)
-
-    # Which bin the animation is currently on. This is the source of truth for
-    # "what's the next frame" — NOT input$map_daterange. shiny$updateSliderInput()
-    # only pushes a value to the client; it does not update input$map_daterange
-    # until the browser echoes the new value back on a later flush. Reading the
-    # slider back to decide the next bin raced that round trip: on the very
-    # first Play click, the tick loop below would run in the same flush as the
-    # slider-snap, see the *old* (already-at-the-end) value, conclude there was
-    # nothing left to animate, and immediately stop — requiring a second click
-    # once the first click's update had finally echoed back. Tracking the index
-    # as plain server-side state sidesteps the round trip entirely.
-    anim_idx <- shiny$reactiveVal(0L)
-
-    # Frozen snapshot of the bin boundaries for the CURRENT playback run only
-    # — deliberately a reactiveVal, not a live reactive off input$map_daterange.
-    # The tick loop below updates map_daterange every frame; if the bins were
-    # recomputed live from that same input, each tick would invalidate its own
-    # bin set and re-trigger independently of the 750ms shiny$invalidateLater(),
-    # racing/ignoring the intended pacing. Freezing it once at Play-start (from
-    # whatever range is selected on the slider *then*) avoids that feedback
-    # loop entirely, and is also what lets the user pre-narrow "Date range" to
-    # animate just that window instead of the whole dataset.
-    anim_bins <- shiny$reactiveVal(NULL)
 
     # Live preview of what the bins *would* be for the currently selected date
     # range + interval — used only to enable/disable the Play button, so it's
@@ -3481,39 +3703,115 @@ server <- function(
       )
     }
 
-    anim_bins_preview <- shiny$reactive({
-      rng <- input$map_daterange
-      shiny$req(rng)
+    # The bin starts Play steps through over the date window `rng`.
+    bins_over <- function(rng) {
       lo <- as.Date(rng[1])
       hi <- as.Date(rng[2])
-      shiny$req(lo <= hi)
+      if (!length(rng) || is.na(lo) || is.na(hi) || lo > hi) {
+        return(NULL)
+      }
       bins <- seq(lo, hi, by = interval_unit())
       if (!length(bins) || tail(bins, 1) < hi) {
         bins <- c(bins, hi)
       }
       unique(bins)
+    }
+
+    anim_bins_preview <- shiny$reactive({
+      shiny$req(input$map_daterange)
+      bins_over(input$map_daterange)
     })
 
-    # Start/stop the animation. On start, freeze the bins for this run from
-    # whatever is currently selected on "Date range", then snap to the first
-    # bin so playback always begins from the same, predictable frame.
+    # Play widens the window bin by bin from the start handle to the end
+    # handle. The whole run is worked out once, here (anim_timeline()), and
+    # handed to the browser (app/js/viz-anim.js), which steps the map already
+    # on screen through it on its own clock: markers join the cluster, region
+    # fills ease from one count to the next, the heat blends and the charts
+    # re-slice, while the basemap, the view and every control stay as they
+    # are. Re-rendering the whole widget on a server tick, as Play once did,
+    # reloaded the tiles and rebuilt every layer each frame. A pressed-again
+    # Play pauses where the run has got to.
+
+    # Id of the latest run; the browser's reports name the run they are about.
+    last_run <- 0L
+    # The run the browser is still playing, dropped if playback stops from here.
+    open_run <- NULL
+    # The latest run's bins.
+    run_bins <- NULL
+    # The zoom the latest run's charts were clustered at.
+    run_zoom <- NULL
+
+    # Sends one playback command to the browser's player.
+    send_anim <- function(cmd, ...) {
+      session$sendCustomMessage(
+        "pt-map-anim",
+        list(
+          cmd = cmd,
+          map = ns("map"),
+          input = ns("anim_event"),
+          label = ns("map_anim_label"),
+          run = last_run,
+          ...
+        )
+      )
+    }
+
     shiny$observeEvent(input$map_play, {
       shiny$req(generated())
       if (isTRUE(anim_playing())) {
+        open_run <<- NULL
+        send_anim("pause")
         anim_playing(FALSE)
-        anim_idx(0L)
         return(invisible(NULL))
       }
-      bins <- shiny$isolate(anim_bins_preview())
+      # From the map as drawn, so the run's last frame is what is on screen.
+      p <- shiny$isolate(map_inputs())
+      shiny$req(p)
+      bins <- bins_over(p$opts$daterange)
       shiny$req(length(bins) >= 2)
-      anim_bins(bins)
-      anim_idx(1L)
-      shiny$updateSliderInput(
-        session,
-        "map_daterange",
-        value = c(bins[1], bins[1])
-      )
+      last_run <<- last_run + 1L
+      zoom <- shiny$isolate(input$map_zoom)
+      timeline <- tryCatch(anim_timeline(p, bins, zoom), error = function(err) err)
+      if (inherits(timeline, "error")) {
+        shiny$showNotification(
+          paste("The animation could not be prepared:", conditionMessage(timeline)),
+          type = "error"
+        )
+        return(invisible(NULL))
+      }
+      run_bins <<- bins
+      run_zoom <<- zoom
+      open_run <<- last_run
+      do.call(send_anim, c(list("play", step_ms = MAP_STEP_MS), timeline))
       anim_playing(TRUE)
+    })
+
+    # The browser's report that a run ended: played to the end, or stopped by
+    # Pause at a frame. A stopped run leaves the window at that frame, and the
+    # map re-renders to it; one played out is already on the map as drawn.
+    shiny$observeEvent(input$anim_event, {
+      ev <- input$anim_event
+      if (!identical(as.integer(ev$run), last_run) || is.null(run_bins)) {
+        return(invisible(NULL))
+      }
+      open_run <<- NULL
+      anim_playing(FALSE)
+      n <- length(run_bins)
+      k <- min(max(as.integer(ev$frame %||% n), 1L), n)
+      if (k < n) {
+        shiny$updateSliderInput(session, "map_daterange", value = c(run_bins[1], run_bins[k]))
+      } else if (!identical(shiny$isolate(input$map_zoom), run_zoom)) {
+        # Zoomed while playing: the charts are still clustered for the old zoom.
+        recluster_charts(shiny$isolate(input$map_zoom))
+      }
+    })
+
+    # A redraw of the map while a run plays (a changed control, a Generate)
+    # ends the run: the browser is stepping layers the redraw replaces.
+    shiny$observeEvent(map_inputs(), {
+      if (isTRUE(anim_playing())) {
+        anim_playing(FALSE)
+      }
     })
 
     # Reflect play/pause state in the button and lock the controls an
@@ -3522,16 +3820,22 @@ server <- function(
       anim_playing(),
       {
         playing <- isTRUE(anim_playing())
+        # Stopped from here (a reset, a redraw, a new date variable): drop the
+        # run the browser is still playing.
+        if (!playing && !is.null(open_run)) {
+          open_run <<- NULL
+          send_anim("abort")
+        }
         shiny$updateActionButton(
           session,
           "map_play",
           label = if (playing) "Pause" else "Play",
           icon = shiny$icon(if (playing) "pause" else "play")
         )
-        # Lock every other Time control for the duration of playback: a manual
-        # drag, interval switch or scale/label toggle mid-run either races the
-        # tick loop that is driving map_daterange or rebins the very frames it
-        # is walking. Play itself stays live so it can pause. The step buttons
+        # Lock every other Time control for the duration of playback: a drag,
+        # interval switch or scale/label toggle mid-run would redraw the map
+        # the browser is stepping, or rebin the frames it is walking. Play
+        # itself stays live so it can pause. The step buttons
         # are NOT touched here — they are owned solely by the enable/disable
         # observe further down (which already keys off anim_playing()), so no
         # control is written by two observers in the same flush.
@@ -3539,7 +3843,7 @@ server <- function(
         toggleState("map_interval", condition = !playing)
         toggleState("map_show_time_label", condition = !playing)
         toggleState("map_region_fixed_scale", condition = !playing)
-        # Hide the flickering slider behind its cover (see the Time nav_panel).
+        # Cover the slider for the run (see the Time nav_panel).
         toggleClass(
           id = "daterange_slider_wrap",
           class = "date-slider--playing",
@@ -3550,7 +3854,7 @@ server <- function(
     )
 
     # Manual stepping (the two arrow-pairs) is deliberately independent of
-    # Play's frozen bins/index — each click always reads "Date range" +
+    # Play's run — each click always reads "Date range" +
     # "Interval" fresh off the live inputs and nudges just ONE end of the
     # currently displayed window by one interval unit, rather than resuming
     # some earlier frozen sequence. A step-based approach that shared Play's
@@ -3604,41 +3908,6 @@ server <- function(
     shiny$observeEvent(input$map_step_end_next, {
       shiny$req(generated())
       step_daterange("end", 1)
-    })
-
-    # The tick loop: advance one bin every 750ms while playing (the map's
-    # barrier draws each tick at once, see map_inputs). Mirrors the guarded
-    # shiny$observe()+shiny$invalidateLater() polling pattern already used in
-    # app/view/typing.R for the typing-progress loop. Stops
-    # (does not reschedule) once the bins are exhausted; also goes dormant
-    # while this plot's tab is in the background — a hidden tab is only
-    # display:none, and Shiny auto-suspends hidden *outputs* but not a running
-    # shiny$observe() loop — and resumes automatically once visible() next
-    # reads back TRUE, since reading it here creates the reactive dependency.
-    # Always reveals cumulatively from the frozen bins' first (selected) bound.
-    shiny$observe({
-      if (!isTRUE(anim_playing())) {
-        return(NULL)
-      }
-      if (!isTRUE(visible())) {
-        return(NULL)
-      }
-      bins <- anim_bins()
-      shiny$req(bins)
-      idx <- shiny$isolate(anim_idx())
-      if (idx >= length(bins)) {
-        anim_playing(FALSE)
-        anim_idx(0L)
-        return(NULL)
-      }
-      nxt_idx <- idx + 1L
-      anim_idx(nxt_idx)
-      shiny$updateSliderInput(
-        session,
-        "map_daterange",
-        value = c(bins[1], bins[nxt_idx])
-      )
-      shiny$invalidateLater(750, session)
     })
 
     output$map_anim_label <- shiny$renderText({
@@ -3786,14 +4055,10 @@ server <- function(
     # and heat controls it refits reached the debounced controls, and again for
     # each slider's echo arriving from the browser after that. Settled and
     # value-compared, as the Epi curve's and the AMR's `plot_inputs` are, a
-    # Generate draws once and no echo redraws. Playback does not wait to settle:
-    # each tick is a frame. priority: the barrier settles before outputs are
-    # recalculated in the same flush.
+    # Generate draws once and no echo redraws. priority: the barrier settles
+    # before outputs are recalculated in the same flush.
     map_inputs <- shiny$reactiveVal(NULL)
-    settled_source <- shiny$debounce(
-      map_source,
-      function() if (isTRUE(anim_playing())) 0 else viz_helpers$PLOT_SETTLE_MS
-    )
+    settled_source <- shiny$debounce(map_source, viz_helpers$PLOT_SETTLE_MS)
     shiny$observe(
       {
         current <- settled_source()
@@ -3958,34 +4223,37 @@ server <- function(
     # the correct clustering for the current zoom on any *control* change (it
     # reads the live zoom), so this observer only needs to handle the zoom
     # itself changing. leafletProxy edits the existing map in place — no full
-    # re-render — so it stays cheap even at this app's data volumes.
+    # re-render — so it stays cheap even at this app's data volumes. A run of
+    # Play updates the charts as they were clustered when it started, so the
+    # zoom waits for the run to end (see input$anim_event).
+    recluster_charts <- function(z) {
+      p <- shiny$req(shiny$isolate(map_inputs()))
+      o <- p$opts
+      if (!identical(o$mode, "Charts") || !isTRUE(o$chart_cluster) || is.null(z)) {
+        return(invisible(NULL))
+      }
+      base <- focus_rows(p$coords, o$focus)
+      coords <- filter_coords(base, o)
+      if (is.null(coords) || !nrow(coords)) {
+        return(invisible(NULL))
+      }
+      proxy <- leaflet$leafletProxy("map")
+      clearMinicharts(proxy)
+      # Pass the full (unfiltered) coords so a re-cluster on zoom keeps the
+      # same fixed full-range category set and palette the full render uses.
+      # The legend lists those same categories at every zoom, so the one the
+      # full render drew stays: drawn again here, each zoom stacked another
+      # copy, without the sizing and opacity that render applied to it.
+      o$legend <- FALSE
+      build_charts(proxy, coords, o, full_coords = base, zoom = z)
+    }
     map_zoom_d <- shiny$debounce(shiny$reactive(input$map_zoom), 250)
     shiny$observeEvent(
       map_zoom_d(),
       {
-        p <- shiny$req(map_inputs())
-        o <- p$opts
-        z <- map_zoom_d()
-        if (!identical(o$mode, "Charts") || !isTRUE(o$chart_cluster)) {
-          return()
+        if (!isTRUE(shiny$isolate(anim_playing()))) {
+          recluster_charts(map_zoom_d())
         }
-        if (is.null(z)) {
-          return()
-        }
-        base <- focus_rows(p$coords, o$focus)
-        coords <- filter_coords(base, o)
-        if (is.null(coords) || !nrow(coords)) {
-          return()
-        }
-        proxy <- leaflet$leafletProxy("map")
-        clearMinicharts(proxy)
-        # Pass the full (unfiltered) coords so a re-cluster on zoom keeps the
-        # same fixed full-range category set and palette the full render uses.
-        # The legend lists those same categories at every zoom, so the one the
-        # full render drew stays: drawn again here, each zoom stacked another
-        # copy, without the sizing and opacity that render applied to it.
-        o$legend <- FALSE
-        build_charts(proxy, coords, o, full_coords = base, zoom = z)
       },
       ignoreInit = TRUE
     )
@@ -4640,7 +4908,6 @@ server <- function(
     # the message that lands.
     reset_map_settings <- function() {
       anim_playing(FALSE)
-      anim_idx(0L)
       # The seq goes back to zero with the layers, which is safe only because
       # no card survives to address an id that will be handed out again.
       map_layers(list())

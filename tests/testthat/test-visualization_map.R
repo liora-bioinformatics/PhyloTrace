@@ -1,10 +1,13 @@
 box::use(
   leaflet[leaflet],
   sf[st_intersects, st_point, st_sfc],
+  stats[setNames],
+  utils[modifyList],
   shiny[NS, observe, reactive, reactiveVal, testServer],
   testthat[
     expect_false,
     expect_identical,
+    expect_length,
     expect_match,
     expect_null,
     expect_setequal,
@@ -1035,4 +1038,130 @@ test_that("re-clustering charts on zoom keeps the one legend", {
       expect_false("addLegend" %in% sent$methods)
     }
   )
+})
+
+# --- Play ---------------------------------------------------------------------
+
+# Options for a Play run over the fixture's dates, in `mode`.
+anim_opts <- function(mode) {
+  rng <- as.Date(c("2026-01-14", "2026-03-04"))
+  list(
+    mode = mode,
+    focus = character(0),
+    date_field = "sample_collection_date",
+    daterange = rng,
+    date_bounds = rng,
+    marker_color = "#2C7FB8C7",
+    legend = TRUE,
+    legend_pos = "topleft",
+    legend_title = "",
+    legend_digits = 2,
+    region_level = "country",
+    region_transform = "Raw",
+    region_fixed_scale = TRUE,
+    region_scale = "Oranges",
+    region_permanent = FALSE,
+    heat_max = 3,
+    heat_scale = "viridis"
+  )
+}
+
+# The month bins Play steps the fixture through: Jan 14, Feb 14, Mar 4.
+anim_bins <- function() as.Date(c("2026-01-14", "2026-02-14", "2026-03-04"))
+
+test_that("Play shows each marker from the frame its date is reached", {
+  p <- list(opts = anim_opts("Markers"), coords = coords_fixture())
+  tl <- impl$anim_timeline(p, anim_bins())
+  expect_identical(tl$kind, "markers")
+  expect_identical(tl$markers$cluster, impl$MARKER_CLUSTER_ID)
+  appear <- setNames(unclass(tl$markers$appear), unclass(tl$markers$ids))
+  expect_identical(
+    appear[paste0("ISO-", 1:6)],
+    setNames(c(1L, 2L, 2L, 2L, 3L, 3L), paste0("ISO-", 1:6))
+  )
+  # The last frame is the window as drawn.
+  expect_identical(unclass(tl$labels)[3], impl$format_daterange_label(p$opts$daterange))
+  # A scale fixed to the full range keeps the drawn colours and legend.
+  expect_null(tl$markers$fills)
+  expect_null(tl$legends)
+})
+
+test_that("Play's markers are the ones the map draws, by the same ids", {
+  o <- anim_opts("Markers")
+  o$popup_fields <- character(0)
+  o$hover_field <- character(0)
+  o$cluster <- FALSE
+  o$cluster_radius <- 0
+  o$radius <- 10
+  o$permanent <- FALSE
+  o$label_size <- 12
+  m <- impl$build_markers(leaflet(), coords_fixture(), o)
+  call <- Filter(function(cl) identical(cl$method, "addCircleMarkers"), m$x$calls)[[1]]
+  # layerId, then clusterId, as leaflet serialises them.
+  expect_identical(call$args[[4]], coords_fixture()$isolate)
+  expect_identical(call$args[[8]], impl$MARKER_CLUSTER_ID)
+})
+
+test_that("Play restyles every region per frame, with the legend following an unfixed scale", {
+  regions <- meta_fixture()
+  regions$country_code <- ifelse(regions$geo_loc_name_country == "Germany", "DEU", "FRA")
+  o <- anim_opts("Choropleth")
+  o$region_fixed_scale <- FALSE
+  p <- list(opts = o, coords = coords_fixture(), regions = regions)
+  tl <- impl$anim_timeline(p, anim_bins())
+  expect_identical(tl$kind, "regions")
+  ids <- unclass(tl$regions$ids)
+  labels <- lapply(tl$regions$labels, unclass)
+  de <- grep("^Germany: ", labels[[1]])
+  expect_identical(labels[[1]][de], "Germany: 1 isolates")
+  expect_identical(labels[[3]][de], "Germany: 3 isolates")
+  expect_identical(lengths(lapply(tl$regions$fills, unclass)), rep(length(ids), 3L))
+  # The count range grows with the window, so the legend changes with it.
+  expect_identical(length(tl$legends$idx), 3L)
+  expect_true(length(tl$legends$items) > 1L)
+})
+
+test_that("Play blends heat over the drawn places, frame by frame", {
+  p <- list(opts = anim_opts("Heatmap"), coords = coords_fixture())
+  tl <- impl$anim_timeline(p, anim_bins())
+  expect_identical(tl$kind, "heat")
+  expect_identical(tl$heat$id, impl$HEAT_LAYER_ID)
+  totals <- vapply(tl$heat$counts, function(x) sum(unclass(x)), numeric(1))
+  expect_identical(totals, c(1, 4, 6))
+  expect_identical(unclass(tl$heat$max), rep(3, 3))
+})
+
+test_that("a window below the fixed scale's start still shades its regions", {
+  # The full range's scale starts at its smallest final count; a partial window
+  # counting fewer used to fall outside it and draw as the no-data grey.
+  regions <- meta_fixture()
+  regions$country_code <- ifelse(regions$geo_loc_name_country == "Germany", "DEU", "FRA")
+  o <- anim_opts("Choropleth")
+  first <- impl$filter_coords(regions, modifyList(o, list(daterange = anim_bins()[c(1, 1)])))
+  st <- impl$choropleth_state(first, o, regions)
+  de <- grep("^Germany: 1 isolates", st$label)
+  expect_false(identical(st$fill[de], "#f0f0f0"))
+  # The full window draws as it always did.
+  full <- impl$choropleth_state(regions, o, regions)
+  expect_identical(length(unique(full$fill[full$fill != "#f0f0f0"])), 1L)
+})
+
+test_that("Play updates each drawn chart in place, by the id it was drawn with", {
+  o <- anim_opts("Charts")
+  o$layer <- list(field = "specimen", palette = "Set1", continuous = FALSE)
+  o$chart_type <- "pie"
+  o$chart_opacity <- 0.7
+  o$chart_size <- 40
+  o$chart_cluster <- FALSE
+  p <- list(opts = o, coords = coords_fixture())
+  drawn <- impl$build_charts(leaflet(), coords_fixture(), o, coords_fixture())
+  # One options entry per chart, each carrying its id.
+  chart_ids <- function(options) vapply(options, function(x) x$static$layerId, "")
+  drawn_ids <- chart_ids(
+    Filter(function(cl) identical(cl$method, "addMinicharts"), drawn$x$calls)[[1]]$args[[1]]
+  )
+  tl <- impl$anim_timeline(p, anim_bins())
+  expect_identical(tl$kind, "charts")
+  expect_length(tl$charts, 3L)
+  expect_setequal(chart_ids(tl$charts[[1]][[1]]), drawn_ids)
 })

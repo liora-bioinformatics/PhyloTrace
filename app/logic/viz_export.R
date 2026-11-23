@@ -24,8 +24,9 @@
 box::use(
   base64enc[base64decode],
   digest[digest],
-  ggplot2[ggsave],
-  grDevices[cairo_pdf, jpeg, png, tiff],
+  ggplot2[calc_element, ggplot_build, ggplot_gtable, ggsave, theme_get],
+  grDevices[cairo_pdf, dev.cur, dev.off, dev.set, jpeg, png, tiff],
+  grid[deviceLoc, grid.draw, grid.layout, grid.newpage, pushViewport, unit, viewport],
   shiny[
     actionButton,
     div,
@@ -564,8 +565,7 @@ write_data_uri <- function(uri, file) {
 #' @return `file`, invisibly.
 #' @export
 render_canvas_png <- function(plot, file, width_in, height_in, res = PLOT_RES) {
-  longest <- max(width_in, height_in, 1e-3)
-  res <- max(12, min(res, floor(PLOT_MAX_PX / longest)))
+  res <- .canvas_res(width_in, height_in, res)
   ggsave(
     filename = file,
     plot = plot,
@@ -575,6 +575,72 @@ render_canvas_png <- function(plot, file, width_in, height_in, res = PLOT_RES) {
     limitsize = FALSE
   )
   invisible(file)
+}
+
+# The resolution a canvas is rasterised at: `res`, lowered only where the canvas
+# would pass `PLOT_MAX_PX`.
+.canvas_res <- function(width_in, height_in, res) {
+  longest <- max(width_in, height_in, 1e-3)
+  max(12, min(res, floor(PLOT_MAX_PX / longest)))
+}
+
+#' Rasterise a fixed-canvas ggplot to PNG and report where its panel landed.
+#'
+#' The same drawing as `render_canvas_png()`: the same device, resolution and
+#' theme background, so the two write the same pixels. It also records the
+#' panel's horizontal extent and the x data range across it, which is what lets
+#' the browser cut the image at a data value (the Epi curve's playback wipe).
+#'
+#' A drawn gtable pops its viewports, so the panel cannot be looked up after
+#' drawing, and adding a probe grob to the table changes how every edge is
+#' anti-aliased. Instead the table's own layout is pushed again on the same
+#' device once it is drawn (pushing a viewport draws nothing) and the panel's
+#' cell measured in it.
+#'
+#' @param plot ggplot object with a single panel.
+#' @param file Character. Destination path.
+#' @param width_in,height_in Numeric. Canvas size in inches.
+#' @param res Numeric. Pixels per inch.
+#' @return List: `panel` (the panel's left and right edge, as fractions of the
+#'   image width) and `x_range` (the data range the panel spans, as numbers).
+#' @export
+render_canvas_png_panel <- function(plot, file, width_in, height_in, res = PLOT_RES) {
+  res <- .canvas_res(width_in, height_in, res)
+  # As ggsave() picks it: the plot's own background, which the letterbox around
+  # a fixed-aspect panel has to share.
+  bg <- calc_element("plot.background", theme_get() + plot$theme)$fill %||%
+    "transparent"
+  old_dev <- dev.cur()
+  .device_for("png", res)(filename = file, width = width_in, height = height_in, bg = bg)
+  built <- NULL
+  panel_in <- tryCatch(
+    {
+      # Built only once the device is open: the table sizes its text with the
+      # current device's font metrics.
+      built <- ggplot_build(plot)
+      table <- ggplot_gtable(built)
+      cell <- table$layout[grepl("^panel", table$layout$name), , drop = FALSE][1, ]
+      grid.newpage()
+      grid.draw(table)
+      pushViewport(viewport(layout = grid.layout(
+        length(table$heights),
+        length(table$widths),
+        widths = table$widths,
+        heights = table$heights,
+        respect = table$respect
+      )))
+      pushViewport(viewport(layout.pos.row = cell$t:cell$b, layout.pos.col = cell$l:cell$r))
+      deviceLoc(unit(c(0, 1), "npc"), unit(c(0, 0), "npc"), valueOnly = TRUE)$x
+    },
+    finally = {
+      dev.off()
+      if (old_dev > 1) dev.set(old_dev)
+    }
+  )
+  list(
+    panel = panel_in / width_in,
+    x_range = as.numeric(built$layout$panel_params[[1]]$x.range)
+  )
 }
 
 #' A `renderImage()` payload for a fixed-canvas plot.

@@ -1309,7 +1309,7 @@ server <- function(
 
       is_dir <- dir.exists(path)
       files <- if (is_dir) {
-        list.files(path, pattern = genome_pattern, full.names = TRUE)
+        list.files(path, pattern = genome_pattern, full.names = TRUE, ignore.case = TRUE)
       } else {
         path
       }
@@ -1355,12 +1355,14 @@ server <- function(
       "genome_file",
       mode = "file",
       title = "Choose a genome assembly",
-      pattern = "\\.(fasta|fa|fna)$"
+      pattern = genome_pattern
     )
     picked_dir <- file_dialog$server(
       "genome_dir",
       mode = "dir",
-      title = "Choose a folder of assemblies"
+      title = "Choose a folder of assemblies",
+      pattern = genome_pattern,
+      hint = "Every .fasta, .fa and .fna file in the chosen folder is typed."
     )
 
     observeEvent(picked_file(), {

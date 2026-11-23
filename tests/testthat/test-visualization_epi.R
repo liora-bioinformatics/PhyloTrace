@@ -5,6 +5,7 @@ box::use(
     expect_false,
     expect_gt,
     expect_identical,
+    expect_length,
     expect_s3_class,
     expect_setequal,
     expect_true,
@@ -566,7 +567,23 @@ test_that("an echo that changes nothing the curve is built from does not redraw 
   )
 })
 
-test_that("playback draws each frame without waiting for the controls to settle", {
+# Collects the playback commands the module sends its browser-side player.
+capture_anim <- function(session) {
+  sent <- new.env()
+  sent$msgs <- list()
+  root <- .subset2(session, "parent")
+  root$sendCustomMessage <- function(type, message) {
+    if (identical(type, "pt-epi-anim")) {
+      sent$msgs[[length(sent$msgs) + 1L]] <- message
+    }
+  }
+  sent
+}
+
+# The commands sent so far, in order.
+anim_cmds <- function(sent) vapply(sent$msgs, `[[`, "", "cmd")
+
+test_that("Play prepares one wipe run and leaves the drawn curve alone", {
   generate <- reactiveVal(0L)
 
   testServer(
@@ -577,18 +594,147 @@ test_that("playback draws each frame without waiting for the controls to settle"
       plot_type = reactiveVal("Epi")
     ),
     {
+      sent <- capture_anim(session)
       set_default_inputs(session)
       session$setInputs(epi_interval = "day")
       generate(1L)
       settle(session)
+      drawn <- plot_inputs()
       bins <- epi_bins()
-      expect_identical(plot_inputs()$opts$reveal_to, bins[length(bins)])
 
-      # The first tick lands on the same flush as the press, and is drawn there.
       session$setInputs(epi_play = 1)
       expect_true(anim_playing())
-      expect_identical(plot_inputs()$opts$reveal_to, bins[win_end_idx()])
-      expect_true(win_end_idx() < length(bins))
+      # The browser plays the run; the curve on screen is not redrawn.
+      expect_identical(plot_inputs(), drawn)
+      expect_identical(win_end_idx(), 0L)
+      expect_identical(anim_cmds(sent), c("prepare", "play"))
+      play <- sent$msgs[[2]]
+      expect_identical(play$kind, "wipe")
+      expect_length(play$urls, 2L)
+      # A stop at every bin start and at the last bin's end, left to right
+      # across the image.
+      edges <- unclass(play$edges)
+      expect_length(edges, length(bins) + 1L)
+      expect_true(all(diff(edges) > 0))
+      expect_true(edges[1] > 0 && edges[length(edges)] < 1)
+    }
+  )
+})
+
+test_that("a paused run hands the bin it stopped at back as the window", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      sent <- capture_anim(session)
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "day")
+      generate(1L)
+      settle(session)
+
+      session$setInputs(epi_play = 1)
+      session$setInputs(epi_play = 2)
+      expect_false(anim_playing())
+      expect_identical(anim_cmds(sent)[3], "pause")
+
+      # A report about an older run changes nothing.
+      session$setInputs(anim_event = list(run = 0L, type = "stopped", bins = 2L))
+      expect_identical(win_end_idx(), 0L)
+
+      session$setInputs(anim_event = list(run = 1L, type = "stopped", bins = 2L))
+      expect_identical(win_start_idx(), 1L)
+      expect_identical(win_end_idx(), 2L)
+      release <- sent$msgs[[length(sent$msgs)]]
+      expect_identical(release$cmd, "release")
+      # The browser keeps its frame up until the curve has re-rendered to it.
+      expect_true(release$wait)
+      settle(session)
+      expect_identical(plot_inputs()$opts$reveal_to, epi_bins()[2])
+    }
+  )
+})
+
+test_that("a run played to the end leaves the window as it was", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      sent <- capture_anim(session)
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "day")
+      generate(1L)
+      settle(session)
+      n <- length(epi_bins())
+
+      session$setInputs(epi_play = 1)
+      session$setInputs(anim_event = list(run = 1L, type = "done", bins = n))
+      expect_false(anim_playing())
+      expect_identical(win_end_idx(), 0L)
+      expect_false(sent$msgs[[length(sent$msgs)]]$wait)
+    }
+  )
+})
+
+test_that("a zoomed date axis plays every bin as its own frame", {
+  # The axis moves with the window, so there is no one layout to wipe across.
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      sent <- capture_anim(session)
+      set_default_inputs(session)
+      session$setInputs(epi_interval = "day", epi_zoom_axis = TRUE)
+      generate(1L)
+      settle(session)
+
+      session$setInputs(epi_play = 1)
+      play <- sent$msgs[[length(sent$msgs)]]
+      expect_identical(play$cmd, "play")
+      expect_identical(play$kind, "frames")
+      expect_length(play$urls, length(epi_bins()))
+    }
+  )
+})
+
+test_that("changing the curve mid-run drops the run", {
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_epi$server,
+    args = list(
+      viz_metadata = reactive(meta_fixture()),
+      generate = generate,
+      plot_type = reactiveVal("Epi")
+    ),
+    {
+      sent <- capture_anim(session)
+      set_default_inputs(session)
+      generate(1L)
+      settle(session)
+
+      session$setInputs(epi_play = 1)
+      session$setInputs(epi_background_color = "#123456")
+      settle(session)
+      expect_false(anim_playing())
+      expect_identical(anim_cmds(sent)[length(sent$msgs)], "abort")
     }
   )
 })
@@ -783,38 +929,6 @@ test_that("a fresh curve starts with the window untouched", {
       bins <- epi_bins()
       expect_identical(win_start_date(), bins[1])
       expect_identical(win_end_date(), bins[length(bins)])
-    }
-  )
-})
-
-test_that("Play freezes the start, sweeps the end forward, and stops at the target", {
-  # The window is server-side state, not the slider read back: an
-  # updateSliderInput only reaches the input a client round trip later, so a
-  # loop that consulted the slider would race its own update — the same
-  # reasoning documented on the Map's own anim_idx, which this mirrors.
-  generate <- reactiveVal(0L)
-
-  testServer(
-    visualization_epi$server,
-    args = list(
-      viz_metadata = reactive(meta_fixture()),
-      generate = generate,
-      plot_type = reactiveVal("Epi")
-    ),
-    {
-      set_default_inputs(session)
-      generate(1L)
-      settle(session)
-
-      session$setInputs(epi_play = 1)
-      # Collapsed to the start and already stepping (the tick loop runs on the
-      # same flush, so it has taken at least its first step by now).
-      expect_true(win_end_idx() >= 1L)
-      expect_true(anim_playing())
-
-      # Pressed again: pauses without finishing the sweep.
-      session$setInputs(epi_play = 2)
-      expect_false(anim_playing())
     }
   )
 })

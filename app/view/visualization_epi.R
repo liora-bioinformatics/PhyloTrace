@@ -14,12 +14,9 @@
 #
 # The plot is a ggplot rendered by renderImage (through ggsave, so the whole
 # frame takes the theme background — see the epi_plot output), like the Tree but
-# for that one detail. Playback
-# is this module's own tick loop (see anim_playing), which re-renders the curve
-# one interval further along on each tick — the pattern the Map's "Play" already
-# uses. gganimate would have wanted a GIF renderer (gifski/magick/av), none of
-# which install here without system packages, and a server-rendered GIF would be
-# far slower than simply redrawing a ggplot.
+# for that one detail. Playback is prepared once on Play and played by the
+# browser (see input$epi_play): re-rendering the curve on a server tick, as it
+# once was, held every frame up for a full ggplot draw and image round trip.
 
 box::use(
   bslib[
@@ -43,6 +40,7 @@ box::use(
     updateVirtualSelect
   ],
   rlang[`%||%`],
+  utils[modifyList],
 )
 box::use(
   app /
@@ -75,7 +73,10 @@ box::use(
       rebalance_layers,
       set_layer_granularity,
     ],
-  app / logic / viz_export[canvas_export, canvas_image, render_canvas_png],
+  app / logic / viz_anim[render_frames, serve_images],
+  app /
+    logic /
+    viz_export[canvas_export, canvas_image, render_canvas_png, render_canvas_png_panel],
   app /
     logic /
     viz_fit[ASPECT_MAX, TEXT_SIZE_DEFAULT, legibility_note, text_scale_percent],
@@ -143,7 +144,7 @@ PLOT_MODES <- c(
 )
 PLOT_MODE_DEFAULT <- "stacked"
 
-# How long one playback step is held, in milliseconds.
+# How long playback spends on each bin, in milliseconds.
 STEP_MS <- 450
 
 # What the aspect slider holds before any data is loaded. Generate replaces it
@@ -869,10 +870,6 @@ server <- function(
     # it.
     win_start_idx <- shiny$reactiveVal(0L)
     win_end_idx <- shiny$reactiveVal(0L)
-    # The end index Play is walking towards; frozen at Play-press time so a
-    # mid-run change to epi_bins() (a data update while playing) can't move the
-    # goalposts.
-    anim_target_idx <- shiny$reactiveVal(0L)
 
     # --- controls fitted to the data ----------------------------------------
 
@@ -1323,7 +1320,6 @@ server <- function(
       anim_playing(FALSE)
       win_start_idx(0L)
       win_end_idx(0L)
-      anim_target_idx(0L)
       # The mapping is reactiveVal state, not an input; the seq goes back to
       # zero with it, which is safe only because no card survives to address an
       # id that will be handed out again.
@@ -1761,12 +1757,9 @@ server <- function(
       ))
       shiny$div(
         class = "custom-slider date-slider",
-        # Covered while Play is running (see the anim_playing observer): even
-        # with the re-render gone, the per-tick updateSliderInput still redraws
-        # the ion.rangeSlider handles and rotated tick labels underneath. The
-        # window it would show is already narrated by the on-plot reveal, so the
-        # slider is hidden behind an opaque "Animating…" cover for the duration
-        # rather than left twitching.
+        # Covered while Play is running (see the anim_playing observer): the
+        # window is narrated by the on-plot reveal, and the slider stays where
+        # it was until the run ends.
         id = ns("daterange_slider_wrap"),
         shiny$sliderInput(
           ns("epi_daterange"),
@@ -1851,45 +1844,204 @@ server <- function(
     shiny$observeEvent(input$epi_step_end_prev, step_end_by(-1L))
     shiny$observeEvent(input$epi_step_end_next, step_end_by(1L))
 
-    # Play freezes the start handle wherever it currently sits, collapses the
-    # window to that single point, and then sweeps the end handle forward to
-    # wherever the end handle was — exactly the Map's own Play (which freezes
-    # its start bin and advances only the end index each tick). A pressed-again
-    # Play just pauses.
+    # Play reveals the window's bins one after another from the start handle to
+    # the end handle. The whole run is prepared once, here, and handed to the
+    # browser (app/js/viz-anim.js), which plays it on its own clock, so no frame
+    # waits on the server and the curve never re-renders mid-run. A
+    # pressed-again Play pauses where the run has got to.
+    #
+    # Wherever every frame shares one layout — the fixed date axis — a run is
+    # just two renders, the window with nothing revealed and fully revealed,
+    # and the browser wipes from one to the other, a continuous sweep rather
+    # than a step per bin. Where the layout moves with the window (the zoomed
+    # axis), or a label follows the newest bin (the cumulative end labels),
+    # every frame is rendered up front and played as a flipbook.
+
+    # Id of the latest run; the browser's reports name the run they are about.
+    last_run <- 0L
+    # The run the browser is still playing, dropped if playback stops from here.
+    open_run <- NULL
+    # The latest run's first and last bin index.
+    run_window <- NULL
+    # What the latest run was drawn from, its window aside.
+    run_picture <- NULL
+
+    # The curve's inputs with the window taken out: what a run's images show.
+    without_window <- function(p) {
+      p$opts$reveal_from <- NULL
+      p$opts$reveal_to <- NULL
+      p
+    }
+
+    # Sends one playback command to the browser's player.
+    send_anim <- function(cmd, ...) {
+      session$sendCustomMessage(
+        "pt-epi-anim",
+        list(
+          cmd = cmd,
+          output = ns("epi_plot"),
+          stage = ns("plot_stage"),
+          input = ns("anim_event"),
+          run = last_run,
+          ...
+        )
+      )
+    }
+
+    # The curve `p` with bins `from` to `to` revealed, built at its layout.
+    reveal_frame <- function(p, from, to) {
+      opts <- modifyList(p$opts, list(reveal_from = from, reveal_to = to))
+      lay <- epi_plot$epi_layout(
+        p$data,
+        c(
+          opts,
+          list(
+            width_in = epi_plot$EPI_CANVAS_IN,
+            aspect = p$aspect,
+            text_scale = text_scale_percent(p$text_size)
+          )
+        )
+      )
+      list(plot = epi_plot$build_epi_ggplot(p$data, c(opts, list(layout = lay))), lay = lay)
+    }
+
+    # Renders what one run of bins s to e plays: for a wipe the first and the
+    # last frame and where each bin ends across them (fractions of the image
+    # width), for a flipbook one image per bin.
+    prepare_run <- function(p, bins, s, e) {
+      wipe <- isTRUE(p$opts$fixed_axis) &&
+        !(identical(p$opts$mode, "cumulative") && isTRUE(p$opts$label_ends))
+      if (wipe) {
+        files <- c(tempfile(fileext = ".png"), tempfile(fileext = ".png"))
+        # The run opens on its first bin alone, as the old stepped Play did. A
+        # window revealing nothing at all would also drop the legend keys the
+        # moving average and cumulative lines add, and shift the layout.
+        first <- reveal_frame(p, bins[s], bins[s])
+        full <- reveal_frame(p, bins[s], bins[e])
+        geom <- render_canvas_png_panel(
+          first$plot,
+          files[1],
+          first$lay$width_in,
+          first$lay$height_in
+        )
+        render_canvas_png(full$plot, files[2], full$lay$width_in, full$lay$height_in)
+        # A bin's bars run from its start to its start plus its calendar width,
+        # so the wipe stops at every bin's start and the last bin's end. It
+        # starts at the first bin's start although that bin's bars are in both
+        # images: the cumulative and moving-average lines begin inside it.
+        edges <- as.numeric(c(
+          bins[s:e],
+          bins[e] + epi_plot$exact_bin_widths(bins[e], p$opts$interval)
+        ))
+        frac <- geom$panel[1] +
+          (edges - geom$x_range[1]) / diff(geom$x_range) * diff(geom$panel)
+        return(list(
+          kind = "wipe",
+          urls = serve_images(session, "epi_anim", files),
+          edges = frac
+        ))
+      }
+      # Named here, not in the workers: forked processes share one random
+      # state and would pick the same temporary names.
+      files <- vapply(s:e, function(k) tempfile(fileext = ".png"), character(1))
+      render_frames(
+        seq_along(files),
+        function(i) {
+          frame <- reveal_frame(p, bins[s], bins[s + i - 1L])
+          render_canvas_png(frame$plot, files[i], frame$lay$width_in, frame$lay$height_in)
+          files[i]
+        },
+        progress = function(done) send_anim("progress", value = done)
+      )
+      list(kind = "frames", urls = serve_images(session, "epi_anim", files))
+    }
+
     shiny$observeEvent(input$epi_play, {
       if (isTRUE(anim_playing())) {
+        open_run <<- NULL
+        send_anim("pause")
         anim_playing(FALSE)
         return(invisible(NULL))
       }
+      p <- shiny$isolate(plot_inputs())
       bins <- shiny$isolate(epi_bins())
-      shiny$req(length(bins) >= 2)
+      shiny$req(p, length(bins) >= 2)
       s <- resolve_idx(shiny$isolate(win_start_idx()), bins, 1L)
       e <- resolve_idx(shiny$isolate(win_end_idx()), bins, length(bins))
       shiny$req(e > s)
-      anim_target_idx(e)
-      win_start_idx(s)
-      win_end_idx(s)
-      shiny$updateSliderInput(
-        session,
-        "epi_daterange",
-        value = slider_bounds(s, s)
+      last_run <<- last_run + 1L
+      send_anim("prepare")
+      run <- tryCatch(prepare_run(p, bins, s, e), error = function(err) err)
+      if (inherits(run, "error")) {
+        send_anim("abort")
+        shiny$showNotification(
+          paste("The animation could not be prepared:", conditionMessage(run)),
+          type = "error"
+        )
+        return(invisible(NULL))
+      }
+      run_window <<- c(s, e)
+      run_picture <<- without_window(p)
+      open_run <<- last_run
+      send_anim(
+        "play",
+        kind = run$kind,
+        urls = I(run$urls),
+        # A flipbook has no wipe stops.
+        edges = if (!is.null(run$edges)) I(run$edges),
+        step_ms = STEP_MS
       )
       anim_playing(TRUE)
     })
 
+    # The browser's report that a run ended: played to the end, or stopped by
+    # Pause at a bin. The window takes the bin it stopped at, and the browser
+    # keeps its last frame up until the curve has re-rendered to match.
+    shiny$observeEvent(input$anim_event, {
+      ev <- input$anim_event
+      if (!identical(as.integer(ev$run), last_run) || is.null(run_window)) {
+        return(invisible(NULL))
+      }
+      open_run <<- NULL
+      anim_playing(FALSE)
+      s <- run_window[1]
+      e <- run_window[2]
+      k <- min(max(s + as.integer(ev$bins %||% 0L) - 1L, s), e)
+      moved <- k != resolve_idx(shiny$isolate(win_end_idx()), shiny$isolate(epi_bins()), e)
+      if (moved) {
+        win_start_idx(s)
+        win_end_idx(k)
+        shiny$updateSliderInput(session, "epi_daterange", value = slider_bounds(s, k))
+      }
+      send_anim("release", wait = moved)
+    })
+
+    # A change to anything the curve is drawn from but its window ends the run:
+    # the browser is playing images of the curve as it was.
+    shiny$observeEvent(plot_inputs(), {
+      if (isTRUE(anim_playing()) && !identical(without_window(plot_inputs()), run_picture)) {
+        anim_playing(FALSE)
+      }
+    })
+
     shiny$observeEvent(anim_playing(), {
       playing <- isTRUE(anim_playing())
+      # Stopped from here (a new bin set, a reset, a changed curve): drop the
+      # run the browser is still playing.
+      if (!playing && !is.null(open_run)) {
+        open_run <<- NULL
+        send_anim("abort")
+      }
       shiny$updateActionButton(
         session,
         "epi_play",
         label = if (playing) "Pause" else "Play",
         icon = shiny$icon(if (playing) "pause" else "play")
       )
-      # Lock every other Time control for the duration of playback: a manual
-      # drag, step, interval switch or axis-zoom toggle mid-run is either
-      # indistinguishable server-side from a tick or rebinds the very bins the
-      # loop is walking, both of which race the animation into buggy behaviour.
-      # Play itself stays live so it can pause.
+      # Lock every other Time control for the duration of playback: a drag,
+      # step, interval switch or axis-zoom toggle mid-run would redraw or rebin
+      # the curve the browser is playing images of. Play itself stays live so
+      # it can pause.
       shinyjs::toggleState("epi_daterange", condition = !playing)
       shinyjs::toggleState("epi_step_start_prev", condition = !playing)
       shinyjs::toggleState("epi_step_start_next", condition = !playing)
@@ -1903,36 +2055,6 @@ server <- function(
         class = "date-slider--playing",
         condition = playing
       )
-    })
-
-    # The tick loop. Mirrors the guarded observe() + invalidateLater() pattern
-    # the Map's animation and typing.R's progress poll already use. Stops (does
-    # not reschedule) once the target is reached, and goes dormant while
-    # another engine is showing — navset_hidden only hides a panel with CSS, it
-    # does not suspend a running observe().
-    shiny$observe({
-      if (!isTRUE(anim_playing())) {
-        return(NULL)
-      }
-      if (!identical(plot_type(), "Epi")) {
-        return(NULL)
-      }
-      bins <- shiny$isolate(epi_bins())
-      cur <- shiny$isolate(win_end_idx())
-      target <- shiny$isolate(anim_target_idx())
-      if (!length(bins) || target > length(bins) || cur >= target) {
-        anim_playing(FALSE)
-        return(NULL)
-      }
-      nxt <- cur + 1L
-      win_end_idx(nxt)
-      s <- shiny$isolate(win_start_idx())
-      shiny$updateSliderInput(
-        session,
-        "epi_daterange",
-        value = slider_bounds(s, nxt)
-      )
-      shiny$invalidateLater(STEP_MS, session)
     })
 
     # --- plot ----------------------------------------------------------------
@@ -2000,14 +2122,10 @@ server <- function(
     #
     # `generation` keeps a Generate that changes nothing visible: the loading
     # overlay comes down on the plot's value event, so a re-confirmed identical
-    # selection must still draw. Playback does not wait to settle: its ticks are
-    # STEP_MS apart, and each one is a frame. priority: the barrier settles
-    # before outputs are recalculated in the same flush.
+    # selection must still draw. priority: the barrier settles before outputs
+    # are recalculated in the same flush.
     plot_inputs <- shiny$reactiveVal(NULL)
-    settled_source <- shiny$debounce(
-      plot_source,
-      function() if (isTRUE(anim_playing())) 0 else PLOT_SETTLE_MS
-    )
+    settled_source <- shiny$debounce(plot_source, PLOT_SETTLE_MS)
     shiny$observe(
       {
         current <- settled_source()

@@ -1748,12 +1748,19 @@ build_epi_ggplot <- function(binned, opts = list()) {
     p <- p + l
   }
 
-  # Overlay double-line moving average (background outline + foreground stroke)
-  if (!is.null(mov_shown) && nrow(mov_shown) > 1) {
+  # Overlay double-line moving average (background outline + foreground stroke).
+  # The layer and its legend key stay whenever the average is asked for, even
+  # while the revealed window holds too little of it to draw a line: the layout
+  # reserves the key either way, and a key that came and went with the window
+  # would reflow the legend mid-Play.
+  if (!is.null(mov_shown)) {
+    if (sum(!is.na(mov_shown$avg)) < 2) {
+      mov_shown <- mov_shown[0, , drop = FALSE]
+    }
     mov_shown$x <- mov_shown$date_bin +
       exact_bin_widths(mov_shown$date_bin, interval) / 2
     ma_label <- epi_moving_avg_label(moving_avg_window, interval)
-    mov_shown$series <- ma_label
+    mov_shown$series <- rep(ma_label, nrow(mov_shown))
     p <- p +
       geom_line(
         data = mov_shown,
@@ -1770,6 +1777,7 @@ build_epi_ggplot <- function(binned, opts = list()) {
       scale_linetype_manual(
         name = NULL,
         values = setNames("solid", ma_label),
+        limits = ma_label,
         guide = guide_legend(
           order = 99,
           override.aes = list(colour = moving_avg_color, linewidth = 0.9)
@@ -1777,8 +1785,9 @@ build_epi_ggplot <- function(binned, opts = list()) {
       )
   }
 
-  # Overlay double-line cumulative trend step curve
-  if (!is.null(cum_shown) && nrow(cum_shown)) {
+  # Overlay double-line cumulative trend step curve; a single revealed bin has
+  # no line yet (and geom_step() would warn about it).
+  if (!is.null(cum_shown) && nrow(cum_shown) > 1) {
     mapping <- aes(x = .data$date_bin, y = .data$scaled)
     p <- p +
       geom_step(
@@ -1892,8 +1901,12 @@ square_panel_ratio <- function(binned, mode = "stacked") {
 
 .mode_layers <- function(shown, mode, square, interval) {
   if (identical(mode, "cumulative")) {
+    # A stratum with a single revealed bin has no line to draw yet, and
+    # geom_step() warns about it on every render (a one-bin window, Play's first
+    # frame). Its legend key stays: the colour scale's limits list every stratum.
+    lines <- table(shown$stratum)
     return(geom_step(
-      data = shown,
+      data = shown[shown$stratum %in% names(lines)[lines > 1], , drop = FALSE],
       aes(x = .data$date_bin, y = .data$count, colour = .data$stratum),
       linewidth = 0.7
     ))

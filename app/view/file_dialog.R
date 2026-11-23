@@ -63,7 +63,8 @@ ui <- function(id, label, icon_name = "folder-open", class = NULL, width = NULL)
 #' @param title Character dialog title.
 #' @param pattern Regular expression of the files the caller expects, or
 #'   `NULL`. Matching files are emphasised; other files stay listed and
-#'   pickable, since browsers save some downloads without an extension.
+#'   pickable, since browsers save some downloads without an extension. In
+#'   `"dir"` mode files are listed for orientation only and cannot be picked.
 #' @param multiple Logical. Allow several files (`"file"` mode).
 #' @param allow_dir Logical. In `"file"` mode, also accept a folder.
 #' @param default_name Function returning the proposed file name (`"save"`).
@@ -131,8 +132,9 @@ server <- function(
       listing_no <<- listing_no + 1L
       rows <- tryCatch(
         # Hidden entries are never listed; a hidden folder can still be
-        # opened by typing its path.
-        file_browser$list_dir(current(), files = mode != "dir", pattern = pattern),
+        # opened by typing its path. Folder mode lists files too, inert, so a
+        # folder of the expected files does not look empty.
+        file_browser$list_dir(current(), files = TRUE, pattern = pattern),
         error = function(e) {
           structure(
             file_browser$list_dir(tempfile(), files = FALSE),
@@ -393,7 +395,10 @@ server <- function(
           '<span class="fb-name">%s</span><span class="fb-size">%s</span>',
           '<span class="fb-date">%s</span></div>'
         ),
-        ifelse(rows$is_dir, " is-dir", ifelse(rows$match, " is-match", " is-other")),
+        paste0(
+          ifelse(rows$is_dir, " is-dir", ifelse(rows$match, " is-match", " is-other")),
+          ifelse(!rows$is_dir & mode == "dir", " is-inert", "")
+        ),
         seq_len(nrow(rows)),
         row_icons(rows$name, rows$is_dir),
         htmlEscape(rows$name),
