@@ -21,7 +21,8 @@ var lastGestureAt = 0;
 var probeTimer = null;
 var graceTimer = null;
 var failsafeTimer = null;
-var holdFailsafeTimer = null;
+// Active server-driven holds, by key: each maps to its own failsafe timer.
+var holds = {};
 var shieldEl = null;
 
 function isTypingSurface(el) {
@@ -136,23 +137,39 @@ function engage() {
  * of `body` regardless of stacking, and a single `pointer-events: auto` re-opens
  * exactly the controls marked `.pt-shield-passthrough`.
  */
-function holdShield(maxMs) {
-  if (holdFailsafeTimer) clearTimeout(holdFailsafeTimer);
+function holdShield(maxMs, key) {
+  var k = key || "default";
+  if (holds[k]) clearTimeout(holds[k]);
   document.documentElement.classList.add("pt-busy-hold");
 
   // The server should always release, but a crash mid-operation must not leave
   // the UI permanently dead. A caller that knows its operation is short (a plot
   // export) passes a tighter bound, so a lost release costs seconds, not minutes.
-  holdFailsafeTimer = setTimeout(function () {
-    holdFailsafeTimer = null;
+  holds[k] = setTimeout(function () {
     // eslint-disable-next-line no-console
-    console.warn("busy-shield: hold exceeded its failsafe, releasing");
-    releaseHold();
+    console.warn("busy-shield: hold '" + k + "' exceeded its failsafe, releasing");
+    releaseHold(k);
   }, maxMs > 0 ? maxMs : MAX_HOLD_MS);
 }
 
-function releaseHold() {
-  if (holdFailsafeTimer) { clearTimeout(holdFailsafeTimer); holdFailsafeTimer = null; }
+// Holds are counted by key, so two overlapping operations (a plot still being
+// revealed while an export starts) cannot end each other's hold: the UI frees
+// only once every key has been released.
+function releaseHold(key) {
+  var k = key || "default";
+  if (holds[k]) {
+    clearTimeout(holds[k]);
+    delete holds[k];
+  }
+  if (Object.keys(holds).length === 0) {
+    document.documentElement.classList.remove("pt-busy-hold");
+  }
+}
+
+// Drops every hold at once, for a session that can no longer release its own.
+function releaseAllHolds() {
+  Object.keys(holds).forEach(function (k) { clearTimeout(holds[k]); });
+  holds = {};
   document.documentElement.classList.remove("pt-busy-hold");
 }
 
@@ -226,5 +243,5 @@ $(document).on("shiny:idle", function () {
 // A dead session can never send its own release, so drop both shields.
 $(document).on("shiny:disconnected", function () {
   release();
-  releaseHold();
+  releaseAllHolds();
 });

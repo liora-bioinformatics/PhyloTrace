@@ -99,20 +99,10 @@ cc_license_url <- function(kind, version = NULL) {
 #' @export
 PUBMLST_API <- "https://rest.pubmlst.org/db"
 
-#' PubMLST Account Page
+#' Institut Pasteur BIGSdb Web Interface
 #'
-#' @description Where users register and create a personal API key.
-#' @export
-PUBMLST_ACCOUNT <- "https://pubmlst.org/bigsdb"
-
-#' Institut Pasteur BIGSdb REST API
-#'
-#' @description Root of the API of BIGSdb-Pasteur's databases, named in the scheme download
-#'   guide's commands.
-#' @export
-PASTEUR_API <- "https://bigsdb.pasteur.fr/api/db"
-
-#' Institut Pasteur BIGSdb Account Page
+#' @description Base of the scheme pages the download guide links to
+#'   (`?db=<database>&page=downloadAlleles&scheme_id=<id>`).
 #' @export
 PASTEUR_ACCOUNT <- "https://bigsdb.pasteur.fr/cgi-bin/bigsdb/bigsdb.pl"
 

@@ -3369,7 +3369,7 @@ setup_ui <- function(id) {
 # `options_ui` is accepted for one signature across all engines; this one has no
 # distance-computation controls, so the tab never passes any.
 #' @export
-ui <- function(id, generate_id, options_ui = NULL) {
+ui <- function(id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   bslib$layout_sidebar(
@@ -3394,32 +3394,6 @@ ui <- function(id, generate_id, options_ui = NULL) {
     ),
     useShinyjs(),
     useWaiter(),
-    # Hide the "press Generate" prompt the instant Generate is clicked —
-    # mirrors the MST/Tree engines' loading-overlay script — rather than
-    # waiting for `generated()` to flip server-side, which for Map only
-    # happens after geocoding finishes (the prompt would otherwise stay
-    # visible underneath the geocoding waiter for the whole wait).
-    shiny$tags$script(
-      shiny$HTML(
-        paste0(
-          "(function(){",
-          "var gen='",
-          generate_id,
-          "';var stage='",
-          ns("plot_stage"),
-          "';",
-          "$(document).on('click','#'+gen.replace(/([:.])/g,'\\\\$1'),",
-          "function(){",
-          "var s=document.getElementById(stage);if(!s)return;",
-          # Ignore Generate clicks while this engine's panel is hidden (the
-          # sibling engine is active) — offsetParent is null when display:none.
-          "if(s.offsetParent===null)return;",
-          "var p=s.querySelector('.viz-plot-prompt');if(p)p.style.display='none';",
-          "});",
-          "})();"
-        )
-      )
-    ),
     # Drives the geocoding waiter's live "Remaining time M:SS / M:SS" countdown.
     # Geocoding blocks the R session, so the tick can't be pushed from the
     # server; instead this runs once on page load and watches for the
@@ -4136,7 +4110,14 @@ server <- function(
       shiny$div(
         class = "map-plot-stage html-fill-container html-fill-item",
         id = ns("plot_stage"),
+        # What app/js/plot-reveal.js waits on before it ends the loading
+        # overlay and the UI hold Generate put up: the geocoding waiter only
+        # covers the server's share, and Leaflet still has to build the map
+        # and fetch its tiles once that is done.
+        `data-pt-output` = ns("map"),
+        `data-pt-reveal` = "leaflet",
         prompt,
+        viz_helpers$plot_loading_overlay(),
         shiny$div(
           id = ns("map_wrap"),
           style = if (isTRUE(shiny$isolate(generated()))) {

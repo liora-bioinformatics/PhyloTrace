@@ -3357,8 +3357,10 @@ mst_stats_caption <- function(counts, weights) {
     "if(!this.__ptFitted){this.__ptFitted=true;",
     .fit_view_js(extent),
     "}",
-    "document.querySelectorAll('.viz-plot-stage')",
-    ".forEach(function(s){s.classList.remove('is-loading');});}"
+    # Reports the draw to app/js/plot-reveal.js, which ends this stage's
+    # loading overlay and UI hold. Absent from a saved HTML file, hence the
+    # guard.
+    "if(window.__ptPlotDrawn&&this.body)window.__ptPlotDrawn(this.body.container);}"
   )
 }
 

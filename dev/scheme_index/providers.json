@@ -24,7 +24,8 @@
         "contact": null,
         "status": "not needed for listing",
         "notes": "Users download scheme files themselves; the app never contacts cgmlst.org."
-      }
+      },
+      "download_guide": "Browser steps only: robots.txt closes /ncs/schema/ to scripts, so no commands are shown."
     },
     "chewie_ns": {
       "name": "Chewie-NS",
@@ -50,7 +51,8 @@
         "contact": null,
         "status": "not needed for listing",
         "notes": "Check schema authors' terms before commercial use of a schema."
-      }
+      },
+      "download_guide": "One-command ZIP download from the public API, which invites programmatic use; no account. Terms reviewed 2026-11-23."
     },
     "pubmlst": {
       "name": "PubMLST",
@@ -80,7 +82,8 @@
         "granted_by": "Dr. Keith Jolley, University of Oxford",
         "conditions": "Allowed as long as no scheme data is downloaded or distributed. robots.txt is aimed at crawler bots, not scripted API use. Up to 4 concurrent connections allowed, but sequential requests from a single process are preferred; no pause between calls needed.",
         "notes": "Request: weekly automated listing of scheme metadata only, excluding rMLST, identified with a contact address."
-      }
+      },
+      "download_guide": "Commands without an API key only. The terms' restriction on 'software tools that enable the use or the downloading of data, including by academic users via their own API key' sits in section 4, which applies only to data submitted from 2025 on; pre-2025 data is unrestricted, and anonymous API access serves only that. cgMLST commands fetch only allele 1 of each locus (the reference PhyloTrace keeps). An API-key option would need a licence contract. Reviewed 2026-11-23."
     },
     "pasteur": {
       "name": "Institut Pasteur BIGSdb",
@@ -109,7 +112,8 @@
         "granted_by": "Thomas Miron, Technology Transfer & Industrial Partnership, Institut Pasteur",
         "conditions": "The use as described is acceptable and compliant with the BIGSdb-Pasteur policy: weekly at most, metadata only (no alleles, profiles or isolate data), sequential requests with pauses, identified with a contact address.",
         "notes": "Keep the pauses and the contact address in the User-Agent; any wider use needs a new request."
-      }
+      },
+      "download_guide": "No commands: the policy's identical clause on software tools that enable downloading has no date limit, so any download command needs a licence contract (bigsdb-policy@pasteur.fr). The guide links to the scheme's download pages and Pasteur's API-key page. Reviewed 2026-11-23."
     },
     "enterobase": {
       "name": "EnteroBase",
@@ -137,7 +141,8 @@
         "contact": "enterobase@warwick.ac.uk",
         "status": "not requested",
         "notes": "Ask together with a licence question if automated listing or commercial use of EnteroBase schemes is wanted."
-      }
+      },
+      "download_guide": "Commands download from the public scheme directory (/schemes/), which EnteroBase's documentation points users to; no account. The terms have no clause on tools that enable downloading; use stays academic-only. Reviewed 2026-11-23."
     }
   }
 }

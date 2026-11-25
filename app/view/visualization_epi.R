@@ -87,10 +87,12 @@ box::use(
       apply_controls,
       collect_input_snapshot,
       control_families,
+      end_plot_loading,
       field_select,
       fit_hint,
       granularity_select,
       on_confirmed_reset,
+      plot_loading_overlay,
       reset_button_row,
       scale_select,
       suitable_scale_categories,
@@ -589,7 +591,7 @@ epi_controls <- function(ns) {
 #' @export
 # `options_ui` is accepted for one signature across all engines; this one has no
 # distance-computation controls, so the tab never passes any.
-ui <- function(id, generate_id, options_ui = NULL) {
+ui <- function(id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -614,38 +616,6 @@ ui <- function(id, generate_id, options_ui = NULL) {
     ),
     shinyjs::useShinyjs(),
     waiter::useWaiter(),
-    # Loading overlay: shown when Generate (parent namespace) is clicked, scoped
-    # to this engine's own stage id, and cleared when the plot re-renders — the
-    # Tree's shiny:value variant, since this is an image output too.
-    shiny$tags$script(
-      shiny$HTML(
-        paste0(
-          "(function(){",
-          "var gen='",
-          generate_id,
-          "';var out='",
-          ns("epi_plot"),
-          "';var stage='",
-          ns("plot_stage"),
-          "';var timer;",
-          "function set(on){var s=document.getElementById(stage);if(!s)return;",
-          # Ignore Generate clicks while this engine's panel is hidden (a
-          # sibling engine is active) — offsetParent is null when display:none.
-          "if(on&&s.offsetParent===null)return;",
-          "s.classList.toggle('is-loading',on);",
-          "if(on){var p=s.querySelector('.viz-plot-prompt');if(p)p.style.display='none';",
-          "clearTimeout(timer);timer=setTimeout(function(){set(false);},45000);}",
-          "else{clearTimeout(timer);}}",
-          "$(document).on('click','#'+gen.replace(/([:.])/g,'\\\\$1'),",
-          "function(){set(true);});",
-          "$(document).on('shiny:value shiny:recalculated',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "$(document).on('shiny:error',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "})();"
-        )
-      )
-    ),
     card(
       full_screen = TRUE,
       class = "plot-card",
@@ -1642,7 +1612,7 @@ server <- function(
       meta <- viz_metadata()
       if (is.null(meta) || !nrow(meta)) {
         shiny$showNotification("No isolate metadata to plot.", type = "warning")
-        shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+        end_plot_loading()
         return()
       }
 
@@ -1668,10 +1638,10 @@ server <- function(
         # dates get filled in, or at another date axis, rather than just
         # reporting the curve is empty.
         notify_no_dates()
-        # No plot will render, so the overlay's clearing event never fires —
-        # hide it now rather than leaving the spinner up for 45s. The click
-        # also hid the prompt, which generated() staying FALSE never re-shows.
-        shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+        # No plot will render, so the paint that normally ends the loading
+        # overlay and the UI hold never comes — end both now. The click also
+        # hid the prompt, which generated() staying FALSE never re-shows.
+        end_plot_loading()
         shinyjs::show(id = "viz_prompt")
         awaiting_dates <<- TRUE
         generated(FALSE)
@@ -2259,18 +2229,15 @@ server <- function(
         )
       )
 
-      loading <- shiny$div(
-        class = "viz-loading",
-        shiny$div(
-          class = "spinner-custom viz-spinner-dark",
-          waiter::spin_flower(),
-          shiny$tags$h5("Generating plot …", class = "viz-loading_text")
-        )
-      )
+      loading <- plot_loading_overlay()
 
       shiny$div(
         class = "viz-plot-stage epi-stage",
         id = ns("plot_stage"),
+        # What app/js/plot-reveal.js waits on before it ends the loading
+        # overlay and the UI hold Generate put up.
+        `data-pt-output` = ns("epi_plot"),
+        `data-pt-reveal` = "image",
         prompt,
         loading,
         zoom_viewport(shiny$plotOutput(ns("epi_plot"), height = "auto"))

@@ -34,6 +34,7 @@ box::use(
     downloadHandler,
     showNotification,
     tags,
+    tagAppendAttributes,
     tagList,
     span,
     showModal,
@@ -520,12 +521,18 @@ ui <- function(id, plot_type) {
           class = "plot-setup",
           title = NULL,
           width = 340,
-          actionButton(
-            ns("generate"),
-            "Generate",
-            icon = icon("chalkboard"),
-            class = "btn-primary",
-            width = "100%"
+          # `data-pt-stage` names the engine's plot stage: clicking Generate
+          # puts up that stage's loading overlay and holds the UI until the
+          # plot has painted (app/js/plot-reveal.js).
+          tagAppendAttributes(
+            actionButton(
+              ns("generate"),
+              "Generate",
+              icon = icon("chalkboard"),
+              class = "btn-primary",
+              width = "100%"
+            ),
+            `data-pt-stage` = NS(ns("engine"), "plot_stage")
           ),
           accordion(
             id = ns("setup_accordion"),
@@ -581,7 +588,6 @@ ui <- function(id, plot_type) {
         as_fill_carrier(
           spec$mod$ui(
             ns("engine"),
-            generate_id = ns("generate"),
             # The distance-computation controls, rendered in the engine's own
             # right-hand sidebar rather than here. They stay namespaced to this
             # module, so every observer behind them is unchanged — what moves is
@@ -2230,6 +2236,18 @@ server <- function(
       # Non-UI state can be set straight away.
       if (!is.null(preset$plot_id)) {
         plot_id(as.integer(preset$plot_id))
+      }
+      # A reopened plot is generated without anyone pressing Generate, after
+      # the two deferrals below. Its loading overlay and UI hold start now,
+      # in the same flush that opens the tab, so the dashboard click stays
+      # blocked until the plot is on screen instead of freeing the UI over an
+      # empty tab for the length of those deferrals. The synthetic Generate
+      # click takes the same entry over (app/js/plot-reveal.js).
+      if (!is.null(preset$snapshot)) {
+        runjs(sprintf(
+          "if (window.__ptPlotLoading) window.__ptPlotLoading('%s', true);",
+          NS(ns("engine"), "plot_stage")
+        ))
       }
       if (!is.null(preset$selection)) {
         selected_isolates(preset$selection)

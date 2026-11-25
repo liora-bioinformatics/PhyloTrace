@@ -106,10 +106,12 @@ box::use(
       apply_controls,
       control_families,
       on_confirmed_reset,
+      plot_loading_overlay,
       reset_button_row,
       collect_input_snapshot,
       count_label,
       distance_issue_lines,
+      end_plot_loading,
       PLOT_SETTLE_MS,
       status_line,
       text_size_slider,
@@ -1267,7 +1269,7 @@ tree_status <- function(n_tips, dist, algo, na_handling) {
 }
 
 #' @export
-ui <- function(id, generate_id, options_ui = NULL) {
+ui <- function(id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -1293,39 +1295,6 @@ ui <- function(id, generate_id, options_ui = NULL) {
     shinyjs::useShinyjs(),
     # Loads waiter.js so the flower spinner used in the loading overlay is styled.
     waiter::useWaiter(),
-    # Loading overlay: shown the moment Generate (in the parent namespace) is
-    # clicked, hidden once the ggtree render fires its value event. Scoped to
-    # this engine's own stage id so it never touches the sibling MST panel. A
-    # timeout is a safety net.
-    shiny$tags$script(
-      shiny$HTML(
-        paste0(
-          "(function(){",
-          "var gen='",
-          generate_id,
-          "';var out='",
-          ns("tree_plot"),
-          "';var stage='",
-          ns("plot_stage"),
-          "';var timer;",
-          "function set(on){var s=document.getElementById(stage);if(!s)return;",
-          # Ignore Generate clicks while this engine's panel is hidden (the
-          # sibling engine is active) — offsetParent is null when display:none.
-          "if(on&&s.offsetParent===null)return;",
-          "s.classList.toggle('is-loading',on);",
-          "if(on){var p=s.querySelector('.viz-plot-prompt');if(p)p.style.display='none';",
-          "clearTimeout(timer);timer=setTimeout(function(){set(false);},45000);}",
-          "else{clearTimeout(timer);}}",
-          "$(document).on('click','#'+gen.replace(/([:.])/g,'\\\\$1'),",
-          "function(){set(true);});",
-          "$(document).on('shiny:value shiny:recalculated',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "$(document).on('shiny:error',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "})();"
-        )
-      )
-    ),
     card(
       full_screen = TRUE,
       class = "plot-card",
@@ -2363,10 +2332,9 @@ server <- function(
             "Could not build a tree: need at least 3 isolates in the database.",
             type = "warning"
           )
-          # No plot will render, so the value event that normally clears the
-          # loading overlay never fires — hide it now instead of leaving the
-          # spinner up until the 45s client-side safety timeout.
-          shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+          # No plot will render, so the paint that normally ends the loading
+          # overlay and the UI hold never comes — end both now.
+          end_plot_loading()
         }
         if (!is.null(tree)) {
           refit_layout(tree, notify = TRUE, choose = TRUE)
@@ -2714,19 +2682,16 @@ server <- function(
         )
       )
 
-      # Loading overlay, shown/hidden client-side via the `.is-loading` class.
-      loading <- shiny$div(
-        class = "viz-loading",
-        shiny$div(
-          class = "spinner-custom viz-spinner-dark",
-          waiter::spin_flower(),
-          shiny$tags$h5("Generating plot …", class = "viz-loading_text")
-        )
-      )
+      # Shown while the stage has `.is-loading`; see app/js/plot-reveal.js.
+      loading <- plot_loading_overlay()
 
       shiny$div(
         class = "viz-plot-stage tree-stage",
         id = ns("plot_stage"),
+        # What app/js/plot-reveal.js waits on before it ends the loading
+        # overlay and the UI hold Generate put up.
+        `data-pt-output` = ns("tree_plot"),
+        `data-pt-reveal` = "image",
         prompt,
         loading,
         # height="auto" lets the container shrink-wrap the image, whose pixel

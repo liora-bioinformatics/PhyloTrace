@@ -20,6 +20,8 @@ box::use(
   ],
   viridisLite[viridis],
   rlang[`%||%`],
+  shinyjs[runjs],
+  waiter[spin_flower],
 )
 
 box::use(
@@ -917,6 +919,42 @@ zoom_viewport <- function(plot) {
     # Hidden until the first image loads; the script writes its text.
     shiny$div(class = "viz-zoom-badge", hidden = NA)
   )
+}
+
+#' Plot Stage Loading Overlay
+#'
+#' The spinner every engine's plot stage carries. It is shown while the stage
+#' has `.is-loading`, which app/js/plot-reveal.js sets from Generate until the
+#' plot has actually painted.
+#'
+#' @return A tag, for directly inside the plot stage div.
+#' @export
+plot_loading_overlay <- function() {
+  shiny$div(
+    class = "viz-loading",
+    shiny$div(
+      class = "spinner-custom viz-spinner-dark",
+      spin_flower(),
+      shiny$tags$h5("Generating plot …", class = "viz-loading_text")
+    )
+  )
+}
+
+#' End a Plot Stage's Loading State
+#'
+#' Drops the stage's loading overlay together with the UI hold Generate took
+#' out (see app/js/plot-reveal.js). For a Generate that ends without drawing
+#' anything, so no paint will ever arrive to end it.
+#'
+#' @param session The engine's session; its `plot_stage` is the stage ended.
+#' @return Invisible `NULL`.
+#' @export
+end_plot_loading <- function(session = shiny$getDefaultReactiveDomain()) {
+  runjs(sprintf(
+    "if (window.__ptPlotLoading) window.__ptPlotLoading('%s', false);",
+    session$ns("plot_stage")
+  ))
+  invisible(NULL)
 }
 
 #' Milliseconds the Controls Have to Stop Moving Before a Plot Is Rebuilt

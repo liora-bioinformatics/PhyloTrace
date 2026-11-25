@@ -93,9 +93,11 @@ box::use(
       field_select,
       granularity_select,
       control_families,
+      end_plot_loading,
       fit_hint,
       layer_action_btn,
       on_confirmed_reset,
+      plot_loading_overlay,
       PLOT_SETTLE_MS,
       reset_button_row,
       scale_select,
@@ -183,6 +185,32 @@ ASPECT_STEP <- 0.05
 .snap_aspect <- function(value) {
   snapped <- ASPECT_MIN + round((value - ASPECT_MIN) / ASPECT_STEP) * ASPECT_STEP
   round(min(max(snapped, ASPECT_MIN), ASPECT_MAX), 2)
+}
+
+# The values the server has written to one slider, oldest first, so that what
+# the browser reports back can be told from the reader's own drag. Starts with
+# the value the slider is built with, whose first report is no drag either.
+#
+# The browser reports in the order it was sent, and a settled read can skip
+# values in between, so an echo consumes its own entry and every older one:
+# those can no longer arrive. Anything not in the log is a drag, which clears
+# it.
+.echo_log <- function(initial) {
+  sent <- initial
+  list(
+    note = function(value) {
+      sent <<- c(sent, value)
+    },
+    is_echo = function(value) {
+      hit <- which(abs(sent - value) < 1e-9)
+      if (!length(hit)) {
+        sent <<- numeric(0)
+        return(FALSE)
+      }
+      sent <<- sent[-seq_len(hit[1])]
+      TRUE
+    }
+  )
 }
 
 # One depth for both dendrograms, in percent of the depth fitted to the canvas
@@ -819,7 +847,7 @@ amr_status <- function(n_items, noun, n_classes, no_hit) {
 #' @export
 # `options_ui` is accepted for one signature across all engines; this one has no
 # distance-computation controls, so the tab never passes any.
-ui <- function(id, generate_id, options_ui = NULL) {
+ui <- function(id, options_ui = NULL) {
   ns <- shiny$NS(id)
 
   layout_sidebar(
@@ -844,38 +872,6 @@ ui <- function(id, generate_id, options_ui = NULL) {
     ),
     shinyjs::useShinyjs(),
     waiter::useWaiter(),
-    # Loading overlay: shown when Generate (parent namespace) is clicked, scoped
-    # to this engine's own stage id, and cleared when the plot re-renders — the
-    # Epi engine's shiny:value variant, since this is an image output too.
-    shiny$tags$script(
-      shiny$HTML(
-        paste0(
-          "(function(){",
-          "var gen='",
-          generate_id,
-          "';var out='",
-          ns("amr_plot"),
-          "';var stage='",
-          ns("plot_stage"),
-          "';var timer;",
-          "function set(on){var s=document.getElementById(stage);if(!s)return;",
-          # Ignore Generate clicks while this engine's panel is hidden (another
-          # plot tab is active) — offsetParent is null when display:none.
-          "if(on&&s.offsetParent===null)return;",
-          "s.classList.toggle('is-loading',on);",
-          "if(on){var p=s.querySelector('.viz-plot-prompt');if(p)p.style.display='none';",
-          "clearTimeout(timer);timer=setTimeout(function(){set(false);},45000);}",
-          "else{clearTimeout(timer);}}",
-          "$(document).on('click','#'+gen.replace(/([:.])/g,'\\\\$1'),",
-          "function(){set(true);});",
-          "$(document).on('shiny:value shiny:recalculated',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "$(document).on('shiny:error',",
-          "function(e){if(e.target.id===out)set(false);});",
-          "})();"
-        )
-      )
-    ),
     card(
       full_screen = TRUE,
       class = "plot-card",
@@ -1783,19 +1779,25 @@ server <- function(
 
     # --- generate -----------------------------------------------------------
 
-    # No plot will render when Generate bails, so the overlay's clearing event
-    # never fires — hide it now rather than leaving the spinner up for 45s.
+    # No plot will render when Generate bails, so the paint that normally ends
+    # the loading overlay and the UI hold never comes — end both now.
     bail <- function(...) {
       shiny$showNotification(..., type = "warning")
-      shinyjs::removeClass(id = "plot_stage", class = "is-loading")
+      end_plot_loading()
       generated(FALSE)
       invisible(NULL)
     }
+
+    # Set by a restore and spent by the next Generate, whether or not it draws,
+    # so it never outlives the reopened plot it was set for.
+    keep_layout <- FALSE
 
     shiny$observeEvent(generate(), {
       if (!identical(plot_type(), "AMR")) {
         return()
       }
+      refit <- !keep_layout
+      keep_layout <<- FALSE
       meta <- viz_metadata()
       if (is.null(meta) || !nrow(meta)) {
         return(bail("No isolate metadata to plot."))
@@ -1837,8 +1839,12 @@ server <- function(
 
       # Fitted before the plot is published, so the first draw is already at the
       # right ratio rather than being drawn once at the old one and again at the
-      # new one. Both views go back to their fit: a Generate is a new plot.
-      auto_fit_layout(unname(PLOT_MODES))
+      # new one. Both views go back to their fit: a Generate is a new plot. The
+      # one exception is the Generate that redraws a reopened plot, which
+      # keeps the ratio, text size and label switches it was saved with.
+      if (refit) {
+        auto_fit_layout(unname(PLOT_MODES))
+      }
       generated(TRUE)
     })
 
@@ -1907,7 +1913,8 @@ server <- function(
     # where that view still follows its fit - the Epi curve's
     # aspect_follows_fit, kept per view because a heatmap's ratio means nothing
     # to a bar chart. Generate and a reset clear both, Auto-fit the one on
-    # screen, and a restore records the saved ratio against its view.
+    # screen, and a restore records the saved ratio against its view, which the
+    # Generate redrawing that reopened plot leaves in place (`keep_layout`).
     hand_aspect <- shiny$reactiveVal(list())
 
     # A user drag lands in the same mirror the fit writes to and is remembered
@@ -1919,13 +1926,14 @@ server <- function(
     # once it settles, and a server busy drawing a thousand-isolate heatmap can
     # let one echo settle after the fit has already moved on. Every value sent
     # since the reader last dragged is therefore recognised as the server's own.
-    aspects_sent <- numeric(0)
+    # The slider's own initial value counts as sent: a reopened plot's restore
+    # writes the mirror before that first report settles, and it is no drag.
+    aspects_sent <- .echo_log(ASPECT_DEFAULT)
     shiny$observeEvent(settled$amr_aspect_ratio(), {
       value <- settled$amr_aspect_ratio()
-      if (any(abs(aspects_sent - value) < 1e-9)) {
+      if (aspects_sent$is_echo(value)) {
         return()
       }
-      aspects_sent <<- numeric(0)
       if (!isTRUE(all.equal(shiny$isolate(aspect_mirror()), value))) {
         aspect_mirror(value)
         held <- shiny$isolate(hand_aspect())
@@ -1936,7 +1944,7 @@ server <- function(
 
     # Writes an aspect to the slider and to the mirror the plot reads.
     set_aspect <- function(value) {
-      aspects_sent <<- c(aspects_sent, value)
+      aspects_sent$note(value)
       shiny$updateSliderInput(session, "amr_aspect_ratio", value = value)
       aspect_mirror(value)
     }
@@ -1960,11 +1968,17 @@ server <- function(
       }
     })
 
-    # The text size is reset by Auto-fit, so it echoes as the aspect does.
+    # The text size is reset by Auto-fit and written by a restore, so it echoes
+    # as the aspect does, and its echoes are told from a reader's drag the same
+    # way.
     text_size_mirror <- shiny$reactiveVal(TEXT_SIZE_DEFAULT)
+    text_sizes_sent <- .echo_log(TEXT_SIZE_DEFAULT)
 
     shiny$observeEvent(settled$amr_text_size(), {
       value <- settled$amr_text_size()
+      if (text_sizes_sent$is_echo(value)) {
+        return()
+      }
       if (!isTRUE(all.equal(shiny$isolate(text_size_mirror()), value))) {
         text_size_mirror(value)
       }
@@ -1972,6 +1986,7 @@ server <- function(
 
     # Writes a text size to the slider and to the mirror the fit reads.
     set_text_size <- function(value) {
+      text_sizes_sent$note(value)
       shiny$updateSliderInput(session, "amr_text_size", value = value)
       text_size_mirror(value)
     }
@@ -2360,18 +2375,15 @@ server <- function(
         )
       )
 
-      loading <- shiny$div(
-        class = "viz-loading",
-        shiny$div(
-          class = "spinner-custom viz-spinner-dark",
-          waiter::spin_flower(),
-          shiny$tags$h5("Generating plot …", class = "viz-loading_text")
-        )
-      )
+      loading <- plot_loading_overlay()
 
       shiny$div(
         class = "viz-plot-stage amr-stage",
         id = ns("plot_stage"),
+        # What app/js/plot-reveal.js waits on before it ends the loading
+        # overlay and the UI hold Generate put up.
+        `data-pt-output` = ns("amr_plot"),
+        `data-pt-reveal` = "image",
         prompt,
         loading,
         zoom_viewport(shiny$plotOutput(ns("amr_plot"), height = "auto"))
@@ -2557,16 +2569,21 @@ server <- function(
 
       # The mirror is what the render reads, and a restored slider reaches it
       # only via the browser's echo — which never arrives for a value that did
-      # not change. Writing it here makes a restore take effect on this flush.
+      # not change. Writing it here makes a restore take effect on this flush,
+      # and writing it as sent keeps that echo, arriving after the Generate
+      # that follows, from being taken for a drag and drawing the plot again.
       if (!is.null(vals$amr_aspect_ratio)) {
-        aspect_mirror(vals$amr_aspect_ratio)
+        set_aspect(vals$amr_aspect_ratio)
         held <- list()
         held[[vals$amr_mode %||% PLOT_MODE_DEFAULT]] <- vals$amr_aspect_ratio
         hand_aspect(held)
       }
       if (!is.null(vals$amr_text_size)) {
-        text_size_mirror(vals$amr_text_size)
+        set_text_size(vals$amr_text_size)
       }
+      # The saved layout is the plot being reopened; the Generate that redraws
+      # it must not refit it away.
+      keep_layout <<- TRUE
       if (!is.null(vals$amr_show_row_names)) {
         show_row_names_mirror(isTRUE(vals$amr_show_row_names))
       }

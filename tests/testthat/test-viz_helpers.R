@@ -355,3 +355,15 @@ test_that("distance_issue_lines names each problem a distance matrix can have", 
   other <- vapply(viz_helpers$distance_issue_lines(both, "ignore_na"), as.character, "")
   expect_false(grepl("Omitting loci", other[[2]]))
 })
+
+test_that("end_plot_loading() ends the calling engine's own stage", {
+  session <- MockShinySession$new()
+  sent <- NULL
+  session$sendCustomMessage <- function(type, message) {
+    sent <<- message
+  }
+  moduleServer("engine", function(input, output, session) {
+    viz_helpers$end_plot_loading()
+  }, session = session)
+  expect_match(sent$code, "__ptPlotLoading('engine-plot_stage', false)", fixed = TRUE)
+})

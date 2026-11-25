@@ -386,3 +386,16 @@ test_that("the engines are actually handed engine_isolates, not the raw selectio
     quote(gate(engine_isolates))
   )
 })
+
+test_that("Generate names the engine stage it puts the loading overlay on", {
+  # app/js/plot-reveal.js starts the overlay and the UI hold from a click on
+  # whatever carries `data-pt-stage`, so the value has to be the id the
+  # engine's plot_area gives its stage: <tab>-engine-plot_stage.
+  for (type in visualization_plot$plot_types) {
+    html <- as.character(visualization_plot$ui("tab_1", plot_type = type))
+    expect_true(
+      grepl('data-pt-stage="tab_1-engine-plot_stage"', html, fixed = TRUE),
+      info = type
+    )
+  }
+})

@@ -1,9 +1,9 @@
 # app/logic/scheme_guide.R
 #
 # Step-by-step instructions for getting a published scheme from its provider
-# and importing it, shown in a dialog opened from the setup's scheme lists. The
-# commands use only the providers' public download routes and run on the
-# user's machine, under the user's own account; PhyloTrace itself never
+# and importing it, shown in a dialog opened from the setup's scheme lists.
+# Commands are offered only where the provider's terms allow a tool to enable
+# downloads; they run on the user's machine, and PhyloTrace itself never
 # contacts a provider.
 
 box::use(
@@ -18,23 +18,11 @@ box::use(
     CHEWIE_NS_SCHEMAS,
     ENTEROBASE_SCHEMES,
     PASTEUR_ACCOUNT,
-    PASTEUR_API,
     PASTEUR_API_KEY_HELP,
-    PUBMLST_ACCOUNT,
     PUBMLST_API,
     chewie_ns_api,
   ],
 )
-
-# REST API roots of the BIGSdb sites, by provider id.
-BIGSDB_API <- c(
-  pubmlst = PUBMLST_API,
-  pasteur = PASTEUR_API
-)
-
-# Seconds between two locus downloads. Institut Pasteur asks for pauses
-# between scripted requests; PubMLST asks only for one request at a time.
-BIGSDB_PAUSE <- c(pubmlst = 0, pasteur = 1)
 
 # Folders of EnteroBase's public scheme directory, by the scheme's id in
 # dev/scheme_index/curation.csv (checked against the directory on 2026-11-23).
@@ -175,94 +163,35 @@ pick_folder <- function(dir) {
   )
 }
 
-# Steps for a BIGSdb site (PubMLST, Institut Pasteur): the REST API serves the
-# loci of a scheme and one allele FASTA per locus, so a short loop fetches the
-# whole scheme. Without an account, only data submitted up to 2024 is served.
-bigsdb_steps <- function(row, src) {
+# Steps for PubMLST. Its restriction on software tools that enable downloading
+# (terms, section 4) covers only data submitted from 2025 on; earlier data is
+# unrestricted. The commands therefore never take an API key: without one,
+# PubMLST serves only data submitted up to 2024. A cgMLST scheme needs only the
+# first allele of each locus (the reference PhyloTrace keeps), so the commands
+# fetch that alone into one FASTA file instead of every allele - minutes and a
+# few megabytes instead of hours and gigabytes.
+pubmlst_steps <- function(row) {
   ids <- bigsdb_ids(row$source_id)
   if (is.null(ids)) {
     return(NULL)
   }
-  provider <- row$provider
-  api <- paste0(BIGSDB_API[[provider]], "/", ids$db)
-  pause <- BIGSDB_PAUSE[[provider]]
+  api <- paste0(PUBMLST_API, "/", ids$db)
   dir <- folder_name(row$scheme)
-  mlst <- identical(row$type, "MLST")
-
-  commands <- c(
-    'KEY=""  # optional: your API key, see "With an account"',
-    sprintf('DIR="%s"', dir),
-    sprintf('API="%s"', api),
-    'mkdir -p "$DIR" && cd "$DIR"',
-    if (mlst) {
-      sprintf(
-        'curl -fsS -H "X-API-Key: $KEY" -o profiles.tsv "$API/schemes/%s/profiles_csv"',
-        ids$scheme
-      )
-    },
-    sprintf('curl -fsS -H "X-API-Key: $KEY" "$API/schemes/%s/loci" \\', ids$scheme),
-    '  | grep -o "$API/loci/[^\\"]*" \\',
-    "  | while read -r url; do",
-    '      echo "${url##*/}"',
-    '      curl -fsS --retry 3 -H "X-API-Key: $KEY" \\',
-    '        -o "${url##*/}.fasta" "$url/alleles_fasta"',
-    if (pause > 0) sprintf("      sleep %s", pause),
-    "    done",
-    'echo "Done: files are in $PWD"'
+  loci_list <- c(
+    sprintf('curl -fsS "$API/schemes/%s/loci" | grep -o "$API/loci/[^\\"]*" \\', ids$scheme)
   )
 
-  account <- if (identical(provider, "pubmlst")) {
-    shiny$tags$ol(
-      shiny$tags$li(
-        "Register for a free account at ",
-        external_link(PUBMLST_ACCOUNT, "pubmlst.org/bigsdb"), "."
-      ),
-      shiny$tags$li("Log in, open your account page and create a personal API key."),
-      shiny$tags$li(
-        "Paste the key between the quotes of ", code_tag('KEY=""'),
-        " and run the commands again."
-      )
+  if (identical(row$type, "MLST")) {
+    commands <- c(
+      sprintf('DIR="%s"', dir),
+      sprintf('API="%s"', api),
+      'mkdir -p "$DIR" && cd "$DIR"',
+      sprintf('curl -fsS -o profiles.tsv "$API/schemes/%s/profiles_csv"', ids$scheme),
+      loci_list,
+      '  | while read -r url; do curl -fsS -o "${url##*/}.fasta" "$url/alleles_fasta"; done',
+      'echo "Done: files are in $PWD"'
     )
-  } else {
-    shiny$tags$ol(
-      shiny$tags$li(
-        "Create an account at ",
-        external_link(
-          PASTEUR_ACCOUNT,
-          "bigsdb.pasteur.fr"
-        ),
-        " and register it for the database ", code_tag(ids$db), "."
-      ),
-      shiny$tags$li(
-        "Request an API key by e-mail, as described on ",
-        external_link(
-          PASTEUR_API_KEY_HELP,
-          "Requesting an API key"
-        ),
-        "."
-      ),
-      shiny$tags$li(
-        "Paste the key between the quotes of ", code_tag('KEY=""'),
-        " and run the commands again."
-      )
-    )
-  }
-
-  if (mlst) {
-    # New sequence types since 2025 are only served to logged-in users, and an
-    # MLST scheme is only as complete as its profile table.
-    list(
-      list(
-        title = "Get an API key (recommended)",
-        detail = shiny$tagList(
-          shiny$p(
-            "Without an account, ", src$label, " serves only the sequence types and",
-            " alleles submitted up to the end of 2024. To get the newer ones too:"
-          ),
-          account,
-          shiny$p(class = "help-note", "Without a key, leave the line as it is.")
-        )
-      ),
+    return(list(
       list(
         title = "Download the scheme",
         detail = shiny$tagList(
@@ -270,40 +199,129 @@ bigsdb_steps <- function(row, src) {
             "Paste these commands into a terminal. They save the profile table and one",
             " FASTA file per locus in a new folder ", code_tag(dir), "."
           ),
-          command_block(commands)
+          command_block(commands),
+          shiny$p(
+            class = "help-note",
+            "Without logging in, PubMLST serves the sequence types and alleles",
+            " submitted up to the end of 2024. Newer ones are available to logged-in",
+            " users on the PubMLST website (", em_tag("Download page"), ")."
+          )
         )
       ),
       import_step("MLST", list(
         profiles = code_tag(paste0(dir, "/profiles.tsv")),
         alleles = pick_folder(dir)
       ))
-    )
-  } else {
+    ))
+  }
+
+  file <- paste0(dir, "_references.fasta")
+  commands <- c(
+    sprintf('API="%s"', api),
+    sprintf('FILE="%s"', file),
+    loci_list,
+    "  | sed 's|$|/alleles/1|' | xargs curl -fsS --retry 3 -w '\\n' \\",
+    "  | awk '/\"sequence\"/ {",
+    "      match($0, /\\/loci\\/[^\"]+/); print \">\" substr($0, RSTART + 6, RLENGTH - 6)",
+    "      match($0, /\"sequence\":\"[A-Z]+/); print substr($0, RSTART + 12, RLENGTH - 12)",
+    "    }' > \"$FILE\"",
+    'echo "$(grep -c ">" "$FILE") loci saved in $PWD/$FILE"'
+  )
+  list(
     list(
+      title = "Download the reference alleles",
+      detail = shiny$tagList(
+        shiny$p(
+          "PhyloTrace needs only the first allele of each locus as its reference.",
+          " Paste these commands into a terminal; they save those alleles in one file, ",
+          code_tag(file), ".", duration_hint(row$loci, 0.25), " No account is needed."
+        ),
+        command_block(commands),
+        shiny$p(
+          class = "help-note",
+          "The last line reports how many loci were saved. Far fewer than the scheme's ",
+          "loci means the scheme is newer than 2024: PubMLST then offers its alleles to ",
+          "logged-in users on its website."
+        )
+      )
+    ),
+    import_step(row$type, list(
+      alleles = shiny$tagList("pick ", code_tag(file), ".")
+    ))
+  )
+}
+
+# Steps for Institut Pasteur. Its policy requires a licence contract from the
+# publishers of commercial software tools that enable downloading its data, of
+# any date and with or without the user's own API key, so the guide offers no
+# commands: it points to the scheme's pages on the Pasteur website.
+pasteur_steps <- function(row) {
+  ids <- bigsdb_ids(row$source_id)
+  if (is.null(ids)) {
+    return(NULL)
+  }
+  page <- function(name) {
+    sprintf("%s?db=%s&page=%s&scheme_id=%s", PASTEUR_ACCOUNT, ids$db, name, ids$scheme)
+  }
+  alleles_link <- external_link(page("downloadAlleles"), "allele download page")
+  terms_note <- shiny$p(
+    class = "help-note",
+    "Institut Pasteur's terms require a licence for software that downloads its data,",
+    " so PhyloTrace shows no download commands for it."
+  )
+
+  if (identical(row$type, "MLST")) {
+    return(list(
+      list(
+        title = "Download the profile table",
+        detail = shiny$tagList(
+          "Open the scheme's ",
+          external_link(page("downloadProfiles"), "profile download page"),
+          " and save the table in a new folder."
+        )
+      ),
       list(
         title = "Download the allele files",
         detail = shiny$tagList(
           shiny$p(
-            "Paste these commands into a terminal. They save one FASTA file per locus",
-            " in a new folder ", code_tag(dir), ", one request at a time.",
-            duration_hint(row$loci, pause + 0.5), " No account is needed."
+            "On the ", alleles_link, ", download the FASTA file of every locus into the",
+            " same folder."
           ),
-          command_block(commands),
-          shiny$tags$details(
-            class = "scheme-guide_more",
-            shiny$tags$summary("With an account"),
-            shiny$p(
-              "Without an account, ", src$label, " serves the alleles submitted up to",
-              " the end of 2024. PhyloTrace uses the first allele of each locus as its",
-              " reference, so these are enough. To download every allele:"
-            ),
-            account
-          )
+          terms_note
         )
       ),
-      import_step(row$type, list(alleles = pick_folder(dir)))
-    )
+      import_step("MLST", list(
+        profiles = "the profile table",
+        alleles = shiny$tagList(
+          "open the folder and choose ", em_tag("Use this folder"), "."
+        )
+      ))
+    ))
   }
+
+  list(
+    list(
+      title = "Download the allele files",
+      detail = shiny$tagList(
+        shiny$p(
+          "The scheme's ", alleles_link, " offers one FASTA file per locus. For a",
+          " scheme of many loci, Institut Pasteur gives registered users API access",
+          " instead (", external_link(PASTEUR_API_KEY_HELP, "Requesting an API key"),
+          "). Keep the files together in one folder."
+        ),
+        terms_note,
+        shiny$p(
+          class = "help-note",
+          "Other providers listed for this species may offer a scheme as a single download."
+        )
+      )
+    ),
+    import_step(row$type, list(
+      alleles = shiny$tagList(
+        "open the folder with the locus files and choose ", em_tag("Use this folder"), "."
+      )
+    ))
+  )
 }
 
 # Steps for Chewie-NS: every schema is offered as one compressed download, no
@@ -401,11 +419,8 @@ enterobase_steps <- function(row) {
     'mkdir -p "$DIR" && cd "$DIR"',
     if (mlst) 'curl -fsS "$URL/profiles.list.gz" | gunzip > profiles.tsv',
     "curl -fsS \"$URL/\" | grep -o 'href=\"[^\"/]*\\.fasta\\.gz\"' | cut -d'\"' -f2 \\",
-    "  | while read -r f; do",
-    '      echo "$f"',
-    '      curl -fsS --retry 3 -o "$f" "$URL/$f"',
-    "    done",
-    'echo "Done: files are in $PWD"'
+    "  | sed \"s|^|$URL/|\" | xargs curl -fsS --retry 3 --remote-name-all",
+    'echo "Done: $(ls *.fasta.gz | wc -l) loci saved in $PWD"'
   )
   list(
     list(
@@ -417,7 +432,7 @@ enterobase_steps <- function(row) {
           "one gzipped FASTA file per locus from EnteroBase's public ",
           external_link(ENTEROBASE_SCHEMES, "scheme directory"),
           " in a new folder ", code_tag(dir), ".",
-          duration_hint(row$loci, 0.3), " No account is needed."
+          " A large scheme takes a few minutes. No account is needed."
         ),
         command_block(commands),
         shiny$p(
@@ -485,8 +500,8 @@ generic_steps <- function(row) {
 #' Download Steps for a Published Scheme
 #'
 #' @description The numbered steps that get a scheme from its provider into
-#'   PhyloTrace, with ready-to-run commands where the provider offers a
-#'   scripted route.
+#'   PhyloTrace, with ready-to-run commands where the provider's terms allow
+#'   them.
 #'
 #' @param row One-row data frame from `scheme_index$schemes_for_species()`.
 #'
@@ -494,11 +509,10 @@ generic_steps <- function(row) {
 #'   takes them.
 #' @export
 guide_steps <- function(row) {
-  src <- scheme_source(row$provider)
   steps <- switch(
     row$provider,
-    pubmlst = ,
-    pasteur = bigsdb_steps(row, src),
+    pubmlst = pubmlst_steps(row),
+    pasteur = pasteur_steps(row),
     chewie_ns = chewie_steps(row),
     enterobase = enterobase_steps(row),
     cgmlst_org = cgmlst_org_steps(row),
@@ -519,6 +533,12 @@ guide_steps <- function(row) {
 guide_modal <- function(row) {
   src <- scheme_source(row$provider)
   provider <- if (is.null(src)) row$provider else src$label
+  steps <- guide_steps(row)
+  scripted <- any(vapply(
+    steps,
+    function(st) grepl("scheme-guide_code", as.character(st$detail), fixed = TRUE),
+    logical(1)
+  ))
   meta <- paste(c(
     provider,
     if (!is.na(row$loci)) sprintf("%s loci", format(row$loci, big.mark = ","))
@@ -539,8 +559,15 @@ guide_modal <- function(row) {
         shiny$p(class = "help-lead", meta),
         shiny$p(
           "PhyloTrace imports a scheme from files you download yourself. These steps ",
-          "show the usual way to get them; the commands run in a terminal on this ",
-          "computer and need ", code_tag("curl"), "."
+          "show the usual way to get them",
+          if (scripted) {
+            shiny$tagList(
+              "; the commands run in a terminal on this computer and need ",
+              code_tag("curl"), "."
+            )
+          } else {
+            "."
+          }
         ),
         if (!is.null(src) && !is.na(src$commercial_use)) {
           setup_note(shiny$tagList(
@@ -548,7 +575,7 @@ guide_modal <- function(row) {
             if (safe_url(src$terms_url)) external_link(src$terms_url, "Terms of use")
           ), "warn")
         },
-        plan_list(guide_steps(row))
+        plan_list(steps)
       ),
       footer = shiny$tagList(
         if (safe_url(row$url)) {

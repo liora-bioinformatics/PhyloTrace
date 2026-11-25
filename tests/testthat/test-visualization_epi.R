@@ -1160,25 +1160,32 @@ test_that("plot_area renders the stage with the shared overlay classes", {
       expect_true(grepl(session$ns("epi_plot"), html, fixed = TRUE))
       expect_true(grepl(session$ns("plot_stage"), html, fixed = TRUE))
       # Keeps .viz-plot-stage so the shared .viz-plot-prompt overlay and the
-      # `.viz-plot-stage.is-loading .viz-loading` toggle still reach it, and
-      # adds .epi-stage to undo that class's flex centering.
+      # `.is-loading > .viz-loading` toggle still reach it, and adds
+      # .epi-stage to undo that class's flex centering.
       expect_true(grepl("viz-plot-stage epi-stage", html, fixed = TRUE))
+      expect_true(grepl("viz-loading", html, fixed = TRUE))
+      # What app/js/plot-reveal.js waits on before ending the loading overlay
+      # and the UI hold: this output's image, decoded.
+      expect_true(grepl(
+        sprintf('data-pt-output="%s"', session$ns("epi_plot")),
+        html,
+        fixed = TRUE
+      ))
+      expect_true(grepl('data-pt-reveal="image"', html, fixed = TRUE))
     }
   )
 })
 
-test_that("ui() mounts the controls and the loading overlay under the id", {
-  html <- as.character(visualization_epi$ui("epi", generate_id = "viz-generate"))
+test_that("ui() mounts the controls under the id", {
+  html <- as.character(visualization_epi$ui("epi"))
 
   # The blanket shinyjs::reset() target.
   expect_true(grepl("epi-controls_wrap", html, fixed = TRUE))
   expect_true(grepl("epi-controls_sidebar", html, fixed = TRUE))
-  # The overlay script has to hook the *parent's* Generate button id.
-  expect_true(grepl("viz-generate", html, fixed = TRUE))
 })
 
 test_that("the annotation types are named for what they mark, not how", {
-  html <- as.character(visualization_epi$ui("epi", generate_id = "viz-generate"))
+  html <- as.character(visualization_epi$ui("epi"))
 
   expect_true(grepl(">Timestamp<", html, fixed = TRUE))
   expect_true(grepl(">Time period<", html, fixed = TRUE))

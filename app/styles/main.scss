@@ -1416,8 +1416,22 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
     color: var(--dark);
 }
 
-.viz-plot-stage.is-loading .viz-loading {
+// A direct child, so the Map's full-bleed stage (.map-plot-stage) shares it.
+.is-loading > .viz-loading {
     display: flex;
+}
+
+// Leaflet's panes and controls stack up to z-index 1000 in the stage's own
+// context, so the Map's overlay has to clear them to cover the map.
+.map-plot-stage > .viz-loading {
+    z-index: 1001;
+}
+
+// The geocoding waiter is inserted into the same stage and says more (place
+// count, countdown), so while it is up the stage's own overlay stands back
+// rather than showing a second spinner through its veil.
+.map-plot-stage:has(> .waiter-overlay) > .viz-loading {
+    display: none;
 }
 
 .viz-loading_text {
@@ -1550,6 +1564,44 @@ $map-control-bg: rgba(255, 255, 255, $map-control-opacity);
 }
 
 // Analysis Dashboard module ---------------------------------------------------
+
+// Positioning context for the stack's delayed busy overlay.
+.ad-stack-host {
+    position: relative;
+    min-height: 100%;
+}
+
+// Shown by app/js/delayed-busy.js only once a re-render of the stack runs past
+// a short delay (the landing page's database card works the same way). The
+// spinner sits near the top rather than centred: the stack can be far taller
+// than the viewport, which would put a centred spinner out of sight.
+.ad-stack-busy {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: start center;
+    padding-top: min(30vh, 12rem);
+    background-color: rgba(var(--bs-body-bg-rgb), 0.7);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+        opacity 0.2s ease,
+        visibility 0s linear 0.2s;
+
+    .spinner-border {
+        width: 2rem;
+        height: 2rem;
+        border-width: 0.2rem;
+        color: var(--pt-brand-green);
+    }
+}
+
+.ad-stack-host.is-busy .ad-stack-busy {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.2s ease;
+}
 
 // Vertical stack of group cards in the main panel.
 .ad-group-stack {
@@ -8085,15 +8137,5 @@ table.dataTable.overview-table thead>tr>th,
         .scheme-guide_copy-done {
             display: inline;
         }
-    }
-}
-
-.scheme-guide_more {
-    margin-top: 0.25rem;
-
-    summary {
-        cursor: pointer;
-        font-weight: 600;
-        margin-bottom: 0.4rem;
     }
 }

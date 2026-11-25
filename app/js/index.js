@@ -8,6 +8,7 @@ import "./dt-filter-scope";
 import "./dt-grid-patch";
 import "./dt-visibility-resync";
 import "./file-browser";
+import "./plot-reveal";
 import "./virtual-select-count-label";
 import "./virtual-select-popup-confirm";
 import "./virtual-select-popup-refresh";

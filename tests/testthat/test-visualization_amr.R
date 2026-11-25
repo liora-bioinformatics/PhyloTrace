@@ -1091,6 +1091,70 @@ test_that("a restored aspect ratio reaches the mirror on the same flush", {
   )
 })
 
+test_that(".echo_log tells the server's own values from a drag", {
+  log <- impl$.echo_log(0.9)
+  # The slider's initial report, then two writes the settled read skipped to
+  # the last of.
+  expect_true(log$is_echo(0.9))
+  log$note(1)
+  log$note(2.25)
+  expect_true(log$is_echo(2.25))
+  # The skipped 1 can no longer arrive, so a later 1 is the reader's.
+  expect_false(log$is_echo(1))
+  log$note(3)
+  expect_false(log$is_echo(0.5))
+  # A drag clears the log: the 3 sent before it is not an echo any more.
+  expect_false(log$is_echo(3))
+})
+
+test_that("a reopened plot draws once, at its saved layout", {
+  path <- amr_db()
+  meta <- meta_fixture()
+  generate <- reactiveVal(0L)
+
+  testServer(
+    visualization_amr$server,
+    args = list(
+      db_path = reactive(path),
+      viz_metadata = reactive(meta),
+      field_profiles = reactive(anno_profiles_fixture(meta)),
+      generate = generate,
+      plot_type = reactiveVal("AMR")
+    ),
+    {
+      # The slider's initial values are still settling when the restore lands,
+      # as they are on a tab opened from the Analysis Dashboard.
+      set_default_inputs(session)
+      session$setInputs(amr_text_size = 100)
+      restore(list(amr_mode = "heatmap", amr_aspect_ratio = 1, amr_text_size = 200))
+      settle(session)
+      expect_equal(aspect_mirror(), 1)
+      expect_equal(text_size_mirror(), 200)
+
+      # The synthetic Generate keeps the saved layout rather than refitting it.
+      generate(1L)
+      settle(session)
+      expect_equal(aspect_mirror(), 1)
+      drawn <- plot_inputs()
+      expect_equal(drawn$canvas$height_in / drawn$canvas$width_in, 1)
+
+      # The restore's own echoes arrive late and change nothing.
+      session$setInputs(amr_aspect_ratio = 1, amr_text_size = 200)
+      settle(session)
+      expect_identical(plot_inputs(), drawn)
+
+      # The reader's drag still counts, and the next Generate refits again.
+      session$setInputs(amr_aspect_ratio = 2.2)
+      settle(session)
+      expect_equal(aspect_mirror(), 2.2)
+      generate(2L)
+      settle(session)
+      expect_null(hand_aspect()[["heatmap"]])
+      expect_equal(aspect_mirror(), fitted_aspect())
+    }
+  )
+})
+
 test_that("the snapshot carries the aspect ratio", {
   path <- amr_db()
   meta <- meta_fixture()

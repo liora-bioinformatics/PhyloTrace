@@ -71,9 +71,20 @@ ui <- function(id) {
       ),
       uiOutput(ns("sidebar_navigation"))
     ),
+    # pt-delayed-busy (app/js/delayed-busy.js): a re-render of the stack that
+    # runs past a short delay shows a spinner over it rather than cards
+    # emptying and refilling one by one; a fast one shows nothing.
     div(
-      class = "ad-group-stack",
-      uiOutput(ns("groups_vertical_stack"))
+      class = "ad-stack-host pt-delayed-busy",
+      div(
+        class = "ad-group-stack",
+        uiOutput(ns("groups_vertical_stack"))
+      ),
+      div(
+        class = "ad-stack-busy",
+        div(class = "spinner-border", role = "status"),
+        span(class = "visually-hidden", "Loading analyses")
+      )
     )
   )
 }

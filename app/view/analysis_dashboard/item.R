@@ -18,6 +18,7 @@ box::use(
     modalDialog,
     moduleServer,
     observeEvent,
+    outputOptions,
     p,
     reactive,
     reactiveVal,
@@ -298,6 +299,10 @@ server <- function(
         )
       )
     })
+
+    # Eager, so the box and its thumbnail are ready before the dashboard tab
+    # is first shown; see the matching note in group.R.
+    outputOptions(output, "box_container", suspendWhenHidden = FALSE)
 
     # Duplicate: copies this plot's settings snapshot and thumbnail into a new
     # card in the same Analysis. Purely additive, so no confirmation — but the

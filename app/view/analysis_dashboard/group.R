@@ -21,6 +21,7 @@ box::use(
     moduleServer,
     observe,
     observeEvent,
+    outputOptions,
     reactive,
     reactiveVal,
     removeModal,
@@ -324,5 +325,12 @@ server <- function(
         )
       )
     })
+
+    # Eager like the dashboard's own outputs: rendered while the database
+    # loads, behind its loading overlay (app/main.R), rather than only once
+    # the dashboard tab is first shown. A hidden output is suspended by
+    # default, so each nesting level (this card, then every plot box in it)
+    # would otherwise cost its own round trip after the tab opens.
+    outputOptions(output, "group_card_layout", suspendWhenHidden = FALSE)
   })
 }

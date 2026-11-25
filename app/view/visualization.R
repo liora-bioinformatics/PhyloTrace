@@ -82,10 +82,33 @@ box::use(
 # the first plot tab lands directly after it.
 .NEW_TAB <- "new_plot"
 
+# Plot type the creator form starts on.
+.DEFAULT_TYPE <- "MST"
+
 # Most plot tabs open at once (the creator tab not counted). Every tab keeps a
 # live engine server and its outputs resident, and the tab strip only scrolls,
 # so past this the session gets heavy and the strip hard to navigate.
 .MAX_TABS <- 16L
+
+# The name the creator form suggests for a new plot: the plot type and the
+# lowest number not already taken, e.g. "Epi 1", then "Epi 2". `taken` holds
+# every name in use - the open tabs' and the saved plots' - and is matched
+# ignoring case and surrounding space, so "epi 1" typed by hand or saved long
+# ago blocks "Epi 1" too. Lowest free rather than one past the highest, so a
+# number freed by closing an unsaved tab is offered again and the suggestions
+# stay short; a saved plot never frees its number, so a new plot cannot land
+# next to a same-named one in an Analysis.
+.next_plot_name <- function(plot_type, taken = character(0)) {
+  taken <- tolower(trimws(as.character(taken)))
+  n <- 1L
+  repeat {
+    candidate <- sprintf("%s %d", plot_type, n)
+    if (!tolower(candidate) %in% taken) {
+      return(candidate)
+    }
+    n <- n + 1L
+  }
+}
 
 # One plot type's tile, used as a radio button's label. The preview sits in its
 # own layer rather than on the button itself: the caption then keeps a solid
@@ -138,7 +161,7 @@ box::use(
         # type the rest of the module keys on.
         choiceNames = unname(lapply(meta, .type_tile)),
         choiceValues = names(meta),
-        selected = "MST",
+        selected = .DEFAULT_TYPE,
         justified = TRUE
       )
     ),
@@ -159,7 +182,7 @@ box::use(
             textInput(
               ns("plot_name"),
               "Plot name",
-              value = "Plot 1",
+              value = .next_plot_name(.DEFAULT_TYPE),
               width = "100%"
             )
           ),
@@ -578,25 +601,38 @@ server <- function(
     # Analysis, each led by a "New plot" entry (value "analysis:<id>") and its
     # saved plots (value "plot:<id>"). One read here feeds every tab's picker.
     NONE_TARGET <- "none"
-    picker_choices <- reactive({
+    # Every Analysis with its saved plots, one list_plots() frame per
+    # Analysis. Read once per `analyses` revision for both its readers: the
+    # Save picker below and the creator form's name suggestion.
+    saved_plots <- reactive({
       db_events$depend(db_rev, "analyses")
       path <- db_path()
-      none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       req(path)
       df_a <- guard_db_read(
         "Loading saved Analyses",
         analysis_store$list_analyses(path)
       )
+      list(
+        analyses = df_a,
+        plots = lapply(df_a$id, function(aid) {
+          guard_db_read(
+            "Loading saved plots",
+            analysis_store$list_plots(path, aid)
+          )
+        })
+      )
+    })
+
+    picker_choices <- reactive({
+      saved <- saved_plots()
+      df_a <- saved$analyses
+      none_entry <- list("None (not part of an Analysis)" = NONE_TARGET)
       if (!nrow(df_a)) {
         return(none_entry)
       }
       groups <- lapply(seq_len(nrow(df_a)), function(i) {
-        aid <- df_a$id[i]
-        ch <- c("+ New plot" = paste0("analysis:", aid))
-        pl <- guard_db_read(
-          "Loading saved plots",
-          analysis_store$list_plots(path, aid)
-        )
+        ch <- c("+ New plot" = paste0("analysis:", df_a$id[i]))
+        pl <- saved$plots[[i]]
         if (nrow(pl)) {
           ch <- c(ch, stats::setNames(paste0("plot:", pl$id), pl$name))
         }
@@ -786,6 +822,53 @@ server <- function(
     }
 
     # ---------------------------------------------------- creator form -----
+    # Names already in use: every open tab's (a plot reopened from the
+    # dashboard keeps its saved name) and every saved plot's, open or not.
+    # Without a database there are no saved plots, rather than no answer.
+    taken_plot_names <- reactive({
+      open <- vapply(tabs(), function(e) e$handle$name(), character(1))
+      saved <- tryCatch(
+        unlist(lapply(saved_plots()$plots, `[[`, "name"), use.names = FALSE),
+        error = function(e) character(0)
+      )
+      c(unname(open), saved)
+    })
+
+    # The name the form offers for the picked type right now.
+    suggested_name <- reactive({
+      .next_plot_name(input$plot_type %||% .DEFAULT_TYPE, taken_plot_names())
+    })
+
+    # Every name this form has filled in itself, starting with the one the UI
+    # is built with. A field holding one of them (or nothing) still holds the
+    # app's suggestion rather than the user's choice, so it follows the
+    # suggestion when the type or the taken names change; a typed name is
+    # never overwritten. A set rather than the last value: a field update is
+    # a browser round trip, and two suggestions in quick succession (a type
+    # switch while a reopened plot is opening) would otherwise read the first
+    # one back as typed by hand.
+    issued_names <- .next_plot_name(.DEFAULT_TYPE)
+
+    # Whether the name field holds `value` as the app's suggestion.
+    holds_suggestion <- function(value) {
+      value <- trimws(value %||% "")
+      !nzchar(value) || value %in% issued_names
+    }
+
+    # Puts a suggested name in the field and remembers it as one.
+    offer_name <- function(name) {
+      issued_names <<- union(issued_names, name)
+      updateTextInput(session, "plot_name", value = name)
+    }
+
+    # Keeps an untouched name field in step with the picked type and with the
+    # names other tabs and saved plots have taken meanwhile.
+    observeEvent(suggested_name(), {
+      if (holds_suggestion(input$plot_name)) {
+        offer_name(suggested_name())
+      }
+    })
+
     # Left column of the detail panel: the picked type's identity, its prose
     # description and its capability badges. The create form beneath it in the
     # same column is static markup (see .creator_ui), so this re-render never
@@ -926,23 +1009,24 @@ server <- function(
         return()
       }
 
-      # Named after how many plots are open, not after the never-resetting tab
-      # counter, so the suggestion stays "Plot 3" rather than drifting to
-      # "Plot 47" over a long session of opening and closing tabs.
-      next_name <- function(offset) {
-        sprintf("Plot %d", length(isolate(tabs())) + offset)
-      }
+      # A field still holding a suggestion is given the current one, not the
+      # one on screen, which can be a beat behind: a saved plot reopened from
+      # the dashboard may have taken that name since it was offered.
       name <- trimws(input$plot_name %||% "")
-      if (!nzchar(name)) {
-        name <- next_name(1L)
+      if (holds_suggestion(name)) {
+        name <- suggested_name()
       }
 
-      preset <- isolate(pending_preset())
+      tid <- create_tab(pt, name, preset = isolate(pending_preset()))
+      # Refused at the tab limit, the Analysis preset stays for the next try.
+      if (is.null(tid)) {
+        return()
+      }
       pending_preset(NULL)
-      create_tab(pt, name, preset = preset)
 
-      # Ready the form for the next plot.
-      updateTextInput(session, "plot_name", value = next_name(1L))
+      # Ready the form for the next plot, typed name or not. Read past the new
+      # tab, which taken_plot_names() only sees once recomputed here.
+      offer_name(.next_plot_name(pt, taken_plot_names()))
     })
 
     # ------------------------------------------------------- closing -------
